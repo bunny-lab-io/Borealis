@@ -4,7 +4,9 @@ ARG BOREALIS_ENGINE_RUNTIME_UID=64646
 ARG BOREALIS_ENGINE_RUNTIME_GID=64646
 
 RUN apk add --no-cache \
+        bash \
         ca-certificates \
+        curl \
         git \
         tzdata \
     && addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \

@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  IconButton,
   Menu,
   MenuItem,
   Paper,
@@ -26,6 +27,7 @@ import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
+import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
@@ -33,7 +35,8 @@ import dayjs from "dayjs";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
-import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
+import { buildRowContextMenuColumnDef, GridRowContextMenuButtonCell } from "../Grid_Row_Context_Menu_Button.jsx";
+import RowContextMenu from "../Row_Context_Menu.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
@@ -75,6 +78,16 @@ const TASK_REMOVE_SECONDS = 60;
 const SITE_WORKER_REFRESH_MS = 5000;
 const SITE_CONNECTION_STABILITY_GRACE_SECONDS = 20;
 const BASE_ROW_HEIGHT = 56;
+const INSTALL_LINK_DETAIL_ROW_HEIGHT = 116;
+const NAV_SUBSECTION_ROW_BG = "#0f141c";
+const SITE_DESCRIPTION_SUBTEXT_COLOR = "rgba(148,163,184,0.72)";
+const INSTALL_LINK_HEADER_BG = "#123a5a";
+const INSTALL_LINK_STATUS_TONES = {
+  upToDate: { label: "Up-to-Date", color: "#34d399" },
+  compiling: { label: "Compiling...", color: "#fbbf24" },
+  outOfDate: { label: "Out-of-Date", color: "#f87171" },
+  sending: { label: "Sending to Site Worker...", color: "#7dd3fc" },
+};
 const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
 const CONNECTED_DEVICES_COLUMN_ID = "connected_devices";
 const RUNNING_TASKS_COLUMN_ID = "assigned_task_groups";
@@ -140,14 +153,16 @@ function siteMutationErrorMessage(payload, fallback) {
   return String(payload?.message || payload?.error || fallback || "Site update failed.");
 }
 const DEFAULT_INSTALL_BRANCH = "main";
+const INSTALL_SOURCE_ENGINE = "engine";
+const INSTALL_SOURCE_GITHUB = "github";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
 const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads";
 const BOREALIS_LINK_COLOR = "#58a6ff";
 const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
-const INSTALL_OS_OPTIONS = [
-  { id: "windows", label: "Windows" },
-  { id: "linux", label: "Linux" },
+const INSTALL_LINK_PLATFORM_OPTIONS = [
+  { id: "windows", platform: "windows-amd64", label: "Windows", shortLabel: "Win" },
+  { id: "linux", platform: "linux-amd64", label: "Linux", shortLabel: "Linux" },
 ];
 
 const TASK_SECTIONS = [
@@ -245,42 +260,6 @@ const SITE_DIALOG_DANGER_BUTTON_SX = {
     color: "rgba(255,154,165,0.48)",
     borderColor: "rgba(244,63,94,0.16)",
     background: "rgba(44,8,22,0.24)",
-  },
-};
-
-const INSTALL_MENU_PAPER_SX = {
-  mt: 0.8,
-  minWidth: 180,
-  borderRadius: 2.5,
-  overflow: "hidden",
-  background:
-    "radial-gradient(140% 140% at 0% 0%, rgba(76,186,255,0.18), transparent 52%), " +
-    "radial-gradient(140% 140% at 100% 0%, rgba(214,130,255,0.22), transparent 62%), rgba(8,12,24,0.96)",
-  backdropFilter: "blur(18px)",
-  border: `1px solid ${MAGIC_UI.panelBorder}`,
-  boxShadow: "0 24px 60px rgba(2,8,23,0.72)",
-  color: MAGIC_UI.textBright,
-  "& .MuiList-root": {
-    py: 0.8,
-  },
-};
-
-const INSTALL_MENU_ITEM_SX = {
-  mx: 0.8,
-  my: 0.3,
-  borderRadius: 2,
-  minHeight: 40,
-  fontSize: "0.92rem",
-  fontWeight: 600,
-  color: MAGIC_UI.textBright,
-  transition: "background 160ms ease, color 160ms ease, transform 120ms ease",
-  "&:hover": {
-    background:
-      "linear-gradient(90deg, rgba(125,211,252,0.16) 0%, rgba(192,132,252,0.14) 100%)",
-  },
-  "&.Mui-focusVisible": {
-    background:
-      "linear-gradient(90deg, rgba(125,211,252,0.16) 0%, rgba(192,132,252,0.14) 100%)",
   },
 };
 
@@ -471,6 +450,37 @@ function deviceConnectionBreakdown(payload, worker, siteId, connectedDevices, si
 function siteIdForRow(row) {
   const siteId = Number(row?.site_id || row?.id || 0);
   return Number.isFinite(siteId) && siteId > 0 ? siteId : 0;
+}
+
+function installLinkDetailRowId(siteId) {
+  return `install-links:${String(siteId || "").trim()}`;
+}
+
+function isInstallLinkDetailRow(row) {
+  return Boolean(row?.__installLinkDetail);
+}
+
+export function insertExpandedInstallLinkRows(siteRows, expandedSiteId = null) {
+  const rows = Array.isArray(siteRows) ? siteRows : [];
+  const expandedId = String(expandedSiteId ?? "").trim();
+  if (!expandedId) {
+    return rows;
+  }
+  const nextRows = [];
+  rows.forEach((row) => {
+    nextRows.push(row);
+    const siteId = siteIdForRow(row);
+    if (siteId > 0 && String(siteId) === expandedId) {
+      nextRows.push({
+        id: installLinkDetailRowId(siteId),
+        site_id: siteId,
+        parent_site_id: siteId,
+        __installLinkDetail: true,
+        site: row,
+      });
+    }
+  });
+  return nextRows;
 }
 
 export function buildDeviceListSiteStatusPath(site, statusKey = "") {
@@ -822,17 +832,23 @@ function taskCountdownSecondsLabel(seconds) {
 }
 
 export function siteListAssignedTaskGroupCount(row) {
+  if (isInstallLinkDetailRow(row)) {
+    return 0;
+  }
   return Math.max(0, Array.isArray(row?.assigned_task_groups) ? row.assigned_task_groups.length : 0);
 }
 
 export function siteListRowHeightForData(row) {
+  if (isInstallLinkDetailRow(row)) {
+    return INSTALL_LINK_DETAIL_ROW_HEIGHT;
+  }
   return BASE_ROW_HEIGHT * Math.max(1, siteListAssignedTaskGroupCount(row));
 }
 
 export function siteListRowHeightSignature(rows) {
   if (!Array.isArray(rows)) return "";
   return rows
-    .map((row) => `${String(row?.id ?? row?.site_id ?? "")}:${siteListAssignedTaskGroupCount(row)}`)
+    .map((row) => `${String(row?.id ?? row?.site_id ?? "")}:${isInstallLinkDetailRow(row) ? "install-links" : siteListAssignedTaskGroupCount(row)}`)
     .join("|");
 }
 
@@ -1252,6 +1268,8 @@ export async function loadSiteListPageData(request) {
       installServerUrl,
       installEngineCA,
       installServerIPFallback,
+      agentBinarySource: normalizeInstallSource(data?.agent_binary_source),
+      agentInstallArtifact: data?.agent_install_artifact || null,
       initialError: "",
     };
   } catch (error) {
@@ -1262,6 +1280,8 @@ export async function loadSiteListPageData(request) {
       installServerUrl: "",
       installEngineCA: null,
       installServerIPFallback: "",
+      agentBinarySource: INSTALL_SOURCE_ENGINE,
+      agentInstallArtifact: null,
       initialError: getRouteErrorMessage(error, "Unable to load sites."),
     };
   } finally {
@@ -1865,6 +1885,20 @@ function normalizeInstallBranch(value) {
   return String(value || DEFAULT_INSTALL_BRANCH).trim() || DEFAULT_INSTALL_BRANCH;
 }
 
+function normalizeInstallSource(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (["engine", "engine-compiled", "engine_compiled", "engine-cache", "engine_cached"].includes(text)) {
+    return INSTALL_SOURCE_ENGINE;
+  }
+  return INSTALL_SOURCE_GITHUB;
+}
+
+function formatInstallSource(value) {
+  return normalizeInstallSource(value) === INSTALL_SOURCE_ENGINE
+    ? "Engine-Compiled Agent"
+    : "GitHub Branch";
+}
+
 function rawBorealisFileUrl(branch, fileName) {
   const encodedBranch = normalizeInstallBranch(branch)
     .split("/")
@@ -1891,10 +1925,251 @@ function installEngineCAB64(engineCA) {
   return String(engineCA?.pem_b64 || "").trim();
 }
 
-export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, engineCA = null, serverIPFallback = "") {
+function engineInstallDownloadUrl(osId, serverUrl, downloads = {}) {
+  const item = downloads?.[osId] || null;
+  const rawUrl = String(item?.url || "").trim();
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+  const rawPath = String(item?.path || "").trim();
+  if (rawPath.startsWith("/")) {
+    const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
+    return normalizedServerUrl ? `${normalizedServerUrl}${rawPath}` : "";
+  }
+  return "";
+}
+
+function githubAgentDownloadUrl(osId, branch = DEFAULT_INSTALL_BRANCH) {
+  if (osId === "windows") {
+    return rawBorealisFileUrl(branch, "Data/Agent/dist/windows-amd64/Agent.exe");
+  }
+  if (osId === "linux") {
+    return rawBorealisFileUrl(branch, "Data/Agent/dist/linux-amd64/Agent");
+  }
+  return "";
+}
+
+function installDownloadUrlForLink(link, serverUrl) {
+  const rawUrl = String(link?.url || "").trim();
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+  const rawPath = String(link?.path || "").trim();
+  if (rawPath.startsWith("/")) {
+    const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
+    return normalizedServerUrl ? `${normalizedServerUrl}${rawPath}` : rawPath;
+  }
+  return "";
+}
+
+function unixTimestampValue(value) {
+  const seconds = Number(value || 0);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
+function formatInstallLinkTimestamp(value, fallback = "Never") {
+  const seconds = unixTimestampValue(value);
+  if (!seconds) {
+    return fallback;
+  }
+  try {
+    const timestamp = new Date(seconds * 1000);
+    const date = timestamp.toLocaleDateString("en-US", {
+      month: "2-digit",
+      day: "2-digit",
+      year: "numeric",
+    });
+    const time = timestamp.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return `${date} @ ${time}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function formatInstallLinkAge(value, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const seconds = unixTimestampValue(value);
+  if (!seconds) {
+    return "";
+  }
+  const elapsed = Math.max(0, Number(nowSeconds || 0) - seconds);
+  const units = [
+    { size: 31536000, label: "Year" },
+    { size: 604800, label: "Week" },
+    { size: 86400, label: "Day" },
+    { size: 3600, label: "Hour" },
+    { size: 60, label: "Minute" },
+  ];
+  const unit = units.find((item) => elapsed >= item.size) || units[units.length - 1];
+  const count = Math.max(1, Math.floor(elapsed / unit.size));
+  return `${count} ${unit.label}${count === 1 ? "" : "s"} Ago`;
+}
+
+function formatInstallCompileDate(value, nowSeconds = Math.floor(Date.now() / 1000), fallback = "Unavailable") {
+  const timestamp = formatInstallLinkTimestamp(value, fallback);
+  if (timestamp === fallback) {
+    return fallback;
+  }
+  const age = formatInstallLinkAge(value, nowSeconds);
+  return age ? `${timestamp} (${age})` : timestamp;
+}
+
+export function siteInstallLinkForOS(site, osId) {
+  const downloads = site?.agent_install_downloads || {};
+  const platform = INSTALL_LINK_PLATFORM_OPTIONS.find((option) => option.id === osId)?.platform || "";
+  return downloads?.[osId] || downloads?.[platform] || null;
+}
+
+function isActiveSiteInstallLink(link, nowSeconds = Math.floor(Date.now() / 1000)) {
+  if (!link || typeof link !== "object") {
+    return false;
+  }
+  const expiresAt = unixTimestampValue(link.expires_at);
+  const revokedAt = unixTimestampValue(link.revoked_at);
+  return Boolean((link.url || link.path) && link.active !== false && revokedAt === 0 && expiresAt > nowSeconds);
+}
+
+export function siteInstallLinkRows(site, nowSeconds = Math.floor(Date.now() / 1000)) {
+  return INSTALL_LINK_PLATFORM_OPTIONS.map((option) => {
+    const link = siteInstallLinkForOS(site, option.id);
+    return {
+      ...option,
+      link,
+      active: isActiveSiteInstallLink(link, nowSeconds),
+      downloadCount: Number(link?.download_count || 0),
+      expiresAt: unixTimestampValue(link?.expires_at),
+      issuedAt: unixTimestampValue(link?.issued_at),
+      lastDownloadedAt: unixTimestampValue(link?.last_downloaded_at),
+    };
+  });
+}
+
+function installLinkStatusTone(id, description = "") {
+  const base = INSTALL_LINK_STATUS_TONES[id] || INSTALL_LINK_STATUS_TONES.outOfDate;
+  return {
+    ...base,
+    id,
+    description,
+  };
+}
+
+function installArtifactID(value) {
+  return String(value?.artifact_id || value?.artifact || "").trim();
+}
+
+export function siteInstallLinkStatus(row, site = {}, artifact = null, selectedInstallSource = INSTALL_SOURCE_ENGINE) {
+  const source = normalizeInstallSource(selectedInstallSource);
+  if (source !== INSTALL_SOURCE_ENGINE) {
+    return installLinkStatusTone("outOfDate", "Current drawer source is not the Engine-compiled Agent cache.");
+  }
+
+  const buildStatus = String(artifact?.build_status || "").trim().toLowerCase();
+  const artifactAvailable = artifact ? Boolean(artifact.available) : true;
+  const engineCacheAvailable = artifact?.engine_cache_available !== false;
+  const linkStateAvailable = artifact?.link_state_available !== false;
+  const buildError = String(artifact?.build_error || artifact?.last_error || "").trim();
+  if (buildStatus === "compiling" || (artifact && !engineCacheAvailable && !buildError)) {
+    return installLinkStatusTone("compiling", "Engine is still compiling or validating the stable Agent artifact.");
+  }
+  if (buildStatus === "stale" || artifact?.agent_source_stale) {
+    return installLinkStatusTone("outOfDate", "Engine Agent source changed after this cached Agent artifact was compiled.");
+  }
+  if (buildStatus === "link_state_unavailable" || !linkStateAvailable) {
+    return installLinkStatusTone("outOfDate", "Engine link-state table is unavailable.");
+  }
+  if (buildStatus === "error" || (artifact && !artifactAvailable && buildError)) {
+    return installLinkStatusTone("outOfDate", "Engine Agent artifact build or cache validation failed.");
+  }
+  if (!row?.active) {
+    return installLinkStatusTone("outOfDate", "This platform link is expired, revoked, or unavailable.");
+  }
+
+  const currentArtifact = installArtifactID(artifact);
+  const rowArtifact = installArtifactID(row?.link || row);
+  if (currentArtifact && rowArtifact && currentArtifact !== rowArtifact) {
+    return installLinkStatusTone("outOfDate", "This platform link points at an older Engine Agent artifact.");
+  }
+
+  const workerStatus = String(site?.site_worker_status || site?.raw_site_worker?.status || "").trim().toLowerCase();
+  if (site?.site_worker_payload_ready === false || workerStatus === "starting") {
+    return installLinkStatusTone("sending", "Engine is waiting for the site worker to report readiness.");
+  }
+  if (site?.site_worker_payload_ready === true && !isActiveSiteWorkerRow(site)) {
+    return installLinkStatusTone("sending", "No active site worker has reported ready state for this site.");
+  }
+
+  return installLinkStatusTone("upToDate", "Engine stable Agent artifact, active link, and site-worker state agree.");
+}
+
+export function siteInstallLinkGridRows(site, installServerUrl = "", nowSeconds = Math.floor(Date.now() / 1000), artifact = null, selectedInstallSource = INSTALL_SOURCE_ENGINE) {
+  return siteInstallLinkRows(site, nowSeconds).map((row) => {
+    const link = row.link || {};
+    const urlText = installDownloadUrlForLink(link, installServerUrl);
+    const compiledAt = unixTimestampValue(
+      link?.compiled_at ||
+      artifact?.compiled_at
+    );
+    const gridRow = {
+      id: `${siteIdForRow(site) || "site"}:${row.platform}`,
+      site,
+      osId: row.id,
+      agentType: `Install on ${row.label}`,
+      platform: row.platform,
+      link,
+      active: row.active,
+      url: urlText,
+      artifact: String(link?.artifact_id || link?.artifact || "").trim() || "Unavailable",
+      agentCompileDate: compiledAt,
+      nowSeconds,
+      expiresAt: row.expiresAt,
+      issuedAt: row.issuedAt,
+      downloadCount: row.downloadCount,
+      lastDownloadedAt: row.lastDownloadedAt,
+    };
+    gridRow.installStatus = siteInstallLinkStatus(gridRow, site, artifact, selectedInstallSource);
+    return gridRow;
+  });
+}
+
+export function siteInstallLinkSummary(site, artifact = null, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const rows = siteInstallLinkRows(site, nowSeconds);
+  const activeRows = rows.filter((row) => row.active);
+  const nearestExpiry = activeRows
+    .map((row) => row.expiresAt)
+    .filter(Boolean)
+    .sort((a, b) => a - b)[0] || 0;
+  const linkStateAvailable = artifact?.link_state_available !== false;
+  const cacheAvailable = artifact ? Boolean(artifact.available) : true;
+  const sourceStale =
+    artifact?.agent_source_stale ||
+    String(artifact?.build_status || "").trim().toLowerCase() === "stale";
+  return {
+    rows,
+    activeCount: activeRows.length,
+    totalDownloads: rows.reduce((sum, row) => sum + row.downloadCount, 0),
+    nearestExpiry,
+    available: activeRows.length === INSTALL_LINK_PLATFORM_OPTIONS.length,
+    warning:
+      sourceStale ||
+      !cacheAvailable ||
+      !linkStateAvailable ||
+      activeRows.length < INSTALL_LINK_PLATFORM_OPTIONS.length,
+    cacheAvailable,
+    linkStateAvailable,
+    sourceStale,
+  };
+}
+
+export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, engineCA = null, serverIPFallback = "", options = {}) {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
-  const normalizedBranch = normalizeInstallBranch(branch);
+  const installSource = normalizeInstallSource(options?.source);
+  const engineDownloadUrl = installSource === INSTALL_SOURCE_ENGINE
+    ? engineInstallDownloadUrl(osId, normalizedServerUrl, options?.downloads)
+    : "";
+  const normalizedBranch = engineDownloadUrl ? DEFAULT_INSTALL_BRANCH : normalizeInstallBranch(branch);
   const usesDefaultBranch = normalizedBranch === DEFAULT_INSTALL_BRANCH;
   const engineCAB64 = installEngineCAB64(engineCA);
   const normalizedServerIPFallback = normalizeInstallServerIPFallback({ server_ip_fallback: serverIPFallback });
@@ -1909,12 +2184,14 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     if (engineCA?.required && !normalizedServerIPFallback) {
       return "";
     }
-    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
+    const agentUrl = engineDownloadUrl || rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
     const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 ${quotePowerShellValue(engineCAB64)}` : "";
     const serverIPFallbackArg = engineCAB64 && normalizedServerIPFallback ? ` --server-ip-fallback ${quotePowerShellValue(normalizedServerIPFallback)}` : "";
+    const releaseArg = engineDownloadUrl ? `--release-channel ${quotePowerShellValue("stable")} ` : "";
     return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
       `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
+      releaseArg +
       `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}${caArg}${serverIPFallbackArg}`;
   }
@@ -1923,11 +2200,13 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     if (engineCA?.required && !normalizedServerIPFallback) {
       return "";
     }
-    const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
-    const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
+    const agentUrl = engineDownloadUrl || rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
+    const urlArg = usesDefaultBranch && !engineDownloadUrl ? agentUrl : quoteShellValue(agentUrl);
     const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 "${escapeShellDoubleQuoted(engineCAB64)}"` : "";
     const serverIPFallbackArg = engineCAB64 && normalizedServerIPFallback ? ` --server-ip-fallback "${escapeShellDoubleQuoted(normalizedServerIPFallback)}"` : "";
+    const releaseArg = engineDownloadUrl ? `--release-channel "stable" ` : "";
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
+      releaseArg +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"${caArg}${serverIPFallbackArg} --install-service`;
     return `curl -fsSL ${urlArg} -o /tmp/Borealis-Agent; ` +
@@ -1937,11 +2216,322 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   return "";
 }
 
+function InstallLinkAgentTypeCell(params) {
+  const row = params?.data || {};
+  const copyInstallCommand = params?.context?.copyInstallCommand;
+  const openInstallLinkContextMenu = params?.context?.openInstallLinkContextMenu;
+  const selectedInstallSource = normalizeInstallSource(params?.context?.selectedInstallSource);
+  const hasDownloadLink = selectedInstallSource === INSTALL_SOURCE_GITHUB || Boolean(row.url);
+  const installStatus = row.installStatus || (row.active
+    ? installLinkStatusTone("upToDate")
+    : installLinkStatusTone("outOfDate"));
+  const handleCopyLink = useCallback((event) => {
+    stopGridRowSelectionEvent(event);
+    if (copyInstallCommand) {
+      void copyInstallCommand(row.site, row.osId);
+    }
+  }, [copyInstallCommand, row.osId, row.site]);
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, minWidth: 0, width: "100%", height: "100%" }}>
+      <Box sx={{ width: 32, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <GridRowContextMenuButtonCell
+          params={params}
+          onOpenContextMenu={openInstallLinkContextMenu}
+          tooltip="Install Link Actions"
+        />
+      </Box>
+      <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", minWidth: 0, flex: 1, height: "100%" }}>
+        <Tooltip title={hasDownloadLink ? "Copy install command" : "Install command unavailable"} placement="top-start">
+          <Box
+            component="button"
+            type="button"
+            disabled={!copyInstallCommand}
+            onMouseDown={stopGridRowSelectionEvent}
+            onClick={handleCopyLink}
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              width: "100%",
+              maxWidth: "100%",
+              p: 0,
+              border: 0,
+              background: "transparent",
+              color: SITE_DESCRIPTION_SUBTEXT_COLOR,
+              cursor: copyInstallCommand ? "pointer" : "default",
+              font: "inherit",
+              fontSize: "0.82rem",
+              fontWeight: 800,
+              lineHeight: 1.15,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              textAlign: "left",
+              "&:hover": copyInstallCommand
+                ? {
+                    color: BOREALIS_LINK_COLOR,
+                    textDecoration: "underline",
+                  }
+                : undefined,
+              "&:disabled": {
+                opacity: 0.8,
+              },
+            }}
+          >
+            {row.agentType || "Install Agent"}
+          </Box>
+        </Tooltip>
+        <Tooltip title={installStatus.description || installStatus.label} placement="top-start">
+          <Typography
+            sx={{
+              mt: 0.15,
+              color: installStatus.color,
+              fontSize: "0.68rem",
+              fontWeight: 800,
+              lineHeight: 1.1,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {installStatus.label}
+          </Typography>
+        </Tooltip>
+      </Box>
+    </Box>
+  );
+}
+
+function InstallLinkCompileDateCell(params) {
+  const value = formatInstallCompileDate(params?.data?.agentCompileDate, params?.context?.nowSeconds || params?.data?.nowSeconds, "Unavailable");
+  return (
+    <Tooltip title={value} placement="top-start">
+      <Typography
+        sx={{
+          color: SITE_DESCRIPTION_SUBTEXT_COLOR,
+          fontSize: "0.72rem",
+          fontWeight: 700,
+          lineHeight: 1.2,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          maxWidth: "100%",
+        }}
+      >
+        {value}
+      </Typography>
+    </Tooltip>
+  );
+}
+
+function InstallLinkTimestampCell(params) {
+  return (
+    <Typography sx={{ color: SITE_DESCRIPTION_SUBTEXT_COLOR, fontSize: "0.72rem", fontWeight: 600, lineHeight: 1.2 }}>
+      {formatInstallLinkTimestamp(params?.value, "Unavailable")}
+    </Typography>
+  );
+}
+
+function InstallLinkDownloadsCell(params) {
+  const row = params?.data || {};
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", minWidth: 0, width: "100%", height: "100%" }}>
+      <Typography sx={{ color: SITE_DESCRIPTION_SUBTEXT_COLOR, fontSize: "0.78rem", fontWeight: 800, lineHeight: 1.15 }}>
+        {Number(row.downloadCount || 0).toLocaleString()}
+      </Typography>
+      <Typography sx={{ mt: 0.15, color: SITE_DESCRIPTION_SUBTEXT_COLOR, fontSize: "0.66rem", fontWeight: 600, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        Last: {formatInstallLinkTimestamp(row.lastDownloadedAt, "None")}
+      </Typography>
+    </Box>
+  );
+}
+
+function buildInstallLinkDetailColumnDefs() {
+  return [
+    {
+      headerName: "Agent Type",
+      field: "agentType",
+      minWidth: 230,
+      flex: 1.1,
+      cellRenderer: InstallLinkAgentTypeCell,
+    },
+    {
+      headerName: "Agent Compile Date",
+      field: "agentCompileDate",
+      minWidth: 230,
+      flex: 1.3,
+      cellRenderer: InstallLinkCompileDateCell,
+    },
+    {
+      headerName: "Issued",
+      field: "issuedAt",
+      minWidth: 168,
+      flex: 0.85,
+      cellRenderer: InstallLinkTimestampCell,
+    },
+    {
+      headerName: "Expires",
+      field: "expiresAt",
+      minWidth: 168,
+      flex: 0.85,
+      cellRenderer: InstallLinkTimestampCell,
+    },
+    {
+      headerName: "Downloads",
+      field: "downloadCount",
+      minWidth: 150,
+      flex: 0.72,
+      cellRenderer: InstallLinkDownloadsCell,
+    },
+  ];
+}
+
+export function InstallLinksDetailRow(params) {
+  const site = params?.data?.site || {};
+  const context = params?.context || {};
+  const rowData = siteInstallLinkGridRows(
+    site,
+    context.installServerUrl || "",
+    context.nowSeconds || Math.floor(Date.now() / 1000),
+    context.agentInstallArtifact || null,
+    context.selectedInstallSource
+  );
+  const columnDefs = useMemo(() => buildInstallLinkDetailColumnDefs(), []);
+  const defaultColDef = useMemo(() => ({
+    sortable: false,
+    filter: false,
+    resizable: true,
+    suppressHeaderMenuButton: true,
+    suppressHeaderContextMenu: true,
+  }), []);
+
+  return (
+    <Box
+      sx={{
+        width: "100%",
+        height: "100%",
+        px: 0,
+        py: 0,
+        overflow: "hidden",
+        "@keyframes installLinkDrawerSlideDown": {
+          "0%": { opacity: 0, transform: "translateY(-12px)", clipPath: "inset(0 0 100% 0)" },
+          "100%": { opacity: 1, transform: "translateY(0)", clipPath: "inset(0 0 0 0)" },
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: "100%",
+          height: "100%",
+          minWidth: 0,
+          borderRadius: 0,
+          border: "none",
+          background: NAV_SUBSECTION_ROW_BG,
+          boxShadow: "none",
+          overflow: "hidden",
+          transformOrigin: "top center",
+          animation: "installLinkDrawerSlideDown 180ms ease-out",
+          willChange: "transform, opacity, clip-path",
+        }}
+      >
+        <Box
+          className={themeClassName}
+          sx={{
+            height: "100%",
+            minHeight: INSTALL_LINK_DETAIL_ROW_HEIGHT,
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+            "& .ag-root-wrapper": {
+              border: "none",
+              borderRadius: 0,
+              background: NAV_SUBSECTION_ROW_BG,
+            },
+            "& .ag-header": {
+              minHeight: "32px !important",
+              backgroundColor: INSTALL_LINK_HEADER_BG,
+              borderBottom: "1px solid rgba(125,211,252,0.22)",
+            },
+            "& .ag-header-cell-label": {
+              color: "#e2e8f0",
+              fontSize: "0.68rem",
+              fontWeight: 900,
+              letterSpacing: "0.03em",
+              textTransform: "uppercase",
+            },
+            "& .ag-header-cell-resize::after": {
+              backgroundColor: "rgba(226,232,240,0.26)",
+            },
+            "& .ag-row, & .ag-row-even, & .ag-row-odd": {
+              color: SITE_DESCRIPTION_SUBTEXT_COLOR,
+              borderColor: "rgba(255,255,255,0.04)",
+              backgroundColor: `${NAV_SUBSECTION_ROW_BG} !important`,
+            },
+            "& .ag-row-hover": {
+              backgroundColor: "rgba(88,166,255,0.12) !important",
+            },
+            "& .ag-cell": {
+              display: "flex",
+              alignItems: "center",
+              px: 1.2,
+            },
+            "& .ag-cell-value": {
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+            },
+          }}
+        >
+          <AgGridReact
+            rowData={rowData}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            rowHeight={42}
+            headerHeight={32}
+            suppressCellFocus
+            suppressContextMenu
+            preventDefaultOnContextMenu
+            getRowId={(rowParams) => String(rowParams.data?.id || "")}
+            onCellContextMenu={(rowParams) => context.openInstallLinkContextMenu?.(rowParams.event, rowParams.data, rowParams.node, rowParams)}
+            context={context}
+            theme={myTheme}
+          />
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function SiteInstallLinkRevokeDialog({ target, saving, onCancel, onConfirm }) {
+  const siteName = String(target?.site?.name || "Selected Site").trim() || "Selected Site";
+  const platformLabel = INSTALL_LINK_PLATFORM_OPTIONS.find((option) => option.platform === target?.platform)?.label || "Agent";
+  return (
+    <Dialog open={Boolean(target)} onClose={saving ? undefined : onCancel} maxWidth="xs" fullWidth PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
+      <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
+        <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 800, fontSize: "1rem", lineHeight: 1.2 }}>
+          Revoke Install Link
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
+        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.88rem", lineHeight: 1.45 }}>
+          Revoke current {platformLabel} link for {siteName} and issue replacement.
+        </Typography>
+      </DialogContent>
+      <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
+        <Button onClick={onCancel} disabled={saving} sx={SITE_DIALOG_BUTTON_SX}>Cancel</Button>
+        <Button onClick={onConfirm} disabled={saving} sx={SITE_DIALOG_DANGER_BUTTON_SX}>
+          {saving ? "Revoking..." : "Revoke"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
   const siteNames = Array.isArray(sites) ? sites.map((site) => site?.name).filter(Boolean) : [];
   const previewNames = siteNames.slice(0, 4);
   const remainingCount = Math.max(siteNames.length - previewNames.length, 0);
-  const deleteLabel = "Delete Site(s)";
+  const deleteLabel = siteNames.length === 1 ? "Delete Site" : "Delete Sites";
 
   return (
     <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
@@ -1951,7 +2541,7 @@ function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
             {deleteLabel}
           </Typography>
           <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
-            Permanently remove the selected site records from Borealis.
+            Permanently remove these site records from Borealis.
           </Typography>
         </Box>
       </DialogTitle>
@@ -1968,7 +2558,7 @@ function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
             }}
           >
             <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", fontWeight: 700, letterSpacing: 0.75, textTransform: "uppercase" }}>
-              Selected Sites
+              Sites To Delete
             </Typography>
             <Box sx={{ mt: 1.2, display: "flex", flexWrap: "wrap", gap: 0.9 }}>
               {previewNames.map((name) => (
@@ -2206,11 +2796,13 @@ export default function SiteList() {
   const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
   const initialInstallEngineCA = loaderData?.installEngineCA || null;
   const initialInstallServerIPFallback = String(loaderData?.installServerIPFallback || "");
+  const initialAgentInstallArtifact = loaderData?.agentInstallArtifact || null;
   const [rows, setRows] = useState(() => initialRows);
   const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => ({}));
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
   const [installEngineCA, setInstallEngineCA] = useState(() => initialInstallEngineCA);
   const [installServerIPFallback, setInstallServerIPFallback] = useState(() => initialInstallServerIPFallback);
+  const [agentInstallArtifact, setAgentInstallArtifact] = useState(() => initialAgentInstallArtifact);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -2225,14 +2817,17 @@ export default function SiteList() {
   const [autoApprovalSaving, setAutoApprovalSaving] = useState(false);
   const [autoApprovalError, setAutoApprovalError] = useState("");
   const [siteContextMenu, setSiteContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
-  const [installMenuAnchorEl, setInstallMenuAnchorEl] = useState(null);
-  const [installMenuSite, setInstallMenuSite] = useState(null);
+  const [selectedInstallSource, setSelectedInstallSource] = useState(INSTALL_SOURCE_ENGINE);
   const [selectedInstallBranch, setSelectedInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
   const [draftInstallBranch, setDraftInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
   const [branchDialogOpen, setBranchDialogOpen] = useState(false);
   const [branchRows, setBranchRows] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState("");
+  const [expandedInstallLinksSiteId, setExpandedInstallLinksSiteId] = useState(null);
+  const [installLinkContextMenu, setInstallLinkContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
+  const [revokeInstallLinkTarget, setRevokeInstallLinkTarget] = useState(null);
+  const [installLinkRevokeSaving, setInstallLinkRevokeSaving] = useState(false);
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
@@ -2272,7 +2867,7 @@ export default function SiteList() {
     [mergedRows, nowSeconds, siteConnectionSnapshotVersion]
   );
 
-  const displayRows = useMemo(
+  const siteDisplayRows = useMemo(
     () =>
       attachResourceHistoryToRows(stableRows, resourceHistoryRef.current).map((row) => ({
         ...row,
@@ -2284,6 +2879,10 @@ export default function SiteList() {
       stableRows,
       siteWorkerPayloadReady,
     ]
+  );
+  const displayRows = useMemo(
+    () => insertExpandedInstallLinkRows(siteDisplayRows, expandedInstallLinksSiteId),
+    [expandedInstallLinksSiteId, siteDisplayRows]
   );
 
   const rowHeightSignature = useMemo(() => siteListRowHeightSignature(displayRows), [displayRows]);
@@ -2368,6 +2967,7 @@ export default function SiteList() {
       setInstallServerUrl(nextInstallServerUrl);
       setInstallEngineCA(nextInstallEngineCA);
       setInstallServerIPFallback(nextInstallServerIPFallback);
+      setAgentInstallArtifact(data?.agent_install_artifact || null);
       setLoadError("");
     } catch {
       setRows([]);
@@ -2375,6 +2975,7 @@ export default function SiteList() {
       setInstallServerUrl("");
       setInstallEngineCA(null);
       setInstallServerIPFallback("");
+      setAgentInstallArtifact(null);
       setLoadError("Unable to load sites.");
     }
   }, [fetchInstallMetadataFromOverview]);
@@ -2456,8 +3057,28 @@ export default function SiteList() {
     setInstallServerUrl(initialInstallServerUrl);
     setInstallEngineCA(initialInstallEngineCA);
     setInstallServerIPFallback(initialInstallServerIPFallback);
+    setSelectedInstallSource(INSTALL_SOURCE_ENGINE);
+    setAgentInstallArtifact(initialAgentInstallArtifact);
     setLoadError(String(loaderData?.initialError || ""));
-  }, [initialInstallEngineCA, initialInstallServerIPFallback, initialInstallServerUrl, initialRows, loaderData]);
+  }, [
+    initialAgentInstallArtifact,
+    initialInstallEngineCA,
+    initialInstallServerUrl,
+    initialInstallServerIPFallback,
+    initialRows,
+    loaderData,
+  ]);
+
+  useEffect(() => {
+    if (!expandedInstallLinksSiteId) {
+      return;
+    }
+    const expandedStillVisible = rows.some((row) => String(row?.id ?? row?.site_id ?? "") === String(expandedInstallLinksSiteId));
+    if (!expandedStillVisible) {
+      setExpandedInstallLinksSiteId(null);
+      setInstallLinkContextMenu({ open: false, top: 0, left: 0, row: null });
+    }
+  }, [expandedInstallLinksSiteId, rows]);
 
   useEffect(() => {
     recordSiteWorkerResourceHistory(resourceHistoryRef.current, siteWorkerPayload, Date.now());
@@ -2582,17 +3203,11 @@ export default function SiteList() {
     }
   }, []);
 
-  const handleCloseInstallMenu = useCallback(() => {
-    setInstallMenuAnchorEl(null);
-    setInstallMenuSite(null);
-  }, []);
-
   const handleOpenBranchDialog = useCallback(() => {
     setDraftInstallBranch(selectedInstallBranch);
     setBranchDialogOpen(true);
-    handleCloseInstallMenu();
     void fetchInstallBranches();
-  }, [fetchInstallBranches, handleCloseInstallMenu, selectedInstallBranch]);
+  }, [fetchInstallBranches, selectedInstallBranch]);
 
   const handleCloseBranchDialog = useCallback(() => {
     setBranchDialogOpen(false);
@@ -2602,6 +3217,7 @@ export default function SiteList() {
   const handleApplyInstallBranch = useCallback(async () => {
     const nextBranch = normalizeInstallBranch(draftInstallBranch);
     setSelectedInstallBranch(nextBranch);
+    setSelectedInstallSource(INSTALL_SOURCE_GITHUB);
     setDraftInstallBranch(nextBranch);
     setBranchDialogOpen(false);
     await sendNotification({
@@ -2612,52 +3228,198 @@ export default function SiteList() {
     });
   }, [draftInstallBranch, sendNotification]);
 
-  const handleCopyInstallCommand = useCallback(async (osId, site) => {
-    const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
-    const enrollmentCode = String(site?.enrollment_code || "").trim();
-    const osLabel = INSTALL_OS_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
-    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch, installEngineCA, installServerIPFallback);
+  const handleToggleInstallSource = useCallback(async () => {
+    const nextSource = selectedInstallSource === INSTALL_SOURCE_ENGINE ? INSTALL_SOURCE_GITHUB : INSTALL_SOURCE_ENGINE;
+    setSelectedInstallSource(nextSource);
+    if (nextSource === INSTALL_SOURCE_ENGINE) {
+      setSelectedInstallBranch(DEFAULT_INSTALL_BRANCH);
+      setDraftInstallBranch(DEFAULT_INSTALL_BRANCH);
+    }
+    await sendNotification({
+      title: "Download Source Updated",
+      message: `Agent install commands now use <b>${formatInstallSource(nextSource)}</b>.`,
+      icon: "settings",
+      variant: "info",
+    });
+  }, [selectedInstallSource, sendNotification]);
 
+  const handleToggleInstallLinksForSite = useCallback((site) => {
+    const siteId = siteIdForRow(site);
+    if (!siteId) {
+      return;
+    }
+    setExpandedInstallLinksSiteId((current) => (String(current || "") === String(siteId) ? null : String(siteId)));
+    setInstallLinkContextMenu({ open: false, top: 0, left: 0, row: null });
+  }, []);
+
+  const handleCloseInstallLinkContextMenu = useCallback(() => {
+    setInstallLinkContextMenu({ open: false, top: 0, left: 0, row: null });
+  }, []);
+
+  const handleToggleInstallLinkSource = useCallback(() => {
+    handleCloseInstallLinkContextMenu();
+    void handleToggleInstallSource();
+  }, [handleCloseInstallLinkContextMenu, handleToggleInstallSource]);
+
+  const handleOpenInstallLinkBranchDialog = useCallback(() => {
+    handleCloseInstallLinkContextMenu();
+    handleOpenBranchDialog();
+  }, [handleCloseInstallLinkContextMenu, handleOpenBranchDialog]);
+
+  const handleOpenInstallLinkContextMenu = useCallback((event, row) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!row) {
+      return;
+    }
+    setInstallLinkContextMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      row,
+    });
+  }, []);
+
+  const handleCopyInstallCommand = useCallback(async (site, osId) => {
+    const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
+    const osLabel = INSTALL_LINK_PLATFORM_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
+    const source = normalizeInstallSource(selectedInstallSource);
+    const command = buildInstallCommand(
+      osId,
+      installServerUrl,
+      site?.enrollment_code,
+      selectedInstallBranch,
+      installEngineCA,
+      installServerIPFallback,
+      {
+        source,
+        downloads: site?.agent_install_downloads,
+      }
+    );
     if (!command) {
-      const internalMissingFallback = installEngineCA?.required && !installServerIPFallback;
       await sendNotification({
         title: "Install Command Unavailable",
-        message: internalMissingFallback
-          ? `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the Internal-Only Engine IP fallback is unavailable.`
-          : `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the public engine URL or enrollment code is unavailable.`,
+        message: `<b>${osLabel}</b> install command for <b>${siteName}</b> is unavailable.`,
         icon: "warning",
         variant: "error",
       });
       return;
     }
-
     const copied = await copyTextToClipboard(command, `Copy ${osLabel} install command`);
     if (copied) {
       await sendNotification({
         title: "Install Command Copied",
-        message: `Agent installation command for <b>${osLabel}</b> at <b>${siteName}</b> copied to clipboard.`,
+        message: `<b>${osLabel}</b> ${formatInstallSource(source)} install command for <b>${siteName}</b> copied to clipboard.`,
         icon: "done",
         variant: "info",
       });
       return;
     }
-
     await sendNotification({
       title: "Manual Copy Required",
       message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for the <b>${osLabel}</b> install command at <b>${siteName}</b>.`,
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, installEngineCA, installServerIPFallback, installServerUrl, selectedInstallBranch, sendNotification]);
+  }, [copyTextToClipboard, installEngineCA, installServerIPFallback, installServerUrl, selectedInstallBranch, selectedInstallSource, sendNotification]);
 
-  const handleSelectInstallOs = useCallback(async (osId) => {
-    const activeSite = installMenuSite;
-    handleCloseInstallMenu();
-    if (!activeSite) {
+  const handleRequestRevokeInstallLink = useCallback((site, platform) => {
+    handleCloseInstallLinkContextMenu();
+    setRevokeInstallLinkTarget({ site, platform });
+  }, [handleCloseInstallLinkContextMenu]);
+
+  const handleCancelRevokeInstallLink = useCallback(() => {
+    if (!installLinkRevokeSaving) {
+      setRevokeInstallLinkTarget(null);
+    }
+  }, [installLinkRevokeSaving]);
+
+  const handleConfirmRevokeInstallLink = useCallback(async () => {
+    const target = revokeInstallLinkTarget;
+    const siteId = target?.site?.id;
+    const platform = String(target?.platform || "").trim();
+    if (!siteId || !platform) {
+      setRevokeInstallLinkTarget(null);
       return;
     }
-    await handleCopyInstallCommand(osId, activeSite);
-  }, [handleCloseInstallMenu, handleCopyInstallCommand, installMenuSite]);
+    const siteName = String(target?.site?.name || "Unknown Site").trim() || "Unknown Site";
+    const platformLabel = INSTALL_LINK_PLATFORM_OPTIONS.find((option) => option.platform === platform)?.label || "Agent";
+    setInstallLinkRevokeSaving(true);
+    try {
+      const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/agent-install-links/${encodeURIComponent(platform)}/revoke`, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      await fetchSites();
+      setRevokeInstallLinkTarget(null);
+      await sendNotification({
+        title: "Install Link Replaced",
+        message: `<b>${platformLabel}</b> install link for <b>${siteName}</b> was revoked and replaced.`,
+        icon: "done",
+        variant: "info",
+      });
+    } catch (error) {
+      await sendNotification({
+        title: "Install Link Not Revoked",
+        message: String(error?.message || error || "Unable to revoke install link."),
+        icon: "warning",
+        variant: "error",
+      });
+    } finally {
+      setInstallLinkRevokeSaving(false);
+    }
+  }, [fetchSites, revokeInstallLinkTarget, sendNotification]);
+
+  const installLinkContextRow = installLinkContextMenu.row || null;
+  const installLinkContextActions = useMemo(() => {
+    const row = installLinkContextRow;
+    const site = row?.site || null;
+    const platform = row?.platform || "";
+    return [
+      {
+        id: "switch-download-source",
+        group: "organize",
+        label: "Switch Download Source",
+        icon: DownloadRoundedIcon,
+        description: selectedInstallSource === INSTALL_SOURCE_ENGINE && !agentInstallArtifact?.available
+          ? `Current: ${formatInstallSource(selectedInstallSource)}. Engine cache unavailable.`
+          : `Current: ${formatInstallSource(selectedInstallSource)}`,
+        onClick: () => handleToggleInstallLinkSource(),
+      },
+      {
+        id: "switch-install-branch",
+        group: "organize",
+        label: "Switch Branch",
+        icon: AltRouteRoundedIcon,
+        description: `Current: ${selectedInstallBranch}.`,
+        onClick: () => handleOpenInstallLinkBranchDialog(),
+      },
+      {
+        id: "revoke-installer-link",
+        group: "danger",
+        label: "Revoke Installer Link",
+        icon: DeleteRoundedIcon,
+        intent: "danger",
+        disabled: !row?.active,
+        disabledReason: row?.active ? "" : "Link unavailable.",
+        description: "Rotate this agent download link now.",
+        onClick: () => handleRequestRevokeInstallLink(site, platform),
+      },
+    ];
+  }, [
+    agentInstallArtifact?.available,
+    handleOpenInstallLinkBranchDialog,
+    handleRequestRevokeInstallLink,
+    handleToggleInstallLinkSource,
+    installLinkContextRow,
+    selectedInstallBranch,
+    selectedInstallSource,
+  ]);
 
   const openRenameDialog = useCallback((siteOverride = null) => {
     const selId = siteOverride?.id ?? (selectedIds.size === 1 ? Array.from(selectedIds)[0] : null);
@@ -2670,41 +3432,9 @@ export default function SiteList() {
 
   const getRowId = useCallback((params) => String(params.data?.id ?? ""), []);
 
-  const rowSelection = useMemo(
-    () => ({
-      mode: "multiRow",
-      checkboxes: true,
-      headerCheckbox: true,
-      enableClickSelection: true,
-      enableSelectionWithoutKeys: true,
-    }),
-    []
-  );
-
-  const selectionColumnDef = useMemo(
-    () => ({
-      headerName: "",
-      minWidth: 52,
-      width: 52,
-      maxWidth: 52,
-      pinned: "left",
-      sortable: false,
-      resizable: false,
-      suppressHeaderMenuButton: true,
-      suppressHeaderContextMenu: true,
-      suppressMovable: true,
-      lockPinned: true,
-      lockPosition: true,
-    }),
-    []
-  );
-
-  const handleOpenSiteContextMenu = useCallback((event, row, rowNode = null) => {
+  const handleOpenSiteContextMenu = useCallback((event, row) => {
     event?.preventDefault?.();
     event?.stopPropagation?.();
-    if (rowNode && !rowNode.isSelected?.()) {
-      rowNode.setSelected?.(true, true);
-    }
     setSiteContextMenu({
       open: true,
       top: Number(event?.clientY || 0),
@@ -2719,48 +3449,82 @@ export default function SiteList() {
       field: "name",
       minWidth: 260,
       flex: 1.15,
+      cellStyle: {
+        paddingLeft: 6,
+        paddingRight: 12,
+      },
       cellRendererParams: {
         suppressMouseEventHandling: () => true,
       },
       cellRenderer: (params) => {
         const description = String(params?.data?.description || "").trim();
+        const siteId = siteIdForRow(params?.data);
+        const expanded = siteId > 0 && String(expandedInstallLinksSiteId || "") === String(siteId);
+        const linkSummary = siteInstallLinkSummary(params?.data, agentInstallArtifact);
+        const linkSummaryText = `${linkSummary.activeCount}/${INSTALL_LINK_PLATFORM_OPTIONS.length} install links · ${linkSummary.totalDownloads.toLocaleString()} downloads`;
+        const subtitle = description ? `${description} · ${linkSummaryText}` : linkSummaryText;
+        const toggleInstallLinksLabel = expanded ? "Hide Agent Install Links" : "Display Agent Install Links";
         return (
           <Box
             sx={{
               display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              alignItems: "flex-start",
+              alignItems: "center",
+              gap: 0.75,
               width: "100%",
               height: "100%",
               minWidth: 0,
               lineHeight: 1.25,
             }}
           >
-            <Box
-              component="span"
-              sx={{
-                color: BOREALIS_LINK_COLOR,
-                cursor: "pointer",
-                fontWeight: 500,
-                fontSize: "0.88rem",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: "100%",
-              }}
-              onMouseDown={stopGridRowSelectionEvent}
-              onClick={(event) => {
-                stopGridRowSelectionEvent(event);
-                handleOpenDevicesForSite(params.data);
-              }}
-            >
-              {params.value}
-            </Box>
-            {description ? (
+            <Tooltip title={toggleInstallLinksLabel} placement="top">
+              <IconButton
+                size="small"
+                aria-label={`${toggleInstallLinksLabel} for ${params.value || "site"}`}
+                onMouseDown={stopGridRowSelectionEvent}
+                onClick={(event) => {
+                  stopGridRowSelectionEvent(event);
+                  handleToggleInstallLinksForSite(params.data);
+                }}
+                sx={{
+                  width: 28,
+                  height: 28,
+                  flexShrink: 0,
+                  color: expanded ? "#7dd3fc" : "rgba(226,232,240,0.78)",
+                  border: "none",
+                  background: "transparent",
+                  "&:hover": {
+                    color: "#f8fbff",
+                    background: "rgba(88,166,255,0.14)",
+                  },
+                }}
+              >
+                {expanded ? <KeyboardArrowDownRoundedIcon fontSize="small" /> : <DownloadRoundedIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+            <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", minWidth: 0, flex: 1 }}>
+              <Box
+                component="span"
+                sx={{
+                  color: BOREALIS_LINK_COLOR,
+                  cursor: "pointer",
+                  fontWeight: 500,
+                  fontSize: "0.88rem",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  maxWidth: "100%",
+                }}
+                onMouseDown={stopGridRowSelectionEvent}
+                onClick={(event) => {
+                  stopGridRowSelectionEvent(event);
+                  handleOpenDevicesForSite(params.data);
+                }}
+              >
+                {params.value}
+              </Box>
               <Typography
                 component="span"
-                title={description}
+                title={subtitle || undefined}
                 sx={{
                   mt: 0.25,
                   color: "rgba(148,163,184,0.72)",
@@ -2773,9 +3537,9 @@ export default function SiteList() {
                   maxWidth: "100%",
                 }}
               >
-                {description}
+                {subtitle}
               </Typography>
-            ) : null}
+            </Box>
           </Box>
         );
       },
@@ -2853,7 +3617,7 @@ export default function SiteList() {
       },
     },
     buildRowContextMenuColumnDef(handleOpenSiteContextMenu, { tooltip: "Site Actions" }),
-  ], [handleOpenDevicesForSite, handleOpenSiteContextMenu]);
+  ], [agentInstallArtifact, expandedInstallLinksSiteId, handleOpenDevicesForSite, handleOpenSiteContextMenu, handleToggleInstallLinksForSite]);
 
   const defaultColDef = useMemo(() => ({
     sortable: false,
@@ -2867,30 +3631,7 @@ export default function SiteList() {
     [rows, selectedIds]
   );
 
-  const singleSelectedSite = useMemo(
-    () => (selectedSiteRows.length === 1 ? selectedSiteRows[0] : null),
-    [selectedSiteRows]
-  );
-
   const hasSelectedSites = selectedSiteRows.length > 0;
-  const canOpenInstallMenu = Boolean(singleSelectedSite && installServerUrl && singleSelectedSite?.enrollment_code);
-  const installActionTooltip = selectedIds.size === 0
-    ? "Select one site to copy an install command"
-    : selectedIds.size > 1
-      ? "Select exactly one site to copy an install command"
-      : !installServerUrl
-        ? "Borealis public engine URL is unavailable"
-        : !singleSelectedSite?.enrollment_code
-          ? "The selected site is missing an enrollment code"
-          : undefined;
-
-  const handleOpenInstallMenu = useCallback((event) => {
-    if (!singleSelectedSite) return;
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    setInstallMenuAnchorEl(event.currentTarget);
-    setInstallMenuSite(singleSelectedSite);
-  }, [singleSelectedSite]);
 
   const handleCloseSiteContextMenu = useCallback(() => {
     setSiteContextMenu({ open: false, top: 0, left: 0, row: null });
@@ -2919,52 +3660,8 @@ export default function SiteList() {
     setDeleteOpen(true);
   }, [handleCloseSiteContextMenu, hasSelectedSites, selectedIds]);
 
-  useEffect(() => {
-    if (!hasSelectedSites) {
-      setInstallMenuAnchorEl(null);
-      setInstallMenuSite(null);
-      return;
-    }
-
-    if (!singleSelectedSite) {
-      setInstallMenuAnchorEl(null);
-      setInstallMenuSite(null);
-      return;
-    }
-
-    if (installMenuSite && String(installMenuSite.id) !== String(singleSelectedSite.id)) {
-      setInstallMenuAnchorEl(null);
-      setInstallMenuSite(null);
-    }
-  }, [hasSelectedSites, installMenuSite, singleSelectedSite]);
-
   const pageHeaderActions = useMemo(
     () => [
-      {
-        id: "install-site-agent",
-        label: "Install Agent(s)",
-        icon: <DownloadRoundedIcon />,
-        tone: "primary",
-        disabled: !canOpenInstallMenu,
-        tooltip: installActionTooltip,
-        onClick: handleOpenInstallMenu,
-      },
-      ...(singleSelectedSite
-        ? [{
-            id: "onboard-site-devices",
-            label: "Onboard Devices",
-            icon: <DevicesIcon />,
-            tone: "primary",
-            onClick: () => handleOpenOnboardingForSite(singleSelectedSite),
-          },
-          {
-            id: "site-auto-approval",
-            label: "Auto-Approval",
-            icon: <CheckCircleOutlineRoundedIcon />,
-            tone: "secondary",
-            onClick: () => openAutoApprovalDialog(singleSelectedSite),
-          }]
-        : []),
       {
         id: "create-site",
         label: "Create Site",
@@ -2973,14 +3670,7 @@ export default function SiteList() {
         onClick: () => setCreateOpen(true),
       },
     ],
-    [
-      canOpenInstallMenu,
-      handleOpenInstallMenu,
-      handleOpenOnboardingForSite,
-      openAutoApprovalDialog,
-      installActionTooltip,
-      singleSelectedSite,
-    ]
+    []
   );
 
   const siteContextRow = siteContextMenu.row || null;
@@ -2990,7 +3680,6 @@ export default function SiteList() {
   const siteContextActions = useMemo(() => {
     const row = siteContextMenu.row || null;
     const unavailableReason = row ? "" : "Select a site first.";
-    const deleteTargetCount = row?.id != null && selectedIds.has(row.id) ? selectedSiteRows.length : row ? 1 : 0;
     return [
       {
         id: "display-site-devices",
@@ -3021,11 +3710,11 @@ export default function SiteList() {
       {
         id: "onboard-site-devices",
         group: "primary",
-        label: "Onboard Devices",
+        label: "Network-Based Device Onboarding",
         icon: DevicesIcon,
         disabled: Boolean(unavailableReason),
         disabledReason: unavailableReason,
-        description: "Open Automatic Device Onboarding locked to this site.",
+        description: "Automatically onboard devices across a network.",
         onClick: () => {
           handleCloseSiteContextMenu();
           handleOpenOnboardingForSite(row);
@@ -3057,15 +3746,12 @@ export default function SiteList() {
       {
         id: "delete-site",
         group: "danger",
-        label: deleteTargetCount > 1 ? "Delete Selected Sites" : "Delete",
+        label: "Delete",
         icon: DeleteRoundedIcon,
         intent: "danger",
         disabled: Boolean(unavailableReason),
         disabledReason: unavailableReason,
-        description:
-          deleteTargetCount > 1
-            ? `Delete ${deleteTargetCount} selected site records.`
-            : "Delete this site record.",
+        description: "Delete this site record.",
         onClick: () => handleOpenDeleteDialog(row),
       },
     ];
@@ -3077,8 +3763,6 @@ export default function SiteList() {
     handleOpenSoftwareAuditForSite,
     openRenameDialog,
     openAutoApprovalDialog,
-    selectedSiteRows.length,
-    selectedIds,
     siteContextMenu.row,
   ]);
   const groupedSiteContextActions = useMemo(
@@ -3102,8 +3786,14 @@ export default function SiteList() {
     () => ({
       navigate,
       openDevicesForSiteStatus: handleOpenDevicesForSiteStatus,
+      nowSeconds,
+      installServerUrl,
+      agentInstallArtifact,
+      selectedInstallSource,
+      openInstallLinkContextMenu: handleOpenInstallLinkContextMenu,
+      copyInstallCommand: handleCopyInstallCommand,
     }),
-    [handleOpenDevicesForSiteStatus, navigate]
+    [agentInstallArtifact, handleCopyInstallCommand, handleOpenDevicesForSiteStatus, handleOpenInstallLinkContextMenu, installServerUrl, navigate, nowSeconds, selectedInstallSource]
   );
 
   return (
@@ -3124,36 +3814,6 @@ export default function SiteList() {
       }}
       elevation={0}
     >
-      <Menu
-        anchorEl={installMenuAnchorEl}
-        open={Boolean(installMenuAnchorEl)}
-        onClose={handleCloseInstallMenu}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{ sx: INSTALL_MENU_PAPER_SX }}
-      >
-        {INSTALL_OS_OPTIONS.map((option) => (
-          <MenuItem
-            key={option.id}
-            onClick={() => void handleSelectInstallOs(option.id)}
-            sx={INSTALL_MENU_ITEM_SX}
-          >
-            {option.label}
-          </MenuItem>
-        ))}
-        <Divider sx={{ my: 0.55, borderColor: "rgba(148,163,184,0.16)" }} />
-        <MenuItem onClick={handleOpenBranchDialog} sx={{ ...INSTALL_MENU_ITEM_SX, alignItems: "flex-start", gap: 1 }}>
-          <AltRouteRoundedIcon sx={{ mt: 0.15, fontSize: 18, color: "rgba(226,232,240,0.92)" }} />
-          <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.92rem", fontWeight: 700, lineHeight: 1.2 }}>
-              Switch Branch
-            </Typography>
-            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.72rem", lineHeight: 1.25, mt: 0.25 }}>
-              Current: {selectedInstallBranch}
-            </Typography>
-          </Box>
-        </MenuItem>
-      </Menu>
       <Menu
         open={Boolean(siteContextMenu.open)}
         onClose={handleCloseSiteContextMenu}
@@ -3273,10 +3933,6 @@ export default function SiteList() {
               "& .ag-row-hover": {
                 backgroundColor: "rgba(73,156,196,0.2) !important",
               },
-              "& .ag-row-selected": {
-                backgroundColor: "rgba(125,211,252,0.2) !important",
-                boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-              },
               "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
                 display: "flex",
                 alignItems: "center",
@@ -3302,6 +3958,12 @@ export default function SiteList() {
                 display: "flex",
                 alignItems: "center",
               },
+              "& .ag-full-width-container, & .ag-full-width-row, & .ag-full-width-row .ag-full-width-cell": {
+                width: "100% !important",
+              },
+              "& .ag-full-width-row": {
+                overflow: "hidden",
+              },
             }}
           >
             <AgGridReact
@@ -3310,8 +3972,8 @@ export default function SiteList() {
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
               context={gridContext}
-              rowSelection={rowSelection}
-              selectionColumnDef={selectionColumnDef}
+              isFullWidthRow={(params) => isInstallLinkDetailRow(params?.rowNode?.data || params?.data)}
+              fullWidthCellRenderer={InstallLinksDetailRow}
               suppressCellFocus
               suppressContextMenu
               preventDefaultOnContextMenu
@@ -3337,13 +3999,10 @@ export default function SiteList() {
                   autoSizeHandleRef.current = null;
                 }
               }}
-              onSelectionChanged={() => {
-                const api = gridApiRef.current || gridRef.current?.api;
-                if (!api) return;
-                const selected = api.getSelectedNodes().map((n) => n.data?.id).filter((id) => id != null);
-                setSelectedIds(new Set(selected));
+              onCellContextMenu={(params) => {
+                if (isInstallLinkDetailRow(params?.data)) return;
+                handleOpenSiteContextMenu(params.event, params.data);
               }}
-              onCellContextMenu={(params) => handleOpenSiteContextMenu(params.event, params.data, params.node)}
               onFirstDataRendered={autoSizeColumns}
               onRowDataUpdated={autoSizeColumns}
               theme={myTheme}
@@ -3351,6 +4010,24 @@ export default function SiteList() {
           </Box>
         </Box>
       </PageBodyFrame>
+
+      <RowContextMenu
+        open={installLinkContextMenu.open}
+        onClose={handleCloseInstallLinkContextMenu}
+        position={{ top: installLinkContextMenu.top, left: installLinkContextMenu.left }}
+        headerIcon={DownloadRoundedIcon}
+        title={installLinkContextRow?.site?.name || "Install Link"}
+        subtitle={installLinkContextRow ? `${installLinkContextRow.agentType} · ${installLinkContextRow.platform}` : "Agent install link"}
+        actions={installLinkContextActions}
+        widthVariant="standard"
+      />
+
+      <SiteInstallLinkRevokeDialog
+        target={revokeInstallLinkTarget}
+        saving={installLinkRevokeSaving}
+        onCancel={handleCancelRevokeInstallLink}
+        onConfirm={() => void handleConfirmRevokeInstallLink()}
+      />
 
       <CreateSiteDialog
         open={createOpen}
@@ -3405,7 +4082,10 @@ export default function SiteList() {
 
       <SiteDeleteDialog
         open={deleteOpen}
-        onCancel={() => setDeleteOpen(false)}
+        onCancel={() => {
+          setDeleteOpen(false);
+          setSelectedIds(new Set());
+        }}
         sites={selectedSiteRows}
         onConfirm={async () => {
           try {

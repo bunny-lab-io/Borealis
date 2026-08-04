@@ -57,6 +57,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/agent/enroll/request` (No Authentication) - submit enrollment request.
     - `POST /api/agent/enroll/poll` (No Authentication) - finalize approved enrollment, including recreating a previously purged GUID with a bumped token version after fresh approval.
     - `POST /api/agent/token/refresh` (Refresh Token) - mint new access token; returns `401 device_purged` when a GUID is blocked by a purge barrier.
+    - `GET /api/agent/install/download/{platform}?site_id=<id>&artifact=<artifact_id>&expires=<rfc3339>&download_signature=<signature>` (Signed URL, No Session) - download a cached Engine-served Agent binary for initial install. The signature is non-enumerable and bound to artifact ID, platform, site ID, visible expiration, active link nonce, and current site enrollment-code hash. Successful binary responses increment the active link counter.
 
     ### Devices and Inventory
     - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, Agent Metadata Field sync, and Engine-side release-channel correction. Responses may include `agent_release_channel_instruction` with `stable/main` when a no-override Agent reports `unstable` or when an overridden Agent keeps reporting a retired branch after the recovery grace window.
@@ -140,13 +141,14 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device_list_views` (Token Authenticated) - create saved view.
     - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
     - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-    - `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname` metadata for install-command UIs. Site rows include `site_worker_slug` and `site_worker_name` for K3s bridge naming visibility.
+    - `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname`, Agent binary source, and signed Engine install download metadata for install-command UIs. Site rows include `site_worker_slug` and `site_worker_name` for K3s bridge naming visibility.
     - `POST /api/sites` (Admin) - create site. Rejects site-worker slug conflicts, empty slugs, and slugs longer than 51 characters.
     - `POST /api/sites/delete` (Admin) - delete sites.
     - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map for devices in the current operator's site scope.
     - `POST /api/sites/assign` (Admin) - assign devices to site.
     - `POST /api/sites/rename` (Admin) - rename site. Rejects site-worker slug conflicts, empty slugs, and slugs longer than 51 characters.
     - `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level enrollment auto-approval.
+    - `POST /api/sites/<site_id>/agent-install-links/<platform>/revoke` (Admin) - revoke the current active Agent install link for one platform (`windows-amd64` or `linux-amd64`) and return replacement link metadata with a zeroed counter.
     - `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash for optional `repo`, `branch`, and `ttl` query parameters; feature branch refs with slashes are supported.
     - `GET /api/agent/hash` (Device Authenticated) - get agent hash.
     - `POST /api/agent/hash` (Device Authenticated) - update agent hash.
@@ -252,7 +254,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `GET /api/server/workers` (Admin) - active and recent scheduler/site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, K3s Metrics Server CPU/RAM stats for bridge workers when `borealis-operator` can read podmetrics, and optional Docker inspect size metadata when Docker metadata is available.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
     - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
-    - `PUT /api/server/agent-release-channels` (Admin) - update Agent release GitHub repo, then refresh cached update artifacts. Devices without overrides remain pinned to `Stable:main`.
+    - `PUT /api/server/agent-release-channels` (Admin) - update Agent release GitHub repo, binary source (`engine` or `github`), optional GitHub fallback, then refresh cached update artifacts. Devices without overrides remain pinned to `Stable:main`.
     - `POST /api/server/agent-release-channels/refresh` (Admin) - refresh Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached runtime service action through `job-scheduler`; supported K3s workload restarts route through `borealis-operator`, and K3s WireGuard reconcile routes through the mounted control socket. Docker/Compose helper actions are retired after Stage 11. Supported actions are `api-backend restart`, `webui-frontend restart`, `postgres-db restart`, `remote-desktop-guacd restart`, `traefik-edge reload`, and `wireguard-tunnel reconcile`. WebUI rebuilds are CLI-only through `Engine.sh --network-mode public|local --service webui-frontend rebuild prod|dev`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.

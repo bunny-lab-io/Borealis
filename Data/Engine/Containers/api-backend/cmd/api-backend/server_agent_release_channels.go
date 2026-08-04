@@ -15,6 +15,8 @@ const (
 	defaultAgentReleaseChannel = "stable"
 	defaultAgentReleaseRepo    = "bunny-lab-io/Borealis"
 	defaultAgentReleaseBranch  = "main"
+	agentReleaseSourceEngine   = "engine"
+	agentReleaseSourceGitHub   = "github"
 )
 
 type githubTokenStateStore interface {
@@ -55,6 +57,15 @@ func agentReleaseChannelsHandler(auth *authService, fallback http.Handler) http.
 			}
 			settings := collectAgentReleaseChannelSettings()
 			settings["default_channel"] = defaultAgentReleaseChannel
+			if value, ok := body["binary_source"]; ok {
+				settings["binary_source"] = normalizeAgentReleaseBinarySource(value, agentReleaseSourceGitHub)
+			}
+			if value, ok := body["source"]; ok {
+				settings["binary_source"] = normalizeAgentReleaseBinarySource(value, agentReleaseSourceGitHub)
+			}
+			if value, ok := body["github_fallback_enabled"]; ok {
+				settings["github_fallback_enabled"] = boolFromAny(value)
+			}
 			if value, ok := body["repo"]; ok {
 				github, _ := settings["github"].(map[string]any)
 				if github == nil {
@@ -157,6 +168,8 @@ func collectAgentReleaseChannelSettings() map[string]any {
 	github["repo"] = normalizeAgentReleaseRepo(github["repo"], defaultAgentReleaseRepo)
 	github["default_branch"] = firstText(cleanText(github["default_branch"]), defaultAgentReleaseBranch)
 	merged["github"] = github
+	merged["binary_source"] = normalizeAgentReleaseBinarySource(merged["binary_source"], agentReleaseSourceGitHub)
+	merged["github_fallback_enabled"] = boolFromAny(merged["github_fallback_enabled"])
 
 	loadedChannels, _ := loaded["channels"].(map[string]any)
 	channels, _ := merged["channels"].(map[string]any)
@@ -183,8 +196,10 @@ func defaultAgentReleaseChannelSettings(now int64) map[string]any {
 	repo := normalizeAgentReleaseRepo(os.Getenv("BOREALIS_UPDATE_REPO"), defaultAgentReleaseRepo)
 	branch := firstText(cleanText(os.Getenv("BOREALIS_UPDATE_BRANCH")), defaultAgentReleaseBranch)
 	return map[string]any{
-		"version":         int64(1),
-		"default_channel": defaultAgentReleaseChannel,
+		"version":                 int64(1),
+		"default_channel":         defaultAgentReleaseChannel,
+		"binary_source":           agentReleaseSourceGitHub,
+		"github_fallback_enabled": false,
 		"github": map[string]any{
 			"repo":           repo,
 			"default_branch": branch,
@@ -284,6 +299,18 @@ func normalizeAgentReleaseChannel(value any, fallback string) string {
 	switch text {
 	case "stable", "unstable":
 		return text
+	default:
+		return fallback
+	}
+}
+
+func normalizeAgentReleaseBinarySource(value any, fallback string) string {
+	text := strings.ToLower(strings.TrimSpace(cleanText(value)))
+	switch text {
+	case "engine", "engine-compiled", "engine_compiled", "engine-cache", "engine_cached":
+		return agentReleaseSourceEngine
+	case "github", "git", "repository", "repo", "release", "releases":
+		return agentReleaseSourceGitHub
 	default:
 		return fallback
 	}

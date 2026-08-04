@@ -16,6 +16,8 @@ sites (id) --------------------< device_sites (site_id)
   +------------------------< device_approvals (site_id, soft relation)
   |
   +------------------------< credentials (site_id, ON DELETE SET NULL)
+  |
+  +------------------------< site_agent_install_links (site_id, ON DELETE CASCADE)
 
 devices (guid) ----------------< refresh_tokens (guid)
 devices (guid) ----------------< device_keys (guid)
@@ -440,6 +442,24 @@ finally:
     - Rebuild migration removes legacy `enrollment_code_id` if present.
     - Current design stores site-code association directly in this table.
     - `auto_approve_until` stores a UTC epoch timestamp for temporary site-level auto-approval. Enrollment only auto-approves while the timestamp is in the future and hostname conflict checks are safe.
+
+    #### `site_agent_install_links`
+    - Status: Active.
+    - Purpose: Current and historical Engine-served Agent install links per site/platform.
+    - Columns: `id`, `site_id`, `platform`, `artifact_id`, `link_nonce`, `issued_at`, `expires_at`, `revoked_at`, `download_count`, `last_downloaded_at`.
+    - Constraints and indexes:
+    - `id` primary key.
+    - `site_id` references `engine.sites(id)` with `ON DELETE CASCADE`.
+    - `idx_site_agent_install_links_site` on `(site_id, platform, artifact_id)`.
+    - `idx_site_agent_install_links_active` unique partial index on `(site_id, platform)` where `revoked_at = 0`.
+    - Used by:
+    - `GET /api/sites` creates or reuses active Windows/Linux links when the Engine Agent cache is available.
+    - `GET /api/agent/install/download/{platform}` verifies readable signed-query URLs against active link state.
+    - `POST /api/sites/{site_id}/agent-install-links/{platform}/revoke` revokes one active platform link and inserts a replacement.
+    - Notes:
+    - `link_nonce` is not shown in install URLs. It is included in the signature input so visible query fields stay readable without becoming tamperable.
+    - `download_count` and `last_downloaded_at` update only after a successful binary response from the signed-query route.
+    - Expired, revoked, and artifact-stale rows remain internal audit state; only current active rows are shown by the Sites UI.
 
     #### `device_approvals`
     - Status: Active.
