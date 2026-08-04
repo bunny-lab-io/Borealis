@@ -925,8 +925,12 @@ func passkeyProtocolTransports(raw string) []protocol.AuthenticatorTransport {
 }
 
 func readPasskeyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
-	_, body, ok := readPasskeyJSONRaw(w, r)
-	return body, ok
+	body, err := readJSONMapWithLimit(r, 1<<20)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
+		return nil, false
+	}
+	return body, true
 }
 
 func readPasskeyJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[string]any, bool) {
@@ -949,7 +953,7 @@ func readPasskeyJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[str
 	if body == nil {
 		body = map[string]any{}
 	}
-	if errs := sanitizeJSONInputMap(body); len(errs) > 0 {
+	if errs := validateJSONTransportMap(body); len(errs) > 0 {
 		writePublicValidationErrors(w, errs)
 		return nil, nil, false
 	}

@@ -214,12 +214,22 @@ export function validateBorealisFetchRequest(input, init = {}, baseOrigin = glob
   if (typeof body === "string" && (contentType.includes("json") || /^[\s\r\n]*[\[{]/.test(body))) {
     try {
       const parsedBody = JSON.parse(body);
-      const result = sanitizePayload(parsedBody);
-      errors.push(...result.errors);
-      if (!errors.length) {
+      if (usesTransportOnlyBodyValidation(parsed.pathname)) {
+        errors.push(...validateTransportPayload(parsedBody));
+      } else {
+        const result = sanitizePayload(parsedBody);
+        errors.push(...result.errors);
+        if (!errors.length) {
+          nextInit = {
+            ...init,
+            body: JSON.stringify(result.value),
+            headers: withJSONContentType(init?.headers),
+          };
+        }
+      }
+      if (!errors.length && nextInit === init) {
         nextInit = {
           ...init,
-          body: JSON.stringify(result.value),
           headers: withJSONContentType(init?.headers),
         };
       }
@@ -271,6 +281,34 @@ function withJSONContentType(headers) {
     return next;
   }
   return { ...headers, "Content-Type": headerValue(headers, "content-type") || "application/json" };
+}
+
+function usesTransportOnlyBodyValidation(pathname) {
+  return pathname === "/api/auth/passkeys/register/verify" || pathname === "/api/auth/passkeys/authenticate/verify";
+}
+
+function validateTransportPayload(value, field = "body") {
+  const errors = [];
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      errors.push(...validateTransportPayload(item, `${field}[${index}]`));
+    });
+    return errors;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, child]) => {
+      const childField = field === "body" ? key : `${field}.${key}`;
+      errors.push(...validateTransportPayload(child, childField));
+    });
+    return errors;
+  }
+  if (typeof value !== "string") return errors;
+  if (value.length > SECRET_MAX_LENGTH) {
+    errors.push({ field, message: `${field} exceeds ${SECRET_MAX_LENGTH} characters.` });
+  } else if (CONTROL_RE.test(value) || /[\u0009\u000a\u000d]/.test(value)) {
+    errors.push({ field, message: `${field} cannot include control characters.` });
+  }
+  return errors;
 }
 
 function safeDecodeURIComponent(value) {

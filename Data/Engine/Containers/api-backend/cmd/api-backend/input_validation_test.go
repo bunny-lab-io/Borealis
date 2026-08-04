@@ -78,6 +78,31 @@ func TestReadJSONMapWithLimitRejectsInvalidRegex(t *testing.T) {
 	}
 }
 
+func TestPasskeyVerifyPayloadUsesTransportValidation(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/passkeys/authenticate/verify", strings.NewReader(`{
+		"request_id":"pending.token.value",
+		"credential":{
+			"id":"abc+/=",
+			"rawId":"abc+/=",
+			"type":"public-key",
+			"response":{
+				"clientDataJSON":"abc+/=",
+				"authenticatorData":"abc+/=",
+				"signature":"abc+/="
+			}
+		}
+	}`))
+	rec := httptest.NewRecorder()
+	_, body, ok := readPasskeyJSONRaw(rec, req)
+	if !ok {
+		t.Fatalf("expected passkey payload to pass transport validation, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	credential, ok := body["credential"].(map[string]any)
+	if !ok || credential["id"] != "abc+/=" {
+		t.Fatalf("expected opaque credential id preserved, got %#v", body["credential"])
+	}
+}
+
 func TestHostValidationRejectsSlashHostname(t *testing.T) {
 	if err := validateHostInput("hostname", "borealis/evil"); err == nil {
 		t.Fatal("expected slash hostname to fail")

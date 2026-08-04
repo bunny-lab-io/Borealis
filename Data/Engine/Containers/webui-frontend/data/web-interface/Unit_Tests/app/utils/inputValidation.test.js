@@ -51,6 +51,34 @@ describe("inputValidation", () => {
     });
   });
 
+  it("keeps passkey verify credential JSON opaque", () => {
+    const body = JSON.stringify({
+      request_id: "pending.token.value",
+      credential: {
+        id: "abc+/=",
+        rawId: "abc+/=",
+        type: "public-key",
+        response: {
+          clientDataJSON: "abc+/=",
+          authenticatorData: "abc+/=",
+          signature: "abc+/=",
+        },
+      },
+    });
+    const request = validateBorealisFetchRequest(
+      "/api/auth/passkeys/authenticate/verify",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      },
+      "https://borealis.test"
+    );
+
+    expect(request.errors).toEqual([]);
+    expect(request.init.body).toBe(body);
+  });
+
   it("rejects unsafe same-origin API paths", () => {
     const request = validateBorealisFetchRequest("/api/devices/%3Cscript%3E", {}, "https://borealis.test");
 
