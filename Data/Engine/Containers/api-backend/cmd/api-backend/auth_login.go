@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -598,9 +597,9 @@ func readAuthJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[string
 	if r.Body == nil {
 		return nil, map[string]any{}, true
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	raw, err := readLimitedRequestBody(r, publicAuthJSONMaxBytes)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return nil, nil, false
 	}
 	if len(raw) == 0 {
@@ -613,6 +612,10 @@ func readAuthJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[string
 	}
 	if body == nil {
 		body = map[string]any{}
+	}
+	if errs := sanitizeJSONInputMap(body); len(errs) > 0 {
+		writePublicValidationErrors(w, errs)
+		return nil, nil, false
 	}
 	return raw, body, true
 }

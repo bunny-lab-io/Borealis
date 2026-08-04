@@ -371,6 +371,7 @@ Stop and ask operator before destructive DB operations, schema migrations, produ
 * Visual example: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx`.
 * Treat `Page_Style_Template.jsx` as reference only. Do not add business logic there.
 * Mirror layout, spacing, card treatment, selection column behavior, toast patterns, and route conventions from documented UI guidance.
+* Every new WebUI text entry path must declare its field class, frontend validation/sanitization, backend validation/sanitization, maximum length, and test coverage. Use shared WebUI/API input-validation helpers where possible. Never rely on frontend-only validation for operator-controlled or agent-controlled text.
 * For UI changes, provide local preview path, screenshot instructions, or browser verification notes when practical.
 * Do not rely on visual judgment alone when tests or route checks exist.
 

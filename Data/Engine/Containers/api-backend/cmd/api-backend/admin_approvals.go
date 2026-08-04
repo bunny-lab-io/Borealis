@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -151,8 +150,10 @@ func handleApprovalStatusMutation(w http.ResponseWriter, r *http.Request, auth *
 	}
 	var body map[string]any
 	if status == "approved" {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		var err error
+		body, err = readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 	}

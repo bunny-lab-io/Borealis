@@ -219,13 +219,10 @@ func deviceRemoteAccessBlockedPayload(status string) map[string]any {
 }
 
 func readOptionalJSONMap(w http.ResponseWriter, r *http.Request) map[string]any {
-	var body map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+	body, err := readJSONMap(r)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
 		return nil
-	}
-	if body == nil {
-		body = map[string]any{}
 	}
 	return body
 }

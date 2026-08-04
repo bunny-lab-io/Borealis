@@ -166,7 +166,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.ListenPort),
-		Handler:           withRequestHeaders(mux),
+		Handler:           withRequestHeaders(withPublicInputValidation(mux)),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 

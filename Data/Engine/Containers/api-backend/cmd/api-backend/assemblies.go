@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -531,15 +530,25 @@ func assemblyMutationAllowed(w http.ResponseWriter, r *http.Request, auth *authS
 }
 
 func readAssemblyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
+	raw, err := readLimitedRequestBody(r, assemblyDocumentMaxBytes)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, publicValidationErrorPayload(err, "invalid json"))
+		return nil, false
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return map[string]any{}, true
+	}
 	var body map[string]any
-	reader := http.MaxBytesReader(w, r.Body, assemblyDocumentMaxBytes)
-	err := json.NewDecoder(reader).Decode(&body)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 		return nil, false
 	}
 	if body == nil {
 		body = map[string]any{}
+	}
+	if errs := validateJSONTransportMap(body); len(errs) > 0 {
+		writePublicValidationErrors(w, errs)
+		return nil, false
 	}
 	return body, true
 }

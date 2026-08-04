@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -64,9 +63,10 @@ func userSiteAssignmentHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "user_site_assignments_unavailable"})
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			body = map[string]any{}
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
 		}
 		usernames := normalizeAssignmentUsernames(body["usernames"])
 		siteIDs := normalizeAssignmentSiteIDs(body["site_ids"])
@@ -75,14 +75,14 @@ func userSiteAssignmentHandler(auth *authService) http.HandlerFunc {
 
 		var payload map[string]any
 		var status int
-		var err error
+		var storeErr error
 		if route == "selection" {
-			payload, status, err = store.loadUserSiteAssignmentSelection(ctx, usernames)
+			payload, status, storeErr = store.loadUserSiteAssignmentSelection(ctx, usernames)
 		} else {
-			payload, status, err = store.assignUserSites(ctx, usernames, siteIDs)
+			payload, status, storeErr = store.assignUserSites(ctx, usernames, siteIDs)
 		}
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		if storeErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": storeErr.Error()})
 			return
 		}
 		writeJSON(w, status, payload)

@@ -185,9 +185,9 @@ func deviceFilterPreviewHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMapWithLimit(r, publicJSONMapMaxBytes)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		store, ok := auth.store.(deviceFilterStore)
@@ -233,7 +233,7 @@ func deviceFilterIDHandler(auth *authService) http.HandlerFunc {
 		case action == "" && r.Method == http.MethodPut:
 			body, err := readJSONMap(r)
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+				invalidJSONOrValidation(w, err)
 				return
 			}
 			payload, status, err := store.updateDeviceFilter(ctx, profile, filterID, body)
@@ -296,7 +296,7 @@ func handleDeviceFilterCreate(w http.ResponseWriter, r *http.Request, auth *auth
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	store, ok := auth.store.(deviceFilterStore)
@@ -342,14 +342,7 @@ func parseDeviceFilterAction(path string) (int64, string, bool) {
 }
 
 func readJSONMap(r *http.Request) (map[string]any, error) {
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
-		return nil, err
-	}
-	if body == nil {
-		body = map[string]any{}
-	}
-	return body, nil
+	return readJSONMapWithLimit(r, publicJSONMapMaxBytes)
 }
 
 func writeFilterFoundResponse(w http.ResponseWriter, payload map[string]any, found bool, err error, key string) {

@@ -96,9 +96,17 @@ const JSONPrettyDisplayNode = ({ id, data }) => {
     return () => { clearInterval(iv); clearInterval(monitor); };
   }, [id, edges, setNodes]);
 
-  // Generate highlighted HTML
   const pretty = JSON.stringify(jsonData, null, 2);
-  const highlighted = Prism.highlight(pretty, Prism.languages.json, "json");
+  const highlighted = (() => {
+    try {
+      return Prism.highlight(pretty, Prism.languages.json, "json");
+    } catch {
+      return String(pretty || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+  })();
 
   return (
     <div

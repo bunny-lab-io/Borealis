@@ -224,8 +224,11 @@ func deviceWatchdogOverrideHandler(auth *authService, broadcaster watchdogIncide
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "watchdogs_unavailable"})
 			return
 		}
-		body := map[string]any{}
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
+		body, err := readJSONMapWithLimit(r, 64<<10)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
+		}
 		ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
 		defer cancel()
 		payload, validationErrors, err := store.upsertDeviceWatchdogOverride(ctx, profile, r.PathValue("device_id"), body)
@@ -328,8 +331,11 @@ func watchdogPreview(w http.ResponseWriter, r *http.Request, auth *authService) 
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "watchdogs_unavailable"})
 		return
 	}
-	body := map[string]any{}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	body, err := readJSONMap(r)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
+		return
+	}
 	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
 	defer cancel()
 	payload, validationErrors, err := store.previewWatchdog(ctx, profile, body)
@@ -394,8 +400,11 @@ func watchdogSave(w http.ResponseWriter, r *http.Request, auth *authService, bro
 	if !ok {
 		return
 	}
-	body := map[string]any{}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	body, err := readJSONMap(r)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
+		return
+	}
 	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
 	defer cancel()
 	item, validationErrors, err := store.saveWatchdog(ctx, profile, watchdogID, body)
@@ -511,8 +520,11 @@ func watchdogIncidentStateUpdate(w http.ResponseWriter, r *http.Request, auth *a
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 		return
 	}
-	body := map[string]any{}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
+	body, err := readJSONMapWithLimit(r, 64<<10)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
+		return
+	}
 	requestedState := firstText(cleanText(body["state"]), "open")
 	requestedReason := cleanText(body["reason"])
 	if normalizeIncidentMutationState(requestedState) == "suppressed" && cleanSingleLine(requestedReason) == "" {

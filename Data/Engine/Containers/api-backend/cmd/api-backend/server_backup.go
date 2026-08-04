@@ -352,6 +352,14 @@ func readEngineBackupRequest(w http.ResponseWriter, r *http.Request, requireConf
 	_ = json.Unmarshal(raw["confirmation"], &req.Confirmation)
 	req.Cipher = strings.TrimSpace(req.Cipher)
 	req.Confirmation = strings.TrimSpace(req.Confirmation)
+	if err := validateInputValue("cipher", req.Cipher, inputClassSecret); err != nil {
+		writePublicValidationErrors(w, []publicValidationError{{Field: "cipher", Message: err.Error()}})
+		return engineBackupRestoreRequest{}, false
+	}
+	if err := validateInputValue("confirmation", req.Confirmation, inputClassPlainSingleLine); err != nil {
+		writePublicValidationErrors(w, []publicValidationError{{Field: "confirmation", Message: err.Error()}})
+		return engineBackupRestoreRequest{}, false
+	}
 	if req.Cipher == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cipher_required", "message": "Aegis Cipher is required."})
 		return engineBackupRestoreRequest{}, false

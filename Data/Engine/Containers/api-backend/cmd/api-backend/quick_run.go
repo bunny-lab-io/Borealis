@@ -52,7 +52,7 @@ func quickRunHandler(auth *authService, realtime *operatorRealtimeHub) http.Hand
 		}
 		body, err := readJSONMap(r)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		hostnames := quickRunNormalizeHostnames(body["hostnames"])

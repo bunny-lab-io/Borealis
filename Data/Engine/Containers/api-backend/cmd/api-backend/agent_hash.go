@@ -82,7 +82,11 @@ func agentHashHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerif
 		var status int
 		var err error
 		if r.Method == http.MethodGet {
-			agentGUID, agentID := parseAgentHashLookupRequest(r)
+			agentGUID, agentID, badRequest := parseAgentHashLookupRequest(r)
+			if badRequest != nil {
+				writeJSON(w, http.StatusBadRequest, badRequest)
+				return
+			}
 			payload, status, err = store.lookupAgentHash(ctx, deviceCtx.GUID, agentGUID, agentID)
 		} else {
 			updateRequest, badRequest := parseAgentHashUpdateRequest(r)
@@ -284,24 +288,25 @@ func (s *agentJWTSigner) verifyAccessToken(token string) (map[string]any, error)
 	return claims, nil
 }
 
-func parseAgentHashLookupRequest(r *http.Request) (string, string) {
+func parseAgentHashLookupRequest(r *http.Request) (string, string, map[string]any) {
 	agentGUID := normalizeCanonicalGUID(r.URL.Query().Get("agent_guid"))
 	agentID := cleanText(firstText(r.URL.Query().Get("agent_id"), r.URL.Query().Get("id")))
 	if agentGUID != "" || agentID != "" {
-		return agentGUID, agentID
+		return agentGUID, agentID, nil
 	}
-	var body map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(nilResponseWriter{}, r.Body, 1<<20)).Decode(&body); err == nil {
-		agentGUID = normalizeCanonicalGUID(body["agent_guid"])
-		agentID = cleanText(firstText(cleanText(body["agent_id"]), cleanText(body["id"])))
+	body, err := readJSONMapWithLimit(r, 1<<20)
+	if err != nil {
+		return "", "", publicValidationErrorPayload(err, "invalid_request")
 	}
-	return agentGUID, agentID
+	agentGUID = normalizeCanonicalGUID(body["agent_guid"])
+	agentID = cleanText(firstText(cleanText(body["agent_id"]), cleanText(body["id"])))
+	return agentGUID, agentID, nil
 }
 
 func parseAgentHashUpdateRequest(r *http.Request) (agentHashUpdateRequest, map[string]any) {
-	var body map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(nilResponseWriter{}, r.Body, 1<<20)).Decode(&body); err != nil {
-		return agentHashUpdateRequest{}, map[string]any{"error": "invalid_request"}
+	body, err := readJSONMapWithLimit(r, 1<<20)
+	if err != nil {
+		return agentHashUpdateRequest{}, publicValidationErrorPayload(err, "invalid_request")
 	}
 	request := agentHashUpdateRequest{
 		AgentHash: cleanText(body["agent_hash"]),
@@ -313,12 +318,6 @@ func parseAgentHashUpdateRequest(r *http.Request) (agentHashUpdateRequest, map[s
 	}
 	return request, nil
 }
-
-type nilResponseWriter struct{}
-
-func (nilResponseWriter) Header() http.Header       { return http.Header{} }
-func (nilResponseWriter) Write([]byte) (int, error) { return 0, nil }
-func (nilResponseWriter) WriteHeader(int)           {}
 
 func (s *postgresOperatorStore) requiredDeviceTokenVersion(ctx context.Context, guid string) (*int, error) {
 	conn, err := s.db.Conn(ctx)

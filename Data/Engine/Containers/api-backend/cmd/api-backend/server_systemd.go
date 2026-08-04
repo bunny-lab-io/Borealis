@@ -89,7 +89,7 @@ func collectSystemdServiceRows() []map[string]any {
 func handleSystemdServiceRestart(w http.ResponseWriter, r *http.Request, serviceKey string) {
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), systemdCommandTimeout)

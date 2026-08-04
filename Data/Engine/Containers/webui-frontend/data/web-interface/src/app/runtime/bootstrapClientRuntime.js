@@ -1,4 +1,5 @@
 import { io } from "socket.io-client";
+import { installBorealisInputValidationGuard } from "../utils/inputValidation.js";
 
 let bootstrapped = false;
 const GO_REALTIME_EVENTS = [
@@ -170,6 +171,7 @@ export function bootstrapClientRuntime() {
   if (!window.BorealisUpdateRate) {
     window.BorealisUpdateRate = 200;
   }
+  installBorealisInputValidationGuard(window);
   bootstrapped = true;
 }
 

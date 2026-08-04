@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -193,6 +194,10 @@ func remoteFileChildrenHandler(auth *authService) func(http.ResponseWriter, *htt
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path_required"})
 			return
 		}
+		if err := validatePathInput("path", requestedPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "path", Message: err.Error()}})
+			return
+		}
 		snapshot, operatorID, ok := requireRemoteFileContext(w, r, auth, hostname)
 		if !ok {
 			return
@@ -218,15 +223,23 @@ func remoteFileChildrenHandler(auth *authService) func(http.ResponseWriter, *htt
 
 func remoteFileUploadConflictsHandler(auth *authService) func(http.ResponseWriter, *http.Request, string) {
 	return func(w http.ResponseWriter, r *http.Request, hostname string) {
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMapWithLimit(r, 2<<20)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		targetPath := cleanText(body["target_path"])
 		items := normalizeUploadManifestItems(body["items"])
 		if targetPath == "" || len(items) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "target_path_and_items_required"})
+			return
+		}
+		if err := validatePathInput("target_path", targetPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "target_path", Message: err.Error()}})
+			return
+		}
+		if errs := validateRemoteUploadManifestItems(items); len(errs) > 0 {
+			writePublicValidationErrors(w, errs)
 			return
 		}
 		snapshot, operatorID, ok := requireRemoteFileContext(w, r, auth, hostname)
@@ -276,6 +289,10 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "target_path_required"})
 			return
 		}
+		if err := validatePathInput("target_path", targetPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "target_path", Message: err.Error()}})
+			return
+		}
 		files := remoteFileUploadFiles(r)
 		manifestItems := uploadManifestFromMultipartForm(r.FormValue("manifest"), files)
 		if len(manifestItems) == 0 {
@@ -289,6 +306,10 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 		}
 		if len(files) > 0 && len(manifestItems) != len(files) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_manifest_mismatch"})
+			return
+		}
+		if errs := validateRemoteUploadManifestItems(manifestItems); len(errs) > 0 {
+			writePublicValidationErrors(w, errs)
 			return
 		}
 		deviceGUID := remoteFileTransferDeviceGUID(snapshot)
@@ -457,6 +478,10 @@ func remoteFileReadTextHandler(auth *authService) func(http.ResponseWriter, *htt
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path_required"})
 			return
 		}
+		if err := validatePathInput("path", requestedPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "path", Message: err.Error()}})
+			return
+		}
 		snapshot, operatorID, ok := requireRemoteFileContext(w, r, auth, hostname)
 		if !ok {
 			return
@@ -488,14 +513,18 @@ func remoteFileReadTextHandler(auth *authService) func(http.ResponseWriter, *htt
 
 func remoteFileWriteTextHandler(auth *authService) func(http.ResponseWriter, *http.Request, string) {
 	return func(w http.ResponseWriter, r *http.Request, hostname string) {
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMapWithLimit(r, 4<<20)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		itemPath := cleanText(body["path"])
 		if itemPath == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path_required"})
+			return
+		}
+		if err := validatePathInput("path", itemPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "path", Message: err.Error()}})
 			return
 		}
 		snapshot, operatorID, ok := requireRemoteFileContext(w, r, auth, hostname)
@@ -540,6 +569,14 @@ func remoteFileMkdirHandler(auth *authService) func(http.ResponseWriter, *http.R
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path_and_name_required"})
 			return
 		}
+		if err := validatePathInput("path", parentPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "path", Message: err.Error()}})
+			return
+		}
+		if err := validateRemoteFileName("name", name); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "name", Message: err.Error()}})
+			return
+		}
 		remoteFileMutation(w, r, auth, hostname, "mkdir", map[string]any{"path": parentPath, "name": name}, remoteFileDefaultTimeoutSeconds, "entry")
 	}
 }
@@ -554,6 +591,14 @@ func remoteFileRenameHandler(auth *authService) func(http.ResponseWriter, *http.
 		newName := cleanText(body["new_name"])
 		if itemPath == "" || newName == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path_and_new_name_required"})
+			return
+		}
+		if err := validatePathInput("path", itemPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "path", Message: err.Error()}})
+			return
+		}
+		if err := validateRemoteFileName("new_name", newName); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "new_name", Message: err.Error()}})
 			return
 		}
 		remoteFileMutation(w, r, auth, hostname, "rename", map[string]any{"path": itemPath, "new_name": newName}, remoteFileDefaultTimeoutSeconds, "entry")
@@ -572,6 +617,14 @@ func remoteFileMoveHandler(auth *authService) func(http.ResponseWriter, *http.Re
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "paths_and_destination_required"})
 			return
 		}
+		if err := validatePathInput("destination_path", destinationPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "destination_path", Message: err.Error()}})
+			return
+		}
+		if errs := validateRemoteFileSelections(selections); len(errs) > 0 {
+			writePublicValidationErrors(w, errs)
+			return
+		}
 		remoteFileMutation(w, r, auth, hostname, "move", map[string]any{"paths": selections, "destination_path": destinationPath}, 120.0, "moved")
 	}
 }
@@ -585,6 +638,10 @@ func remoteFileDeleteHandler(auth *authService) func(http.ResponseWriter, *http.
 		selections := normalizeTransferEntries(firstNonEmpty(body["paths"], body["items"], body["path"]))
 		if len(selections) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "paths_required"})
+			return
+		}
+		if errs := validateRemoteFileSelections(selections); len(errs) > 0 {
+			writePublicValidationErrors(w, errs)
 			return
 		}
 		remoteFileMutation(w, r, auth, hostname, "delete", map[string]any{"paths": selections}, 120.0, "deleted")
@@ -606,6 +663,14 @@ func remoteFilePasteHandler(auth *authService) func(http.ResponseWriter, *http.R
 		}
 		if destinationPath == "" || len(selections) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "paths_and_destination_required"})
+			return
+		}
+		if err := validatePathInput("destination_path", destinationPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "destination_path", Message: err.Error()}})
+			return
+		}
+		if errs := validateRemoteFileSelections(selections); len(errs) > 0 {
+			writePublicValidationErrors(w, errs)
 			return
 		}
 		remoteFileMutation(w, r, auth, hostname, "paste", map[string]any{"operation": operation, "paths": selections, "destination_path": destinationPath}, 300.0, "pasted")
@@ -728,15 +793,43 @@ func remoteFileUploadConflictsPayload(ctx context.Context, auth *authService, sn
 }
 
 func decodeRemoteFileJSON(w http.ResponseWriter, r *http.Request, limit int64) (map[string]any, bool) {
-	var body map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+	body, err := readJSONMapWithLimit(r, limit)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
 		return nil, false
 	}
-	if body == nil {
-		body = map[string]any{}
-	}
 	return body, true
+}
+
+func validateRemoteFileSelections(selections []map[string]any) []publicValidationError {
+	errs := make([]publicValidationError, 0)
+	for index, selection := range selections {
+		if err := validatePathInput(fmt.Sprintf("paths[%d].path", index), cleanText(selection["path"])); err != nil {
+			errs = append(errs, publicValidationError{Field: fmt.Sprintf("paths[%d].path", index), Message: err.Error()})
+		}
+	}
+	return errs
+}
+
+func validateRemoteUploadManifestItems(items []map[string]any) []publicValidationError {
+	errs := make([]publicValidationError, 0)
+	for index, item := range items {
+		nameField := fmt.Sprintf("items[%d].name", index)
+		if err := validateRemoteFileName(nameField, cleanText(item["name"])); err != nil {
+			errs = append(errs, publicValidationError{Field: nameField, Message: err.Error()})
+		}
+		relativePath := cleanText(item["relative_path"])
+		if relativePath == "" {
+			continue
+		}
+		for _, part := range strings.Split(relativePath, "/") {
+			if err := validateRemoteFileName(fmt.Sprintf("items[%d].relative_path", index), part); err != nil {
+				errs = append(errs, publicValidationError{Field: fmt.Sprintf("items[%d].relative_path", index), Message: err.Error()})
+				break
+			}
+		}
+	}
+	return errs
 }
 
 func remoteFileTransferDeviceGUID(snapshot deviceProcessContext) string {

@@ -960,7 +960,10 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     try {
       return Prism.highlight(code ?? "", Prism.languages[lang] || Prism.languages.markup, lang);
     } catch {
-      return String(code || "");
+      return String(code || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
     }
   }, []);
 

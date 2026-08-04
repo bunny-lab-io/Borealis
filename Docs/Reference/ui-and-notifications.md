@@ -17,6 +17,11 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - Alerts queue: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`.
 - Page style template reference: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx` (layout only).
 
+## Input Validation
+WebUI text fields and Engine APIs use field-class validation. Plain labels and descriptions are trimmed and normalized, while code, secrets, JSON, LDAP filters, regex patterns, registry data, and remote paths keep meaningful syntax and receive context-specific checks.
+
+New forms should validate before submit and expect the API to enforce the same rule again. Validation failures return `validation_failed` with field-level messages where shared helpers handle the request.
+
 ## Operator Bootstrap Gate
 - Borealis now resolves `/api/bootstrap/state` before it attempts `/api/auth/me` or renders the normal login form.
 - Bootstrap phases are:
@@ -140,6 +145,14 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - [Software Icon Overrides](software-icon-overrides.md)
     - [Software Uninstall Overrides](software-uninstall-overrides.md)
     - [Software Uninstall Blocklist](software-uninstall-blocklist.md)
+
+    ### Input validation source map
+
+    - WebUI shared helper: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/utils/inputValidation.js`.
+    - WebUI runtime guard: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/runtime/bootstrapClientRuntime.js` installs same-origin `/api/*` fetch validation before route rendering.
+    - Go API helper: `Data/Engine/Containers/api-backend/cmd/api-backend/input_validation.go` owns public request path/query validation, bounded map decoders, field-class validators, and `validation_failed` payloads.
+    - Field classes: plain single-line, plain multiline, identifier/ref, slug, host/IP/CIDR, URL, remote path, registry path/value name, regex, secret, and code/content.
+    - Preserve syntax for scripts, CodeMirror content, JSON, passwords, Aegis Cipher, private keys, LDAP DNs/filters, command arguments, registry value data, regex, and remote paths. Apply size, UTF-8, NUL/control, parse, enum, or domain-specific validation instead of generic stripping.
 
     ### Shared Conventions (Full)
     - Cross-cutting guidance that applies to both Agent and Engine work.

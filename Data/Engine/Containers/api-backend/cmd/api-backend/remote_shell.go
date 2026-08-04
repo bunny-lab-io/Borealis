@@ -179,21 +179,10 @@ func remoteShellDisconnectHandler(auth *authService) http.HandlerFunc {
 }
 
 func readRemoteShellJSON(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	body, err := readJSONMapWithLimit(r, 1<<20)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+		writeJSON(w, http.StatusBadRequest, publicValidationErrorPayload(err, "invalid_request"))
 		return nil, false
-	}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return map[string]any{}, true
-	}
-	var body map[string]any
-	if err := json.Unmarshal(raw, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
-		return nil, false
-	}
-	if body == nil {
-		body = map[string]any{}
 	}
 	return body, true
 }

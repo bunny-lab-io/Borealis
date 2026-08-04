@@ -60,13 +60,10 @@ func updateAnsibleRunnerSettings(w http.ResponseWriter, r *http.Request, auth *a
 		return
 	}
 
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+	body, err := readJSONMap(r)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
 		return
-	}
-	if body == nil {
-		body = map[string]any{}
 	}
 
 	normalized := map[string]int{}

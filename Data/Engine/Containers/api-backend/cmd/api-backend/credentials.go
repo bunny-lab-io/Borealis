@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -151,7 +149,7 @@ func handleCredentialCreate(w http.ResponseWriter, r *http.Request, auth *authSe
 	}
 	payload, err := readCredentialJSONMap(w, r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	ctx, cancel := requestTimeout(r.Context(), auth)
@@ -176,7 +174,7 @@ func handleCredentialUpdate(w http.ResponseWriter, r *http.Request, auth *authSe
 	}
 	payload, err := readCredentialJSONMap(w, r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	ctx, cancel := requestTimeout(r.Context(), auth)
@@ -206,18 +204,7 @@ func handleCredentialDelete(w http.ResponseWriter, r *http.Request, auth *authSe
 }
 
 func readCredentialJSONMap(w http.ResponseWriter, r *http.Request) (map[string]any, error) {
-	var payload map[string]any
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&payload)
-	if errors.Is(err, io.EOF) {
-		return map[string]any{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	return payload, nil
+	return readJSONMapWithLimit(r, 2<<20)
 }
 
 func writeStoreMutationResponse(w http.ResponseWriter, payload map[string]any, status int, err error) {

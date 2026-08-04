@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -38,10 +37,12 @@ func deviceSecurityStatusHandler(auth *authService, runtime devicePurgeRuntime, 
 		}
 		reason := "operator_requested"
 		if r.Body != nil {
-			var body map[string]any
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err == nil {
-				reason = firstText(cleanText(body["reason"]), reason)
+			body, err := readJSONMap(r)
+			if err != nil {
+				invalidJSONOrValidation(w, err)
+				return
 			}
+			reason = firstText(cleanText(body["reason"]), reason)
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
