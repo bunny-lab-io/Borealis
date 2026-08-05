@@ -38,7 +38,7 @@ func agentPatchInstallProgressHandler(auth *authService, signer *agentJWTSigner,
 		}
 		body, err := readJSONMap(r)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		timeout := auth.timeout

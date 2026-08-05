@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -127,6 +126,10 @@ func remoteRegistryChildrenHandler(auth *authService) func(http.ResponseWriter, 
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path_required"})
 			return
 		}
+		if err := validateRegistryInput("path", requestedPath); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "path", Message: err.Error()}})
+			return
+		}
 		snapshot, operatorID, ok := requireRemoteRegistryContext(w, r, auth, hostname)
 		if !ok {
 			return
@@ -155,9 +158,13 @@ func remoteRegistryChildrenHandler(auth *authService) func(http.ResponseWriter, 
 
 func remoteRegistryMutateHandler(auth *authService, action string) func(http.ResponseWriter, *http.Request, string) {
 	return func(w http.ResponseWriter, r *http.Request, hostname string) {
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
+		}
+		if errs := validateRemoteRegistryMutationBody(body); len(errs) > 0 {
+			writePublicValidationErrors(w, errs)
 			return
 		}
 		snapshot, operatorID, ok := requireRemoteRegistryContext(w, r, auth, hostname)
@@ -271,6 +278,30 @@ func remoteRegistryErrorPayload(status int, payload map[string]any) map[string]a
 		}
 	}
 	return result
+}
+
+func validateRemoteRegistryMutationBody(body map[string]any) []publicValidationError {
+	errs := make([]publicValidationError, 0)
+	for _, key := range []string{"path", "parent_path", "source_path", "destination_path", "target_path", "confirm_path"} {
+		if value := cleanText(body[key]); value != "" {
+			if err := validateRegistryInput(key, value); err != nil {
+				errs = append(errs, publicValidationError{Field: key, Message: err.Error()})
+			}
+		}
+	}
+	for _, key := range []string{"name", "new_name", "value_name"} {
+		if value := cleanText(body[key]); value != "" {
+			if err := validateRegistryInput(key, value); err != nil {
+				errs = append(errs, publicValidationError{Field: key, Message: err.Error()})
+			}
+		}
+	}
+	if kind := cleanText(firstNonEmpty(body["kind"], body["type"], body["value_type"])); kind != "" {
+		if err := validateIdentifierInput("value_type", kind); err != nil {
+			errs = append(errs, publicValidationError{Field: "value_type", Message: err.Error()})
+		}
+	}
+	return errs
 }
 
 func remoteRegistryTimeoutSeconds(value float64) float64 {

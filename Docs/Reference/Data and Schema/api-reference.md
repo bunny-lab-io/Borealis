@@ -2,6 +2,8 @@
 
 Provide a consolidated, human-readable list of Borealis Engine API endpoints grouped by domain.
 
+Public `/api/*` routes validate path/query/body input before domain work where shared validation helpers are in use. Malformed field-class input returns HTTP `400` with `error: validation_failed` and field-level `errors`; legacy endpoint-specific validation payloads remain in place where domain handlers already expose them.
+
 ??? example "Detailed Codex Breakdown"
 
     ### API endpoints

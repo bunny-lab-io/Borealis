@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -161,9 +160,9 @@ func workflowRunStart(w http.ResponseWriter, r *http.Request, auth *authService)
 	if !ok {
 		return
 	}
-	var body map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+	body, err := readJSONMapWithLimit(r, 2<<20)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	workflowGUID := assemblyCoerceGUID(firstNonEmptyAny(body["workflow_guid"], body["workflowGuid"]))
@@ -232,9 +231,14 @@ func workflowRunResolve(w http.ResponseWriter, r *http.Request, auth *authServic
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
 		return
 	}
-	var body map[string]any
+	body := map[string]any{}
 	if r.Body != nil {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+		var err error
+		body, err = readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
+		}
 	}
 	ctx, cancel := workflowTimeoutContext(r.Context(), auth)
 	defer cancel()
@@ -285,9 +289,9 @@ func internalWorkflowStartHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "workflow_store_unavailable"})
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMapWithLimit(r, 2<<20)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		sourceMetadata := mapStringAny(body["source_metadata"])

@@ -149,9 +149,10 @@ func metadataFieldDefinitionHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			body = map[string]any{}
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
 		}
 		description := cleanText(body["description"])
 
@@ -295,9 +296,10 @@ func deviceMetadataFieldsHandler(auth *authService) http.HandlerFunc {
 		if r.Method == http.MethodGet && !parsed.hasField {
 			payload, status, err = store.deviceMetadataFields(ctx, profile, parsed.deviceID)
 		} else if r.Method == http.MethodPut && parsed.hasField {
-			var body map[string]any
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-				body = map[string]any{}
+			body, err := readJSONMap(r)
+			if err != nil {
+				invalidJSONOrValidation(w, err)
+				return
 			}
 			payload, status, err = store.updateDeviceMetadataField(ctx, profile, parsed.deviceID, parsed.fieldNumber, normalizeMetadataValue(cleanText(body["value"])))
 		} else {

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -106,9 +105,9 @@ func remoteOpsSessionHandler(auth *authService, signer *agentJWTSigner) http.Han
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "remote_ops_session_unavailable"})
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		capabilities := normalizeRemoteOpCapabilities(firstPresent(body["capabilities"], body["capability"]))

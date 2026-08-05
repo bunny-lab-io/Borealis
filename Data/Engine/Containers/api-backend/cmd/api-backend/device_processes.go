@@ -93,7 +93,7 @@ func deviceProcessTerminateHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := readJSONMap(r)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		pid := coerceInt64(body["pid"])

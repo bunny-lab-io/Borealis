@@ -101,6 +101,10 @@ func agentHeartbeatHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 		}
 		payload, err := readAgentJSONMap(w, r, 8<<20)
 		if err != nil {
+			if errs, ok := asPublicValidationErrors(err); ok {
+				writePublicValidationErrors(w, errs)
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
 			return
 		}
@@ -133,6 +137,10 @@ func agentStatusHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVer
 		}
 		payload, err := readAgentJSONMap(w, r, 1<<20)
 		if err != nil {
+			if errs, ok := asPublicValidationErrors(err); ok {
+				writePublicValidationErrors(w, errs)
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
 			return
 		}
@@ -179,6 +187,9 @@ func readAgentJSONMap(w http.ResponseWriter, r *http.Request, limit int64) (map[
 	if body == nil {
 		body = map[string]any{}
 	}
+	if errs := validateJSONTransportMap(body); len(errs) > 0 {
+		return nil, publicValidationErrors(errs)
+	}
 	return body, nil
 }
 
@@ -201,6 +212,9 @@ func readAgentJSONMapWithHash(w http.ResponseWriter, r *http.Request, limit int6
 	if body == nil {
 		body = map[string]any{}
 	}
+	if errs := validateJSONTransportMap(body); len(errs) > 0 {
+		return nil, bodyHash, publicValidationErrors(errs)
+	}
 	return body, bodyHash, nil
 }
 
@@ -217,6 +231,10 @@ func agentDetailsHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVe
 		}
 		payload, payloadHash, err := readAgentJSONMapWithHash(w, r, 24<<20)
 		if err != nil {
+			if errs, ok := asPublicValidationErrors(err); ok {
+				writePublicValidationErrors(w, errs)
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
 			return
 		}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,15 +28,13 @@ func notificationNotifyHandler(auth *authService, broadcaster notificationBroadc
 			return
 		}
 
-		var body map[string]any
-		if r.Body != nil {
-			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
-		}
-		if body == nil {
-			body = map[string]any{}
+		body, err := readJSONMapWithLimit(r, 64<<10)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
 		}
 
-		message := cleanText(body["message"])
+		message := sanitizeNotificationText(cleanText(body["message"]))
 		if message == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error":   "invalid_payload",
@@ -61,9 +58,9 @@ func notificationNotifyHandler(auth *authService, broadcaster notificationBroadc
 
 		payload := map[string]any{
 			"id":         fmt.Sprintf("notif-%d-%d", now.Unix(), now.UnixMilli()%1000),
-			"title":      firstText(cleanText(body["title"]), "Notification"),
+			"title":      firstText(sanitizeSingleLineInput(cleanText(body["title"])), "Notification"),
 			"message":    message,
-			"icon":       firstText(cleanText(body["icon"]), "NotificationsActive"),
+			"icon":       firstText(sanitizeSingleLineInput(cleanText(body["icon"])), "NotificationsActive"),
 			"variant":    variant,
 			"username":   user.Username,
 			"role":       firstText(user.Role, "User"),

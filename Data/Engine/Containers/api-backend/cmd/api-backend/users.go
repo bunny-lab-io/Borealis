@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -239,9 +238,9 @@ func userRoleUpdate(w http.ResponseWriter, r *http.Request, auth *authService, u
 		return
 	}
 
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+	body, err := readJSONMap(r)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	role := normalizeUserRole(body["role"])
@@ -267,7 +266,7 @@ func userMFAUpdate(w http.ResponseWriter, r *http.Request, auth *authService, us
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	enabled := boolFromAny(body["enabled"])

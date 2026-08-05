@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -926,20 +925,24 @@ func passkeyProtocolTransports(raw string) []protocol.AuthenticatorTransport {
 }
 
 func readPasskeyJSON(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
-	_, body, ok := readPasskeyJSONRaw(w, r)
-	return body, ok
+	body, err := readJSONMapWithLimit(r, 1<<20)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
+		return nil, false
+	}
+	return body, true
 }
 
 func readPasskeyJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[string]any, bool) {
 	if r.Body == nil {
 		return nil, map[string]any{}, true
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	raw, err := readLimitedRequestBody(r, 1<<20)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		writeJSON(w, http.StatusBadRequest, publicValidationErrorPayload(err, "invalid_json"))
 		return nil, nil, false
 	}
-	if len(raw) == 0 {
+	if len(strings.TrimSpace(string(raw))) == 0 {
 		return raw, map[string]any{}, true
 	}
 	var body map[string]any
@@ -949,6 +952,10 @@ func readPasskeyJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[str
 	}
 	if body == nil {
 		body = map[string]any{}
+	}
+	if errs := validateJSONTransportMap(body); len(errs) > 0 {
+		writePublicValidationErrors(w, errs)
+		return nil, nil, false
 	}
 	return raw, body, true
 }

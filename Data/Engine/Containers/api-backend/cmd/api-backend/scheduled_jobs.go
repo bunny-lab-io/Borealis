@@ -226,7 +226,7 @@ func scheduledJobCreate(w http.ResponseWriter, r *http.Request, auth *authServic
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
@@ -274,7 +274,7 @@ func scheduledJobUpdate(w http.ResponseWriter, r *http.Request, auth *authServic
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
@@ -325,7 +325,7 @@ func scheduledJobToggle(w http.ResponseWriter, r *http.Request, auth *authServic
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	enabled := true

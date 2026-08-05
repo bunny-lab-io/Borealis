@@ -105,9 +105,9 @@ func authPasskeyByIDHandler(auth *authService, fallback http.Handler) http.Handl
 		defer cancel()
 		switch r.Method {
 		case http.MethodPatch:
-			var body map[string]any
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			body, err := readJSONMapWithLimit(r, 1<<20)
+			if err != nil {
+				invalidJSONOrValidation(w, err)
 				return
 			}
 			label := cleanText(body["label"])

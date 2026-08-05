@@ -111,16 +111,13 @@ func agentTokenRefreshHandler(auth *authService, signer *agentJWTSigner, dpop *d
 			return
 		}
 
-		var body struct {
-			GUID         string `json:"guid"`
-			RefreshToken string `json:"refresh_token"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
-		guid := normalizeCanonicalGUID(body.GUID)
-		refreshToken := strings.TrimSpace(body.RefreshToken)
+		guid := normalizeCanonicalGUID(body["guid"])
+		refreshToken := strings.TrimSpace(cleanText(body["refresh_token"]))
 		if guid == "" || refreshToken == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
 			return

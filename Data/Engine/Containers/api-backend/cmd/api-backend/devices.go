@@ -418,9 +418,9 @@ func deviceDescriptionHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		store, ok := auth.store.(deviceMutationStore)
@@ -445,9 +445,9 @@ func deviceAgentReleaseChannelHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		store, ok := auth.store.(deviceMutationStore)

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -105,13 +104,17 @@ func handleSiteCreate(w http.ResponseWriter, r *http.Request, auth *authService)
 		failure.write(w)
 		return
 	}
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+	body, err := readJSONMap(r)
+	if err != nil {
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	name := cleanText(body["name"])
 	description := cleanText(body["description"])
+	if err := validateInputValue("name", name, inputClassPlainSingleLine); err != nil {
+		writePublicValidationErrors(w, []publicValidationError{{Field: "name", Message: err.Error()}})
+		return
+	}
 	store, ok := auth.store.(siteMutationStore)
 	if !ok {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "site_mutation_unavailable"})
@@ -222,9 +225,9 @@ func siteDeleteHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		rawIDs, ok := body["ids"].([]any)
@@ -263,9 +266,9 @@ func siteAssignHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		siteID, ok := parseInt64Value(body["site_id"])
@@ -281,7 +284,7 @@ func siteAssignHandler(auth *authService) http.HandlerFunc {
 		hostnames := make([]string, 0, len(rawHostnames))
 		for _, rawHostname := range rawHostnames {
 			hostname := cleanText(rawHostname)
-			if hostname == "" {
+			if hostname == "" || validateHostInput("hostnames", hostname) != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "hostnames must be a list of strings"})
 				return
 			}
@@ -309,9 +312,9 @@ func siteRenameHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		siteID, ok := parseInt64Value(body["id"])
@@ -320,6 +323,10 @@ func siteRenameHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		newName := cleanText(body["new_name"])
+		if err := validateInputValue("new_name", newName, inputClassPlainSingleLine); err != nil {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "new_name", Message: err.Error()}})
+			return
+		}
 		store, ok := auth.store.(siteMutationStore)
 		if !ok {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "site_mutation_unavailable"})
@@ -347,9 +354,9 @@ func siteAutoApprovalHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid id"})
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		var until *int64

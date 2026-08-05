@@ -283,7 +283,7 @@ func patchPolicySave(w http.ResponseWriter, r *http.Request, auth *authService, 
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+		invalidJSONOrValidation(w, err)
 		return
 	}
 	ctx, cancel := requestTimeout(r.Context(), auth)
@@ -322,6 +322,10 @@ func patchPolicyPreview(w http.ResponseWriter, r *http.Request, auth *authServic
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
+		if errs, ok := asPublicValidationErrors(err); ok {
+			writePublicValidationErrors(w, errs)
+			return
+		}
 		body = map[string]any{}
 	}
 	ctx, cancel := requestTimeout(r.Context(), auth)
@@ -361,6 +365,10 @@ func patchPolicyEvaluate(w http.ResponseWriter, r *http.Request, auth *authServi
 	}
 	body, err := readJSONMap(r)
 	if err != nil {
+		if errs, ok := asPublicValidationErrors(err); ok {
+			writePublicValidationErrors(w, errs)
+			return
+		}
 		body = map[string]any{}
 	}
 	ctx, cancel := patchPolicyEvaluateContext(r.Context(), auth)

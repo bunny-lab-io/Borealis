@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -381,11 +380,17 @@ func parseDeviceViewID(path string) (int64, error) {
 func parseCreateDeviceViewMutation(r *http.Request) (deviceViewMutation, int, map[string]any) {
 	body, err := readDeviceViewBody(r)
 	if err != nil {
+		if errs, ok := asPublicValidationErrors(err); ok {
+			return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "validation_failed", "errors": errs}
+		}
 		return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "invalid json"}
 	}
 	name := strings.TrimSpace(cleanText(body["name"]))
 	if name == "" {
 		return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "name is required"}
+	}
+	if err := validateInputValue("name", name, inputClassPlainSingleLine); err != nil {
+		return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "validation_failed", "errors": []publicValidationError{{Field: "name", Message: err.Error()}}}
 	}
 	if strings.EqualFold(name, "default view") {
 		return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "reserved name"}
@@ -404,6 +409,9 @@ func parseCreateDeviceViewMutation(r *http.Request) (deviceViewMutation, int, ma
 func parseUpdateDeviceViewMutation(r *http.Request) (deviceViewMutation, int, map[string]any) {
 	body, err := readDeviceViewBody(r)
 	if err != nil {
+		if errs, ok := asPublicValidationErrors(err); ok {
+			return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "validation_failed", "errors": errs}
+		}
 		return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "invalid json"}
 	}
 	mutation := deviceViewMutation{}
@@ -411,6 +419,9 @@ func parseUpdateDeviceViewMutation(r *http.Request) (deviceViewMutation, int, ma
 		name := strings.TrimSpace(cleanText(value))
 		if name == "" {
 			return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "name cannot be empty"}
+		}
+		if err := validateInputValue("name", name, inputClassPlainSingleLine); err != nil {
+			return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "validation_failed", "errors": []publicValidationError{{Field: "name", Message: err.Error()}}}
 		}
 		if strings.EqualFold(name, "default view") {
 			return deviceViewMutation{}, http.StatusBadRequest, map[string]any{"error": "reserved name"}
@@ -441,17 +452,7 @@ func readDeviceViewBody(r *http.Request) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	defer r.Body.Close()
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		if errors.Is(err, io.EOF) {
-			return map[string]any{}, nil
-		}
-		return nil, err
-	}
-	if body == nil {
-		body = map[string]any{}
-	}
-	return body, nil
+	return readJSONMapWithLimit(r, publicJSONMapMaxBytes)
 }
 
 func stringSliceFromAny(value any) ([]string, bool) {

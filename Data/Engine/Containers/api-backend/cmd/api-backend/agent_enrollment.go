@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -130,8 +129,11 @@ func agentEnrollmentRequestHandler(auth *authService, scriptSigner *agentScriptS
 			return
 		}
 
-		body := map[string]any{}
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
+		}
 		hostname := cleanText(body["hostname"])
 		enrollmentCode := cleanText(body["enrollment_code"])
 		agentPubkeyB64, pubkeyOK := body["agent_pubkey"].(string)
@@ -219,9 +221,10 @@ func agentEnrollmentPollHandler(auth *authService, jwtSigner *agentJWTSigner, sc
 			return
 		}
 
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			body = map[string]any{}
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
+			return
 		}
 		approvalReference, referenceOK := body["approval_reference"].(string)
 		clientNonceB64, nonceOK := body["client_nonce"].(string)

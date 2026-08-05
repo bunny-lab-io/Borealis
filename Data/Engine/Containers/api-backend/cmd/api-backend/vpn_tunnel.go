@@ -228,9 +228,9 @@ func tunnelConnectHandler(auth *authService, service *vpnTunnelService) http.Han
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
 			return
 		}
-		var body map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+		body, err := readJSONMap(r)
+		if err != nil {
+			invalidJSONOrValidation(w, err)
 			return
 		}
 		requestedAgentID := cleanText(body["agent_id"])
