@@ -10,6 +10,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 - Agents connect outbound to the Engine over CA-validated HTTPS and Borealis-managed WireGuard. Externally Accessible deployments use public CA validation; Internal-Only deployments use a Borealis local CA plus normal hostname validation. Internal-Only agents may use a persisted Engine IP fallback as a route hint, but the Engine FQDN remains the TLS identity. Endpoint inbound exposure is not required for normal remote operations.
 - Device trust starts with operator-approved enrollment, device-generated Ed25519 identity, short-lived access tokens, hashed refresh tokens, and device status checks.
 - Operator trust is protected by Aegis Cipher, MFA by default, WebAuthn passkeys, RBAC, site scoping, and strict session invalidation.
+- Public Engine APIs and WebUI text-entry paths treat operator, browser, and agent-supplied text as untrusted. Borealis validates field shape, length, encoding, enum values, paths, URLs, registry data, regex patterns, and operational content before those values reach domain handlers.
 - Script and automation delivery is signed by the Engine. Agents verify signatures before execution.
 - WireGuard is treated as encrypted transport, not blanket authorization. Borealis adds peer isolation, route validation, firewall rules, containment gates, and remote-operation checks above it.
 - Quarantine and revocation give operators a containment path when a device becomes suspicious or should no longer receive work.
@@ -39,6 +40,13 @@ This page starts with a plain-language security posture summary for evaluators, 
 - Engine signs script payloads, and Agent enforces trusted delivery before execution.
 - Jobs, quick runs, workflows, watchdog remediation, and Ansible target materialization respect site scope and device containment.
 - Reusable machine credentials stay protected by Aegis Cipher and are never intended to appear in plaintext logs.
+
+### Input Validation and Data Hygiene
+
+- Public Engine API handlers validate path, query, and body input before domain work. Malformed shared-validation payloads return HTTP `400` with `validation_failed` and field-level errors where practical.
+- Borealis WebUI text fields use shared field-class validation before submit, and the Engine repeats validation server-side so browser checks are not the trust boundary.
+- Validation is context-aware. Borealis preserves legitimate syntax for scripts, JSON, private keys, passwords, LDAP filters and DNs, command arguments, absolute remote paths, registry data, regex patterns, and WebAuthn passkey payloads while still enforcing size, UTF-8, control-character, enum, parser, and domain rules.
+- Output paths that render rich UI content escape user-controlled values unless markup is known app-generated notification emphasis.
 
 ### Runtime and Container Boundaries
 
@@ -96,6 +104,14 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 - First deployment follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
 - Later Engine restarts follow `Unlock Aegis Cipher -> Enter normal Borealis login or passkey flow`.
 - Normal authenticated endpoints are unavailable until Aegis setup or unlock is complete and the Engine reaches the `login_required` bootstrap phase.
+
+### Engine API Input Boundary
+
+Borealis validates public API input by domain before processing state changes or dispatching remote work.
+
+- Covered public API domains include bootstrap and authentication, passkeys, users, directory providers, reusable credentials, sites, device inventory and search, metadata fields, device filters and saved views, scheduler and onboarding jobs, assemblies and workflows, watchdogs, patch and software management, remote files, registry, processes, services, shell, VNC, tunnel setup, agent enrollment, agent tokens, agent status, agent details, agent downloads, and agent software-management payloads.
+- Validation checks include bounded JSON decoding, UTF-8 and NUL/control-character rejection, maximum lengths, enum allowlists, identifiers, slugs, hostnames, IPs, CIDRs, URLs, paths, registry names, regex compilation, and domain-specific payload shape.
+- Internal HMAC worker/operator routes use their own narrow command contracts and are not treated as public operator or agent input surfaces.
 
 ### Engine Container Hardening
 
@@ -320,12 +336,23 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - K3s operator image: `Data/Engine/Containers/borealis-operator/Dockerfile`.
     - Static container hardening and service mount contracts: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/compose.env.example`.
     - Container policy validation: `Data/Engine/Containers/check-compose-policy.py` and `.github/workflows/engine-container-policy.yml`.
+    - API input validation helpers and shared `validation_failed` response shaping: `Data/Engine/Containers/api-backend/cmd/api-backend/input_validation.go`.
+    - API input validation tests: `Data/Engine/Containers/api-backend/cmd/api-backend/input_validation_test.go`.
+    - WebUI field-class validation and `/api/*` fetch guard: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/utils/inputValidation.js` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/runtime/bootstrapClientRuntime.js`.
     - Scheduler-to-operator lifecycle calls and route ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
     - K3s site-worker pod template, fixed hostPath allowlist, HMAC lifecycle verbs, and host-loopback bridge annotations: `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go`.
     - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
     - Scheduler image and entrypoint routing: `Data/Engine/Containers/job-scheduler/Dockerfile`, `Data/Engine/Containers/job-scheduler/entrypoint.sh`, and `Data/Engine/Containers/job-scheduler/healthcheck.sh`.
     - Remote Desktop guacd container runtime: `Data/Engine/Containers/remote-desktop-guacd/Dockerfile`, `Data/Engine/Containers/remote-desktop-guacd/entrypoint.sh`, and `Data/Engine/Containers/remote-desktop-guacd/healthcheck.sh`.
     - WebUI K3s bind-host and production route support: `Engine.sh`, `Data/Engine/Containers/traefik-edge/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/static-server.js`, and `Data/Engine/Containers/webui-frontend/healthcheck.js`.
+
+    ### Input validation runtime behavior
+
+    - Shared Go validators reject malformed public API path, query, and body fields before handlers mutate state, enqueue work, or call remote-operation helpers.
+    - Shared WebUI validators classify text inputs as plain single-line, multiline, identifier/ref, slug, host/IP/CIDR, URL, remote path, registry path/value name, regex, secret, or code/content.
+    - Bounded JSON decode paths protect public APIs from oversized objects and unexpected field types. Endpoint-specific handlers keep compatible legacy errors where existing callers depend on them.
+    - Passkey/WebAuthn payloads are validated as structured credential ceremony JSON, not generic text, so browser-supplied authenticator material is preserved while malformed envelopes are rejected.
+    - Remote operations preserve valid operator intent for absolute paths, command arguments, scripts, registry edits, LDAP syntax, and regex filters while enforcing context-specific parser and length limits.
 
     ### Key material locations
 

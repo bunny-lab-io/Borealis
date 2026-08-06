@@ -136,6 +136,13 @@ Keep in mind that admonitions require correct indentation, otherwise they will b
 * Changes of that nature need to happen in runtime folders. Prefer deferring to operator/developer to redeploy Agent or Engine to detect page-formatting/runtime issues unless task explicitly requires runtime validation.
 * Before changing generated files, vendored files, migrations, runtime scripts, or deployment artifacts, read relevant domain docs.
 
+## Input Validation and API Boundaries
+* Every new public Engine `/api/*` route must validate path, query, and body input server-side before domain work. Use shared helpers in `Data/Engine/Containers/api-backend/cmd/api-backend/input_validation.go` unless domain parser or protocol rules require stricter validation.
+* Every new text-bearing API field and WebUI text entry path must declare field class, maximum length, frontend validation/sanitization, backend validation/sanitization, and test coverage. Use `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/utils/inputValidation.js` for WebUI paths where possible.
+* Preserve meaningful operational syntax for scripts, CodeMirror content, JSON, passwords, Aegis Cipher values, private keys, LDAP filters and DNs, command arguments, registry value data, regex patterns, remote paths, and WebAuthn/passkey credential JSON. Validate shape, size, encoding, parser behavior, enum membership, and context instead of stripping valid syntax.
+* Do not rely on frontend-only validation for operator-controlled, browser-controlled, or agent-controlled text.
+* Internal HMAC worker/operator routes may use separate narrow command contracts only when route boundary is documented and caller set is not public.
+
 ## Steering During Work
 Operator may steer while work is active.
 
@@ -371,7 +378,7 @@ Stop and ask operator before destructive DB operations, schema migrations, produ
 * Visual example: `Data/Engine/Containers/webui-frontend/data/web-interface/src/DevTools/Page_Style_Template.jsx`.
 * Treat `Page_Style_Template.jsx` as reference only. Do not add business logic there.
 * Mirror layout, spacing, card treatment, selection column behavior, toast patterns, and route conventions from documented UI guidance.
-* Every new WebUI text entry path must declare its field class, frontend validation/sanitization, backend validation/sanitization, maximum length, and test coverage. Use shared WebUI/API input-validation helpers where possible. Never rely on frontend-only validation for operator-controlled or agent-controlled text.
+* Follow `Input Validation and API Boundaries` for every new WebUI text entry path.
 * For UI changes, provide local preview path, screenshot instructions, or browser verification notes when practical.
 * Do not rely on visual judgment alone when tests or route checks exist.
 
