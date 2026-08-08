@@ -43,6 +43,7 @@ Environment overrides:
   BOREALIS_ENGINE_UNIT_TEST_TIMEOUT_SECONDS
   BOREALIS_ENGINE_UNIT_TEST_FILE_TIMEOUT_SECONDS
   BOREALIS_ENGINE_GO_TEST_TIMEOUT_SECONDS
+  BOREALIS_WEBUI_TEST_RUNTIME
   BOREALIS_WEBUI_UNIT_TEST_TIMEOUT_SECONDS
 USAGE
 }
@@ -511,7 +512,7 @@ else
   fi
 fi
 
-WEBUI_RUNTIME="${PROJECT_ROOT}/Engine/Services/webui-frontend/cache/web-interface"
+WEBUI_RUNTIME="${BOREALIS_WEBUI_TEST_RUNTIME:-${PROJECT_ROOT}/Engine/Services/webui-frontend/cache/web-interface}"
 WEBUI_UNIT_TESTS="${WEBUI_RUNTIME}/Unit_Tests"
 NODE_PATH_PREFIX=""
 NPM_BIN="$(command -v npm 2>/dev/null || true)"
@@ -527,7 +528,7 @@ if [[ "$REQUESTED_DOMAIN" != "all" && "$REQUESTED_DOMAIN" != "webui" ]]; then
 elif [[ ! -d "$WEBUI_UNIT_TESTS" ]]; then
   {
     echo "Engine WebUI runtime unit tests missing at ${WEBUI_UNIT_TESTS}."
-    echo "Redeploy the Engine so container-owned WebUI source is staged into Engine/Services/webui-frontend/cache/web-interface, then rerun this script."
+    echo "Prepare a WebUI test runtime with Unit_Tests and node_modules at ${WEBUI_RUNTIME}, or set BOREALIS_WEBUI_TEST_RUNTIME to that prepared runtime path, then rerun this script."
   } >"$WEBUI_LOG"
   if [[ "$REQUESTED_DOMAIN" == "webui" ]]; then
     echo "Engine WebUI unit tests failed with status 2. Log: ${WEBUI_LOG}" >&2
