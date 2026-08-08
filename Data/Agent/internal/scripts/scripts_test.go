@@ -68,6 +68,38 @@ func TestBuildPowerShellScriptSuppressesNoisyStreams(t *testing.T) {
 	}
 }
 
+func TestBuildPowerShellScriptPreservesAdvancedScriptPreamble(t *testing.T) {
+	content := "[CmdletBinding()]\nparam(\n    [string]$Version = '2501'\n)\n\nWrite-Host $Version\nWrite-Host $env:VERSION\n"
+	wrapped := BuildPowerShellScript(content, map[string]string{"VERSION": "2501"})
+
+	marker := "$__BorealisScript = {\n"
+	markerIndex := strings.Index(wrapped, marker)
+	if markerIndex < 0 {
+		t.Fatalf("missing script block marker in %q", wrapped)
+	}
+	prelude := wrapped[:markerIndex]
+	scriptAndTail := wrapped[markerIndex+len(marker):]
+	blockEndIndex := strings.Index(scriptAndTail, "\n}")
+	if blockEndIndex < 0 {
+		t.Fatalf("missing script block close in %q", wrapped)
+	}
+	scriptBody := scriptAndTail[:blockEndIndex]
+	tail := scriptAndTail[blockEndIndex:]
+
+	if !strings.Contains(prelude, "SetEnvironmentVariable('VERSION', '2501', 'Process')") {
+		t.Fatalf("environment variable assignment missing from prelude: %q", prelude)
+	}
+	if !strings.HasPrefix(scriptBody, content) {
+		t.Fatalf("script body did not preserve advanced preamble: %q", scriptBody)
+	}
+	if strings.Contains(scriptBody, "SetEnvironmentVariable('VERSION', '2501', 'Process')") {
+		t.Fatalf("environment variable assignment injected into script body: %q", scriptBody)
+	}
+	if !strings.Contains(tail, "& $__BorealisScript") {
+		t.Fatalf("script block invocation missing from tail: %q", tail)
+	}
+}
+
 func TestCleanPowerShellStreamDecodesCliXMLAndDropsProgressOnlyPayloads(t *testing.T) {
 	progressOnly := "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\"><MS><PR N=\"Record\"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>"
 	if got := CleanPowerShellStream(progressOnly); got != "" {
