@@ -398,7 +398,7 @@ finally:
     ### Change-management checklist for schema edits
     - Update creation/migration code first (`database.py`, `database_migrations.py`, scheduler table init, or assembly DB manager).
     - Update this document and any affected domain docs (`device-auditing.md`, `scheduled-jobs.md`, `security-whitepaper.md`).
-    - Update unit tests that rely on local schema fixtures (`Data/Engine/Unit_Tests/conftest.py`).
+    - Update package-local Go tests that rely on local schema fixtures under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
     - Verify runtime startup applies schema without errors by checking `Engine/Services/api-backend/logs/engine.log`.
 
     ### Data-model guidance for the current enrollment design

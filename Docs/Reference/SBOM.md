@@ -93,7 +93,6 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | site-worker | alembic 1.18.5 | [MIT](https://spdx.org/licenses/MIT.html) |
 | site-worker | psycopg 3.3.4 (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
 | site-worker | ldap3 2.9.1 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
-| site-worker | pytest 9.1.1 | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
 | site-worker | ansible-core 2.21.2 | [GPL-3.0-or-later](https://spdx.org/licenses/GPL-3.0-or-later.html) |
 | site-worker | ansible-runner 2.4.3 | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
 | site-worker | jmespath 1.1.0 | [MIT](https://spdx.org/licenses/MIT.html) |
