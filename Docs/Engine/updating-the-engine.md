@@ -31,7 +31,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
 !!! warning "Local changes"
     `git pull --ff-only` stops if local files changed. Review those changes before updating so Engine deployment does not mix local edits with upstream changes.
 
-Every redeploy rebuilds the Engine-hosted Agent installer cache from `Data/Agent` on the Engine host. Sites install links use that local cache by default, so Borealis does not need prebuilt Agent binaries published to GitHub for normal installs.
+Every redeploy rebuilds Engine-hosted Agent artifact from `Data/Agent` on Engine host. Sites install links and Agent updates use that artifact exclusively; Borealis does not publish or retrieve Agent binaries through GitHub.
 
 When only Agent source changed, use `bash Engine.sh --redeploy-agent-binaries` from [Engine Maintenance Commands](engine-maintenance-commands.md). It publishes current binaries and rotates outdated active site workers without rebuilding or redeploying unrelated Engine workloads.
 

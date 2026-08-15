@@ -122,7 +122,6 @@ func main() {
 	}
 	registerTunnelRoutes(mux, auth, vpnRuntime)
 	registerServerTimeRoutes(mux, auth)
-	registerAgentReleaseChannelRoutes(mux, auth, fallback)
 	registerServerOverviewRoutes(mux, auth, operatorRealtime, fallback)
 	registerBorealisOperatorRoutes(mux, auth)
 	registerServerSettingsRoutes(mux, auth, fallback)

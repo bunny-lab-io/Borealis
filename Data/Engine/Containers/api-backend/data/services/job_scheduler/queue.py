@@ -732,8 +732,6 @@ def enqueue_agent_maintenance_run(
     hostname: str,
     operation_id: str,
     action: str,
-    release_channel: str,
-    branch: str,
     event_payload: Mapping[str, Any],
     task_link: Optional[Mapping[str, Any]] = None,
 ) -> int:
@@ -744,8 +742,6 @@ def enqueue_agent_maintenance_run(
         "hostname": str(hostname or "").strip(),
         "operation_id": str(operation_id or "").strip(),
         "action": str(action or "").strip(),
-        "release_channel": str(release_channel or "").strip(),
-        "branch": str(branch or "").strip(),
         "service_mode": "system",
         "event_name": "agent_maintenance_request",
         "event_payload": dict(event_payload or {}),

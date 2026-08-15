@@ -859,15 +859,12 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	serviceMode := firstText(cleanText(payload["service_mode"]), "system")
 	eventName := firstText(cleanText(payload["event_name"]), "agent_maintenance_request")
 	action := cleanText(payload["action"])
-	releaseChannel := cleanText(payload["release_channel"])
-	branch := cleanText(payload["branch"])
 	waitText := fmt.Sprintf(
-		"Job scheduler waiting for Agent %s socket operation_id=%s action=%s release_channel=%s branch=%s\n",
+		"Job scheduler waiting for Agent %s socket operation_id=%s action=%s artifact_source=%s\n",
 		firstText(serviceMode, "system"),
 		operationID,
 		firstText(action, "-"),
-		firstText(releaseChannel, "-"),
-		firstText(branch, "-"),
+		agentArtifactSourceEngine,
 	)
 	if err := m.updateAgentMaintenanceRunStatus(ctx, runID, "Running", waitText, ""); err != nil {
 		return err
@@ -927,11 +924,10 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	}
 	responseStatus := strings.ToLower(cleanText(response["status"]))
 	stdout := fmt.Sprintf(
-		"Job scheduler delivered agent maintenance operation_id=%s action=%s release_channel=%s branch=%s\n",
+		"Job scheduler delivered agent maintenance operation_id=%s action=%s artifact_source=%s\n",
 		operationID,
 		firstText(action, "-"),
-		firstText(releaseChannel, "-"),
-		firstText(branch, "-"),
+		agentArtifactSourceEngine,
 	)
 	if responseStatus != "" {
 		stdout += "Agent response status=" + responseStatus + "\n"

@@ -66,10 +66,7 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID stri
 		_ = os.Remove(pending)
 		return false, nil
 	}
-	if sourceRootHasGoAgent(sourceRoot) {
-		return false, fmt.Errorf("Go Agent source archive does not include a built Windows Agent.exe; update artifact must include Data\\Agent\\dist\\windows-amd64\\Agent.exe")
-	}
-	return false, fmt.Errorf("update artifact missing Agent.exe")
+	return false, fmt.Errorf("Engine update artifact missing Agent.exe")
 }
 
 func agentUpdateBinaryCandidates(sourceRoot string) []string {

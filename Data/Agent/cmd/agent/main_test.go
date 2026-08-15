@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,12 +10,7 @@ import (
 	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
-func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.T) {
-	originalResolver := resolveInstallRepoRefBuildIDFunc
-	t.Cleanup(func() { resolveInstallRepoRefBuildIDFunc = originalResolver })
-	resolveInstallRepoRefBuildIDFunc = func(ctx context.Context, repoRef string) (string, error) {
-		return "ABCDEF123456", nil
-	}
+func TestPersistInstallConfigRemovesLegacyAgentSourceFields(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, agentconfig.FileName)
 	raw := `{
@@ -39,7 +33,7 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 		ServerURL:          "https://borealis.example.com/",
 		ServerIPFallback:   "192.168.3.251",
 		EnrollmentCode:     "CODE",
-		RepoRef:            "feature/linux-install",
+		BuildID:            "ABCDEF123456",
 		TrustedEngineCAB64: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tDQpBUUlEDQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0t",
 	})
 	if err != nil {
@@ -61,12 +55,6 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	if loaded.Trust.EngineCAPEM != "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n" {
 		t.Fatalf("engine_ca_pem = %q", loaded.Trust.EngineCAPEM)
 	}
-	if loaded.Agent.Branch != "feature/linux-install" {
-		t.Fatalf("branch = %q", loaded.Agent.Branch)
-	}
-	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelUnstable {
-		t.Fatalf("release_channel = %q", loaded.Agent.ReleaseChannel)
-	}
 	if loaded.Agent.InstalledBuildID != "abcdef123456" {
 		t.Fatalf("installed_build_id = %q", loaded.Agent.InstalledBuildID)
 	}
@@ -74,8 +62,8 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(rewritten), "\n  \"release_channel\"") {
-		t.Fatalf("flat release_channel survived rewrite: %s", string(rewritten))
+	if strings.Contains(string(rewritten), "release_channel") || strings.Contains(string(rewritten), "\"branch\"") {
+		t.Fatalf("legacy Agent source fields survived rewrite: %s", string(rewritten))
 	}
 }
 
@@ -170,7 +158,6 @@ func TestValidateAgentConfigAcceptsFutureFields(t *testing.T) {
   "schema_version": 1,
   "server_url": "https://borealis.example.com",
   "agent": {
-    "branch": "feature/test",
     "future_liveness_gate": true
   },
   "identity": {},
@@ -220,9 +207,6 @@ func TestFreshDeployInstallDetectionSkipsUpdaterRepair(t *testing.T) {
 func TestInstallServiceIsInferredFromEnrollmentInputs(t *testing.T) {
 	if shouldRunInstallService(false, agentruntime.Options{}) {
 		t.Fatalf("empty options should not infer install-service")
-	}
-	if shouldRunInstallService(false, agentruntime.Options{RepoRef: "feature/test"}) {
-		t.Fatalf("repo-ref alone should not infer install-service")
 	}
 	if !shouldRunInstallService(false, agentruntime.Options{ServerURL: "https://borealis.example.com", EnrollmentCode: "CODE"}) {
 		t.Fatalf("server-url and enrollment-code should infer install-service")

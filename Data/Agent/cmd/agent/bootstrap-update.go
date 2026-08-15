@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,13 +21,9 @@ import (
 )
 
 type updateManifest struct {
-	TargetBuildID    string `json:"target_build_id"`
-	ArtifactSHA256   string `json:"artifact_sha256"`
-	FallbackURL      string `json:"fallback_url"`
-	DownloadPath     string `json:"download_path"`
-	EffectiveChannel string `json:"effective_channel"`
-	TargetChannel    string `json:"target_channel"`
-	Branch           string `json:"branch"`
+	TargetBuildID  string `json:"target_build_id"`
+	ArtifactSHA256 string `json:"artifact_sha256"`
+	DownloadPath   string `json:"download_path"`
 }
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
@@ -58,25 +53,21 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	installed := readConfigInstalledBuildID(cfg)
-	logger.Tracef("Agent update check start: release_channel=%s repo_ref=%s installed_build_id=%s", cfg.ReleaseChannel, cfg.RepoRef, installed)
-	if shouldUseRepoRefUpdate(cfg) {
-		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
-	}
-	return runStableManifestUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
+	logger.Tracef("Agent update check start: source=engine installed_build_id=%s", installed)
+	return runEngineManifestUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
 }
 
-func runStableManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string, engineHTTPClient *http.Client) error {
+func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string, engineHTTPClient *http.Client) error {
 	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
 	manifest, err := fetchUpdateManifest(engineHTTPClient, serverURL, token, installed)
 	if err != nil {
 		return err
 	}
 	target := strings.TrimSpace(strings.ToLower(manifest.TargetBuildID))
-	logger.Tracef("Agent update manifest: target_build_id=%s installed_build_id=%s artifact_sha256_present=%t fallback_url_present=%t download_path_present=%t effective_channel=%s target_channel=%s branch=%s", target, installed, strings.TrimSpace(manifest.ArtifactSHA256) != "", strings.TrimSpace(manifest.FallbackURL) != "", strings.TrimSpace(manifest.DownloadPath) != "", manifest.EffectiveChannel, manifest.TargetChannel, manifest.Branch)
+	logger.Tracef("Agent update manifest: source=engine target_build_id=%s installed_build_id=%s artifact_sha256_present=%t download_path_present=%t", target, installed, strings.TrimSpace(manifest.ArtifactSHA256) != "", strings.TrimSpace(manifest.DownloadPath) != "")
 	if target == "" {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
-	writeConfigReleaseTarget(cfg, releaseChannelForUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent update check: up to date (%s).", target)
 		if err := ensureAgentTasks(cfg, logger); err != nil {
@@ -86,21 +77,16 @@ func runStableManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 		return nil
 	}
 	downloadURL := strings.TrimSpace(manifest.DownloadPath)
-	authed := true
 	if downloadURL == "" {
-		downloadURL = strings.TrimSpace(manifest.FallbackURL)
-		authed = false
-	}
-	if downloadURL == "" {
-		return fmt.Errorf("update manifest did not provide artifact URL")
+		return fmt.Errorf("update manifest did not provide Engine artifact path")
 	}
 	if strings.HasPrefix(downloadURL, "/") {
 		downloadURL = serverURL + downloadURL
 	}
 	archivePath := filepath.Join(updateTempDir(cfg), "agent-update.zip")
 	markConfigUpdateOperation(configPath, "staging", "")
-	logger.Tracef("Agent update artifact download start: url=%s authed=%t archive=%s", downloadURL, authed, archivePath)
-	if err := downloadUpdateArtifact(engineHTTPClient, downloadURL, token, authed, archivePath); err != nil {
+	logger.Tracef("Agent update artifact download start: source=engine url=%s archive=%s", downloadURL, archivePath)
+	if err := downloadUpdateArtifact(engineHTTPClient, downloadURL, token, archivePath); err != nil {
 		return err
 	}
 	if manifest.ArtifactSHA256 != "" {
@@ -119,7 +105,7 @@ func runStableManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
 		return err
 	}
-	sourceRoot := resolveSourceRoot(extractRoot)
+	sourceRoot := extractRoot
 	logger.Tracef("Agent update source resolved: %s", sourceRoot)
 	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
 		return err
@@ -158,190 +144,6 @@ func bootstrapEngineHTTPClient(cfg BootstrapConfig) (*http.Client, error) {
 	return auth.HTTPClientForConfig(agentCfg, 180*time.Second)
 }
 
-func releaseChannelForUpdateManifest(effective string, target string) string {
-	channel := strings.ToLower(strings.TrimSpace(effective))
-	if channel == "" {
-		channel = strings.ToLower(strings.TrimSpace(target))
-	}
-	switch channel {
-	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelUnstable
-	default:
-		return agentconfig.ReleaseChannelStable
-	}
-}
-
-func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
-	return agentconfig.UsesUnstableReleaseChannel(cfg.ReleaseChannel)
-}
-
-func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string, httpClient *http.Client) error {
-	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
-	ref := strings.TrimSpace(cfg.RepoRef)
-	target, err := resolveEngineRepoRefSHA(httpClient, serverURL, token, cfg.RepoURL, ref)
-	if err != nil {
-		engineErr := err
-		logger.Warnf("Engine repo hash lookup failed for repo_ref %q; trying GitHub fallback: %v", ref, engineErr)
-		target, err = resolveGithubRefSHA(cfg.RepoURL, ref)
-		if err != nil {
-			if shouldFallbackRepoRefToStable(engineErr, err) {
-				logger.Warnf("Agent repo_ref %q no longer resolves; switching to stable:%s.", ref, agentconfig.DefaultBranch)
-				writeConfigReleaseTarget(cfg, agentconfig.ReleaseChannelStable, agentconfig.DefaultBranch)
-				return runStableManifestUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, httpClient)
-			}
-			return fmt.Errorf("resolve repo_ref %q update target; Engine repo hash API failed: %v; GitHub fallback failed: %w", ref, engineErr, err)
-		}
-	}
-	target = strings.TrimSpace(strings.ToLower(target))
-	logger.Tracef("Agent repo_ref update target: repo_ref=%s target_build_id=%s installed_build_id=%s", ref, target, installed)
-	if target == "" {
-		return fmt.Errorf("repo_ref %q resolved empty target build id", ref)
-	}
-	if installed != "" && strings.EqualFold(installed, target) {
-		logger.Infof("Agent repo_ref update check: up to date (%s).", target)
-		if err := ensureAgentTasks(cfg, logger); err != nil {
-			logger.Warnf("Agent service/task reconciliation skipped: %v", err)
-		}
-		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
-		return nil
-	}
-	sourceRoot, err := downloadRepoRefUpdateSource(cfg, logger, ref)
-	if err != nil {
-		return err
-	}
-	markConfigUpdateOperation(configPath, "staging", "")
-	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
-		return err
-	}
-	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
-	stopBorealisProcesses(cfg, logger)
-	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
-	if err != nil {
-		return err
-	}
-	if deferred {
-		markConfigUpdateOperation(configPath, "restarting", "")
-		logger.Infof("Agent repo_ref update staged (%s @ %s); deferred replacement will finalize after Agent.exe exits.", ref, target)
-		logger.Tracef("Agent update check complete: repo_ref_deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
-		return nil
-	}
-	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
-	if err := ensureAgentTasks(cfg, logger); err != nil {
-		return err
-	}
-	writeInstalledBuildID(cfg, target)
-	markConfigUpdateOperation(configPath, "success", "")
-	logger.Infof("Agent repo_ref update applied (%s @ %s).", ref, target)
-	logger.Tracef("Agent update check complete: repo_ref_applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
-	return nil
-}
-
-func downloadRepoRefUpdateSource(cfg BootstrapConfig, logger *BootstrapLogger, ref string) (string, error) {
-	archiveURL, err := githubArchiveURL(cfg.RepoURL, ref)
-	if err != nil {
-		return "", err
-	}
-	archivePath := filepath.Join(updateTempDir(cfg), "repo-ref-update.zip")
-	logger.Tracef("Agent repo_ref update archive download start: repo_ref=%s url=%s archive=%s", ref, archiveURL, archivePath)
-	if err := downloadFileLogged(context.Background(), archiveURL, archivePath, 180*time.Second, logger); err != nil {
-		return "", fmt.Errorf("download repo_ref %q update archive; refusing manifest fallback: %w", ref, err)
-	}
-	extractRoot := filepath.Join(updateTempDir(cfg), "repo-ref-extract")
-	_ = os.RemoveAll(extractRoot)
-	if err := unzipFileLogged(archivePath, extractRoot, logger); err != nil {
-		return "", err
-	}
-	sourceRoot := resolveSourceRoot(extractRoot)
-	if !sourceRootHasGoAgent(sourceRoot) {
-		return "", fmt.Errorf("repo_ref %q update archive missing Go Agent source under Data\\Agent", ref)
-	}
-	logger.Tracef("Agent repo_ref update source resolved: %s", sourceRoot)
-	return sourceRoot, nil
-}
-
-func resolveEngineRepoRefSHA(httpClient *http.Client, serverURL string, token string, repoURL string, ref string) (string, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
-	if baseURL == "" {
-		return "", fmt.Errorf("server URL missing")
-	}
-	owner, repo, err := githubRepoParts(repoURL)
-	if err != nil {
-		return "", err
-	}
-	params := url.Values{}
-	params.Set("repo", owner+"/"+repo)
-	params.Set("branch", strings.TrimSpace(ref))
-	params.Set("ttl", "300")
-	apiURL := baseURL + "/api/repo/current_hash?" + params.Encode()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
-	if strings.TrimSpace(token) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-	}
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("Engine repo hash API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var payload struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	sha := strings.TrimSpace(payload.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("Engine repo hash API returned empty sha")
-	}
-	return sha, nil
-}
-
-func resolveGithubRefSHA(repoURL string, ref string) (string, error) {
-	owner, repo, err := githubRepoParts(repoURL)
-	if err != nil {
-		return "", err
-	}
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("GitHub commit API HTTP %d", resp.StatusCode)
-	}
-	var payload struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	sha := strings.TrimSpace(payload.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("GitHub commit API returned empty sha")
-	}
-	return sha, nil
-}
-
 func fetchUpdateManifest(httpClient *http.Client, serverURL string, token string, installedBuildID string) (updateManifest, error) {
 	params := url.Values{}
 	if installedBuildID != "" {
@@ -376,7 +178,7 @@ func fetchUpdateManifest(httpClient *http.Client, serverURL string, token string
 	return manifest, nil
 }
 
-func downloadUpdateArtifact(httpClient *http.Client, rawURL string, token string, authed bool, destination string) error {
+func downloadUpdateArtifact(httpClient *http.Client, rawURL string, token string, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return err
 	}
@@ -386,9 +188,7 @@ func downloadUpdateArtifact(httpClient *http.Client, rawURL string, token string
 	if err != nil {
 		return err
 	}
-	if authed {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}

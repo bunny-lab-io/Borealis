@@ -7154,9 +7154,8 @@ PY
 package_engine_agent_install_cache() {
   local build_id="$1"
   local dist_root="$2"
-  local branch="$3"
-  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_release_channels.json"
-  python3 - "${AGENT_UPDATE_CACHE_ROOT}" "${config_path}" "${dist_root}" "${build_id}" "${branch}" <<'PY'
+  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_artifact.json"
+  python3 - "${AGENT_UPDATE_CACHE_ROOT}" "${config_path}" "${dist_root}" "${build_id}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -7171,7 +7170,6 @@ cache_root = pathlib.Path(sys.argv[1])
 config_path = pathlib.Path(sys.argv[2])
 dist_root = pathlib.Path(sys.argv[3])
 build_id = str(sys.argv[4]).strip().lower()
-branch = str(sys.argv[5]).strip() or "main"
 
 platform_artifacts = {
     "windows-amd64": "Data/Agent/dist/windows-amd64/Agent.exe",
@@ -7184,9 +7182,9 @@ def clean_artifact_id(value: str) -> str:
     cleaned = re.sub(r"[^a-z0-9._-]+", "-", value.strip().lower()).strip("-")
     return cleaned or "build"
 
-def artifact_id(channel: str) -> str:
+def artifact_id() -> str:
     cleaned_build = clean_artifact_id(build_id)[:20] or "build"
-    return f"{clean_artifact_id(channel)}-{cleaned_build}"
+    return f"engine-{cleaned_build}"
 
 def sha256_file(path: pathlib.Path) -> str:
     hasher = hashlib.sha256()
@@ -7201,8 +7199,8 @@ def load_existing(path: pathlib.Path) -> dict:
     except Exception:
         return {}
 
-def package_channel(channel: str) -> dict:
-    artifact = artifact_id(f"engine-{channel}")
+def package_artifact() -> dict:
+    artifact = artifact_id()
     artifact_path = cache_root / f"{artifact}.zip"
     manifest_path = cache_root / f"{artifact}.json"
     build_root = cache_root / "Builds" / artifact
@@ -7212,8 +7210,6 @@ def package_channel(channel: str) -> dict:
     shutil.copytree(dist_root, build_dist)
 
     manifest = {
-        "channel": channel,
-        "repo": "bunny-lab-io/Borealis",
         "source": "engine",
         "artifact_format": "borealis-go-agent-v1",
         "platform_artifacts": platform_artifacts,
@@ -7222,16 +7218,8 @@ def package_channel(channel: str) -> dict:
         "artifact_path": str(artifact_path),
         "artifact_sha256": "",
         "artifact_size": 0,
-        "download_url": "",
-        "fallback_url": "",
-        "version_label": f"engine:{branch}",
-        "release_tag": "",
-        "release_name": "Engine-Compiled Agent",
         "published_at": published_at,
-        "branch": branch,
         "compiled_at": compiled_at,
-        "promoted_at": compiled_at,
-        "refreshed_at": compiled_at,
         "last_error": "",
     }
 
@@ -7257,25 +7245,14 @@ cache_root.mkdir(parents=True, exist_ok=True)
 config_path.parent.mkdir(parents=True, exist_ok=True)
 
 existing = load_existing(config_path)
+legacy_config_path = config_path.with_name("agent_release_channels.json")
+legacy_settings = load_existing(legacy_config_path)
 created_at = int(existing.get("created_at") or compiled_at)
-github = existing.get("github") if isinstance(existing.get("github"), dict) else {}
-github["repo"] = str(github.get("repo") or "bunny-lab-io/Borealis")
-github["default_branch"] = str(github.get("default_branch") or "main")
-stable = package_channel("stable")
-unstable = package_channel("unstable")
+artifact = package_artifact()
 settings = {
     "version": 1,
-    "default_channel": "stable",
-    "binary_source": "engine",
-    "github_fallback_enabled": False,
-    "github": github,
-    "channels": {
-        "stable": stable,
-        "unstable": unstable,
-    },
-    "last_refresh_started_at": compiled_at,
-    "last_refresh_completed_at": compiled_at,
-    "last_refresh_error": "",
+    "source": "engine",
+    "artifact": artifact,
     "created_at": created_at,
     "updated_at": compiled_at,
 }
@@ -7283,7 +7260,21 @@ temp_config = config_path.with_suffix(config_path.suffix + ".tmp")
 temp_config.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 temp_config.chmod(0o600)
 temp_config.replace(config_path)
-print(f"{stable['artifact_id']}\t{build_id}\t{compiled_at}")
+
+# Remove retired per-channel metadata and only artifacts named by that metadata.
+legacy_channels = legacy_settings.get("channels") if isinstance(legacy_settings.get("channels"), dict) else {}
+for legacy_target in legacy_channels.values():
+    if not isinstance(legacy_target, dict):
+        continue
+    raw_legacy_id = str(legacy_target.get("artifact_id") or "").strip().lower()
+    legacy_id = clean_artifact_id(raw_legacy_id)
+    if not raw_legacy_id or legacy_id != raw_legacy_id or legacy_id == artifact["artifact_id"]:
+        continue
+    (cache_root / f"{legacy_id}.zip").unlink(missing_ok=True)
+    (cache_root / f"{legacy_id}.json").unlink(missing_ok=True)
+    shutil.rmtree(cache_root / "Builds" / legacy_id, ignore_errors=True)
+legacy_config_path.unlink(missing_ok=True)
+print(f"{artifact['artifact_id']}\t{build_id}\t{compiled_at}")
 PY
 }
 
@@ -7300,10 +7291,6 @@ ensure_engine_agent_install_cache() {
   temp_root="$(mktemp -d "${AGENT_UPDATE_CACHE_ROOT}/Builds/.deploy-agent.XXXXXX")"
   local dist_root="${temp_root}/dist"
   local go_install_root="${AGENT_UPDATE_CACHE_ROOT}/Go/go1.22.12"
-  local branch
-  branch="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
-  branch="${branch:-main}"
-
   log_status "Agent Installer Cache" "Building Agent" "${C_YELLOW}"
   if ! BOREALIS_AGENT_VERSION="${initial_build_id}" \
     BOREALIS_GO_AGENT_OUTPUT_ROOT="${dist_root}" \
@@ -7331,7 +7318,7 @@ ensure_engine_agent_install_cache() {
   fi
 
   local metadata
-  if ! metadata="$(package_engine_agent_install_cache "${final_build_id}" "${dist_root}" "${branch}")"; then
+  if ! metadata="$(package_engine_agent_install_cache "${final_build_id}" "${dist_root}")"; then
     rm -rf "${temp_root}"
     log_status "Agent Installer Cache" "Package Failed" "${C_RED}"
     die "Engine Agent install cache packaging failed. See ${BUILD_LOG}."
@@ -9656,27 +9643,27 @@ PY
 }
 
 agent_redeploy_artifact_metadata() {
-  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_release_channels.json"
-  [[ -f "${config_path}" ]] || die "Agent release channel config missing after build: ${config_path}"
+  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_artifact.json"
+  [[ -f "${config_path}" ]] || die "Agent artifact config missing after build: ${config_path}"
   python3 - "${config_path}" <<'PY'
 import json
 import pathlib
 import sys
 
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-stable = ((payload.get("channels") or {}).get("stable") or {})
-artifact_id = str(stable.get("artifact_id") or "").strip()
-build_id = str(stable.get("build_id") or "").strip()
-compiled_at = int(stable.get("compiled_at") or 0)
-artifact_path = str(stable.get("artifact_path") or "").strip()
+artifact = payload.get("artifact") or {}
+artifact_id = str(artifact.get("artifact_id") or "").strip()
+build_id = str(artifact.get("build_id") or "").strip()
+compiled_at = int(artifact.get("compiled_at") or 0)
+artifact_path = str(artifact.get("artifact_path") or "").strip()
 if not artifact_id or not build_id or compiled_at <= 0 or not artifact_path:
-    raise SystemExit("stable Agent artifact metadata is incomplete")
+    raise SystemExit("Agent artifact metadata is incomplete")
 print(f"{artifact_id}\t{build_id}\t{compiled_at}\t{artifact_path}")
 PY
 }
 
 agent_redeploy_verify_api_cache_mount() {
-  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_release_channels.json"
+  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_artifact.json"
   local artifact_path="$1"
   local build_id="$2"
   k3s_kubectl -n "${K3S_NAMESPACE}" exec deployment/api-backend -c api-backend -- sh -c \

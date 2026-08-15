@@ -16,7 +16,6 @@ import (
 
 const (
 	defaultInstallDir            = `C:\Borealis`
-	defaultRepoURL               = "https://github.com/bunny-lab-io/Borealis.git"
 	defaultTimeoutSeconds        = 1800
 	legacyAgentTaskName          = "Borealis Agent"
 	agentUpdaterTaskName         = "Borealis Agent (AutoUpdater)"
@@ -30,14 +29,10 @@ const (
 	bootstrapOutputRelativePath  = `Temp\Onboarding\stdout.log`
 )
 
-var defaultRepoRef = "main"
-
 type cliOptions struct {
 	ServerURL          string
 	ServerIPFallback   string
 	SiteEnrollmentCode string
-	RepoRef            string
-	ReleaseChannel     string
 	TrustedEngineCAPEM string
 	TrustedEngineCAB64 string
 	Uninstall          bool
@@ -50,9 +45,6 @@ type BootstrapConfig struct {
 	ServerIPFallback    string `json:"server_ip_fallback"`
 	SiteEnrollmentCode  string `json:"site_enrollment_code"`
 	LegacyEnrollment    string `json:"enrollment_code"`
-	RepoURL             string `json:"repo_url"`
-	RepoRef             string `json:"repo_ref"`
-	ReleaseChannel      string `json:"release_channel"`
 	TrustedEngineCAPEM  string `json:"trusted_engine_ca_pem"`
 	TrustedEngineCAB64  string `json:"trusted_engine_ca_b64"`
 	PayloadPath         string `json:"agent_bundle_path"`
@@ -102,18 +94,6 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.SiteEnrollmentCode = strings.TrimSpace(args[i])
-		case "--repo-ref", "--repo-branch":
-			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return opts, errors.New(arg + " requires value")
-			}
-			i++
-			opts.RepoRef = strings.TrimSpace(args[i])
-		case "--release-channel":
-			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return opts, errors.New("--release-channel requires value")
-			}
-			i++
-			opts.ReleaseChannel = strings.TrimSpace(args[i])
 		case "--trusted-engine-ca-pem":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, errors.New("--trusted-engine-ca-pem requires value")
@@ -142,7 +122,7 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	cfg.Uninstall = cli.Uninstall
 	cfg.Verbose = cli.Verbose
 	cfg.Interactive = !serviceMode && isInteractiveConsole()
-	deployIntent := cli.ServerURL != "" || cli.SiteEnrollmentCode != "" || cli.RepoRef != "" || cli.ReleaseChannel != ""
+	deployIntent := cli.ServerURL != "" || cli.SiteEnrollmentCode != ""
 	if serviceMode {
 		cfg.NonInteractive = true
 	}
@@ -168,12 +148,6 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	}
 	if cli.SiteEnrollmentCode != "" {
 		cfg.SiteEnrollmentCode = cli.SiteEnrollmentCode
-	}
-	if cli.RepoRef != "" {
-		cfg.RepoRef = cli.RepoRef
-	}
-	if cli.ReleaseChannel != "" {
-		cfg.ReleaseChannel = cli.ReleaseChannel
 	}
 	if cli.TrustedEngineCAB64 != "" {
 		cfg.TrustedEngineCAB64 = cli.TrustedEngineCAB64
@@ -203,8 +177,6 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 func defaultBootstrapConfig() BootstrapConfig {
 	return BootstrapConfig{
 		InstallDir:     defaultInstallDir,
-		RepoURL:        defaultRepoURL,
-		RepoRef:        defaultRepoRef,
 		TimeoutSeconds: defaultTimeoutSeconds,
 	}
 }
@@ -214,9 +186,7 @@ func bootstrapConfigHasDeployIntent(cfg BootstrapConfig) bool {
 		strings.TrimSpace(cfg.SiteEnrollmentCode) != "" ||
 		strings.TrimSpace(cfg.LegacyEnrollment) != "" ||
 		strings.TrimSpace(cfg.PayloadPath) != "" ||
-		strings.TrimSpace(cfg.ManifestPath) != "" ||
-		strings.TrimSpace(cfg.RepoRef) != "" ||
-		strings.TrimSpace(cfg.ReleaseChannel) != ""
+		strings.TrimSpace(cfg.ManifestPath) != ""
 }
 
 func discoverBootstrapConfigPath(installDir string) string {
@@ -263,15 +233,6 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	}
 	if strings.TrimSpace(incoming.LegacyEnrollment) != "" {
 		base.LegacyEnrollment = incoming.LegacyEnrollment
-	}
-	if strings.TrimSpace(incoming.RepoURL) != "" {
-		base.RepoURL = incoming.RepoURL
-	}
-	if strings.TrimSpace(incoming.RepoRef) != "" {
-		base.RepoRef = incoming.RepoRef
-	}
-	if strings.TrimSpace(incoming.ReleaseChannel) != "" {
-		base.ReleaseChannel = incoming.ReleaseChannel
 	}
 	if strings.TrimSpace(incoming.TrustedEngineCAB64) != "" {
 		base.TrustedEngineCAB64 = incoming.TrustedEngineCAB64
@@ -326,19 +287,6 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 
 func normalizeBootstrapConfig(cfg *BootstrapConfig) {
 	cfg.InstallDir = cleanPathOrDefault(cfg.InstallDir, defaultInstallDir)
-	cfg.RepoURL = strings.TrimSpace(cfg.RepoURL)
-	if cfg.RepoURL == "" {
-		cfg.RepoURL = defaultRepoURL
-	}
-	cfg.RepoRef = strings.TrimSpace(cfg.RepoRef)
-	if cfg.RepoRef == "" {
-		cfg.RepoRef = defaultRepoRef
-	}
-	if strings.TrimSpace(cfg.ReleaseChannel) == "" {
-		cfg.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.RepoRef)
-	} else {
-		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
-	}
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = defaultTimeoutSeconds
 	}

@@ -52,28 +52,8 @@ func updateOperationActive(update agentconfig.AgentUpdateSection) bool {
 func recoverExpiredUpdateOperation(configPath string, cfg agentconfig.AgentConfig, now time.Time) (bool, error) {
 	update := cfg.Agent.Update
 	status := strings.ToLower(strings.TrimSpace(update.Status))
-	previousChannel := agentconfig.NormalizeReleaseChannel(update.PreviousChannel)
-	previousBranch := agentconfig.NormalizeBranch(update.PreviousBranch)
-	if previousChannel == "" {
-		previousChannel = agentconfig.ReleaseChannelStable
-	}
-	if previousChannel == agentconfig.ReleaseChannelStable {
-		previousBranch = agentconfig.DefaultBranch
-	}
-	targetChannel := agentconfig.NormalizeReleaseChannel(update.TargetChannel)
-	targetBranch := agentconfig.NormalizeBranch(update.TargetBranch)
-	if targetChannel == agentconfig.ReleaseChannelStable {
-		targetBranch = agentconfig.DefaultBranch
-	}
-
-	if !strings.HasPrefix(status, "rollback_") && !strings.HasPrefix(status, "factory_reset_") && (previousChannel != targetChannel || !strings.EqualFold(previousBranch, targetBranch)) {
-		if err := requestWatchdogUpdateTarget(configPath, "rollback_started", previousChannel, previousBranch, now); err != nil {
-			return true, err
-		}
-		return true, startLocalUpdater(configPath)
-	}
-	if strings.HasPrefix(status, "rollback_") || (previousChannel == targetChannel && strings.EqualFold(previousBranch, targetBranch)) {
-		if err := requestWatchdogUpdateTarget(configPath, "factory_reset_started", agentconfig.ReleaseChannelStable, agentconfig.DefaultBranch, now); err != nil {
+	if !strings.HasPrefix(status, "factory_reset_") {
+		if err := requestWatchdogUpdateRetry(configPath, "factory_reset_started", now); err != nil {
 			return true, err
 		}
 		return true, startLocalUpdater(configPath)
@@ -81,20 +61,11 @@ func recoverExpiredUpdateOperation(configPath string, cfg agentconfig.AgentConfi
 	return false, nil
 }
 
-func requestWatchdogUpdateTarget(configPath string, status string, channel string, branch string, now time.Time) error {
+func requestWatchdogUpdateRetry(configPath string, status string, now time.Time) error {
 	return agentconfig.UpdateWithWriter(configPath, "watchdog:update_recovery", func(cfg *agentconfig.AgentConfig) {
-		targetChannel := agentconfig.NormalizeReleaseChannel(channel)
-		targetBranch := agentconfig.NormalizeBranch(branch)
-		if targetChannel == agentconfig.ReleaseChannelStable {
-			targetBranch = agentconfig.DefaultBranch
-		}
-		cfg.Agent.ReleaseChannel = targetChannel
-		cfg.Agent.Branch = targetBranch
 		cfg.Agent.Update.Status = strings.ToLower(strings.TrimSpace(status))
 		cfg.Agent.Update.UpdatedAt = now.Unix()
 		cfg.Agent.Update.DeadlineAt = now.Add(15 * time.Minute).Unix()
-		cfg.Agent.Update.TargetChannel = targetChannel
-		cfg.Agent.Update.TargetBranch = targetBranch
 		cfg.Agent.Update.LastError = ""
 		cfg.Agent.Update.RecoveryAttempts++
 	})

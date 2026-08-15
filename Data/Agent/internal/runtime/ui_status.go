@@ -124,8 +124,6 @@ func (a *Agent) applyUIConfigLocked(cfg agentconfig.AgentConfig) {
 	if a.uiSnapshot.InstalledBuildID == "" {
 		a.uiSnapshot.InstalledBuildID = agentconfig.NormalizeBuildID(a.options.BuildID)
 	}
-	a.uiSnapshot.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
-	a.uiSnapshot.Branch = agentconfig.NormalizeBranch(cfg.Agent.Branch)
 	a.uiSnapshot.Logs = safeLogPaths(a.configPath)
 	if a.uiSnapshot.EngineState == "" {
 		a.uiSnapshot.EngineState = "Starting"

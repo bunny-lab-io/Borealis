@@ -160,11 +160,9 @@ func logBootstrapConfigSummary(cfg BootstrapConfig, logger *BootstrapLogger) {
 		}
 	}
 	logger.Tracef(
-		"Bootstrap config: install_dir=%s config_path=%s repo_url=%s repo_ref=%s payload_path=%s payload_exists=%t payload_sha256_present=%t state_path=%s events_path=%s stdout_path=%s stderr_path=%s job_id=%d run_id=%d target=%s service_name=%s interactive=%t noninteractive=%t server_url_present=%t site_enrollment_code_sha256_prefix=%s",
+		"Bootstrap config: install_dir=%s config_path=%s payload_path=%s payload_exists=%t payload_sha256_present=%t state_path=%s events_path=%s stdout_path=%s stderr_path=%s job_id=%d run_id=%d target=%s service_name=%s interactive=%t noninteractive=%t server_url_present=%t site_enrollment_code_sha256_prefix=%s",
 		cfg.InstallDir,
 		cfg.ConfigPath,
-		cfg.RepoURL,
-		cfg.RepoRef,
 		cfg.PayloadPath,
 		fileExists(cfg.PayloadPath),
 		strings.TrimSpace(cfg.PayloadSHA256) != "",

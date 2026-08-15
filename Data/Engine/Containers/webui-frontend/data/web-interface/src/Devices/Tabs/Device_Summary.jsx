@@ -68,11 +68,6 @@ import {
   rethrowIfRouteRedirect,
 } from "../../app/routes/routeData.js";
 import { normalizeQuickJobTargets } from "../../app/utils/quickJob.js";
-import AgentBranchChannelDialog, {
-  fetchAgentBranchRows,
-  normalizeAgentBranch,
-  normalizeAgentReleaseChannel,
-} from "../../AgentBranchChannelDialog.jsx";
 import {
   STORAGE_USAGE_ALERT_COLOR,
   STORAGE_USAGE_ALERT_LABEL,
@@ -348,7 +343,7 @@ function describeAgentUpdateState(value) {
   if (normalized === "applied") return "Update applied successfully";
   if (normalized === "up_to_date") return "Checked and already current";
   if (normalized === "deferred") return "Update queued until the device is idle";
-  if (normalized === "checking") return "Checking for channel updates";
+  if (normalized === "checking") return "Checking for updates";
   if (normalized === "downloading") return "Downloading the update package";
   if (normalized === "staging") return "Staging the update package";
   if (normalized === "staged") return "Update staged and awaiting runtime refresh";
@@ -562,26 +557,6 @@ function normalizeDeviceSummarySnapshot(detailData, { device = {}, deviceId = ""
       normalizedSummary.agent_version_status ||
       detailData?.details?.summary?.agent_version_status ||
       "Needs Updated",
-    agentReleaseChannelOverride:
-      detailData?.agent_release_channel_override ||
-      normalizedSummary.agent_release_channel_override ||
-      detailData?.details?.summary?.agent_release_channel_override ||
-      "",
-    agentReleaseChannel:
-      detailData?.agent_release_channel ||
-      normalizedSummary.agent_release_channel ||
-      detailData?.details?.summary?.agent_release_channel ||
-      "",
-    agentBranch:
-      detailData?.agent_branch ||
-      normalizedSummary.agent_branch ||
-      detailData?.details?.summary?.agent_branch ||
-      "",
-    agentReleaseChannelEffective:
-      detailData?.agent_release_channel_effective ||
-      normalizedSummary.agent_release_channel_effective ||
-      detailData?.details?.summary?.agent_release_channel_effective ||
-      "",
     agentTargetBuildId:
       detailData?.agent_target_build_id ||
       normalizedSummary.agent_target_build_id ||
@@ -1515,20 +1490,8 @@ export default function DeviceSummary() {
     history: true,
     metadata: true,
   });
-  const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
-  const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
-  const [agentBranchDraft, setAgentBranchDraft] = useState("");
-  const [agentBranchChannelDialogOpen, setAgentBranchChannelDialogOpen] = useState(false);
-  const [agentBranchRows, setAgentBranchRows] = useState([]);
-  const [agentBranchesLoading, setAgentBranchesLoading] = useState(false);
-  const [agentBranchLoadError, setAgentBranchLoadError] = useState("");
-  const [draftAgentChannel, setDraftAgentChannel] = useState("stable");
-  const [draftAgentBranch, setDraftAgentBranch] = useState("main");
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
-  const [releaseChannelSaving, setReleaseChannelSaving] = useState(false);
-  const [agentBranchSaving, setAgentBranchSaving] = useState(false);
-  const [agentBranchChannelSaving, setAgentBranchChannelSaving] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const softwareRefreshTimersRef = useRef([]);
   // Snapshotted status for the lifetime of this page
@@ -2004,328 +1967,6 @@ export default function DeviceSummary() {
       setUpdateAgentBusy(false);
     }
   }, [activityHostname, device?.agent_guid, device?.guid, meta.agentGuid, notifyOperator, summary.agent_guid, updateAgentBusy]);
-
-  const fetchAgentBranches = useCallback(async () => {
-    setAgentBranchesLoading(true);
-    setAgentBranchLoadError("");
-    try {
-      const nextRows = await fetchAgentBranchRows();
-      setAgentBranchRows(nextRows);
-      if (!nextRows.length) {
-        setAgentBranchLoadError("No GitHub branches returned.");
-      }
-    } catch (error) {
-      setAgentBranchRows([]);
-      setAgentBranchLoadError(error instanceof Error ? error.message : "GitHub branch lookup failed.");
-    } finally {
-      setAgentBranchesLoading(false);
-    }
-  }, []);
-
-  const openAgentBranchChannelDialog = useCallback(() => {
-    if (!isAdmin || agentBranchChannelSaving) return;
-    const currentChannel = normalizeAgentReleaseChannel(
-      meta.agentReleaseChannel ||
-        summary.agent_release_channel ||
-        meta.agentReleaseChannelEffective ||
-        summary.agent_release_channel_effective ||
-        meta.agentReleaseChannelOverride ||
-        summary.agent_release_channel_override ||
-        ""
-    );
-    const currentBranch = normalizeAgentBranch(currentChannel, meta.agentBranch || summary.agent_branch || "");
-    setDraftAgentChannel(currentChannel);
-    setDraftAgentBranch(currentBranch);
-    setAgentBranchLoadError("");
-    setAgentBranchChannelDialogOpen(true);
-    void fetchAgentBranches();
-  }, [
-    agentBranchChannelSaving,
-    fetchAgentBranches,
-    isAdmin,
-    meta.agentBranch,
-    meta.agentReleaseChannel,
-    meta.agentReleaseChannelEffective,
-    meta.agentReleaseChannelOverride,
-    summary.agent_branch,
-    summary.agent_release_channel,
-    summary.agent_release_channel_effective,
-    summary.agent_release_channel_override,
-  ]);
-
-  const closeAgentBranchChannelDialog = useCallback(() => {
-    if (agentBranchChannelSaving) return;
-    setAgentBranchChannelDialogOpen(false);
-  }, [agentBranchChannelSaving]);
-
-  const applyAgentBranchChannel = useCallback(async () => {
-    const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
-    if (!isAdmin || !targetGuid || agentBranchChannelSaving) return;
-    const targetChannel = normalizeAgentReleaseChannel(draftAgentChannel);
-    if (!["stable", "unstable"].includes(targetChannel)) {
-      setAgentBranchLoadError("Choose stable or unstable before applying.");
-      return;
-    }
-    const targetBranch = normalizeAgentBranch(targetChannel, draftAgentBranch);
-    setAgentBranchChannelSaving(true);
-    setAgentBranchLoadError("");
-    try {
-      const resp = await fetch("/api/devices/agent-maintenance", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "switch_branch_channel",
-          guids: [targetGuid],
-          release_channel: targetChannel,
-          branch: targetBranch,
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
-      }
-      setAgentBranchChannelDialogOpen(false);
-      const snapshot = await fetchDeviceSummarySnapshot({
-        device,
-        deviceId,
-        includeAgents: false,
-      });
-      applyDeviceSummarySnapshot(snapshot, { silent: true });
-      await notifyOperator({
-        title: "Agent Branch/Channel Queued",
-        message: `<b>${activityHostname || targetGuid}</b> queued for <b>${targetChannel} - ${targetBranch}</b>.`,
-        icon: "update",
-        variant: "success",
-      });
-    } catch (error) {
-      setAgentBranchLoadError(String(error?.message || error || "Agent branch/channel switch failed."));
-      await notifyOperator({
-        title: "Agent Branch/Channel Failed",
-        message: `Could not queue the branch/channel switch: ${String(error?.message || error)}`,
-        icon: "error",
-        variant: "error",
-      });
-    } finally {
-      setAgentBranchChannelSaving(false);
-    }
-  }, [
-    activityHostname,
-    agentBranchChannelSaving,
-    applyDeviceSummarySnapshot,
-    device,
-    deviceId,
-    draftAgentBranch,
-    draftAgentChannel,
-    isAdmin,
-    meta.agentGuid,
-    notifyOperator,
-    summary.agent_guid,
-  ]);
-
-  const openReleaseChannelMenu = useCallback(
-    (event) => {
-      if (!isAdmin || releaseChannelSaving) return;
-      if (event?.preventDefault) event.preventDefault();
-      if (event?.stopPropagation) event.stopPropagation();
-      const rect = event?.currentTarget?.getBoundingClientRect?.();
-      if (rect) {
-        setReleaseChannelMenuPosition({
-          top: Math.round(rect.bottom + 4),
-          left: Math.round(rect.left),
-        });
-        return;
-      }
-      setReleaseChannelMenuPosition(
-        typeof event?.clientX === "number" && typeof event?.clientY === "number"
-          ? { top: Math.round(event.clientY + 4), left: Math.round(event.clientX) }
-          : null
-      );
-    },
-    [isAdmin, releaseChannelSaving]
-  );
-
-  const closeReleaseChannelMenu = useCallback(() => {
-    setReleaseChannelMenuPosition(null);
-  }, []);
-
-  const openAgentBranchMenu = useCallback(
-    (event) => {
-      if (!isAdmin || agentBranchSaving) return;
-      if (event?.preventDefault) event.preventDefault();
-      if (event?.stopPropagation) event.stopPropagation();
-      setAgentBranchDraft(
-        String(meta.agentBranch || summary.agent_branch || "main").trim() || "main"
-      );
-      const rect = event?.currentTarget?.getBoundingClientRect?.();
-      if (rect) {
-        setAgentBranchMenuPosition({
-          top: Math.round(rect.bottom + 4),
-          left: Math.round(rect.left),
-        });
-        return;
-      }
-      setAgentBranchMenuPosition(
-        typeof event?.clientX === "number" && typeof event?.clientY === "number"
-          ? { top: Math.round(event.clientY + 4), left: Math.round(event.clientX) }
-          : null
-      );
-    },
-    [agentBranchSaving, isAdmin, meta.agentBranch, summary.agent_branch]
-  );
-
-  const closeAgentBranchMenu = useCallback(() => {
-    setAgentBranchMenuPosition(null);
-  }, []);
-
-  const applyAgentReleaseChannelOverride = useCallback(
-    async (channel) => {
-      const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
-      if (!isAdmin || !targetGuid || releaseChannelSaving) return;
-      const normalizedChannel = String(channel || "").trim().toLowerCase();
-      setReleaseChannelSaving(true);
-      try {
-        const resp = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/agent-release-channel`, {
-          method: "PUT",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel: normalizedChannel || null }),
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
-        }
-        const snapshot = await fetchDeviceSummarySnapshot({
-          device,
-          deviceId,
-          includeAgents: false,
-        });
-        applyDeviceSummarySnapshot(snapshot, { silent: true });
-        const resolvedChannel =
-          String(data?.agent_release_channel || normalizedChannel || "stable")
-            .trim()
-            .toLowerCase() || "stable";
-        const targetLabel = activityHostname || targetGuid;
-        await notifyOperator({
-          title: "Agent Channel Updated",
-          message: `<b>${targetLabel}</b> Release Channel changed to <b>${resolvedChannel}</b>`,
-          icon: "info",
-          variant: "success",
-        });
-      } catch (err) {
-        await notifyOperator({
-          title: "Agent Channel Update Failed",
-          message: `Could not update the agent release channel: ${String(err?.message || err)}`,
-          icon: "error",
-          variant: "error",
-        });
-      } finally {
-        setReleaseChannelSaving(false);
-      }
-    },
-    [
-      activityHostname,
-      applyDeviceSummarySnapshot,
-      device,
-      deviceId,
-      isAdmin,
-      meta.agentGuid,
-      notifyOperator,
-      releaseChannelSaving,
-      summary.agent_guid,
-    ]
-  );
-
-  const handleReleaseChannelSelection = useCallback(
-    (channel) => {
-      closeReleaseChannelMenu();
-      applyAgentReleaseChannelOverride(channel);
-    },
-    [applyAgentReleaseChannelOverride, closeReleaseChannelMenu]
-  );
-
-  const applyAgentBranchOverride = useCallback(
-    async () => {
-      const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
-      const normalizedBranch = String(agentBranchDraft || "").trim();
-      if (!isAdmin || !targetGuid || agentBranchSaving) return;
-      if (!normalizedBranch) {
-        await notifyOperator({
-          title: "Agent Branch Required",
-          message: "Enter an unstable branch before applying the agent branch change.",
-          icon: "error",
-          variant: "error",
-        });
-        return;
-      }
-      setAgentBranchSaving(true);
-      try {
-        const resp = await fetch(`/api/devices/${encodeURIComponent(targetGuid)}/agent-release-channel`, {
-          method: "PUT",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel: "unstable", branch: normalizedBranch }),
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
-        }
-        setAgentBranchMenuPosition(null);
-        const snapshot = await fetchDeviceSummarySnapshot({
-          device,
-          deviceId,
-          includeAgents: false,
-        });
-        applyDeviceSummarySnapshot(snapshot, { silent: true });
-        const resolvedBranch = String(data?.agent_branch || normalizedBranch).trim() || normalizedBranch;
-        setMeta((prev) => ({
-          ...(prev || {}),
-          agentBranch: resolvedBranch,
-          agentReleaseChannel: data?.agent_release_channel || "unstable",
-          agentReleaseChannelOverride: data?.agent_release_channel_override || "unstable",
-          agentReleaseChannelEffective: data?.agent_release_channel_effective || "unstable",
-        }));
-        setDetails((prev) => ({
-          ...(prev || {}),
-          summary: {
-            ...(prev?.summary || {}),
-            agent_branch: resolvedBranch,
-            agent_release_channel: data?.agent_release_channel || "unstable",
-            agent_release_channel_override: data?.agent_release_channel_override || "unstable",
-            agent_release_channel_effective: data?.agent_release_channel_effective || "unstable",
-          },
-        }));
-        const targetLabel = activityHostname || targetGuid;
-        await notifyOperator({
-          title: "Agent Branch Updated",
-          message: `<b>${targetLabel}</b> Unstable Branch changed to <b>${resolvedBranch}</b>`,
-          icon: "info",
-          variant: "success",
-        });
-      } catch (err) {
-        await notifyOperator({
-          title: "Agent Branch Update Failed",
-          message: `Could not update the agent unstable branch: ${String(err?.message || err)}`,
-          icon: "error",
-          variant: "error",
-        });
-      } finally {
-        setAgentBranchSaving(false);
-      }
-    },
-    [
-      activityHostname,
-      agentBranchDraft,
-      agentBranchSaving,
-      applyDeviceSummarySnapshot,
-      device,
-      deviceId,
-      isAdmin,
-      meta.agentGuid,
-      notifyOperator,
-      summary.agent_guid,
-    ]
-  );
 
   const handleDescriptionDraftChange = useCallback((nextDescription) => {
     descriptionDraftRef.current = String(nextDescription ?? "");
@@ -3386,32 +3027,6 @@ export default function DeviceSummary() {
 
   const borealisAgentRows = useMemo(
     () => {
-      const configuredReleaseChannel = String(
-        meta.agentReleaseChannel ||
-          summary.agent_release_channel ||
-          ""
-      )
-        .trim()
-        .toLowerCase();
-      const rawEffectiveChannel =
-        String(
-          configuredReleaseChannel ||
-            meta.agentReleaseChannelEffective ||
-            summary.agent_release_channel_effective ||
-            meta.agentReleaseChannelOverride ||
-            summary.agent_release_channel_override ||
-            "stable"
-        )
-          .trim()
-          .toLowerCase() || "stable";
-      const effectiveChannel = normalizeAgentReleaseChannel(rawEffectiveChannel);
-      const currentBranch =
-        normalizeAgentBranch(effectiveChannel, meta.agentBranch || summary.agent_branch || "");
-      const lastChannelUpdateValue = formatDateValue(
-        meta.agentTargetPublishedAt || summary.agent_target_published_at || "",
-        "unknown"
-      );
-      const targetBuildId = meta.agentTargetBuildId || summary.agent_target_build_id || "unknown";
       const rawUpdateState = meta.agentUpdateState || summary.agent_update_state || "idle";
       return [
         {
@@ -3428,19 +3043,6 @@ export default function DeviceSummary() {
           id: "agent-last-seen",
           label: "Last Seen",
           value: formatDateValue(meta.lastSeen || summary.last_seen || device?.last_seen || "", "unknown"),
-        },
-        {
-          id: "agent-branch-channel",
-          label: "Agent Branch/Channel",
-          value: `${effectiveChannel} - ${currentBranch}`,
-          changeActionVisible: Boolean(isAdmin),
-          changeActionText: agentBranchChannelSaving ? "[switching...]" : "[switch]",
-        },
-        {
-          id: "agent-last-channel-update",
-          label: "Last Channel Update",
-          labelTooltip: `Target Build: ${targetBuildId}`,
-          value: lastChannelUpdateValue,
         },
         {
           id: "agent-update-state",
@@ -3470,27 +3072,13 @@ export default function DeviceSummary() {
       meta.agentGuid,
       meta.agentVersionStatus,
       meta.lastSeen,
-      meta.agentReleaseChannel,
-      meta.agentReleaseChannelEffective,
-      meta.agentReleaseChannelOverride,
-      meta.agentBranch,
-      meta.agentTargetBuildId,
-      meta.agentTargetPublishedAt,
       meta.agentUpdateState,
       meta.lastEnrollmentAt,
       meta.lastEnrollmentAtIso,
       meta.created,
-      isAdmin,
-      agentBranchChannelSaving,
       summary.agent_guid,
       summary.agent_version_status,
       summary.last_seen,
-      summary.agent_release_channel,
-      summary.agent_release_channel_effective,
-      summary.agent_release_channel_override,
-      summary.agent_branch,
-      summary.agent_target_build_id,
-      summary.agent_target_published_at,
       summary.agent_update_state,
       summary.last_enrollment_at,
       summary.created,
@@ -3575,69 +3163,6 @@ export default function DeviceSummary() {
           />
         );
       }
-      if (row?.id === "agent-branch-channel") {
-        const actionBusy = agentBranchChannelSaving;
-        const actionHandler = openAgentBranchChannelDialog;
-        return (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.8,
-              flexWrap: "wrap",
-              minWidth: 0,
-              width: "100%",
-              minHeight: "100%",
-            }}
-          >
-            <Typography
-              sx={{
-                color: MAGIC_UI.textBright,
-                fontSize: "0.88rem",
-                lineHeight: 1.45,
-                whiteSpace: "normal",
-                wordBreak: "break-word",
-              }}
-            >
-              {value}
-            </Typography>
-            {row?.changeActionVisible ? (
-              <Box
-                component="button"
-                type="button"
-                disabled={actionBusy}
-                onClick={actionHandler}
-                sx={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  p: 0,
-                  m: 0,
-                  border: 0,
-                  background: "transparent",
-                  color: BOREALIS_LINK_COLOR,
-                  cursor: actionBusy ? "default" : "pointer",
-                  font: "inherit",
-                  fontSize: "0.82rem",
-                  lineHeight: 1.45,
-                  textDecoration: "none",
-                  transition: "color 160ms ease, opacity 160ms ease",
-                  "&:hover": actionBusy
-                    ? undefined
-                    : {
-                        color: BOREALIS_LINK_HOVER_COLOR,
-                        textDecoration: "underline",
-                      },
-                  "&:disabled": {
-                    opacity: 0.6,
-                  },
-                }}
-              >
-                {String(row.changeActionText || "[change]")}
-              </Box>
-            ) : null}
-          </Box>
-        );
-      }
       return (
         <Box
           sx={{
@@ -3682,7 +3207,7 @@ export default function DeviceSummary() {
           </Box>
         );
       },
-    [agentBranchChannelSaving, handleDescriptionDraftChange, openAgentBranchChannelDialog, saveDescription]
+    [handleDescriptionDraftChange, saveDescription]
   );
 
   const topLevelSplitColumnDefs = useMemo(
@@ -4471,108 +3996,6 @@ export default function DeviceSummary() {
           Clear Device Activity
         </MenuItem>
       </Menu>
-      <Menu
-        anchorReference="anchorPosition"
-        anchorPosition={releaseChannelMenuPosition || undefined}
-        open={Boolean(releaseChannelMenuPosition)}
-        onClose={closeReleaseChannelMenu}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-          },
-        }}
-      >
-        <MenuItem
-          selected={!String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim()}
-          disabled={releaseChannelSaving}
-          onClick={() => handleReleaseChannelSelection("")}
-        >
-          Use Default
-        </MenuItem>
-        <MenuItem
-          selected={String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "stable"}
-          disabled={releaseChannelSaving}
-          onClick={() => handleReleaseChannelSelection("stable")}
-        >
-          Stable
-        </MenuItem>
-        <MenuItem
-          selected={
-            normalizeAgentReleaseChannel(
-              meta.agentReleaseChannel ||
-                summary.agent_release_channel ||
-                meta.agentReleaseChannelOverride ||
-                summary.agent_release_channel_override ||
-                ""
-            ) === "unstable" ||
-            String(meta.agentReleaseChannelOverride || summary.agent_release_channel_override || "").trim().toLowerCase() === "unstable"
-          }
-          disabled={releaseChannelSaving}
-          onClick={() => handleReleaseChannelSelection("unstable")}
-        >
-          Unstable
-        </MenuItem>
-      </Menu>
-      <Menu
-        anchorReference="anchorPosition"
-        anchorPosition={agentBranchMenuPosition || undefined}
-        open={Boolean(agentBranchMenuPosition)}
-        onClose={closeAgentBranchMenu}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            p: 1.25,
-          },
-        }}
-      >
-        <Box sx={{ width: 340, maxWidth: "calc(100vw - 48px)" }}>
-          <TextField
-            autoFocus
-            fullWidth
-            size="small"
-            label="Unstable Branch"
-            value={agentBranchDraft}
-            disabled={agentBranchSaving}
-            onChange={(event) => setAgentBranchDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                applyAgentBranchOverride();
-              }
-            }}
-            sx={{
-              "& .MuiInputBase-root": {
-                color: MAGIC_UI.textBright,
-              },
-              "& .MuiInputLabel-root": {
-                color: MAGIC_UI.textMuted,
-              },
-              "& .MuiOutlinedInput-notchedOutline": {
-                borderColor: MAGIC_UI.panelBorder,
-              },
-            }}
-          />
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.25 }}>
-            <Button size="small" onClick={closeAgentBranchMenu} disabled={agentBranchSaving}>
-              Cancel
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={applyAgentBranchOverride}
-              disabled={agentBranchSaving || !String(agentBranchDraft || "").trim()}
-            >
-              Apply
-            </Button>
-          </Stack>
-        </Box>
-      </Menu>
       <QuickJobDialog
         open={quickJobOpen}
         onClose={() => setQuickJobOpen(false)}
@@ -4580,23 +4003,6 @@ export default function DeviceSummary() {
         targetRecords={quickJobTargetRecords}
         deviceLabel={activityHostname || displayHostname}
         notifyOperator={notifyOperator}
-      />
-      <AgentBranchChannelDialog
-        open={agentBranchChannelDialogOpen}
-        title="Switch Agent Branch/Channel"
-        subtitle={activityHostname || displayHostname}
-        rows={agentBranchRows}
-        loading={agentBranchesLoading}
-        error={agentBranchLoadError}
-        channel={draftAgentChannel}
-        branch={draftAgentBranch}
-        busy={agentBranchChannelSaving}
-        onChannelChange={setDraftAgentChannel}
-        onBranchChange={setDraftAgentBranch}
-        onRefresh={() => void fetchAgentBranches()}
-        onCancel={closeAgentBranchChannelDialog}
-        onApply={() => void applyAgentBranchChannel()}
-        gridTheme={DEVICE_DETAILS_GRID_THEME}
       />
       {loadError ? (
         <Alert severity="error" sx={{ mb: 2 }}>

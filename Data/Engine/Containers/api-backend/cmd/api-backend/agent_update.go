@@ -43,11 +43,10 @@ type agentInstallLinkStore interface {
 }
 
 type agentUpdateDeviceIdentity struct {
-	GUID                   string
-	Hostname               string
-	AgentHash              string
-	AgentID                string
-	ReleaseChannelOverride string
+	GUID      string
+	Hostname  string
+	AgentHash string
+	AgentID   string
 }
 
 func registerAgentUpdateRoutes(mux *http.ServeMux, auth *authService, signer *agentJWTSigner, dpop *dpopVerifier) {
@@ -66,7 +65,7 @@ func agentUpdateManifestHandler(auth *authService, signer *agentJWTSigner, dpop 
 		}
 		store, ok := auth.store.(agentUpdateManifestStore)
 		if !ok {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "release_channels_unavailable"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "agent_artifact_unavailable"})
 			return
 		}
 		timeout := auth.timeout
@@ -189,37 +188,30 @@ func (s *postgresOperatorStore) agentUpdateManifest(ctx context.Context, guid, h
 		}
 		return nil, http.StatusServiceUnavailable, err
 	}
-	settings := collectAgentReleaseChannelSettings()
-	effectiveChannel := resolveEffectiveAgentReleaseChannel(settings, identity.ReleaseChannelOverride)
-	target := agentReleaseChannelTarget(settings, effectiveChannel)
+	target, artifactID, cacheReady := currentAgentInstallArtifactTarget()
+	if !cacheReady {
+		return nil, http.StatusServiceUnavailable, errors.New("Engine Agent artifact unavailable")
+	}
 	targetBuildID := strings.ToLower(cleanText(target["build_id"]))
 	if targetBuildID == "" {
-		return nil, http.StatusServiceUnavailable, errors.New("channel target unavailable")
+		return nil, http.StatusServiceUnavailable, errors.New("Engine Agent artifact unavailable")
 	}
 	currentBuildID := strings.ToLower(firstText(cleanText(installedBuildID), cleanText(identity.AgentHash)))
-	artifactID := cleanText(target["artifact_id"])
 	return map[string]any{
 		"status":             "ok",
 		"hostname":           firstText(identity.Hostname, hostname),
 		"guid":               firstText(identity.GUID, guid),
-		"effective_channel":  effectiveChannel,
-		"target_channel":     effectiveChannel,
 		"target_build_id":    targetBuildID,
 		"update_available":   currentBuildID == "" || currentBuildID != targetBuildID,
 		"artifact_id":        artifactID,
 		"artifact_sha256":    cleanText(target["artifact_sha256"]),
 		"artifact_size":      coerceInt64(target["artifact_size"]),
 		"artifact_format":    firstText(cleanText(target["artifact_format"]), agentUpdateArtifactFormat),
-		"platform_artifacts": agentReleasePlatformArtifacts(target["platform_artifacts"]),
+		"platform_artifacts": agentArtifactPlatformArtifacts(target["platform_artifacts"]),
 		"download_path":      fmt.Sprintf("/api/agent/update/download/%s", artifactID),
-		"fallback_url":       cleanText(target["fallback_url"]),
-		"release_tag":        cleanText(target["release_tag"]),
-		"release_name":       cleanText(target["release_name"]),
-		"version_label":      cleanText(target["version_label"]),
 		"published_at":       cleanText(target["published_at"]),
-		"branch":             cleanText(target["branch"]),
-		"repo":               agentReleaseSettingsRepo(settings),
-		"promoted_at":        coerceInt64(target["promoted_at"]),
+		"compiled_at":        coerceInt64(target["compiled_at"]),
+		"source":             agentArtifactSourceEngine,
 	}, http.StatusOK, nil
 }
 
@@ -235,30 +227,30 @@ func (s *postgresOperatorStore) agentUpdateDeviceIdentity(ctx context.Context, g
 	}
 	defer conn.Close()
 
-	var rowGUID, rowHostname, rowAgentHash, rowAgentID, rowOverride sql.NullString
+	var rowGUID, rowHostname, rowAgentHash, rowAgentID sql.NullString
 	if normalizedGUID != "" {
 		err = conn.QueryRowContext(
 			ctx,
 			`
-			SELECT guid, hostname, agent_hash, agent_id, agent_release_channel_override
+			SELECT guid, hostname, agent_hash, agent_id
 			  FROM engine.devices
 			 WHERE UPPER(guid)=UPPER($1)
 			 LIMIT 1
 			`,
 			normalizedGUID,
-		).Scan(&rowGUID, &rowHostname, &rowAgentHash, &rowAgentID, &rowOverride)
+		).Scan(&rowGUID, &rowHostname, &rowAgentHash, &rowAgentID)
 	} else {
 		err = conn.QueryRowContext(
 			ctx,
 			`
-			SELECT guid, hostname, agent_hash, agent_id, agent_release_channel_override
+			SELECT guid, hostname, agent_hash, agent_id
 			  FROM engine.devices
 			 WHERE LOWER(hostname)=LOWER($1)
 			 ORDER BY last_seen DESC
 			 LIMIT 1
 			`,
 			normalizedHost,
-		).Scan(&rowGUID, &rowHostname, &rowAgentHash, &rowAgentID, &rowOverride)
+		).Scan(&rowGUID, &rowHostname, &rowAgentHash, &rowAgentID)
 	}
 	if err != nil {
 		return agentUpdateDeviceIdentity{}, err
@@ -268,12 +260,10 @@ func (s *postgresOperatorStore) agentUpdateDeviceIdentity(ctx context.Context, g
 	row.Hostname = nullString(rowHostname)
 	row.AgentHash = nullString(rowAgentHash)
 	row.AgentID = nullString(rowAgentID)
-	row.ReleaseChannelOverride = nullString(rowOverride)
 	row.GUID = normalizeCanonicalGUID(row.GUID)
 	row.Hostname = cleanText(row.Hostname)
 	row.AgentHash = strings.ToLower(cleanText(row.AgentHash))
 	row.AgentID = cleanText(row.AgentID)
-	row.ReleaseChannelOverride = normalizeAgentReleaseChannel(row.ReleaseChannelOverride, "")
 	return row, nil
 }
 
@@ -289,46 +279,6 @@ func (s *postgresOperatorStore) siteEnrollmentCode(ctx context.Context, siteID i
 		return "", err
 	}
 	return nullString(enrollmentCode), nil
-}
-
-func resolveEffectiveAgentReleaseChannel(settings map[string]any, override string) string {
-	if normalized := normalizeAgentReleaseChannel(override, ""); normalized != "" {
-		return normalized
-	}
-	return defaultAgentReleaseChannel
-}
-
-func agentReleaseChannelTarget(settings map[string]any, channel string) map[string]any {
-	normalized := normalizeAgentReleaseChannel(channel, defaultAgentReleaseChannel)
-	channels, _ := settings["channels"].(map[string]any)
-	if channels == nil {
-		return map[string]any{"channel": normalized}
-	}
-	target, _ := channels[normalized].(map[string]any)
-	if target == nil {
-		return map[string]any{"channel": normalized}
-	}
-	copied := deepCopyMap(target)
-	copied["channel"] = normalized
-	if normalized == "stable" && cleanText(copied["branch"]) == "" {
-		copied["branch"] = defaultAgentReleaseBranch
-	}
-	return copied
-}
-
-func agentReleasePlatformArtifacts(value any) map[string]any {
-	if artifacts, ok := value.(map[string]any); ok && len(artifacts) > 0 {
-		return deepCopyMap(artifacts)
-	}
-	return deepCopyMap(requiredGoAgentArtifacts)
-}
-
-func agentReleaseSettingsRepo(settings map[string]any) string {
-	github, _ := settings["github"].(map[string]any)
-	if github == nil {
-		return ""
-	}
-	return cleanText(github["repo"])
 }
 
 func agentUpdateCacheRoot() string {
@@ -494,49 +444,28 @@ func sha256HexText(value string) string {
 }
 
 func currentAgentInstallArtifactTarget() (map[string]any, string, bool) {
-	settings := collectAgentReleaseChannelSettings()
-	source := normalizeAgentReleaseBinarySource(settings["binary_source"], agentReleaseSourceGitHub)
-	target := agentReleaseChannelTarget(settings, defaultAgentReleaseChannel)
+	settings := collectAgentArtifactSettings()
+	target := agentArtifactTarget(settings)
 	artifactID := cleanText(target["artifact_id"])
 	artifactPath := agentUpdateArtifactPath(artifactID)
-	cacheReady := source == agentReleaseSourceEngine
-	if cacheReady && artifactPath != "" {
+	cacheReady := artifactPath != ""
+	if cacheReady {
 		if info, err := os.Stat(artifactPath); err == nil && !info.IsDir() {
-			cacheReady = validateAgentReleaseArtifact(artifactPath) == nil
+			cacheReady = validateAgentArtifact(artifactPath) == nil
 			if cacheReady && coerceInt64(target["compiled_at"]) == 0 {
-				target["compiled_at"] = agentReleaseArtifactCompiledAt(artifactPath, info)
+				target["compiled_at"] = agentArtifactCompiledAt(artifactPath, info)
 			}
 		} else {
 			cacheReady = false
 		}
 	}
-	if source == agentReleaseSourceEngine {
-		if desiredBuildID, err := engineAgentReleaseBuildID(); err == nil {
-			target["desired_build_id"] = desiredBuildID
-			targetBuildID := strings.ToLower(cleanText(target["build_id"]))
-			target["agent_source_stale"] = desiredBuildID != "" && targetBuildID != "" && targetBuildID != strings.ToLower(cleanText(desiredBuildID))
-		}
-	}
-	target["binary_source"] = source
-	target["github_fallback_enabled"] = boolFromAny(settings["github_fallback_enabled"])
-	target["last_refresh_started_at"] = coerceInt64(settings["last_refresh_started_at"])
-	target["last_refresh_completed_at"] = coerceInt64(settings["last_refresh_completed_at"])
-	target["last_refresh_error"] = cleanText(settings["last_refresh_error"])
+	target["binary_source"] = agentArtifactSourceEngine
 	return target, artifactID, cacheReady
 }
 
-func agentInstallArtifactBuildStatus(source string, engineCacheReady bool, linkStoreReady bool, startedAt int64, completedAt int64, refreshError string, targetError string, sourceStale bool) string {
-	if normalizeAgentReleaseBinarySource(source, agentReleaseSourceGitHub) != agentReleaseSourceEngine {
-		return "external"
-	}
-	if startedAt > completedAt {
-		return "compiling"
-	}
-	if sourceStale {
-		return "stale"
-	}
+func agentInstallArtifactBuildStatus(engineCacheReady bool, linkStoreReady bool, targetError string) string {
 	if !engineCacheReady {
-		if cleanText(refreshError) != "" || cleanText(targetError) != "" {
+		if cleanText(targetError) != "" {
 			return "error"
 		}
 		return "compiling"
@@ -578,7 +507,6 @@ func attachAgentInstallDownloads(r *http.Request, auth *authService, metadata ma
 		return
 	}
 	target, artifactID, cacheReady := currentAgentInstallArtifactTarget()
-	source := cleanText(target["binary_source"])
 	var linkStore agentInstallLinkStore
 	linkStoreReady := false
 	if auth != nil && auth.store != nil {
@@ -586,34 +514,26 @@ func attachAgentInstallDownloads(r *http.Request, auth *authService, metadata ma
 	}
 	engineCacheReady := cacheReady
 	linksReady := engineCacheReady && linkStoreReady
-	buildStartedAt := coerceInt64(target["last_refresh_started_at"])
-	buildCompletedAt := coerceInt64(target["last_refresh_completed_at"])
-	buildError := firstText(cleanText(target["last_refresh_error"]), cleanText(target["last_error"]))
+	buildCompletedAt := coerceInt64(target["compiled_at"])
+	buildError := cleanText(target["last_error"])
 	compiledAt := coerceInt64(target["compiled_at"])
-	sourceStale := boolFromAny(target["agent_source_stale"])
-	metadata["agent_binary_source"] = source
+	metadata["agent_binary_source"] = agentArtifactSourceEngine
 	metadata["agent_install_artifact"] = map[string]any{
-		"available":               linksReady,
-		"artifact_id":             artifactID,
-		"artifact_sha256":         cleanText(target["artifact_sha256"]),
-		"artifact_size":           coerceInt64(target["artifact_size"]),
-		"binary_source":           source,
-		"build_status":            agentInstallArtifactBuildStatus(source, engineCacheReady, linkStoreReady, buildStartedAt, buildCompletedAt, cleanText(target["last_refresh_error"]), cleanText(target["last_error"]), sourceStale),
-		"build_started_at":        buildStartedAt,
-		"build_completed_at":      buildCompletedAt,
-		"build_error":             buildError,
-		"compiled_at":             compiledAt,
-		"agent_source_stale":      sourceStale,
-		"desired_build_id":        cleanText(target["desired_build_id"]),
-		"engine_cache_available":  engineCacheReady,
-		"promoted_at":             coerceInt64(target["promoted_at"]),
-		"refreshed_at":            coerceInt64(target["refreshed_at"]),
-		"source":                  cleanText(target["source"]),
-		"target_build_id":         cleanText(target["build_id"]),
-		"version_label":           cleanText(target["version_label"]),
-		"token_ttl_seconds":       int64(agentInstallDownloadTokenTTL() / time.Second),
-		"github_fallback_enabled": boolFromAny(target["github_fallback_enabled"]),
-		"link_state_available":    linkStoreReady,
+		"available":              linksReady,
+		"artifact_id":            artifactID,
+		"artifact_sha256":        cleanText(target["artifact_sha256"]),
+		"artifact_size":          coerceInt64(target["artifact_size"]),
+		"binary_source":          agentArtifactSourceEngine,
+		"build_status":           agentInstallArtifactBuildStatus(engineCacheReady, linkStoreReady, cleanText(target["last_error"])),
+		"build_started_at":       buildCompletedAt,
+		"build_completed_at":     buildCompletedAt,
+		"build_error":            buildError,
+		"compiled_at":            compiledAt,
+		"engine_cache_available": engineCacheReady,
+		"source":                 agentArtifactSourceEngine,
+		"target_build_id":        cleanText(target["build_id"]),
+		"token_ttl_seconds":      int64(agentInstallDownloadTokenTTL() / time.Second),
+		"link_state_available":   linkStoreReady,
 	}
 	if !linksReady {
 		return

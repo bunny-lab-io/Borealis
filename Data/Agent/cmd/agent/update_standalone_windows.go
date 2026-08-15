@@ -21,8 +21,6 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	configLoaded := err == nil
 	if configLoaded {
 		cfg.ServerURL = current.ServerURL
-		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(current.Agent.ReleaseChannel)
-		cfg.RepoRef = agentconfig.NormalizeBranch(current.Agent.Branch)
 	}
 	if strings.TrimSpace(options.ServerURL) != "" {
 		if err := agentconfig.ValidateServerURLForEnrollment(options.ServerURL); err != nil {
@@ -54,22 +52,6 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		cfg.TrustedEngineCAPEM = agentconfig.NormalizeEngineCAPEM(options.TrustedEngineCAPEM)
 		if configLoaded {
 			current.Trust.EngineCAPEM = cfg.TrustedEngineCAPEM
-			_ = agentconfig.Save(configPath, &current)
-		}
-	}
-	if strings.TrimSpace(options.RepoRef) != "" {
-		cfg.RepoRef = agentconfig.NormalizeBranch(options.RepoRef)
-		cfg.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.RepoRef)
-		if configLoaded {
-			current.Agent.Branch = cfg.RepoRef
-			current.Agent.ReleaseChannel = cfg.ReleaseChannel
-			_ = agentconfig.Save(configPath, &current)
-		}
-	}
-	if strings.TrimSpace(options.ReleaseChannel) != "" {
-		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
-		if configLoaded {
-			current.Agent.ReleaseChannel = cfg.ReleaseChannel
 			_ = agentconfig.Save(configPath, &current)
 		}
 	}

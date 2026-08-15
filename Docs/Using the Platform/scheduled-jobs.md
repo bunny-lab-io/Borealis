@@ -40,7 +40,7 @@ The job list opens on the `Normal` filter so operator-created automation and onb
 
 ## Onboarding Jobs
 
-Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. They use discovery scope, exclusions, stored credentials, platform selection, install branch, remote ports, and concurrency limits. Successful install still requires Device Approval.
+Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. They use discovery scope, exclusions, stored credentials, platform selection, remote ports, and concurrency limits. Successful install still requires Device Approval.
 
 !!! tip
 
@@ -96,5 +96,5 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - Patch install occurrences freeze target membership, queue `patch_install_run` work items, then call the site worker host-service bridge so the Agent SYSTEM socket performs WUA install work.
     - Patch policy evaluation runs from the scheduler manager before normal scheduled-job ticks. Due policies create immediate `job_kind=patch_install` jobs with `trigger=policy`, `policy_id`, and `policy_run_id` in the patch component.
     - Policy-created patch jobs still use regular scheduled-job run history, target rows, activity output, and progress metadata. Operators review them through the Scheduled Jobs `Patch Management` filter.
-    - Device Summary Agent update actions and Device Inventory bulk branch/channel changes create `job_kind=agent_maintenance` jobs so operators can audit queued Agent maintenance from the `Maintenance` filter.
+    - Device Summary and Device Inventory Agent update actions create `job_kind=agent_maintenance` jobs so operators can audit queued Agent maintenance from the `Maintenance` filter.
     - `Scheduled_Jobs_List.jsx` defaults to the `Normal` filter. Normal, Immediate, Scheduled, Recurring, and Completed exclude `agent_maintenance` and `patch_install` job kinds. `Maintenance` includes Agent maintenance and future job-kind names with a standalone `maintenance` token. `Patch Management` includes patch job-kind names such as `patch_install`.

@@ -1358,7 +1358,7 @@ func engineBackupFileSpecs() []engineBackupFileSpec {
 		{ID: "traefik_local_ca_key", Path: func() (string, error) { return overviewLocalCAKeyPath(), nil }, Mode: 0o600},
 		{ID: "traefik_local_tls_cert", Path: func() (string, error) { return overviewLocalTLSCertPath(), nil }, Mode: 0o644},
 		{ID: "traefik_local_tls_key", Path: func() (string, error) { return overviewLocalTLSKeyPath(), nil }, Mode: 0o600},
-		{ID: "agent_release_channels", Path: func() (string, error) { return agentReleaseChannelsPath(), nil }, Mode: 0o600},
+		{ID: "agent_artifact", Path: func() (string, error) { return agentArtifactSettingsPath(), nil }, Mode: 0o600},
 		{ID: "ansible_runner_settings", Path: func() (string, error) { return ansibleRunnerSettingsPath(), nil }, Mode: 0o600},
 		{ID: "site_worker_settings", Path: func() (string, error) { return siteWorkerSettingsPath(), nil }, Mode: 0o600},
 		{ID: "software_icon_overrides", Path: func() (string, error) { return agentSoftwareIconOverridesPath(), nil }, Mode: 0o644},

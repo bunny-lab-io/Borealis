@@ -12,156 +12,6 @@ import (
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
-func TestHandleReleaseChannelChangedStoresUnstableBranch(t *testing.T) {
-	originalStarter := startLocalUpdaterForRequest
-	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
-	startedUpdater := make(chan struct{}, 1)
-	startLocalUpdaterForRequest = func(configPath string) error {
-		startedUpdater <- struct{}{}
-		return nil
-	}
-
-	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
-	cfg := agentconfig.Default()
-	cfg.ServerURL = "https://borealis.example.com"
-	cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelStable
-	cfg.Agent.Branch = agentconfig.DefaultBranch
-	if err := agentconfig.Save(configPath, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := agent.handleReleaseChannelChanged(context.Background(), map[string]any{
-		"channel": "unstable",
-		"branch":  "feature/rewrite-borealis-agent-in-golang",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, afterAck := responseBody(t, response)
-	if body["status"] != "ok" {
-		t.Fatalf("status = %v", body["status"])
-	}
-	if body["release_channel"] != agentconfig.ReleaseChannelUnstable {
-		t.Fatalf("release_channel = %v", body["release_channel"])
-	}
-	select {
-	case <-startedUpdater:
-		t.Fatalf("local updater started before ack callback")
-	case <-time.After(50 * time.Millisecond):
-	}
-	go afterAck()
-	select {
-	case <-startedUpdater:
-	case <-time.After(time.Second):
-		t.Fatalf("local updater was not started after ack callback")
-	}
-
-	var loaded agentconfig.AgentConfig
-	for i := 0; i < 20; i++ {
-		loaded, err = agentconfig.Load(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if loaded.Agent.Update.OperationID != "" && loaded.Agent.Update.Status == "updater_started" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelUnstable {
-		t.Fatalf("stored release_channel = %q", loaded.Agent.ReleaseChannel)
-	}
-	if loaded.Agent.Branch != "feature/rewrite-borealis-agent-in-golang" {
-		t.Fatalf("stored branch = %q", loaded.Agent.Branch)
-	}
-	if loaded.Agent.Update.OperationID == "" || loaded.Agent.Update.Status != "updater_started" {
-		t.Fatalf("update operation not tracked: %#v", loaded.Agent.Update)
-	}
-}
-
-func TestHandleReleaseChannelChangedRejectsMissingChannel(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
-	cfg := agentconfig.Default()
-	cfg.ServerURL = "https://borealis.example.com"
-	if err := agentconfig.Save(configPath, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := agent.handleReleaseChannelChanged(context.Background(), map[string]any{
-		"branch": "feature/test",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := response.(map[string]any)
-	if body["status"] != "error" || body["detail"] != "release_channel missing" {
-		t.Fatalf("unexpected response: %#v", body)
-	}
-}
-
-func TestHandleHeartbeatReleaseChannelInstructionStartsStableFallback(t *testing.T) {
-	originalStarter := startLocalUpdaterForRequest
-	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
-	startedUpdater := make(chan struct{}, 1)
-	startLocalUpdaterForRequest = func(configPath string) error {
-		startedUpdater <- struct{}{}
-		return nil
-	}
-
-	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
-	cfg := agentconfig.Default()
-	cfg.ServerURL = "https://borealis.example.com"
-	cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelUnstable
-	cfg.Agent.Branch = "feature/closed-branch"
-	if err := agentconfig.Save(configPath, &cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent.handleHeartbeatReleaseChannelInstruction(map[string]any{
-		"operation_id":    "branch-recovery-1",
-		"kind":            "branch_retired_fallback",
-		"release_channel": "stable",
-		"branch":          "main",
-	})
-
-	select {
-	case <-startedUpdater:
-	case <-time.After(time.Second):
-		t.Fatalf("local updater was not started")
-	}
-	var loaded agentconfig.AgentConfig
-	for i := 0; i < 20; i++ {
-		loaded, err = agentconfig.Load(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if loaded.Agent.Update.Status == "updater_started" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelStable {
-		t.Fatalf("release channel = %q", loaded.Agent.ReleaseChannel)
-	}
-	if loaded.Agent.Branch != agentconfig.DefaultBranch {
-		t.Fatalf("branch = %q", loaded.Agent.Branch)
-	}
-	if loaded.Agent.Update.Kind != "branch_retired_fallback" {
-		t.Fatalf("update kind = %q", loaded.Agent.Update.Kind)
-	}
-}
-
 func TestHandleAgentMaintenanceRequestStartsUpdaterAfterAckCallback(t *testing.T) {
 	originalStarter := startLocalUpdaterForRequest
 	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
@@ -185,10 +35,8 @@ func TestHandleAgentMaintenanceRequestStartsUpdaterAfterAckCallback(t *testing.T
 		t.Fatal(err)
 	}
 	response, err := agent.handleAgentMaintenanceRequest(context.Background(), map[string]any{
-		"operation_id":    "op-ack-first",
-		"release_channel": "unstable",
-		"branch":          "feature/rewrite-api-backend-in-golang",
-		"kind":            "update_now",
+		"operation_id": "op-ack-first",
+		"kind":         "update_now",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -240,8 +88,6 @@ func TestHandleUpdateRequestStoresCurrentTargetAfterAckCallback(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
 	cfg := agentconfig.Default()
 	cfg.ServerURL = "https://borealis.example.com"
-	cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelUnstable
-	cfg.Agent.Branch = "feature/rewrite-api-backend-in-golang"
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -282,11 +128,8 @@ func TestHandleUpdateRequestStoresCurrentTargetAfterAckCallback(t *testing.T) {
 	if loaded.Agent.Update.OperationID != "op-current-target" {
 		t.Fatalf("operation id = %q", loaded.Agent.Update.OperationID)
 	}
-	if loaded.Agent.Update.TargetChannel != agentconfig.ReleaseChannelUnstable {
-		t.Fatalf("target channel = %q", loaded.Agent.Update.TargetChannel)
-	}
-	if loaded.Agent.Update.TargetBranch != "feature/rewrite-api-backend-in-golang" {
-		t.Fatalf("target branch = %q", loaded.Agent.Update.TargetBranch)
+	if loaded.Agent.Update.Kind != "update_now" {
+		t.Fatalf("update kind = %q", loaded.Agent.Update.Kind)
 	}
 }
 
@@ -307,27 +150,6 @@ func responseBody(t *testing.T, response any) (map[string]any, func()) {
 		t.Fatalf("response is %T", response)
 	}
 	return body, afterAck
-}
-
-func TestReleaseChannelFromPayloadAliases(t *testing.T) {
-	tests := []struct {
-		name    string
-		payload map[string]any
-		want    string
-	}{
-		{name: "source", payload: map[string]any{"release_channel": "source"}, want: agentconfig.ReleaseChannelUnstable},
-		{name: "unstable", payload: map[string]any{"channel": "unstable"}, want: agentconfig.ReleaseChannelUnstable},
-		{name: "branch", payload: map[string]any{"target_channel": "branch"}, want: agentconfig.ReleaseChannelUnstable},
-		{name: "stable", payload: map[string]any{"effective_channel": "stable"}, want: agentconfig.ReleaseChannelStable},
-		{name: "release", payload: map[string]any{"release_channel": "release"}, want: agentconfig.ReleaseChannelStable},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := releaseChannelFromPayload(tt.payload); got != tt.want {
-				t.Fatalf("releaseChannelFromPayload = %q, want %q", got, tt.want)
-			}
-		})
-	}
 }
 
 func TestWriteInstalledBuildIDStoresConfigAndRemovesLegacyStatus(t *testing.T) {

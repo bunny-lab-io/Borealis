@@ -118,10 +118,6 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "agent_id": "TEXT",
         "connection_type": "TEXT",
         "connection_endpoint": "TEXT",
-        "agent_release_channel_override": "TEXT",
-        "agent_release_channel": "TEXT",
-        "agent_branch": "TEXT",
-        "agent_update_channel": "TEXT",
         "agent_update_target_build_id": "TEXT",
         "agent_update_state": "TEXT",
         "agent_update_error": "TEXT",
@@ -135,6 +131,14 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
 
     missing_columns = [col for col in required_columns if col not in col_names]
     if missing_columns:
+        needs_rebuild = True
+    retired_agent_source_columns = {
+        "agent_release_channel_override",
+        "agent_release_channel",
+        "agent_branch",
+        "agent_update_channel",
+    }
+    if retired_agent_source_columns.intersection(col_names):
         needs_rebuild = True
 
     if needs_rebuild:
@@ -743,10 +747,6 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             agent_id TEXT,
             connection_type TEXT,
             connection_endpoint TEXT,
-            agent_release_channel_override TEXT,
-            agent_release_channel TEXT,
-            agent_branch TEXT,
-            agent_update_channel TEXT,
             agent_update_target_build_id TEXT,
             agent_update_state TEXT,
             agent_update_error TEXT,
@@ -818,12 +818,11 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             guid, hostname, description, created_at, last_enrollment_at, agent_hash, agent_role_health, memory,
             network, software, services, storage, cpu, sessions, processes, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, cpu_percent, memory_percent, last_user, operating_system,
-            uptime, agent_id, connection_type, connection_endpoint,
-            agent_release_channel_override, agent_release_channel, agent_branch, agent_update_channel, agent_update_target_build_id,
+            uptime, agent_id, connection_type, connection_endpoint, agent_update_target_build_id,
             agent_update_state, agent_update_error, agent_update_source,
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guid) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             description = EXCLUDED.description,
@@ -853,10 +852,6 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             agent_id = EXCLUDED.agent_id,
             connection_type = EXCLUDED.connection_type,
             connection_endpoint = EXCLUDED.connection_endpoint,
-            agent_release_channel_override = EXCLUDED.agent_release_channel_override,
-            agent_release_channel = EXCLUDED.agent_release_channel,
-            agent_branch = EXCLUDED.agent_branch,
-            agent_update_channel = EXCLUDED.agent_update_channel,
             agent_update_target_build_id = EXCLUDED.agent_update_target_build_id,
             agent_update_state = EXCLUDED.agent_update_state,
             agent_update_error = EXCLUDED.agent_update_error,
@@ -913,10 +908,6 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             record.get("agent_id"),
             record.get("connection_type"),
             record.get("connection_endpoint"),
-            record.get("agent_release_channel_override"),
-            record.get("agent_release_channel"),
-            record.get("agent_branch"),
-            record.get("agent_update_channel"),
             record.get("agent_update_target_build_id"),
             record.get("agent_update_state"),
             record.get("agent_update_error"),

@@ -1,6 +1,6 @@
 # Server Info
 
-Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, timezone, WebUI route owner, and site-worker scheduled task slots.
+Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, timezone, WebUI route owner, and site-worker scheduled task slots.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Server_Overview.png" alt="Borealis Server Overview" loading="lazy">
@@ -23,14 +23,6 @@ Use service actions for focused restart, Traefik reload, or WireGuard reconcile 
 
 ## Tune Runtime Settings
 
-Admins can adjust:
-
-- Agent release repository, binary source, optional GitHub fallback, and cached Stable / Unstable targets.
-
-Devices without an ad-hoc branch/channel override always use `Stable:main`. Change one device from Device Summary, or select multiple devices in Device Inventory and use `Change Branch/Channel`, when endpoints should stay on a different branch or channel. Existing agents that were previously following `Unstable:main` are corrected back to `Stable:main` during heartbeat. If an override branch later disappears from the repository, the Agent falls back to `Stable:main`; the Engine also clears the stale override after a short self-remediation window if the device keeps heartbeating from the retired branch.
-
-Use `Engine-Compiled Agent` when the Engine should build Agent binaries from the checked-out Borealis source and serve install downloads from the Engine cache. Full Engine deploys refresh that cache automatically from `Data/Agent/build-agent.sh`. Use `GitHub Release Channel` only when install commands should intentionally use GitHub-hosted branch artifacts. Enable GitHub fallback only when Engine-compiled refreshes should fall back to the configured repository after a local build failure.
-
 Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh --network-mode public|local deploy` tunes that value from the detected Engine sizing profile, and redeploys overwrite stale manual values.
 
 This value is active scheduled-lane work-item capacity per site worker, not raw device concurrency. Shared Ansible batches, scheduled workflows, scheduled jobs, and agent-maintenance items each consume scheduled slots while active according to their work-item shape.
@@ -47,9 +39,6 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - `GET /api/server/time` - server clock.
     - `GET /api/server/timezones` - current Engine timezone metadata. Timezone changes are handled on the host, then applied through Engine redeploy.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
-    - `GET /api/server/agent-release-channels` - read Agent update channel targets.
-    - `PUT /api/server/agent-release-channels` - update the Agent release repository, binary source (`engine` or `github`), optional GitHub fallback, and refresh cached artifacts. `default_channel` is fixed to `stable` for devices without overrides.
-    - `POST /api/server/agent-release-channels/refresh` - refresh cached Agent update artifacts.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
     - `POST /api/server/wireguard/recover` - queue WireGuard tunnel reconcile.
@@ -64,8 +53,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     - Server API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go`
     - Server actions: `Data/Engine/Containers/api-backend/cmd/api-backend/server_actions.go`
-    - Agent release channels: `Data/Engine/Containers/api-backend/cmd/api-backend/server_agent_release_channels.go`
-    - Agent release refresh and cache: `Data/Engine/Containers/api-backend/cmd/api-backend/server_agent_release_refresh.go`
+    - Agent artifact metadata: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_artifact.go`
     - Agent update/download API: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go`
     - WireGuard recovery: `Data/Engine/Containers/api-backend/cmd/api-backend/server_wireguard.go`
     - Log API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go`
@@ -83,9 +71,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - Service actions queue work items so API request can return before service changes interrupt runtime. K3s-owned workload actions are reconciled through `borealis-operator`; K3s WireGuard reconcile uses the mounted WireGuard control socket from `job-scheduler`. Stage 11 retires Docker/Compose service-action helpers and stale Compose service rows.
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
     - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
-    - Agent release-channel default selection is fixed to `Stable:main`; Server Info manages repository, binary source, optional GitHub fallback, and cached target refreshes. Per-device override rows still persist through Device Summary and Agent Maintenance branch/channel actions.
-    - Full Engine deploys build `Data/Agent` directly through `Data/Agent/build-agent.sh`, package stable/unstable Engine artifacts under `Engine/Services/api-backend/cache/AgentUpdates/<artifact_id>.zip`, and write `Engine/Services/api-backend/config/agent_release_channels.json` with `binary_source=engine`. Server Info manual Engine-compiled refreshes use the API refresh path, which stages `Data/Agent` under `Engine/Services/api-backend/cache/AgentUpdates/BuildSource`, builds into `Builds`, and packages the same artifact shape. GitHub-sourced refreshes keep existing source-archive packaging behavior.
-    - Runtime install downloads are non-enumerable signed URLs generated from the stable cached artifact, site enrollment-code hash, artifact ID, platform, and visible `expires` query value. Rotating a site enrollment code invalidates outstanding install download URLs for that site.
-    - Agent branch-retirement recovery is two-sided. The Agent update-check path switches local config to `stable/main` when its configured branch ref returns a missing-ref response. The Engine heartbeat path immediately corrects no-override agents that still report `unstable`, checks overridden non-main unstable branch reports through the repository head lookup cache, waits five minutes from first confirmed missing-ref observation, clears the stale device override, and returns an `agent_release_channel_instruction` heartbeat response that tells the Agent to switch to `stable/main`.
+    - Agent source selection does not live in Server Info. Full Engine deploys build current `Data/Agent` source, package one artifact under `Engine/Services/api-backend/cache/AgentUpdates/<artifact_id>.zip`, and write `Engine/Services/api-backend/config/agent_artifact.json`.
+    - Runtime install downloads are non-enumerable signed URLs generated from current Engine artifact, site enrollment-code hash, artifact ID, platform, and visible `expires` query value. Rotating a site enrollment code invalidates outstanding install download URLs for that site.
     - Server Info is informational first; raw log inspection belongs in CLI-driven Engine Log Access.
     - Legacy `/engine-status` URLs redirect to `/server`; the old Engine Status React Flow page was retired.

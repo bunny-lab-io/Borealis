@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 type deviceListFilter struct {
@@ -35,7 +34,6 @@ type deviceDetailStore interface {
 
 type deviceMutationStore interface {
 	setDeviceDescription(ctx context.Context, profile operatorProfile, hostname string, description string) (map[string]any, int, error)
-	setAgentReleaseChannelOverride(ctx context.Context, guid string, channel any, branch any) (map[string]any, int, error)
 }
 
 type devicePurgeStore interface {
@@ -43,46 +41,42 @@ type devicePurgeStore interface {
 }
 
 type deviceRow struct {
-	GUID                        sql.NullString
-	Hostname                    sql.NullString
-	Description                 sql.NullString
-	CreatedAt                   sql.NullInt64
-	LastEnrollmentAt            sql.NullInt64
-	AgentHash                   sql.NullString
-	AgentRoleHealth             sql.NullString
-	Memory                      sql.NullString
-	Network                     sql.NullString
-	Software                    sql.NullString
-	Services                    sql.NullString
-	Storage                     sql.NullString
-	CPU                         sql.NullString
-	Sessions                    sql.NullString
-	Processes                   sql.NullString
-	DeviceType                  sql.NullString
-	Domain                      sql.NullString
-	ExternalIP                  sql.NullString
-	InternalIP                  sql.NullString
-	LastReboot                  sql.NullString
-	LastSeen                    sql.NullInt64
-	CPUPercent                  sql.NullFloat64
-	MemoryPercent               sql.NullFloat64
-	LastUser                    sql.NullString
-	OperatingSystem             sql.NullString
-	Uptime                      sql.NullInt64
-	AgentID                     sql.NullString
-	ConnectionType              sql.NullString
-	ConnectionEndpoint          sql.NullString
-	AgentReleaseChannelOverride sql.NullString
-	AgentReleaseChannel         sql.NullString
-	AgentBranch                 sql.NullString
-	AgentUpdateChannel          sql.NullString
-	AgentUpdateTargetBuildID    sql.NullString
-	AgentUpdateState            sql.NullString
-	AgentUpdateError            sql.NullString
-	AgentUpdateSource           sql.NullString
-	SiteID                      sql.NullInt64
-	SiteName                    sql.NullString
-	SiteDescription             sql.NullString
+	GUID                     sql.NullString
+	Hostname                 sql.NullString
+	Description              sql.NullString
+	CreatedAt                sql.NullInt64
+	LastEnrollmentAt         sql.NullInt64
+	AgentHash                sql.NullString
+	AgentRoleHealth          sql.NullString
+	Memory                   sql.NullString
+	Network                  sql.NullString
+	Software                 sql.NullString
+	Services                 sql.NullString
+	Storage                  sql.NullString
+	CPU                      sql.NullString
+	Sessions                 sql.NullString
+	Processes                sql.NullString
+	DeviceType               sql.NullString
+	Domain                   sql.NullString
+	ExternalIP               sql.NullString
+	InternalIP               sql.NullString
+	LastReboot               sql.NullString
+	LastSeen                 sql.NullInt64
+	CPUPercent               sql.NullFloat64
+	MemoryPercent            sql.NullFloat64
+	LastUser                 sql.NullString
+	OperatingSystem          sql.NullString
+	Uptime                   sql.NullInt64
+	AgentID                  sql.NullString
+	ConnectionType           sql.NullString
+	ConnectionEndpoint       sql.NullString
+	AgentUpdateTargetBuildID sql.NullString
+	AgentUpdateState         sql.NullString
+	AgentUpdateError         sql.NullString
+	AgentUpdateSource        sql.NullString
+	SiteID                   sql.NullInt64
+	SiteName                 sql.NullString
+	SiteDescription          sql.NullString
 }
 
 func registerDeviceRoutes(mux *http.ServeMux, auth *authService, runtime devicePurgeRuntime, broadcaster watchdogIncidentBroadcaster) {
@@ -95,7 +89,6 @@ func registerDeviceRoutes(mux *http.ServeMux, auth *authService, runtime deviceP
 	mux.HandleFunc("POST /api/devices/{guid}/unquarantine", deviceSecurityStatusHandler(auth, runtime, "active"))
 	mux.HandleFunc("POST /api/devices/{guid}/revoke", deviceSecurityStatusHandler(auth, runtime, "revoked"))
 	mux.HandleFunc("POST /api/devices/{guid}/purge", devicePurgeHandler(auth, runtime))
-	mux.HandleFunc("PUT /api/devices/{guid}/agent-release-channel", deviceAgentReleaseChannelHandler(auth))
 	mux.HandleFunc("GET /api/device/details/{hostname}", deviceDetailsHandler(auth))
 	mux.HandleFunc("POST /api/device/description/{hostname}", deviceDescriptionHandler(auth))
 }
@@ -439,33 +432,6 @@ func deviceDescriptionHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func deviceAgentReleaseChannelHandler(auth *authService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
-		body, err := readJSONMap(r)
-		if err != nil {
-			invalidJSONOrValidation(w, err)
-			return
-		}
-		store, ok := auth.store.(deviceMutationStore)
-		if !ok {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_mutation_unavailable"})
-			return
-		}
-		ctx, cancel := requestTimeout(r.Context(), auth)
-		defer cancel()
-		payload, status, err := store.setAgentReleaseChannelOverride(ctx, normalizeCanonicalGUID(r.PathValue("guid")), body["channel"], body["branch"])
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		writeJSON(w, status, payload)
-	}
-}
-
 func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operatorProfile, filter deviceListFilter) ([]map[string]any, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -512,10 +478,6 @@ func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operato
 			d.agent_id,
 			d.connection_type,
 			d.connection_endpoint,
-			d.agent_release_channel_override,
-			d.agent_release_channel,
-			d.agent_branch,
-			d.agent_update_channel,
 			d.agent_update_target_build_id,
 			d.agent_update_state,
 			d.agent_update_error,
@@ -591,10 +553,6 @@ func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operato
 			&row.AgentID,
 			&row.ConnectionType,
 			&row.ConnectionEndpoint,
-			&row.AgentReleaseChannelOverride,
-			&row.AgentReleaseChannel,
-			&row.AgentBranch,
-			&row.AgentUpdateChannel,
 			&row.AgentUpdateTargetBuildID,
 			&row.AgentUpdateState,
 			&row.AgentUpdateError,
@@ -714,116 +672,6 @@ func (s *postgresOperatorStore) setDeviceDescription(ctx context.Context, profil
 	return map[string]any{"status": "ok"}, http.StatusOK, nil
 }
 
-func (s *postgresOperatorStore) setAgentReleaseChannelOverride(ctx context.Context, guid string, channel any, branch any) (map[string]any, int, error) {
-	normalizedGUID := normalizeCanonicalGUID(guid)
-	if normalizedGUID == "" {
-		return map[string]any{"error": "invalid_guid"}, http.StatusBadRequest, nil
-	}
-	rawOverride := strings.ToLower(cleanText(channel))
-	cleanedOverride := rawOverride
-	switch rawOverride {
-	case "release", "releases":
-		cleanedOverride = "stable"
-	case "source", "branch", "repo", "repository":
-		cleanedOverride = "unstable"
-	}
-	if cleanedOverride != "" && cleanedOverride != "stable" && cleanedOverride != "unstable" {
-		return map[string]any{"error": "invalid_channel"}, http.StatusBadRequest, nil
-	}
-	branchSupplied := branch != nil
-	suppliedBranch := ""
-	if branchSupplied {
-		suppliedBranch = normalizeAgentBranch(branch)
-		if suppliedBranch == "" {
-			return map[string]any{"error": "invalid_branch"}, http.StatusBadRequest, nil
-		}
-	}
-
-	targetBranch := ""
-	targetBuildID := ""
-	targetPublishedAt := ""
-	effectiveChannel := ""
-	releaseChannel := ""
-	if suppliedBranch != "" {
-		cleanedOverride = "unstable"
-		effectiveChannel = "unstable"
-		releaseChannel = "unstable"
-		if rawOverride == "source" || rawOverride == "branch" || rawOverride == "repo" || rawOverride == "repository" {
-			releaseChannel = "source"
-		}
-		targetBranch = suppliedBranch
-	} else {
-		effectiveChannel, targetBuildID, targetPublishedAt = resolveAgentTarget(cleanedOverride)
-		settings := collectAgentReleaseChannelSettings()
-		if channels, ok := settings["channels"].(map[string]any); ok {
-			if target, ok := channels[effectiveChannel].(map[string]any); ok {
-				targetBranch = normalizeAgentBranch(target["branch"])
-			}
-		}
-		if strings.EqualFold(effectiveChannel, "stable") && targetBranch == "" {
-			targetBranch = defaultAgentReleaseBranch
-		}
-		if strings.EqualFold(effectiveChannel, "unstable") {
-			releaseChannel = "unstable"
-		} else {
-			releaseChannel = "stable"
-		}
-	}
-	var storedOverride any
-	if cleanedOverride != "" {
-		storedOverride = cleanedOverride
-	}
-
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return nil, 0, errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rollbackQuietly(tx)
-	result, err := tx.ExecContext(
-		ctx,
-		`
-		UPDATE engine.devices
-		   SET agent_release_channel_override = $1,
-		       agent_release_channel = $2,
-		       agent_branch = $3
-		 WHERE UPPER(guid) = $4
-		`,
-		storedOverride,
-		releaseChannel,
-		targetBranch,
-		normalizedGUID,
-	)
-	if err != nil {
-		return nil, 0, err
-	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
-		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
-	}
-	var hostname sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT hostname FROM engine.devices WHERE UPPER(guid) = $1 LIMIT 1", normalizedGUID).Scan(&hostname); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, 0, err
-	}
-	return map[string]any{
-		"status":                          "ok",
-		"guid":                            normalizedGUID,
-		"hostname":                        nullString(hostname),
-		"agent_release_channel_override":  storedOverride,
-		"agent_release_channel_effective": effectiveChannel,
-		"agent_release_channel":           releaseChannel,
-		"agent_branch":                    targetBranch,
-		"agent_target_build_id":           targetBuildID,
-		"agent_target_published_at":       targetPublishedAt,
-	}, http.StatusOK, nil
-}
-
 func (s *postgresOperatorStore) getDeviceByGUID(ctx context.Context, profile operatorProfile, guid string) (map[string]any, int, error) {
 	row, found, err := s.lookupDeviceDetail(ctx, profile, "LOWER(d.guid) = LOWER($1)", guid)
 	if err != nil {
@@ -892,10 +740,6 @@ func (s *postgresOperatorStore) lookupDeviceDetail(ctx context.Context, profile 
 			d.agent_id,
 			d.connection_type,
 			d.connection_endpoint,
-			d.agent_release_channel_override,
-			d.agent_release_channel,
-			d.agent_branch,
-			d.agent_update_channel,
 			d.agent_update_target_build_id,
 			d.agent_update_state,
 			d.agent_update_error,
@@ -949,10 +793,6 @@ func (s *postgresOperatorStore) lookupDeviceDetail(ctx context.Context, profile 
 		&row.AgentID,
 		&row.ConnectionType,
 		&row.ConnectionEndpoint,
-		&row.AgentReleaseChannelOverride,
-		&row.AgentReleaseChannel,
-		&row.AgentBranch,
-		&row.AgentUpdateChannel,
 		&row.AgentUpdateTargetBuildID,
 		&row.AgentUpdateState,
 		&row.AgentUpdateError,
@@ -985,36 +825,32 @@ func buildDevicePayload(row deviceRow, now int64) map[string]any {
 	processes, processesReportedAt := normalizeInventoryPayload(row.Processes, "processes")
 
 	summary := map[string]any{
-		"hostname":                       nullString(row.Hostname),
-		"description":                    nullString(row.Description),
-		"agent_hash":                     agentHash,
-		"agent_build_id":                 agentHash,
-		"agent_role_health":              roleHealth,
-		"agent_guid":                     agentGUID,
-		"agent_id":                       nullString(row.AgentID),
-		"device_type":                    nullString(row.DeviceType),
-		"domain":                         nullString(row.Domain),
-		"external_ip":                    nullString(row.ExternalIP),
-		"internal_ip":                    nullString(row.InternalIP),
-		"last_reboot":                    nullString(row.LastReboot),
-		"last_seen":                      lastSeen,
-		"cpu_percent":                    nullFloat(row.CPUPercent),
-		"memory_percent":                 nullFloat(row.MemoryPercent),
-		"last_user":                      nullString(row.LastUser),
-		"operating_system":               nullString(row.OperatingSystem),
-		"uptime":                         nullInt(row.Uptime),
-		"created_at":                     createdAt,
-		"last_enrollment_at":             lastEnrollmentAt,
-		"connection_type":                nullString(row.ConnectionType),
-		"connection_endpoint":            nullString(row.ConnectionEndpoint),
-		"agent_release_channel_override": nullString(row.AgentReleaseChannelOverride),
-		"agent_release_channel":          nullString(row.AgentReleaseChannel),
-		"agent_branch":                   nullString(row.AgentBranch),
-		"agent_update_channel":           nullString(row.AgentUpdateChannel),
-		"agent_update_target_build_id":   nullString(row.AgentUpdateTargetBuildID),
-		"agent_update_state":             nullString(row.AgentUpdateState),
-		"agent_update_error":             nullString(row.AgentUpdateError),
-		"agent_update_source":            nullString(row.AgentUpdateSource),
+		"hostname":                     nullString(row.Hostname),
+		"description":                  nullString(row.Description),
+		"agent_hash":                   agentHash,
+		"agent_build_id":               agentHash,
+		"agent_role_health":            roleHealth,
+		"agent_guid":                   agentGUID,
+		"agent_id":                     nullString(row.AgentID),
+		"device_type":                  nullString(row.DeviceType),
+		"domain":                       nullString(row.Domain),
+		"external_ip":                  nullString(row.ExternalIP),
+		"internal_ip":                  nullString(row.InternalIP),
+		"last_reboot":                  nullString(row.LastReboot),
+		"last_seen":                    lastSeen,
+		"cpu_percent":                  nullFloat(row.CPUPercent),
+		"memory_percent":               nullFloat(row.MemoryPercent),
+		"last_user":                    nullString(row.LastUser),
+		"operating_system":             nullString(row.OperatingSystem),
+		"uptime":                       nullInt(row.Uptime),
+		"created_at":                   createdAt,
+		"last_enrollment_at":           lastEnrollmentAt,
+		"connection_type":              nullString(row.ConnectionType),
+		"connection_endpoint":          nullString(row.ConnectionEndpoint),
+		"agent_update_target_build_id": nullString(row.AgentUpdateTargetBuildID),
+		"agent_update_state":           nullString(row.AgentUpdateState),
+		"agent_update_error":           nullString(row.AgentUpdateError),
+		"agent_update_source":          nullString(row.AgentUpdateSource),
 	}
 	details := map[string]any{
 		"summary":   summary,
@@ -1033,68 +869,60 @@ func buildDevicePayload(row deviceRow, now int64) map[string]any {
 		siteID = row.SiteID.Int64
 	}
 	payload := map[string]any{
-		"hostname":                       summary["hostname"],
-		"description":                    summary["description"],
-		"details":                        details,
-		"summary":                        summary,
-		"created_at":                     createdAt,
-		"created_at_iso":                 unixISO(createdAt),
-		"last_enrollment_at":             lastEnrollmentAt,
-		"last_enrollment_at_iso":         unixISO(lastEnrollmentAt),
-		"agent_hash":                     agentHash,
-		"agent_build_id":                 agentHash,
-		"agent_role_health":              roleHealth,
-		"agent_guid":                     agentGUID,
-		"guid":                           agentGUID,
-		"memory":                         details["memory"],
-		"network":                        details["network"],
-		"software":                       details["software"],
-		"services":                       services,
-		"services_reported_at":           servicesReportedAt,
-		"storage":                        details["storage"],
-		"cpu":                            details["cpu"],
-		"sessions":                       sessions,
-		"sessions_reported_at":           sessionsReportedAt,
-		"processes":                      processes,
-		"processes_reported_at":          processesReportedAt,
-		"device_type":                    summary["device_type"],
-		"domain":                         summary["domain"],
-		"external_ip":                    summary["external_ip"],
-		"internal_ip":                    summary["internal_ip"],
-		"last_reboot":                    summary["last_reboot"],
-		"last_seen":                      lastSeen,
-		"last_seen_iso":                  unixISO(lastSeen),
-		"cpu_percent":                    summary["cpu_percent"],
-		"memory_percent":                 summary["memory_percent"],
-		"last_user":                      summary["last_user"],
-		"operating_system":               summary["operating_system"],
-		"uptime":                         summary["uptime"],
-		"agent_id":                       summary["agent_id"],
-		"connection_type":                summary["connection_type"],
-		"connection_endpoint":            summary["connection_endpoint"],
-		"agent_release_channel_override": summary["agent_release_channel_override"],
-		"agent_release_channel":          summary["agent_release_channel"],
-		"agent_branch":                   summary["agent_branch"],
-		"agent_update_channel":           summary["agent_update_channel"],
-		"agent_update_target_build_id":   summary["agent_update_target_build_id"],
-		"agent_update_state":             summary["agent_update_state"],
-		"agent_update_error":             summary["agent_update_error"],
-		"agent_update_source":            summary["agent_update_source"],
-		"site_id":                        siteID,
-		"site_name":                      nullString(row.SiteName),
-		"site_description":               nullString(row.SiteDescription),
-		"status":                         statusFromLastSeen(lastSeen, now),
+		"hostname":                     summary["hostname"],
+		"description":                  summary["description"],
+		"details":                      details,
+		"summary":                      summary,
+		"created_at":                   createdAt,
+		"created_at_iso":               unixISO(createdAt),
+		"last_enrollment_at":           lastEnrollmentAt,
+		"last_enrollment_at_iso":       unixISO(lastEnrollmentAt),
+		"agent_hash":                   agentHash,
+		"agent_build_id":               agentHash,
+		"agent_role_health":            roleHealth,
+		"agent_guid":                   agentGUID,
+		"guid":                         agentGUID,
+		"memory":                       details["memory"],
+		"network":                      details["network"],
+		"software":                     details["software"],
+		"services":                     services,
+		"services_reported_at":         servicesReportedAt,
+		"storage":                      details["storage"],
+		"cpu":                          details["cpu"],
+		"sessions":                     sessions,
+		"sessions_reported_at":         sessionsReportedAt,
+		"processes":                    processes,
+		"processes_reported_at":        processesReportedAt,
+		"device_type":                  summary["device_type"],
+		"domain":                       summary["domain"],
+		"external_ip":                  summary["external_ip"],
+		"internal_ip":                  summary["internal_ip"],
+		"last_reboot":                  summary["last_reboot"],
+		"last_seen":                    lastSeen,
+		"last_seen_iso":                unixISO(lastSeen),
+		"cpu_percent":                  summary["cpu_percent"],
+		"memory_percent":               summary["memory_percent"],
+		"last_user":                    summary["last_user"],
+		"operating_system":             summary["operating_system"],
+		"uptime":                       summary["uptime"],
+		"agent_id":                     summary["agent_id"],
+		"connection_type":              summary["connection_type"],
+		"connection_endpoint":          summary["connection_endpoint"],
+		"agent_update_target_build_id": summary["agent_update_target_build_id"],
+		"agent_update_state":           summary["agent_update_state"],
+		"agent_update_error":           summary["agent_update_error"],
+		"agent_update_source":          summary["agent_update_source"],
+		"site_id":                      siteID,
+		"site_name":                    nullString(row.SiteName),
+		"site_description":             nullString(row.SiteDescription),
+		"status":                       statusFromLastSeen(lastSeen, now),
 	}
 	return payload
 }
 
 func attachAgentVersionStatus(payload map[string]any) map[string]any {
 	summary, _ := payload["summary"].(map[string]any)
-	channelOverride := cleanText(payload["agent_release_channel_override"])
-	if channelOverride == "" {
-		channelOverride = cleanText(summary["agent_release_channel_override"])
-	}
-	effectiveChannel, targetBuildID, targetPublishedAt := resolveAgentTarget(channelOverride)
+	targetBuildID, targetPublishedAt := resolveAgentTarget()
 	installedBuildID := firstText(
 		cleanText(payload["agent_build_id"]),
 		cleanText(payload["agent_hash"]),
@@ -1105,26 +933,9 @@ func attachAgentVersionStatus(payload map[string]any) map[string]any {
 	if installedBuildID != "" && targetBuildID != "" && strings.EqualFold(installedBuildID, targetBuildID) {
 		status = "Up-to-Date"
 	}
-	releaseChannel := firstText(cleanText(payload["agent_release_channel"]), cleanText(summary["agent_release_channel"]))
-	branch := firstText(cleanText(payload["agent_branch"]), cleanText(summary["agent_branch"]))
-	if releaseChannel == "" || channelOverride == "" {
-		releaseChannel = effectiveChannel
-	}
-	if strings.EqualFold(effectiveChannel, "stable") && branch == "" {
-		branch = defaultAgentReleaseBranch
-	}
-
 	payload["agent_version_status"] = status
 	payload["agent_target_build_id"] = targetBuildID
 	payload["agent_target_published_at"] = targetPublishedAt
-	if channelOverride == "" {
-		payload["agent_release_channel_override"] = nil
-	} else {
-		payload["agent_release_channel_override"] = channelOverride
-	}
-	payload["agent_release_channel"] = releaseChannel
-	payload["agent_branch"] = branch
-	payload["agent_release_channel_effective"] = effectiveChannel
 	if installedBuildID != "" {
 		payload["agent_build_id"] = installedBuildID
 	}
@@ -1145,26 +956,14 @@ func applyAgentVersionSummary(summary map[string]any, status string, targetBuild
 	summary["agent_version_status"] = status
 	summary["agent_target_build_id"] = targetBuildID
 	summary["agent_target_published_at"] = targetPublishedAt
-	summary["agent_release_channel_override"] = payload["agent_release_channel_override"]
-	summary["agent_release_channel"] = payload["agent_release_channel"]
-	summary["agent_branch"] = payload["agent_branch"]
-	if cleanText(payload["agent_release_channel_effective"]) != "" {
-		summary["agent_release_channel_effective"] = payload["agent_release_channel_effective"]
-	}
 	if installedBuildID != "" && cleanText(summary["agent_build_id"]) == "" {
 		summary["agent_build_id"] = installedBuildID
 	}
 }
 
-func resolveAgentTarget(channelOverride string) (string, string, string) {
-	settings := collectAgentReleaseChannelSettings()
-	effectiveChannel := normalizeAgentReleaseChannel(channelOverride, "")
-	if effectiveChannel == "" {
-		effectiveChannel = defaultAgentReleaseChannel
-	}
-	channels, _ := settings["channels"].(map[string]any)
-	target, _ := channels[effectiveChannel].(map[string]any)
-	return effectiveChannel, strings.ToLower(cleanText(target["build_id"])), cleanText(target["published_at"])
+func resolveAgentTarget() (string, string) {
+	target := agentArtifactTarget(collectAgentArtifactSettings())
+	return strings.ToLower(cleanText(target["build_id"])), cleanText(target["published_at"])
 }
 
 func buildAgentListPayload(devices []map[string]any, now int64) map[string]any {
@@ -1261,33 +1060,6 @@ func normalizeServiceMode(value any, agentID string) string {
 	default:
 		return "currentuser"
 	}
-}
-
-func normalizeAgentBranch(value any) string {
-	text := cleanText(value)
-	if text == "" || len(text) > 160 {
-		return ""
-	}
-	for _, ch := range text {
-		if ch < 32 || unicode.IsSpace(ch) {
-			return ""
-		}
-		switch {
-		case ch >= 'A' && ch <= 'Z':
-		case ch >= 'a' && ch <= 'z':
-		case ch >= '0' && ch <= '9':
-		case ch == '.', ch == '_', ch == '/', ch == '-':
-		default:
-			return ""
-		}
-	}
-	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, ".") || strings.HasSuffix(text, "/") || strings.HasSuffix(text, ".") {
-		return ""
-	}
-	if strings.Contains(text, "..") || strings.Contains(text, "//") || strings.Contains(text, "@{") || strings.Contains(text, "\\") || strings.Contains(text, ":") {
-		return ""
-	}
-	return text
 }
 
 func normalizeCanonicalGUID(value any) string {

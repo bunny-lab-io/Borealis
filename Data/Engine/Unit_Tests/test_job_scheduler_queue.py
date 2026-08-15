@@ -126,8 +126,6 @@ def test_site_worker_source_excludes_go_owned_work_item_claims(tmp_path: Path) -
             hostname="LAB-OPERATOR-01",
             operation_id="op-filtered",
             action="update_now",
-            release_channel="stable",
-            branch="main",
             event_payload={"operation_id": "op-filtered"},
         )
         workflow_id = enqueue_scheduled_workflow_run(

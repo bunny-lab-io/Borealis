@@ -284,7 +284,7 @@ Build cache:
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend`, `job-scheduler`, and `borealis-operator` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
 - `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags only when no container still references them.
-- Scoped Agent binary redeployment rebuilds Agent ZIP cache and `site-worker` image only. Running API reads updated release-channel config and artifact through fixed hostPath mounts, so API image/restart is not required.
+- Scoped Agent binary redeployment rebuilds singular Agent ZIP cache and `site-worker` image only. Running API reads updated `agent_artifact.json` and ZIP through fixed hostPath mounts, so API image/restart is not required.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.

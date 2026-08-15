@@ -185,7 +185,6 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	if err := writeGoAgentConfig(cfg, logger); err != nil {
 		return err
 	}
-	stampBootstrapInstalledBuildID(cfg, logger)
 	logger.Tracef("Agent agent.json ready.")
 	logger.Stepf("Registering Services and Scheduled Tasks.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
@@ -234,28 +233,6 @@ func quiesceBorealisManagedComponents(cfg BootstrapConfig, logger *BootstrapLogg
 	}
 	stopBorealisProcesses(cfg, logger)
 	logger.Tracef("Graceful component quiesce complete.")
-}
-
-func stampBootstrapInstalledBuildID(cfg BootstrapConfig, logger *BootstrapLogger) {
-	if !agentconfig.UsesUnstableReleaseChannel(cfg.ReleaseChannel) {
-		return
-	}
-	target, err := resolveGithubRefSHA(cfg.RepoURL, cfg.RepoRef)
-	if err != nil {
-		if logger != nil {
-			logger.Warnf("Agent build stamp skipped: resolve repo_ref %q failed: %v", cfg.RepoRef, err)
-		}
-		return
-	}
-	if err := writeConfigInstalledBuildID(cfg, target); err != nil {
-		if logger != nil {
-			logger.Warnf("Agent build stamp write failed: build_id=%s error=%v", target, err)
-		}
-		return
-	}
-	if logger != nil {
-		logger.Tracef("Agent build stamp written: repo_ref=%s installed_build_id=%s", cfg.RepoRef, target)
-	}
 }
 
 func shouldValidateFreshBootstrap(cfg BootstrapConfig) bool {

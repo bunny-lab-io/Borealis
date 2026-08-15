@@ -32,14 +32,12 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
 		current.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
 	}
-	current.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
-	current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
 	current.ApplyDefaults()
 	if err := agentconfig.SaveWithWriter(path, "bootstrap:config", &current); err != nil {
 		return err
 	}
 	if logger != nil {
-		logger.Tracef("Go Agent config written: path=%s server_url_present=%t enrollment_present=%t release_channel=%s branch=%s", path, current.ServerURL != "", current.EnrollmentCode != "", current.Agent.ReleaseChannel, current.Agent.Branch)
+		logger.Tracef("Go Agent config written: path=%s server_url_present=%t enrollment_present=%t", path, current.ServerURL != "", current.EnrollmentCode != "")
 	}
 	return nil
 }
@@ -72,11 +70,7 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 		ServerURL        string `json:"server_url"`
 		ServerIPFallback string `json:"server_ip_fallback"`
 		EnrollmentCode   string `json:"enrollment_code"`
-		Agent            struct {
-			ReleaseChannel string `json:"release_channel"`
-			Branch         string `json:"branch"`
-		} `json:"agent"`
-		Trust struct {
+		Trust            struct {
 			EngineCAPEM string `json:"engine_ca_pem"`
 		} `json:"trust"`
 	}
@@ -94,16 +88,6 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 	}
 	if strings.TrimSpace(cfg.TrustedEngineCAPEM) == "" {
 		cfg.TrustedEngineCAPEM = agentconfig.NormalizeEngineCAPEM(parsed.Trust.EngineCAPEM)
-	}
-	if strings.TrimSpace(cfg.RepoRef) == "" || strings.EqualFold(strings.TrimSpace(cfg.RepoRef), defaultRepoRef) {
-		if branch := strings.TrimSpace(parsed.Agent.Branch); branch != "" {
-			cfg.RepoRef = branch
-		}
-	}
-	if strings.TrimSpace(cfg.ReleaseChannel) == "" {
-		if releaseChannel := strings.TrimSpace(parsed.Agent.ReleaseChannel); releaseChannel != "" {
-			cfg.ReleaseChannel = releaseChannel
-		}
 	}
 }
 
@@ -142,29 +126,10 @@ func writeConfigInstalledBuildID(cfg BootstrapConfig, value string) error {
 		return err
 	}
 	current.Agent.InstalledBuildID = buildID
-	if strings.TrimSpace(current.Agent.ReleaseChannel) == "" {
-		current.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
-	}
-	if strings.TrimSpace(current.Agent.Branch) == "" {
-		current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
-	}
 	if err := agentconfig.SaveWithWriter(path, "bootstrap:installed_build_id", &current); err != nil {
 		return err
 	}
 	return nil
-}
-
-func writeConfigReleaseTarget(cfg BootstrapConfig, releaseChannel string, branch string) {
-	path := agentConfigPath(cfg.InstallDir)
-	current, err := agentconfig.LoadOrCreate(path)
-	if err != nil {
-		return
-	}
-	current.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(releaseChannel)
-	if strings.TrimSpace(branch) != "" {
-		current.Agent.Branch = agentconfig.NormalizeBranch(branch)
-	}
-	_ = agentconfig.SaveWithWriter(path, "bootstrap:release_target", &current)
 }
 
 func readConfigDependencyVersion(cfg BootstrapConfig, name string) string {

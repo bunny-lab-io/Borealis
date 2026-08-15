@@ -52,9 +52,6 @@ type fakeOperatorStore struct {
 	deviceSecurityResult deviceSecurityResult
 	deviceSecurityCode   int
 	deviceSecurityErr    error
-	releaseGUID          string
-	releaseChannel       any
-	releaseBranch        any
 	sites                []map[string]any
 	siteErr              error
 	siteProfile          operatorProfile
@@ -252,33 +249,6 @@ func (s *fakeOperatorStore) setDeviceDescription(_ context.Context, profile oper
 	payload := s.deviceMutation
 	if payload == nil {
 		payload = map[string]any{"status": "ok"}
-	}
-	return copyMap(payload), status, nil
-}
-
-func (s *fakeOperatorStore) setAgentReleaseChannelOverride(_ context.Context, guid string, channel any, branch any) (map[string]any, int, error) {
-	s.releaseGUID = guid
-	s.releaseChannel = channel
-	s.releaseBranch = branch
-	if s.deviceMutationErr != nil {
-		return nil, 0, s.deviceMutationErr
-	}
-	status := s.deviceMutationCode
-	if status == 0 {
-		status = http.StatusOK
-	}
-	payload := s.deviceMutation
-	if payload == nil {
-		payload = map[string]any{
-			"status":                          "ok",
-			"guid":                            guid,
-			"agent_release_channel":           cleanText(channel),
-			"agent_release_channel_effective": cleanText(channel),
-			"agent_release_channel_override":  cleanText(channel),
-			"agent_branch":                    cleanText(branch),
-			"agent_target_build_id":           "",
-			"agent_target_published_at":       "",
-		}
 	}
 	return copyMap(payload), status, nil
 }
@@ -1856,89 +1826,28 @@ func TestDeviceDescriptionHandlerUpdatesDescription(t *testing.T) {
 	}
 }
 
-func TestDeviceAgentReleaseChannelHandlerUpdatesOverride(t *testing.T) {
-	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
-	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/devices/"+guid+"/agent-release-channel", strings.NewReader(`{"channel":"source","branch":"feature/rewrite-api-backend-in-golang"}`))
-	request.SetPathValue("guid", guid)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceAgentReleaseChannelHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if store.releaseGUID != guid || store.releaseChannel != "source" || store.releaseBranch != "feature/rewrite-api-backend-in-golang" {
-		t.Fatalf("unexpected release mutation guid=%q channel=%#v branch=%#v", store.releaseGUID, store.releaseChannel, store.releaseBranch)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["status"] != "ok" {
-		t.Fatalf("unexpected payload %+v", payload)
-	}
-}
-
-func TestDeviceAgentReleaseChannelHandlerRequiresAdmin(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Technician"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/devices/2540DA38-E2B1-45B9-9113-BF7CF0E1778A/agent-release-channel", strings.NewReader(`{"channel":"stable"}`))
-	request.SetPathValue("guid", "2540DA38-E2B1-45B9-9113-BF7CF0E1778A")
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceAgentReleaseChannelHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestNormalizeAgentBranchMatchesPythonRules(t *testing.T) {
-	if got := normalizeAgentBranch("feature/rewrite-api-backend-in-golang"); got != "feature/rewrite-api-backend-in-golang" {
-		t.Fatalf("expected valid branch, got %q", got)
-	}
-	invalid := []any{"main branch", ".hidden", "main/", "main..next", "main//next", "main@{1", `main\next`, "https://repo"}
-	for _, value := range invalid {
-		if got := normalizeAgentBranch(value); got != "" {
-			t.Fatalf("expected %q to be rejected, got %q", value, got)
-		}
-	}
-}
-
-func TestAttachAgentVersionStatusUsesReleaseChannelTarget(t *testing.T) {
-	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
-	content := `{
-		"default_channel": "unstable",
-		"channels": {
-			"stable": {"channel": "stable", "build_id": "stable-build", "published_at": "2026-06-02T00:00:00Z"},
-			"unstable": {"channel": "unstable", "build_id": "unstable-build"}
-		}
-	}`
-	if err := os.WriteFile(settingsPath, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
+func TestAttachAgentVersionStatusUsesEngineArtifactTarget(t *testing.T) {
+	root := t.TempDir()
+	configureTestAgentArtifact(t, root, "engine-build", 1700000300)
 	payload := map[string]any{
-		"agent_build_id": "stable-build",
-		"summary":        map[string]any{"agent_build_id": "stable-build"},
-		"details":        map[string]any{"summary": map[string]any{"agent_build_id": "stable-build"}},
+		"agent_build_id": "build",
+		"summary":        map[string]any{"agent_build_id": "build"},
+		"details":        map[string]any{"summary": map[string]any{"agent_build_id": "build"}},
 	}
 
 	updated := attachAgentVersionStatus(payload)
 	if got := updated["agent_version_status"]; got != "Up-to-Date" {
 		t.Fatalf("expected Up-to-Date, got %#v", got)
 	}
-	if got := updated["agent_target_build_id"]; got != "stable-build" {
-		t.Fatalf("expected stable target, got %#v", got)
+	if got := updated["agent_target_build_id"]; got != "build" {
+		t.Fatalf("expected Engine artifact target, got %#v", got)
 	}
 	summary := updated["summary"].(map[string]any)
-	if got := summary["agent_release_channel_effective"]; got != "stable" {
-		t.Fatalf("expected stable effective channel, got %#v", got)
+	if _, present := summary["agent_release_channel"]; present {
+		t.Fatalf("summary exposed removed Agent release channel: %#v", summary)
 	}
-	if got := summary["agent_branch"]; got != "main" {
-		t.Fatalf("expected stable branch main, got %#v", got)
+	if _, present := summary["agent_branch"]; present {
+		t.Fatalf("summary exposed removed Agent branch: %#v", summary)
 	}
 }
 
@@ -2810,101 +2719,6 @@ func TestPasskeyListUnsupportedMethodDoesNotProxy(t *testing.T) {
 	}
 }
 
-func TestAgentReleaseChannelsHandlerRequiresAdmin(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/agent-release-channels", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	agentReleaseChannelsHandler(auth, nil).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestAgentReleaseChannelsHandlerReturnsSettings(t *testing.T) {
-	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
-	content := `{
-		"version": 1,
-		"default_channel": "unstable",
-		"github": {"repo": "bunny-lab-io/Borealis", "default_branch": "feature/rewrite-api-backend-in-golang"},
-		"channels": {
-			"stable": {"channel": "stable", "build_id": "stable-build", "published_at": "2026-06-01T00:00:00Z"},
-			"unstable": {"channel": "unstable", "build_id": "unstable-build", "branch": "feature/rewrite-api-backend-in-golang"}
-		},
-		"last_refresh_completed_at": 1780000000
-	}`
-	if err := os.WriteFile(settingsPath, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
-	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
-	store.githubToken = map[string]any{"has_token": true, "reset_required": false, "reset_at": int64(0)}
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/agent-release-channels", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	agentReleaseChannelsHandler(auth, nil).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if got := payload["default_channel"]; got != "stable" {
-		t.Fatalf("expected stable default, got %#v", got)
-	}
-	if got := payload["settings_path"]; got != settingsPath {
-		t.Fatalf("expected settings path, got %#v", got)
-	}
-	githubToken := payload["github_token"].(map[string]any)
-	if got := githubToken["has_token"]; got != true {
-		t.Fatalf("expected github token true, got %#v", got)
-	}
-	channels := payload["channels"].(map[string]any)
-	stable := channels["stable"].(map[string]any)
-	if got := stable["build_id"]; got != "stable-build" {
-		t.Fatalf("expected stable build, got %#v", got)
-	}
-	if got := stable["branch"]; got != "main" {
-		t.Fatalf("expected stable branch main, got %#v", got)
-	}
-	unstable := channels["unstable"].(map[string]any)
-	if got := unstable["branch"]; got != "feature/rewrite-api-backend-in-golang" {
-		t.Fatalf("expected unstable branch, got %#v", got)
-	}
-}
-
-func TestAgentReleaseChannelsDefaultsWhenConfigMissing(t *testing.T) {
-	settingsPath := filepath.Join(t.TempDir(), "missing", "agent_release_channels.json")
-	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
-	t.Setenv("BOREALIS_UPDATE_REPO", "owner/repo")
-	t.Setenv("BOREALIS_UPDATE_BRANCH", "develop")
-
-	payload := collectAgentReleaseChannelSettings()
-	if got := payload["default_channel"]; got != "stable" {
-		t.Fatalf("expected stable default, got %#v", got)
-	}
-	github := payload["github"].(map[string]any)
-	if got := github["repo"]; got != "owner/repo" {
-		t.Fatalf("expected env repo, got %#v", got)
-	}
-	if got := github["default_branch"]; got != "develop" {
-		t.Fatalf("expected env branch, got %#v", got)
-	}
-	channels := payload["channels"].(map[string]any)
-	unstable := channels["unstable"].(map[string]any)
-	if got := unstable["version_label"]; got != "develop" {
-		t.Fatalf("expected unstable version label from env, got %#v", got)
-	}
-	if got := unstable["branch"]; got != "develop" {
-		t.Fatalf("expected unstable branch from env, got %#v", got)
-	}
-}
-
 func TestServerWorkersHandlerRequiresAdmin(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
 
@@ -2968,11 +2782,6 @@ func TestServerOverviewHandlerRequiresAdmin(t *testing.T) {
 }
 
 func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
-	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
-	if err := os.WriteFile(settingsPath, []byte(`{"default_channel":"unstable","channels":{"unstable":{"channel":"unstable","build_id":"build-1"}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
 	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.example.test")
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.example.test")
 	t.Setenv("BOREALIS_WEBUI_MODE", "prod")
@@ -2994,7 +2803,7 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"host", "resources", "services", "wireguard", "public_edge", "security", "ansible_runner", "site_worker_settings", "agent_release_channels", "remote_desktop", "operator_session_count"} {
+	for _, key := range []string{"host", "resources", "services", "wireguard", "public_edge", "security", "ansible_runner", "site_worker_settings", "remote_desktop", "operator_session_count"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("expected overview key %q in %+v", key, payload)
 		}
@@ -3009,9 +2818,8 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	if got := host["public_base_url"]; got != "https://borealis.example.test" {
 		t.Fatalf("expected public base url, got %#v", got)
 	}
-	channels := payload["agent_release_channels"].(map[string]any)
-	if got := channels["default_channel"]; got != "stable" {
-		t.Fatalf("expected stable default, got %#v", got)
+	if _, present := payload["agent_release_channels"]; present {
+		t.Fatalf("server overview exposed removed Agent release channels: %+v", payload)
 	}
 	if got := payload["operator_session_count"]; got != float64(1) {
 		t.Fatalf("expected operator session count 1, got %#v", got)

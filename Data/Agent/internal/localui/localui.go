@@ -32,8 +32,6 @@ type StatusSnapshot struct {
 	AgentID           string       `json:"agent_id,omitempty"`
 	BuildID           string       `json:"build_id,omitempty"`
 	InstalledBuildID  string       `json:"installed_build_id,omitempty"`
-	ReleaseChannel    string       `json:"release_channel,omitempty"`
-	Branch            string       `json:"branch,omitempty"`
 	EngineState       string       `json:"engine_state"`
 	LastStatusPhase   string       `json:"last_status_phase,omitempty"`
 	LastStatus        string       `json:"last_status,omitempty"`

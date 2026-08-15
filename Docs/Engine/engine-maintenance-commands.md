@@ -32,7 +32,7 @@ sudo bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 
 ## Rebuild and Publish Agent Binaries
 
-Use Agent binary redeployment after changing checked-out `Data/Agent` source. Command compiles Windows and Linux Agents, atomically publishes Engine-hosted stable artifact, verifies running API can read it, then replaces active site workers still using older site-worker image.
+Use Agent binary redeployment after changing checked-out `Data/Agent` source. Command compiles Windows and Linux Agents, atomically publishes current Engine-hosted artifact, verifies running API can read it, then replaces active site workers still using older site-worker image.
 
 ```sh
 cd /opt/Borealis
@@ -57,7 +57,7 @@ Traefik dynamic routes keep same ClusterIP target. No Traefik reload or route-fi
     Failure before scheduler image commit restores old Service selectors, removes candidates, and resumes old scheduler. Failure after commit keeps validated candidates live and resumes scheduler only when Deployment already names new desired image. Read `Engine/Deploy/build.log` before manual recovery.
 
 !!! info "Install delivery"
-    Agent ZIP lives in API cache, not inside site worker. Running API hot-loads release-channel file from mounted Engine state. Worker rotation synchronizes site-worker runtime image and proves routing; it does not require API or full Engine redeploy.
+    Agent ZIP lives in API cache, not inside site worker. Running API hot-loads `agent_artifact.json` from mounted Engine state. Publishing removes retired per-channel metadata and artifacts named by that metadata. Worker rotation synchronizes site-worker runtime image and proves routing; it does not require API or full Engine redeploy.
 
 !!! warning "Repository binary history cleanup"
     `Data/Agent/dist/` is generated output and should not stay in future commits. Removing older binary blobs from Git history requires coordinated repository maintenance, not a normal Engine deploy. Do this only after open PRs are merged or rebased, protected branches are ready for a force-push window, and operators know they must refresh local clones.

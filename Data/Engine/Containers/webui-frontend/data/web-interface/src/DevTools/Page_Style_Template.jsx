@@ -119,7 +119,7 @@ const SAMPLE_ROWS = [
   },
   {
     id: "TPL-002",
-    name: "Agent Release Channel",
+    name: "Agent Artifact",
     state: "Needs Update",
     tone: "warning",
     signal: "Review",
@@ -299,11 +299,11 @@ const COCKPIT_ATTENTION = [
     body: "Windows targets timed out during patch scan.",
   },
   {
-    title: "Agent Release Channel",
+    title: "Agent Artifact",
     scope: "Denver Core / Inventory",
     tone: "warning",
     time: "needs update",
-    body: "Staged agents behind stable channel by two versions.",
+    body: "Staged agents behind Engine artifact by two versions.",
   },
   {
     title: "Provision Linux Baseline",

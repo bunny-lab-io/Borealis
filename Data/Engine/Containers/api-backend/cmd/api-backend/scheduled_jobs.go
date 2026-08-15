@@ -2083,7 +2083,7 @@ func normalizeScheduledJobKind(value string) string {
 	switch normalized {
 	case "device_onboarding", "automatic_onboarding", "ssh_onboarding", scheduledJobKindOnboarding:
 		return scheduledJobKindOnboarding
-	case "agent_maintenance", "agent_update", "agent_channel_switch":
+	case "agent_maintenance", "agent_update":
 		return scheduledJobKindAgentMaintenance
 	case "patch_install", "patch_management", "patch_deployment", "ad_hoc_patch_install", "policy_patch_install":
 		return scheduledJobKindPatchInstall

@@ -70,13 +70,10 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Automatic Device Onboarding";
 const PAGE_SUBTITLE = "Enroll remote devices automatically as long as they are reachable by the Borealis Engine using stored machine or domain credentials. Required Ports: Windows: TCP:445 (SMB) | Linux: TCP:22 (SSH)";
-const DEFAULT_BRANCH = "main";
 const DEFAULT_SSH_PORT = 22;
 const DEFAULT_WINDOWS_PORT = 445;
 const DEFAULT_WINRM_PORT = 5985;
 const DEFAULT_ONBOARDING_CONCURRENCY = 5;
-const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
-const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
 const ONBOARDING_TAB_URL_BY_KEY = Object.freeze({
   name: "job_name",
   scope: "scope",
@@ -1055,10 +1052,6 @@ function statusIsActiveProgress(status) {
   return ["pending", "pending_approval", "running", "in_progress", "waiting_approval", "already_pending"].includes(normalized);
 }
 
-function normalizeBranchName(value) {
-  return String(value || DEFAULT_BRANCH).trim() || DEFAULT_BRANCH;
-}
-
 function normalizeTabToken(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -1371,9 +1364,6 @@ export default function CreateOnboardingJob() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [targetRows, setTargetRows] = useState([]);
-  const [branchRows, setBranchRows] = useState([]);
-  const [branchesLoading, setBranchesLoading] = useState(false);
-  const [branchLoadError, setBranchLoadError] = useState("");
   const [actioningApprovalId, setActioningApprovalId] = useState("");
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputTitle, setOutputTitle] = useState("");
@@ -1399,7 +1389,6 @@ export default function CreateOnboardingJob() {
     credentialId: "",
     windowsCredentialIds: [],
     linuxCredentialIds: [],
-    branch: DEFAULT_BRANCH,
     sshPort: DEFAULT_SSH_PORT,
     windowsPort: DEFAULT_WINDOWS_PORT,
     winrmPort: DEFAULT_WINRM_PORT,
@@ -1423,22 +1412,6 @@ export default function CreateOnboardingJob() {
     [credentials]
   );
 
-  const branchOptions = useMemo(() => {
-    const currentBranch = normalizeBranchName(form.branch);
-    const rows = Array.isArray(branchRows) ? branchRows : [];
-    if (rows.some((branch) => branch.name === currentBranch)) {
-      return rows;
-    }
-    return [
-      {
-        name: currentBranch,
-        sha: "",
-        protected: false,
-        default: currentBranch === DEFAULT_BRANCH,
-      },
-      ...rows,
-    ];
-  }, [branchRows, form.branch]);
 
   const tabDefs = useMemo(() => {
     const tabs = [
@@ -1489,72 +1462,6 @@ export default function CreateOnboardingJob() {
           : prev.start || datetimeLocalValueFromDayjs(defaultStartDateTime(engineScheduleClock)),
     }));
   }, [engineScheduleClock]);
-
-  const fetchInstallBranches = useCallback(async () => {
-    setBranchesLoading(true);
-    setBranchLoadError("");
-    try {
-      const tokenRes = await fetch("/api/github/token", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const tokenData = await tokenRes.json().catch(() => ({}));
-      if (!tokenRes.ok) {
-        const message = tokenData?.message || tokenData?.error || `GitHub token lookup failed (HTTP ${tokenRes.status}).`;
-        throw new Error(message);
-      }
-      const githubToken = String(tokenData?.token || "").trim();
-      if (!githubToken) {
-        throw new Error(tokenData?.message || "GitHub API token is unavailable.");
-      }
-
-      const nextRows = [];
-      for (let page = 1; page <= 10; page += 1) {
-        const branchRes = await fetch(`${GITHUB_BRANCHES_API_URL}?per_page=100&page=${page}`, {
-          cache: "no-store",
-          headers: {
-            Accept: "application/vnd.github+json",
-            Authorization: `Bearer ${githubToken}`,
-          },
-        });
-        if (!branchRes.ok) {
-          const body = await branchRes.text().catch(() => "");
-          throw new Error(`GitHub branch lookup failed (HTTP ${branchRes.status})${body ? `: ${body.slice(0, 180)}` : ""}`);
-        }
-        const pageRows = await branchRes.json().catch(() => []);
-        if (!Array.isArray(pageRows)) {
-          throw new Error("GitHub branch lookup returned an unexpected payload.");
-        }
-        pageRows.forEach((branch) => {
-          const name = String(branch?.name || "").trim();
-          if (!name) return;
-          nextRows.push({
-            name,
-            sha: String(branch?.commit?.sha || "").trim(),
-            protected: Boolean(branch?.protected),
-            default: name === DEFAULT_BRANCH,
-          });
-        });
-        if (pageRows.length < 100) {
-          break;
-        }
-      }
-      nextRows.sort((a, b) => {
-        if (a.name === DEFAULT_BRANCH) return -1;
-        if (b.name === DEFAULT_BRANCH) return 1;
-        return a.name.localeCompare(b.name);
-      });
-      setBranchRows(nextRows);
-      if (!nextRows.length) {
-        setBranchLoadError("No GitHub branches returned.");
-      }
-    } catch (err) {
-      setBranchRows([]);
-      setBranchLoadError(err instanceof Error ? err.message : "GitHub branch lookup failed.");
-    } finally {
-      setBranchesLoading(false);
-    }
-  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -1621,7 +1528,6 @@ export default function CreateOnboardingJob() {
           credentialId: job.credential_id ? String(job.credential_id) : "",
           windowsCredentialIds,
           linuxCredentialIds,
-          branch: firstComponent.install_branch || firstComponent.repo_branch || firstComponent.branch || DEFAULT_BRANCH,
           sshPort: Number(firstComponent.ssh_port || firstComponent.port || DEFAULT_SSH_PORT),
           windowsPort: Number(firstComponent.windows_port || firstComponent.smb_port || firstComponent.port || DEFAULT_WINDOWS_PORT),
           winrmPort: Number(firstComponent.winrm_port || firstComponent.windows_winrm_port || DEFAULT_WINRM_PORT),
@@ -1653,10 +1559,6 @@ export default function CreateOnboardingJob() {
     if (!sites.some((site) => String(site.id) === String(lockedSiteId))) return;
     setForm((prev) => (String(prev.siteId) === String(lockedSiteId) ? prev : { ...prev, siteId: String(lockedSiteId) }));
   }, [lockedSiteId, siteScopeLocked, sites]);
-
-  useEffect(() => {
-    fetchInstallBranches();
-  }, [fetchInstallBranches]);
 
   useEffect(() => {
     setSelectedTargetId("");
@@ -2271,7 +2173,6 @@ export default function CreateOnboardingJob() {
             kind: "device_onboarding",
             name: "Device Onboarding",
             agent_platform: agentPlatform,
-            install_branch: form.branch || DEFAULT_BRANCH,
             ssh_port: sshPort,
             windows_port: windowsPort,
             winrm_port: winrmPort,
@@ -2552,46 +2453,6 @@ export default function CreateOnboardingJob() {
                       onChange={(event) => setField("onboardingConcurrency", event.target.value)}
                       sx={{ width: { xs: "100%", md: 300 }, ...FIELD_SX }}
                     />
-                  </Stack>
-                  <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
-                    <FormControl fullWidth error={Boolean(branchLoadError)} sx={FIELD_SX}>
-                      <InputLabel id="onboarding-install-branch-label">Agent Install Branch</InputLabel>
-                      <Select
-                        labelId="onboarding-install-branch-label"
-                        label="Agent Install Branch"
-                        value={normalizeBranchName(form.branch)}
-                        onChange={(event) => setField("branch", event.target.value)}
-                        onOpen={() => {
-                          if (!branchRows.length && !branchesLoading) {
-                            void fetchInstallBranches();
-                          }
-                        }}
-                        MenuProps={SELECT_MENU_PROPS}
-                      >
-                        {branchOptions.map((branch) => (
-                          <MenuItem key={branch.name} value={branch.name}>
-                            {branch.name}
-                            {branch.default ? " (default)" : ""}
-                            {branch.sha ? ` - ${branch.sha.slice(0, 12)}` : ""}
-                          </MenuItem>
-                        ))}
-                        {branchesLoading ? <MenuItem disabled value="__loading">Loading branches...</MenuItem> : null}
-                        {branchLoadError ? <MenuItem disabled value="__error">Branch lookup failed</MenuItem> : null}
-                      </Select>
-                      {branchLoadError ? (
-                        <Typography variant="caption" sx={{ mt: 0.75, color: "#fca5a5" }}>
-                          {branchLoadError}
-                        </Typography>
-                      ) : null}
-                    </FormControl>
-                    <Button
-                      startIcon={branchesLoading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
-                      disabled={branchesLoading}
-                      onClick={() => void fetchInstallBranches()}
-                      sx={{ ...PRIMARY_BUTTON_SX, minWidth: 132 }}
-                    >
-                      Refresh
-                    </Button>
                   </Stack>
                 </Box>
               ) : null}

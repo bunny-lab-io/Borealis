@@ -68,6 +68,55 @@ def test_engine_database_migrations_repair_partial_vpn_key_lease_table(tmp_path)
     }
 
 
+def test_engine_database_migrations_remove_retired_agent_source_columns(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+
+    database.initialise_engine_database(db_url)
+    conn = dbapi.connect(db_url)
+    try:
+        cur = conn.cursor()
+        for column in (
+            "agent_release_channel_override",
+            "agent_release_channel",
+            "agent_branch",
+            "agent_update_channel",
+        ):
+            cur.execute(f"ALTER TABLE devices ADD COLUMN {column} TEXT")
+        cur.execute(
+            """
+            INSERT INTO devices(guid, hostname, agent_release_channel, agent_branch)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+                "legacy-agent",
+                "unstable",
+                "feature/legacy-agent-source",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.initialise_engine_database(db_url)
+
+    columns = _table_columns(db_url, "devices")
+    assert "agent_release_channel_override" not in columns
+    assert "agent_release_channel" not in columns
+    assert "agent_branch" not in columns
+    assert "agent_update_channel" not in columns
+
+    conn = dbapi.connect(db_url)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT hostname FROM devices WHERE guid = ?", ("2540DA38-E2B1-45B9-9113-BF7CF0E1778A",))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("legacy-agent",)
+
+
 def test_engine_database_initialisation_keeps_legacy_patch_policy_restore_columns(tmp_path) -> None:
     db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
     progress: list[str] = []
