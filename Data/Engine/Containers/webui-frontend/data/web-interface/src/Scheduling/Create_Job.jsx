@@ -390,6 +390,12 @@ const GRID_PANEL_SX = {
   ...GRID_STYLE_BASE,
 };
 
+export const JOB_STATUS_COLUMN_MIN_WIDTH = 270;
+export const STATUS_PILL_LAYOUT_SX = Object.freeze({
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+});
+
 const SINGLE_ROW_SELECTION = {
   mode: "singleRow",
   checkboxes: false,
@@ -670,6 +676,7 @@ const StatusPill = ({ label, theme }) => {
         textTransform: "uppercase",
         lineHeight: 1,
         fontFamily: gridFontFamily,
+        ...STATUS_PILL_LAYOUT_SX,
       }}
     >
       {pillTheme.dot ? (
@@ -3532,7 +3539,7 @@ export default function CreateJob() {
       {
         field: "status",
         headerName: "Job Status",
-        minWidth: 140,
+        minWidth: JOB_STATUS_COLUMN_MIN_WIDTH,
         cellRenderer: "HistoryStatusRenderer",
         cellClass: "status-pill-cell",
         sortable: false,
@@ -4164,7 +4171,7 @@ export default function CreateJob() {
       {
         field: "jobStatusLabel",
         headerName: "Job Status",
-        minWidth: 150,
+        minWidth: JOB_STATUS_COLUMN_MIN_WIDTH,
         cellRenderer: "JobStatusRenderer",
         cellClass: "status-pill-cell",
         filter: "agSetColumnFilter",
@@ -4221,7 +4228,7 @@ export default function CreateJob() {
     if (!jobHistoryGridApiRef.current) return;
     requestAnimationFrame(() => {
       try {
-        jobHistoryGridApiRef.current.refreshCells({ columns: ["outputState"], force: true });
+        jobHistoryGridApiRef.current.refreshCells({ columns: ["jobStatusLabel", "outputState"], force: true });
       } catch {}
     });
   }, [jobHistoryGridRows]);

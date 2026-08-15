@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { connectionProbeStatusLabel } from "@/Scheduling/Create_Job.jsx";
+import {
+  connectionProbeStatusLabel,
+  JOB_STATUS_COLUMN_MIN_WIDTH,
+  STATUS_PILL_LAYOUT_SX,
+} from "@/Scheduling/Create_Job.jsx";
 
 describe("scheduled job connection probe status", () => {
   it("derives persistent one-second countdown from absolute probe deadline", () => {
@@ -16,5 +20,13 @@ describe("scheduled job connection probe status", () => {
   it("does not replace unrelated job statuses", () => {
     expect(connectionProbeStatusLabel("Running", 1_700_000_060, 1_700_000_000_000)).toBe("");
     expect(connectionProbeStatusLabel("Skipped", 1_700_000_060, 1_700_000_000_000)).toBe("");
+  });
+
+  it("keeps countdown suffix visible inside job status pills", () => {
+    expect(STATUS_PILL_LAYOUT_SX).toMatchObject({
+      whiteSpace: "nowrap",
+      flexShrink: 0,
+    });
+    expect(JOB_STATUS_COLUMN_MIN_WIDTH).toBeGreaterThanOrEqual(270);
   });
 });
