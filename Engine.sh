@@ -3165,9 +3165,12 @@ borealis_operator_site_worker_image_allowlist() {
   local image="${IMAGE_TAGS[site-worker]:-}"
   [[ -n "${image}" ]] || image="$(previous_image_tag site-worker)"
   {
-    [[ -n "${image}" ]] && printf '%s\n' "${image}"
-    [[ -n "${BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA:-}" ]] \
-      && printf '%s\n' "${BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA}"
+    if [[ -n "${image}" ]]; then
+      printf '%s\n' "${image}"
+    fi
+    if [[ -n "${BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA:-}" ]]; then
+      printf '%s\n' "${BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA}"
+    fi
   } | awk 'NF && !seen[$0]++' | paste -sd, -
 }
 
