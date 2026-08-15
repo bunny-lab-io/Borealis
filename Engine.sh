@@ -213,7 +213,27 @@ DASHBOARD_UPDATED_WIDTH=30
 DASHBOARD_DYNAMIC_ROWS=()
 DASHBOARD_CURRENT_SUBJECT=""
 DASHBOARD_CURRENT_STATUS=""
+DASHBOARD_TITLE="Borealis Engine Deployment"
 GO_API_BACKEND_BINARY_PREPARED=0
+AGENT_REDEPLOY_ACTIVE=0
+AGENT_REDEPLOY_COMMIT_STARTED=0
+AGENT_REDEPLOY_SCHEDULER_PAUSED=0
+AGENT_REDEPLOY_TARGET_IMAGE=""
+AGENT_REDEPLOY_PREVIOUS_IMAGE=""
+AGENT_REDEPLOY_MODE="prod"
+AGENT_REDEPLOY_ARTIFACT_ID=""
+AGENT_REDEPLOY_BUILD_ID=""
+AGENT_REDEPLOY_COMPILED_AT=""
+AGENT_REDEPLOY_ARTIFACT_PATH=""
+BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
+BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE=""
+declare -A AGENT_REDEPLOY_CANDIDATE_BY_SERVICE
+declare -A AGENT_REDEPLOY_OLD_POD_BY_SERVICE
+declare -A AGENT_REDEPLOY_OLD_REVISION_BY_SERVICE
+declare -A AGENT_REDEPLOY_ORIGINAL_REVISION_BY_SERVICE
+declare -A AGENT_REDEPLOY_CUTOVER_BY_SERVICE
+declare -A AGENT_REDEPLOY_OLD_LABEL_ADDED_BY_SERVICE
+AGENT_REDEPLOY_SERVICES=()
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
@@ -1302,7 +1322,7 @@ dashboard_render_gum_table() {
 dashboard_render_gum() {
   dashboard_gum_enabled || return 1
   printf '\033[H'
-  dashboard_gum_line "$("${GUM_BIN}" style --bold --foreground 39 "Borealis Engine Deployment")"
+  dashboard_gum_line "$("${GUM_BIN}" style --bold --foreground 39 "${DASHBOARD_TITLE}")"
   dashboard_render_gum_summary
   dashboard_gum_line ""
   dashboard_render_gum_table
@@ -1312,7 +1332,7 @@ dashboard_render_gum() {
 dashboard_render_plain() {
   [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
   printf '\033[H'
-  printf '%bBorealis Engine Deployment%b\n' "${C_BLUE}${C_BOLD}" "${C_RESET}"
+  printf '%b%s%b\n' "${C_BLUE}${C_BOLD}" "${DASHBOARD_TITLE}" "${C_RESET}"
   printf 'Mode: %s [%s]\n' "${DASHBOARD_MODE_LABEL:-Production}" "${DASHBOARD_NETWORK_LABEL:-Public}"
   if [[ -n "${DASHBOARD_PROFILE}" ]]; then
     printf 'Profile: %s\n' "${DASHBOARD_PROFILE}"
@@ -3144,8 +3164,11 @@ borealis_operator_workload_image_allowlist() {
 borealis_operator_site_worker_image_allowlist() {
   local image="${IMAGE_TAGS[site-worker]:-}"
   [[ -n "${image}" ]] || image="$(previous_image_tag site-worker)"
-  [[ -n "${image}" ]] || return 0
-  printf '%s\n' "${image}"
+  {
+    [[ -n "${image}" ]] && printf '%s\n' "${image}"
+    [[ -n "${BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA:-}" ]] \
+      && printf '%s\n' "${BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA}"
+  } | awk 'NF && !seen[$0]++' | paste -sd, -
 }
 
 base64_inline() {
@@ -3645,7 +3668,13 @@ ensure_borealis_operator_bridge() {
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then
-    import_k3s_local_image_into_k3s "site-worker" "${site_worker_image_allowlist}" ""
+    local allowed_site_worker_image=""
+    local -a allowed_site_worker_images=()
+    IFS=',' read -r -a allowed_site_worker_images <<< "${site_worker_image_allowlist}"
+    for allowed_site_worker_image in "${allowed_site_worker_images[@]}"; do
+      [[ -n "${allowed_site_worker_image}" ]] || continue
+      import_k3s_local_image_into_k3s "site-worker" "${allowed_site_worker_image}" ""
+    done
   fi
   retire_legacy_borealis_operator_readonly_rbac
   if k3s_manifest_config_current \
@@ -4304,6 +4333,8 @@ render_k3s_job_scheduler_manifest() {
   local memory_limit="$6"
   local cpu_limit="$7"
   local internal_api_base="$8"
+  local replicas="${BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE:-1}"
+  [[ "${replicas}" =~ ^[01]$ ]] || die "BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE must be 0 or 1."
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -4338,7 +4369,7 @@ metadata:
     borealis.io/network-mode: "cluster-ip"
     borealis.io/runtime-owner: "k3s"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -4509,6 +4540,7 @@ ensure_k3s_job_scheduler() {
   local api_bridge_port
   local internal_api_base
   local pids_limit
+  local replicas
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT)")"
@@ -4517,6 +4549,8 @@ ensure_k3s_job_scheduler() {
   api_bridge_port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
   internal_api_base="http://$(api_backend_service_dns_name):${api_bridge_port}"
   pids_limit="$(read_env_value BOREALIS_JOB_SCHEDULER_PIDS_LIMIT)"
+  replicas="${BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE:-1}"
+  [[ "${replicas}" =~ ^[01]$ ]] || die "BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE must be 0 or 1."
 
   local config_hash
   config_hash="$(
@@ -4536,6 +4570,7 @@ ensure_k3s_job_scheduler() {
       "runtime_secret=${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}" \
       "internal_api_base=${internal_api_base}" \
       "site_worker_lifecycle=k3s" \
+      "replicas=${replicas}" \
       "project_root=${SCRIPT_DIR}" \
       "wireguard_run=${RUNTIME_ROOT}/Services/wireguard-tunnel/run" \
       | sha256sum | awk '{print $1}'
@@ -8799,7 +8834,9 @@ build_images() {
     selected=("${BUILD_ROLES[@]}")
   fi
   local service=""
-  : > "${BUILD_LOG}"
+  if [[ "${BOREALIS_APPEND_BUILD_LOG:-0}" != "1" ]]; then
+    : > "${BUILD_LOG}"
+  fi
   GO_API_BACKEND_BINARY_PREPARED=0
   for service in "${selected[@]}"; do
     validate_build_role "${service}"
@@ -9599,12 +9636,622 @@ service_action() {
   esac
 }
 
+agent_redeploy_runtime_mode() {
+  local mode=""
+  if [[ -f "${IMAGE_MANIFEST}" ]]; then
+    mode="$(python3 - "${IMAGE_MANIFEST}" <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+print(str(payload.get("mode") or "prod"))
+PY
+)"
+  fi
+  normalize_mode "${mode:-prod}"
+}
+
+agent_redeploy_artifact_metadata() {
+  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_release_channels.json"
+  [[ -f "${config_path}" ]] || die "Agent release channel config missing after build: ${config_path}"
+  python3 - "${config_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+stable = ((payload.get("channels") or {}).get("stable") or {})
+artifact_id = str(stable.get("artifact_id") or "").strip()
+build_id = str(stable.get("build_id") or "").strip()
+compiled_at = int(stable.get("compiled_at") or 0)
+artifact_path = str(stable.get("artifact_path") or "").strip()
+if not artifact_id or not build_id or compiled_at <= 0 or not artifact_path:
+    raise SystemExit("stable Agent artifact metadata is incomplete")
+print(f"{artifact_id}\t{build_id}\t{compiled_at}\t{artifact_path}")
+PY
+}
+
+agent_redeploy_verify_api_cache_mount() {
+  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_release_channels.json"
+  local artifact_path="$1"
+  local build_id="$2"
+  k3s_kubectl -n "${K3S_NAMESPACE}" exec deployment/api-backend -c api-backend -- sh -c \
+    'test -s "$1" && test -s "$2" && grep -Fq "$3" "$1"' \
+    _ "${config_path}" "${artifact_path}" "${build_id}" >>"${BUILD_LOG}" 2>&1
+}
+
+agent_redeploy_active_work_count() {
+  local count=""
+  count="$(
+    k3s_kubectl -n "${K3S_NAMESPACE}" exec postgres-db-0 -c postgres-db -- sh -c \
+      'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT COUNT(*) FROM engine.job_scheduler_work_items WHERE status = '\''running'\'';"' \
+      2>>"${BUILD_LOG}" | tr -d '[:space:]'
+  )"
+  [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "${count}"
+}
+
+agent_redeploy_wait_for_work_drain() {
+  local timeout="${BOREALIS_AGENT_REDEPLOY_DRAIN_TIMEOUT_SECONDS:-300}"
+  [[ "${timeout}" =~ ^[0-9]+$ && "${timeout}" -ge 30 && "${timeout}" -le 3600 ]] \
+    || die "BOREALIS_AGENT_REDEPLOY_DRAIN_TIMEOUT_SECONDS must be 30 through 3600."
+  local deadline=$((SECONDS + timeout))
+  local count=""
+  while ((SECONDS < deadline)); do
+    count="$(agent_redeploy_active_work_count)" \
+      || die "Unable to read running scheduler work count before worker rotation."
+    if ((count == 0)); then
+      log_status "k3s-job-scheduler" "Work Queue Drained" "${C_GREEN}"
+      return 0
+    fi
+    log_status "k3s-job-scheduler" "Waiting For ${count} Running Work Item(s)" "${C_YELLOW}"
+    sleep 3
+  done
+  die "Timed out waiting for running scheduler work to drain. No workers were changed."
+}
+
+agent_redeploy_worker_records() {
+  local target_image="$1"
+  local inventory_file=""
+  inventory_file="$(mktemp "${DEPLOY_DIR}/agent-redeploy-workers.XXXXXX.json")"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    -o json > "${inventory_file}" 2>>"${BUILD_LOG}"; then
+    rm -f "${inventory_file}"
+    return 1
+  fi
+  python3 - "${inventory_file}" "${target_image}" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+target_image = sys.argv[2]
+errors = []
+records = []
+for pod in payload.get("items") or []:
+    metadata = pod.get("metadata") or {}
+    labels = metadata.get("labels") or {}
+    annotations = metadata.get("annotations") or {}
+    status = pod.get("status") or {}
+    spec = pod.get("spec") or {}
+    name = str(metadata.get("name") or "").strip()
+    if str(labels.get("borealis.io/redeploy-agent-candidate") or "").lower() == "true":
+        errors.append(f"unfinished candidate pod exists: {name}")
+        continue
+    configured_image = str(annotations.get("borealis.io/image-ref") or "").strip()
+    if not configured_image:
+        for container in spec.get("containers") or []:
+            if str(container.get("name") or "") == "site-worker":
+                configured_image = str(container.get("image") or "").strip()
+                break
+    if configured_image == target_image:
+        continue
+    ready = any(
+        str(condition.get("type") or "") == "Ready"
+        and str(condition.get("status") or "") == "True"
+        for condition in status.get("conditions") or []
+    )
+    if str(status.get("phase") or "") != "Running" or not ready:
+        errors.append(f"outdated worker is not ready: {name}")
+        continue
+    values = {
+        "pod": name,
+        "service": str(annotations.get("borealis.io/service-name") or name).strip(),
+        "guid": str(labels.get("borealis.io/worker-guid") or "").strip(),
+        "site_id": str(labels.get("borealis.io/site-id") or "").strip(),
+        "remote_ops_port": str(annotations.get("borealis.io/remote-ops-port") or "").strip(),
+        "remote_desktop_port": str(annotations.get("borealis.io/remote-desktop-port") or "").strip(),
+        "configured_image": configured_image,
+        "uid": str(metadata.get("uid") or "").strip(),
+        "pod_revision": str(labels.get("borealis.io/redeploy-agent-revision") or "").strip(),
+    }
+    required = ("pod", "service", "guid", "site_id", "remote_ops_port", "remote_desktop_port", "configured_image", "uid")
+    missing = [key for key in required if not values[key]]
+    if missing:
+        errors.append(f"worker {name} missing rotation metadata: {','.join(missing)}")
+        continue
+    records.append("\t".join(values[key] for key in (*required, "pod_revision")))
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(2)
+print("\n".join(records))
+PY
+  local status=$?
+  rm -f "${inventory_file}"
+  return "${status}"
+}
+
+agent_redeploy_service_revision() {
+  local service="$1"
+  k3s_kubectl -n "${K3S_NAMESPACE}" get "service/${service}" -o json 2>>"${BUILD_LOG}" \
+    | python3 -c 'import json,sys; print(str((((json.load(sys.stdin).get("spec") or {}).get("selector") or {}).get("borealis.io/redeploy-agent-revision") or "")))'
+}
+
+agent_redeploy_service_cluster_ip() {
+  local service="$1"
+  k3s_kubectl -n "${K3S_NAMESPACE}" get "service/${service}" \
+    -o jsonpath='{.spec.clusterIP}' 2>>"${BUILD_LOG}"
+}
+
+agent_redeploy_patch_service_revision() {
+  local service="$1"
+  local revision="$2"
+  k3s_kubectl -n "${K3S_NAMESPACE}" patch "service/${service}" --type=merge \
+    -p "{\"spec\":{\"selector\":{\"borealis.io/redeploy-agent-revision\":\"${revision}\"}}}" \
+    >>"${BUILD_LOG}" 2>&1
+}
+
+agent_redeploy_remove_service_revision() {
+  local service="$1"
+  k3s_kubectl -n "${K3S_NAMESPACE}" patch "service/${service}" --type=json \
+    -p='[{"op":"remove","path":"/spec/selector/borealis.io~1redeploy-agent-revision"}]' \
+    >>"${BUILD_LOG}" 2>&1
+}
+
+agent_redeploy_wait_for_service_endpoint() {
+  local service="$1"
+  local pod="$2"
+  local timeout="${3:-60}"
+  local deadline=$((SECONDS + timeout))
+  local endpoints=""
+  while ((SECONDS < deadline)); do
+    endpoints="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" get endpointslices \
+        -l "kubernetes.io/service-name=${service}" \
+        -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{"\t"}{.targetRef.name}{"\n"}{end}' \
+        2>>"${BUILD_LOG}" || true
+    )"
+    if [[ "$(printf '%s\n' "${endpoints}" | awk -v pod="${pod}" '$1 == "true" {ready++; if ($2 == pod) target++} END {print (ready == 1 && target == 1) ? "yes" : "no"}')" == "yes" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+agent_redeploy_probe_pod() {
+  local pod="$1"
+  local remote_ops_port="$2"
+  local worker_guid="$3"
+  local site_id="$4"
+  local url="http://127.0.0.1:${remote_ops_port}/health"
+  local payload=""
+  payload="$(k3s_kubectl -n "${K3S_NAMESPACE}" exec "${pod}" -c site-worker -- \
+    curl --fail --silent --show-error --max-time 5 "${url}" 2>>"${BUILD_LOG}")" || return 1
+  printf '%s' "${payload}" | python3 -c '
+import json, sys
+worker_guid, site_id = sys.argv[1], int(sys.argv[2])
+payload = json.load(sys.stdin)
+if payload.get("status") != "ok" or str(payload.get("worker_guid") or "") != worker_guid or int(payload.get("site_id") or 0) != site_id:
+    raise SystemExit(1)
+' "${worker_guid}" "${site_id}"
+}
+
+agent_redeploy_probe_service() {
+  local pod="$1"
+  local service="$2"
+  local remote_ops_port="$3"
+  local worker_guid="$4"
+  local site_id="$5"
+  local url="http://${service}.${K3S_NAMESPACE}.svc.cluster.local:${remote_ops_port}/health"
+  local payload=""
+  payload="$(k3s_kubectl -n "${K3S_NAMESPACE}" exec "${pod}" -c site-worker -- \
+    curl --fail --silent --show-error --max-time 5 "${url}" 2>>"${BUILD_LOG}")" || return 1
+  printf '%s' "${payload}" | python3 -c '
+import json, sys
+worker_guid, site_id = sys.argv[1], int(sys.argv[2])
+payload = json.load(sys.stdin)
+if payload.get("status") != "ok" or str(payload.get("worker_guid") or "") != worker_guid or int(payload.get("site_id") or 0) != site_id:
+    raise SystemExit(1)
+' "${worker_guid}" "${site_id}"
+}
+
+agent_redeploy_wait_for_worker_registration() {
+  local worker_guid="$1"
+  local container_name="$2"
+  local timeout="${3:-30}"
+  local deadline=$((SECONDS + timeout))
+  local count=""
+  local query='SELECT COUNT(*)
+FROM engine.job_scheduler_workers AS workers
+JOIN engine.job_scheduler_worker_routes AS routes USING (worker_guid)
+WHERE workers.worker_guid = :'"'"'worker_guid'"'"'
+  AND workers.container_name = :'"'"'container_name'"'"'
+  AND workers.status IN ('"'"'starting'"'"', '"'"'running'"'"', '"'"'idle'"'"')
+  AND routes.container_name = :'"'"'container_name'"'"'
+  AND routes.status = '"'"'active'"'"';'
+  while ((SECONDS < deadline)); do
+    count="$(
+      printf '%s\n' "${query}" | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -c \
+        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v "worker_guid=$1" -v "container_name=$2" -Atq' \
+        _ "${worker_guid}" "${container_name}" 2>>"${BUILD_LOG}" | tr -d '[:space:]'
+    )" || true
+    [[ "${count}" == "1" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+agent_redeploy_candidate_name() {
+  local old_pod="$1"
+  local target_image="$2"
+  local digest="${target_image##*:sha-}"
+  local prefix="${old_pod:0:47}"
+  prefix="${prefix%-}"
+  printf '%s-next-%s\n' "${prefix}" "${digest:0:8}"
+}
+
+agent_redeploy_render_candidate() {
+  local old_pod="$1"
+  local candidate_pod="$2"
+  local revision="$3"
+  local target_image="$4"
+  local artifact_id="$5"
+  local build_id="$6"
+  local compiled_at="$7"
+  local source_file=""
+  source_file="$(mktemp "${DEPLOY_DIR}/agent-redeploy-source.XXXXXX.json")"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" get "pod/${old_pod}" -o json > "${source_file}" 2>>"${BUILD_LOG}"; then
+    rm -f "${source_file}"
+    return 1
+  fi
+  python3 - "${source_file}" "${candidate_pod}" "${revision}" "${target_image}" "${artifact_id}" "${build_id}" "${compiled_at}" <<'PY'
+import copy
+import json
+import pathlib
+import sys
+
+source = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+candidate_name, revision, image, artifact_id, build_id, compiled_at = sys.argv[2:]
+metadata = source.get("metadata") or {}
+labels = copy.deepcopy(metadata.get("labels") or {})
+annotations = copy.deepcopy(metadata.get("annotations") or {})
+labels["borealis.io/redeploy-agent-candidate"] = "true"
+labels["borealis.io/redeploy-agent-revision"] = revision
+annotations["borealis.io/redeploy-agent-source-pod"] = str(metadata.get("name") or "")
+annotations["borealis.io/redeploy-agent-artifact-id"] = artifact_id
+annotations["borealis.io/redeploy-agent-build-id"] = build_id
+annotations["borealis.io/redeploy-agent-compiled-at"] = compiled_at
+annotations["borealis.io/image-ref"] = image
+spec = copy.deepcopy(source.get("spec") or {})
+for key in ("nodeName", "serviceAccount"):
+    spec.pop(key, None)
+for container in spec.get("initContainers") or []:
+    container["image"] = image
+for container in spec.get("containers") or []:
+    if str(container.get("name") or "") != "site-worker":
+        continue
+    container["image"] = image
+    for env in container.get("env") or []:
+        if str(env.get("name") or "") == "BOREALIS_SITE_WORKER_CONTAINER_NAME":
+            env["value"] = candidate_name
+    container["readinessProbe"] = {
+        "httpGet": {"path": "/health", "port": "remote-ops"},
+        "initialDelaySeconds": 2,
+        "periodSeconds": 2,
+        "timeoutSeconds": 1,
+        "failureThreshold": 30,
+    }
+    container["livenessProbe"] = {
+        "httpGet": {"path": "/health", "port": "remote-ops"},
+        "initialDelaySeconds": 15,
+        "periodSeconds": 10,
+        "timeoutSeconds": 2,
+        "failureThreshold": 3,
+    }
+candidate = {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+        "name": candidate_name,
+        "namespace": str(metadata.get("namespace") or "borealis"),
+        "labels": labels,
+        "annotations": annotations,
+    },
+    "spec": spec,
+}
+print(json.dumps(candidate, separators=(",", ":")))
+PY
+  local status=$?
+  rm -f "${source_file}"
+  return "${status}"
+}
+
+agent_redeploy_scheduler_desired_image() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get deployment/job-scheduler \
+    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="BOREALIS_SITE_WORKER_IMAGE")].value}' \
+    2>>"${BUILD_LOG}"
+}
+
+agent_redeploy_exit_trap() {
+  local original_status="${1:-1}"
+  trap - EXIT
+  set +o errexit
+  if [[ "${AGENT_REDEPLOY_ACTIVE}" -eq 1 && "${original_status}" -ne 0 ]]; then
+    printf '[%s] Agent binary redeploy failed; entering readiness-first recovery.\n' "$(date +%FT%T)" >>"${BUILD_LOG}"
+    if [[ "${AGENT_REDEPLOY_COMMIT_STARTED}" -eq 0 ]]; then
+      local service=""
+      local candidate=""
+      local old_pod=""
+      local old_revision=""
+      local candidates_removed=1
+      for service in "${AGENT_REDEPLOY_SERVICES[@]}"; do
+        old_pod="${AGENT_REDEPLOY_OLD_POD_BY_SERVICE[${service}]:-}"
+        old_revision="${AGENT_REDEPLOY_OLD_REVISION_BY_SERVICE[${service}]:-}"
+        if [[ "${AGENT_REDEPLOY_CUTOVER_BY_SERVICE[${service}]:-0}" -eq 1 && -n "${old_revision}" ]]; then
+          agent_redeploy_patch_service_revision "${service}" "${old_revision}" || true
+          agent_redeploy_wait_for_service_endpoint "${service}" "${old_pod}" 30 || true
+        fi
+      done
+      for service in "${AGENT_REDEPLOY_SERVICES[@]}"; do
+        candidate="${AGENT_REDEPLOY_CANDIDATE_BY_SERVICE[${service}]:-}"
+        if [[ -n "${candidate}" ]] \
+          && ! k3s_kubectl -n "${K3S_NAMESPACE}" delete "pod/${candidate}" \
+            --ignore-not-found=true --wait=true --timeout=90s >>"${BUILD_LOG}" 2>&1; then
+          candidates_removed=0
+        fi
+      done
+      if [[ "${candidates_removed}" -eq 1 ]]; then
+        for service in "${AGENT_REDEPLOY_SERVICES[@]}"; do
+          if [[ -z "${AGENT_REDEPLOY_ORIGINAL_REVISION_BY_SERVICE[${service}]:-}" ]]; then
+            agent_redeploy_remove_service_revision "${service}" || true
+            old_pod="${AGENT_REDEPLOY_OLD_POD_BY_SERVICE[${service}]:-}"
+            [[ "${AGENT_REDEPLOY_OLD_LABEL_ADDED_BY_SERVICE[${service}]:-0}" -eq 1 ]] \
+              && k3s_kubectl -n "${K3S_NAMESPACE}" label "pod/${old_pod}" borealis.io/redeploy-agent-revision- >>"${BUILD_LOG}" 2>&1 || true
+          fi
+        done
+      else
+        printf '[%s] Candidate deletion incomplete; retaining old-revision Service selectors for traffic safety.\n' \
+          "$(date +%FT%T)" >>"${BUILD_LOG}"
+      fi
+      IMAGE_TAGS[site-worker]="${AGENT_REDEPLOY_PREVIOUS_IMAGE}"
+      BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
+      ensure_borealis_operator_bridge || true
+      if [[ "${AGENT_REDEPLOY_SCHEDULER_PAUSED}" -eq 1 ]]; then
+        k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=1 >>"${BUILD_LOG}" 2>&1 || true
+        k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/job-scheduler --timeout=120s >>"${BUILD_LOG}" 2>&1 || true
+      fi
+      log_status "site-worker" "Rolled Back - Old Workers Retained" "${C_YELLOW}"
+    else
+      local desired_image=""
+      desired_image="$(agent_redeploy_scheduler_desired_image || true)"
+      if [[ "${desired_image}" == "${AGENT_REDEPLOY_TARGET_IMAGE}" ]]; then
+        k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=1 >>"${BUILD_LOG}" 2>&1 || true
+        k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/job-scheduler --timeout=120s >>"${BUILD_LOG}" 2>&1 || true
+      else
+        printf '[%s] Scheduler remains paused because desired worker image is %s, expected %s.\n' \
+          "$(date +%FT%T)" "${desired_image:-unknown}" "${AGENT_REDEPLOY_TARGET_IMAGE}" >>"${BUILD_LOG}"
+      fi
+      log_status "site-worker" "Cutover Committed - Inspect Recovery Log" "${C_YELLOW}"
+    fi
+  fi
+  dashboard_finish
+  return 0
+}
+
+redeploy_agent_binaries() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    command_exists sudo || die "Agent binary redeploy requires root access. Run sudo bash Engine.sh --redeploy-agent-binaries."
+    printf '[%s] Elevating Agent binary redeploy through sudo.\n' "$(date +%FT%T)"
+    exec sudo bash "${SCRIPT_DIR}/Engine.sh" --redeploy-agent-binaries
+  fi
+  [[ -f "${RUNTIME_ENV}" && -f "${COMPOSE_ENV}" && -f "${IMAGE_MANIFEST}" ]] \
+    || die "Existing Engine deployment state missing. Run normal Engine deploy before Agent binary redeploy."
+  [[ -s "${K3S_KUBECONFIG}" ]] || die "K3s kubeconfig missing: ${K3S_KUBECONFIG}"
+  AGENT_REDEPLOY_MODE="$(agent_redeploy_runtime_mode)"
+  local network_mode=""
+  network_mode="$(read_env_value BOREALIS_ENGINE_NETWORK_MODE)"
+  network_mode="$(normalize_engine_network_mode "${network_mode:-local}")"
+  DASHBOARD_TITLE="Borealis Agent Binary Redeployment"
+  log_deploy_header "${AGENT_REDEPLOY_MODE}" "${network_mode}"
+  AGENT_REDEPLOY_ACTIVE=1
+  trap 'agent_redeploy_exit_trap "$?"' EXIT
+
+  ensure_engine_dependencies
+  mkdir -p "${DEPLOY_DIR}"
+  : >"${BUILD_LOG}"
+  load_existing_image_tags
+  AGENT_REDEPLOY_PREVIOUS_IMAGE="$(agent_redeploy_scheduler_desired_image)" \
+    || die "Current site-worker image unavailable from job-scheduler Deployment."
+  [[ -n "${AGENT_REDEPLOY_PREVIOUS_IMAGE}" ]] || die "Current site-worker image missing from job-scheduler Deployment."
+
+  log_section "Agent Binary Build"
+  ensure_engine_agent_install_cache
+  BOREALIS_APPEND_BUILD_LOG=1 build_images "${AGENT_REDEPLOY_MODE}" site-worker
+  AGENT_REDEPLOY_TARGET_IMAGE="${IMAGE_TAGS[site-worker]:-}"
+  [[ -n "${AGENT_REDEPLOY_TARGET_IMAGE}" ]] || die "New site-worker image tag unavailable after build."
+  IFS=$'\t' read -r AGENT_REDEPLOY_ARTIFACT_ID AGENT_REDEPLOY_BUILD_ID AGENT_REDEPLOY_COMPILED_AT AGENT_REDEPLOY_ARTIFACT_PATH \
+    <<<"$(agent_redeploy_artifact_metadata)"
+  agent_redeploy_verify_api_cache_mount "${AGENT_REDEPLOY_ARTIFACT_PATH}" "${AGENT_REDEPLOY_BUILD_ID}" \
+    || die "Running API backend cannot see newly published Agent artifact ${AGENT_REDEPLOY_ARTIFACT_ID}."
+  log_status "Agent Installer Cache" "Hot-Loaded By API - ${AGENT_REDEPLOY_ARTIFACT_ID}" "${C_GREEN}"
+  import_k3s_local_image_into_k3s "site-worker" "${AGENT_REDEPLOY_TARGET_IMAGE}" "site-worker"
+
+  local record_output=""
+  if ! record_output="$(agent_redeploy_worker_records "${AGENT_REDEPLOY_TARGET_IMAGE}")"; then
+    die "Site-worker inventory is not safe for Agent binary rotation. See preceding error."
+  fi
+  local records=()
+  if [[ -n "${record_output}" ]]; then
+    mapfile -t records <<<"${record_output}"
+  fi
+  if ((${#records[@]} == 0)); then
+    BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA="${AGENT_REDEPLOY_PREVIOUS_IMAGE}"
+    ensure_borealis_operator_bridge
+    ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}"
+    export_image_manifest_env
+    write_image_manifest "${AGENT_REDEPLOY_MODE}"
+    BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
+    ensure_borealis_operator_bridge
+    log_status "site-worker" "Up-to-Date - No Worker Rotation Needed" "${C_GREEN}"
+    log_status "Agent Installer Cache" "Published - ${AGENT_REDEPLOY_ARTIFACT_ID}" "${C_GREEN}"
+    AGENT_REDEPLOY_ACTIVE=0
+    dashboard_finish
+    trap dashboard_finish EXIT
+    return 0
+  fi
+
+  log_section "Safe Worker Rotation"
+  agent_redeploy_wait_for_work_drain
+  log_status "k3s-job-scheduler" "Pausing Reconciliation" "${C_YELLOW}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=0 >>"${BUILD_LOG}" 2>&1 \
+    || die "Failed to pause job scheduler before worker preparation."
+  k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/job-scheduler --timeout=120s >>"${BUILD_LOG}" 2>&1 \
+    || die "Job scheduler did not pause cleanly."
+  AGENT_REDEPLOY_SCHEDULER_PAUSED=1
+  log_status "k3s-job-scheduler" "Paused - Workers Remain Live" "${C_GREEN}"
+
+  BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA="${AGENT_REDEPLOY_PREVIOUS_IMAGE}"
+  ensure_borealis_operator_bridge
+
+  local pod=""
+  local service=""
+  local worker_guid=""
+  local site_id=""
+  local remote_ops_port=""
+  local remote_desktop_port=""
+  local configured_image=""
+  local pod_uid=""
+  local pod_revision=""
+  local original_revision=""
+  local old_revision=""
+  local candidate_revision="agent-${AGENT_REDEPLOY_TARGET_IMAGE##*:sha-}"
+  candidate_revision="${candidate_revision:0:63}"
+  local candidate=""
+  local candidate_manifest=""
+  local cluster_ip=""
+  for record in "${records[@]}"; do
+    IFS=$'\t' read -r pod service worker_guid site_id remote_ops_port remote_desktop_port configured_image pod_uid pod_revision <<<"${record}"
+    AGENT_REDEPLOY_SERVICES+=("${service}")
+    AGENT_REDEPLOY_OLD_POD_BY_SERVICE["${service}"]="${pod}"
+    AGENT_REDEPLOY_CUTOVER_BY_SERVICE["${service}"]=0
+    original_revision="$(agent_redeploy_service_revision "${service}")" \
+      || die "Failed to read selector for ${service}."
+    AGENT_REDEPLOY_ORIGINAL_REVISION_BY_SERVICE["${service}"]="${original_revision}"
+    if [[ -n "${original_revision}" ]]; then
+      [[ "${pod_revision}" == "${original_revision}" ]] \
+        || die "Service ${service} selector revision does not match active pod ${pod}."
+      old_revision="${original_revision}"
+      AGENT_REDEPLOY_OLD_LABEL_ADDED_BY_SERVICE["${service}"]=0
+    else
+      old_revision="legacy-${pod_uid:0:12}"
+      k3s_kubectl -n "${K3S_NAMESPACE}" label "pod/${pod}" \
+        "borealis.io/redeploy-agent-revision=${old_revision}" --overwrite >>"${BUILD_LOG}" 2>&1 \
+        || die "Failed to mark active worker ${pod} before candidate creation."
+      AGENT_REDEPLOY_OLD_LABEL_ADDED_BY_SERVICE["${service}"]=1
+      agent_redeploy_patch_service_revision "${service}" "${old_revision}" \
+        || die "Failed to pin ${service} to active worker ${pod}."
+      agent_redeploy_wait_for_service_endpoint "${service}" "${pod}" 30 \
+        || die "Service ${service} lost active endpoint while pinning old worker."
+    fi
+    AGENT_REDEPLOY_OLD_REVISION_BY_SERVICE["${service}"]="${old_revision}"
+    cluster_ip="$(agent_redeploy_service_cluster_ip "${service}")"
+    [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]] || die "Service ${service} has no stable ClusterIP."
+    local route_file="${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic/site-worker-${worker_guid}.yml"
+    [[ -f "${route_file}" ]] || die "Traefik route file missing for worker ${worker_guid}: ${route_file}"
+    grep -Fq "http://${cluster_ip}:${remote_ops_port}" "${route_file}" \
+      || die "Traefik route for ${worker_guid} does not target stable Service ${cluster_ip}:${remote_ops_port}."
+    grep -Fq "http://${cluster_ip}:${remote_desktop_port}" "${route_file}" \
+      || die "Traefik desktop route for ${worker_guid} does not target stable Service ${cluster_ip}:${remote_desktop_port}."
+
+    candidate="$(agent_redeploy_candidate_name "${pod}" "${AGENT_REDEPLOY_TARGET_IMAGE}")"
+    AGENT_REDEPLOY_CANDIDATE_BY_SERVICE["${service}"]="${candidate}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" get "pod/${candidate}" >/dev/null 2>&1 \
+      && die "Candidate pod already exists: ${candidate}"
+    candidate_manifest="$(agent_redeploy_render_candidate \
+      "${pod}" "${candidate}" "${candidate_revision}" "${AGENT_REDEPLOY_TARGET_IMAGE}" \
+      "${AGENT_REDEPLOY_ARTIFACT_ID}" "${AGENT_REDEPLOY_BUILD_ID}" "${AGENT_REDEPLOY_COMPILED_AT}")" \
+      || die "Failed to render replacement for ${pod}."
+    log_status "${service}" "Creating Candidate ${candidate}" "${C_YELLOW}"
+    printf '%s\n' "${candidate_manifest}" | k3s_kubectl create -f - >>"${BUILD_LOG}" 2>&1 \
+      || die "Failed to create replacement worker ${candidate}."
+    k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=Ready "pod/${candidate}" --timeout=120s >>"${BUILD_LOG}" 2>&1 \
+      || die "Replacement worker ${candidate} did not become Ready. Old worker remains live."
+    agent_redeploy_probe_pod "${candidate}" "${remote_ops_port}" "${worker_guid}" "${site_id}" \
+      || die "Replacement worker ${candidate} failed direct health check. Old worker remains live."
+    log_status "${service}" "Candidate Ready - Old Worker Live" "${C_GREEN}"
+  done
+
+  for record in "${records[@]}"; do
+    IFS=$'\t' read -r pod service worker_guid site_id remote_ops_port remote_desktop_port configured_image pod_uid pod_revision <<<"${record}"
+    candidate="${AGENT_REDEPLOY_CANDIDATE_BY_SERVICE[${service}]}"
+    log_status "${service}" "Cutting Over Stable Service" "${C_YELLOW}"
+    agent_redeploy_patch_service_revision "${service}" "${candidate_revision}" \
+      || die "Failed to point ${service} at ${candidate}. Old worker remains available for rollback."
+    AGENT_REDEPLOY_CUTOVER_BY_SERVICE["${service}"]=1
+    agent_redeploy_wait_for_service_endpoint "${service}" "${candidate}" 60 \
+      || die "Service ${service} did not converge on candidate ${candidate}."
+    agent_redeploy_probe_service "${candidate}" "${service}" "${remote_ops_port}" "${worker_guid}" "${site_id}" \
+      || die "Service ${service} failed post-cutover HTTP health check."
+    log_status "${service}" "Live - Health Check Passed" "${C_GREEN}"
+    printf '[%s] %s cut over to %s through unchanged ClusterIP; Traefik route file unchanged.\n' \
+      "$(date +%FT%T)" "${service}" "${candidate}" >>"${BUILD_LOG}"
+  done
+
+  AGENT_REDEPLOY_COMMIT_STARTED=1
+  BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE=0
+  ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}"
+  unset BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE
+
+  for record in "${records[@]}"; do
+    IFS=$'\t' read -r pod service worker_guid site_id remote_ops_port remote_desktop_port configured_image pod_uid pod_revision <<<"${record}"
+    candidate="${AGENT_REDEPLOY_CANDIDATE_BY_SERVICE[${service}]}"
+    log_status "${service}" "Retiring Old Worker ${pod}" "${C_YELLOW}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" delete "pod/${pod}" --wait=true --timeout=90s >>"${BUILD_LOG}" 2>&1 \
+      || die "New worker ${candidate} is live, but old worker ${pod} did not retire cleanly."
+    agent_redeploy_wait_for_worker_registration "${worker_guid}" "${candidate}" 30 \
+      || die "Replacement worker ${candidate} did not restore active scheduler registration after old worker retirement."
+    k3s_kubectl -n "${K3S_NAMESPACE}" label "pod/${candidate}" borealis.io/redeploy-agent-candidate- >>"${BUILD_LOG}" 2>&1 \
+      || die "Failed to finalize replacement worker label on ${candidate}."
+    log_status "${service}" "Complete - Old Worker Removed" "${C_GREEN}"
+  done
+
+  export_image_manifest_env
+  write_image_manifest "${AGENT_REDEPLOY_MODE}"
+  BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
+  ensure_borealis_operator_bridge
+  ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}"
+  AGENT_REDEPLOY_SCHEDULER_PAUSED=0
+  log_status "k3s-job-scheduler" "Ready - New Worker Image Active" "${C_GREEN}"
+  log_status "Agent Installer Cache" "Published - ${AGENT_REDEPLOY_ARTIFACT_ID}" "${C_GREEN}"
+  log_status "site-worker" "Ready - ${#records[@]} Worker(s) Replaced" "${C_GREEN}"
+  AGENT_REDEPLOY_ACTIVE=0
+  dashboard_finish
+  trap dashboard_finish EXIT
+}
+
 usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
   Engine.sh --network-mode <public|local> --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
+  Engine.sh --redeploy-agent-binaries
 EOF
 }
 
@@ -9631,6 +10278,10 @@ main() {
       ;;
     --service)
       service_action "${2:-}" "${3:-}" "${4:-prod}"
+      ;;
+    --redeploy-agent-binaries)
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --redeploy-agent-binaries"
+      redeploy_agent_binaries
       ;;
     -h|--help|help)
       usage

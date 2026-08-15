@@ -1515,12 +1515,14 @@ def heartbeat_worker(
     task_links: Sequence[Mapping[str, Any]] = (),
     idle_since: Optional[int] = None,
     claimed_count: Optional[int] = None,
-) -> None:
+    container_name: Optional[str] = None,
+) -> bool:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
+    normalized_guid = str(worker_guid or "").strip()
+    expected_container = str(container_name or "").strip()
     cur = conn.cursor()
-    cur.execute(
-        """
+    sql = """
         UPDATE job_scheduler_workers
            SET status=?,
                last_seen_at=?,
@@ -1530,43 +1532,79 @@ def heartbeat_worker(
                claimed_count=COALESCE(?, claimed_count),
                updated_at=?
          WHERE worker_guid=?
-        """,
-        (
-            str(status or WORKER_STATUS_RUNNING),
-            now,
-            idle_since,
-            _json_dumps(list(lanes or [])),
-            _json_dumps(list(task_links or [])),
-            claimed_count,
-            now,
-            str(worker_guid or ""),
-        ),
-    )
+    """
+    params: list[Any] = [
+        str(status or WORKER_STATUS_RUNNING),
+        now,
+        idle_since,
+        _json_dumps(list(lanes or [])),
+        _json_dumps(list(task_links or [])),
+        claimed_count,
+        now,
+        normalized_guid,
+    ]
+    if expected_container:
+        sql += " AND container_name=?"
+        params.append(expected_container)
+    cur.execute(sql, tuple(params))
+    if expected_container and int(getattr(cur, "rowcount", 0) or 0) <= 0:
+        return False
+    if expected_container:
+        route = _fetch_worker_route(conn, worker_guid=normalized_guid)
+        if (
+            route
+            and str(route.get("container_name") or "") == expected_container
+            and str(route.get("status") or "") != WORKER_ROUTE_STATUS_ACTIVE
+        ):
+            upsert_worker_route(
+                conn,
+                worker_guid=normalized_guid,
+                container_name=expected_container,
+                site_id=int(route.get("site_id") or 0),
+                status=WORKER_ROUTE_STATUS_ACTIVE,
+                upstream_scheme=str(route.get("upstream_scheme") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME),
+                upstream_host=str(route.get("upstream_host") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST),
+                upstream_port=int(route.get("upstream_port") or 0),
+                metadata=route.get("metadata") if isinstance(route.get("metadata"), Mapping) else {},
+            )
+    return True
 
 
-def stop_worker(conn: sqlite3.Connection, *, worker_guid: str, status: str = WORKER_STATUS_STOPPED) -> None:
+def stop_worker(
+    conn: sqlite3.Connection,
+    *,
+    worker_guid: str,
+    status: str = WORKER_STATUS_STOPPED,
+    container_name: Optional[str] = None,
+) -> bool:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
     normalized_guid = str(worker_guid or "").strip()
-    _release_worker_running_work_items(
-        conn,
-        worker_guids=[normalized_guid],
-        reason="requeued after site worker stopped before work completed",
-    )
+    expected_container = str(container_name or "").strip()
     cur = conn.cursor()
-    cur.execute(
-        """
+    sql = """
         UPDATE job_scheduler_workers
            SET status=?,
                stopped_at=?,
                last_seen_at=?,
                updated_at=?
          WHERE worker_guid=?
-        """,
-        (str(status or WORKER_STATUS_STOPPED), now, now, now, normalized_guid),
+    """
+    params: list[Any] = [str(status or WORKER_STATUS_STOPPED), now, now, now, normalized_guid]
+    if expected_container:
+        sql += " AND container_name=?"
+        params.append(expected_container)
+    cur.execute(sql, tuple(params))
+    if expected_container and int(getattr(cur, "rowcount", 0) or 0) <= 0:
+        return False
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=[normalized_guid],
+        reason="requeued after site worker stopped before work completed",
     )
     route_status = WORKER_ROUTE_STATUS_LOST if str(status or "").strip().lower() == WORKER_STATUS_LOST else WORKER_ROUTE_STATUS_RETIRED
     retire_worker_routes(conn, worker_guids=[normalized_guid], status=route_status)
+    return True
 
 
 def update_worker_docker_state(

@@ -437,6 +437,19 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 		t.Fatalf("expected one site-worker container: %#v", containers)
 	}
 	container, _ := containers[0].(map[string]any)
+	readinessProbe := nestedMap(container, "readinessProbe")
+	readinessHTTP := nestedMap(readinessProbe, "httpGet")
+	if cleanText(readinessHTTP["path"]) != "/health" || cleanText(readinessHTTP["port"]) != "remote-ops" {
+		t.Fatalf("site-worker readiness probe must validate remote ops health: %#v", readinessProbe)
+	}
+	if coerceInt64(readinessProbe["periodSeconds"]) != 2 || coerceInt64(readinessProbe["failureThreshold"]) != 30 {
+		t.Fatalf("site-worker readiness probe should allow bounded startup: %#v", readinessProbe)
+	}
+	livenessProbe := nestedMap(container, "livenessProbe")
+	livenessHTTP := nestedMap(livenessProbe, "httpGet")
+	if cleanText(livenessHTTP["path"]) != "/health" || cleanText(livenessHTTP["port"]) != "remote-ops" {
+		t.Fatalf("site-worker liveness probe must validate remote ops health: %#v", livenessProbe)
+	}
 	envList, _ := container["env"].([]any)
 	envByName := map[string]string{}
 	for _, rawEnv := range envList {

@@ -20,6 +20,7 @@ from Data.Engine.services.job_scheduler.queue import (
     WORKER_ROUTE_STATUS_ACTIVE,
     WORKER_ROUTE_STATUS_LOST,
     WORKER_ROUTE_STATUS_RETIRED,
+    WORKER_STATUS_IDLE,
     WORKER_STATUS_LOST,
     WORKER_STATUS_RUNNING,
     WORKER_STATUS_STOPPED,
@@ -31,6 +32,7 @@ from Data.Engine.services.job_scheduler.queue import (
     enqueue_scheduled_workflow_run,
     ensure_job_scheduler_tables,
     expire_stale_leases,
+    heartbeat_worker,
     list_worker_routes,
     mark_missing_workers_lost,
     prune_worker_history,
@@ -565,6 +567,89 @@ def test_stop_worker_requeues_running_work_item(tmp_path: Path) -> None:
         assert route is not None
         assert route["status"] == WORKER_ROUTE_STATUS_RETIRED
         assert route["retired_at"] is not None
+    finally:
+        conn.close()
+
+
+def test_stale_worker_exit_does_not_retire_replacement_registration(tmp_path: Path) -> None:
+    conn = _connect_queue_db(tmp_path)
+    try:
+        work_id = _seed_running_site_work(conn, worker_guid="worker-replaced")
+        register_worker(
+            conn,
+            worker_guid="worker-replaced",
+            container_name="site-worker-next",
+            site_id=16,
+            status=WORKER_STATUS_RUNNING,
+        )
+        conn.commit()
+
+        stopped = stop_worker(
+            conn,
+            worker_guid="worker-replaced",
+            container_name="site-worker-worker-replaced",
+        )
+        conn.commit()
+
+        assert stopped is False
+        row = conn.execute(
+            "SELECT container_name, status FROM job_scheduler_workers WHERE worker_guid=?",
+            ("worker-replaced",),
+        ).fetchone()
+        assert row == ("site-worker-next", WORKER_STATUS_RUNNING)
+        assert _work_item_row(conn, work_id)[0] == WORK_STATUS_RUNNING
+        route = worker_route_for_worker(conn, worker_guid="worker-replaced")
+        assert route is not None
+        assert route["status"] == WORKER_ROUTE_STATUS_ACTIVE
+    finally:
+        conn.close()
+
+
+def test_replacement_heartbeat_recovers_route_after_legacy_worker_exit(tmp_path: Path) -> None:
+    conn = _connect_queue_db(tmp_path)
+    try:
+        register_worker(
+            conn,
+            worker_guid="worker-legacy-exit",
+            container_name="site-worker-old",
+            site_id=17,
+            status=WORKER_STATUS_RUNNING,
+        )
+        register_worker(
+            conn,
+            worker_guid="worker-legacy-exit",
+            container_name="site-worker-next",
+            site_id=17,
+            status=WORKER_STATUS_RUNNING,
+        )
+        stop_worker(conn, worker_guid="worker-legacy-exit")
+
+        updated = heartbeat_worker(
+            conn,
+            worker_guid="worker-legacy-exit",
+            container_name="site-worker-next",
+            status=WORKER_STATUS_RUNNING,
+        )
+        conn.commit()
+
+        assert updated is True
+        row = conn.execute(
+            "SELECT container_name, status FROM job_scheduler_workers WHERE worker_guid=?",
+            ("worker-legacy-exit",),
+        ).fetchone()
+        assert row == ("site-worker-next", WORKER_STATUS_RUNNING)
+        route = worker_route_for_worker(conn, worker_guid="worker-legacy-exit")
+        assert route is not None
+        assert route["container_name"] == "site-worker-next"
+        assert route["status"] == WORKER_ROUTE_STATUS_ACTIVE
+
+        stale_updated = heartbeat_worker(
+            conn,
+            worker_guid="worker-legacy-exit",
+            container_name="site-worker-old",
+            status=WORKER_STATUS_IDLE,
+        )
+        assert stale_updated is False
     finally:
         conn.close()
 

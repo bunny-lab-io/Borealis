@@ -942,6 +942,7 @@ finally:
     - Task-scheduler worker reconciliation.
     - Notes:
     - Docker-backed worker container names use random UUIDs (`site-worker-<uuid>`). K3s bridge worker pod names use deterministic site slugs (`site-worker-<sanitized-site-name>`), while `worker_guid` remains the stable worker identity for route records, labels, and lifecycle reconciliation.
+    - Site-worker heartbeat and shutdown writes fence on `container_name` as worker incarnation. Delayed exit from replaced Pod cannot stop newer row with same stable `worker_guid`; active replacement heartbeat also restores route status if legacy worker cleanup retired it during first cutover onto incarnation-aware image.
     - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 300 seconds), and `/api/server/workers?history_seconds=300` hides old terminal rows even if legacy rows lack `stopped_at`.
 
     #### `job_scheduler_worker_routes`
