@@ -313,6 +313,123 @@ func TestLinuxStartSessionWritesConfigAndRunsWgQuick(t *testing.T) {
 	}
 }
 
+func TestLinuxStartSessionInstallsWireGuardToolsWithDNFWhenMissing(t *testing.T) {
+	manager := testManager(t)
+	manager.wgQuick = ""
+	manager.wg = ""
+	installed := false
+	manager.executableResolver = func(name string) string {
+		switch name {
+		case "dnf":
+			return "/usr/bin/dnf"
+		case "wg-quick", "wg":
+			if installed {
+				return "/usr/bin/" + name
+			}
+		}
+		return ""
+	}
+	session, err := manager.buildSession(testPayload(time.Now().Add(time.Hour).Unix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		calls = append(calls, name+" "+joinArgs(args))
+		if name == "/usr/bin/dnf" {
+			if timeout != packageInstallTimeout {
+				t.Fatalf("unexpected package install timeout: %s", timeout)
+			}
+			installed = true
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	if err := manager.startSession(context.Background(), session); err != nil {
+		t.Fatalf("startSession returned error: %v", err)
+	}
+
+	expectedCalls := []string{
+		"/usr/bin/dnf install -y wireguard-tools",
+		"/usr/bin/wg-quick down " + manager.configPathForPlatform(),
+		"/usr/bin/wg-quick up " + manager.configPathForPlatform(),
+	}
+	for _, expected := range expectedCalls {
+		if !containsCall(calls, expected) {
+			t.Fatalf("missing call %q in %#v", expected, calls)
+		}
+	}
+}
+
+func TestLinuxWireGuardToolsInstallFailureUsesRetryCooldown(t *testing.T) {
+	manager := testManager(t)
+	manager.wgQuick = ""
+	manager.wg = ""
+	manager.executableResolver = func(name string) string {
+		if name == "dnf" {
+			return "/usr/bin/dnf"
+		}
+		return ""
+	}
+	installCalls := 0
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "/usr/bin/dnf" {
+			installCalls++
+			return commandResult{ExitCode: 1, Stderr: "AppStream unavailable"}, nil
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	firstErr := manager.ensureLinuxWireGuardTools(context.Background())
+	if firstErr == nil || !strings.Contains(firstErr.Error(), "dnf install wireguard-tools failed: AppStream unavailable") {
+		t.Fatalf("unexpected first dependency error: %v", firstErr)
+	}
+	secondErr := manager.ensureLinuxWireGuardTools(context.Background())
+	if secondErr == nil || !strings.Contains(secondErr.Error(), "automatic retry deferred") {
+		t.Fatalf("unexpected cooldown dependency error: %v", secondErr)
+	}
+	if installCalls != 1 {
+		t.Fatalf("expected one package install attempt during cooldown, got %d", installCalls)
+	}
+}
+
+func TestLinuxWireGuardToolsReprobeDetectsManualRepairDuringCooldown(t *testing.T) {
+	manager := testManager(t)
+	manager.wgQuick = ""
+	manager.wg = ""
+	installed := false
+	manager.executableResolver = func(name string) string {
+		switch name {
+		case "dnf":
+			return "/usr/bin/dnf"
+		case "wg-quick", "wg":
+			if installed {
+				return "/usr/bin/" + name
+			}
+		}
+		return ""
+	}
+	installCalls := 0
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "/usr/bin/dnf" {
+			installCalls++
+			return commandResult{ExitCode: 1, Stderr: "temporary repository error"}, nil
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	if err := manager.ensureLinuxWireGuardTools(context.Background()); err == nil {
+		t.Fatal("expected first package install attempt to fail")
+	}
+	installed = true
+	if err := manager.ensureLinuxWireGuardTools(context.Background()); err != nil {
+		t.Fatalf("manual dependency repair was not detected during cooldown: %v", err)
+	}
+	if installCalls != 1 {
+		t.Fatalf("unexpected repeated package install after manual repair: %d", installCalls)
+	}
+}
+
 func TestLinuxStartSessionUsesServerIPFallbackWhenWireGuardCannotResolveEndpoint(t *testing.T) {
 	manager := testManager(t)
 	manager.serverHost = "borealis.example.com"

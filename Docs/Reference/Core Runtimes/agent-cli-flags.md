@@ -27,7 +27,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     sudo ./Agent --server-url "https://borealis.example.com" --site-enrollment-code "SITE-CODE"
     ```
 
-    Linux uses the normal runtime parser. Supplying `--server-url` and `--site-enrollment-code` implies service install, stages the runtime under `/opt/Borealis/Agent/Agent`, writes `agent.json`, creates systemd units, and starts the Agent service. If Borealis is already installed, the command stops Borealis-managed systemd units and the WireGuard interface, preserves existing identity and trust data in `agent.json`, replaces the runtime binary, and starts the service again.
+    Linux uses the normal runtime parser. Supplying `--server-url` and `--site-enrollment-code` implies service install, stages the runtime under `/opt/Borealis/Agent/Agent`, writes `agent.json`, creates systemd units, and starts the Agent service. If Borealis is already installed, the command stops Borealis-managed systemd units and the WireGuard interface, preserves existing identity and trust data in `agent.json`, replaces the runtime binary, and starts the service again. The root WireGuard role installs missing `wireguard-tools` through the detected OS package manager when tunnel setup begins.
 
 !!! warning
 

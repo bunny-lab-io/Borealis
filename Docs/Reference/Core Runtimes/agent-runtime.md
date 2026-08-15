@@ -19,7 +19,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/registry_management` - SYSTEM Windows registry browse, key create/rename/delete, value create/update/delete, and unsupported status on non-Windows agents.
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
-- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
+- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply with missing-tool recovery, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
 - `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
@@ -34,6 +34,12 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename and serialized across processes through a sibling `agent.json.lock` file. Each write increments `agent.state.revision` and stamps `agent.state.writer` plus `agent.state.last_write_at` so stale writer/debug cases are visible.
 - Successful heartbeats clean stale atomic-write temp files such as `.config-*.tmp` from the Agent install root after they are older than one hour.
+
+## Linux WireGuard Dependency
+
+Linux agents require the `wireguard-tools` package for `wg` and `wg-quick`. When either command is missing, the root Agent installs `wireguard-tools` through the first available supported package manager (`dnf`, `apt-get`, `yum`, `zypper`, `apk`, or `pacman`), re-detects both commands, then resumes tunnel setup. [Rocky Linux 10 provides this package in AppStream](https://download.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/Packages/w/).
+
+If the configured repository is unavailable or excludes `wireguard-tools`, the WireGuard role remains `Recovering` and reports the package-manager error. Automatic install attempts are limited to once every 15 minutes. A manual package install is detected on the next ensure cycle without waiting for that cooldown.
 
 ## Agent CLI Flags
 
@@ -180,7 +186,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, native service registration, support-task registration, and runtime. Windows onboarding stages the Go binary from the Sites install command download source; the installed copy runs from `C:\Borealis\Agent.exe`.
     - Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions and install state-machine phases live in `agent.json` under `agent.dependency_state` with phase/status/version/timestamp/error fields. When an existing WireGuard client executable is present, bootstrap records the detected file/registry/config version, marks the dependency healthy, and skips MSI reinstall. Transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
     - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `BorealisAgent` service, and an Engine-accepted token in `agent.json` are present.
-    - Linux first install: download the Linux Agent binary from the Sites install command source, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code>`. The binary self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer` plus `borealis-agent-watchdog.timer`. Re-running the same command performs an in-place redeploy and preserves existing install identity. `--update-check` also preserves existing install state.
+    - Linux first install: download the Linux Agent binary from the Sites install command source, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code>`. The binary self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer` plus `borealis-agent-watchdog.timer`. Re-running the same command performs an in-place redeploy and preserves existing install identity. `--update-check` also preserves existing install state. The root WireGuard role installs missing Linux `wireguard-tools` through the detected OS package manager, re-probes `wg` and `wg-quick`, and rate-limits failed repository retries to once every 15 minutes.
     - Do not commit `Data/Agent/dist/` output. Engine deploys and Engine-compiled release refreshes build and cache distributable platform binaries under `Engine/Services/api-backend/cache/AgentUpdates`.
     - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
     - Keep Linux Agent installation separate from deployed Engine runtime roots.

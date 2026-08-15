@@ -28,18 +28,20 @@ import (
 )
 
 const (
-	defaultTunnelName   = "wireguard"
-	tunnelDisplayName   = "Borealis Agent - WireGuard"
-	defaultInterface    = "wireguard"
-	legacyInterface     = "borealis"
-	defaultInterfaceMTU = 1420
-	defaultKeepalive    = 30
-	defaultEnsureDelay  = 10 * time.Second
-	defaultEnsureEvery  = 60 * time.Second
-	commandTimeout      = 45 * time.Second
-	readyNotifyCooldown = 60 * time.Second
-	firewallRuleName    = "Borealis Agent - WireGuard"
-	idleAddress         = "169.254.255.254/32"
+	defaultTunnelName     = "wireguard"
+	tunnelDisplayName     = "Borealis Agent - WireGuard"
+	defaultInterface      = "wireguard"
+	legacyInterface       = "borealis"
+	defaultInterfaceMTU   = 1420
+	defaultKeepalive      = 30
+	defaultEnsureDelay    = 10 * time.Second
+	defaultEnsureEvery    = 60 * time.Second
+	commandTimeout        = 45 * time.Second
+	packageInstallTimeout = 5 * time.Minute
+	dependencyRetryEvery  = 15 * time.Minute
+	readyNotifyCooldown   = 60 * time.Second
+	firewallRuleName      = "Borealis Agent - WireGuard"
+	idleAddress           = "169.254.255.254/32"
 )
 
 type AuthClient interface {
@@ -70,26 +72,28 @@ func (a authClientAdapter) StoreServerSigningKey(value string) error {
 }
 
 type Manager struct {
-	authClient       AuthClient
-	hostname         string
-	serviceMode      string
-	configPath       string
-	baseDir          string
-	logPath          string
-	platform         string
-	interfaceName    string
-	wireguardExe     string
-	wgQuick          string
-	wg               string
-	ip               string
-	serverHost       string
-	serverIPFallback string
-	clientPrivate    string
-	clientPublic     string
-	runner           commandRunner
-	statusReporter   func(context.Context, string, string, string) error
+	authClient         AuthClient
+	hostname           string
+	serviceMode        string
+	configPath         string
+	baseDir            string
+	logPath            string
+	platform           string
+	interfaceName      string
+	wireguardExe       string
+	wgQuick            string
+	wg                 string
+	ip                 string
+	serverHost         string
+	serverIPFallback   string
+	clientPrivate      string
+	clientPublic       string
+	runner             commandRunner
+	executableResolver func(string) string
+	statusReporter     func(context.Context, string, string, string) error
 
 	sessionMu                sync.Mutex
+	dependencyMu             sync.Mutex
 	mu                       sync.Mutex
 	started                  bool
 	loopRunning              bool
@@ -101,6 +105,8 @@ type Manager struct {
 	lastAppliedEndpoint      string
 	lastReadyNotificationKey string
 	lastTunnelSnapshot       map[string]any
+	lastDependencyAttempt    time.Time
+	lastDependencyError      string
 	session                  *SessionConfig
 	ensureWake               chan string
 }
@@ -165,6 +171,7 @@ func New(client *auth.Client, hostname string, serviceMode string, configPath st
 		clientPrivate:      privateKey,
 		clientPublic:       publicKey,
 		runner:             runCommand,
+		executableResolver: resolveExecutable,
 		supported:          runtime.GOOS == "windows" || runtime.GOOS == "linux",
 		ensureWake:         make(chan string, 4),
 		lastTunnelSnapshot: map[string]any{},
@@ -596,8 +603,8 @@ func (m *Manager) applyWindowsSession(ctx context.Context, session *SessionConfi
 }
 
 func (m *Manager) applyLinuxSession(ctx context.Context, session *SessionConfig) error {
-	if strings.TrimSpace(m.wgQuick) == "" {
-		return fmt.Errorf("wg-quick not found")
+	if err := m.ensureLinuxWireGuardTools(ctx); err != nil {
+		return err
 	}
 	_ = m.linuxDown(ctx)
 	result, err := m.runLinuxUp(ctx)
@@ -646,7 +653,8 @@ func (m *Manager) applyLinuxSession(ctx context.Context, session *SessionConfig)
 }
 
 func (m *Manager) runLinuxUp(ctx context.Context) (commandResult, error) {
-	return m.runner(ctx, commandTimeout, m.wgQuick, "up", m.configPathForPlatform())
+	wgQuick, _, _ := m.linuxExecutables()
+	return m.runner(ctx, commandTimeout, wgQuick, "up", m.configPathForPlatform())
 }
 
 func (m *Manager) sessionConfigMatchesLive(ctx context.Context, desired *SessionConfig) bool {
@@ -874,14 +882,15 @@ func (m *Manager) serviceState(ctx context.Context) string {
 			}
 		}
 	case "linux":
-		if m.wg != "" {
-			result, err := m.runner(ctx, commandTimeout, m.wg, "show", m.interfaceName)
+		_, wg, ip := m.linuxExecutables()
+		if wg != "" {
+			result, err := m.runner(ctx, commandTimeout, wg, "show", m.interfaceName)
 			if err == nil && result.ExitCode == 0 {
 				return "RUNNING"
 			}
 		}
-		if m.ip != "" {
-			result, err := m.runner(ctx, commandTimeout, m.ip, "link", "show", "dev", m.interfaceName)
+		if ip != "" {
+			result, err := m.runner(ctx, commandTimeout, ip, "link", "show", "dev", m.interfaceName)
 			if err == nil && result.ExitCode == 0 {
 				return "RUNNING"
 			}
@@ -985,25 +994,125 @@ func (m *Manager) ensureWindowsFirewall(ctx context.Context, allowedIPs string, 
 }
 
 func (m *Manager) linuxDown(ctx context.Context) error {
-	if m.wgQuick != "" {
-		_, _ = m.runner(ctx, commandTimeout, m.wgQuick, "down", m.configPathForPlatform())
+	wgQuick, _, ip := m.linuxExecutables()
+	if wgQuick != "" {
+		_, _ = m.runner(ctx, commandTimeout, wgQuick, "down", m.configPathForPlatform())
 	}
-	if m.ip != "" {
+	if ip != "" {
 		for _, interfaceName := range uniqueStrings([]string{m.interfaceName, legacyInterface}) {
-			_, _ = m.runner(ctx, commandTimeout, m.ip, "link", "delete", "dev", interfaceName)
+			_, _ = m.runner(ctx, commandTimeout, ip, "link", "delete", "dev", interfaceName)
 		}
 	}
 	return nil
 }
 
 func (m *Manager) ensureLinuxMTU(ctx context.Context) {
-	if m.ip == "" {
+	_, _, ip := m.linuxExecutables()
+	if ip == "" {
 		return
 	}
-	result, err := m.runner(ctx, commandTimeout, m.ip, "link", "set", "dev", m.interfaceName, "mtu", strconv.Itoa(interfaceMTU()))
+	result, err := m.runner(ctx, commandTimeout, ip, "link", "set", "dev", m.interfaceName, "mtu", strconv.Itoa(interfaceMTU()))
 	if err != nil || result.ExitCode != 0 {
 		m.logf("WireGuard Linux MTU apply failed detail=%s err=%v", commandDetail(result), err)
 	}
+}
+
+func (m *Manager) ensureLinuxWireGuardTools(ctx context.Context) error {
+	if m.refreshLinuxExecutables() {
+		return nil
+	}
+
+	m.dependencyMu.Lock()
+	defer m.dependencyMu.Unlock()
+	if m.refreshLinuxExecutables() {
+		return nil
+	}
+
+	now := time.Now()
+	if !m.lastDependencyAttempt.IsZero() && now.Sub(m.lastDependencyAttempt) < dependencyRetryEvery && m.lastDependencyError != "" {
+		return fmt.Errorf("%s; automatic retry deferred", m.lastDependencyError)
+	}
+	m.lastDependencyAttempt = now
+
+	installer, args, managerName := m.linuxWireGuardInstallCommand()
+	if installer == "" {
+		m.lastDependencyError = "wg-quick not found; install wireguard-tools with the OS package manager"
+		return fmt.Errorf("%s", m.lastDependencyError)
+	}
+
+	m.logf("WireGuard Linux dependency missing; installing wireguard-tools with %s", managerName)
+	result, err := m.runner(ctx, packageInstallTimeout, installer, args...)
+	if err != nil {
+		detail := strings.TrimSpace(commandDetail(result))
+		if detail == "" || detail == "exit code 0" {
+			detail = err.Error()
+		} else if !strings.Contains(detail, err.Error()) {
+			detail += ": " + err.Error()
+		}
+		m.lastDependencyError = fmt.Sprintf("wg-quick not found; %s install wireguard-tools failed: %s", managerName, detail)
+		return fmt.Errorf("%s", m.lastDependencyError)
+	}
+	if result.ExitCode != 0 {
+		m.lastDependencyError = fmt.Sprintf("wg-quick not found; %s install wireguard-tools failed: %s", managerName, commandDetail(result))
+		return fmt.Errorf("%s", m.lastDependencyError)
+	}
+	if !m.refreshLinuxExecutables() {
+		m.lastDependencyError = fmt.Sprintf("%s installed wireguard-tools but wg or wg-quick is still unavailable", managerName)
+		return fmt.Errorf("%s", m.lastDependencyError)
+	}
+
+	m.lastDependencyError = ""
+	m.logf("WireGuard Linux dependency ready after wireguard-tools install with %s", managerName)
+	return nil
+}
+
+func (m *Manager) refreshLinuxExecutables() bool {
+	resolver := m.executableResolver
+	if resolver == nil {
+		resolver = resolveExecutable
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.wgQuick == "" {
+		m.wgQuick = resolver("wg-quick")
+	}
+	if m.wg == "" {
+		m.wg = resolver("wg")
+	}
+	if m.ip == "" {
+		m.ip = resolver("ip")
+	}
+	return m.wgQuick != "" && m.wg != ""
+}
+
+func (m *Manager) linuxExecutables() (string, string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.wgQuick, m.wg, m.ip
+}
+
+func (m *Manager) linuxWireGuardInstallCommand() (string, []string, string) {
+	resolver := m.executableResolver
+	if resolver == nil {
+		resolver = resolveExecutable
+	}
+	candidates := []struct {
+		name string
+		args []string
+	}{
+		{name: "dnf", args: []string{"install", "-y", "wireguard-tools"}},
+		{name: "apt-get", args: []string{"install", "-y", "wireguard-tools"}},
+		{name: "yum", args: []string{"install", "-y", "wireguard-tools"}},
+		{name: "zypper", args: []string{"--non-interactive", "install", "wireguard-tools"}},
+		{name: "apk", args: []string{"add", "--no-cache", "wireguard-tools"}},
+		{name: "pacman", args: []string{"--sync", "--needed", "--noconfirm", "wireguard-tools"}},
+	}
+	for _, candidate := range candidates {
+		if path := resolver(candidate.name); path != "" {
+			return path, candidate.args, candidate.name
+		}
+	}
+	return "", nil, ""
 }
 
 func (m *Manager) rememberTunnelSnapshot(payload map[string]any) {
