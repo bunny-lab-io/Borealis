@@ -33,6 +33,7 @@ Scheduled wall-clock times use the Engine host timezone. If the Engine host is c
 - Current Run shows live or latest run state.
 - Historical Runs groups past occurrences.
 - Device rows show target status, output, errors, and skipped reasons.
+- SSH and WinRM playbook rows show `Establishing Connection (ns)` while Engine checks WireGuard and target-port readiness. Countdown survives page navigation because probe deadline lives with run history.
 - Ansible playbooks store per-target or shared recap output depending on execution mode.
 - Patch install jobs store per-device install result, timeout or failure state, WUA result codes, reboot-required flags, and available Windows Update stdout/stderr detail.
 
@@ -93,6 +94,8 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - Each due occurrence resolves targets once and freezes membership in run target rows.
     - Filter targets preserve allowed site scope from creation/edit time.
     - Remote SSH/WinRM Ansible requires active WireGuard peer IP and selected credential or service account path.
+    - SSH/WinRM admission uses 60-second readiness window. Scheduler persists `Establishing Connection` on run and `establishing_connection` on target rows before probe. `updated_at` anchors API `connection_probe_deadline_ts`; `Create_Job.jsx` derives one-second countdown after reload or tab navigation.
+    - Individual execution probes independently, so ready devices dispatch without waiting for unrelated target timeout. Shared execution waits for batch admission, excludes timed-out targets, then dispatches eligible inventory.
     - Patch install occurrences freeze target membership, queue `patch_install_run` work items, then call the site worker host-service bridge so the Agent SYSTEM socket performs WUA install work.
     - Patch policy evaluation runs from the scheduler manager before normal scheduled-job ticks. Due policies create immediate `job_kind=patch_install` jobs with `trigger=policy`, `policy_id`, and `policy_run_id` in the patch component.
     - Policy-created patch jobs still use regular scheduled-job run history, target rows, activity output, and progress metadata. Operators review them through the Scheduled Jobs `Patch Management` filter.

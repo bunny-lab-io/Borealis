@@ -74,4 +74,5 @@ SSH credentials may include password, private key, become method, and become pas
     - Site-worker scheduled-lane capacity is the active work-item claim limit. Profile values are `5`, `8`, `12`, or `16` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
     - Borealis does not currently pass `--forks` to Ansible. Shared batches use Ansible's default internal host fan-out inside the single claimed work item.
     - `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` defaults to `2` and bounds simultaneous `ansible-playbook` controller processes per site-worker pod. This limit is separate from scheduled-lane work-item capacity.
-    - VPN preparation receives a 45-second readiness window. Scheduler internal HTTP requests use their operation-specific context deadline instead of shorter shared-client timeout.
+    - VPN preparation receives a 60-second readiness window for SSH and WinRM. Scheduler internal HTTP requests use readiness window plus request grace instead of shorter shared-client timeout.
+    - Scheduled Job History renders persisted readiness state as yellow `Establishing Connection (ns)` status. Individual runs continue independently; shared runs exclude targets still unavailable when countdown expires.

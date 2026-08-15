@@ -493,6 +493,13 @@ const JOB_RESULT_THEME = {
     border: "1px solid rgba(251,191,36,0.32)",
     dot: "#f59e0b",
   },
+  establishing_connection: {
+    label: "Establishing Connection",
+    text: "#fbbf24",
+    background: "rgba(251,191,36,0.14)",
+    border: "1px solid rgba(251,191,36,0.32)",
+    dot: "#f59e0b",
+  },
   no_devices_targeted: {
     label: "No Devices Targeted",
     text: "#fbbf24",
@@ -521,6 +528,7 @@ const JOB_STATUS_SORT_RANK = Object.freeze({
   warning: 1,
   failed: 2,
   running: 3,
+  establishing_connection: 3,
   expired: 4,
   timed_out: 4,
   skipped: 4,
@@ -535,6 +543,7 @@ const normalizeJobStatusKey = (status) => {
   if (!normalized || normalized === "scheduled" || normalized === "queued") return "pending";
   if (normalized === "failure") return "failed";
   if (normalized === "timed out" || normalized === "timed_out") return "timed_out";
+  if (normalized === "establishing connection" || normalized === "establishing_connection") return "establishing_connection";
   if (normalized === "no devices targeted" || normalized === "no_devices_targeted") return "no_devices_targeted";
   if (normalized === "no eligible targets" || normalized === "no_eligible_targets") return "no_eligible_targets";
   return normalized;
@@ -549,6 +558,7 @@ const summarizeHistoricalRunStatus = (statuses = []) => {
   const normalized = statuses.map((status) => normalizeJobStatusKey(status)).filter(Boolean);
   if (!normalized.length) return "";
   const count = (key) => normalized.filter((status) => status === key).length;
+  if (count("establishing_connection")) return "establishing_connection";
   if (count("running")) return "running";
   if (count("failed")) return "failed";
   if (count("timed_out")) return "timed_out";
@@ -564,6 +574,14 @@ const summarizeHistoricalRunStatus = (statuses = []) => {
     return "skipped";
   }
   return normalized[0] || "";
+};
+
+export const connectionProbeStatusLabel = (status, deadlineTs, nowMs) => {
+  if (normalizeJobStatusKey(status) !== "establishing_connection") return "";
+  const deadline = Number(deadlineTs || 0);
+  if (!Number.isFinite(deadline) || deadline <= 0) return JOB_RESULT_THEME.establishing_connection.label;
+  const remainingSeconds = Math.max(0, Math.ceil(deadline - Number(nowMs || Date.now()) / 1000));
+  return `Establishing Connection (${remainingSeconds}s)`;
 };
 
 const isWorkflowComponentRecord = (component) => {
@@ -2260,6 +2278,7 @@ export default function CreateJob() {
     };
   }, [components, isPatchBatchJob, isPatchJob, patchJobBatch, targets.length]);
   const [deviceRows, setDeviceRows] = useState([]);
+  const [historyClockMs, setHistoryClockMs] = useState(() => Date.now());
   const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
   const devicePickerGridApiRef = useRef(null);
   const filterPickerGridApiRef = useRef(null);
@@ -2939,7 +2958,7 @@ export default function CreateJob() {
   const deviceFiltered = useMemo(() => {
     const matchStatusFilter = (status, filterKey) => {
       if (filterKey === "pending") return status === "pending";
-      if (filterKey === "running") return status === "running";
+      if (filterKey === "running") return status === "running" || status === "establishing_connection";
       if (filterKey === "success") return status === "success";
       if (filterKey === "warning") return status === "warning";
       if (filterKey === "failed") return status === "failed" || status === "timed_out";
@@ -2961,8 +2980,9 @@ export default function CreateJob() {
       deviceFiltered.map((row, index) => {
         const progress = row?.patch_progress && typeof row.patch_progress === "object" ? row.patch_progress : null;
         const canonicalLabel = JOB_RESULT_THEME[normalizeJobStatusKey(row?.job_status || "")]?.label || (row.job_status || "");
-        const displayLabel = String(row?.display_status_label || "").trim() || patchProgressLabel(progress, row?.job_status || "") || canonicalLabel;
-        const progressTooltip = String(row?.status_tooltip || "").trim() || patchProgressTooltip(progress);
+        const probeLabel = connectionProbeStatusLabel(row?.job_status, row?.connection_probe_deadline_ts, historyClockMs);
+        const displayLabel = probeLabel || String(row?.display_status_label || "").trim() || patchProgressLabel(progress, row?.job_status || "") || canonicalLabel;
+        const progressTooltip = String(row?.status_tooltip || "").trim() || (probeLabel ? "Waiting for WireGuard and target port readiness before playbook execution." : patchProgressTooltip(progress));
         return {
           id: `${row.hostname || "device"}-${index}`,
           hostname: row.hostname || "",
@@ -2995,7 +3015,7 @@ export default function CreateJob() {
             ? "StdErr"
             : "None",
       })),
-    [deviceFiltered]
+    [deviceFiltered, historyClockMs]
   );
   const hydrateExistingComponents = useCallback(async (rawComponents = []) => {
     const results = [];
@@ -3252,6 +3272,7 @@ export default function CreateJob() {
   const [outputError, setOutputError] = useState("");
   const [copiedOutputKey, setCopiedOutputKey] = useState("");
   const outputCopyResetRef = useRef(null);
+  const probeRefreshAtRef = useRef(0);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [rerunningJob, setRerunningJob] = useState(false);
   const [selectedHistoryOccurrence, setSelectedHistoryOccurrence] = useState(null);
@@ -3327,6 +3348,30 @@ export default function CreateJob() {
     }
   }, [editing, effectiveHistorySubTabKey, initialJob?.id, selectedHistoryOccurrence]);
 
+  const activeConnectionProbeDeadlines = useMemo(
+    () => [...historyRows, ...deviceRows]
+      .filter((row) => normalizeJobStatusKey(row?.status || row?.job_status || "") === "establishing_connection")
+      .map((row) => Number(row?.connection_probe_deadline_ts || 0))
+      .filter((deadline) => Number.isFinite(deadline) && deadline > 0),
+    [deviceRows, historyRows]
+  );
+
+  useEffect(() => {
+    if (!editing || activeConnectionProbeDeadlines.length === 0) return undefined;
+    const earliestDeadlineMs = Math.min(...activeConnectionProbeDeadlines) * 1000;
+    const tick = () => {
+      const now = Date.now();
+      setHistoryClockMs(now);
+      if (now >= earliestDeadlineMs && now - probeRefreshAtRef.current >= 1000) {
+        probeRefreshAtRef.current = now;
+        void loadHistory();
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [activeConnectionProbeDeadlines, editing, loadHistory]);
+
   useEffect(() => {
     if (!editing) return;
     let t;
@@ -3389,6 +3434,7 @@ export default function CreateJob() {
         scheduled_ts: row?.scheduled_ts || null,
         started_ts: null,
         finished_ts: null,
+        connection_probe_deadline_ts: null,
         statuses: new Set()
       };
       if (!existing.scheduled_ts && row?.scheduled_ts) existing.scheduled_ts = row.scheduled_ts;
@@ -3397,6 +3443,12 @@ export default function CreateJob() {
       }
       if (row?.finished_ts) {
         existing.finished_ts = existing.finished_ts == null ? row.finished_ts : Math.max(existing.finished_ts, row.finished_ts);
+      }
+      if (normalizeJobStatusKey(row?.status || "") === "establishing_connection" && row?.connection_probe_deadline_ts) {
+        existing.connection_probe_deadline_ts = Math.max(
+          Number(existing.connection_probe_deadline_ts || 0),
+          Number(row.connection_probe_deadline_ts || 0)
+        );
       }
       if (row?.status) existing.statuses.add(String(row.status));
       map.set(strKey, existing);
@@ -3408,17 +3460,20 @@ export default function CreateJob() {
         .filter(Boolean);
       if (!statuses.length) return;
       const ranOn = entry.started_ts || entry.scheduled_ts || entry.finished_ts || Number(entry.key || 0);
+      const status = summarizeHistoricalRunStatus(statuses);
       summaries.push({
         key: entry.key,
         ran_on: ranOn,
         scheduled_ts: entry.scheduled_ts,
         started_ts: entry.started_ts,
         finished_ts: entry.finished_ts,
-        status: summarizeHistoricalRunStatus(statuses)
+        status,
+        connection_probe_deadline_ts: entry.connection_probe_deadline_ts,
+        status_label: connectionProbeStatusLabel(status, entry.connection_probe_deadline_ts, historyClockMs),
       });
     });
     return summaries;
-  }, [historyRows]);
+  }, [historyClockMs, historyRows]);
 
   const sortedHistory = useMemo(() => {
     return [...aggregatedHistory].sort(
@@ -3462,7 +3517,7 @@ export default function CreateJob() {
           {params.value ? fmtTs(params.value) : "-"}
         </Box>
       ),
-      HistoryStatusRenderer: (params) => resultChip(params.value || ""),
+      HistoryStatusRenderer: (params) => resultChip(params.value || "", params?.data?.status_label || ""),
     }),
     [fmtTs, openHistoricalRun, resultChip]
   );
@@ -3524,7 +3579,7 @@ export default function CreateJob() {
       const normalized = normalizeJobStatusKey(row?.job_status || "");
       if (normalized === "pending") {
         base.pending += 1;
-      } else if (normalized === "running") {
+      } else if (normalized === "running" || normalized === "establishing_connection") {
         base.running += 1;
       } else if (normalized === "success") {
         base.success += 1;

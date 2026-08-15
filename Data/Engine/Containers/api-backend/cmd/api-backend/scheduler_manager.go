@@ -473,7 +473,7 @@ func (m *goSchedulerManager) processScheduledJobTick(ctx context.Context, profil
 	}
 	expSeconds := schedulerParseExpiration(nullString(job.Expiration))
 	for _, run := range runs {
-		if scheduledTerminalStatus(nullString(run.Status)) || nullString(run.Status) == scheduledStatusRunning {
+		if scheduledTerminalStatus(nullString(run.Status)) || scheduledActiveStatus(nullString(run.Status)) {
 			continue
 		}
 		runID := nullInt(run.ID)
@@ -594,7 +594,7 @@ func (m *goSchedulerManager) processPatchInstallTick(ctx context.Context, profil
 	}
 	expSeconds := schedulerParseExpiration(nullString(job.Expiration))
 	for _, run := range runs {
-		if scheduledTerminalStatus(nullString(run.Status)) || nullString(run.Status) == scheduledStatusRunning {
+		if scheduledTerminalStatus(nullString(run.Status)) || scheduledActiveStatus(nullString(run.Status)) {
 			continue
 		}
 		runID := nullInt(run.ID)
@@ -671,7 +671,7 @@ func (m *goSchedulerManager) processOnboardingTick(ctx context.Context, job sche
 		return nil
 	}
 	for _, run := range runs {
-		if scheduledTerminalStatus(nullString(run.Status)) || nullString(run.Status) == scheduledStatusRunning {
+		if scheduledTerminalStatus(nullString(run.Status)) || scheduledActiveStatus(nullString(run.Status)) {
 			continue
 		}
 		if _, err := m.enqueueWorkItem(ctx, schedulerKindOnboardingRun, map[string]any{
@@ -1949,8 +1949,8 @@ func (m *goSchedulerManager) expireRunningScheduledRuns(ctx context.Context, now
 		SELECT r.id, r.started_ts, j.expiration, r.component_kind
 		  FROM engine.scheduled_job_runs r
 		  JOIN engine.scheduled_jobs j ON j.id = r.job_id
-		 WHERE r.status=$1
-	`, scheduledStatusRunning)
+		 WHERE r.status IN ($1,$2)
+	`, scheduledStatusRunning, scheduledStatusEstablishingConnection)
 	if err != nil {
 		return err
 	}
@@ -2227,7 +2227,7 @@ func (m *goSchedulerManager) internalJSON(ctx context.Context, method string, pa
 		client = http.DefaultClient
 	} else if client.Timeout > 0 && client.Timeout < timeout {
 		// Request context owns this operation's deadline. A shorter shared-client
-		// timeout previously cut the 45-second VPN readiness wait off at 30 seconds.
+		// timeout must not cut long-running VPN readiness probes short.
 		requestClient := *client
 		requestClient.Timeout = 0
 		client = &requestClient
@@ -2400,6 +2400,10 @@ func schedulerParseExpiration(value string) *int64 {
 
 func scheduledTerminalStatus(status string) bool {
 	return stringInSet(status, scheduledStatusSuccess, scheduledStatusWarning, scheduledStatusFailed, scheduledStatusExpired, scheduledStatusTimedOut, scheduledStatusSkipped)
+}
+
+func scheduledActiveStatus(status string) bool {
+	return stringInSet(status, scheduledStatusRunning, scheduledStatusEstablishingConnection)
 }
 
 func durationForOperator(seconds int64) string {

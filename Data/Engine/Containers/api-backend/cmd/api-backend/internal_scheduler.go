@@ -470,7 +470,7 @@ func internalSchedulerVPNPrepareHandler(auth *authService, vpnRuntime *vpnTunnel
 			sessions = vpnRuntime.waitForSessionsReady(
 				agentIDs,
 				requiredPorts,
-				coercePositiveFloat(firstNonEmpty(body["timeout_seconds"], body["wait_seconds"]), 45),
+				coercePositiveFloat(firstNonEmpty(body["timeout_seconds"], body["wait_seconds"]), float64(scheduledConnectionProbeTimeoutSeconds)),
 				coercePositiveFloat(body["poll_interval_seconds"], 0.5),
 			)
 		}

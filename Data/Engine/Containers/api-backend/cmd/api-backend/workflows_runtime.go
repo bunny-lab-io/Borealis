@@ -1470,9 +1470,9 @@ func (s *postgresOperatorStore) workflowAnsibleTargetSpecs(ctx context.Context, 
 		"agent_ids":             agentIDs,
 		"required_ports":        requiredPorts,
 		"reason":                "workflow_ansible",
-		"timeout_seconds":       45,
+		"timeout_seconds":       scheduledConnectionProbeTimeoutSeconds,
 		"poll_interval_seconds": 0.5,
-	}, 60*time.Second)
+	}, time.Duration(scheduledConnectionProbeTimeoutSeconds+scheduledConnectionProbeRequestGraceSeconds)*time.Second)
 	if err != nil {
 		return nil, nil, err
 	}

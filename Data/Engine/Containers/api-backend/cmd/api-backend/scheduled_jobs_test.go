@@ -438,6 +438,56 @@ func TestScheduledJobAggregationPrefersFailedOverSuccess(t *testing.T) {
 	}
 }
 
+func TestScheduledJobAggregationShowsConnectionProbeDeadline(t *testing.T) {
+	updatedAt := int64(1_700_000_000)
+	devices := aggregateScheduledDevices(
+		[]scheduledRunRow{{
+			ID:        sqlNullInt(12),
+			Status:    sqlNullString(scheduledStatusEstablishingConnection),
+			StartedTS: sqlNullInt(updatedAt - 5),
+			UpdatedAt: sqlNullInt(updatedAt),
+		}},
+		[]scheduledTargetRow{{
+			RunID:              sqlNullInt(12),
+			Hostname:           sqlNullString("LAB-TRAEFIK-01"),
+			ResolvedConnection: sqlNullString("ssh"),
+			ResolutionStatus:   sqlNullString(schedulerResolutionEstablishingConnection),
+			RunStatus:          sqlNullString(scheduledStatusEstablishingConnection),
+			StartedTS:          sqlNullInt(updatedAt - 5),
+			RunUpdatedAt:       sqlNullInt(updatedAt),
+		}},
+	)
+	if len(devices) != 1 {
+		t.Fatalf("expected one device, got %d", len(devices))
+	}
+	if got := cleanText(devices[0]["status"]); got != scheduledStatusEstablishingConnection {
+		t.Fatalf("expected connection status, got %q", got)
+	}
+	if got := coerceInt64(devices[0]["connection_probe_deadline_ts"]); got != updatedAt+scheduledConnectionProbeTimeoutSeconds {
+		t.Fatalf("unexpected connection deadline %d", got)
+	}
+	if got := scheduledStatusBucket(scheduledStatusEstablishingConnection); got != "running" {
+		t.Fatalf("expected connection probe to count as running, got %q", got)
+	}
+	if !scheduledActiveStatus(scheduledStatusEstablishingConnection) {
+		t.Fatal("expected connection probe status to remain active")
+	}
+}
+
+func TestScheduledConnectionProbeUsesSixtySecondWindow(t *testing.T) {
+	if scheduledConnectionProbeTimeoutSeconds != 60 {
+		t.Fatalf("expected 60-second readiness window, got %d", scheduledConnectionProbeTimeoutSeconds)
+	}
+	row := scheduledRunRow{
+		Status:    sqlNullString(scheduledStatusEstablishingConnection),
+		UpdatedAt: sqlNullInt(1_700_000_000),
+	}
+	payload := scheduledRunPayload(row)
+	if got := coerceInt64(payload["connection_probe_deadline_ts"]); got != 1_700_000_060 {
+		t.Fatalf("unexpected persisted connection deadline %d", got)
+	}
+}
+
 func sqlNullString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: true}
 }

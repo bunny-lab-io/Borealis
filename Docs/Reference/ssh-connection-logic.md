@@ -54,6 +54,7 @@ Combined inventory is fallback-only and should not be normal output when probes 
 - Remote temp defaults to `/tmp/.ansible-borealis`.
 - SSH transfer defaults to `scp` with `-O`.
 - Each site worker runs at most two Ansible controller processes by default. Additional individual runs wait for controller capacity.
+- Scheduled SSH and WinRM admission waits up to 60 seconds for WireGuard and target-port readiness before skipping unavailable targets.
 
 ## Failure Reading
 

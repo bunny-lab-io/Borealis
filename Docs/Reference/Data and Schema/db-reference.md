@@ -850,6 +850,7 @@ finally:
     - Notes:
     - Zero-target occurrences are stored as `status = Skipped` with `skip_reason = no_devices_targeted`.
     - Shared Ansible rows leave `target_hostname` empty and use `shared_execution = 1`.
+    - SSH/WinRM Ansible rows temporarily use `status = Establishing Connection`; `updated_at` records probe start and API exposes deadline by adding configured 60-second readiness window.
     - Patch install rows use `component_kind = patch_install`, store the KB/title display name in `component_name`, and keep per-device state in normal run target/activity tables.
 
     #### `scheduled_job_run_activity`
@@ -919,6 +920,7 @@ finally:
     - Notes:
     - Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
     - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
+    - SSH/WinRM readiness probes temporarily store `resolution_status = establishing_connection`; terminal admission replaces it with `eligible`, `skipped`, or `unresolved`.
     - Patch install rows store one frozen device target per endpoint so operators can see install success, failure, timeout, and skipped/offline state in Scheduled Job history.
 
     #### `job_scheduler_work_items`

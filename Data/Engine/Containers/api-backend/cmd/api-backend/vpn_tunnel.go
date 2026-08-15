@@ -584,7 +584,7 @@ func (s *vpnTunnelService) waitForSessionsReady(agentIDs []string, requiredPorts
 		requested = append(requested, agentID)
 	}
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = 45
+		timeoutSeconds = float64(scheduledConnectionProbeTimeoutSeconds)
 	}
 	if pollIntervalSeconds <= 0 {
 		pollIntervalSeconds = 0.5
