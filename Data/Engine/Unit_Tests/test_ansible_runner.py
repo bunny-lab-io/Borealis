@@ -12,6 +12,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import types
 
@@ -115,6 +116,50 @@ def test_runner_normalizes_staged_ssh_private_key_runtime_file(tmp_path: Path) -
     assert "\r" not in staged
     assert staged == "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----\n"
     assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+
+
+def test_runner_bounds_concurrent_controller_processes(monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY", "2")
+    runner = EngineAnsibleRunner(socketio=_DummySocketIO(), db_conn_factory=lambda: sqlite3.connect(":memory:"))
+    state_lock = threading.Lock()
+    release = threading.Event()
+    first_batch_started = threading.Event()
+    all_finished = threading.Event()
+    state = {"active": 0, "started": 0, "finished": 0, "max_active": 0}
+
+    def fake_run_playbook(**_kwargs) -> None:
+        with state_lock:
+            state["active"] += 1
+            state["started"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            if state["started"] == 2:
+                first_batch_started.set()
+        release.wait(timeout=2)
+        with state_lock:
+            state["active"] -= 1
+            state["finished"] += 1
+            if state["finished"] == 3:
+                all_finished.set()
+
+    monkeypatch.setattr(runner, "_run_playbook", fake_run_playbook)
+    for index in range(3):
+        runner.queue_run(
+            hostname=f"host-{index}",
+            playbook_rel_path="Ansible_Playbooks/test.yml",
+            playbook_name="Concurrency Test",
+        )
+
+    assert first_batch_started.wait(timeout=1)
+    time.sleep(0.05)
+    with state_lock:
+        assert state["started"] == 2
+        assert state["max_active"] == 2
+
+    release.set()
+    assert all_finished.wait(timeout=1)
+    with state_lock:
+        assert state["started"] == 3
+        assert state["max_active"] == 2
 
 
 def test_ansible_collections_stage_and_install_missing_collections(tmp_path: Path, monkeypatch) -> None:

@@ -31,6 +31,8 @@ New Ansible jobs default to individual execution so each target gets separate st
 
 The Site Worker Scheduled Tasks value limits active scheduled work items, not raw devices. Shared Ansible mode uses one work-item slot for a site batch and lets Ansible process the hosts inside that batch. Individual mode uses one work-item slot per target while active.
 
+Each site worker launches at most two Ansible controller processes by default. Extra individual runs wait inside worker instead of exhausting K3s worker memory. Set `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` before Engine deployment only when worker memory sizing supports higher parallelism.
+
 ## Read Recap
 
 Run history shows target status and StdOut/StdErr. Playbook recap data captures Ansible results per host or run component.
@@ -71,3 +73,5 @@ SSH credentials may include password, private key, become method, and become pas
     - Legacy Ansible runner limit endpoints remain API-compatible but scheduler dispatch no longer uses them as active gates.
     - Site-worker scheduled-lane capacity is the active work-item claim limit. Profile values are `5`, `8`, `12`, or `16` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
     - Borealis does not currently pass `--forks` to Ansible. Shared batches use Ansible's default internal host fan-out inside the single claimed work item.
+    - `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` defaults to `2` and bounds simultaneous `ansible-playbook` controller processes per site-worker pod. This limit is separate from scheduled-lane work-item capacity.
+    - VPN preparation receives a 45-second readiness window. Scheduler internal HTTP requests use their operation-specific context deadline instead of shorter shared-client timeout.

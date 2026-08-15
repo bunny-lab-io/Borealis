@@ -2226,7 +2226,17 @@ func (m *goSchedulerManager) internalJSON(ctx context.Context, method string, pa
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := m.httpClient.Do(req)
+	client := m.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	} else if client.Timeout > 0 && client.Timeout < timeout {
+		// Request context owns this operation's deadline. A shorter shared-client
+		// timeout previously cut the 45-second VPN readiness wait off at 30 seconds.
+		requestClient := *client
+		requestClient.Timeout = 0
+		client = &requestClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -53,6 +53,7 @@ Combined inventory is fallback-only and should not be normal output when probes 
 - Host key checking is disabled because targets use ephemeral WireGuard peer IPs.
 - Remote temp defaults to `/tmp/.ansible-borealis`.
 - SSH transfer defaults to `scp` with `-O`.
+- Each site worker runs at most two Ansible controller processes by default. Additional individual runs wait for controller capacity.
 
 ## Failure Reading
 

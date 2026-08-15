@@ -57,6 +57,8 @@ The Engine container deployment system auto-detects host CPU and RAM specs on ev
 
 Site-worker memory is per active worker. If 500 workers are active at once, aggregate memory pressure is roughly `500 x site-worker cap` plus Engine service overhead. Tune active worker concurrency and per-worker caps together before scaling large environments.
 
+Scheduled task slots control claimed work items. Ansible controller concurrency has separate `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` limit and defaults to `2` per site worker so individual playbooks cannot consume worker memory for every claimed slot at once.
+
 === "Homelab"
     | Setting | Default |
     | --- | ---: |
