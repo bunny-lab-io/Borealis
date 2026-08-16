@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,20 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 	}
 	if got := manager.configPathForPlatform(); got != filepath.Join(manager.baseDir, "wireguard.conf") {
 		t.Fatalf("unexpected config path: %s", got)
+	}
+}
+
+func TestBuildSessionAcceptsEngineProvidedFallbackEndpoint(t *testing.T) {
+	manager := testManager(t)
+	payload := testPayload(time.Now().Add(time.Hour).Unix())
+	payload["fallback_endpoint"] = "192.168.3.252:30000"
+
+	session, err := manager.buildSession(payload)
+	if err != nil {
+		t.Fatalf("buildSession returned error: %v", err)
+	}
+	if session.FallbackEndpoint != "192.168.3.252:30000" {
+		t.Fatalf("unexpected fallback endpoint: %s", session.FallbackEndpoint)
 	}
 }
 
@@ -455,6 +470,15 @@ func TestLinuxStartSessionUsesServerIPFallbackWhenWireGuardCannotResolveEndpoint
 			}
 			return commandResult{ExitCode: 1, Stderr: "unexpected endpoint"}, nil
 		}
+		if name == "wg" && len(args) == 3 && args[2] == "latest-handshakes" {
+			configBytes, err := os.ReadFile(manager.configPathForPlatform())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(configBytes), "Endpoint = 192.168.3.251:30000") {
+				return commandResult{ExitCode: 0, Stdout: "server-public " + strconv.FormatInt(time.Now().Unix(), 10)}, nil
+			}
+		}
 		return commandResult{ExitCode: 0}, nil
 	}
 
@@ -476,6 +500,50 @@ func TestLinuxStartSessionUsesServerIPFallbackWhenWireGuardCannotResolveEndpoint
 	expected := []string{"Endpoint = borealis.example.com:30000", "Endpoint = 192.168.3.251:30000"}
 	if strings.Join(wgUpEndpoints, "|") != strings.Join(expected, "|") {
 		t.Fatalf("unexpected wg-quick endpoint attempts: %#v", wgUpEndpoints)
+	}
+}
+
+func TestLinuxStartSessionFallsBackWhenPrimaryEndpointNeverHandshakes(t *testing.T) {
+	manager := testManager(t)
+	payload := testPayload(time.Now().Add(time.Hour).Unix())
+	payload["fallback_endpoint"] = "192.168.3.252:30000"
+	session, err := manager.buildSession(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wgUpEndpoints []string
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "wg-quick" && len(args) > 0 && args[0] == "up" {
+			configBytes, readErr := os.ReadFile(manager.configPathForPlatform())
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			wgUpEndpoints = append(wgUpEndpoints, endpointLine(string(configBytes)))
+		}
+		if name == "wg" && len(args) == 3 && args[2] == "latest-handshakes" {
+			configBytes, readErr := os.ReadFile(manager.configPathForPlatform())
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if strings.Contains(string(configBytes), "Endpoint = 192.168.3.252:30000") {
+				return commandResult{ExitCode: 0, Stdout: "server-public " + strconv.FormatInt(time.Now().Unix(), 10)}, nil
+			}
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	if err := manager.startSession(ctx, session); err != nil {
+		t.Fatalf("startSession returned error: %v", err)
+	}
+
+	expected := []string{"Endpoint = borealis.example.com:30000", "Endpoint = 192.168.3.252:30000"}
+	if strings.Join(wgUpEndpoints, "|") != strings.Join(expected, "|") {
+		t.Fatalf("unexpected wg-quick endpoint attempts: %#v", wgUpEndpoints)
+	}
+	if manager.lastAppliedEndpoint != "192.168.3.252:30000" {
+		t.Fatalf("unexpected applied endpoint: %s", manager.lastAppliedEndpoint)
 	}
 }
 
@@ -502,6 +570,9 @@ func TestNotifyReadyPostsPayloadAndReportsStatus(t *testing.T) {
 	}
 	manager.session = session
 	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "wg" && len(args) == 3 && args[2] == "latest-handshakes" {
+			return commandResult{ExitCode: 0, Stdout: "server-public " + strconv.FormatInt(time.Now().Unix(), 10)}, nil
+		}
 		if name == "wg" {
 			return commandResult{ExitCode: 0, Stdout: "interface: wireguard"}, nil
 		}
@@ -527,6 +598,46 @@ func TestNotifyReadyPostsPayloadAndReportsStatus(t *testing.T) {
 	}
 	if len(statusPhases) != 1 || statusPhases[0] != "wireguard_online:complete" {
 		t.Fatalf("unexpected status phases: %#v", statusPhases)
+	}
+}
+
+func TestHealthRequiresFreshLinuxPeerHandshake(t *testing.T) {
+	manager := testManager(t)
+	session, err := manager.buildSession(testPayload(time.Now().Add(time.Hour).Unix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.session = session
+	manager.loopRunning = true
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "wg" && len(args) == 2 && args[0] == "show" {
+			return commandResult{ExitCode: 0, Stdout: "interface: wireguard"}, nil
+		}
+		if name == "wg" && len(args) == 3 && args[2] == "latest-handshakes" {
+			return commandResult{ExitCode: 0, Stdout: "server-public 0"}, nil
+		}
+		return commandResult{ExitCode: 1}, nil
+	}
+
+	health := manager.Health()
+	if health.StatusCode != "recovering" {
+		t.Fatalf("expected recovering health without handshake, got %#v", health)
+	}
+	if !strings.Contains(strings.ToLower(health.Detail), "awaiting peer handshake") {
+		t.Fatalf("unexpected health detail: %s", health.Detail)
+	}
+	if health.Details["last_handshake_at"] != "0" {
+		t.Fatalf("unexpected handshake detail: %#v", health.Details)
+	}
+}
+
+func TestWireGuardHandshakeFreshnessAllowsNormalRekeyWindow(t *testing.T) {
+	now := time.Now().Unix()
+	if !wireGuardHandshakeFresh(now-int64((handshakeFreshness-time.Second)/time.Second), now) {
+		t.Fatal("expected handshake inside freshness window")
+	}
+	if wireGuardHandshakeFresh(now-int64((handshakeFreshness+time.Second)/time.Second), now) {
+		t.Fatal("expected handshake beyond freshness window to be stale")
 	}
 }
 

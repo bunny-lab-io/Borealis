@@ -3,6 +3,7 @@ import {
   connectionProbeStatusLabel,
   JOB_STATUS_COLUMN_MIN_WIDTH,
   STATUS_PILL_LAYOUT_SX,
+  statusPillTextTransform,
 } from "@/Scheduling/Create_Job.jsx";
 
 describe("scheduled job connection probe status", () => {
@@ -10,11 +11,11 @@ describe("scheduled job connection probe status", () => {
     const deadlineTs = 1_700_000_060;
 
     expect(connectionProbeStatusLabel("Establishing Connection", deadlineTs, 1_700_000_000_000))
-      .toBe("Establishing Connection (60s)");
+      .toBe("Establishing Connection - 60s Remaining");
     expect(connectionProbeStatusLabel("Establishing Connection", deadlineTs, 1_700_000_029_100))
-      .toBe("Establishing Connection (31s)");
+      .toBe("Establishing Connection - 31s Remaining");
     expect(connectionProbeStatusLabel("Establishing Connection", deadlineTs, 1_700_000_060_000))
-      .toBe("Establishing Connection (0s)");
+      .toBe("Establishing Connection - 0s Remaining");
   });
 
   it("does not replace unrelated job statuses", () => {
@@ -27,6 +28,8 @@ describe("scheduled job connection probe status", () => {
       whiteSpace: "nowrap",
       flexShrink: 0,
     });
-    expect(JOB_STATUS_COLUMN_MIN_WIDTH).toBeGreaterThanOrEqual(270);
+    expect(JOB_STATUS_COLUMN_MIN_WIDTH).toBeGreaterThanOrEqual(340);
+    expect(statusPillTextTransform(true)).toBe("none");
+    expect(statusPillTextTransform(false)).toBe("uppercase");
   });
 });

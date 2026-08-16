@@ -14,7 +14,7 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Choose an Engine FQDN before deployment. Agents and browsers must use this FQDN, not a raw IP address.
     - Choose one Engine network mode before deployment and keep using that network mode on redeploys.
     - Public network mode needs public DNS and an email address for Let's Encrypt certificate registration (e.g. `infrastructure@bunny-lab.io`).
-    - Local network mode should use private DNS when possible. Agent install commands also carry an Engine IP fallback so agents without private DNS can still connect while validating the Engine FQDN.
+    - Local network mode should use private DNS when possible. Agent install commands also carry an Engine IP fallback so agents without private DNS can still connect while validating the Engine FQDN. Every deployment mode records the Engine host IP for authenticated Linux WireGuard session recovery when a public endpoint cannot hairpin back to the same host.
 
     **Firewall Preparation**:
 
@@ -340,7 +340,7 @@ After deployment finishes:
     - Public mode maps to legacy `externally-accessible`, uses ACME/Let's Encrypt, and prompts for optional outer reverse-proxy trusted IPs only when interactive.
     - Local mode maps to legacy `internal-only`, disables ACME, skips outer reverse-proxy prompts, and generates a Borealis local CA plus DNS-only Engine leaf certificate under `Engine/Services/traefik-edge/state/local-ca/` and `Engine/Services/traefik-edge/state/local-certs/`.
     - Local-mode CA/cert material is included in Backup/Restore. Keep the same FQDN when migrating a live Local Engine so existing agents and browsers keep trusting the restored service.
-    - Agents must use the HTTPS FQDN and rely on CA + hostname validation. Local-mode installs can persist `server_ip_fallback` in `agent.json`; this changes REST/Socket.IO TCP dial targets only after normal FQDN connection fails. The Linux WireGuard role first writes the Engine-provided FQDN endpoint, then rewrites the local WireGuard endpoint to `server_ip_fallback:<port>` only when `wg-quick up` fails because the endpoint name cannot resolve.
+    - Agents must use the HTTPS FQDN and rely on CA + hostname validation. Local-mode installs can persist `server_ip_fallback` in `agent.json`; this changes REST/Socket.IO TCP dial targets only after normal FQDN connection fails. For Linux WireGuard, every Engine mode sends the detected Engine host IP as a secondary endpoint inside the device-authenticated tunnel session. Agent tries public/local FQDN first, waits for a fresh peer handshake, then tries host IP when DNS fails or FQDN path produces no handshake. This handles agents running on same host that owns public UDP forwarding without exposing host IP in public-mode install commands.
     - The Python Engine is not a direct public TLS endpoint in production.
 
     ### Agent install and enrollment notes

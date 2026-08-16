@@ -889,6 +889,7 @@ func (session *vpnSession) payload(includeToken bool) map[string]any {
 	}
 	engineAddr := strings.Split(engineIP, "/")[0]
 	port := parseIntDefault(os.Getenv("BOREALIS_PUBLIC_WIREGUARD_PORT"), parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_PORT"), defaultWireGuardPort))
+	fallbackEndpoint := wireGuardEngineFallbackEndpoint(endpointHost, port)
 	payload := map[string]any{
 		"tunnel_id":           session.TunnelID,
 		"agent_id":            session.AgentID,
@@ -896,6 +897,7 @@ func (session *vpnSession) payload(includeToken bool) map[string]any {
 		"engine_virtual_ip":   engineAddr,
 		"allowed_ips":         engineAddr + "/32",
 		"endpoint":            endpointHost + ":" + strconv.Itoa(port),
+		"fallback_endpoint":   fallbackEndpoint,
 		"server_public_key":   cleanText(os.Getenv("BOREALIS_WIREGUARD_SERVER_PUBLIC_KEY")),
 		"client_public_key":   session.ClientPublicKey,
 		"client_private_key":  session.ClientPrivateKey,
@@ -907,6 +909,18 @@ func (session *vpnSession) payload(includeToken bool) map[string]any {
 		payload["token"] = session.Token
 	}
 	return payload
+}
+
+func wireGuardEngineFallbackEndpoint(primaryHost string, port int) string {
+	fallbackIP := overviewEngineIPFallback()
+	if fallbackIP == "" || port < 1 || port > 65535 {
+		return ""
+	}
+	normalizedPrimary := strings.Trim(strings.TrimSpace(primaryHost), "[]")
+	if parsed := net.ParseIP(normalizedPrimary); parsed != nil && parsed.String() == fallbackIP {
+		return ""
+	}
+	return net.JoinHostPort(fallbackIP, strconv.Itoa(port))
 }
 
 func (session *vpnSession) summary() map[string]any {

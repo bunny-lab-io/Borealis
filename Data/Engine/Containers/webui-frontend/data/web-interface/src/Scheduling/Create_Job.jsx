@@ -390,7 +390,7 @@ const GRID_PANEL_SX = {
   ...GRID_STYLE_BASE,
 };
 
-export const JOB_STATUS_COLUMN_MIN_WIDTH = 270;
+export const JOB_STATUS_COLUMN_MIN_WIDTH = 340;
 export const STATUS_PILL_LAYOUT_SX = Object.freeze({
   whiteSpace: "nowrap",
   flexShrink: 0,
@@ -587,8 +587,10 @@ export const connectionProbeStatusLabel = (status, deadlineTs, nowMs) => {
   const deadline = Number(deadlineTs || 0);
   if (!Number.isFinite(deadline) || deadline <= 0) return JOB_RESULT_THEME.establishing_connection.label;
   const remainingSeconds = Math.max(0, Math.ceil(deadline - Number(nowMs || Date.now()) / 1000));
-  return `Establishing Connection (${remainingSeconds}s)`;
+  return `Establishing Connection - ${remainingSeconds}s Remaining`;
 };
+
+export const statusPillTextTransform = (preserveCase = false) => (preserveCase ? "none" : "uppercase");
 
 const isWorkflowComponentRecord = (component) => {
   const typeRaw = String(
@@ -654,7 +656,7 @@ const componentExecutionDomain = (component) => {
   return "";
 };
 
-const StatusPill = ({ label, theme }) => {
+const StatusPill = ({ label, theme, preserveCase = false }) => {
   if (!label) return null;
   const pillTheme = theme || JOB_RESULT_THEME.default;
   return (
@@ -673,7 +675,7 @@ const StatusPill = ({ label, theme }) => {
         fontWeight: 600,
         fontSize: "12px",
         letterSpacing: 0.35,
-        textTransform: "uppercase",
+        textTransform: statusPillTextTransform(preserveCase),
         lineHeight: 1,
         fontFamily: gridFontFamily,
         ...STATUS_PILL_LAYOUT_SX,
@@ -3420,7 +3422,7 @@ export default function CreateJob() {
     const key = normalizeJobStatusKey(status);
     const theme = JOB_RESULT_THEME[key] || JOB_RESULT_THEME.default;
     const label = displayLabel || JOB_RESULT_THEME[key]?.label || status || "Status";
-    const pill = <StatusPill label={label} theme={theme} />;
+    const pill = <StatusPill label={label} theme={theme} preserveCase={key === "establishing_connection"} />;
     if (!tooltip) return pill;
     return (
       <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}>

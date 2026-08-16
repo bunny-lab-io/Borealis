@@ -19,7 +19,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/registry_management` - SYSTEM Windows registry browse, key create/rename/delete, value create/update/delete, and unsupported status on non-Windows agents.
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
-- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply with missing-tool recovery, and `/api/agent/vpn/ready` reporting.
+- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply with missing-tool and endpoint-path recovery, handshake-aware health, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
 - `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
@@ -41,6 +41,8 @@ Linux agents require the `wireguard-tools` package for `wg` and `wg-quick`. When
 
 If the configured repository is unavailable or excludes `wireguard-tools`, the WireGuard role remains `Recovering` and reports the package-manager error. Automatic install attempts are limited to once every 15 minutes. A manual package install is detected on the next ensure cycle without waiting for that cooldown.
 
+Linux WireGuard health requires a recent peer handshake; an active interface alone is not Healthy. Agent tries Engine FQDN endpoint first. When that interface produces no handshake, Agent tries private Engine host endpoint supplied by authenticated tunnel session. This supports Engine-hosted devices that cannot reach UDP forwarding through their own public address. Agent restores primary configuration and reports recovery error if neither path handshakes.
+
 ## Agent CLI Flags
 
 Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Agent` command-line arguments, including install and re-deploy inputs, metadata field get/set, update checks, service repair/removal, watchdog checks, validation, and internal helper modes.
@@ -58,7 +60,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
     - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
     - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
-    - `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply.
+    - `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply and, on Linux, fresh peer handshake.
     - `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise VNC readiness and reconcile always-on VNC state without returning the VNC password.
     - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one Engine-staged upload item for the File Management role.
     - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.
@@ -95,7 +97,8 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
 
     ### Networking and authentication
     - All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.
-    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. Windows and Linux REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname. Linux WireGuard setup first applies the Engine FQDN endpoint, then rewrites only the local WireGuard endpoint to `server_ip_fallback:<port>` when `wg-quick up` fails because DNS cannot resolve the Engine FQDN.
+    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. Windows and Linux REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname.
+    - Engine `/api/agent/vpn/ensure` responses can include `fallback_endpoint` for Linux WireGuard in every network mode. Agent validates it as a non-loopback IP using same UDP port as primary endpoint. It applies primary endpoint first, waits up to eight seconds for fresh handshake, then applies fallback. Readiness reporting, live-session reuse, and Healthy role status require recent Linux peer handshake; interface presence alone is insufficient.
     - `EnsureAuthenticated` handles identity generation, enrollment, approval polling, and token refresh.
     - During disaster-recovery restore, an already-enrolled Agent may temporarily reach a blank Engine before the backup import restores device trust. `invalid_refresh_token` and `device_not_found` refresh responses are treated as recoverable in that window, so the Agent preserves its existing refresh token and retries. Explicit revoke, purge, token expiry, fingerprint mismatch, and token-version mismatch still clear local token state.
     - Socket.IO is used by the SYSTEM runtime for:
@@ -170,7 +173,8 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
       - Verify signatures with `signature_utils` logs.
     - If VPN fails:
       - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
-      - Ensure the Engine has an active tunnel session and the WireGuard service is running.
+      - Check `last_handshake_at`, `handshake_age_seconds`, `endpoint`, and optional `applied_endpoint` in WireGuard role health.
+      - Ensure Engine peer shows recent handshake and traffic. `running status: RUNNING` without handshake remains `Recovering` on Linux.
     - If VNC fails:
       - Check `Logs/WireGuard/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
       - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.

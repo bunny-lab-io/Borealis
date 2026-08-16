@@ -7577,10 +7577,7 @@ detect_engine_ip_fallback() {
 
 resolve_engine_ip_fallback() {
   local engine_profile="$1"
-  [[ "$(normalize_engine_deployment_profile "${engine_profile}")" == "internal-only" ]] || {
-    printf '%s\n' ""
-    return 0
-  }
+  normalize_engine_deployment_profile "${engine_profile}" >/dev/null
   local configured="${BOREALIS_ENGINE_IP_FALLBACK:-$(read_env_value BOREALIS_ENGINE_IP_FALLBACK)}"
   if [[ -n "${configured}" ]]; then
     normalize_engine_ip_fallback "${configured}" || die "BOREALIS_ENGINE_IP_FALLBACK must be a bare non-loopback IP address."

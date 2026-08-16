@@ -42,3 +42,13 @@ def test_agent_binary_redeploy_has_precommit_rollback() -> None:
     assert 'delete "pod/${candidate}"' in recovery
     assert "--ignore-not-found=true --wait=true --timeout=90s" in recovery
     assert 'scale deployment/job-scheduler --replicas=1' in recovery
+
+
+def test_engine_ip_fallback_is_resolved_for_every_network_mode() -> None:
+    source = _engine_source()
+    function = source.split("resolve_engine_ip_fallback() {", 1)[1].split("\nvalidate_engine_fqdn() {", 1)[0]
+
+    assert 'normalize_engine_deployment_profile "${engine_profile}" >/dev/null' in function
+    assert '== "internal-only"' not in function
+    assert "detect_engine_ip_fallback" in function
+    assert "BOREALIS_ENGINE_IP_FALLBACK=${engine_ip_fallback}" in source
