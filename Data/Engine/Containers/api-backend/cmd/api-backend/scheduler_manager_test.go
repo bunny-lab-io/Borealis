@@ -633,6 +633,26 @@ func TestSchedulerManagerCallsSiteWorkerHostService(t *testing.T) {
 	}
 }
 
+func TestSchedulerInternalJSONHonorsRequestTimeoutBeyondSharedClientTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready"})
+	}))
+	defer server.Close()
+
+	manager := &goSchedulerManager{
+		apiBase:    server.URL,
+		httpClient: &http.Client{Timeout: 10 * time.Millisecond},
+	}
+	payload, err := manager.internalJSON(context.Background(), http.MethodGet, "/vpn-ready", nil, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("internal request should honor request timeout: %v", err)
+	}
+	if cleanText(payload["status"]) != "ready" {
+		t.Fatalf("unexpected response %#v", payload)
+	}
+}
+
 func TestSchedulerManagerAgentMaintenanceErrorText(t *testing.T) {
 	got := schedulerAgentMaintenanceError("LAB-01", "no_response", nil)
 	if !strings.Contains(got, "did not acknowledge") {

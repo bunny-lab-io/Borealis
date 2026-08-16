@@ -500,7 +500,7 @@ finally:
     #### `devices`
     - Status: Active (core inventory and identity table).
     - Purpose: Canonical device identity and inventory snapshot.
-    - Columns: `guid`, `hostname`, `description`, `created_at`, `last_enrollment_at`, `agent_hash`, `agent_role_health`, `memory`, `network`, `software`, `services`, `storage`, `cpu`, `sessions`, `processes`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `cpu_percent`, `memory_percent`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_release_channel_override`, `agent_release_channel`, `agent_branch`, `agent_update_channel`, `agent_update_target_build_id`, `agent_update_state`, `agent_update_error`, `agent_update_source`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
+    - Columns: `guid`, `hostname`, `description`, `created_at`, `last_enrollment_at`, `agent_hash`, `agent_role_health`, `memory`, `network`, `software`, `services`, `storage`, `cpu`, `sessions`, `processes`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `cpu_percent`, `memory_percent`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_update_target_build_id`, `agent_update_state`, `agent_update_error`, `agent_update_source`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
     - Constraints and indexes:
     - `guid` primary key.
     - `uq_devices_hostname` unique on `hostname`.
@@ -516,6 +516,7 @@ finally:
     - Notes:
     - Fingerprint change increments `token_version` and revokes active refresh tokens.
     - `status` supports revocation states used by auth and token refresh checks.
+    - Schema migration rebuilds this table to remove retired Agent source fields (`agent_release_channel_override`, `agent_release_channel`, `agent_branch`, and `agent_update_channel`) while preserving remaining device data.
 
     #### `device_keys`
     - Status: Active.
@@ -831,8 +832,8 @@ finally:
     - Scheduler background loop.
     - Notes:
     - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
-    - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment. `job_kind = agent_maintenance` records on-demand Agent update and branch/channel switch requests. `job_kind = patch_install` records ad-hoc Windows patch install jobs created from Patch Management.
-    - Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Inline `#` comments remain in these saved JSON entries and are stripped only when runtime parsing expands the target list. New onboarding target rows preserve the raw matching scope entry in `target_input` so comments such as `10.0.0.56 # LAB-AIO-01` can help correlate pending approvals back to the summary row. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
+    - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment. `job_kind = agent_maintenance` records on-demand Agent update requests. `job_kind = patch_install` records ad-hoc Windows patch install jobs created from Patch Management.
+    - Onboarding jobs store discovery entries and exclusion entries inside JSON `targets_json` `onboarding_scope` record. Inline `#` comments remain in saved JSON entries and are stripped only when runtime parsing expands target list. New onboarding target rows preserve raw matching scope entry in `target_input` so comments such as `10.0.0.56 # LAB-AIO-01` can help correlate pending approvals back to summary row. Target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
     #### `scheduled_job_runs`
     - Status: Active.
@@ -849,6 +850,7 @@ finally:
     - Notes:
     - Zero-target occurrences are stored as `status = Skipped` with `skip_reason = no_devices_targeted`.
     - Shared Ansible rows leave `target_hostname` empty and use `shared_execution = 1`.
+    - SSH/WinRM Ansible rows temporarily use `status = Establishing Connection`; `updated_at` records probe start and API exposes deadline by adding configured 60-second readiness window.
     - Patch install rows use `component_kind = patch_install`, store the KB/title display name in `component_name`, and keep per-device state in normal run target/activity tables.
 
     #### `scheduled_job_run_activity`
@@ -918,6 +920,7 @@ finally:
     - Notes:
     - Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
     - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
+    - SSH/WinRM readiness probes temporarily store `resolution_status = establishing_connection`; terminal admission replaces it with `eligible`, `skipped`, or `unresolved`.
     - Patch install rows store one frozen device target per endpoint so operators can see install success, failure, timeout, and skipped/offline state in Scheduled Job history.
 
     #### `job_scheduler_work_items`
@@ -942,6 +945,7 @@ finally:
     - Task-scheduler worker reconciliation.
     - Notes:
     - Docker-backed worker container names use random UUIDs (`site-worker-<uuid>`). K3s bridge worker pod names use deterministic site slugs (`site-worker-<sanitized-site-name>`), while `worker_guid` remains the stable worker identity for route records, labels, and lifecycle reconciliation.
+    - Site-worker heartbeat and shutdown writes fence on `container_name` as worker incarnation. Delayed exit from replaced Pod cannot stop newer row with same stable `worker_guid`; active replacement heartbeat also restores route status if legacy worker cleanup retired it during first cutover onto incarnation-aware image.
     - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 300 seconds), and `/api/server/workers?history_seconds=300` hides old terminal rows even if legacy rows lack `stopped_at`.
 
     #### `job_scheduler_worker_routes`

@@ -24,7 +24,6 @@ import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
 import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
-import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
 import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
@@ -152,12 +151,6 @@ export function validateSiteWorkerSiteName(siteName, sites = [], excludeSiteId =
 function siteMutationErrorMessage(payload, fallback) {
   return String(payload?.message || payload?.error || fallback || "Site update failed.");
 }
-const DEFAULT_INSTALL_BRANCH = "main";
-const INSTALL_SOURCE_ENGINE = "engine";
-const INSTALL_SOURCE_GITHUB = "github";
-const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
-const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
-const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads";
 const BOREALIS_LINK_COLOR = "#58a6ff";
 const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
 const INSTALL_LINK_PLATFORM_OPTIONS = [
@@ -1268,7 +1261,6 @@ export async function loadSiteListPageData(request) {
       installServerUrl,
       installEngineCA,
       installServerIPFallback,
-      agentBinarySource: normalizeInstallSource(data?.agent_binary_source),
       agentInstallArtifact: data?.agent_install_artifact || null,
       initialError: "",
     };
@@ -1280,7 +1272,6 @@ export async function loadSiteListPageData(request) {
       installServerUrl: "",
       installEngineCA: null,
       installServerIPFallback: "",
-      agentBinarySource: INSTALL_SOURCE_ENGINE,
       agentInstallArtifact: null,
       initialError: getRouteErrorMessage(error, "Unable to load sites."),
     };
@@ -1881,36 +1872,6 @@ function escapeShellDoubleQuoted(value) {
   return String(value || "").replace(/(["\\$`])/g, "\\$1");
 }
 
-function normalizeInstallBranch(value) {
-  return String(value || DEFAULT_INSTALL_BRANCH).trim() || DEFAULT_INSTALL_BRANCH;
-}
-
-function normalizeInstallSource(value) {
-  const text = String(value || "").trim().toLowerCase();
-  if (["engine", "engine-compiled", "engine_compiled", "engine-cache", "engine_cached"].includes(text)) {
-    return INSTALL_SOURCE_ENGINE;
-  }
-  return INSTALL_SOURCE_GITHUB;
-}
-
-function formatInstallSource(value) {
-  return normalizeInstallSource(value) === INSTALL_SOURCE_ENGINE
-    ? "Engine-Compiled Agent"
-    : "GitHub Branch";
-}
-
-function rawBorealisFileUrl(branch, fileName) {
-  const encodedBranch = normalizeInstallBranch(branch)
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/");
-  return `${RAW_BOREALIS_BASE_URL}/${encodedBranch}/${fileName}`;
-}
-
-function quoteShellValue(value) {
-  return `"${escapeShellDoubleQuoted(value)}"`;
-}
-
 function quotePowerShellValue(value) {
   return `"${escapePowerShellDoubleQuoted(value)}"`;
 }
@@ -1935,16 +1896,6 @@ function engineInstallDownloadUrl(osId, serverUrl, downloads = {}) {
   if (rawPath.startsWith("/")) {
     const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
     return normalizedServerUrl ? `${normalizedServerUrl}${rawPath}` : "";
-  }
-  return "";
-}
-
-function githubAgentDownloadUrl(osId, branch = DEFAULT_INSTALL_BRANCH) {
-  if (osId === "windows") {
-    return rawBorealisFileUrl(branch, "Data/Agent/dist/windows-amd64/Agent.exe");
-  }
-  if (osId === "linux") {
-    return rawBorealisFileUrl(branch, "Data/Agent/dist/linux-amd64/Agent");
   }
   return "";
 }
@@ -2059,22 +2010,14 @@ function installArtifactID(value) {
   return String(value?.artifact_id || value?.artifact || "").trim();
 }
 
-export function siteInstallLinkStatus(row, site = {}, artifact = null, selectedInstallSource = INSTALL_SOURCE_ENGINE) {
-  const source = normalizeInstallSource(selectedInstallSource);
-  if (source !== INSTALL_SOURCE_ENGINE) {
-    return installLinkStatusTone("outOfDate", "Current drawer source is not the Engine-compiled Agent cache.");
-  }
-
+export function siteInstallLinkStatus(row, site = {}, artifact = null) {
   const buildStatus = String(artifact?.build_status || "").trim().toLowerCase();
   const artifactAvailable = artifact ? Boolean(artifact.available) : true;
   const engineCacheAvailable = artifact?.engine_cache_available !== false;
   const linkStateAvailable = artifact?.link_state_available !== false;
   const buildError = String(artifact?.build_error || artifact?.last_error || "").trim();
   if (buildStatus === "compiling" || (artifact && !engineCacheAvailable && !buildError)) {
-    return installLinkStatusTone("compiling", "Engine is still compiling or validating the stable Agent artifact.");
-  }
-  if (buildStatus === "stale" || artifact?.agent_source_stale) {
-    return installLinkStatusTone("outOfDate", "Engine Agent source changed after this cached Agent artifact was compiled.");
+    return installLinkStatusTone("compiling", "Engine is still compiling or validating current Agent artifact.");
   }
   if (buildStatus === "link_state_unavailable" || !linkStateAvailable) {
     return installLinkStatusTone("outOfDate", "Engine link-state table is unavailable.");
@@ -2100,10 +2043,10 @@ export function siteInstallLinkStatus(row, site = {}, artifact = null, selectedI
     return installLinkStatusTone("sending", "No active site worker has reported ready state for this site.");
   }
 
-  return installLinkStatusTone("upToDate", "Engine stable Agent artifact, active link, and site-worker state agree.");
+  return installLinkStatusTone("upToDate", "Current Engine Agent artifact, active link, and site-worker state agree.");
 }
 
-export function siteInstallLinkGridRows(site, installServerUrl = "", nowSeconds = Math.floor(Date.now() / 1000), artifact = null, selectedInstallSource = INSTALL_SOURCE_ENGINE) {
+export function siteInstallLinkGridRows(site, installServerUrl = "", nowSeconds = Math.floor(Date.now() / 1000), artifact = null) {
   return siteInstallLinkRows(site, nowSeconds).map((row) => {
     const link = row.link || {};
     const urlText = installDownloadUrlForLink(link, installServerUrl);
@@ -2128,7 +2071,7 @@ export function siteInstallLinkGridRows(site, installServerUrl = "", nowSeconds 
       downloadCount: row.downloadCount,
       lastDownloadedAt: row.lastDownloadedAt,
     };
-    gridRow.installStatus = siteInstallLinkStatus(gridRow, site, artifact, selectedInstallSource);
+    gridRow.installStatus = siteInstallLinkStatus(gridRow, site, artifact);
     return gridRow;
   });
 }
@@ -2142,9 +2085,6 @@ export function siteInstallLinkSummary(site, artifact = null, nowSeconds = Math.
     .sort((a, b) => a - b)[0] || 0;
   const linkStateAvailable = artifact?.link_state_available !== false;
   const cacheAvailable = artifact ? Boolean(artifact.available) : true;
-  const sourceStale =
-    artifact?.agent_source_stale ||
-    String(artifact?.build_status || "").trim().toLowerCase() === "stale";
   return {
     rows,
     activeCount: activeRows.length,
@@ -2152,25 +2092,18 @@ export function siteInstallLinkSummary(site, artifact = null, nowSeconds = Math.
     nearestExpiry,
     available: activeRows.length === INSTALL_LINK_PLATFORM_OPTIONS.length,
     warning:
-      sourceStale ||
       !cacheAvailable ||
       !linkStateAvailable ||
       activeRows.length < INSTALL_LINK_PLATFORM_OPTIONS.length,
     cacheAvailable,
     linkStateAvailable,
-    sourceStale,
   };
 }
 
-export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, engineCA = null, serverIPFallback = "", options = {}) {
+export function buildInstallCommand(osId, serverUrl, enrollmentCode, engineCA = null, serverIPFallback = "", options = {}) {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
-  const installSource = normalizeInstallSource(options?.source);
-  const engineDownloadUrl = installSource === INSTALL_SOURCE_ENGINE
-    ? engineInstallDownloadUrl(osId, normalizedServerUrl, options?.downloads)
-    : "";
-  const normalizedBranch = engineDownloadUrl ? DEFAULT_INSTALL_BRANCH : normalizeInstallBranch(branch);
-  const usesDefaultBranch = normalizedBranch === DEFAULT_INSTALL_BRANCH;
+  const engineDownloadUrl = engineInstallDownloadUrl(osId, normalizedServerUrl, options?.downloads);
   const engineCAB64 = installEngineCAB64(engineCA);
   const normalizedServerIPFallback = normalizeInstallServerIPFallback({ server_ip_fallback: serverIPFallback });
   if (!normalizedServerUrl || !normalizedEnrollmentCode) {
@@ -2184,15 +2117,12 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     if (engineCA?.required && !normalizedServerIPFallback) {
       return "";
     }
-    const agentUrl = engineDownloadUrl || rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
+    if (!engineDownloadUrl) return "";
     const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 ${quotePowerShellValue(engineCAB64)}` : "";
     const serverIPFallbackArg = engineCAB64 && normalizedServerIPFallback ? ` --server-ip-fallback ${quotePowerShellValue(normalizedServerIPFallback)}` : "";
-    const releaseArg = engineDownloadUrl ? `--release-channel ${quotePowerShellValue("stable")} ` : "";
     return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
-      `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
+      `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(engineDownloadUrl)} -OutFile $borealisAgent; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
-      releaseArg +
-      `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
       `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}${caArg}${serverIPFallbackArg}`;
   }
 
@@ -2200,16 +2130,12 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
     if (engineCA?.required && !normalizedServerIPFallback) {
       return "";
     }
-    const agentUrl = engineDownloadUrl || rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
-    const urlArg = usesDefaultBranch && !engineDownloadUrl ? agentUrl : quoteShellValue(agentUrl);
+    if (!engineDownloadUrl) return "";
     const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 "${escapeShellDoubleQuoted(engineCAB64)}"` : "";
     const serverIPFallbackArg = engineCAB64 && normalizedServerIPFallback ? ` --server-ip-fallback "${escapeShellDoubleQuoted(normalizedServerIPFallback)}"` : "";
-    const releaseArg = engineDownloadUrl ? `--release-channel "stable" ` : "";
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
-      releaseArg +
-      `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
       `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"${caArg}${serverIPFallbackArg} --install-service`;
-    return `curl -fsSL ${urlArg} -o /tmp/Borealis-Agent; ` +
+    return `curl -fsSL "${escapeShellDoubleQuoted(engineDownloadUrl)}" -o /tmp/Borealis-Agent; ` +
       `chmod 700 /tmp/Borealis-Agent; ` +
       `sudo /tmp/Borealis-Agent ${launchArgs}`;
   }
@@ -2220,8 +2146,7 @@ function InstallLinkAgentTypeCell(params) {
   const row = params?.data || {};
   const copyInstallCommand = params?.context?.copyInstallCommand;
   const openInstallLinkContextMenu = params?.context?.openInstallLinkContextMenu;
-  const selectedInstallSource = normalizeInstallSource(params?.context?.selectedInstallSource);
-  const hasDownloadLink = selectedInstallSource === INSTALL_SOURCE_GITHUB || Boolean(row.url);
+  const hasDownloadLink = Boolean(row.url);
   const installStatus = row.installStatus || (row.active
     ? installLinkStatusTone("upToDate")
     : installLinkStatusTone("outOfDate"));
@@ -2393,8 +2318,7 @@ export function InstallLinksDetailRow(params) {
     site,
     context.installServerUrl || "",
     context.nowSeconds || Math.floor(Date.now() / 1000),
-    context.agentInstallArtifact || null,
-    context.selectedInstallSource
+    context.agentInstallArtifact || null
   );
   const columnDefs = useMemo(() => buildInstallLinkDetailColumnDefs(), []);
   const defaultColDef = useMemo(() => ({
@@ -2606,185 +2530,6 @@ function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
   );
 }
 
-function InstallBranchDialog({
-  open,
-  rows,
-  loading,
-  error,
-  draftBranch,
-  onDraftBranchChange,
-  onRefresh,
-  onCancel,
-  onApply,
-}) {
-  const branchGridRef = useRef(null);
-  const branchGridApiRef = useRef(null);
-  const normalizedDraftBranch = normalizeInstallBranch(draftBranch);
-
-  const selectDraftBranch = useCallback(() => {
-    const api = branchGridApiRef.current || branchGridRef.current?.api;
-    if (!api || typeof api.forEachNode !== "function") return;
-    api.forEachNode((node) => {
-      const name = String(node?.data?.name || "");
-      node.setSelected?.(name === normalizedDraftBranch);
-    });
-  }, [normalizedDraftBranch]);
-
-  useEffect(() => {
-    if (!open) {
-      branchGridApiRef.current = null;
-      return undefined;
-    }
-    const handle = setTimeout(selectDraftBranch, 0);
-    return () => clearTimeout(handle);
-  }, [open, rows, selectDraftBranch]);
-
-  const branchColumnDefs = useMemo(() => [
-    {
-      headerName: "Branch",
-      field: "name",
-      minWidth: 260,
-      flex: 1,
-      cellStyle: {
-        display: "flex",
-        alignItems: "center",
-      },
-      cellRenderer: (params) => (
-        <Typography sx={{ color: "#58a6ff", fontSize: "0.88rem", fontWeight: 600, lineHeight: 1.2 }}>
-          {params.value}
-        </Typography>
-      ),
-    },
-    {
-      headerName: "Commit",
-      field: "sha",
-      minWidth: 130,
-      maxWidth: 150,
-      valueFormatter: (params) => String(params.value || "").slice(0, 12),
-    },
-  ], []);
-
-  const branchDefaultColDef = useMemo(() => ({
-    sortable: true,
-    filter: "agTextColumnFilter",
-    resizable: true,
-  }), []);
-
-  const branchRowSelection = useMemo(
-    () => ({
-      mode: "singleRow",
-      checkboxes: true,
-      headerCheckbox: false,
-      enableClickSelection: true,
-    }),
-    []
-  );
-
-  const branchSelectionColumnDef = useMemo(
-    () => ({
-      headerName: "",
-      minWidth: 52,
-      width: 52,
-      maxWidth: 52,
-      pinned: "left",
-      sortable: false,
-      resizable: false,
-      suppressHeaderMenuButton: true,
-      suppressHeaderContextMenu: true,
-      suppressMovable: true,
-      lockPinned: true,
-      lockPosition: true,
-    }),
-    []
-  );
-
-  return (
-    <Dialog open={open} onClose={onCancel} maxWidth="md" fullWidth PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
-      <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
-            Switch Branch
-          </Typography>
-          <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
-            Selected branch: {normalizedDraftBranch}
-          </Typography>
-        </Box>
-      </DialogTitle>
-      <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
-        {error ? (
-          <Alert severity="error" sx={{ mb: 1.5 }}>
-            {error}
-          </Alert>
-        ) : null}
-        {loading ? (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5, color: MAGIC_UI.textMuted }}>
-            <CircularProgress size={16} color="inherit" />
-            <Typography sx={{ fontSize: "0.84rem", color: "inherit" }}>Loading branches</Typography>
-          </Box>
-        ) : null}
-        <Box
-          className={themeClassName}
-          sx={{
-            height: 440,
-            minHeight: 320,
-            "--ag-font-family": gridFontFamily,
-            "--ag-icon-font-family": iconFontFamily,
-            "& .ag-root-wrapper": {
-              border: `1px solid ${MAGIC_UI.panelBorder}`,
-              borderRadius: 2,
-              background: "rgba(7,12,24,0.82)",
-            },
-            "& .ag-header": {
-              backgroundColor: "rgba(15,23,42,0.9)",
-              borderBottom: "1px solid rgba(148,163,184,0.25)",
-            },
-            "& .ag-row-selected": {
-              backgroundColor: "rgba(125,211,252,0.2) !important",
-              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-            },
-          }}
-        >
-          <AgGridReact
-            ref={branchGridRef}
-            rowData={rows}
-            columnDefs={branchColumnDefs}
-            defaultColDef={branchDefaultColDef}
-            rowSelection={branchRowSelection}
-            selectionColumnDef={branchSelectionColumnDef}
-            suppressCellFocus
-            pagination
-            paginationPageSize={20}
-            paginationPageSizeSelector={[20, 50, 100]}
-            animateRows
-            getRowId={(params) => String(params.data?.name || "")}
-            onGridReady={(params) => {
-              branchGridApiRef.current = params.api;
-              selectDraftBranch();
-            }}
-            onFirstDataRendered={selectDraftBranch}
-            onRowDataUpdated={selectDraftBranch}
-            onSelectionChanged={() => {
-              const api = branchGridApiRef.current || branchGridRef.current?.api;
-              const selected = api?.getSelectedRows?.()?.[0]?.name;
-              if (selected) {
-                onDraftBranchChange(selected);
-              }
-            }}
-            theme={myTheme}
-          />
-        </Box>
-      </DialogContent>
-      <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
-        <Button onClick={onRefresh} disabled={loading} sx={SITE_DIALOG_BUTTON_SX}>Refresh</Button>
-        <Button onClick={onCancel} sx={SITE_DIALOG_BUTTON_SX}>Cancel</Button>
-        <Button onClick={onApply} disabled={!normalizedDraftBranch || loading} sx={SITE_DIALOG_BUTTON_SX}>
-          Apply
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
 const PAGE_TITLE = "Sites";
 const PAGE_SUBTITLE = "Manage sites and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
@@ -2817,13 +2562,6 @@ export default function SiteList() {
   const [autoApprovalSaving, setAutoApprovalSaving] = useState(false);
   const [autoApprovalError, setAutoApprovalError] = useState("");
   const [siteContextMenu, setSiteContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
-  const [selectedInstallSource, setSelectedInstallSource] = useState(INSTALL_SOURCE_ENGINE);
-  const [selectedInstallBranch, setSelectedInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
-  const [draftInstallBranch, setDraftInstallBranch] = useState(DEFAULT_INSTALL_BRANCH);
-  const [branchDialogOpen, setBranchDialogOpen] = useState(false);
-  const [branchRows, setBranchRows] = useState([]);
-  const [branchesLoading, setBranchesLoading] = useState(false);
-  const [branchLoadError, setBranchLoadError] = useState("");
   const [expandedInstallLinksSiteId, setExpandedInstallLinksSiteId] = useState(null);
   const [installLinkContextMenu, setInstallLinkContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const [revokeInstallLinkTarget, setRevokeInstallLinkTarget] = useState(null);
@@ -2980,72 +2718,6 @@ export default function SiteList() {
     }
   }, [fetchInstallMetadataFromOverview]);
 
-  const fetchInstallBranches = useCallback(async () => {
-    setBranchesLoading(true);
-    setBranchLoadError("");
-    try {
-      const tokenRes = await fetch("/api/github/token", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const tokenData = await tokenRes.json().catch(() => ({}));
-      if (!tokenRes.ok) {
-        const message = tokenData?.message || tokenData?.error || `GitHub token lookup failed (HTTP ${tokenRes.status}).`;
-        throw new Error(message);
-      }
-      const githubToken = String(tokenData?.token || "").trim();
-      if (!githubToken) {
-        throw new Error(tokenData?.message || "GitHub API token is unavailable.");
-      }
-
-      const nextRows = [];
-      for (let page = 1; page <= 10; page += 1) {
-        const branchRes = await fetch(`${GITHUB_BRANCHES_API_URL}?per_page=100&page=${page}`, {
-          cache: "no-store",
-          headers: {
-            Accept: "application/vnd.github+json",
-            Authorization: `Bearer ${githubToken}`,
-          },
-        });
-        if (!branchRes.ok) {
-          const body = await branchRes.text().catch(() => "");
-          throw new Error(`GitHub branch lookup failed (HTTP ${branchRes.status})${body ? `: ${body.slice(0, 180)}` : ""}`);
-        }
-        const pageRows = await branchRes.json().catch(() => []);
-        if (!Array.isArray(pageRows)) {
-          throw new Error("GitHub branch lookup returned an unexpected payload.");
-        }
-        pageRows.forEach((branch) => {
-          const name = String(branch?.name || "").trim();
-          if (!name) return;
-          nextRows.push({
-            name,
-            sha: String(branch?.commit?.sha || "").trim(),
-            protected: Boolean(branch?.protected),
-            default: name === DEFAULT_INSTALL_BRANCH,
-          });
-        });
-        if (pageRows.length < 100) {
-          break;
-        }
-      }
-      nextRows.sort((a, b) => {
-        if (a.name === DEFAULT_INSTALL_BRANCH) return -1;
-        if (b.name === DEFAULT_INSTALL_BRANCH) return 1;
-        return a.name.localeCompare(b.name);
-      });
-      setBranchRows(nextRows);
-      if (!nextRows.length) {
-        setBranchLoadError("No GitHub branches returned.");
-      }
-    } catch (error) {
-      setBranchRows([]);
-      setBranchLoadError(error instanceof Error ? error.message : "GitHub branch lookup failed.");
-    } finally {
-      setBranchesLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     setRows(initialRows);
     setSiteWorkerPayload({});
@@ -3057,7 +2729,6 @@ export default function SiteList() {
     setInstallServerUrl(initialInstallServerUrl);
     setInstallEngineCA(initialInstallEngineCA);
     setInstallServerIPFallback(initialInstallServerIPFallback);
-    setSelectedInstallSource(INSTALL_SOURCE_ENGINE);
     setAgentInstallArtifact(initialAgentInstallArtifact);
     setLoadError(String(loaderData?.initialError || ""));
   }, [
@@ -3203,46 +2874,6 @@ export default function SiteList() {
     }
   }, []);
 
-  const handleOpenBranchDialog = useCallback(() => {
-    setDraftInstallBranch(selectedInstallBranch);
-    setBranchDialogOpen(true);
-    void fetchInstallBranches();
-  }, [fetchInstallBranches, selectedInstallBranch]);
-
-  const handleCloseBranchDialog = useCallback(() => {
-    setBranchDialogOpen(false);
-    setDraftInstallBranch(selectedInstallBranch);
-  }, [selectedInstallBranch]);
-
-  const handleApplyInstallBranch = useCallback(async () => {
-    const nextBranch = normalizeInstallBranch(draftInstallBranch);
-    setSelectedInstallBranch(nextBranch);
-    setSelectedInstallSource(INSTALL_SOURCE_GITHUB);
-    setDraftInstallBranch(nextBranch);
-    setBranchDialogOpen(false);
-    await sendNotification({
-      title: "Install Branch Updated",
-      message: `Agent install commands now target <b>${nextBranch}</b>.`,
-      icon: "done",
-      variant: "info",
-    });
-  }, [draftInstallBranch, sendNotification]);
-
-  const handleToggleInstallSource = useCallback(async () => {
-    const nextSource = selectedInstallSource === INSTALL_SOURCE_ENGINE ? INSTALL_SOURCE_GITHUB : INSTALL_SOURCE_ENGINE;
-    setSelectedInstallSource(nextSource);
-    if (nextSource === INSTALL_SOURCE_ENGINE) {
-      setSelectedInstallBranch(DEFAULT_INSTALL_BRANCH);
-      setDraftInstallBranch(DEFAULT_INSTALL_BRANCH);
-    }
-    await sendNotification({
-      title: "Download Source Updated",
-      message: `Agent install commands now use <b>${formatInstallSource(nextSource)}</b>.`,
-      icon: "settings",
-      variant: "info",
-    });
-  }, [selectedInstallSource, sendNotification]);
-
   const handleToggleInstallLinksForSite = useCallback((site) => {
     const siteId = siteIdForRow(site);
     if (!siteId) {
@@ -3255,16 +2886,6 @@ export default function SiteList() {
   const handleCloseInstallLinkContextMenu = useCallback(() => {
     setInstallLinkContextMenu({ open: false, top: 0, left: 0, row: null });
   }, []);
-
-  const handleToggleInstallLinkSource = useCallback(() => {
-    handleCloseInstallLinkContextMenu();
-    void handleToggleInstallSource();
-  }, [handleCloseInstallLinkContextMenu, handleToggleInstallSource]);
-
-  const handleOpenInstallLinkBranchDialog = useCallback(() => {
-    handleCloseInstallLinkContextMenu();
-    handleOpenBranchDialog();
-  }, [handleCloseInstallLinkContextMenu, handleOpenBranchDialog]);
 
   const handleOpenInstallLinkContextMenu = useCallback((event, row) => {
     event?.preventDefault?.();
@@ -3283,16 +2904,13 @@ export default function SiteList() {
   const handleCopyInstallCommand = useCallback(async (site, osId) => {
     const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
     const osLabel = INSTALL_LINK_PLATFORM_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
-    const source = normalizeInstallSource(selectedInstallSource);
     const command = buildInstallCommand(
       osId,
       installServerUrl,
       site?.enrollment_code,
-      selectedInstallBranch,
       installEngineCA,
       installServerIPFallback,
       {
-        source,
         downloads: site?.agent_install_downloads,
       }
     );
@@ -3309,7 +2927,7 @@ export default function SiteList() {
     if (copied) {
       await sendNotification({
         title: "Install Command Copied",
-        message: `<b>${osLabel}</b> ${formatInstallSource(source)} install command for <b>${siteName}</b> copied to clipboard.`,
+        message: `<b>${osLabel}</b> Engine-compiled Agent install command for <b>${siteName}</b> copied to clipboard.`,
         icon: "done",
         variant: "info",
       });
@@ -3321,7 +2939,7 @@ export default function SiteList() {
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, installEngineCA, installServerIPFallback, installServerUrl, selectedInstallBranch, selectedInstallSource, sendNotification]);
+  }, [copyTextToClipboard, installEngineCA, installServerIPFallback, installServerUrl, sendNotification]);
 
   const handleRequestRevokeInstallLink = useCallback((site, platform) => {
     handleCloseInstallLinkContextMenu();
@@ -3382,24 +3000,6 @@ export default function SiteList() {
     const platform = row?.platform || "";
     return [
       {
-        id: "switch-download-source",
-        group: "organize",
-        label: "Switch Download Source",
-        icon: DownloadRoundedIcon,
-        description: selectedInstallSource === INSTALL_SOURCE_ENGINE && !agentInstallArtifact?.available
-          ? `Current: ${formatInstallSource(selectedInstallSource)}. Engine cache unavailable.`
-          : `Current: ${formatInstallSource(selectedInstallSource)}`,
-        onClick: () => handleToggleInstallLinkSource(),
-      },
-      {
-        id: "switch-install-branch",
-        group: "organize",
-        label: "Switch Branch",
-        icon: AltRouteRoundedIcon,
-        description: `Current: ${selectedInstallBranch}.`,
-        onClick: () => handleOpenInstallLinkBranchDialog(),
-      },
-      {
         id: "revoke-installer-link",
         group: "danger",
         label: "Revoke Installer Link",
@@ -3412,13 +3012,8 @@ export default function SiteList() {
       },
     ];
   }, [
-    agentInstallArtifact?.available,
-    handleOpenInstallLinkBranchDialog,
     handleRequestRevokeInstallLink,
-    handleToggleInstallLinkSource,
     installLinkContextRow,
-    selectedInstallBranch,
-    selectedInstallSource,
   ]);
 
   const openRenameDialog = useCallback((siteOverride = null) => {
@@ -3789,11 +3384,10 @@ export default function SiteList() {
       nowSeconds,
       installServerUrl,
       agentInstallArtifact,
-      selectedInstallSource,
       openInstallLinkContextMenu: handleOpenInstallLinkContextMenu,
       copyInstallCommand: handleCopyInstallCommand,
     }),
-    [agentInstallArtifact, handleCopyInstallCommand, handleOpenDevicesForSiteStatus, handleOpenInstallLinkContextMenu, installServerUrl, navigate, nowSeconds, selectedInstallSource]
+    [agentInstallArtifact, handleCopyInstallCommand, handleOpenDevicesForSiteStatus, handleOpenInstallLinkContextMenu, installServerUrl, navigate, nowSeconds]
   );
 
   return (
@@ -4256,17 +3850,6 @@ export default function SiteList() {
         </DialogActions>
       </Dialog>
 
-      <InstallBranchDialog
-        open={branchDialogOpen}
-        rows={branchRows}
-        loading={branchesLoading}
-        error={branchLoadError}
-        draftBranch={draftInstallBranch}
-        onDraftBranchChange={setDraftInstallBranch}
-        onRefresh={() => void fetchInstallBranches()}
-        onCancel={handleCloseBranchDialog}
-        onApply={() => void handleApplyInstallBranch()}
-      />
     </Paper>
   );
 }

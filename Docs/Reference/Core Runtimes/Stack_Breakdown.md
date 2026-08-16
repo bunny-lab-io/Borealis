@@ -284,6 +284,7 @@ Build cache:
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend`, `job-scheduler`, and `borealis-operator` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
 - `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags only when no container still references them.
+- Scoped Agent binary redeployment rebuilds singular Agent ZIP cache and `site-worker` image only. Running API reads updated `agent_artifact.json` and ZIP through fixed hostPath mounts, so API image/restart is not required.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
@@ -394,6 +395,11 @@ Update from a cloned checkout:
 ```sh
 git pull --ff-only
 bash Engine.sh --network-mode local deploy prod
+```
+
+Build and publish current Agent binaries, then replace outdated active site workers:
+```sh
+bash Engine.sh --redeploy-agent-binaries
 ```
 
 Use `deploy dev` instead of `deploy prod` for development Engine stacks. Use `--network-mode public` instead of `local` for public/MSP-friendly Engines.
@@ -654,6 +660,7 @@ bash Engine.sh --network-mode local deploy prod
 - `restart` does not rebuild images.
 - `reload` is currently a K3s Traefik Deployment restart.
 - `reconcile` is currently WireGuard-only.
+- `--redeploy-agent-binaries` pauses scheduler after running work drains, keeps old site-worker Pods live while candidates start, uses stable ClusterIP Service selector for cutover, retains Traefik route files because ClusterIP does not change, then removes old Pods and resumes scheduler on new desired worker image.
 - PostgreSQL is ClusterIP-only inside K3s and does not bind host `127.0.0.1:5432` after Stage 9.
 - K3s WireGuard tunnel pod uses host networking with `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, and `no-new-privileges`. It does not run with full privileged mode.
 

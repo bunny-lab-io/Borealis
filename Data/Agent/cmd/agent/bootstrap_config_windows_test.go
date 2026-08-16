@@ -44,8 +44,6 @@ func TestWriteGoAgentConfigPersistsServerIPFallback(t *testing.T) {
 		ServerURL:          "https://internal-borealis.example.test",
 		ServerIPFallback:   "192.168.3.251",
 		SiteEnrollmentCode: "AAAA-BBBB",
-		RepoRef:            "issue/internal-only-engine-deployment-profile",
-		ReleaseChannel:     agentconfig.ReleaseChannelUnstable,
 		TrustedEngineCAPEM: "",
 		TrustedEngineCAB64: "",
 		TimeoutSeconds:     defaultTimeoutSeconds,
@@ -91,8 +89,6 @@ func TestWriteGoAgentConfigPreservesExistingIdentityAndTrust(t *testing.T) {
 		InstallDir:         installDir,
 		ServerURL:          "https://borealis.example.com",
 		SiteEnrollmentCode: "NEW-CODE",
-		RepoRef:            "main",
-		ReleaseChannel:     agentconfig.ReleaseChannelStable,
 		TimeoutSeconds:     defaultTimeoutSeconds,
 	}, nil); err != nil {
 		t.Fatalf("writeGoAgentConfig returned error: %v", err)
@@ -122,14 +118,14 @@ func TestWriteGoAgentConfigPreservesExistingIdentityAndTrust(t *testing.T) {
 	}
 }
 
-func TestBootstrapDeployIntentIgnoresDefaultRepoRef(t *testing.T) {
+func TestBootstrapDefaultConfigDoesNotImplyDeployIntent(t *testing.T) {
 	cfg := defaultBootstrapConfig()
 	normalizeBootstrapConfig(&cfg)
 	if cfg.DeployIntent {
 		t.Fatalf("default bootstrap config should not imply deploy intent")
 	}
 	if shouldValidateFreshBootstrap(cfg) {
-		t.Fatalf("default repo_ref should not require fresh install validation")
+		t.Fatalf("default bootstrap config should not require fresh install validation")
 	}
 }
 

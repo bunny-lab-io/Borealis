@@ -5,12 +5,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 type bootstrapAction string
@@ -143,21 +144,23 @@ func validateExistingAgentWithEngine(cfg BootstrapConfig) (bool, string) {
 	if token == "" {
 		return false, "Existing Agent access token missing."
 	}
+	configPath := agentConfigPath(cfg.InstallDir)
+	agentCfg, err := agentconfig.Load(configPath)
+	if err != nil {
+		return false, fmt.Sprintf("Existing Agent config could not be read: %v", err)
+	}
+	client, err := auth.NewClient(configPath, &agentCfg, "system")
+	if err != nil {
+		return false, fmt.Sprintf("Existing Agent authentication client failed: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	startedAt := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/repo/current_hash?ttl=300", nil)
+	var response map[string]any
+	resp, err := client.GetJSON(ctx, "/api/agent/metadata/1", &response)
 	if err != nil {
-		return false, fmt.Sprintf("Existing Agent validation request failed: %v", err)
+		return false, fmt.Sprintf("Engine rejected existing Agent authentication: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false, fmt.Sprintf("Engine did not answer existing Agent validation: %v", err)
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return true, fmt.Sprintf("Existing Borealis Agent token accepted by Engine in %s.", time.Since(startedAt).Round(time.Millisecond))
 	}

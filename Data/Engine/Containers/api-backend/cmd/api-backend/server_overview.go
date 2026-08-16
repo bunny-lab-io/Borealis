@@ -75,17 +75,6 @@ func serverOverviewHandler(auth *authService, realtime *operatorRealtimeHub) htt
 }
 
 func collectServerOverviewPayload(ctx context.Context, store operatorStore, realtime *operatorRealtimeHub) (map[string]any, error) {
-	releasePayload := collectAgentReleaseChannelSettings()
-	if githubStore, ok := store.(githubTokenStateStore); ok {
-		releasePayload["github_token"] = githubStore.githubTokenState(ctx)
-	} else {
-		releasePayload["github_token"] = defaultGithubTokenState()
-	}
-	releasePayload["settings_path"] = agentReleaseChannelsPath()
-	if _, ok := releasePayload["last_persist_error"]; !ok {
-		releasePayload["last_persist_error"] = ""
-	}
-
 	return map[string]any{
 		"collected_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"host":                   collectOverviewHostPayload(),
@@ -96,7 +85,6 @@ func collectServerOverviewPayload(ctx context.Context, store operatorStore, real
 		"security":               collectOverviewSecurityPayload(),
 		"ansible_runner":         collectAnsibleRunnerSettingsPayload(),
 		"site_worker_settings":   collectSiteWorkerSettingsPayload(),
-		"agent_release_channels": releasePayload,
 		"remote_desktop":         collectOverviewRemoteDesktopPayload(),
 		"operator_session_count": overviewOperatorSessionCount(realtime),
 	}, nil

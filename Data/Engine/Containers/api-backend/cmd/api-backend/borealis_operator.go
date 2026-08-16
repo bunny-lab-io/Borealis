@@ -1271,6 +1271,26 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 						{"name": "remote-ops", "containerPort": remoteOpsPort, "protocol": "TCP"},
 						{"name": "remote-desktop", "containerPort": remoteDesktopPort, "protocol": "TCP"},
 					},
+					"readinessProbe": map[string]any{
+						"httpGet": map[string]any{
+							"path": "/health",
+							"port": "remote-ops",
+						},
+						"initialDelaySeconds": int64(2),
+						"periodSeconds":       int64(2),
+						"timeoutSeconds":      int64(1),
+						"failureThreshold":    int64(30),
+					},
+					"livenessProbe": map[string]any{
+						"httpGet": map[string]any{
+							"path": "/health",
+							"port": "remote-ops",
+						},
+						"initialDelaySeconds": int64(15),
+						"periodSeconds":       int64(10),
+						"timeoutSeconds":      int64(2),
+						"failureThreshold":    int64(3),
+					},
 					"envFrom": []map[string]any{
 						{"secretRef": map[string]any{"name": runtimeSecretName}},
 					},

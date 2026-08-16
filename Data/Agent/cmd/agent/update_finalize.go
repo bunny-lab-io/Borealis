@@ -49,9 +49,6 @@ func finalizeDeferredUpdate(configPath string, buildID string, expectedSHA256 st
 		current.Agent.Update.CompletedAt = now
 		current.Agent.Update.LastError = ""
 	}
-	if strings.TrimSpace(current.Agent.Branch) == "" {
-		current.Agent.Branch = agentconfig.NormalizeBranch("main")
-	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return err
 	}

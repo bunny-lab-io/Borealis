@@ -220,7 +220,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 ### Automatic Local-Network Enrollment
 
 - Sites > Onboard Devices creates scheduler-backed enrollment jobs for local-network Linux and Windows targets.
-- Operators provide site, device OS, discovery scope, stored credential, install branch, and schedule.
+- Operators provide site, device OS, discovery scope, stored credential, remote connection settings, and schedule.
 - Linux enrollment uses SSH. Windows enrollment tries SMB `ADMIN$` plus Remote Service Control Manager, then scheduled task, then WMI/DCOM process creation, then WinRM.
 - Borealis writes non-secret onboarding correlation to agent settings so pending approvals can show source context.
 - Manual approval remains the trust boundary. Successful remote install means the agent reached the approval queue, not that the device is trusted.

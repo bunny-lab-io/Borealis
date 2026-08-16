@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+func defaultGithubTokenState() map[string]any {
+	return map[string]any{
+		"has_token":      false,
+		"reset_required": false,
+		"reset_at":       int64(0),
+	}
+}
+
 type githubTokenManagementStore interface {
 	loadGithubToken(ctx context.Context, secret authSecretService) (githubTokenRecord, error)
 	storeGithubToken(ctx context.Context, secret authSecretService, token string) error

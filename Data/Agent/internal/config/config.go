@@ -20,9 +20,6 @@ const (
 	SchemaVersion           = 1
 	FileName                = "agent.json"
 	MetadataQueueFileName   = "metadata-queue.json"
-	DefaultBranch           = "main"
-	ReleaseChannelStable    = "stable"
-	ReleaseChannelUnstable  = "unstable"
 	DefaultLogRetentionDays = 1
 	MetadataFieldCount      = 500
 	MetadataValueMaxLength  = 1024
@@ -45,8 +42,6 @@ type AgentConfig struct {
 type AgentSection struct {
 	GUID             string                            `json:"guid"`
 	AgentID          string                            `json:"agent_id"`
-	ReleaseChannel   string                            `json:"release_channel"`
-	Branch           string                            `json:"branch"`
 	InstalledBuildID string                            `json:"installed_build_id"`
 	LogRetentionDays int                               `json:"log_retention_days"`
 	State            AgentStateSection                 `json:"state"`
@@ -69,10 +64,6 @@ type AgentUpdateSection struct {
 	UpdatedAt        int64  `json:"updated_at,omitempty"`
 	CompletedAt      int64  `json:"completed_at,omitempty"`
 	DeadlineAt       int64  `json:"deadline_at,omitempty"`
-	PreviousChannel  string `json:"previous_channel,omitempty"`
-	PreviousBranch   string `json:"previous_branch,omitempty"`
-	TargetChannel    string `json:"target_channel,omitempty"`
-	TargetBranch     string `json:"target_branch,omitempty"`
 	LastError        string `json:"last_error,omitempty"`
 	RecoveryAttempts int    `json:"recovery_attempts,omitempty"`
 }
@@ -244,38 +235,6 @@ func DecodeEngineCAB64(value string) (string, error) {
 
 func NormalizeRemoteOpsURL(value string) string {
 	return NormalizeServerURL(value)
-}
-
-func NormalizeBranch(value string) string {
-	text := strings.TrimSpace(value)
-	if text == "" {
-		return DefaultBranch
-	}
-	return text
-}
-
-func NormalizeReleaseChannel(value string) string {
-	text := strings.ToLower(strings.TrimSpace(value))
-	switch text {
-	case "", "stable", "release", "releases":
-		return ReleaseChannelStable
-	case "source", "sources", "branch", "repo", "repository", "unstable":
-		return ReleaseChannelUnstable
-	default:
-		return text
-	}
-}
-
-func ReleaseChannelForBranch(branch string) string {
-	normalizedBranch := NormalizeBranch(branch)
-	if strings.EqualFold(normalizedBranch, DefaultBranch) {
-		return ReleaseChannelStable
-	}
-	return ReleaseChannelUnstable
-}
-
-func UsesUnstableReleaseChannel(value string) bool {
-	return NormalizeReleaseChannel(value) == ReleaseChannelUnstable
 }
 
 func NormalizeBuildID(value string) string {
@@ -600,11 +559,6 @@ func (c *AgentConfig) ApplyDefaults() {
 	if c.SchemaVersion == 0 {
 		c.SchemaVersion = SchemaVersion
 	}
-	c.Agent.ReleaseChannel = NormalizeReleaseChannel(c.Agent.ReleaseChannel)
-	c.Agent.Branch = NormalizeBranch(c.Agent.Branch)
-	if c.Agent.ReleaseChannel == ReleaseChannelStable {
-		c.Agent.Branch = DefaultBranch
-	}
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
 	c.ServerIPFallback = NormalizeServerIPFallback(c.ServerIPFallback)
 	c.Trust.EngineCAPEM = NormalizeEngineCAPEM(c.Trust.EngineCAPEM)
@@ -900,34 +854,8 @@ func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {
 	update.OperationID = strings.TrimSpace(update.OperationID)
 	update.Kind = strings.TrimSpace(update.Kind)
 	update.Status = strings.ToLower(strings.TrimSpace(update.Status))
-	update.PreviousChannel = normalizeOptionalReleaseChannel(update.PreviousChannel)
-	update.PreviousBranch = normalizeOptionalBranch(update.PreviousBranch)
-	update.TargetChannel = normalizeOptionalReleaseChannel(update.TargetChannel)
-	update.TargetBranch = normalizeOptionalBranch(update.TargetBranch)
-	if update.PreviousChannel == ReleaseChannelStable {
-		update.PreviousBranch = DefaultBranch
-	}
-	if update.TargetChannel == ReleaseChannelStable {
-		update.TargetBranch = DefaultBranch
-	}
 	update.LastError = strings.TrimSpace(update.LastError)
 	return update
-}
-
-func normalizeOptionalReleaseChannel(value string) string {
-	text := strings.TrimSpace(value)
-	if text == "" {
-		return ""
-	}
-	return NormalizeReleaseChannel(text)
-}
-
-func normalizeOptionalBranch(value string) string {
-	text := strings.TrimSpace(value)
-	if text == "" {
-		return ""
-	}
-	return NormalizeBranch(text)
 }
 
 func (c *AgentConfig) UpdateDependencyState(name string, update func(*DependencyStateSection)) {

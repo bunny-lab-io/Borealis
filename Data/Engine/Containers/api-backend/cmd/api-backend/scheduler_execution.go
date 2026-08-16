@@ -23,10 +23,13 @@ import (
 )
 
 const (
-	schedulerResolutionEligible   = "eligible"
-	schedulerResolutionSkipped    = "skipped"
-	schedulerResolutionUnresolved = "unresolved"
-	scheduledSSHPrivateKeyPath    = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+	schedulerResolutionEligible                 = "eligible"
+	schedulerResolutionSkipped                  = "skipped"
+	schedulerResolutionUnresolved               = "unresolved"
+	schedulerResolutionEstablishingConnection   = "establishing_connection"
+	scheduledConnectionProbeTimeoutSeconds      = int64(60)
+	scheduledConnectionProbeRequestGraceSeconds = int64(15)
+	scheduledSSHPrivateKeyPath                  = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
 )
 
 type scheduledExecutionTarget struct {
@@ -426,13 +429,16 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 		agentIDs = append(agentIDs, target.AgentID)
 		requiredPorts = append(requiredPorts, port)
 	}
+	if err := m.markScheduledConnectionProbe(ctx, req.RunID, req.TargetRowIDs, transport); err != nil {
+		return nil, nil, err
+	}
 	vpnPayload, err := m.internalJSON(ctx, http.MethodPost, "/api/internal/job-scheduler/vpn-prepare", map[string]any{
 		"agent_ids":             agentIDs,
 		"required_ports":        requiredPorts,
 		"reason":                "scheduled_ansible",
-		"timeout_seconds":       45,
+		"timeout_seconds":       scheduledConnectionProbeTimeoutSeconds,
 		"poll_interval_seconds": 0.5,
-	}, 60*time.Second)
+	}, time.Duration(scheduledConnectionProbeTimeoutSeconds+scheduledConnectionProbeRequestGraceSeconds)*time.Second)
 	if err != nil {
 		_ = m.updateScheduledRunTargets(ctx, req.RunID, req.TargetRowIDs, schedulerResolutionSkipped, "wireguard_unavailable", transport, "", "")
 		return nil, nil, m.markScheduledRunSkipped(ctx, req.RunID, "Managed WireGuard session is unavailable for this Ansible run.")
@@ -503,6 +509,8 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 	}
 	if len(specs) == 0 {
 		_ = m.markScheduledRunSkipped(ctx, req.RunID, fmt.Sprintf("No eligible devices were available for this Ansible run (%d skipped).", skipped))
+	} else {
+		_ = m.markScheduledRunRunning(ctx, req.RunID)
 	}
 	return specs, runtimeFiles, nil
 }
@@ -755,6 +763,43 @@ func (m *goSchedulerManager) markScheduledRunRunning(ctx context.Context, runID 
 		 WHERE id=$4
 	`, scheduledStatusRunning, now, now, runID)
 	return err
+}
+
+func (m *goSchedulerManager) markScheduledConnectionProbe(ctx context.Context, runID int64, targetRowIDs []int64, connection string) error {
+	now := time.Now().Unix()
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackQuietly(tx)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.scheduled_job_runs
+		   SET status=$1, updated_at=$2
+		 WHERE id=$3
+	`, scheduledStatusEstablishingConnection, now, runID); err != nil {
+		return err
+	}
+	filter := ""
+	args := []any{connection, schedulerResolutionEstablishingConnection, runID}
+	if len(targetRowIDs) > 0 {
+		filter = " AND id = ANY($4)"
+		args = append(args, pq.Array(targetRowIDs))
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.scheduled_job_run_targets
+		   SET wireguard_peer_ip='',
+		       resolved_connection=$1,
+		       resolution_status=$2,
+		       resolution_reason=''
+		 WHERE run_id=$3`+filter, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) failScheduledRun(ctx context.Context, runID int64, message string) error {

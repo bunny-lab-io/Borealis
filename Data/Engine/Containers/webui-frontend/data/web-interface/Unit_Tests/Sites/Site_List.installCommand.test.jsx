@@ -9,14 +9,23 @@ import {
 } from "@/Sites/Site_List.jsx";
 
 describe("site install command builder", () => {
-  it("builds Linux Go Agent bootstrap commands without a mandatory sudo pipe", () => {
+  it("builds Linux Go Agent commands from signed Engine downloads", () => {
     const command = buildInstallCommand(
       "linux",
       "https://borealis.example.com",
-      "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+      "E925-448B-626D-D595-5A0F-FB24-B4D6-6983",
+      null,
+      "",
+      {
+        downloads: {
+          linux: {
+            path: "/api/agent/install/download/linux-amd64?site_id=7&artifact=engine-build&download_signature=signed-query",
+          },
+        },
+      }
     );
 
-    expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
+    expect(command).toContain("/api/agent/install/download/linux-amd64");
     expect(command).toContain("curl -fsSL");
     expect(command).toContain("-o /tmp/Borealis-Agent");
     expect(command).toContain("chmod 700 /tmp/Borealis-Agent");
@@ -28,26 +37,22 @@ describe("site install command builder", () => {
     expect(command).not.toContain("wget");
     expect(command).toContain("--server-url");
     expect(command).toContain("https://borealis.example.com");
-    expect(command).toContain("--repo-ref");
-    expect(command).toContain("main");
+    expect(command).not.toContain("--repo-ref");
+    expect(command).not.toContain("--release-channel");
     expect(command).toContain("--site-enrollment-code");
     expect(command).toContain("E925-448B-626D-D595-5A0F-FB24-B4D6-6983");
     expect(command).toContain("--install-service");
     expect(command).not.toContain("Agent.exe");
   });
 
-  it("preserves branch selection while using the Linux Go Agent artifact path", () => {
+  it("does not generate commands without a signed Engine download", () => {
     const command = buildInstallCommand(
       "linux",
       "https://borealis.example.com",
-      "CODE-1234",
-      "feature/proxmox-agent"
+      "CODE-1234"
     );
 
-    expect(command).toContain("/refs/heads/feature/proxmox-agent/Data/Agent/dist/linux-amd64/Agent");
-    expect(command).toContain("--repo-ref");
-    expect(command).toContain("feature/proxmox-agent");
-    expect(command).not.toContain("--repo-branch");
+    expect(command).toBe("");
   });
 
   it("uses Engine-hosted installer download URLs when Engine source is selected", () => {
@@ -55,7 +60,6 @@ describe("site install command builder", () => {
       "linux",
       "https://borealis.example.com",
       "CODE-1234",
-      "feature/proxmox-agent",
       null,
       "",
       {
@@ -69,10 +73,9 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("https://borealis.example.com/api/agent/install/download/linux-amd64?site_id=7&artifact=stable-build&expires=2026-08-04T19%3A18%3A00Z&download_signature=signed-query");
-    expect(command).toContain('--release-channel "stable"');
-    expect(command).toContain('--repo-ref "main"');
+    expect(command).not.toContain("--release-channel");
+    expect(command).not.toContain("--repo-ref");
     expect(command).not.toContain("raw.githubusercontent.com");
-    expect(command).not.toContain("feature/proxmox-agent");
   });
 
   it("summarizes active Windows and Linux install link counters", () => {
@@ -199,16 +202,25 @@ describe("site install command builder", () => {
       "windows",
       "https://borealis.example.com",
       "CODE-1234",
-      "feature/test-agent-install"
+      null,
+      "",
+      {
+        downloads: {
+          windows: {
+            path: "/api/agent/install/download/windows-amd64?site_id=7&artifact=engine-build&download_signature=signed-query",
+          },
+        },
+      }
     );
 
-    expect(command).toContain("Data/Agent/dist/windows-amd64/Agent.exe");
+    expect(command).toContain("/api/agent/install/download/windows-amd64");
     expect(command).toContain('$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"');
     expect(command).toContain("-OutFile $borealisAgent");
     expect(command).toContain("& $borealisAgent");
     expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(command).toContain('--server-url "https://borealis.example.com"');
-    expect(command).toContain('--repo-ref "feature/test-agent-install"');
+    expect(command).not.toContain("--repo-ref");
+    expect(command).not.toContain("--release-channel");
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
     expect(command).not.toContain('$ErrorActionPreference');
     expect(command).not.toContain("NewGuid");

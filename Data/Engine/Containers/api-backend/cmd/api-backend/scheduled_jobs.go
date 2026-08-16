@@ -15,14 +15,15 @@ import (
 )
 
 const (
-	scheduledStatusPending  = "Pending"
-	scheduledStatusRunning  = "Running"
-	scheduledStatusSuccess  = "Success"
-	scheduledStatusWarning  = "Warning"
-	scheduledStatusFailed   = "Failed"
-	scheduledStatusExpired  = "Expired"
-	scheduledStatusTimedOut = "Timed Out"
-	scheduledStatusSkipped  = "Skipped"
+	scheduledStatusPending                = "Pending"
+	scheduledStatusRunning                = "Running"
+	scheduledStatusEstablishingConnection = "Establishing Connection"
+	scheduledStatusSuccess                = "Success"
+	scheduledStatusWarning                = "Warning"
+	scheduledStatusFailed                 = "Failed"
+	scheduledStatusExpired                = "Expired"
+	scheduledStatusTimedOut               = "Timed Out"
+	scheduledStatusSkipped                = "Skipped"
 
 	scheduledJobKindAutomation       = "automation"
 	scheduledJobKindOnboarding       = "onboarding"
@@ -84,6 +85,7 @@ type scheduledRunRow struct {
 	ComponentKind   sql.NullString
 	ComponentName   sql.NullString
 	WorkflowRunID   sql.NullInt64
+	UpdatedAt       sql.NullInt64
 }
 
 type scheduledTargetRow struct {
@@ -105,6 +107,7 @@ type scheduledTargetRow struct {
 	SkipReason                sql.NullString
 	SharedExecution           sql.NullInt64
 	ComponentName             sql.NullString
+	RunUpdatedAt              sql.NullInt64
 }
 
 type onboardingTargetRow struct {
@@ -783,7 +786,7 @@ func (s *postgresOperatorStore) listScheduledJobRuns(ctx context.Context, profil
 	cutoff := time.Now().Unix() - int64(days*86400)
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, scheduled_ts, started_ts, finished_ts, status, error, skip_reason, target_hostname,
-		       shared_execution, component_index, component_kind, component_name, workflow_run_id
+		       shared_execution, component_index, component_kind, component_name, workflow_run_id, updated_at
 		  FROM engine.scheduled_job_runs
 		 WHERE job_id=$1 AND COALESCE(finished_ts, started_ts, scheduled_ts, 0) >= $2
 	  ORDER BY COALESCE(started_ts, scheduled_ts, 0) DESC, id DESC
@@ -796,7 +799,7 @@ func (s *postgresOperatorStore) listScheduledJobRuns(ctx context.Context, profil
 	runs := []map[string]any{}
 	for rows.Next() {
 		var row scheduledRunRow
-		if err := rows.Scan(&row.ID, &row.ScheduledTS, &row.StartedTS, &row.FinishedTS, &row.Status, &row.Error, &row.SkipReason, &row.TargetHostname, &row.SharedExecution, &row.ComponentIndex, &row.ComponentKind, &row.ComponentName, &row.WorkflowRunID); err != nil {
+		if err := rows.Scan(&row.ID, &row.ScheduledTS, &row.StartedTS, &row.FinishedTS, &row.Status, &row.Error, &row.SkipReason, &row.TargetHostname, &row.SharedExecution, &row.ComponentIndex, &row.ComponentKind, &row.ComponentName, &row.WorkflowRunID, &row.UpdatedAt); err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
 		runs = append(runs, scheduledRunPayload(row))
@@ -945,22 +948,23 @@ func (s *postgresOperatorStore) listScheduledJobDevices(ctx context.Context, pro
 		acts := scheduledActivitiesForRuns(rec["run_ids"], activities)
 		progress := patchProgressFromActivities(acts)
 		devices = append(devices, map[string]any{
-			"hostname":            cleanText(rec["hostname"]),
-			"online":              online[hostKey],
-			"site_id":             rec["site_id"],
-			"site_name":           cleanText(rec["site_name"]),
-			"site":                cleanText(rec["site_name"]),
-			"inventory_hostname":  cleanText(rec["inventory_hostname"]),
-			"wireguard_peer_ip":   cleanText(rec["wireguard_peer_ip"]),
-			"resolved_connection": cleanText(rec["resolved_connection"]),
-			"resolution_status":   cleanText(rec["resolution_status"]),
-			"resolution_reason":   cleanText(rec["resolution_reason"]),
-			"ran_on":              firstPresentAny(rec["finished_ts"], rec["started_ts"]),
-			"job_status":          firstText(cleanText(rec["status"]), scheduledStatusPending),
-			"patch_progress":      progress,
-			"has_stdout":          scheduledActivitiesHave(acts, "has_stdout"),
-			"has_stderr":          scheduledActivitiesHave(acts, "has_stderr"),
-			"activities":          acts,
+			"hostname":                     cleanText(rec["hostname"]),
+			"online":                       online[hostKey],
+			"site_id":                      rec["site_id"],
+			"site_name":                    cleanText(rec["site_name"]),
+			"site":                         cleanText(rec["site_name"]),
+			"inventory_hostname":           cleanText(rec["inventory_hostname"]),
+			"wireguard_peer_ip":            cleanText(rec["wireguard_peer_ip"]),
+			"resolved_connection":          cleanText(rec["resolved_connection"]),
+			"resolution_status":            cleanText(rec["resolution_status"]),
+			"resolution_reason":            cleanText(rec["resolution_reason"]),
+			"connection_probe_deadline_ts": rec["connection_probe_deadline_ts"],
+			"ran_on":                       firstPresentAny(rec["finished_ts"], rec["started_ts"]),
+			"job_status":                   firstText(cleanText(rec["status"]), scheduledStatusPending),
+			"patch_progress":               progress,
+			"has_stdout":                   scheduledActivitiesHave(acts, "has_stdout"),
+			"has_stderr":                   scheduledActivitiesHave(acts, "has_stderr"),
+			"activities":                   acts,
 		})
 		if progress != nil && strings.EqualFold(cleanText(rec["status"]), scheduledStatusRunning) {
 			devices[len(devices)-1]["display_status_label"] = cleanText(progress["display_label"])
@@ -1264,7 +1268,7 @@ func loadOccurrenceForJob(ctx context.Context, conn *sql.Conn, jobID int64, occu
 func loadScheduledRunsForOccurrence(ctx context.Context, conn *sql.Conn, jobID int64, occurrence int64) ([]scheduledRunRow, error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, target_hostname, scheduled_ts, started_ts, finished_ts, status, error, skip_reason,
-		       shared_execution, component_index, component_kind, component_name, workflow_run_id
+		       shared_execution, component_index, component_kind, component_name, workflow_run_id, updated_at
 		  FROM engine.scheduled_job_runs
 		 WHERE job_id=$1 AND scheduled_ts=$2
 	  ORDER BY id ASC
@@ -1276,7 +1280,7 @@ func loadScheduledRunsForOccurrence(ctx context.Context, conn *sql.Conn, jobID i
 	results := []scheduledRunRow{}
 	for rows.Next() {
 		var row scheduledRunRow
-		if err := rows.Scan(&row.ID, &row.TargetHostname, &row.ScheduledTS, &row.StartedTS, &row.FinishedTS, &row.Status, &row.Error, &row.SkipReason, &row.SharedExecution, &row.ComponentIndex, &row.ComponentKind, &row.ComponentName, &row.WorkflowRunID); err != nil {
+		if err := rows.Scan(&row.ID, &row.TargetHostname, &row.ScheduledTS, &row.StartedTS, &row.FinishedTS, &row.Status, &row.Error, &row.SkipReason, &row.SharedExecution, &row.ComponentIndex, &row.ComponentKind, &row.ComponentName, &row.WorkflowRunID, &row.UpdatedAt); err != nil {
 			return nil, err
 		}
 		results = append(results, row)
@@ -1289,7 +1293,7 @@ func loadScheduledTargetRows(ctx context.Context, conn *sql.Conn, jobID int64, o
 		SELECT t.id, t.run_id, t.device_guid, t.hostname, t.site_id, s.name, t.inventory_hostname,
 		       t.wireguard_peer_ip, t.resolved_connection, t.resolution_status, t.resolution_reason,
 		       t.resolved_from_filter_ids_json, r.status, r.started_ts, r.finished_ts, r.skip_reason,
-		       r.shared_execution, r.component_name
+		       r.shared_execution, r.component_name, r.updated_at
 		  FROM engine.scheduled_job_run_targets AS t
 		  JOIN engine.scheduled_job_runs AS r ON r.id=t.run_id
 	 LEFT JOIN engine.sites AS s ON s.id=t.site_id
@@ -1303,7 +1307,7 @@ func loadScheduledTargetRows(ctx context.Context, conn *sql.Conn, jobID int64, o
 	results := []scheduledTargetRow{}
 	for rows.Next() {
 		var row scheduledTargetRow
-		if err := rows.Scan(&row.ID, &row.RunID, &row.DeviceGUID, &row.Hostname, &row.SiteID, &row.SiteName, &row.InventoryHostname, &row.WireGuardPeerIP, &row.ResolvedConnection, &row.ResolutionStatus, &row.ResolutionReason, &row.ResolvedFromFilterIDsJSON, &row.RunStatus, &row.StartedTS, &row.FinishedTS, &row.SkipReason, &row.SharedExecution, &row.ComponentName); err != nil {
+		if err := rows.Scan(&row.ID, &row.RunID, &row.DeviceGUID, &row.Hostname, &row.SiteID, &row.SiteName, &row.InventoryHostname, &row.WireGuardPeerIP, &row.ResolvedConnection, &row.ResolutionStatus, &row.ResolutionReason, &row.ResolvedFromFilterIDsJSON, &row.RunStatus, &row.StartedTS, &row.FinishedTS, &row.SkipReason, &row.SharedExecution, &row.ComponentName, &row.RunUpdatedAt); err != nil {
 			return nil, err
 		}
 		results = append(results, row)
@@ -1608,20 +1612,28 @@ func approvalForOnboardingTarget(row onboardingTargetRow, lookup map[string]map[
 
 func scheduledRunPayload(row scheduledRunRow) map[string]any {
 	return map[string]any{
-		"id":               nullInt(row.ID),
-		"scheduled_ts":     nullableInt(row.ScheduledTS),
-		"started_ts":       nullableInt(row.StartedTS),
-		"finished_ts":      nullableInt(row.FinishedTS),
-		"status":           nullString(row.Status),
-		"error":            nullString(row.Error),
-		"skip_reason":      nullString(row.SkipReason),
-		"target_hostname":  nullString(row.TargetHostname),
-		"shared_execution": boolInt64(row.SharedExecution),
-		"component_index":  nullableInt(row.ComponentIndex),
-		"component_kind":   nullString(row.ComponentKind),
-		"component_name":   nullString(row.ComponentName),
-		"workflow_run_id":  nullableInt(row.WorkflowRunID),
+		"id":                           nullInt(row.ID),
+		"scheduled_ts":                 nullableInt(row.ScheduledTS),
+		"started_ts":                   nullableInt(row.StartedTS),
+		"finished_ts":                  nullableInt(row.FinishedTS),
+		"status":                       nullString(row.Status),
+		"error":                        nullString(row.Error),
+		"skip_reason":                  nullString(row.SkipReason),
+		"target_hostname":              nullString(row.TargetHostname),
+		"shared_execution":             boolInt64(row.SharedExecution),
+		"component_index":              nullableInt(row.ComponentIndex),
+		"component_kind":               nullString(row.ComponentKind),
+		"component_name":               nullString(row.ComponentName),
+		"workflow_run_id":              nullableInt(row.WorkflowRunID),
+		"connection_probe_deadline_ts": scheduledConnectionProbeDeadline(nullString(row.Status), row.UpdatedAt),
 	}
+}
+
+func scheduledConnectionProbeDeadline(status string, updatedAt sql.NullInt64) any {
+	if status != scheduledStatusEstablishingConnection || !updatedAt.Valid || updatedAt.Int64 <= 0 {
+		return nil
+	}
+	return updatedAt.Int64 + scheduledConnectionProbeTimeoutSeconds
 }
 
 func onboardingTargetPayload(row onboardingTargetRow) map[string]any {
@@ -1693,16 +1705,17 @@ func aggregateScheduledDevices(runs []scheduledRunRow, targetRows []scheduledTar
 			group := grouped[key]
 			if group == nil {
 				group = map[string]any{
-					"hostname":            hostname,
-					"site_id":             nullableInt(row.SiteID),
-					"site_name":           nullString(row.SiteName),
-					"inventory_hostname":  nullString(row.InventoryHostname),
-					"wireguard_peer_ip":   nullString(row.WireGuardPeerIP),
-					"resolved_connection": nullString(row.ResolvedConnection),
-					"resolution_status":   "",
-					"resolution_reason":   "",
-					"run_ids":             []int64{},
-					"eligible_runs":       []scheduledRunSummary{},
+					"hostname":                     hostname,
+					"site_id":                      nullableInt(row.SiteID),
+					"site_name":                    nullString(row.SiteName),
+					"inventory_hostname":           nullString(row.InventoryHostname),
+					"wireguard_peer_ip":            nullString(row.WireGuardPeerIP),
+					"resolved_connection":          nullString(row.ResolvedConnection),
+					"resolution_status":            "",
+					"resolution_reason":            "",
+					"connection_probe_deadline_ts": nil,
+					"run_ids":                      []int64{},
+					"eligible_runs":                []scheduledRunSummary{},
 				}
 				grouped[key] = group
 			}
@@ -1723,12 +1736,17 @@ func aggregateScheduledDevices(runs []scheduledRunRow, targetRows []scheduledTar
 				}
 			}
 			resolutionStatus := strings.ToLower(nullString(row.ResolutionStatus))
-			if resolutionStatus != "" && resolutionStatus != "pending" && resolutionStatus != "eligible" {
+			if resolutionStatus != "" && resolutionStatus != "pending" && resolutionStatus != "eligible" && resolutionStatus != schedulerResolutionEstablishingConnection {
 				if !hasValue(group["resolution_status"]) {
 					group["resolution_status"] = resolutionStatus
 					group["resolution_reason"] = nullString(row.ResolutionReason)
 				}
 				continue
+			}
+			if resolutionStatus == schedulerResolutionEstablishingConnection {
+				group["resolution_status"] = resolutionStatus
+				group["resolution_reason"] = nullString(row.ResolutionReason)
+				group["connection_probe_deadline_ts"] = scheduledConnectionProbeDeadline(scheduledStatusEstablishingConnection, row.RunUpdatedAt)
 			}
 			group["eligible_runs"] = append(group["eligible_runs"].([]scheduledRunSummary), scheduledRunSummary{
 				ID:         nullInt(row.RunID),
@@ -1751,6 +1769,9 @@ func aggregateScheduledDevices(runs []scheduledRunRow, targetRows []scheduledTar
 				status = firstText(eligible[0].Status, scheduledStatusPending)
 				group["started_ts"] = eligible[0].StartedTS
 				group["finished_ts"] = eligible[0].FinishedTS
+				if strings.EqualFold(cleanText(group["resolution_status"]), schedulerResolutionEstablishingConnection) {
+					status = scheduledStatusEstablishingConnection
+				}
 			} else if strings.ToLower(cleanText(group["resolution_status"])) == "skipped" || strings.ToLower(cleanText(group["resolution_status"])) == "unresolved" {
 				status = scheduledStatusSkipped
 			}
@@ -1775,13 +1796,14 @@ func aggregateScheduledDevices(runs []scheduledRunRow, targetRows []scheduledTar
 		})
 		row := rows[0]
 		out = append(out, map[string]any{
-			"hostname":          nullString(row.TargetHostname),
-			"status":            firstText(nullString(row.Status), scheduledStatusPending),
-			"started_ts":        nullableInt(row.StartedTS),
-			"finished_ts":       nullableInt(row.FinishedTS),
-			"run_ids":           []int64{nullInt(row.ID)},
-			"resolution_status": "",
-			"resolution_reason": "",
+			"hostname":                     nullString(row.TargetHostname),
+			"status":                       firstText(nullString(row.Status), scheduledStatusPending),
+			"started_ts":                   nullableInt(row.StartedTS),
+			"finished_ts":                  nullableInt(row.FinishedTS),
+			"run_ids":                      []int64{nullInt(row.ID)},
+			"resolution_status":            "",
+			"resolution_reason":            "",
+			"connection_probe_deadline_ts": scheduledConnectionProbeDeadline(nullString(row.Status), row.UpdatedAt),
 		})
 	}
 	return out
@@ -1909,7 +1931,7 @@ func scheduledStatusBucket(status string) string {
 	switch strings.TrimSpace(status) {
 	case scheduledStatusPending:
 		return "pending"
-	case scheduledStatusRunning:
+	case scheduledStatusRunning, scheduledStatusEstablishingConnection:
 		return "running"
 	case scheduledStatusSuccess:
 		return "success"
@@ -1963,14 +1985,15 @@ func scheduledHasNoTargetSkip(runs []scheduledRunRow) bool {
 
 func scheduledRunPriority(run scheduledRunSummary) int64 {
 	statusPriority := map[string]int64{
-		scheduledStatusRunning:  70,
-		scheduledStatusFailed:   60,
-		scheduledStatusTimedOut: 50,
-		scheduledStatusWarning:  45,
-		scheduledStatusExpired:  40,
-		scheduledStatusSuccess:  30,
-		scheduledStatusPending:  20,
-		scheduledStatusSkipped:  10,
+		scheduledStatusEstablishingConnection: 75,
+		scheduledStatusRunning:                70,
+		scheduledStatusFailed:                 60,
+		scheduledStatusTimedOut:               50,
+		scheduledStatusWarning:                45,
+		scheduledStatusExpired:                40,
+		scheduledStatusSuccess:                30,
+		scheduledStatusPending:                20,
+		scheduledStatusSkipped:                10,
 	}[run.Status]
 	return statusPriority*1_000_000_000_000 + coerceInt64(firstPresentAny(run.FinishedTS, run.StartedTS))
 }
@@ -2083,7 +2106,7 @@ func normalizeScheduledJobKind(value string) string {
 	switch normalized {
 	case "device_onboarding", "automatic_onboarding", "ssh_onboarding", scheduledJobKindOnboarding:
 		return scheduledJobKindOnboarding
-	case "agent_maintenance", "agent_update", "agent_channel_switch":
+	case "agent_maintenance", "agent_update":
 		return scheduledJobKindAgentMaintenance
 	case "patch_install", "patch_management", "patch_deployment", "ad_hoc_patch_install", "policy_patch_install":
 		return scheduledJobKindPatchInstall

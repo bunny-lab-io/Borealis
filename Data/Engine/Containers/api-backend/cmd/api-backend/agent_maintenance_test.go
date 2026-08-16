@@ -89,7 +89,7 @@ func TestAgentMaintenanceBulkHandlerQueuesRequest(t *testing.T) {
 	}
 	auth := testAgentMaintenanceAuth(store)
 	recorder := httptest.NewRecorder()
-	body := `{"action":"update_agent","release_channel":"unstable","branch":"feature/rewrite-api-backend-in-golang","guids":["2540DA38-E2B1-45B9-9113-BF7CF0E1778A"]}`
+	body := `{"action":"update_agent","guids":["2540DA38-E2B1-45B9-9113-BF7CF0E1778A"]}`
 	request := httptest.NewRequest(http.MethodPost, "/api/devices/agent-maintenance", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 
@@ -101,7 +101,7 @@ func TestAgentMaintenanceBulkHandlerQueuesRequest(t *testing.T) {
 	if !store.called {
 		t.Fatal("expected store call")
 	}
-	if store.request.Action != agentMaintenanceUpdateAction || store.request.ReleaseChannel != "unstable" || store.request.Branch != "feature/rewrite-api-backend-in-golang" {
+	if store.request.Action != agentMaintenanceUpdateAction {
 		t.Fatalf("unexpected request %+v", store.request)
 	}
 	if len(store.request.DeviceGUIDs) != 1 || store.request.DeviceGUIDs[0] != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" {
@@ -116,18 +116,18 @@ func TestAgentMaintenanceBulkHandlerQueuesRequest(t *testing.T) {
 	}
 }
 
-func TestAgentMaintenanceBulkHandlerRejectsSwitchForNonAdmin(t *testing.T) {
+func TestAgentMaintenanceBulkHandlerRejectsRemovedSwitchAction(t *testing.T) {
 	store := &agentMaintenanceTestStore{profile: operatorProfile{Username: "operator", Role: "User"}}
 	auth := testAgentMaintenanceAuth(store)
 	recorder := httptest.NewRecorder()
-	body := `{"action":"switch_branch","release_channel":"unstable","branch":"main","guids":["2540DA38-E2B1-45B9-9113-BF7CF0E1778A"]}`
+	body := `{"action":"switch_branch","guids":["2540DA38-E2B1-45B9-9113-BF7CF0E1778A"]}`
 	request := httptest.NewRequest(http.MethodPost, "/api/devices/agent-maintenance", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 
 	agentMaintenanceBulkHandler(auth).ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 	if store.called {
 		t.Fatal("store should not be called")
@@ -153,7 +153,7 @@ func TestAgentMaintenanceBulkHandlerPropagatesStoreErrors(t *testing.T) {
 	}
 	auth := testAgentMaintenanceAuth(store)
 	recorder := httptest.NewRecorder()
-	body := `{"action":"update_now","release_channel":"stable","guids":["2540DA38-E2B1-45B9-9113-BF7CF0E1778A"]}`
+	body := `{"action":"update_now","guids":["2540DA38-E2B1-45B9-9113-BF7CF0E1778A"]}`
 	request := httptest.NewRequest(http.MethodPost, "/api/devices/agent-maintenance", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 

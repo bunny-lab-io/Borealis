@@ -27,7 +27,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     sudo ./Agent --server-url "https://borealis.example.com" --site-enrollment-code "SITE-CODE"
     ```
 
-    Linux uses the normal runtime parser. Supplying `--server-url` and `--site-enrollment-code` implies service install, stages the runtime under `/opt/Borealis/Agent/Agent`, writes `agent.json`, creates systemd units, and starts the Agent service. If Borealis is already installed, the command stops Borealis-managed systemd units and the WireGuard interface, preserves existing identity and trust data in `agent.json`, replaces the runtime binary, and starts the service again.
+    Linux uses the normal runtime parser. Supplying `--server-url` and `--site-enrollment-code` implies service install, stages the runtime under `/opt/Borealis/Agent/Agent`, writes `agent.json`, creates systemd units, and starts the Agent service. If Borealis is already installed, the command stops Borealis-managed systemd units and the WireGuard interface, preserves existing identity and trust data in `agent.json`, replaces the runtime binary, and starts the service again. The root WireGuard role installs missing `wireguard-tools` through the detected OS package manager when tunnel setup begins.
 
 !!! warning
 
@@ -77,7 +77,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     sudo /opt/Borealis/Agent/Agent --update-check --config-path /opt/Borealis/Agent/agent.json
     ```
 
-`--update-check` runs one local release-channel check. Stable channel uses the Engine release manifest. Unstable/source branch updates resolve the target commit and stage a branch build. The updater validates the candidate with `--validate-config` before replacing the runtime binary.
+`--update-check` asks Engine for current Agent artifact manifest, downloads authenticated platform binary, verifies advertised SHA-256, and validates candidate with `--validate-config` before replacing runtime binary.
 
 ### Validate Configuration
 
@@ -131,9 +131,6 @@ Downloaded Windows `Agent.exe` uses bootstrap mode unless one of the runtime fla
 | `--site-enrollment-code <code>` | Site enrollment code. | Required for fresh bootstrap. `--enrollment-code` is accepted as an alias. |
 | `--trusted-engine-ca-b64 <base64-pem>` | Borealis local CA bundle for Internal-Only Engine installs. | Stored in `agent.json` as `trust.engine_ca_pem`. |
 | `--trusted-engine-ca-pem <pem>` | Borealis local CA PEM for Internal-Only Engine installs. | Prefer `--trusted-engine-ca-b64` for copied commands. |
-| `--repo-ref <ref>` | Git branch, tag, or commit used for source/unstable bootstrap payloads. | Non-`main` refs default the release channel to `unstable`. |
-| `--repo-branch <ref>` | Legacy alias for `--repo-ref`. | Prefer `--repo-ref`. |
-| `--release-channel <channel>` | Agent release channel. | `stable`, `release`, and `releases` normalize to stable. `unstable`, `source`, `branch`, `repo`, and `repository` normalize to unstable. |
 | `--server-ip-fallback <ip>` | Persist Internal-Only Engine IP route hint. | Stores `server_ip_fallback` in `agent.json`; HTTPS still uses the Engine FQDN for host, SNI, and certificate validation. |
 | `--verbose` | Write verbose bootstrap diagnostics. | Also accepted as `-verbose`. |
 | `-uninstall` | Full Windows Agent cleanup. | Single dash. Destructive. Removes Borealis-owned services, tasks, dependencies, and install state. |
@@ -151,13 +148,11 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
 | `--enrollment-code <code>` | Full | Full | Runtime alias for `--site-enrollment-code`. Not accepted by Windows bootstrap mode. |
 | `--trusted-engine-ca-b64 <base64-pem>` | Full | Full | Persist Borealis local CA bundle for Internal-Only Engine HTTPS validation. |
 | `--trusted-engine-ca-pem <pem>` | Full | Full | Persist Borealis local CA PEM. Prefer base64 form for shell-safe commands. |
-| `--repo-ref <ref>` | Full | Full | Set or update Agent branch/ref. Non-`main` refs infer unstable release channel unless `--release-channel` overrides it. |
-| `--release-channel <channel>` | Full | Full | Set or update release channel. Accepted values normalize the same as Windows bootstrap mode. |
 | `--verbose` | Full | Full | Mirror runtime logs to stdout. Bootstrap also accepts `-verbose` on Windows. |
 | `--once` | Full | Full | Authenticate, start roles enough to post one status/heartbeat cycle, then exit before Socket.IO steady state. Useful for diagnostics. |
 | `--install-service` | Full | Full | Install or repair managed service. Linux also writes updater/watchdog systemd units and timers. Windows runtime path creates or updates the `BorealisAgent` service; normal Windows bootstrap creates the support tasks. |
 | `--uninstall-service` | Full | Full | Remove managed service and updater/watchdog task or timer entries. Leaves install root and dependency state in place. |
-| `--update-check` | Full | Full | Run one local update check. Can be combined with `--config-path`, `--server-url`, `--repo-ref`, `--release-channel`, and `--verbose`. |
+| `--update-check` | Full | Full | Run one Engine artifact update check. Can be combined with `--config-path`, `--server-url`, and `--verbose`. |
 | `--watchdog-check` | Full | Full | Run one local watchdog pass. Normally scheduled every minute by Windows Task Scheduler or Linux systemd timer. Repairs missing/stopped/stale Agent service state. |
 | `--validate-config` | Full | Full | Validate `agent.json` compatibility and exit. Used by update candidates before replacement. |
 | `--metadata` | Full | Full | Run metadata subcommand: `--metadata get <field>` or `--metadata set <field> <value>`. |
@@ -207,7 +202,8 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
 
     - Windows has two argument surfaces. If no runtime flag from `hasRuntimeFlag()` is present, `Agent.exe` runs bootstrap mode and accepts only the Windows bootstrap arguments. If a runtime flag is present, it skips bootstrap and uses the standard Go `flag` parser. Windows bootstrap mode accepts `--server-ip-fallback` so WebUI install commands can persist Internal-Only route metadata without switching into runtime flag mode.
     - Linux has one argument surface: the standard Go `flag` parser in `main.go`.
-    - `--server-url` or `--site-enrollment-code` implies `--install-service` in the runtime parser. `--repo-ref` alone does not imply install-service.
+    - `--server-url` or `--site-enrollment-code` implies `--install-service` in runtime parser.
+    - Agent CLI has no repository ref or release-channel arguments. Agent source identity comes from Engine build that published current artifact.
     - Fresh install detection treats `--server-url` or `--site-enrollment-code`/`--enrollment-code` as fresh-deploy intent. Validation requires both server URL and enrollment code before service installation starts. Re-deploy stops Borealis-managed components and preserves existing `agent.json` identity/trust state instead of wiping the install root.
     - Fresh install and runtime server URL overrides require an Engine FQDN. Raw IPs and `localhost` are rejected before enrollment config is written.
     - `--server-ip-fallback` stores a bare non-loopback IP as `server_ip_fallback`. REST, update, file-transfer, software-override, and Socket.IO connections first try the FQDN normally. If that TCP dial fails, they connect to the fallback IP while keeping the original FQDN as the HTTP host and TLS SNI name. Linux WireGuard setup first tries the Engine-provided FQDN endpoint and rewrites the local `wireguard.conf` endpoint to the fallback IP only when `wg-quick up` reports endpoint DNS resolution failure.

@@ -19,7 +19,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/registry_management` - SYSTEM Windows registry browse, key create/rename/delete, value create/update/delete, and unsupported status on non-Windows agents.
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
-- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
+- `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply with missing-tool and endpoint-path recovery, handshake-aware health, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
 - `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
@@ -28,12 +28,20 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Installed configuration file: `agent.json` beside `Agent.exe`.
 - WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
 - Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
-- `agent.json` stores `schema_version`, `server_url`, optional `server_ip_fallback`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `agent.log_retention_days`, `agent.state`, `agent.liveness`, `agent.dependency_state`, Ed25519 keys, access/refresh tokens, optional Internal-Only Engine CA PEM, and Engine script-signing trust material.
+- `agent.json` stores `schema_version`, `server_url`, optional `server_ip_fallback`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.installed_build_id`, `agent.log_retention_days`, `agent.state`, `agent.liveness`, `agent.dependency_state`, Ed25519 keys, access/refresh tokens, optional Internal-Only Engine CA PEM, and Engine script-signing trust material.
 - `metadata-queue.json` sits beside `agent.json` only while local CLI metadata updates are pending. It stores queued field updates as base64 `value`, `modified_at`, and `source`; Engine acknowledgement removes delivered entries.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename and serialized across processes through a sibling `agent.json.lock` file. Each write increments `agent.state.revision` and stamps `agent.state.writer` plus `agent.state.last_write_at` so stale writer/debug cases are visible.
 - Successful heartbeats clean stale atomic-write temp files such as `.config-*.tmp` from the Agent install root after they are older than one hour.
+
+## Linux WireGuard Dependency
+
+Linux agents require the `wireguard-tools` package for `wg` and `wg-quick`. When either command is missing, the root Agent installs `wireguard-tools` through the first available supported package manager (`dnf`, `apt-get`, `yum`, `zypper`, `apk`, or `pacman`), re-detects both commands, then resumes tunnel setup. [Rocky Linux 10 provides this package in AppStream](https://download.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/Packages/w/).
+
+If the configured repository is unavailable or excludes `wireguard-tools`, the WireGuard role remains `Recovering` and reports the package-manager error. Automatic install attempts are limited to once every 15 minutes. A manual package install is detected on the next ensure cycle without waiting for that cooldown.
+
+Linux WireGuard health requires a recent peer handshake; an active interface alone is not Healthy. Agent tries Engine FQDN endpoint first. When that interface produces no handshake, Agent tries private Engine host endpoint supplied by authenticated tunnel session. This supports Engine-hosted devices that cannot reach UDP forwarding through their own public address. Agent restores primary configuration and reports recovery error if neither path handshakes.
 
 ## Agent CLI Flags
 
@@ -46,13 +54,13 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
     - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
     - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
-    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, Agent Metadata Field sync, and release-channel correction instructions when Engine detects a retired branch.
+    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
     - `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded Engine metadata field for local Agent CLI.
     - `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `system:system_heartbeat`.
     - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
     - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
     - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
-    - `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply.
+    - `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply and, on Linux, fresh peer handshake.
     - `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise VNC readiness and reconcile always-on VNC state without returning the VNC password.
     - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one Engine-staged upload item for the File Management role.
     - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.
@@ -71,7 +79,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - Edit only in `Data/Agent/`.
 - Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\agent.json`, managed by the native `BorealisAgent` Windows service. Fresh bootstrap from an operator-downloaded `Agent.exe` stages the runtime copy. Re-deploy with install inputs stops Borealis-managed services, scheduled tasks, and processes, preserves existing `agent.json` identity/trust state, replaces `Agent.exe`, and restarts the Agent service. Providing a new enrollment code clears cached Agent auth tokens and remote-ops route state so cross-Engine or cross-site re-enrollment cannot keep using stale socket routing. If the old binary is still locked, bootstrap leaves a verified `.redeploy` binary and starts a deferred replacement loop that stops the old process, moves the new binary into place, and restarts the service.
     - Linux installed runtime is a single compiled `Agent` binary managed by systemd. Fresh execution from an operator-downloaded binary with both `--server-url` and `--site-enrollment-code` self-stages into `/opt/Borealis/Agent/Agent`, writes or updates `agent.json`, and installs the service plus updater and watchdog timers. Re-deploy with install inputs stops Borealis-managed systemd units and the WireGuard interface, preserves existing `agent.json` identity/trust state, replaces the runtime binary, and restarts the Agent service.
-    - Go Agent updates use Engine release channels and the local `--update-check` path.
+    - Go Agent updates use current Engine artifact and local `--update-check` path.
 
     ### Service modes and context
     - Service mode is used for elevated tasks (Windows service runtime, support scheduled tasks, VPN, system scripts).
@@ -89,7 +97,8 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
 
     ### Networking and authentication
     - All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.
-    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. Windows and Linux REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname. Linux WireGuard setup first applies the Engine FQDN endpoint, then rewrites only the local WireGuard endpoint to `server_ip_fallback:<port>` when `wg-quick up` fails because DNS cannot resolve the Engine FQDN.
+    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. Windows and Linux REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname.
+    - Engine `/api/agent/vpn/ensure` responses can include `fallback_endpoint` for Linux WireGuard in every network mode. Agent validates it as a non-loopback IP using same UDP port as primary endpoint. It applies primary endpoint first, waits up to eight seconds for fresh handshake, then applies fallback. Readiness reporting, live-session reuse, and Healthy role status require recent Linux peer handshake; interface presence alone is insufficient.
     - `EnsureAuthenticated` handles identity generation, enrollment, approval polling, and token refresh.
     - During disaster-recovery restore, an already-enrolled Agent may temporarily reach a blank Engine before the backup import restores device trust. `invalid_refresh_token` and `device_not_found` refresh responses are treated as recoverable in that window, so the Agent preserves its existing refresh token and retries. Explicit revoke, purge, token expiry, fingerprint mismatch, and token-version mismatch still clear local token state.
     - Socket.IO is used by the SYSTEM runtime for:
@@ -152,10 +161,8 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - If current-user execution fails, confirm the SYSTEM broker is advertising helper capability, inspect session inventory for `helper_ready`, and expect `no_interactive_user_session` when no eligible user session exists.
     - If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
     - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater path immediately so the same updater-owned path is used for both manual and hourly runs.
-    - Engine-managed release channels cache a Go Agent binary bundle built from local Engine source or packaged from a configured GitHub release channel. Agents download that authenticated update bundle, verify SHA-256 when provided, validate the candidate with `--validate-config --config-path <agent.json>`, stage the platform binary, and restart through the local service manager.
-    - Branch installs persist the operator-selected branch in `agent.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally. Repo-ref update checks resolve target commit through Engine `/api/repo/current_hash` first so Engine cache absorbs GitHub API usage; direct GitHub lookup is fallback only. If both lookups confirm the branch/ref no longer exists, the Agent writes `stable/main` to `agent.json` and runs the stable manifest update path instead of staying stranded on the retired branch.
-    - Engine heartbeat recovery backs up Agent self-remediation. Devices without explicit release-channel override that still report `unstable` are immediately corrected to `stable/main`. When a device with an override keeps reporting a non-main unstable branch that no longer resolves, the Engine waits five minutes from first confirmed missing-ref observation, clears the stale override on the device row, and returns `agent_release_channel_instruction` in the heartbeat response. The Agent stores that instruction as a local update operation and starts the normal updater path.
-    - Installed build tracking lives in `agent.json` as `agent.installed_build_id`; fresh unstable/source branch bootstraps stamp this from the resolved repository commit SHA so the Engine can prove the exact branch build before the first update cycle. The Go Agent does not create a standalone `installed_build_id.txt`.
+    - Engine caches one Go Agent binary bundle built from checked-out `Data/Agent` source. Agents download that authenticated bundle from Engine only, verify SHA-256 when provided, validate candidate with `--validate-config --config-path <agent.json>`, stage platform binary, and restart through local service manager. No GitHub binary source or fallback exists.
+    - Installed build tracking lives in `agent.json` as `agent.installed_build_id`. Fresh installation stamps compiled Agent build ID, and update finalization records target build only after binary verification. Go Agent does not create standalone `installed_build_id.txt`.
     - Update checks do not persist `update_status.json`; transient state such as `state`, `update_available`, and `last_checked_at` is intentionally not stored by the Go Agent.
     - Metadata fields can be read or queued by scripts through `Agent.exe --metadata get 1` / `Agent.exe --metadata set 1 "text"` on Windows or `Agent --metadata get 1` / `Agent --metadata set 1 "text"` on Linux. `set` base64-encodes the supplied value into `metadata-queue.json`; the next heartbeat sends it to Engine. `get` returns a pending queued value first, otherwise reads Engine through device-auth API. Blank values queue clears. Decoded values are capped at 1024 characters.
     - Windows update archives and extracted repository payloads are staged under `C:\Borealis\Temp\Updater`; the updater removes update workspaces immediately, schedules full `C:\Borealis\Temp` cleanup after bootstrap exits so stdout/stderr handles are closed, and cleans old accidental `C:\Borealis\Agent` update workspaces.
@@ -166,7 +173,8 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
       - Verify signatures with `signature_utils` logs.
     - If VPN fails:
       - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
-      - Ensure the Engine has an active tunnel session and the WireGuard service is running.
+      - Check `last_handshake_at`, `handshake_age_seconds`, `endpoint`, and optional `applied_endpoint` in WireGuard role health.
+      - Ensure Engine peer shows recent handshake and traffic. `running status: RUNNING` without handshake remains `Recovering` on Linux.
     - If VNC fails:
       - Check `Logs/WireGuard/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
       - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
@@ -180,7 +188,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - Bootstrap: `Agent.exe` owns deploy, repair, update check, config write, native service registration, support-task registration, and runtime. Windows onboarding stages the Go binary from the Sites install command download source; the installed copy runs from `C:\Borealis\Agent.exe`.
     - Windows support dependencies: `Agent.exe` can still install UltraVNC and WireGuard from official installers. Installed dependency versions and install state-machine phases live in `agent.json` under `agent.dependency_state` with phase/status/version/timestamp/error fields. When an existing WireGuard client executable is present, bootstrap records the detected file/registry/config version, marks the dependency healthy, and skips MSI reinstall. Transient installer payloads under `C:\Borealis\Dependencies` are removed after dependency reconciliation. It does not stage Python, create a venv, or call `launch_service.ps1`.
     - Existing Windows agents are repairable when `C:\Borealis\Agent.exe`, the `BorealisAgent` service, and an Engine-accepted token in `agent.json` are present.
-    - Linux first install: download the Linux Agent binary from the Sites install command source, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code>`. The binary self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer` plus `borealis-agent-watchdog.timer`. Re-running the same command performs an in-place redeploy and preserves existing install identity. `--update-check` also preserves existing install state.
+    - Linux first install: download the Linux Agent binary from the Sites install command source, mark that downloaded file executable, and run it as root with `--server-url <url> --site-enrollment-code <code>`. The binary self-stages into `/opt/Borealis/Agent/Agent`, writes `agent.json`, installs `borealis-agent.service`, and enables `borealis-agent-updater.timer` plus `borealis-agent-watchdog.timer`. Re-running the same command performs an in-place redeploy and preserves existing install identity. `--update-check` also preserves existing install state. The root WireGuard role installs missing Linux `wireguard-tools` through the detected OS package manager, re-probes `wg` and `wg-quick`, and rate-limits failed repository retries to once every 15 minutes.
     - Do not commit `Data/Agent/dist/` output. Engine deploys and Engine-compiled release refreshes build and cache distributable platform binaries under `Engine/Services/api-backend/cache/AgentUpdates`.
     - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
     - Keep Linux Agent installation separate from deployed Engine runtime roots.
@@ -212,7 +220,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
 
     #### Execution contexts and roles
     - Go roles are explicit packages under `Data/Agent/internal/roles`.
-    - First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory including Windows domain/workgroup telemetry, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Go release-channel self-update.
+    - First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory including Windows domain/workgroup telemetry, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Engine-hosted Go Agent self-update.
     - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
     - Service tasks depend on Windows service and scheduled-task creation rights; failures should surface through Engine logging and `Logs/Agent/role_recovery.log`.
 

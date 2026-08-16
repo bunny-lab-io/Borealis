@@ -1,9 +1,11 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,72 @@ import (
 	"testing"
 	"time"
 )
+
+func configureTestAgentArtifact(t *testing.T, root, artifactID string, compiledAt int64) string {
+	t.Helper()
+	t.Setenv("BOREALIS_PROJECT_ROOT", root)
+	settingsPath := filepath.Join(root, "Engine", "Services", "api-backend", "config", "agent_artifact.json")
+	t.Setenv("BOREALIS_AGENT_ARTIFACT_PATH", settingsPath)
+	artifactPath := agentUpdateArtifactPath(artifactID)
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := os.Create(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(handle)
+	entries := map[string][]byte{
+		"manifest.json":                           []byte(fmt.Sprintf(`{"artifact_format":%q,"compiled_at":%d}`, agentUpdateArtifactFormat, compiledAt)),
+		"Data/Agent/dist/linux-amd64/Agent":       []byte("linux-agent"),
+		"Data/Agent/dist/windows-amd64/Agent.exe": []byte("windows-agent"),
+	}
+	for name, body := range entries {
+		writer, createErr := archive.Create(name)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if _, writeErr := writer.Write(body); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]any{
+		"version": 1,
+		"source":  agentArtifactSourceEngine,
+		"artifact": map[string]any{
+			"source":             agentArtifactSourceEngine,
+			"build_id":           "build",
+			"artifact_id":        artifactID,
+			"artifact_path":      artifactPath,
+			"artifact_sha256":    sha256File(artifactPath),
+			"artifact_size":      info.Size(),
+			"artifact_format":    agentUpdateArtifactFormat,
+			"platform_artifacts": requiredGoAgentArtifacts,
+			"compiled_at":        compiledAt,
+		},
+	}
+	body, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return artifactPath
+}
 
 type agentUpdateTestStore struct {
 	deviceAuthRecord deviceBearerAuthRecord
@@ -216,16 +284,6 @@ func TestAgentUpdateManifestHandlerReturnsAuthenticatedManifest(t *testing.T) {
 	}
 }
 
-func TestResolveEffectiveAgentReleaseChannelPinsNoOverrideToStable(t *testing.T) {
-	settings := map[string]any{"default_channel": "unstable"}
-	if got := resolveEffectiveAgentReleaseChannel(settings, ""); got != "stable" {
-		t.Fatalf("expected no override to resolve stable, got %q", got)
-	}
-	if got := resolveEffectiveAgentReleaseChannel(settings, "unstable"); got != "unstable" {
-		t.Fatalf("expected explicit override to remain unstable, got %q", got)
-	}
-}
-
 func TestAgentUpdateDownloadHandlerServesCachedArtifact(t *testing.T) {
 	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
 	signer := testAgentJWTSigner(t)
@@ -273,17 +331,9 @@ func TestAgentUpdateDownloadHandlerServesCachedArtifact(t *testing.T) {
 
 func TestAgentInstallDownloadHandlerServesSignedPlatformArtifact(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("BOREALIS_PROJECT_ROOT", root)
 	t.Setenv("BOREALIS_AGENT_INSTALL_DOWNLOAD_TOKEN_TTL_SECONDS", "3600")
-	artifactID := "engine-stable-build"
-	artifactPath := agentUpdateArtifactPath(artifactID)
-	if err := packageAgentReleaseArtifact(agentReleaseTestSourceZip(t), artifactPath, map[string]any{
-		"channel":  "stable",
-		"source":   "engine",
-		"build_id": "build",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	artifactID := "engine-build"
+	configureTestAgentArtifact(t, root, artifactID, 1700000300)
 	store := &agentUpdateTestStore{siteEnrollment: "CODE-1234", linkNow: 1700000000}
 	auth := &authService{
 		verifier: &tokenVerifier{
@@ -334,36 +384,10 @@ func TestAgentInstallDownloadHandlerServesSignedPlatformArtifact(t *testing.T) {
 	}
 }
 
-func TestAttachAgentInstallDownloadsAddsSignedSiteURLsForEngineSource(t *testing.T) {
+func TestAttachAgentInstallDownloadsAddsSignedSiteURLs(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("BOREALIS_PROJECT_ROOT", root)
-	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", filepath.Join(root, "Engine", "Services", "api-backend", "config", "agent_release_channels.json"))
-	artifactID := "engine-stable-build"
-	if err := packageAgentReleaseArtifact(agentReleaseTestSourceZip(t), agentUpdateArtifactPath(artifactID), map[string]any{
-		"channel":  "stable",
-		"source":   "engine",
-		"build_id": "build",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	settings := defaultAgentReleaseChannelSettings(1700000000)
-	settings["binary_source"] = agentReleaseSourceEngine
-	channels := settings["channels"].(map[string]any)
-	channels["stable"] = map[string]any{
-		"channel":         "stable",
-		"source":          "engine",
-		"build_id":        "build",
-		"artifact_id":     artifactID,
-		"artifact_path":   agentUpdateArtifactPath(artifactID),
-		"artifact_sha256": "sha",
-		"artifact_size":   int64(123),
-		"compiled_at":     int64(1700000300),
-		"promoted_at":     int64(1600000100),
-		"refreshed_at":    int64(1600000200),
-	}
-	if err := saveAgentReleaseChannelSettings(settings); err != nil {
-		t.Fatal(err)
-	}
+	artifactID := "engine-build"
+	configureTestAgentArtifact(t, root, artifactID, 1700000300)
 	store := &agentUpdateTestStore{siteEnrollment: "CODE-1234", linkNow: 1700000000}
 	auth := &authService{
 		verifier: &tokenVerifier{
@@ -377,7 +401,7 @@ func TestAttachAgentInstallDownloadsAddsSignedSiteURLsForEngineSource(t *testing
 
 	attachAgentInstallDownloads(nil, auth, metadata, sites)
 
-	if metadata["agent_binary_source"] != agentReleaseSourceEngine {
+	if metadata["agent_binary_source"] != agentArtifactSourceEngine {
 		t.Fatalf("expected engine source metadata, got %#v", metadata["agent_binary_source"])
 	}
 	artifact := metadata["agent_install_artifact"].(map[string]any)
@@ -427,30 +451,9 @@ func TestAttachAgentInstallDownloadsAddsSignedSiteURLsForEngineSource(t *testing
 
 func TestSiteAgentInstallLinkRevokeReplacesOnlyRequestedPlatform(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("BOREALIS_PROJECT_ROOT", root)
-	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", filepath.Join(root, "Engine", "Services", "api-backend", "config", "agent_release_channels.json"))
 	t.Setenv("BOREALIS_AGENT_INSTALL_DOWNLOAD_TOKEN_TTL_SECONDS", "3600")
-	artifactID := "engine-stable-build"
-	if err := packageAgentReleaseArtifact(agentReleaseTestSourceZip(t), agentUpdateArtifactPath(artifactID), map[string]any{
-		"channel":  "stable",
-		"source":   "engine",
-		"build_id": "build",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	settings := defaultAgentReleaseChannelSettings(1700000000)
-	settings["binary_source"] = agentReleaseSourceEngine
-	channels := settings["channels"].(map[string]any)
-	channels["stable"] = map[string]any{
-		"channel":       "stable",
-		"source":        "engine",
-		"build_id":      "build",
-		"artifact_id":   artifactID,
-		"artifact_path": agentUpdateArtifactPath(artifactID),
-	}
-	if err := saveAgentReleaseChannelSettings(settings); err != nil {
-		t.Fatal(err)
-	}
+	artifactID := "engine-build"
+	configureTestAgentArtifact(t, root, artifactID, 1700000300)
 	store := &agentUpdateTestStore{siteEnrollment: "CODE-1234", linkNow: 1700000000}
 	auth := &authService{
 		verifier: &tokenVerifier{

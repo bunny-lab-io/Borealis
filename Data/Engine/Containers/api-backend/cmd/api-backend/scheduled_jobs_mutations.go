@@ -7,15 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 )
 
 const onboardingComponentKind = "device_onboarding"
 const patchInstallComponentKind = "patch_install"
-
-var onboardingBranchPattern = regexp.MustCompile(`^[A-Za-z0-9._/\-]+$`)
 
 type scheduledJobMutationValues struct {
 	Name                string
@@ -199,7 +196,7 @@ func buildScheduledJobCreateValues(ctx context.Context, conn *sql.Conn, profile 
 	jobKind := normalizeScheduledJobKind(cleanText(firstPresentAny(payload["job_kind"], payload["kind"])))
 	components := scheduledAnySlice(payload["components"])
 	if jobKind == scheduledJobKindOnboarding && len(components) == 0 {
-		components = []any{map[string]any{"kind": onboardingComponentKind, "install_branch": "main"}}
+		components = []any{map[string]any{"kind": onboardingComponentKind}}
 	}
 	targets, scopeErr, err := normalizeAndScopeScheduledTargets(ctx, conn, profile, allowedSiteIDs, firstPresentAny(payload["targets"], []any{}))
 	if err != nil {
@@ -323,7 +320,7 @@ func buildScheduledJobUpdateValues(ctx context.Context, conn *sql.Conn, profile 
 		values.ExecutionContext = "onboarding_local_network"
 		values.UseServiceAccount = false
 		if len(values.Components) == 0 {
-			values.Components = []any{map[string]any{"kind": onboardingComponentKind, "install_branch": "main"}}
+			values.Components = []any{map[string]any{"kind": onboardingComponentKind}}
 		}
 	}
 	if values.JobKind == scheduledJobKindPatchInstall {
@@ -740,10 +737,6 @@ func validateScheduledOnboardingConfig(components []any, targets []any, credenti
 	}
 	if len(scopeEntries) == 0 {
 		return "Onboarding jobs require at least one IP address, CIDR, range, or FQDN."
-	}
-	branch := firstText(cleanText(firstPresentAny(component["install_branch"], component["repo_branch"], component["branch"])), "main")
-	if !onboardingBranchPattern.MatchString(branch) {
-		return "Install branch contains unsupported characters."
 	}
 	platform := strings.ToLower(firstText(cleanText(firstPresentAny(component["agent_platform"], component["target_os"], component["platform"], component["os"])), "linux"))
 	switch platform {

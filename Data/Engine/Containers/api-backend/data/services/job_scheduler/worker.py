@@ -146,7 +146,7 @@ def _connect_worker_db_with_retry(
             attempt += 1
 
 
-def _stop_worker_quietly(logger, db_factory, *, worker_guid: str) -> None:
+def _stop_worker_quietly(logger, db_factory, *, worker_guid: str, container_name: str = "") -> None:
     try:
         conn = db_factory()
     except Exception as exc:
@@ -159,7 +159,7 @@ def _stop_worker_quietly(logger, db_factory, *, worker_guid: str) -> None:
             return
         raise
     try:
-        stop_worker(conn, worker_guid=worker_guid)
+        stop_worker(conn, worker_guid=worker_guid, container_name=container_name)
         conn.commit()
     except Exception as exc:
         _rollback_quietly(conn)
@@ -185,6 +185,7 @@ def _commit_worker_heartbeat(
     task_links,
     idle_since: Optional[int],
     claimed_count: int,
+    container_name: str = "",
     max_attempts: int = 3,
     sleep_fn=time.sleep,
 ) -> bool:
@@ -199,6 +200,7 @@ def _commit_worker_heartbeat(
                 task_links=task_links,
                 idle_since=idle_since,
                 claimed_count=claimed_count,
+                container_name=container_name,
             )
             conn.commit()
             return True
@@ -453,6 +455,7 @@ def main() -> None:
                     task_links=_agent_socket_task_links(agent_device_count) + _agent_online_task_links(online_device_total),
                     idle_since=None if online_device_total > 0 else idle_since,
                     claimed_count=0,
+                    container_name=container_name,
                 )
             finally:
                 conn.close()
@@ -481,7 +484,12 @@ def main() -> None:
             site_id,
             exit_reason,
         )
-        _stop_worker_quietly(logger, db_factory, worker_guid=worker_guid)
+        _stop_worker_quietly(
+            logger,
+            db_factory,
+            worker_guid=worker_guid,
+            container_name=container_name,
+        )
 
 
 if __name__ == "__main__":

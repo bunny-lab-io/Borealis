@@ -24,14 +24,10 @@ import (
 )
 
 type linuxUpdateManifest struct {
-	TargetBuildID    string `json:"target_build_id"`
-	ArtifactSHA256   string `json:"artifact_sha256"`
-	FallbackURL      string `json:"fallback_url"`
-	DownloadPath     string `json:"download_path"`
-	EffectiveChannel string `json:"effective_channel"`
-	TargetChannel    string `json:"target_channel"`
-	ArtifactFormat   string `json:"artifact_format"`
-	Branch           string `json:"branch"`
+	TargetBuildID  string `json:"target_build_id"`
+	ArtifactSHA256 string `json:"artifact_sha256"`
+	DownloadPath   string `json:"download_path"`
+	ArtifactFormat string `json:"artifact_format"`
 }
 
 func runStandaloneUpdateCheck(options agentruntime.Options) error {
@@ -69,13 +65,6 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if strings.TrimSpace(options.TrustedEngineCAPEM) != "" {
 		cfg.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(options.TrustedEngineCAPEM)
 	}
-	if strings.TrimSpace(options.RepoRef) != "" {
-		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
-		cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.Agent.Branch)
-	}
-	if strings.TrimSpace(options.ReleaseChannel) != "" {
-		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
-	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return err
 	}
@@ -92,14 +81,10 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if installed == "" {
 		installed = agentconfig.NormalizeBuildID(options.BuildID)
 	}
-	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
-	if agentconfig.UsesUnstableReleaseChannel(cfg.Agent.ReleaseChannel) {
-		return runLinuxRepoRefUpdateCheck(ctx, client, configPath, &cfg, branch, installed)
-	}
-	return runLinuxStableManifestUpdateCheck(ctx, client, configPath, &cfg, installed)
+	return runLinuxManifestUpdateCheck(ctx, client, configPath, &cfg, installed)
 }
 
-func runLinuxStableManifestUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, installed string) error {
+func runLinuxManifestUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, installed string) error {
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
 		removeLinuxUpdateStatus(configPath)
@@ -109,25 +94,19 @@ func runLinuxStableManifestUpdateCheck(ctx context.Context, client *auth.Client,
 	if target == "" {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
-	_ = writeLinuxReleaseTarget(configPath, cfg, releaseChannelForLinuxUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		removeLinuxUpdateStatus(configPath)
 		return nil
 	}
 	downloadURL := strings.TrimSpace(manifest.DownloadPath)
-	authed := true
 	if downloadURL == "" {
-		downloadURL = strings.TrimSpace(manifest.FallbackURL)
-		authed = false
-	}
-	if downloadURL == "" {
-		return fmt.Errorf("update manifest did not provide artifact URL")
+		return fmt.Errorf("update manifest did not provide Engine artifact path")
 	}
 	if strings.HasPrefix(downloadURL, "/") {
 		downloadURL = strings.TrimRight(client.BaseURL(), "/") + downloadURL
 	}
 	archivePath := filepath.Join(updaterDir(configPath), "agent-update.zip")
-	if err := downloadLinuxUpdateArtifact(ctx, client, downloadURL, authed, archivePath); err != nil {
+	if err := downloadLinuxUpdateArtifact(ctx, client, downloadURL, archivePath); err != nil {
 		return err
 	}
 	if strings.TrimSpace(manifest.ArtifactSHA256) != "" {
@@ -145,19 +124,6 @@ func runLinuxStableManifestUpdateCheck(ctx context.Context, client *auth.Client,
 	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
 	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
 	return nil
-}
-
-func releaseChannelForLinuxUpdateManifest(effective string, target string) string {
-	channel := strings.ToLower(strings.TrimSpace(effective))
-	if channel == "" {
-		channel = strings.ToLower(strings.TrimSpace(target))
-	}
-	switch channel {
-	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelUnstable
-	default:
-		return agentconfig.ReleaseChannelStable
-	}
 }
 
 func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installedBuildID string) (linuxUpdateManifest, error) {
@@ -192,180 +158,16 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 	return manifest, nil
 }
 
-func runLinuxRepoRefUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string) error {
-	target, err := resolveEngineRepoRefSHA(ctx, client, branch)
-	if err != nil {
-		engineErr := err
-		target, err = resolveGithubRefSHA(ctx, branch)
-		if err != nil {
-			if shouldFallbackRepoRefToStable(engineErr, err) {
-				if writeErr := writeLinuxReleaseTarget(configPath, cfg, agentconfig.ReleaseChannelStable, agentconfig.DefaultBranch); writeErr != nil {
-					removeLinuxUpdateStatus(configPath)
-					return writeErr
-				}
-				return runLinuxStableManifestUpdateCheck(ctx, client, configPath, cfg, installed)
-			}
-			removeLinuxUpdateStatus(configPath)
-			return fmt.Errorf("resolve repo_ref %q update target; Engine repo hash API failed: %v; GitHub fallback failed: %w", branch, engineErr, err)
-		}
-	}
-	target = strings.TrimSpace(strings.ToLower(target))
-	if target == "" {
-		return fmt.Errorf("repo_ref %q resolved empty target build id", branch)
-	}
-	if installed != "" && strings.EqualFold(installed, target) {
-		removeLinuxUpdateStatus(configPath)
-		return nil
-	}
-	downloadURL := linuxBranchAgentURL(branch)
-	binaryPath := filepath.Join(updaterDir(configPath), "Agent.branch")
-	if err := downloadRawFile(ctx, downloadURL, binaryPath); err != nil {
-		removeLinuxUpdateStatus(configPath)
+func downloadLinuxUpdateArtifact(ctx context.Context, client *auth.Client, rawURL string, destination string) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(binaryPath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
-	if len(data) == 0 {
-		return fmt.Errorf("repo_ref %q Linux Agent artifact is empty", branch)
-	}
-	if err := stageLinuxAgentBinary(configPath, data); err != nil {
-		return err
-	}
-	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
-	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
-	return nil
-}
-
-func resolveEngineRepoRefSHA(ctx context.Context, client *auth.Client, branch string) (string, error) {
-	if client == nil {
-		return "", fmt.Errorf("auth client missing")
-	}
-	params := url.Values{}
-	params.Set("branch", strings.TrimSpace(branch))
-	params.Set("ttl", "300")
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		strings.TrimRight(client.BaseURL(), "/")+"/api/repo/current_hash?"+params.Encode(),
-		nil,
-	)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
 	for key, value := range client.AuthHeaders() {
 		req.Header.Set(key, value)
-	}
-	resp, err := client.HTTPClient().Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("Engine repo hash API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var payload struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	sha := strings.TrimSpace(payload.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("Engine repo hash API returned empty sha")
-	}
-	return sha, nil
-}
-
-func resolveGithubRefSHA(ctx context.Context, branch string) (string, error) {
-	apiURL := "https://api.github.com/repos/bunny-lab-io/Borealis/commits/" + url.PathEscape(branch)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("GitHub commit API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var payload struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	sha := strings.TrimSpace(payload.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("GitHub commit API returned empty sha")
-	}
-	return sha, nil
-}
-
-func linuxBranchAgentURL(branch string) string {
-	escapedBranch := strings.Trim(strings.ReplaceAll(branch, "\\", "/"), "/")
-	rawURL := url.URL{
-		Scheme: "https",
-		Host:   "raw.githubusercontent.com",
-		Path:   "/bunny-lab-io/Borealis/refs/heads/" + escapedBranch + "/Data/Agent/dist/linux-amd64/Agent",
-	}
-	return rawURL.String()
-}
-
-func downloadRawFile(ctx context.Context, rawURL string, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("raw artifact HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	temp := destination + ".download"
-	out, err := os.OpenFile(temp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, resp.Body)
-	closeErr := out.Close()
-	if copyErr != nil {
-		_ = os.Remove(temp)
-		return copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(temp)
-		return closeErr
-	}
-	return os.Rename(temp, destination)
-}
-
-func downloadLinuxUpdateArtifact(ctx context.Context, client *auth.Client, rawURL string, authed bool, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
-	}
-	if authed {
-		for key, value := range client.AuthHeaders() {
-			req.Header.Set(key, value)
-		}
 	}
 	resp, err := client.HTTPClient().Do(req)
 	if err != nil {
@@ -486,21 +288,6 @@ func writeLinuxInstalledBuildID(configPath string, cfg *agentconfig.AgentConfig,
 		return err
 	}
 	return nil
-}
-
-func writeLinuxReleaseTarget(configPath string, cfg *agentconfig.AgentConfig, releaseChannel string, branch string) error {
-	if cfg == nil {
-		loaded, err := agentconfig.LoadOrCreate(configPath)
-		if err != nil {
-			return err
-		}
-		cfg = &loaded
-	}
-	cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(releaseChannel)
-	if strings.TrimSpace(branch) != "" {
-		cfg.Agent.Branch = agentconfig.NormalizeBranch(branch)
-	}
-	return agentconfig.Save(configPath, cfg)
 }
 
 func removeLinuxUpdateStatus(configPath string) {

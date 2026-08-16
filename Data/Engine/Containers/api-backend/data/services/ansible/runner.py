@@ -34,6 +34,8 @@ RUN_STATUS_RUNNING = "Running"
 RUN_STATUS_TIMED_OUT = "Timed Out"
 _SHARED_ANSIBLE_RUN_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS"
 _DEFAULT_SHARED_ANSIBLE_RUN_TIMEOUT_SECONDS = 900
+_SITE_WORKER_ANSIBLE_CONCURRENCY_ENV = "BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY"
+_DEFAULT_SITE_WORKER_ANSIBLE_CONCURRENCY = 2
 _SHARED_ANSIBLE_TIMEOUT_TERMINATION_GRACE_SECONDS = 5
 
 
@@ -141,6 +143,12 @@ class EngineAnsibleRunner:
         self._db_conn_factory = db_conn_factory
         self._service_log = service_log
         self._logger = logger or logging.getLogger(__name__)
+        self._run_slots = threading.BoundedSemaphore(
+            _env_positive_int(
+                _SITE_WORKER_ANSIBLE_CONCURRENCY_ENV,
+                _DEFAULT_SITE_WORKER_ANSIBLE_CONCURRENCY,
+            )
+        )
 
     def queue_run(
         self,
@@ -164,7 +172,7 @@ class EngineAnsibleRunner:
     ) -> str:
         run_id = uuid.uuid4().hex
         worker = threading.Thread(
-            target=self._run_playbook,
+            target=self._run_playbook_with_slot,
             kwargs={
                 "run_id": run_id,
                 "hostname": hostname,
@@ -184,10 +192,15 @@ class EngineAnsibleRunner:
                 "scheduled_job_run_row_id": scheduled_job_run_row_id,
                 "connection": connection,
             },
+            name=f"ansible-run-{run_id[:12]}",
             daemon=True,
         )
         worker.start()
         return run_id
+
+    def _run_playbook_with_slot(self, **kwargs: Any) -> None:
+        with self._run_slots:
+            self._run_playbook(**kwargs)
 
     # ------------------------------------------------------------------
     # Path helpers

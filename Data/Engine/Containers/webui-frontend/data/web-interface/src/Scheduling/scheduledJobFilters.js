@@ -11,7 +11,6 @@ export const FILTER_OPTIONS = [
 const MAINTENANCE_JOB_KIND_ALIASES = new Set([
   "agent_maintenance",
   "agent_update",
-  "agent_channel_switch",
   "maintenance",
   "engine_maintenance",
 ]);

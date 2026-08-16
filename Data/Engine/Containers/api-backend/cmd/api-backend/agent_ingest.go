@@ -438,22 +438,7 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 		updates["agent_hash"] = agentBuildID
 	}
 	updateStatus, _ := payload["agent_update_status"].(map[string]any)
-	agentReleaseChannelRaw := cleanText(payload["agent_release_channel"])
-	agentBranchRaw := cleanText(payload["agent_branch"])
-	agentReleaseChannel := cleanText(agentReleaseChannelRaw)
-	agentBranch := cleanText(agentBranchRaw)
-	releaseInstruction := agentHeartbeatReleaseChannelInstruction(authGUID, agentReleaseChannelRaw, agentBranchRaw, now)
-	if agentReleaseChannel != "" {
-		updates["agent_release_channel"] = agentReleaseChannel
-	}
-	if agentBranch != "" {
-		updates["agent_branch"] = agentBranch
-	}
-	if normalizeAgentReleaseChannel(agentReleaseChannelRaw, "") == "stable" && strings.EqualFold(normalizeAgentBranch(agentBranchRaw), defaultAgentReleaseBranch) {
-		updates["agent_release_channel_override"] = nil
-	}
 	if len(updateStatus) > 0 {
-		updates["agent_update_channel"] = cleanText(firstNonEmpty(updateStatus["target_channel"], updateStatus["effective_channel"]))
 		updates["agent_update_target_build_id"] = cleanText(updateStatus["target_build_id"])
 		updates["agent_update_state"] = cleanText(updateStatus["state"])
 		updates["agent_update_error"] = cleanText(updateStatus["last_error"])
@@ -479,7 +464,7 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 		}
 	}()
 
-	targetGUID, existingRoleHealth, rowHostname, rowReleaseOverride, found, err := selectAgentDeviceForGUID(ctx, tx, authGUID)
+	targetGUID, existingRoleHealth, rowHostname, found, err := selectAgentDeviceForGUID(ctx, tx, authGUID)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -494,16 +479,6 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 		if conflict && !strings.EqualFold(conflictGUID, targetGUID) {
 			delete(updates, "hostname")
 		}
-	}
-	if releaseInstruction == nil {
-		releaseInstruction = agentHeartbeatNoOverrideReleaseInstruction(targetGUID, rowReleaseOverride, agentReleaseChannelRaw, agentBranchRaw, now)
-	}
-	if releaseInstruction != nil {
-		agentReleaseChannel = defaultAgentReleaseChannel
-		agentBranch = defaultAgentReleaseBranch
-		updates["agent_release_channel_override"] = nil
-		updates["agent_release_channel"] = defaultAgentReleaseChannel
-		updates["agent_branch"] = defaultAgentReleaseBranch
 	}
 	if hasRoleHealth {
 		updates["agent_role_health"] = serializeAgentRoleHealth(mergeAgentRoleHealth(existingRoleHealth, incomingRoleHealth, incomingServiceMode))
@@ -533,7 +508,7 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 
 	if len(updateStatus) > 0 {
 		reconcileHostname := firstText(cleanText(updates["hostname"]), hostname, rowHostname)
-		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, reconcileHostname, updateStatus, firstText(cleanText(updateStatus["target_channel"]), cleanText(updateStatus["effective_channel"]), agentReleaseChannel), firstText(cleanText(updateStatus["target_branch"]), agentBranch), agentBuildID)
+		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, reconcileHostname, updateStatus, agentBuildID)
 	}
 
 	response := map[string]any{
@@ -543,9 +518,6 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 		"site_name":           siteName,
 		"metadata_fields":     metadataSync["updates"],
 		"metadata_field_acks": metadataSync["acks"],
-	}
-	if releaseInstruction != nil {
-		response["agent_release_channel_instruction"] = releaseInstruction
 	}
 	return response, http.StatusOK, nil
 }
@@ -606,7 +578,7 @@ func (s *postgresOperatorStore) updateAgentStatus(ctx context.Context, deviceCtx
 			_ = tx.Rollback()
 		}
 	}()
-	targetGUID, existingRoleHealth, existingHostname, _, found, err := selectAgentDeviceForGUID(ctx, tx, authGUID)
+	targetGUID, existingRoleHealth, existingHostname, found, err := selectAgentDeviceForGUID(ctx, tx, authGUID)
 	if err != nil {
 		return agentStatusUpdateResult{}, http.StatusInternalServerError, err
 	}
@@ -657,25 +629,25 @@ func (s *postgresOperatorStore) updateAgentStatus(ctx context.Context, deviceCtx
 	}, http.StatusOK, nil
 }
 
-func selectAgentDeviceForGUID(ctx context.Context, tx *sql.Tx, guid string) (string, string, string, string, bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT guid, COALESCE(agent_role_health, ''), COALESCE(hostname, ''), COALESCE(agent_release_channel_override, '') FROM engine.devices WHERE UPPER(guid)=UPPER($1)`, guid)
+func selectAgentDeviceForGUID(ctx context.Context, tx *sql.Tx, guid string) (string, string, string, bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT guid, COALESCE(agent_role_health, ''), COALESCE(hostname, '') FROM engine.devices WHERE UPPER(guid)=UPPER($1)`, guid)
 	if err != nil {
-		return "", "", "", "", false, err
+		return "", "", "", false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var rowGUID, roleHealth, hostname, releaseOverride string
-		if err := rows.Scan(&rowGUID, &roleHealth, &hostname, &releaseOverride); err != nil {
-			return "", "", "", "", false, err
+		var rowGUID, roleHealth, hostname string
+		if err := rows.Scan(&rowGUID, &roleHealth, &hostname); err != nil {
+			return "", "", "", false, err
 		}
 		if normalizeCanonicalGUID(rowGUID) == guid {
-			return rowGUID, roleHealth, hostname, releaseOverride, true, nil
+			return rowGUID, roleHealth, hostname, true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", "", "", "", false, err
+		return "", "", "", false, err
 	}
-	return "", "", "", "", false, nil
+	return "", "", "", false, nil
 }
 
 func lookupDeviceGUIDForHostname(ctx context.Context, tx *sql.Tx, hostname string) (string, bool, error) {
@@ -886,7 +858,7 @@ func upsertAgentMetadataValueTx(ctx context.Context, tx *sql.Tx, guid string, re
 	return err
 }
 
-func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.Context, hostname string, updateStatus map[string]any, releaseChannel string, branch string, installedBuildID string) error {
+func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.Context, hostname string, updateStatus map[string]any, installedBuildID string) error {
 	operationID := cleanText(updateStatus["operation_id"])
 	if operationID == "" || hostname == "" {
 		return nil
@@ -910,7 +882,7 @@ func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.C
 		finished = now
 		stderr = firstText(cleanText(updateStatus["last_error"]), "Agent update operation failed.")
 	}
-	stdout := fmt.Sprintf("Agent reported operation_id=%s state=%s release_channel=%s branch=%s installed_build_id=%s\n", operationID, rawState, firstText(releaseChannel, "-"), firstText(branch, "-"), firstText(installedBuildID, "-"))
+	stdout := fmt.Sprintf("Agent reported operation_id=%s state=%s artifact_source=%s installed_build_id=%s\n", operationID, rawState, agentArtifactSourceEngine, firstText(installedBuildID, "-"))
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {

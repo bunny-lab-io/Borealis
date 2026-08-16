@@ -17,8 +17,6 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.ServerIPFallback = "192.168.3.251"
 	cfg.EnrollmentCode = "CODE"
 	cfg.Agent.GUID = "guid"
-	cfg.Agent.ReleaseChannel = "Unstable"
-	cfg.Agent.Branch = "feature/test"
 	cfg.Agent.InstalledBuildID = "ABCDEF"
 	cfg.Trust.EngineCAPEM = "-----BEGIN CERTIFICATE-----\r\nAQID\r\n-----END CERTIFICATE-----"
 	cfg.RemoteOps.Available = true
@@ -57,12 +55,6 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 	if loaded.ServerIPFallback != "192.168.3.251" {
 		t.Fatalf("server_ip_fallback not normalized: %q", loaded.ServerIPFallback)
-	}
-	if loaded.Agent.Branch != "feature/test" {
-		t.Fatalf("branch mismatch: %q", loaded.Agent.Branch)
-	}
-	if loaded.Agent.ReleaseChannel != ReleaseChannelUnstable {
-		t.Fatalf("release channel mismatch: %q", loaded.Agent.ReleaseChannel)
 	}
 	if loaded.Agent.InstalledBuildID != "abcdef" {
 		t.Fatalf("installed build id mismatch: %q", loaded.Agent.InstalledBuildID)
@@ -486,46 +478,17 @@ func TestSaveDropsLegacyAgentJSONMetadataFields(t *testing.T) {
 	}
 }
 
-func TestDefaultBranch(t *testing.T) {
-	cfg := Default()
-	cfg.ApplyDefaults()
-	if cfg.Agent.Branch != DefaultBranch {
-		t.Fatalf("default branch = %q, want %q", cfg.Agent.Branch, DefaultBranch)
-	}
-	if cfg.Agent.ReleaseChannel != ReleaseChannelStable {
-		t.Fatalf("default release channel = %q, want %q", cfg.Agent.ReleaseChannel, ReleaseChannelStable)
-	}
-}
-
-func TestEmptyUpdateSectionDoesNotDefaultToStableMain(t *testing.T) {
-	cfg := Default()
-	cfg.ApplyDefaults()
-	if cfg.Agent.Update.PreviousChannel != "" || cfg.Agent.Update.PreviousBranch != "" || cfg.Agent.Update.TargetChannel != "" || cfg.Agent.Update.TargetBranch != "" {
-		t.Fatalf("empty update section defaulted channel/branch: %#v", cfg.Agent.Update)
-	}
-}
-
-func TestUpdateSectionNormalizesPresentChannelsAndBranches(t *testing.T) {
+func TestUpdateSectionNormalizesFields(t *testing.T) {
 	cfg := Default()
 	cfg.Agent.Update = AgentUpdateSection{
-		OperationID:     " operation-1 ",
-		Kind:            " switch_branch_channel ",
-		Status:          " SUCCESS ",
-		PreviousChannel: "release",
-		PreviousBranch:  "feature/old",
-		TargetChannel:   "source",
-		TargetBranch:    " feature/new ",
-		LastError:       " done ",
+		OperationID: " operation-1 ",
+		Kind:        " update_now ",
+		Status:      " SUCCESS ",
+		LastError:   " done ",
 	}
 	cfg.ApplyDefaults()
-	if cfg.Agent.Update.OperationID != "operation-1" || cfg.Agent.Update.Kind != "switch_branch_channel" || cfg.Agent.Update.Status != "success" {
+	if cfg.Agent.Update.OperationID != "operation-1" || cfg.Agent.Update.Kind != "update_now" || cfg.Agent.Update.Status != "success" {
 		t.Fatalf("update metadata not normalized: %#v", cfg.Agent.Update)
-	}
-	if cfg.Agent.Update.PreviousChannel != ReleaseChannelStable || cfg.Agent.Update.PreviousBranch != DefaultBranch {
-		t.Fatalf("previous stable channel not normalized to main: %#v", cfg.Agent.Update)
-	}
-	if cfg.Agent.Update.TargetChannel != ReleaseChannelUnstable || cfg.Agent.Update.TargetBranch != "feature/new" {
-		t.Fatalf("target unstable branch not normalized: %#v", cfg.Agent.Update)
 	}
 	if cfg.Agent.Update.LastError != "done" {
 		t.Fatalf("last error not trimmed: %q", cfg.Agent.Update.LastError)

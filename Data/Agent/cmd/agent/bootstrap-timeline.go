@@ -17,7 +17,6 @@ type StatePayload struct {
 	RunID                int    `json:"run_id,omitempty"`
 	Target               string `json:"target,omitempty"`
 	Hostname             string `json:"hostname,omitempty"`
-	RepoRef              string `json:"repo_ref,omitempty"`
 	ServerURL            string `json:"server_url,omitempty"`
 	EnrollmentCodeSHA256 string `json:"enrollment_code_sha256,omitempty"`
 	Status               string `json:"status"`
@@ -47,7 +46,6 @@ func writeState(cfg BootstrapConfig, status string, exitCode int, detail string)
 		RunID:                cfg.RunID,
 		Target:               cfg.Target,
 		Hostname:             currentHostname(),
-		RepoRef:              cfg.RepoRef,
 		ServerURL:            cfg.ServerURL,
 		EnrollmentCodeSHA256: hashText(cfg.SiteEnrollmentCode),
 		Status:               status,

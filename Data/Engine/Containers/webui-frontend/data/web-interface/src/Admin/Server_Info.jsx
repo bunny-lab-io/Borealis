@@ -7,12 +7,9 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  FormControlLabel,
   Menu,
   MenuItem,
   Stack,
-  Switch,
-  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -31,7 +28,6 @@ import {
   DIALOG_BODY_TEXT_SX,
   DIALOG_BUTTON_SX,
   DIALOG_CONTENT_SX,
-  DIALOG_INPUT_SX,
   DIALOG_MAGIC_UI,
   DIALOG_PAPER_SX,
   DIALOG_PRIMARY_BUTTON_SX,
@@ -84,23 +80,6 @@ const SERVER_GRID_THEME = themeQuartz.withParams({
 });
 
 const SERVER_GRID_THEME_CLASS = SERVER_GRID_THEME.themeName || "ag-theme-quartz";
-const AGENT_BINARY_SOURCE_ENGINE = "engine";
-const AGENT_BINARY_SOURCE_GITHUB = "github";
-
-function normalizeAgentBinarySource(value) {
-  const text = String(value || "").trim().toLowerCase();
-  if (["engine", "engine-compiled", "engine_compiled", "engine-cache", "engine_cached"].includes(text)) {
-    return AGENT_BINARY_SOURCE_ENGINE;
-  }
-  return AGENT_BINARY_SOURCE_GITHUB;
-}
-
-function formatAgentBinarySource(value) {
-  return normalizeAgentBinarySource(value) === AGENT_BINARY_SOURCE_ENGINE
-    ? "Engine-Compiled Agent"
-    : "GitHub Release Channel";
-}
-
 const STATUS_COLOR_BY_CODE = Object.freeze({
   healthy: {
     border: "1px solid rgba(52, 211, 153, 0.45)",
@@ -365,12 +344,6 @@ function formatDateOnly(value) {
   const day = String(parsed.getUTCDate()).padStart(2, "0");
   const year = parsed.getUTCFullYear();
   return `${month}/${day}/${year}`;
-}
-
-function formatBuildShort(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "Unavailable";
-  return raw.length > 12 ? raw.slice(0, 12) : raw;
 }
 
 function formatUnixDateTime(value) {
@@ -794,13 +767,6 @@ export default function ServerInfo() {
   const [actionBusyKey, setActionBusyKey] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
   const [boostPollingUntil, setBoostPollingUntil] = useState(0);
-  const [releaseChannelsDialogOpen, setReleaseChannelsDialogOpen] = useState(false);
-  const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
-  const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
-  const [releaseChannelsError, setReleaseChannelsError] = useState("");
-  const [releaseRepo, setReleaseRepo] = useState("");
-  const [releaseBinarySource, setReleaseBinarySource] = useState(AGENT_BINARY_SOURCE_GITHUB);
-  const [releaseGithubFallbackEnabled, setReleaseGithubFallbackEnabled] = useState(false);
   const hasOverviewRef = useRef(Boolean(loaderData?.overview));
 
   const sendScopedNotification = useAppNotifications();
@@ -995,108 +961,6 @@ export default function ServerInfo() {
     });
   }, []);
 
-  const openReleaseChannelsDialog = useCallback(() => {
-    const currentSettings = overview?.agent_release_channels || {};
-    setReleaseRepo(String(currentSettings?.github?.repo || ""));
-    setReleaseBinarySource(normalizeAgentBinarySource(currentSettings?.binary_source));
-    setReleaseGithubFallbackEnabled(Boolean(currentSettings?.github_fallback_enabled));
-    setReleaseChannelsError("");
-    setReleaseChannelsDialogOpen(true);
-  }, [overview]);
-
-  const closeReleaseChannelsDialog = useCallback(() => {
-    if (releaseChannelsSaving || releaseChannelsRefreshing) return;
-    setReleaseChannelsDialogOpen(false);
-    setReleaseChannelsError("");
-  }, [releaseChannelsRefreshing, releaseChannelsSaving]);
-
-  const applyReleaseChannelSettings = useCallback(async () => {
-    const repoValue = String(releaseRepo || "bunny-lab-io/Borealis").trim();
-    const needsRepo = normalizeAgentBinarySource(releaseBinarySource) === AGENT_BINARY_SOURCE_GITHUB || releaseGithubFallbackEnabled;
-    if (needsRepo && (!repoValue || !repoValue.includes("/"))) {
-      setReleaseChannelsError("GitHub repo must be in owner/name form.");
-      return;
-    }
-    setReleaseChannelsSaving(true);
-    setReleaseChannelsError("");
-    try {
-      const response = await fetch("/api/server/agent-release-channels", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          repo: repoValue,
-          binary_source: normalizeAgentBinarySource(releaseBinarySource),
-          github_fallback_enabled: releaseGithubFallbackEnabled,
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      setReleaseChannelsDialogOpen(false);
-      await sendScopedNotification({
-        title: "Release Channels Updated",
-        message: "Agent release-channel source and cached targets updated.",
-        icon: "settings",
-        variant: "info",
-      });
-      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
-      await fetchOverview({ background: false });
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not update the agent release-channel settings.";
-      setReleaseChannelsError(message);
-      await sendScopedNotification({
-        title: "Release Channels Update Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setReleaseChannelsSaving(false);
-    }
-  }, [fetchOverview, releaseBinarySource, releaseGithubFallbackEnabled, releaseRepo, sendScopedNotification]);
-
-  const refreshReleaseChannelTargets = useCallback(async () => {
-    setReleaseChannelsRefreshing(true);
-    setReleaseChannelsError("");
-    try {
-      const response = await fetch("/api/server/agent-release-channels/refresh", {
-        method: "POST",
-        credentials: "include",
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      await sendScopedNotification({
-        title: "Release Targets Refreshed",
-        message: "Borealis refreshed the cached Stable and Unstable agent artifacts.",
-        icon: "info",
-        variant: "success",
-      });
-      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
-      await fetchOverview({ background: false });
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not refresh the agent release-channel targets.";
-      setReleaseChannelsError(message);
-      await sendScopedNotification({
-        title: "Release Target Refresh Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setReleaseChannelsRefreshing(false);
-    }
-  }, [fetchOverview, sendScopedNotification]);
-
   const executeAction = useCallback(async () => {
     if (!confirmAction) return;
     const targetRow = confirmAction?.payload || null;
@@ -1198,15 +1062,9 @@ export default function ServerInfo() {
   const siteWorkerSettings = overview?.site_worker_settings || {};
   const deploymentProfile = siteWorkerSettings?.deployment_profile || host?.deployment_profile || {};
   const deploymentProfileName = String(deploymentProfile?.name || "Deployment Profile").trim();
-  const agentReleaseChannels = overview?.agent_release_channels || {};
   const certificates = Array.isArray(publicEdge?.certificates) ? publicEdge.certificates : [];
   const worstCert = getWorstCertificate(certificates);
   const aegis = overview?.security?.aegis || {};
-  const stableChannel = agentReleaseChannels?.channels?.stable || {};
-  const unstableChannel = agentReleaseChannels?.channels?.unstable || {};
-  const agentBinarySource = normalizeAgentBinarySource(agentReleaseChannels?.binary_source);
-  const agentBinarySourceLabel = formatAgentBinarySource(agentBinarySource);
-  const githubFallbackLabel = agentReleaseChannels?.github_fallback_enabled ? "GitHub fallback on" : "GitHub fallback off";
   const effectiveTimezoneId = String(
     host?.timezone_id || serverTimeSnapshot?.timezone_id || ""
   ).trim();
@@ -1334,20 +1192,6 @@ export default function ServerInfo() {
         actions: [],
       },
       {
-        id: "agent_release_channels",
-        name: "Agent Release Channels",
-        value: `Stable:main / ${agentBinarySourceLabel}`,
-        details: `Stable ${String(stableChannel?.release_tag || formatBuildShort(stableChannel?.build_id))} · Unstable ${formatBuildShort(unstableChannel?.build_id)} · ${githubFallbackLabel} · Refreshed ${formatDateTime(agentReleaseChannels?.last_refresh_completed_at ? new Date(Number(agentReleaseChannels.last_refresh_completed_at) * 1000).toISOString() : "")}`,
-        actions: [
-          {
-            id: "edit_agent_release_channels",
-            label: releaseChannelsRefreshing ? "Refreshing..." : "Configure",
-            disabled: releaseChannelsRefreshing || releaseChannelsSaving,
-            onClick: openReleaseChannelsDialog,
-          },
-        ],
-      },
-      {
         id: "system_time",
         name: "System Time",
         value: clockValue,
@@ -1370,21 +1214,13 @@ export default function ServerInfo() {
       },
     ],
     [
-      agentBinarySourceLabel,
-      agentReleaseChannels,
       clockValue,
       deploymentProfileName,
-      githubFallbackLabel,
       host,
       loadAverageCaption,
       loadAverageValue,
-      openReleaseChannelsDialog,
-      releaseChannelsRefreshing,
-      releaseChannelsSaving,
       siteWorkerSettings,
-      stableChannel,
       timezoneDisplayValue,
-      unstableChannel,
     ]
   );
 
@@ -1668,89 +1504,6 @@ export default function ServerInfo() {
           />
         </Box>
       </PageBodyFrame>
-
-      <Dialog open={releaseChannelsDialogOpen} onClose={closeReleaseChannelsDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock
-            title="Agent Release Channels"
-            subtitle="Devices without overrides use Stable:main. Refresh cached Stable / Unstable targets or change the source repository."
-          />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Stable:main is the fixed default for devices without an ad-hoc override. Unstable tracks the configured repository default branch. Borealis caches a Go agent binary bundle for Windows and Linux before connected SYSTEM agents can update.
-          </Typography>
-          <Stack spacing={2} sx={{ mt: 2 }}>
-            <TextField
-              select
-              label="Agent Binary Source"
-              value={releaseBinarySource}
-              onChange={(event) => {
-                const nextSource = normalizeAgentBinarySource(event.target.value);
-                setReleaseBinarySource(nextSource);
-                if (nextSource !== AGENT_BINARY_SOURCE_ENGINE) {
-                  setReleaseGithubFallbackEnabled(false);
-                }
-                if (releaseChannelsError) setReleaseChannelsError("");
-              }}
-              sx={DIALOG_INPUT_SX}
-              helperText="Production installs normally use Engine-compiled binaries; GitHub remains available for branch testing."
-            >
-              <MenuItem value={AGENT_BINARY_SOURCE_ENGINE}>Use Engine-Compiled Agent</MenuItem>
-              <MenuItem value={AGENT_BINARY_SOURCE_GITHUB}>Use GitHub Release Channel</MenuItem>
-            </TextField>
-            <TextField
-              label="GitHub Repo"
-              value={releaseRepo}
-              onChange={(event) => {
-                setReleaseRepo(event.target.value);
-                if (releaseChannelsError) setReleaseChannelsError("");
-              }}
-              sx={DIALOG_INPUT_SX}
-              helperText="Repo identity in owner/name form."
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={releaseGithubFallbackEnabled}
-                  onChange={(event) => setReleaseGithubFallbackEnabled(event.target.checked)}
-                  disabled={releaseBinarySource !== AGENT_BINARY_SOURCE_ENGINE}
-                />
-              }
-              label="Use GitHub fallback when Engine build fails"
-              sx={{ color: MAGIC_UI.textMuted, "& .MuiFormControlLabel-label": { fontSize: "0.86rem" } }}
-            />
-            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem", lineHeight: 1.45 }}>
-              Stable target: {String(stableChannel?.release_tag || formatBuildShort(stableChannel?.build_id) || "Unavailable")}
-              {" · "}
-              Unstable target: {formatBuildShort(unstableChannel?.build_id)}
-            </Typography>
-            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem", lineHeight: 1.45 }}>
-              Source: {agentBinarySourceLabel}
-              {" · "}
-              GitHub token ready: {agentReleaseChannels?.github_token?.has_token ? "Yes" : "No"}
-              {" · "}
-              Last refresh: {formatDateTime(agentReleaseChannels?.last_refresh_completed_at ? new Date(Number(agentReleaseChannels.last_refresh_completed_at) * 1000).toISOString() : "")}
-            </Typography>
-          </Stack>
-          {releaseChannelsError ? (
-            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
-              {releaseChannelsError}
-            </Typography>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeReleaseChannelsDialog} sx={DIALOG_BUTTON_SX} disabled={releaseChannelsSaving || releaseChannelsRefreshing}>
-            Cancel
-          </Button>
-          <Button onClick={refreshReleaseChannelTargets} sx={DIALOG_BUTTON_SX} disabled={releaseChannelsSaving || releaseChannelsRefreshing}>
-            {releaseChannelsRefreshing ? "Refreshing..." : "Refresh Targets"}
-          </Button>
-          <Button onClick={applyReleaseChannelSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={releaseChannelsSaving || releaseChannelsRefreshing}>
-            {releaseChannelsSaving ? "Saving..." : "Save Channels"}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <Dialog open={Boolean(confirmAction)} onClose={() => setConfirmAction(null)} PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>

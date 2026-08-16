@@ -92,8 +92,6 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 	)
 	incomingRoleHealth := firstNonNil(payload["agent_role_health"], payload["role_health"], details["agent_role_health"], summary["agent_role_health"])
 	updateStatus := agentDetailsMapFromAny(firstNonNil(payload["agent_update_status"], summary["agent_update_status"]))
-	releaseChannel := cleanText(firstNonEmpty(payload["agent_release_channel"], summary["agent_release_channel"]))
-	agentBranch := normalizeAgentBranch(firstNonEmpty(payload["agent_branch"], summary["agent_branch"]))
 
 	existing, found, err := s.loadAgentDetailsExisting(ctx, authGUID, hostname)
 	if err != nil {
@@ -123,12 +121,6 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 	if agentHash != "" {
 		summary["agent_hash"] = agentHash
 		summary["agent_build_id"] = agentHash
-	}
-	if releaseChannel != "" {
-		summary["agent_release_channel"] = releaseChannel
-	}
-	if agentBranch != "" {
-		summary["agent_branch"] = agentBranch
 	}
 	applyAgentUpdateStatusSummary(summary, updateStatus)
 	effectiveGUID := firstText(authGUID, existingGUID)
@@ -229,7 +221,7 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 	}
 
 	if len(updateStatus) > 0 {
-		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, hostname, updateStatus, firstText(cleanText(updateStatus["target_channel"]), cleanText(updateStatus["effective_channel"]), releaseChannel), firstText(cleanText(updateStatus["target_branch"]), agentBranch), firstText(agentHash, cleanText(mergedSummary["agent_build_id"]), cleanText(mergedSummary["agent_hash"])))
+		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, hostname, updateStatus, firstText(agentHash, cleanText(mergedSummary["agent_build_id"]), cleanText(mergedSummary["agent_hash"])))
 	}
 	return agentDetailsUpdateResult{
 		Payload:           map[string]any{"status": "ok"},
@@ -283,8 +275,7 @@ func queryAgentDetailsExisting(ctx context.Context, conn *sql.Conn, predicate st
 			d.domain, d.external_ip, d.internal_ip, d.last_reboot, d.last_seen,
 			d.cpu_percent, d.memory_percent, d.last_user, d.operating_system,
 			d.uptime, d.agent_id, d.connection_type, d.connection_endpoint,
-			d.agent_release_channel_override, d.agent_release_channel, d.agent_branch,
-			d.agent_update_channel, d.agent_update_target_build_id, d.agent_update_state,
+			d.agent_update_target_build_id, d.agent_update_state,
 			d.agent_update_error, d.agent_update_source,
 			NULL::BIGINT AS site_id, NULL::TEXT AS site_name, NULL::TEXT AS site_description,
 			d.ssl_key_fingerprint
@@ -299,8 +290,7 @@ func queryAgentDetailsExisting(ctx context.Context, conn *sql.Conn, predicate st
 		&item.Row.Domain, &item.Row.ExternalIP, &item.Row.InternalIP, &item.Row.LastReboot, &item.Row.LastSeen,
 		&item.Row.CPUPercent, &item.Row.MemoryPercent, &item.Row.LastUser, &item.Row.OperatingSystem,
 		&item.Row.Uptime, &item.Row.AgentID, &item.Row.ConnectionType, &item.Row.ConnectionEndpoint,
-		&item.Row.AgentReleaseChannelOverride, &item.Row.AgentReleaseChannel, &item.Row.AgentBranch,
-		&item.Row.AgentUpdateChannel, &item.Row.AgentUpdateTargetBuildID, &item.Row.AgentUpdateState,
+		&item.Row.AgentUpdateTargetBuildID, &item.Row.AgentUpdateState,
 		&item.Row.AgentUpdateError, &item.Row.AgentUpdateSource, &item.Row.SiteID, &item.Row.SiteName, &item.Row.SiteDescription,
 		&item.Fingerprint,
 	)
@@ -335,8 +325,7 @@ func (s *postgresOperatorStore) writeAgentDetails(ctx context.Context, input age
 		input.Columns["sessions"], input.Columns["processes"], input.Columns["device_type"], input.Columns["domain"], input.Columns["external_ip"], input.Columns["internal_ip"],
 		input.Columns["last_reboot"], input.Columns["last_seen"], input.Columns["cpu_percent"], input.Columns["memory_percent"], input.Columns["last_user"],
 		input.Columns["operating_system"], input.Columns["uptime"], input.Columns["agent_id"], input.Columns["connection_type"], input.Columns["connection_endpoint"],
-		input.Columns["agent_release_channel"], input.Columns["agent_branch"], input.Columns["agent_update_channel"], input.Columns["agent_update_target_build_id"],
-		input.Columns["agent_update_state"], input.Columns["agent_update_error"], input.Columns["agent_update_source"],
+		input.Columns["agent_update_target_build_id"], input.Columns["agent_update_state"], input.Columns["agent_update_error"], input.Columns["agent_update_source"],
 	}
 	_, err = tx.ExecContext(ctx, agentDetailsUpsertSQL(), params...)
 	if err != nil {
@@ -390,12 +379,11 @@ func agentDetailsUpsertSQL() string {
 			memory, network, software, services, storage, cpu, sessions, processes,
 			device_type, domain, external_ip, internal_ip, last_reboot, last_seen,
 			cpu_percent, memory_percent, last_user, operating_system, uptime, agent_id,
-			connection_type, connection_endpoint, agent_release_channel, agent_branch,
-			agent_update_channel, agent_update_target_build_id, agent_update_state,
+			connection_type, connection_endpoint, agent_update_target_build_id, agent_update_state,
 			agent_update_error, agent_update_source
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-			$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+			$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
 		)
 		ON CONFLICT(hostname) DO UPDATE SET
 			description=EXCLUDED.description,
@@ -425,9 +413,6 @@ func agentDetailsUpsertSQL() string {
 			agent_id=COALESCE(NULLIF(EXCLUDED.agent_id, ''), engine.devices.agent_id),
 			connection_type=COALESCE(NULLIF(EXCLUDED.connection_type, ''), engine.devices.connection_type),
 			connection_endpoint=COALESCE(NULLIF(EXCLUDED.connection_endpoint, ''), engine.devices.connection_endpoint),
-			agent_release_channel=COALESCE(NULLIF(EXCLUDED.agent_release_channel, ''), engine.devices.agent_release_channel),
-			agent_branch=COALESCE(NULLIF(EXCLUDED.agent_branch, ''), engine.devices.agent_branch),
-			agent_update_channel=COALESCE(NULLIF(EXCLUDED.agent_update_channel, ''), engine.devices.agent_update_channel),
 			agent_update_target_build_id=COALESCE(NULLIF(EXCLUDED.agent_update_target_build_id, ''), engine.devices.agent_update_target_build_id),
 			agent_update_state=COALESCE(NULLIF(EXCLUDED.agent_update_state, ''), engine.devices.agent_update_state),
 			agent_update_error=COALESCE(NULLIF(EXCLUDED.agent_update_error, ''), engine.devices.agent_update_error),
@@ -457,9 +442,6 @@ func extractAgentDetailDeviceColumns(details map[string]any) map[string]any {
 	out["agent_id"] = cleanText(summary["agent_id"])
 	out["connection_type"] = cleanText(firstNonEmpty(summary["connection_type"], summary["remote_type"]))
 	out["connection_endpoint"] = cleanText(firstNonEmpty(summary["connection_endpoint"], summary["connection_address"], summary["address"], summary["external_ip"], summary["internal_ip"]))
-	out["agent_release_channel"] = cleanText(firstNonEmpty(summary["agent_release_channel"], summary["release_channel"]))
-	out["agent_branch"] = normalizeAgentBranch(firstNonEmpty(summary["agent_branch"], summary["branch"], summary["repo_ref"], summary["repo_branch"]))
-	out["agent_update_channel"] = cleanText(firstNonEmpty(summary["agent_update_channel"], summary["target_channel"], summary["agent_release_channel_effective"]))
 	out["agent_update_target_build_id"] = cleanText(firstNonEmpty(summary["agent_update_target_build_id"], summary["target_build_id"], summary["agent_target_build_id"]))
 	out["agent_update_state"] = cleanText(firstNonEmpty(summary["agent_update_state"], summary["update_state"]))
 	out["agent_update_error"] = cleanText(firstNonEmpty(summary["agent_update_error"], summary["last_update_error"]))
@@ -1138,9 +1120,6 @@ func applyAgentUpdateStatusSummary(summary map[string]any, updateStatus map[stri
 	if len(updateStatus) == 0 {
 		return
 	}
-	if value := cleanText(firstNonEmpty(updateStatus["target_channel"], updateStatus["effective_channel"])); value != "" {
-		summary["agent_update_channel"] = value
-	}
 	if value := cleanText(updateStatus["target_build_id"]); value != "" {
 		summary["agent_update_target_build_id"] = value
 	}
@@ -1169,6 +1148,29 @@ func deepMergePreserve(base map[string]any, incoming map[string]any) map[string]
 		}
 	}
 	return merged
+}
+
+func deepCopyMap(source map[string]any) map[string]any {
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		switch typed := value.(type) {
+		case map[string]any:
+			cloned[key] = deepCopyMap(typed)
+		case []any:
+			items := make([]any, len(typed))
+			for index, item := range typed {
+				if nested, ok := item.(map[string]any); ok {
+					items[index] = deepCopyMap(nested)
+				} else {
+					items[index] = item
+				}
+			}
+			cloned[key] = items
+		default:
+			cloned[key] = value
+		}
+	}
+	return cloned
 }
 
 func cloneMap(value any) (map[string]any, bool) {

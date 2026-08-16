@@ -17,7 +17,6 @@ import (
 
 const (
 	agentMaintenanceUpdateAction = "update_now"
-	agentMaintenanceSwitchAction = "switch_branch_channel"
 	agentMaintenanceJobKind      = "agent_maintenance"
 	agentMaintenanceLane         = "scheduled_job"
 )
@@ -27,20 +26,16 @@ type agentMaintenanceStore interface {
 }
 
 type agentMaintenanceRequest struct {
-	Action         string
-	ReleaseChannel string
-	Branch         string
-	DeviceGUIDs    []string
+	Action      string
+	DeviceGUIDs []string
 }
 
 type agentMaintenanceDevice struct {
-	GUID                string
-	Hostname            string
-	AgentID             string
-	AgentReleaseChannel string
-	AgentBranch         string
-	SiteID              sql.NullInt64
-	SiteName            string
+	GUID     string
+	Hostname string
+	AgentID  string
+	SiteID   sql.NullInt64
+	SiteName string
 }
 
 type agentMaintenanceRunRef struct {
@@ -75,16 +70,6 @@ func agentMaintenanceBulkHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_action"})
 			return
 		}
-		if action == agentMaintenanceSwitchAction && !strings.EqualFold(cleanText(profile.Role), "admin") {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
-			return
-		}
-		channel := normalizeAgentMaintenanceChannel(firstNonEmpty(body["release_channel"], body["channel"]))
-		if channel != "stable" && channel != "unstable" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_channel"})
-			return
-		}
-		branch := normalizeAgentMaintenanceBranch(channel, body["branch"])
 		guids := normalizeAgentMaintenanceGUIDs(firstNonEmpty(body["guids"], body["device_guids"], body["devices"]))
 		if len(guids) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "no_devices_targeted"})
@@ -98,10 +83,8 @@ func agentMaintenanceBulkHandler(auth *authService) http.HandlerFunc {
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
 		payload, status, err := store.queueAgentMaintenance(ctx, profile, agentMaintenanceRequest{
-			Action:         action,
-			ReleaseChannel: channel,
-			Branch:         branch,
-			DeviceGUIDs:    guids,
+			Action:      action,
+			DeviceGUIDs: guids,
 		})
 		if err != nil {
 			writeJSON(w, status, map[string]any{"error": err.Error()})
@@ -212,10 +195,8 @@ func (s *postgresOperatorStore) queueAgentMaintenance(ctx context.Context, profi
 	now := time.Now().Unix()
 	jobName := agentMaintenanceJobName(request.Action)
 	component := map[string]any{
-		"kind":            agentMaintenanceJobKind,
-		"action":          request.Action,
-		"release_channel": request.ReleaseChannel,
-		"branch":          request.Branch,
+		"kind":   agentMaintenanceJobKind,
+		"action": request.Action,
 	}
 	targets := make([]map[string]any, 0, len(devices))
 	for _, device := range devices {
@@ -257,48 +238,22 @@ func (s *postgresOperatorStore) queueAgentMaintenance(ctx context.Context, profi
 			return nil, http.StatusInternalServerError, err
 		}
 		operationID := newUUIDString()
-		targetChannel := request.ReleaseChannel
-		targetBranch := request.Branch
-		if request.Action == agentMaintenanceUpdateAction {
-			targetChannel = normalizeAgentMaintenanceChannel(device.AgentReleaseChannel)
-			targetBranch = normalizeAgentMaintenanceBranch(targetChannel, firstText(device.AgentBranch, request.Branch))
-		} else if device.GUID == "" {
-			stderr := "Device GUID unavailable for branch/channel switch.\n"
-			if err := updateAgentMaintenanceRun(ctx, tx, runRef, "Failed", "", stderr, operationID); err != nil {
-				return nil, http.StatusInternalServerError, err
-			}
-			errorsList = append(errorsList, map[string]any{"hostname": device.Hostname, "guid": device.GUID, "error": "missing_guid", "run_id": runRef.RunID})
-			continue
-		} else if err := updateAgentMaintenanceDeviceChannel(ctx, tx, device.GUID, targetChannel, targetBranch); err != nil {
-			stderr := fmt.Sprintf("Failed to update Agent branch/channel selection: %v\n", err)
-			if updateErr := updateAgentMaintenanceRun(ctx, tx, runRef, "Failed", "", stderr, operationID); updateErr != nil {
-				return nil, http.StatusInternalServerError, updateErr
-			}
-			errorsList = append(errorsList, map[string]any{"hostname": device.Hostname, "guid": device.GUID, "error": "channel_update_failed", "run_id": runRef.RunID})
-			continue
-		}
-
 		eventPayload := map[string]any{
 			"operation_id":         operationID,
 			"kind":                 request.Action,
 			"action":               request.Action,
 			"hostname":             device.Hostname,
 			"guid":                 device.GUID,
-			"release_channel":      targetChannel,
-			"channel":              targetChannel,
-			"target_channel":       targetChannel,
-			"branch":               targetBranch,
-			"target_branch":        targetBranch,
 			"requested_at":         now,
 			"requested_by":         firstText(profile.Username, "unknown"),
 			"scheduled_job_id":     jobID,
 			"scheduled_job_run_id": runRef.RunID,
 		}
-		stdout := fmt.Sprintf("Queued operation_id=%s for site-worker dispatch release_channel=%s branch=%s\n", operationID, targetChannel, targetBranch)
+		stdout := fmt.Sprintf("Queued operation_id=%s for site-worker dispatch from Engine artifact.\n", operationID)
 		if err := updateAgentMaintenanceRun(ctx, tx, runRef, "Pending", stdout, "", operationID); err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		workID, err := enqueueAgentMaintenanceWorkItem(ctx, tx, jobID, runRef.RunID, now, device, operationID, request.Action, targetChannel, targetBranch, eventPayload)
+		workID, err := enqueueAgentMaintenanceWorkItem(ctx, tx, jobID, runRef.RunID, now, device, operationID, request.Action, eventPayload)
 		if err != nil {
 			stderr := fmt.Sprintf("Failed to queue site-worker agent maintenance dispatch: %v\n", err)
 			if updateErr := updateAgentMaintenanceRun(ctx, tx, runRef, "Failed", "", stderr, operationID); updateErr != nil {
@@ -363,8 +318,6 @@ func (s *postgresOperatorStore) loadAgentMaintenanceDevices(ctx context.Context,
 		SELECT d.guid,
 		       COALESCE(d.hostname, ''),
 		       COALESCE(d.agent_id, ''),
-		       COALESCE(d.agent_release_channel, ''),
-		       COALESCE(d.agent_branch, ''),
 		       ds.site_id,
 		       COALESCE(s.name, '')
 		  FROM engine.devices AS d
@@ -381,14 +334,12 @@ func (s *postgresOperatorStore) loadAgentMaintenanceDevices(ctx context.Context,
 	devices := make([]agentMaintenanceDevice, 0)
 	for rows.Next() {
 		var device agentMaintenanceDevice
-		if err := rows.Scan(&device.GUID, &device.Hostname, &device.AgentID, &device.AgentReleaseChannel, &device.AgentBranch, &device.SiteID, &device.SiteName); err != nil {
+		if err := rows.Scan(&device.GUID, &device.Hostname, &device.AgentID, &device.SiteID, &device.SiteName); err != nil {
 			return nil, err
 		}
 		device.GUID = normalizeCanonicalGUID(device.GUID)
 		device.Hostname = cleanText(device.Hostname)
 		device.AgentID = cleanText(device.AgentID)
-		device.AgentReleaseChannel = normalizeAgentMaintenanceChannel(device.AgentReleaseChannel)
-		device.AgentBranch = normalizeAgentMaintenanceBranch(device.AgentReleaseChannel, device.AgentBranch)
 		device.SiteName = cleanText(device.SiteName)
 		if device.Hostname == "" {
 			continue
@@ -430,19 +381,18 @@ func createAgentMaintenanceRun(ctx context.Context, tx *sql.Tx, jobID int64, job
 		return agentMaintenanceRunRef{}, err
 	}
 	metadata := map[string]any{
-		"scheduled_job_id":       jobID,
-		"scheduled_job_run_id":   runID,
-		"component_kind":         agentMaintenanceJobKind,
-		"operation_id":           "",
-		"requested_by":           firstText(profile.Username, "unknown"),
-		"target_release_channel": request.ReleaseChannel,
-		"target_branch":          request.Branch,
+		"scheduled_job_id":     jobID,
+		"scheduled_job_run_id": runID,
+		"component_kind":       agentMaintenanceJobKind,
+		"operation_id":         "",
+		"requested_by":         firstText(profile.Username, "unknown"),
+		"artifact_source":      agentArtifactSourceEngine,
 	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return agentMaintenanceRunRef{}, err
 	}
-	stdout := fmt.Sprintf("Requested action=%s release_channel=%s branch=%s\n", request.Action, request.ReleaseChannel, request.Branch)
+	stdout := fmt.Sprintf("Requested action=%s artifact_source=%s\n", request.Action, agentArtifactSourceEngine)
 	var activityID int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO engine.activity_history(
@@ -464,17 +414,6 @@ func createAgentMaintenanceRun(ctx context.Context, tx *sql.Tx, jobID int64, job
 		return agentMaintenanceRunRef{}, err
 	}
 	return agentMaintenanceRunRef{RunID: runID, ActivityID: activityID, Metadata: metadata}, nil
-}
-
-func updateAgentMaintenanceDeviceChannel(ctx context.Context, tx *sql.Tx, guid string, channel string, branch string) error {
-	_, err := tx.ExecContext(ctx, `
-		UPDATE engine.devices
-		   SET agent_release_channel_override=$1,
-		       agent_release_channel=$2,
-		       agent_branch=$3
-		 WHERE UPPER(guid)=UPPER($4)
-	`, channel, channel, branch, guid)
-	return err
 }
 
 func updateAgentMaintenanceRun(ctx context.Context, tx *sql.Tx, run agentMaintenanceRunRef, status string, stdout string, stderr string, operationID string) error {
@@ -532,11 +471,8 @@ func updateAgentMaintenanceRun(ctx context.Context, tx *sql.Tx, run agentMainten
 	return err
 }
 
-func enqueueAgentMaintenanceWorkItem(ctx context.Context, tx *sql.Tx, jobID int64, runID int64, scheduledTS int64, device agentMaintenanceDevice, operationID string, action string, releaseChannel string, branch string, eventPayload map[string]any) (int64, error) {
+func enqueueAgentMaintenanceWorkItem(ctx context.Context, tx *sql.Tx, jobID int64, runID int64, scheduledTS int64, device agentMaintenanceDevice, operationID string, action string, eventPayload map[string]any) (int64, error) {
 	label := "Update Borealis Agent"
-	if action == agentMaintenanceSwitchAction {
-		label = "Switch Agent Branch/Channel"
-	}
 	taskLink := map[string]any{
 		"kind":   agentMaintenanceJobKind,
 		"label":  label,
@@ -545,18 +481,16 @@ func enqueueAgentMaintenanceWorkItem(ctx context.Context, tx *sql.Tx, jobID int6
 		"path":   fmt.Sprintf("/jobs/%d?tab=job_history", jobID),
 	}
 	payload := map[string]any{
-		"job_id":          jobID,
-		"run_id":          runID,
-		"scheduled_ts":    scheduledTS,
-		"hostname":        device.Hostname,
-		"operation_id":    operationID,
-		"action":          action,
-		"release_channel": releaseChannel,
-		"branch":          branch,
-		"service_mode":    "system",
-		"event_name":      "agent_maintenance_request",
-		"event_payload":   eventPayload,
-		"task_link":       taskLink,
+		"job_id":        jobID,
+		"run_id":        runID,
+		"scheduled_ts":  scheduledTS,
+		"hostname":      device.Hostname,
+		"operation_id":  operationID,
+		"action":        action,
+		"service_mode":  "system",
+		"event_name":    "agent_maintenance_request",
+		"event_payload": eventPayload,
+		"task_link":     taskLink,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -587,32 +521,11 @@ func enqueueAgentMaintenanceWorkItem(ctx context.Context, tx *sql.Tx, jobID int6
 func normalizeAgentMaintenanceAction(value any) string {
 	text := strings.ToLower(cleanText(value))
 	switch text {
-	case "switch", "switch_channel", "switch_branch", "switch_branch_channel":
-		return agentMaintenanceSwitchAction
 	case "", "update", "update_agent", "update_now":
 		return agentMaintenanceUpdateAction
 	default:
 		return ""
 	}
-}
-
-func normalizeAgentMaintenanceChannel(value any) string {
-	text := strings.ToLower(cleanText(value))
-	switch text {
-	case "source", "branch", "repo", "repository", "unstable":
-		return "unstable"
-	case "", "release", "releases", "stable":
-		return "stable"
-	default:
-		return text
-	}
-}
-
-func normalizeAgentMaintenanceBranch(channel string, branch any) string {
-	if normalizeAgentMaintenanceChannel(channel) != "unstable" {
-		return "main"
-	}
-	return firstText(cleanText(branch), "main")
 }
 
 func normalizeAgentMaintenanceGUIDs(value any) []string {
@@ -673,9 +586,6 @@ func uniqueAgentMaintenanceGUIDs(values []string) []string {
 }
 
 func agentMaintenanceJobName(action string) string {
-	if action == agentMaintenanceSwitchAction {
-		return "Switch Agent Branch/Channel"
-	}
 	return "Update Borealis Agent"
 }
 

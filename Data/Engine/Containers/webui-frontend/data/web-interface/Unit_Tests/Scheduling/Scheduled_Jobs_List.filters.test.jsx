@@ -14,7 +14,7 @@ function row(name, categoryFlags) {
 describe("Scheduled Jobs list filters", () => {
   it("classifies internal maintenance and patch jobs outside normal queues", () => {
     const maintenance = buildScheduledJobCategoryFlags({
-      jobKind: "agent_channel_switch",
+      jobKind: "agent_maintenance",
       scheduleRaw: "immediately",
       allTargetsEvaluated: false,
       jobExpiredFlag: false,

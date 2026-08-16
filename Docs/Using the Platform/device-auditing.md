@@ -14,7 +14,7 @@ Device Auditing is the normal starting point for understanding a managed endpoin
 3. Select a device hostname to open Device Summary.
 4. Use saved table views when you need repeatable columns and filters for routine audits.
 5. Open `Columns` to add grouped inventory fields or defined Metadata Fields to the table when those values matter for reporting.
-6. Select one or more Agent devices, then use `Change Branch/Channel` when a fleet needs to move to another Agent release channel or source branch.
+6. Select one or more Agent devices, then use `Update Agent` to queue current Engine-built artifact when endpoints need refresh.
 
 ## Read Device Summary
 
@@ -55,7 +55,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `GET /api/devices` - device list scoped to operator site access.
     - `GET /api/devices/search?hostname=<query>` - shared hostname search.
     - `GET /api/devices/<guid>` - device summary by GUID.
-    - `POST /api/devices/agent-maintenance` - queue Agent update or branch/channel maintenance jobs for selected devices.
+    - `POST /api/devices/agent-maintenance` - queue current Engine artifact update jobs for selected devices.
     - `POST /api/devices/<guid>/quarantine` - admin containment action that blocks jobs and remote access without deleting inventory.
     - `POST /api/devices/<guid>/unquarantine` - admin restore action for quarantined devices.
     - `POST /api/devices/<guid>/revoke` - admin trust revocation that blocks token refresh and remote access.
@@ -91,7 +91,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     ### Runtime behavior
 
     - Device List status is derived from `devices.last_seen` plus the site-worker Agent socket registry exposed through `/api/devices` as `agent_socket`.
-    - Device List `Channel / Branch` mirrors Agent release-channel fields on the device row. Bulk `Change Branch/Channel` posts selected Agent GUIDs to `/api/devices/agent-maintenance` with `action=switch_branch_channel`, which creates `agent_maintenance` scheduled-job history and site-worker work items.
+    - Bulk `Update Agent` posts selected Agent GUIDs to `/api/devices/agent-maintenance` with `action=update_now`, which creates `agent_maintenance` scheduled-job history and site-worker work items.
     - `GET /api/devices` enriches device rows by fetching each visible site worker's `/agents` snapshot once, then matching system sockets by hostname, Agent ID, or GUID.
     - Site List drilldowns use `/devices?site=<site_id>&status=<connected|disconnected|offline>`; Device List normalizes those status tokens to `Connected`, `Disconnected`, or `Offline`.
     - Heartbeat-only online state without a confirmed Agent socket renders as `Disconnected`, not `Connected`.

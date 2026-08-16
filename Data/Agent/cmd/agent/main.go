@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,7 +17,6 @@ import (
 )
 
 var version = "dev"
-var resolveInstallRepoRefBuildIDFunc = resolveInstallRepoRefBuildID
 
 func main() {
 	os.Exit(run())
@@ -43,7 +39,6 @@ func run() int {
 	var metadataCommand bool
 	var finalizeBuildID string
 	var finalizeExpectedSHA256 string
-	var repoRef string
 	var helperSessionID int
 	var helperStateDir string
 	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to agent.json. Defaults beside Agent.exe.")
@@ -53,14 +48,12 @@ func run() int {
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
 	flag.StringVar(&options.TrustedEngineCAPEM, "trusted-engine-ca-pem", "", "Trusted Borealis Engine CA PEM for Internal-Only deployments.")
 	flag.StringVar(&options.TrustedEngineCAB64, "trusted-engine-ca-b64", "", "Trusted Borealis Engine CA PEM base64 for Internal-Only deployments.")
-	flag.StringVar(&repoRef, "repo-ref", "", "Borealis repository branch/ref used by bootstrap installers.")
-	flag.StringVar(&options.ReleaseChannel, "release-channel", "", "Agent release channel: stable or unstable.")
 	flag.StringVar(&helperStateDir, "helper-state-dir", "", "Current-user helper state directory.")
 	flag.BoolVar(&options.Verbose, "verbose", false, "Mirror logs to stdout.")
 	flag.BoolVar(&options.Once, "once", false, "Run auth and heartbeat once, then exit.")
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
 	flag.BoolVar(&uninstallService, "uninstall-service", false, "Uninstall Borealis Agent service.")
-	flag.BoolVar(&updateCheck, "update-check", false, "Run one Agent release-channel update check.")
+	flag.BoolVar(&updateCheck, "update-check", false, "Run one Engine-hosted Agent update check.")
 	flag.BoolVar(&watchdogCheck, "watchdog-check", false, "Run one local Agent watchdog check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
 	flag.BoolVar(&validateConfig, "validate-config", false, "Validate agent.json compatibility and exit.")
@@ -72,7 +65,6 @@ func run() int {
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
 	flag.IntVar(&helperSessionID, "helper-session-id", 0, "Current-user helper session ID.")
 	flag.Parse()
-	options.RepoRef = repoRef
 	options.BuildID = version
 	installService = shouldRunInstallService(installService, options)
 
@@ -320,7 +312,7 @@ func fetchMetadataFieldValue(configPath string, fieldNumber int) (string, error)
 }
 
 func isFreshDeployInstall(options agentruntime.Options) bool {
-	return strings.TrimSpace(options.ServerURL) != "" || strings.TrimSpace(options.EnrollmentCode) != "" || strings.TrimSpace(options.RepoRef) != ""
+	return strings.TrimSpace(options.ServerURL) != "" || strings.TrimSpace(options.EnrollmentCode) != ""
 }
 
 func shouldRunInstallService(explicit bool, options agentruntime.Options) bool {
@@ -376,14 +368,7 @@ func persistInstallConfig(options agentruntime.Options) error {
 		cfg.EnrollmentCode = options.EnrollmentCode
 		cfg.ResetAuthForEnrollment()
 	}
-	if options.RepoRef != "" {
-		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
-		cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.Agent.Branch)
-	}
-	if options.ReleaseChannel != "" {
-		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
-	}
-	if buildID := resolveInstallBuildID(options, cfg); buildID != "" {
+	if buildID := agentconfig.NormalizeBuildID(options.BuildID); buildID != "" && !strings.EqualFold(buildID, "dev") {
 		cfg.Agent.InstalledBuildID = buildID
 	}
 	return agentconfig.Save(configPath, &cfg)
@@ -391,54 +376,4 @@ func persistInstallConfig(options agentruntime.Options) error {
 
 func loadInstallConfig(configPath string) (agentconfig.AgentConfig, error) {
 	return agentconfig.LoadOrCreate(configPath)
-}
-
-func resolveInstallBuildID(options agentruntime.Options, cfg agentconfig.AgentConfig) string {
-	if agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID) != "" {
-		return agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
-	}
-	repoRef := strings.TrimSpace(options.RepoRef)
-	if repoRef == "" {
-		repoRef = strings.TrimSpace(cfg.Agent.Branch)
-	}
-	channel := cfg.Agent.ReleaseChannel
-	if strings.TrimSpace(options.ReleaseChannel) != "" {
-		channel = options.ReleaseChannel
-	}
-	if repoRef != "" && agentconfig.UsesUnstableReleaseChannel(channel) {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if buildID, err := resolveInstallRepoRefBuildIDFunc(ctx, repoRef); err == nil {
-			return buildID
-		}
-	}
-	return agentconfig.NormalizeBuildID(options.BuildID)
-}
-
-func resolveInstallRepoRefBuildID(ctx context.Context, repoRef string) (string, error) {
-	apiURL := "https://api.github.com/repos/bunny-lab-io/Borealis/commits/" + url.PathEscape(strings.TrimSpace(repoRef))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("GitHub commit API HTTP %d", resp.StatusCode)
-	}
-	var payload struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	sha := agentconfig.NormalizeBuildID(payload.SHA)
-	if sha == "" {
-		return "", fmt.Errorf("GitHub commit API returned empty sha")
-	}
-	return sha, nil
 }

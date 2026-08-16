@@ -213,6 +213,7 @@ engine_python_files_for_domain() {
         "${test_root}/test_core_api.py" \
         "${test_root}/test_database_schema.py" \
         "${test_root}/test_edge_runtime.py" \
+        "${test_root}/test_engine_launcher.py" \
         "${test_root}/test_engine_secret_config.py" \
         "${test_root}/test_web_ui.py"
       ;;

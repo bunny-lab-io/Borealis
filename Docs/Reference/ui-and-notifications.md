@@ -102,9 +102,6 @@ New forms should validate before submit and expect the API to enforce the same r
     - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WebUI route owner/upstream, disabled Compose WebUI state when K3s owns production WebUI traffic, WireGuard runtime status, public-edge certificate health, and live operator presence.
     - `GET /api/server/workers` (Operator Admin Session) - returns active and recent site-worker container state, all sites with total and online device counts, connected Agent counts, and worker-assigned work for Sites. Sites does not call this endpoint from the route loader; it shows `Polling Site Worker Metrics`, starts polling immediately after the first render, and displays mini-trends after the first successful worker payload with active Docker stats. Sites forces AG Grid to refresh the Site Worker Container renderer because the visible metric value is a nested Docker stats sample, not the stable container id.
     - `GET /api/server/site-worker-settings` (Operator Admin Session) - returns profile-managed site-worker scheduled-lane work-item capacity shown in Server Info.
-    - `GET /api/server/agent-release-channels` (Operator Admin Session) - returns Agent update channel targets shown in Server Info.
-    - `PUT /api/server/agent-release-channels` (Operator Admin Session) - updates the Agent release GitHub repo and refreshes cached artifacts; devices without overrides remain pinned to `Stable:main`.
-    - `POST /api/server/agent-release-channels/refresh` (Operator Admin Session) - refreshes Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: K3s workload restart, Traefik reload, or WireGuard reconcile.
     - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
     - `POST /api/server/wireguard/recover` (Operator Admin Session) - queues WireGuard tunnel reconcile when active tunnels exist.
@@ -335,6 +332,7 @@ New forms should validate before submit and expect the API to enforce the same r
     - Counts: show live counts when the page has them; `0` is acceptable for placeholder categories that are not fully implemented yet.
     - Selection behavior: pages may default to the highest-signal view when one is clearly preferred, but clicking the currently active segment should clear the filter and return the page to an unfiltered all-items view.
     - Summary copy: use a short sentence to the right of the control, for example `Showing 14 active filters` or `Showing 32 locally installed entries`.
+    - Scheduled Job History uses adjacent `Not Started` and `Started` Filter Sliders with one shared mutually exclusive selection. Show them on Current Run and selected dated-run tabs, not on Historical Runs summary list. Keep counts live from displayed occurrence device rows and let device AG Grid fill remaining page height.
     - Current implementation note: many pages still use a helper named `CountSliderGroup`. Treat that helper as the current code implementation of the Filter Slider pattern until Borealis consolidates it under the new name.
 
     #### Dialog Boxes and Confirmation Modals

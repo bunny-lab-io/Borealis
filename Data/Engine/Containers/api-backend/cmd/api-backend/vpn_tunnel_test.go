@@ -75,6 +75,28 @@ func TestWireGuardRuntimePrefixesAcceptPrivateContainedOverlayConfig(t *testing.
 	}
 }
 
+func TestVPNSessionPayloadIncludesEngineWireGuardFallback(t *testing.T) {
+	t.Setenv("BOREALIS_PUBLIC_WIREGUARD_HOST", "borealis.example.com")
+	t.Setenv("BOREALIS_PUBLIC_WIREGUARD_PORT", "30000")
+	t.Setenv("BOREALIS_ENGINE_IP_FALLBACK", "192.168.3.252")
+	session := &vpnSession{
+		TunnelID:         "tunnel-1",
+		AgentID:          "agent-1",
+		VirtualIP:        "10.255.0.35/32",
+		ClientPrivateKey: "client-private",
+		ClientPublicKey:  "client-public",
+		Operators:        map[string]struct{}{},
+	}
+
+	payload := session.payload(false)
+	if got := cleanText(payload["endpoint"]); got != "borealis.example.com:30000" {
+		t.Fatalf("unexpected primary endpoint: %s", got)
+	}
+	if got := cleanText(payload["fallback_endpoint"]); got != "192.168.3.252:30000" {
+		t.Fatalf("unexpected fallback endpoint: %s", got)
+	}
+}
+
 func TestVPNTunnelAllocateVirtualIPSkipsPeerNetworkAddress(t *testing.T) {
 	service := &vpnTunnelService{
 		enginePrefix:    netip.MustParsePrefix("10.255.0.1/32"),

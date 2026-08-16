@@ -426,8 +426,8 @@ func listWorkerScheduledRunWork(ctx context.Context, conn *sql.Conn, activeOnly 
 	params := []any{}
 	where := ""
 	if activeOnly {
-		where = "WHERE r.status=$1"
-		params = append(params, scheduledStatusRunning)
+		where = "WHERE r.status IN ($1,$2)"
+		params = append(params, scheduledStatusRunning, scheduledStatusEstablishingConnection)
 	} else {
 		cutoff := time.Now().Unix() - int64(maxInt(historySeconds, 0))
 		where = `

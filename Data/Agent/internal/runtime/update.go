@@ -22,74 +22,16 @@ func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, erro
 	operation := a.previewUpdateOperation(
 		stringFromPayload(body, "operation_id", "request_id"),
 		"update_now",
-		"",
-		"",
 	)
 	response := map[string]any{
-		"status":          "ok",
-		"operation_id":    operation.OperationID,
-		"release_channel": operation.TargetChannel,
-		"branch":          operation.TargetBranch,
+		"status":       "ok",
+		"operation_id": operation.OperationID,
 	}
 	return a.responseWithUpdateAfterAck(response, operation, "update request"), nil
 }
 
-func (a *Agent) handleReleaseChannelChanged(ctx context.Context, payload any) (any, error) {
-	return a.handleAgentMaintenanceRequest(ctx, payload)
-}
-
-func (a *Agent) handleHeartbeatReleaseChannelInstruction(payload map[string]any) {
-	if a == nil || len(payload) == 0 {
-		return
-	}
-	releaseChannel := releaseChannelFromPayload(payload)
-	branch := stringFromPayload(payload, "branch", "target_branch", "repo_ref", "repo_branch")
-	if releaseChannel == "" {
-		if a.logger != nil {
-			a.logger.Printf("heartbeat release-channel instruction ignored: release_channel missing")
-		}
-		return
-	}
-	kind := stringFromPayload(payload, "kind", "action")
-	if kind == "" {
-		kind = "branch_retired_fallback"
-	}
-	operation := a.previewUpdateOperation(
-		stringFromPayload(payload, "operation_id", "request_id"),
-		kind,
-		releaseChannel,
-		branch,
-	)
-	a.storeUpdateAndStartLocalUpdaterAsync(operation, "heartbeat release-channel instruction")
-}
-
 func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) (any, error) {
-	if a == nil {
-		return map[string]any{"status": "error", "detail": "agent unavailable"}, nil
-	}
-	body, _ := payload.(map[string]any)
-	releaseChannel := releaseChannelFromPayload(body)
-	branch := stringFromPayload(body, "branch", "repo_ref", "repo_branch")
-	if releaseChannel == "" {
-		return map[string]any{"status": "error", "detail": "release_channel missing"}, nil
-	}
-	kind := stringFromPayload(body, "kind", "action")
-	if kind == "" {
-		kind = "switch_branch_channel"
-	}
-	operation := a.previewUpdateOperation(
-		stringFromPayload(body, "operation_id", "request_id"),
-		kind,
-		releaseChannel,
-		branch,
-	)
-	response := map[string]any{
-		"status":          "ok",
-		"operation_id":    operation.OperationID,
-		"release_channel": operation.TargetChannel,
-		"branch":          operation.TargetBranch,
-	}
-	return a.responseWithUpdateAfterAck(response, operation, "release channel change"), nil
+	return a.handleUpdateRequest(ctx, payload)
 }
 
 func (a *Agent) responseWithUpdateAfterAck(response map[string]any, operation agentconfig.AgentUpdateSection, reason string) any {
@@ -101,34 +43,18 @@ func (a *Agent) responseWithUpdateAfterAck(response map[string]any, operation ag
 	})
 }
 
-func (a *Agent) previewUpdateOperation(operationID string, kind string, releaseChannel string, branch string) agentconfig.AgentUpdateSection {
+func (a *Agent) previewUpdateOperation(operationID string, kind string) agentconfig.AgentUpdateSection {
 	now := time.Now().Unix()
 	if strings.TrimSpace(operationID) == "" {
 		operationID = fmt.Sprintf("%d", now)
 	}
-	channel := ""
-	if strings.TrimSpace(releaseChannel) != "" {
-		channel = agentconfig.NormalizeReleaseChannel(releaseChannel)
-	}
-	targetBranch := ""
-	if strings.TrimSpace(branch) != "" {
-		targetBranch = agentconfig.NormalizeBranch(branch)
-	}
-	if channel == agentconfig.ReleaseChannelStable {
-		targetBranch = agentconfig.DefaultBranch
-	}
-	if channel != "" && targetBranch == "" {
-		targetBranch = agentconfig.DefaultBranch
-	}
 	return agentconfig.AgentUpdateSection{
-		OperationID:   strings.TrimSpace(operationID),
-		Kind:          strings.TrimSpace(kind),
-		Status:        "ack_pending_config",
-		StartedAt:     now,
-		UpdatedAt:     now,
-		DeadlineAt:    now + int64(15*time.Minute/time.Second),
-		TargetChannel: channel,
-		TargetBranch:  targetBranch,
+		OperationID: strings.TrimSpace(operationID),
+		Kind:        strings.TrimSpace(kind),
+		Status:      "ack_pending_config",
+		StartedAt:   now,
+		UpdatedAt:   now,
+		DeadlineAt:  now + int64(15*time.Minute/time.Second),
 	}
 }
 
@@ -140,20 +66,9 @@ func (a *Agent) storeUpdateAndStartLocalUpdaterAsync(operation agentconfig.Agent
 	logger := a.logger
 	authClient := a.authClient
 	go func() {
-		if strings.TrimSpace(operation.TargetChannel) == "" || strings.TrimSpace(operation.TargetBranch) == "" {
-			cfg := authClient.Config()
-			if strings.TrimSpace(operation.TargetChannel) == "" {
-				operation.TargetChannel = cfg.Agent.ReleaseChannel
-			}
-			if strings.TrimSpace(operation.TargetBranch) == "" {
-				operation.TargetBranch = cfg.Agent.Branch
-			}
-		}
 		stored, err := authClient.StoreAgentUpdateOperation(
 			operation.OperationID,
 			operation.Kind,
-			operation.TargetChannel,
-			operation.TargetBranch,
 		)
 		if err != nil {
 			if logger != nil {
@@ -162,7 +77,7 @@ func (a *Agent) storeUpdateAndStartLocalUpdaterAsync(operation agentconfig.Agent
 			return
 		}
 		if logger != nil {
-			logger.Printf("update operation stored after %s ack release_channel=%s branch=%s operation_id=%s", reason, stored.TargetChannel, stored.TargetBranch, stored.OperationID)
+			logger.Printf("update operation stored after %s ack operation_id=%s", reason, stored.OperationID)
 		}
 		if err := startLocalUpdaterForRequest(configPath); err != nil {
 			markUpdateOperationStatus(configPath, "failed", err.Error())
@@ -173,24 +88,6 @@ func (a *Agent) storeUpdateAndStartLocalUpdaterAsync(operation agentconfig.Agent
 		}
 		markUpdateOperationStatus(configPath, "updater_started", "")
 	}()
-}
-
-func releaseChannelFromPayload(payload map[string]any) string {
-	releaseChannel := stringFromPayload(payload, "release_channel")
-	if releaseChannel != "" {
-		return agentconfig.NormalizeReleaseChannel(releaseChannel)
-	}
-	effective := strings.ToLower(stringFromPayload(payload, "effective_channel", "target_channel", "channel"))
-	switch effective {
-	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelUnstable
-	case "stable", "release", "releases":
-		return agentconfig.ReleaseChannelStable
-	case "":
-		return ""
-	default:
-		return agentconfig.NormalizeReleaseChannel(effective)
-	}
 }
 
 func stringFromPayload(payload map[string]any, keys ...string) string {

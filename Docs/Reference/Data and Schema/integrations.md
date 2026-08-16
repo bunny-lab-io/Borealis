@@ -6,7 +6,7 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - The Engine can query GitHub for the latest commit hash of a repository/branch.
 - Results are cached locally to reduce API usage.
 - Admins can store a GitHub API token via the WebUI.
-- The Sites install menu uses that stored token to list Borealis GitHub branches for branch-specific Agent bootstrap commands.
+- Agent installation and update do not use GitHub integration. Engine builds and serves Agent binaries from local `Data/Agent` source.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -40,15 +40,14 @@ Document external integrations used by Borealis, primarily the GitHub repository
     - Admins manage tokens via `/api/github/token`.
     - The token is stored in the Engine database (`github_token` table).
     - `GitHubIntegration.verify_token()` reports validity and rate-limit status.
-    - The Sites page branch picker reads the token through `/api/github/token`, calls GitHub's branch list API from the operator browser, and never stores the token in component state.
-    - `main` keeps install commands on the default raw URL without `--repo-branch`; any selected non-main branch changes the raw URL and adds `--repo-branch <branch>` to Linux/macOS/Windows agent commands.
 
     ### `GET /api/repo/current_hash`
     - This endpoint uses the cached GitHub integration to return a hash for `repo`, `branch`, and `ttl` query parameters.
-    - Branch refs with slashes are resolved through GitHub's commit endpoint with URL-encoded refs, so feature branches such as `feature/agent-metadata-fields` work.
+    - Branch refs with slashes are resolved through GitHub's commit endpoint with URL-encoded refs for Engine repository operations.
+    - Agent install/update paths do not call this endpoint or resolve repository branches.
     - It supports device-auth and operator-auth contexts.
     - Device/operator bearer tokens authenticate the Borealis request only. GitHub calls use stored Engine token, `X-GitHub-Token`, or environment token.
-    - Useful for agent update checks and diagnostics.
+    - Useful for Engine repository diagnostics and Engine branch-aware operations.
 
     ### Debug checklist
     - Token missing: call `/api/github/token` as Admin and confirm `has_token`.
