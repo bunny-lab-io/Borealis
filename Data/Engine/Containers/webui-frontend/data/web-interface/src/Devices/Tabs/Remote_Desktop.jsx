@@ -348,15 +348,15 @@ const connectionFlowSteps = (protocol) => Object.freeze([
     label: "Preparing Agent Session",
     detail:
       protocol === REMOTE_DESKTOP_PROTOCOL_RDP
-        ? "Requesting Windows RDP readiness and the WireGuard route."
+        ? "Requesting RDP readiness and the WireGuard route."
         : "Requesting live VNC credentials and the WireGuard route.",
   },
   {
     id: "service",
-    label: protocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Starting Windows RDP" : "Starting Agent VNC",
+    label: protocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Starting RDP" : "Starting Agent VNC",
     detail:
       protocol === REMOTE_DESKTOP_PROTOCOL_RDP
-        ? "Waiting for Windows Remote Desktop service readiness."
+        ? "Waiting for RDP service readiness."
         : "Waiting for the Agent to finish VNC service readiness.",
   },
   {
@@ -369,7 +369,7 @@ const connectionFlowSteps = (protocol) => Object.freeze([
     label: "Opening Guacamole",
     detail:
       protocol === REMOTE_DESKTOP_PROTOCOL_RDP
-        ? "Connecting Guacamole to the Windows RDP listener."
+        ? "Connecting Guacamole to the RDP listener."
         : "Connecting Guacamole to the Agent VNC listener.",
   },
   {
@@ -2170,7 +2170,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setSessionState("connecting");
     setStatusMessage(
       selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP
-        ? "Starting Windows Remote Desktop service..."
+        ? "Starting RDP service..."
         : "Starting Agent VNC service..."
     );
     const selectedPerformancePreference = normalizePerformanceTogglePreference(performancePreferenceRef.current);
@@ -4056,7 +4056,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       value={REMOTE_DESKTOP_PROTOCOL_RDP}
                       sx={{ fontFamily: REMOTE_DESKTOP_FONT_FAMILY }}
                     >
-                      Windows RDP
+                      RDP
                     </MenuItem>
                   </Select>
                 </FormControl>
@@ -4399,8 +4399,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       onClick={handleConnect}
                     >
                       {sessionId
-                        ? `Reconnect ${remoteProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Windows RDP" : "UltraVNC"}`
-                        : `Launch ${remoteProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Windows RDP" : "UltraVNC"}`}
+                        ? `Reconnect ${remoteProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "RDP" : "UltraVNC"}`
+                        : `Launch ${remoteProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "RDP" : "UltraVNC"}`}
                     </Button>
                   ) : null}
                 </Stack>
@@ -4439,7 +4439,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       PaperProps={{ sx: DIALOG_PAPER_SX }}
     >
       <DialogTitle sx={DIALOG_TITLE_SX}>
-        <DialogHeaderBlock title="Connect with Windows RDP" />
+        <DialogHeaderBlock title="Connect with RDP" />
       </DialogTitle>
       <DialogContent sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2 }}>
         <Typography sx={DIALOG_BODY_TEXT_SX}>
