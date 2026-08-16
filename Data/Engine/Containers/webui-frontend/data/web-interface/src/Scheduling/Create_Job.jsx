@@ -3514,19 +3514,6 @@ export default function CreateJob() {
   }, [sortedHistory]);
 
   const statusCounts = useMemo(() => buildJobHistoryStatusCounts(deviceRows), [deviceRows]);
-  const activeStatusFilterLabel = useMemo(
-    () => JOB_HISTORY_STATUS_FILTER_GROUPS
-      .flatMap((group) => group.options)
-      .find((option) => option.key === deviceStatusFilter)?.label || "",
-    [deviceStatusFilter]
-  );
-  const statusFilterSummary = useMemo(() => {
-    const count = jobHistoryGridRows.length;
-    const noun = count === 1 ? "device" : "devices";
-    return activeStatusFilterLabel
-      ? `Showing ${count} ${noun} with ${activeStatusFilterLabel} status`
-      : `Showing ${count} ${noun}`;
-  }, [activeStatusFilterLabel, jobHistoryGridRows.length]);
 
   const inferLanguage = useCallback((path = "") => {
     const lower = String(path || "").toLowerCase();
@@ -5158,9 +5145,6 @@ export default function CreateJob() {
                       </Box>
                     ))}
                   </Box>
-                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, ml: "auto" }}>
-                    {statusFilterSummary}
-                  </Typography>
                 </Box>
 
                 <Box
