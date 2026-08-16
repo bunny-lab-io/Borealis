@@ -4009,7 +4009,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   })}
                 </Box>
               </Box>
-              <Box sx={{ px: 1.5, pb: 1.25 }}>
+              <Box sx={{ px: 1.5, pt: "5px", pb: 1.25 }}>
                 <FormControl
                   fullWidth
                   size="small"
