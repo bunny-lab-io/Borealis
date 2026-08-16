@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,6 +18,14 @@ const (
 	maxRDPUsernameLength               = 256
 	maxRDPDomainLength                 = 256
 	maxRDPPasswordLength               = 4096
+	defaultRDPDisplayWidth             = 1440
+	defaultRDPDisplayHeight            = 900
+	defaultRDPDisplayDPI               = 96
+	minRDPDisplayWidth                 = 320
+	minRDPDisplayHeight                = 200
+	minRDPDisplayDPI                   = 48
+	maxRDPDisplayDimension             = 8192
+	maxRDPDisplayDPI                   = 384
 )
 
 type rdpRuntime struct {
@@ -106,6 +115,9 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 	if sessionErr != nil || participantErr != nil {
 		return map[string]any{"error": "session_issue_failed"}, http.StatusInternalServerError
 	}
+	displayWidth := rdpDisplayDimension(body["width"], defaultRDPDisplayWidth, minRDPDisplayWidth, maxRDPDisplayDimension)
+	displayHeight := rdpDisplayDimension(body["height"], defaultRDPDisplayHeight, minRDPDisplayHeight, maxRDPDisplayDimension)
+	displayDPI := rdpDisplayDimension(body["dpi"], defaultRDPDisplayDPI, minRDPDisplayDPI, maxRDPDisplayDPI)
 	workerResponse, workerStatus, workerErr := remoteFilePostWorkerJSON(ctx, r.auth, result.Route, "/remote-desktop/vnc/session", map[string]any{
 		"operation_token":        issued.Token,
 		"protocol":               "rdp",
@@ -121,9 +133,9 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 		"session_id":             sessionID,
 		"participant_id":         participantID,
 		"role":                   "controller",
-		"width":                  rdpDisplayDimension(body["width"], 1440, 320, 8192),
-		"height":                 rdpDisplayDimension(body["height"], 900, 200, 8192),
-		"dpi":                    rdpDisplayDimension(body["dpi"], 96, 48, 384),
+		"width":                  displayWidth,
+		"height":                 displayHeight,
+		"dpi":                    displayDPI,
 		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
 		"image_codec":            normalizeVNCImageCodec(body["image_codec"]),
 	}, 10*time.Second)
@@ -258,6 +270,29 @@ func validateRDPRequestCredentialInput(body map[string]any) error {
 	}
 	_, err = validateRDPCredential(username, password, domain)
 	return err
+}
+
+func validateRDPDisplayInput(body map[string]any) error {
+	fields := []struct {
+		name    string
+		minimum int64
+		maximum int64
+	}{
+		{name: "width", minimum: minRDPDisplayWidth, maximum: maxRDPDisplayDimension},
+		{name: "height", minimum: minRDPDisplayHeight, maximum: maxRDPDisplayDimension},
+		{name: "dpi", minimum: minRDPDisplayDPI, maximum: maxRDPDisplayDPI},
+	}
+	for _, field := range fields {
+		value, provided := body[field.name]
+		if !provided {
+			continue
+		}
+		parsed, valid := parseInt64Value(value)
+		if !valid || parsed < field.minimum || parsed > field.maximum {
+			return fmt.Errorf("%s must be integer between %d and %d", field.name, field.minimum, field.maximum)
+		}
+	}
+	return nil
 }
 
 func rdpCredentialID(body map[string]any) (int64, bool, bool) {

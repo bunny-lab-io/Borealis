@@ -74,6 +74,31 @@ func TestValidateRDPRequestCredentialInputRejectsInvalidShapes(t *testing.T) {
 	}
 }
 
+func TestValidateRDPDisplayInputAcceptsViewportAndRejectsInvalidShapes(t *testing.T) {
+	if err := validateRDPDisplayInput(map[string]any{"width": float64(2298), "height": float64(1214), "dpi": float64(96)}); err != nil {
+		t.Fatalf("expected viewport dimensions to pass validation: %v", err)
+	}
+	for _, body := range []map[string]any{
+		{"width": float64(319)},
+		{"height": float64(8193)},
+		{"dpi": float64(96.5)},
+		{"width": "wide"},
+	} {
+		if err := validateRDPDisplayInput(body); err == nil {
+			t.Fatalf("expected invalid display body rejection for %#v", body)
+		}
+	}
+}
+
+func TestRDPDisplayDimensionUsesViewportAndSafeFallback(t *testing.T) {
+	if got := rdpDisplayDimension(float64(2298), defaultRDPDisplayWidth, minRDPDisplayWidth, maxRDPDisplayDimension); got != 2298 {
+		t.Fatalf("expected viewport width 2298, got %d", got)
+	}
+	if got := rdpDisplayDimension(float64(120), defaultRDPDisplayWidth, minRDPDisplayWidth, maxRDPDisplayDimension); got != defaultRDPDisplayWidth {
+		t.Fatalf("expected invalid viewport width fallback %d, got %d", defaultRDPDisplayWidth, got)
+	}
+}
+
 func TestResolveRDPCredentialAcceptsGlobalWindowsCredential(t *testing.T) {
 	store := &fakeRDPCredentialStore{
 		found: true,

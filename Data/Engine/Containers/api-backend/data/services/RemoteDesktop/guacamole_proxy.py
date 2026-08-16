@@ -69,6 +69,34 @@ _GUACAMOLE_VNC_CODEC_MIMETYPES: Dict[str, Tuple[str, ...]] = {
     "jpeg": ("image/jpeg",),
     "png": ("image/png",),
 }
+_GUACAMOLE_RDP_SPEED_ARGUMENTS: Dict[str, str] = {
+    "color-depth": "16",
+    "force-lossless": "false",
+    "enable-wallpaper": "false",
+    "enable-theming": "false",
+    "enable-font-smoothing": "false",
+    "enable-full-window-drag": "false",
+    "enable-desktop-composition": "false",
+    "enable-menu-animations": "false",
+    "disable-bitmap-caching": "false",
+    "disable-offscreen-caching": "false",
+    "disable-glyph-caching": "false",
+    "disable-gfx": "false",
+}
+_GUACAMOLE_RDP_QUALITY_ARGUMENTS: Dict[str, str] = {
+    "color-depth": "24",
+    "force-lossless": "true",
+    "enable-wallpaper": "true",
+    "enable-theming": "true",
+    "enable-font-smoothing": "true",
+    "enable-full-window-drag": "true",
+    "enable-desktop-composition": "true",
+    "enable-menu-animations": "true",
+    "disable-bitmap-caching": "false",
+    "disable-offscreen-caching": "false",
+    "disable-glyph-caching": "false",
+    "disable-gfx": "false",
+}
 
 
 @dataclass
@@ -257,6 +285,12 @@ def guacamole_vnc_image_mimetypes(preference: Any, image_codec: Any = "") -> Tup
     return _GUACAMOLE_VNC_IMAGE_MIMETYPES.get(normalized) or _GUACAMOLE_VNC_IMAGE_MIMETYPES[0]
 
 
+def guacamole_rdp_performance_arguments(preference: Any) -> Dict[str, str]:
+    normalized = normalize_guacamole_performance_preference(preference)
+    selected = _GUACAMOLE_RDP_QUALITY_ARGUMENTS if normalized > 0 else _GUACAMOLE_RDP_SPEED_ARGUMENTS
+    return dict(selected)
+
+
 class GuacamoleProtocolParser:
     def __init__(self) -> None:
         self._buffer = ""
@@ -322,6 +356,7 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
                 "resize-method": "display-update",
             }
         )
+        values.update(guacamole_rdp_performance_arguments(session.performance_preference))
     else:
         values.update(guacamole_vnc_performance_arguments(session.performance_preference))
     resolved: List[str] = []
@@ -835,6 +870,7 @@ __all__ = [
     "GuacamoleVncSession",
     "encode_instruction",
     "guacamole_connect_arguments",
+    "guacamole_rdp_performance_arguments",
     "guacamole_vnc_image_mimetypes",
     "guacamole_vnc_performance_arguments",
     "guacd_health",

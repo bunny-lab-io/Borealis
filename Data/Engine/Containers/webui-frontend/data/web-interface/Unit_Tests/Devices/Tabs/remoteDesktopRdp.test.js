@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRDPConnectionCredential,
   eligibleRDPCredentials,
+  rdpViewportDimensions,
   validateManualRDPCredential,
 } from "../../../src/Devices/Tabs/remoteDesktopRdp.js";
 
@@ -43,5 +44,24 @@ describe("remote desktop RDP credentials", () => {
     expect(validateManualRDPCredential({ username: "admin", password: "" })).toBe("Password required.");
     expect(validateManualRDPCredential({ username: "admin\nother", password: "secret" })).toContain("control characters");
     expect(validateManualRDPCredential({ username: "admin", password: "x".repeat(4097) })).toContain("4096");
+  });
+
+  it("uses viewer surface dimensions for RDP sessions", () => {
+    const element = {
+      clientWidth: 800,
+      clientHeight: 600,
+      getBoundingClientRect: () => ({ width: 2298.4, height: 1213.6 }),
+    };
+
+    expect(rdpViewportDimensions(element)).toEqual({ width: 2298, height: 1214, dpi: 96 });
+  });
+
+  it("bounds missing and oversized RDP viewport dimensions", () => {
+    expect(rdpViewportDimensions(null)).toEqual({ width: 1440, height: 900, dpi: 96 });
+    expect(
+      rdpViewportDimensions({
+        getBoundingClientRect: () => ({ width: 9000, height: 100 }),
+      })
+    ).toEqual({ width: 8192, height: 900, dpi: 96 });
   });
 });

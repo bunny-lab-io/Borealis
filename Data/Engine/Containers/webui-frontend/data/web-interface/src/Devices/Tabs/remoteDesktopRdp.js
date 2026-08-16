@@ -5,6 +5,12 @@ export const REMOTE_DESKTOP_PROTOCOL_RDP = "rdp";
 export const RDP_USERNAME_MAX_LENGTH = 256;
 export const RDP_DOMAIN_MAX_LENGTH = 256;
 export const RDP_PASSWORD_MAX_LENGTH = 4096;
+export const RDP_VIEWPORT_DEFAULT_WIDTH = 1440;
+export const RDP_VIEWPORT_DEFAULT_HEIGHT = 900;
+export const RDP_VIEWPORT_DPI = 96;
+export const RDP_VIEWPORT_MIN_WIDTH = 320;
+export const RDP_VIEWPORT_MIN_HEIGHT = 200;
+export const RDP_VIEWPORT_MAX_DIMENSION = 8192;
 
 function normalizedSiteId(value) {
   const parsed = Number(value);
@@ -13,6 +19,31 @@ function normalizedSiteId(value) {
 
 function utf8Length(value) {
   return new TextEncoder().encode(String(value ?? "")).length;
+}
+
+function rdpViewportDimension(value, fallback, minimum) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed) || parsed < minimum) return fallback;
+  return Math.min(parsed, RDP_VIEWPORT_MAX_DIMENSION);
+}
+
+export function rdpViewportDimensions(element) {
+  const rect = element?.getBoundingClientRect?.() || null;
+  const measuredWidth = Number(rect?.width || element?.clientWidth || 0);
+  const measuredHeight = Number(rect?.height || element?.clientHeight || 0);
+  return {
+    width: rdpViewportDimension(
+      measuredWidth,
+      RDP_VIEWPORT_DEFAULT_WIDTH,
+      RDP_VIEWPORT_MIN_WIDTH
+    ),
+    height: rdpViewportDimension(
+      measuredHeight,
+      RDP_VIEWPORT_DEFAULT_HEIGHT,
+      RDP_VIEWPORT_MIN_HEIGHT
+    ),
+    dpi: RDP_VIEWPORT_DPI,
+  };
 }
 
 export function eligibleRDPCredentials(credentials, deviceSiteId) {

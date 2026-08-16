@@ -150,6 +150,10 @@ func vncEstablishHandler(auth *authService, runtime *vncRuntime, rdp *rdpRuntime
 			return
 		}
 		if protocol == "rdp" {
+			if validationErr := validateRDPDisplayInput(body); validationErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_rdp_display", "detail": validationErr.Error()})
+				return
+			}
 			if validationErr := validateRDPRequestCredentialInput(body); validationErr != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_rdp_credentials", "detail": validationErr.Error()})
 				return

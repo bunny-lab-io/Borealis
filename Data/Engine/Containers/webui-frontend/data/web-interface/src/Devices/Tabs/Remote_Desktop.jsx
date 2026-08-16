@@ -59,6 +59,7 @@ import {
   RDP_PASSWORD_MAX_LENGTH,
   RDP_USERNAME_MAX_LENGTH,
   rdpCredentialLabel,
+  rdpViewportDimensions,
   REMOTE_DESKTOP_PROTOCOL_RDP,
   REMOTE_DESKTOP_PROTOCOL_VNC,
 } from "./remoteDesktopRdp.js";
@@ -77,6 +78,7 @@ const VNC_STAGE_BACKGROUND = "#0b1325";
 const VNC_CANVAS_BOX_SHADOW =
   "0 0 0 1px rgba(125, 183, 255, 0.18), 0 18px 42px rgba(2, 6, 23, 0.4)";
 const VNC_OPERATOR_CURSOR = "default";
+const REMOTE_DESKTOP_FONT_FAMILY = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const VIEWFINDER_DEFAULT_WIDTH = 202;
 const VIEWFINDER_DEFAULT_HEIGHT = 106;
 const VIEWFINDER_MIN_MEASURED_SIZE = 24;
@@ -1263,6 +1265,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const connectRunnerRef = useRef(null);
   const manualDisconnectRef = useRef(false);
   const sessionReconnectTimerRef = useRef(0);
+  const rdpResizeTimerRef = useRef(0);
+  const lastRDPViewportSizeRef = useRef("");
   const sessionReconnectAttemptRef = useRef(0);
   const idleWarningTimerRef = useRef(0);
   const idleDisconnectTimerRef = useRef(0);
@@ -1486,6 +1490,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   useEffect(() => {
     remoteProtocolRef.current = remoteProtocol;
+    lastRDPViewportSizeRef.current = "";
     if (remoteProtocol !== REMOTE_DESKTOP_PROTOCOL_RDP) {
       rdpConnectionCredentialRef.current = null;
     }
@@ -1598,6 +1603,22 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     window.setTimeout(focusDisplaySurface, 500);
   }, [focusDisplaySurface]);
 
+  const sendRDPViewportSize = useCallback((client = remoteClientRef.current) => {
+    if (
+      remoteProtocolRef.current !== REMOTE_DESKTOP_PROTOCOL_RDP ||
+      !client ||
+      typeof client.sendSize !== "function"
+    ) {
+      return false;
+    }
+    const viewport = rdpViewportDimensions(displayRef.current);
+    const viewportKey = `${viewport.width}x${viewport.height}@${viewport.dpi}`;
+    if (lastRDPViewportSizeRef.current === viewportKey) return false;
+    client.sendSize(viewport.width, viewport.height);
+    lastRDPViewportSizeRef.current = viewportKey;
+    return true;
+  }, []);
+
   const clearSessionReconnect = useCallback(() => {
     if (sessionReconnectTimerRef.current && typeof window !== "undefined") {
       window.clearTimeout(sessionReconnectTimerRef.current);
@@ -1672,6 +1693,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, []);
 
   const teardownDisplay = useCallback(() => {
+    if (rdpResizeTimerRef.current && typeof window !== "undefined") {
+      window.clearTimeout(rdpResizeTimerRef.current);
+    }
+    rdpResizeTimerRef.current = 0;
+    lastRDPViewportSizeRef.current = "";
     try {
       const client = remoteClientRef.current;
       if (client) {
@@ -2148,6 +2174,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         : "Starting Agent VNC service..."
     );
     const selectedPerformancePreference = normalizePerformanceTogglePreference(performancePreferenceRef.current);
+    const rdpViewport =
+      selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP
+        ? rdpViewportDimensions(displayRef.current)
+        : null;
     try {
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
@@ -2161,7 +2191,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           performance_preference: selectedPerformancePreference,
           image_codec: performanceCodecFromPreference(selectedPerformancePreference),
           auth_probe: Boolean(options.authProbe),
-          ...(selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? rdpCredential : {}),
+          ...(selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP
+            ? { ...rdpCredential, ...rdpViewport }
+            : {}),
         }),
       });
       const data = await resp.json().catch(() => ({}));
@@ -2845,6 +2877,41 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const isConnected = sessionState === "connected";
   const previewNavigationEnabled = Boolean(isConnected && displayViewportTarget);
+
+  useEffect(() => {
+    if (
+      !isConnected ||
+      remoteProtocol !== REMOTE_DESKTOP_PROTOCOL_RDP ||
+      typeof window === "undefined"
+    ) {
+      return undefined;
+    }
+    const host = displayRef.current;
+    const client = remoteClientRef.current;
+    if (!host || !client) return undefined;
+    const scheduleViewportUpdate = () => {
+      if (rdpResizeTimerRef.current) {
+        window.clearTimeout(rdpResizeTimerRef.current);
+      }
+      rdpResizeTimerRef.current = window.setTimeout(() => {
+        rdpResizeTimerRef.current = 0;
+        sendRDPViewportSize(client);
+      }, 180);
+    };
+    sendRDPViewportSize(client);
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleViewportUpdate);
+    observer?.observe(host);
+    window.addEventListener("resize", scheduleViewportUpdate);
+    return () => {
+      if (rdpResizeTimerRef.current) {
+        window.clearTimeout(rdpResizeTimerRef.current);
+      }
+      rdpResizeTimerRef.current = 0;
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleViewportUpdate);
+    };
+  }, [isConnected, remoteProtocol, sendRDPViewportSize]);
 
   const navigateViewfinderPoint = useCallback(
     (localX, localY) => {
@@ -3876,39 +3943,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               title="Session Control"
             >
               <>
-              <Box sx={{ px: 1.5, pt: 1, pb: 0.75 }}>
-                <FormControl fullWidth size="small">
-                  <InputLabel id="remote-desktop-protocol-label">Protocol</InputLabel>
-                  <Select
-                    labelId="remote-desktop-protocol-label"
-                    id="remote-desktop-protocol"
-                    value={remoteProtocol}
-                    label="Protocol"
-                    disabled={loading || isConnected}
-                    onChange={(event) => {
-                      const nextProtocol = String(event.target.value || "");
-                      if (
-                        nextProtocol !== REMOTE_DESKTOP_PROTOCOL_VNC &&
-                        nextProtocol !== REMOTE_DESKTOP_PROTOCOL_RDP
-                      ) {
-                        return;
-                      }
-                      remoteProtocolRef.current = nextProtocol;
-                      setRemoteProtocol(nextProtocol);
-                      setStatusMessage("");
-                      setVncStage("idle");
-                    }}
-                    sx={{
-                      color: SIDEBAR_THEME.text,
-                      backgroundColor: "rgba(8,15,32,0.85)",
-                      "& .MuiOutlinedInput-notchedOutline": { borderColor: SIDEBAR_THEME.border },
-                    }}
-                  >
-                    <MenuItem value={REMOTE_DESKTOP_PROTOCOL_VNC}>UltraVNC</MenuItem>
-                    <MenuItem value={REMOTE_DESKTOP_PROTOCOL_RDP}>Windows RDP</MenuItem>
-                  </Select>
-                </FormControl>
-              </Box>
               <SidebarNavRow
                 icon={<StopIcon fontSize="small" />}
                 label="Disconnect"
@@ -3974,6 +4008,58 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     );
                   })}
                 </Box>
+              </Box>
+              <Box sx={{ px: 1.5, pb: 1.25 }}>
+                <FormControl
+                  fullWidth
+                  size="small"
+                  sx={{
+                    fontFamily: REMOTE_DESKTOP_FONT_FAMILY,
+                    "& .MuiInputLabel-root": { fontFamily: REMOTE_DESKTOP_FONT_FAMILY },
+                  }}
+                >
+                  <InputLabel id="remote-desktop-protocol-label">Protocol</InputLabel>
+                  <Select
+                    labelId="remote-desktop-protocol-label"
+                    id="remote-desktop-protocol"
+                    value={remoteProtocol}
+                    label="Protocol"
+                    disabled={loading || isConnected}
+                    onChange={(event) => {
+                      const nextProtocol = String(event.target.value || "");
+                      if (
+                        nextProtocol !== REMOTE_DESKTOP_PROTOCOL_VNC &&
+                        nextProtocol !== REMOTE_DESKTOP_PROTOCOL_RDP
+                      ) {
+                        return;
+                      }
+                      remoteProtocolRef.current = nextProtocol;
+                      setRemoteProtocol(nextProtocol);
+                      setStatusMessage("");
+                      setVncStage("idle");
+                    }}
+                    sx={{
+                      color: SIDEBAR_THEME.text,
+                      fontFamily: REMOTE_DESKTOP_FONT_FAMILY,
+                      backgroundColor: "rgba(8,15,32,0.85)",
+                      "& .MuiSelect-select": { fontFamily: REMOTE_DESKTOP_FONT_FAMILY },
+                      "& .MuiOutlinedInput-notchedOutline": { borderColor: SIDEBAR_THEME.border },
+                    }}
+                  >
+                    <MenuItem
+                      value={REMOTE_DESKTOP_PROTOCOL_VNC}
+                      sx={{ fontFamily: REMOTE_DESKTOP_FONT_FAMILY }}
+                    >
+                      UltraVNC
+                    </MenuItem>
+                    <MenuItem
+                      value={REMOTE_DESKTOP_PROTOCOL_RDP}
+                      sx={{ fontFamily: REMOTE_DESKTOP_FONT_FAMILY }}
+                    >
+                      Windows RDP
+                    </MenuItem>
+                  </Select>
+                </FormControl>
               </Box>
               </>
             </SidebarSection>

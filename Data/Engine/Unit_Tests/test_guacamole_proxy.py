@@ -202,6 +202,83 @@ def test_guacamole_rdp_connect_arguments_keep_credentials_server_side() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("preference", "expected"),
+    [
+        (
+            -2,
+            [
+                "16",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+            ],
+        ),
+        (
+            2,
+            [
+                "24",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "false",
+            ],
+        ),
+    ],
+)
+def test_guacamole_rdp_connect_arguments_apply_visual_performance_profile(
+    preference: int,
+    expected: list[str],
+) -> None:
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.42",
+        port=3389,
+        password="domain-password",
+        created_at=0,
+        expires_at=120,
+        protocol="rdp",
+        username="nicole",
+        performance_preference=preference,
+    )
+
+    values = guacamole_connect_arguments(
+        session,
+        [
+            "color-depth",
+            "force-lossless",
+            "enable-wallpaper",
+            "enable-theming",
+            "enable-font-smoothing",
+            "enable-full-window-drag",
+            "enable-desktop-composition",
+            "enable-menu-animations",
+            "disable-bitmap-caching",
+            "disable-offscreen-caching",
+            "disable-glyph-caching",
+            "disable-gfx",
+        ],
+    )
+
+    assert values == expected
+
+
 def test_guacamole_rdp_handshake_selects_rdp(monkeypatch: pytest.MonkeyPatch) -> None:
     reader = _FakeReader(
         [
