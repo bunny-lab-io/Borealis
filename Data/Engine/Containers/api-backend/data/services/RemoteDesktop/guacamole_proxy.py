@@ -1,11 +1,11 @@
 # ======================================================
 # Data\Engine\services\RemoteDesktop\guacamole_proxy.py
-# Description: Apache Guacamole tunnel support for Borealis VNC sessions.
+# Description: Apache Guacamole tunnel support for Borealis remote desktop sessions.
 #
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""Server-side Guacamole tunnel bridge for UltraVNC over Borealis WireGuard."""
+"""Server-side Guacamole tunnel bridge for VNC and RDP over Borealis WireGuard."""
 from __future__ import annotations
 
 import asyncio
@@ -80,6 +80,11 @@ class GuacamoleVncSession:
     password: str
     created_at: float
     expires_at: float
+    protocol: str = "vnc"
+    username: str = ""
+    domain: str = ""
+    security: str = ""
+    ignore_cert: bool = False
     operator_id: Optional[str] = None
     session_id: str = ""
     participant_id: str = ""
@@ -123,6 +128,11 @@ class GuacamoleSessionRegistry:
         host: str,
         port: int,
         password: str,
+        protocol: str = "vnc",
+        username: str = "",
+        domain: str = "",
+        security: str = "",
+        ignore_cert: bool = False,
         operator_id: Optional[str] = None,
         session_id: str = "",
         participant_id: str = "",
@@ -146,6 +156,11 @@ class GuacamoleSessionRegistry:
             host=host,
             port=port,
             password=password,
+            protocol="rdp" if str(protocol or "").strip().lower() == "rdp" else "vnc",
+            username=str(username or ""),
+            domain=str(domain or ""),
+            security=str(security or "").strip().lower(),
+            ignore_cert=bool(ignore_cert),
             created_at=now,
             expires_at=now + self.ttl_seconds,
             operator_id=operator_id,
@@ -280,6 +295,7 @@ class GuacamoleProtocolParser:
 
 
 def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) -> List[str]:
+    protocol = "rdp" if str(session.protocol or "").strip().lower() == "rdp" else "vnc"
     values: Dict[str, str] = {
         "hostname": session.host,
         "port": str(int(session.port)),
@@ -293,7 +309,21 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "clipboard-encoding": "UTF-8",
         "autoretry": _GUACAMOLE_VNC_AUTORETRY,
     }
-    values.update(guacamole_vnc_performance_arguments(session.performance_preference))
+    if protocol == "rdp":
+        values.update(
+            {
+                "username": session.username,
+                "domain": session.domain,
+                "security": session.security or "nla",
+                "ignore-cert": "true" if session.ignore_cert else "",
+                "disable-audio": "true",
+                "enable-drive": "false",
+                "enable-printing": "false",
+                "resize-method": "display-update",
+            }
+        )
+    else:
+        values.update(guacamole_vnc_performance_arguments(session.performance_preference))
     resolved: List[str] = []
     for index, name in enumerate(names):
         normalized = str(name or "")
@@ -468,7 +498,8 @@ async def _handshake_guacd(
     session: GuacamoleVncSession,
 ) -> Tuple[str, List[Tuple[str, List[str]]], GuacamoleProtocolParser]:
     parser = GuacamoleProtocolParser()
-    await _write_instruction(writer, "select", "vnc")
+    protocol = "rdp" if str(session.protocol or "").strip().lower() == "rdp" else "vnc"
+    await _write_instruction(writer, "select", protocol)
     opcode, args, _extra = await _read_instruction(
         reader,
         parser,
@@ -482,7 +513,7 @@ async def _handshake_guacd(
     await _write_instruction(writer, "size", session.width, session.height, session.dpi)
     await _write_instruction(writer, "image", *guacamole_vnc_image_mimetypes(session.performance_preference, session.image_codec))
     await _write_instruction(writer, "timezone", "UTC")
-    await _write_instruction(writer, "name", f"Borealis VNC {session.agent_id}")
+    await _write_instruction(writer, "name", f"Borealis {protocol.upper()} {session.agent_id}")
     await _write_instruction(writer, "connect", *guacamole_connect_arguments(session, args))
 
     opcode, ready_args, pending = await _read_instruction(

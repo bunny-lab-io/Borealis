@@ -17,6 +17,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
 	patchmanagement "github.com/bunny-lab-io/borealis/go-agent/internal/roles/patch_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
+	rdprole "github.com/bunny-lab-io/borealis/go-agent/internal/roles/rdp"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/registry_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/remote_shell"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
@@ -54,6 +55,7 @@ type Agent struct {
 	patches       *patchmanagement.Manager
 	processes     *processmanagement.Manager
 	registry      *registrymanagement.Manager
+	rdp           *rdprole.Manager
 	remoteShell   *remoteshell.Manager
 	services      *servicemanagement.Manager
 	software      *softwaremanagement.Manager
@@ -133,6 +135,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	patchManager := patchmanagement.New(authClient, hostname, options.ServiceMode)
 	processManager := processmanagement.New(hostname)
 	registryManager := registrymanagement.New(hostname, options.ServiceMode)
+	rdpManager := rdprole.New(authClient, configPath)
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
@@ -152,6 +155,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		patches:     patchManager,
 		processes:   processManager,
 		registry:    registryManager,
+		rdp:         rdpManager,
 		remoteShell: remoteShellManager,
 		services:    serviceManager,
 		software:    softwareManager,
@@ -177,6 +181,12 @@ func (a *Agent) registerRoleRecoveryHandlers() {
 		a.supervisor.RegisterRecoveryHandler("system:vnc", func(snapshot RoleSnapshot) {
 			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "vnc_ensure", nil)
 			a.vnc.RequestEnsure("role_supervisor_recovery")
+		})
+	}
+	if a.rdp != nil {
+		a.supervisor.RegisterRecoveryHandler("system:rdp", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "rdp_ensure", nil)
+			a.rdp.RequestEnsure("role_supervisor_recovery")
 		})
 	}
 	if a.wireguard != nil {
@@ -228,6 +238,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.vnc != nil {
 		a.vnc.Start(ctx)
 		defer a.vnc.Stop(context.Background())
+	}
+	if a.rdp != nil {
+		a.rdp.Start(ctx)
+		defer a.rdp.Stop(context.Background())
 	}
 	if a.remoteShell != nil {
 		a.remoteShell.Start(ctx)
@@ -392,6 +406,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vnc_refresh", a.vnc.HandleRefresh)
 		socket.On("vnc_credential_request", a.vnc.HandleCredentialRequest)
 	}
+	if a.rdp != nil {
+		socket.On("rdp_start", a.rdp.HandleStart)
+	}
 	socket.On("agent_update_request", a.handleUpdateRequest)
 	socket.On("agent_maintenance_request", a.handleAgentMaintenanceRequest)
 	socket.OnConnected(func(ctx context.Context) error {
@@ -405,6 +422,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"file_management":     true,
 				"patch_management":    true,
 				"process_management":  true,
+				"rdp":                 true,
 				"registry_management": true,
 				"remote_shell":        true,
 				"service_management":  true,
@@ -608,6 +626,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.vnc != nil {
 		vncHealth = a.vnc.Health()
 	}
+	rdpHealth := rdprole.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "RDP role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.rdp != nil {
+		rdpHealth = a.rdp.Health()
+	}
 	wireGuardHealth := wireguardtunnel.RoleHealth{
 		Status:     "unsupported",
 		StatusCode: "unsupported",
@@ -656,6 +686,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		roleSnapshotFromHealth("system:process_management", "process_management", "Process Management", "system", processHealth.Status, processHealth.StatusCode, processHealth.Detail, processHealth.Details, now),
 		roleSnapshotFromHealth("system:registry_management", "registry_management", "Registry Management", "system", registryHealth.Status, registryHealth.StatusCode, registryHealth.Detail, registryHealth.Details, now),
 		roleSnapshotFromHealth("system:remote_shell", "remote_shell", "Remote Shell", "system", remoteShellHealth.Status, remoteShellHealth.StatusCode, remoteShellHealth.Detail, remoteShellHealth.Details, now),
+		roleSnapshotFromHealth("system:rdp", "rdp", "Borealis Agent - RDP", "system", rdpHealth.Status, rdpHealth.StatusCode, rdpHealth.Detail, rdpHealth.Details, now),
 		roleSnapshotFromHealth("system:service_management", "service_management", "Service Management", "system", serviceHealth.Status, serviceHealth.StatusCode, serviceHealth.Detail, serviceHealth.Details, now),
 		roleSnapshotFromHealth("system:patch_management", "patch_management", "Patch Management", "system", patchHealth.Status, patchHealth.StatusCode, patchHealth.Detail, patchHealth.Details, now),
 		roleSnapshotFromHealth("system:software_management", "software_management", "Software Management", "system", softwareHealth.Status, softwareHealth.StatusCode, softwareHealth.Detail, softwareHealth.Details, now),

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,6 +79,13 @@ func TestVNCViewersHandlerReportsGuacdReady(t *testing.T) {
 	if guacamole["available"] != true || guacamole["reason"] != "ready" || guacamole["ws_path"] != "/remote-desktop/vnc/guacamole" {
 		t.Fatalf("unexpected guacamole payload %#v", guacamole)
 	}
+	if payload["default_protocol"] != "vnc" {
+		t.Fatalf("unexpected default protocol %#v", payload["default_protocol"])
+	}
+	protocols, ok := payload["protocols"].([]any)
+	if !ok || len(protocols) != 2 || protocols[1].(map[string]any)["id"] != "rdp" {
+		t.Fatalf("unexpected protocol options %#v", payload["protocols"])
+	}
 	port, _ := strconv.ParseFloat(portText, 64)
 	if guacamole["port"] != port {
 		t.Fatalf("unexpected guacd port %#v", guacamole["port"])
@@ -118,6 +126,30 @@ func TestVNCSessionRoutesUseGoHandler(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected Go validation 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRemoteDesktopEstablishRejectsProtocolAndRDPInputBeforeDeviceLookup(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+		err  string
+	}{
+		{name: "protocol", body: `{"agent_id":"LAB-AIO-01_SYSTEM","protocol":"telnet"}`, err: "invalid_protocol"},
+		{name: "credential", body: `{"agent_id":"LAB-AIO-01_SYSTEM","protocol":"rdp","credential_id":4.5}`, err: "invalid_rdp_credentials"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), nil, nil)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/vnc/establish", strings.NewReader(testCase.body))
+			request.Header.Set("Authorization", "Bearer "+testAuthToken)
+			request.Header.Set("Content-Type", "application/json")
+			mux.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), testCase.err) {
+				t.Fatalf("expected validation error %q, got %d body=%s", testCase.err, recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 

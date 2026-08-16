@@ -11,11 +11,16 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  FormControl,
+  InputLabel,
   ListItemButton,
   ListItemText,
+  MenuItem,
+  Select,
   Switch,
   LinearProgress,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -47,6 +52,16 @@ import {
   DialogHeaderBlock,
 } from "../../DialogStyles.jsx";
 import Guacamole from "../../vendor/guacamole/guacamole-common-js.js";
+import {
+  buildRDPConnectionCredential,
+  eligibleRDPCredentials,
+  RDP_DOMAIN_MAX_LENGTH,
+  RDP_PASSWORD_MAX_LENGTH,
+  RDP_USERNAME_MAX_LENGTH,
+  rdpCredentialLabel,
+  REMOTE_DESKTOP_PROTOCOL_RDP,
+  REMOTE_DESKTOP_PROTOCOL_VNC,
+} from "./remoteDesktopRdp.js";
 
 const MAGIC_UI = {
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -325,16 +340,22 @@ const DISPLAY_INFERENCE_WIDE_RATIO = 4.1;
 const DISPLAY_INFERENCE_MAX_ASPECT_ERROR = 0.08;
 const DISPLAY_INFERENCE_ASPECT_PRIORS = Object.freeze([16 / 9, 16 / 10, 21 / 9, 32 / 9, 4]);
 const DISPLAY_INFERENCE_HEIGHT_FRACTIONS = Object.freeze([1, 0.8, 0.75, 2 / 3]);
-const CONNECTION_FLOW_STEPS = Object.freeze([
+const connectionFlowSteps = (protocol) => Object.freeze([
   {
     id: "tunnel",
     label: "Preparing Agent Session",
-    detail: "Requesting live VNC credentials and the WireGuard route.",
+    detail:
+      protocol === REMOTE_DESKTOP_PROTOCOL_RDP
+        ? "Requesting Windows RDP readiness and the WireGuard route."
+        : "Requesting live VNC credentials and the WireGuard route.",
   },
   {
     id: "service",
-    label: "Starting Agent VNC",
-    detail: "Waiting for the Agent to finish VNC service readiness.",
+    label: protocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Starting Windows RDP" : "Starting Agent VNC",
+    detail:
+      protocol === REMOTE_DESKTOP_PROTOCOL_RDP
+        ? "Waiting for Windows Remote Desktop service readiness."
+        : "Waiting for the Agent to finish VNC service readiness.",
   },
   {
     id: "socket",
@@ -344,7 +365,10 @@ const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "guacamole",
     label: "Opening Guacamole",
-    detail: "Connecting Guacamole to the Agent VNC listener.",
+    detail:
+      protocol === REMOTE_DESKTOP_PROTOCOL_RDP
+        ? "Connecting Guacamole to the Windows RDP listener."
+        : "Connecting Guacamole to the Agent VNC listener.",
   },
   {
     id: "frame",
@@ -1167,6 +1191,18 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   });
   const [sessionId, setSessionId] = useState("");
   const [, setParticipantId] = useState("");
+  const [remoteProtocol, setRemoteProtocol] = useState(REMOTE_DESKTOP_PROTOCOL_VNC);
+  const [rdpCredentialDialogOpen, setRdpCredentialDialogOpen] = useState(false);
+  const [rdpCredentials, setRdpCredentials] = useState([]);
+  const [rdpCredentialsLoading, setRdpCredentialsLoading] = useState(false);
+  const [rdpCredentialsError, setRdpCredentialsError] = useState("");
+  const [rdpCredentialSelection, setRdpCredentialSelection] = useState("manual");
+  const [rdpCredentialForm, setRdpCredentialForm] = useState({
+    username: "",
+    password: "",
+    domain: "",
+  });
+  const [rdpCredentialFormError, setRdpCredentialFormError] = useState("");
   const [displayMode, setDisplayMode] = useState("fit");
   const [performancePreference, setPerformancePreference] = useState(() => {
     if (typeof window === "undefined") return PERFORMANCE_PREFERENCE_DEFAULT;
@@ -1219,6 +1255,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const sessionStateRef = useRef(sessionState);
   const loadingRef = useRef(loading);
   const performancePreferenceRef = useRef(performancePreference);
+  const remoteProtocolRef = useRef(remoteProtocol);
+  const rdpConnectionCredentialRef = useRef(null);
   const clipboardSyncRef = useRef(clipboardSync);
   const clipboardLastRef = useRef("");
   const connectAttemptRef = useRef(0);
@@ -1272,6 +1310,19 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       deviceRouteId ||
       "device",
     [device, deviceRouteId]
+  );
+  const deviceSiteId = useMemo(
+    () =>
+      device?.site_id ??
+      device?.siteId ??
+      device?.summary?.site_id ??
+      device?.summary?.siteId ??
+      null,
+    [device]
+  );
+  const selectableRDPCredentials = useMemo(
+    () => eligibleRDPCredentials(rdpCredentials, deviceSiteId),
+    [deviceSiteId, rdpCredentials]
   );
   const guacamoleAvailable = Boolean(guacamoleAvailability.available);
   const normalizedDisplayTopology = useMemo(
@@ -1432,6 +1483,54 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    remoteProtocolRef.current = remoteProtocol;
+    if (remoteProtocol !== REMOTE_DESKTOP_PROTOCOL_RDP) {
+      rdpConnectionCredentialRef.current = null;
+    }
+  }, [remoteProtocol]);
+
+  useEffect(() => {
+    if (!rdpCredentialDialogOpen) return undefined;
+    let cancelled = false;
+    const loadRDPCredentials = async () => {
+      setRdpCredentialsLoading(true);
+      setRdpCredentialsError("");
+      try {
+        const response = await fetch("/api/credentials", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.message || data?.error || `Unable to load credentials (${response.status})`);
+        }
+        if (!cancelled) {
+          setRdpCredentials(Array.isArray(data?.credentials) ? data.credentials : []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setRdpCredentials([]);
+          setRdpCredentialsError(String(error?.message || error));
+          setRdpCredentialSelection("manual");
+        }
+      } finally {
+        if (!cancelled) setRdpCredentialsLoading(false);
+      }
+    };
+    void loadRDPCredentials();
+    return () => {
+      cancelled = true;
+    };
+  }, [rdpCredentialDialogOpen]);
+
+  useEffect(() => {
+    if (rdpCredentialSelection === "manual") return;
+    if (!selectableRDPCredentials.some((credential) => String(credential.id) === rdpCredentialSelection)) {
+      setRdpCredentialSelection("manual");
+    }
+  }, [rdpCredentialSelection, selectableRDPCredentials]);
 
   useEffect(() => {
     clipboardSyncRef.current = clipboardSync;
@@ -1834,6 +1933,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           agent_id: currentAgentId,
           session_id: sessionIdRef.current || undefined,
           reason,
+          protocol: remoteProtocolRef.current,
         }),
       });
     } catch {
@@ -1858,6 +1958,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       setParticipantId("");
       resetDisconnectedViewState();
       clipboardLastRef.current = "";
+      rdpConnectionCredentialRef.current = null;
       setLoading(false);
     }
   }, [
@@ -2017,6 +2118,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       cancelPendingConnect();
       clearSessionReconnect();
       teardownDisplay();
+      rdpConnectionCredentialRef.current = null;
       disconnectVnc("component_unmount");
     };
   }, [cancelPendingConnect, clearSessionReconnect, disconnectVnc, teardownDisplay]);
@@ -2024,6 +2126,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const requestTunnel = useCallback(async (options = {}) => {
     if (!agentId) {
       throw buildRetryableError("Agent ID is required to establish.", false);
+    }
+    const selectedProtocol = remoteProtocolRef.current;
+    const rdpCredential = rdpConnectionCredentialRef.current;
+    if (selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP && !rdpCredential) {
+      throw buildRetryableError("RDP credential required.", false);
     }
     const timeoutMs = Math.max(1, Math.min(VNC_CONNECT_DEADLINE_MS, Number(options.timeoutMs || VNC_CONNECT_DEADLINE_MS)));
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -2035,7 +2142,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setStatusMessage("");
     setVncStage("starting_agent_vnc");
     setSessionState("connecting");
-    setStatusMessage("Starting Agent VNC service...");
+    setStatusMessage(
+      selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP
+        ? "Starting Windows Remote Desktop service..."
+        : "Starting Agent VNC service..."
+    );
     const selectedPerformancePreference = normalizePerformanceTogglePreference(performancePreferenceRef.current);
     try {
       const resp = await fetch("/api/vnc/establish", {
@@ -2044,11 +2155,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         signal: controller?.signal,
         body: JSON.stringify({
           agent_id: agentId,
+          protocol: selectedProtocol,
           remove_wallpaper: true,
           viewer: "guacamole",
           performance_preference: selectedPerformancePreference,
           image_codec: performanceCodecFromPreference(selectedPerformancePreference),
           auth_probe: Boolean(options.authProbe),
+          ...(selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? rdpCredential : {}),
         }),
       });
       const data = await resp.json().catch(() => ({}));
@@ -2155,7 +2268,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         throw new Error("Guacamole session unavailable.");
       }
       if (!displayHost) {
-        throw new Error("VNC display container missing.");
+        throw new Error("Remote desktop display container missing.");
       }
       displayHost.innerHTML = "";
       displayHost.tabIndex = 0;
@@ -2489,7 +2602,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         if (attempt > 1) {
           setSessionState("connecting");
           setVncStage("retrying");
-          setStatusMessage(`Retrying VNC... (${attempt}/${VNC_AUTO_RETRY_ATTEMPTS})`);
+          setStatusMessage(`Retrying remote desktop... (${attempt}/${VNC_AUTO_RETRY_ATTEMPTS})`);
           await sleep(Math.min(VNC_AUTO_RETRY_DELAY_MS, remainingConnectMs()));
           if (connectAttemptRef.current !== connectToken) return;
         }
@@ -2547,7 +2660,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (retryAfterMs > 0) {
             setSessionState("connecting");
             setVncStage("retrying");
-            setStatusMessage("Waiting for Agent VNC credential recovery...");
+            setStatusMessage("Waiting for remote desktop credential recovery...");
             await sleep(Math.max(VNC_AUTO_RETRY_DELAY_MS, retryAfterMs));
             if (connectAttemptRef.current !== connectToken) return;
           }
@@ -2579,11 +2692,48 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     connectRunnerRef.current = runVncConnect;
   }, [runVncConnect]);
 
+  const closeRDPCredentialDialog = useCallback(() => {
+    setRdpCredentialDialogOpen(false);
+    setRdpCredentialFormError("");
+    setRdpCredentialForm((previous) => ({ ...previous, password: "" }));
+  }, []);
+
+  const handleRDPConnect = useCallback(() => {
+    try {
+      if (
+        rdpCredentialSelection !== "manual" &&
+        !selectableRDPCredentials.some(
+          (credential) => String(credential.id) === rdpCredentialSelection
+        )
+      ) {
+        throw new Error("Stored credential unavailable for this device site.");
+      }
+      const credential = buildRDPConnectionCredential(
+        rdpCredentialSelection,
+        rdpCredentialForm
+      );
+      rdpConnectionCredentialRef.current = credential;
+      setRdpCredentialDialogOpen(false);
+      setRdpCredentialFormError("");
+      setRdpCredentialForm((previous) => ({ ...previous, password: "" }));
+      void runVncConnect();
+    } catch (error) {
+      setRdpCredentialFormError(String(error?.message || error));
+    }
+  }, [rdpCredentialForm, rdpCredentialSelection, runVncConnect, selectableRDPCredentials]);
+
   const handleConnect = useCallback(() => {
+    if (remoteProtocolRef.current === REMOTE_DESKTOP_PROTOCOL_RDP) {
+      setRdpCredentialFormError("");
+      setRdpCredentialDialogOpen(true);
+      return;
+    }
+    rdpConnectionCredentialRef.current = null;
     void runVncConnect();
   }, [runVncConnect]);
 
   const refreshSessionDetails = useCallback(async () => {
+    if (remoteProtocolRef.current === REMOTE_DESKTOP_PROTOCOL_RDP) return;
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId) return;
     try {
@@ -3275,7 +3425,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     </ListItemButton>
   );
   const connectionFlowStages = useMemo(() => {
-    const steps = CONNECTION_FLOW_STEPS.map((step) => ({ ...step, status: "pending" }));
+    const steps = connectionFlowSteps(remoteProtocol).map((step) => ({ ...step, status: "pending" }));
     if (isConnected || vncStage === "connected") {
       return steps.map((step) => ({ ...step, status: "complete" }));
     }
@@ -3331,7 +3481,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         break;
     }
     return steps;
-  }, [isConnected, sessionId, vncStage]);
+  }, [isConnected, remoteProtocol, sessionId, vncStage]);
 
   const showClipboardActions = isConnected;
   const displaySettingsEnabled = isConnected;
@@ -3726,6 +3876,39 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               title="Session Control"
             >
               <>
+              <Box sx={{ px: 1.5, pt: 1, pb: 0.75 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="remote-desktop-protocol-label">Protocol</InputLabel>
+                  <Select
+                    labelId="remote-desktop-protocol-label"
+                    id="remote-desktop-protocol"
+                    value={remoteProtocol}
+                    label="Protocol"
+                    disabled={loading || isConnected}
+                    onChange={(event) => {
+                      const nextProtocol = String(event.target.value || "");
+                      if (
+                        nextProtocol !== REMOTE_DESKTOP_PROTOCOL_VNC &&
+                        nextProtocol !== REMOTE_DESKTOP_PROTOCOL_RDP
+                      ) {
+                        return;
+                      }
+                      remoteProtocolRef.current = nextProtocol;
+                      setRemoteProtocol(nextProtocol);
+                      setStatusMessage("");
+                      setVncStage("idle");
+                    }}
+                    sx={{
+                      color: SIDEBAR_THEME.text,
+                      backgroundColor: "rgba(8,15,32,0.85)",
+                      "& .MuiOutlinedInput-notchedOutline": { borderColor: SIDEBAR_THEME.border },
+                    }}
+                  >
+                    <MenuItem value={REMOTE_DESKTOP_PROTOCOL_VNC}>UltraVNC</MenuItem>
+                    <MenuItem value={REMOTE_DESKTOP_PROTOCOL_RDP}>Windows RDP</MenuItem>
+                  </Select>
+                </FormControl>
+              </Box>
               <SidebarNavRow
                 icon={<StopIcon fontSize="small" />}
                 label="Disconnect"
@@ -4129,7 +4312,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       disabled={!agentId || !guacamoleAvailable}
                       onClick={handleConnect}
                     >
-                      {sessionId ? "Reconnect Remote Desktop" : "Launch Remote Desktop"}
+                      {sessionId
+                        ? `Reconnect ${remoteProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Windows RDP" : "UltraVNC"}`
+                        : `Launch ${remoteProtocol === REMOTE_DESKTOP_PROTOCOL_RDP ? "Windows RDP" : "UltraVNC"}`}
                     </Button>
                   ) : null}
                 </Stack>
@@ -4157,6 +4342,116 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       <DialogActions sx={DIALOG_ACTIONS_SX}>
         <Button onClick={() => setClipboardNotImplementedOpen(false)} sx={DIALOG_BUTTON_SX}>
           Close
+        </Button>
+      </DialogActions>
+    </Dialog>
+    <Dialog
+      open={rdpCredentialDialogOpen}
+      onClose={closeRDPCredentialDialog}
+      maxWidth="sm"
+      fullWidth
+      PaperProps={{ sx: DIALOG_PAPER_SX }}
+    >
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock title="Connect with Windows RDP" />
+      </DialogTitle>
+      <DialogContent sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2 }}>
+        <Typography sx={DIALOG_BODY_TEXT_SX}>
+          Select eligible site or global Windows credential, or enter credentials for this session.
+          Manual password remains only in current browser memory while session reconnects.
+        </Typography>
+        {rdpCredentialsLoading ? <LinearProgress /> : null}
+        <FormControl fullWidth size="small">
+          <InputLabel id="rdp-credential-source-label">Credential</InputLabel>
+          <Select
+            labelId="rdp-credential-source-label"
+            id="rdp-credential-source"
+            value={rdpCredentialSelection}
+            label="Credential"
+            onChange={(event) => {
+              setRdpCredentialSelection(String(event.target.value || "manual"));
+              setRdpCredentialFormError("");
+            }}
+          >
+            <MenuItem value="manual">Enter credentials for this session</MenuItem>
+            {selectableRDPCredentials.map((credential) => (
+              <MenuItem key={credential.id} value={String(credential.id)}>
+                {rdpCredentialLabel(credential)}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        {rdpCredentialSelection === "manual" ? (
+          <>
+            <TextField
+              id="rdp-username"
+              label="Username"
+              value={rdpCredentialForm.username}
+              required
+              fullWidth
+              autoComplete="off"
+              inputProps={{ maxLength: RDP_USERNAME_MAX_LENGTH }}
+              onChange={(event) => {
+                setRdpCredentialForm((previous) => ({ ...previous, username: event.target.value }));
+                setRdpCredentialFormError("");
+              }}
+              helperText="Use DOMAIN\\username here or enter domain separately."
+            />
+            <TextField
+              id="rdp-domain"
+              label="Domain (optional)"
+              value={rdpCredentialForm.domain}
+              fullWidth
+              autoComplete="off"
+              inputProps={{ maxLength: RDP_DOMAIN_MAX_LENGTH }}
+              onChange={(event) => {
+                setRdpCredentialForm((previous) => ({ ...previous, domain: event.target.value }));
+                setRdpCredentialFormError("");
+              }}
+            />
+            <TextField
+              id="rdp-password"
+              label="Password"
+              type="password"
+              value={rdpCredentialForm.password}
+              required
+              fullWidth
+              autoComplete="new-password"
+              inputProps={{ maxLength: RDP_PASSWORD_MAX_LENGTH }}
+              onChange={(event) => {
+                setRdpCredentialForm((previous) => ({ ...previous, password: event.target.value }));
+                setRdpCredentialFormError("");
+              }}
+            />
+          </>
+        ) : null}
+        {rdpCredentialsError ? (
+          <Typography role="status" sx={{ color: "warning.main", fontSize: "0.82rem" }}>
+            Stored credentials unavailable: {rdpCredentialsError}. Manual entry remains available.
+          </Typography>
+        ) : null}
+        {rdpCredentialFormError ? (
+          <Typography role="alert" sx={{ color: "error.main", fontSize: "0.82rem" }}>
+            {rdpCredentialFormError}
+          </Typography>
+        ) : null}
+      </DialogContent>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <Button onClick={closeRDPCredentialDialog} sx={DIALOG_BUTTON_SX}>
+          Cancel
+        </Button>
+        <Button
+          onClick={handleRDPConnect}
+          sx={DIALOG_BUTTON_SX}
+          disabled={
+            rdpCredentialsLoading ||
+            (rdpCredentialSelection !== "manual" &&
+              !selectableRDPCredentials.some(
+                  (credential) => String(credential.id) === rdpCredentialSelection
+                ))
+          }
+        >
+          Connect
         </Button>
       </DialogActions>
     </Dialog>

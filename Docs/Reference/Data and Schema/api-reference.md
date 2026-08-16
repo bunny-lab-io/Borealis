@@ -235,11 +235,12 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by in-scope agent.
     - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels visible in the current operator's site scope.
 
-    ### VNC
+    ### Remote Desktop
     - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state and return listener/session metadata for the agent without caching or echoing the VNC password.
-    - `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
-    - `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session for an in-scope device. Optional `viewer` accepts `guacamole` and defaults to `guacamole`.
-    - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session for an in-scope device.
+    - `POST /api/agent/rdp/ensure` (Device Authenticated) - ensure native Windows RDP role and return Agent/Engine WireGuard `/32` firewall scope plus service/listener health.
+    - `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole availability plus supported `vnc` and `rdp` protocols; default protocol is `vnc`.
+    - `POST /api/vnc/establish` (Token Authenticated) - establish remote desktop session for in-scope device. Optional `viewer` accepts `guacamole`. Optional `protocol` accepts `vnc` or `rdp` and defaults to `vnc`. RDP requires positive `credential_id` or manual `rdp_username`, `rdp_password`, and optional `rdp_domain`.
+    - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close selected `vnc` or `rdp` session for in-scope device.
     - `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside an active shared VNC collaboration session.
     - `GET /api/vnc/sessions` (Token Authenticated) - list active VNC collaboration sessions visible within the current operator's site scope.
     - `POST /api/vnc/session` (Token Authenticated) - legacy alias for establish.

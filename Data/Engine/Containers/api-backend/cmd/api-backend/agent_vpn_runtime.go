@@ -20,7 +20,66 @@ func registerAgentVPNRuntimeRoutes(mux *http.ServeMux, auth *authService, vpnRun
 	mux.HandleFunc("POST /api/agent/vpn/ensure", agentVPNTunnelEnsureHandler(auth, signer, dpop, vpnRuntime, vncRuntime))
 	mux.HandleFunc("POST /api/agent/vpn/ready", agentVPNTunnelReadyHandler(auth, signer, dpop, vpnRuntime))
 	mux.HandleFunc("POST /api/agent/vnc/ensure", agentVNCEnsureHandler(auth, signer, dpop, vpnRuntime, vncRuntime))
+	mux.HandleFunc("POST /api/agent/rdp/ensure", agentRDPEnsureHandler(auth, signer, dpop, vpnRuntime))
 	return nil
+}
+
+func agentRDPEnsureHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, vpnRuntime *vpnTunnelService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deviceCtx, failure := authenticateDeviceBearer(r.Context(), r, auth, signer, dpop)
+		if failure != nil {
+			failure.write(w)
+			return
+		}
+		if !deviceAllowsRemoteAccess(deviceCtx.Status) {
+			writeJSON(w, http.StatusForbidden, deviceRemoteAccessBlockedPayload(deviceCtx.Status))
+			return
+		}
+		body := readOptionalJSONMap(w, r)
+		if body == nil {
+			return
+		}
+		device, status, payloadErr := resolveAgentDeviceForGUID(r.Context(), auth, deviceCtx.GUID, cleanText(body["agent_id"]))
+		if payloadErr != nil {
+			writeJSON(w, status, payloadErr)
+			return
+		}
+		if vpnRuntime == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tunnel_unavailable"})
+			return
+		}
+		rdpPort := parseIntDefault(os.Getenv("BOREALIS_RDP_PORT"), defaultRDPBackendPort)
+		sessionPayload := vpnRuntime.sessionPayload(device.AgentID, false)
+		if sessionPayload == nil {
+			var err error
+			sessionPayload, err = vpnRuntime.connect(r.Context(), vpnConnectRequest{
+				AgentID:       device.AgentID,
+				EndpointHost:  inferWireGuardEndpointHost(r),
+				MarkActivity:  false,
+				RequiredPorts: []int{rdpPort},
+			})
+			if err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "tunnel_down", "detail": err.Error()})
+				return
+			}
+		}
+		roleHealth := loadAgentRoleHealth(r.Context(), auth, device.AgentID, "rdp")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":            "ok",
+			"agent_id":          device.AgentID,
+			"rdp_port":          rdpPort,
+			"allowed_ips":       firstNonEmpty(sessionPayload["allowed_ips"], sessionPayload["engine_virtual_ip"]),
+			"engine_virtual_ip": sessionPayload["engine_virtual_ip"],
+			"virtual_ip":        sessionPayload["virtual_ip"],
+			"tunnel_id":         sessionPayload["tunnel_id"],
+			"ready":             boolFromAny(roleHealth["ready"]),
+			"service_state":     cleanText(roleHealth["service_state"]),
+			"listener_state":    cleanText(roleHealth["listener_state"]),
+			"last_ready_at":     coerceInt64(roleHealth["last_ready_at"]),
+			"health_status":     cleanText(roleHealth["status"]),
+			"detail":            cleanText(roleHealth["detail"]),
+		})
+	}
 }
 
 func agentVPNTunnelEnsureHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, vpnRuntime *vpnTunnelService, vncRuntime *vncRuntime) http.HandlerFunc {
@@ -383,6 +442,63 @@ func loadAgentVNCRoleHealth(ctx context.Context, auth *authService, agentID stri
 			"display_topology":       cloneAnyMapSlice(firstNonEmpty(details["display_topology"], details["display_topology_json"])),
 			"display_virtual_bounds": copyAnyMap(firstNonEmpty(details["display_virtual_bounds"], details["display_virtual_bounds_json"])),
 			"details":                details,
+		}
+	}
+	return defaultPayload
+}
+
+func loadAgentRoleHealth(ctx context.Context, auth *authService, agentID string, roleName string) map[string]any {
+	defaultPayload := map[string]any{
+		"status":         "unknown",
+		"detail":         "",
+		"ready":          false,
+		"service_state":  "",
+		"listener_state": "",
+		"last_ready_at":  0,
+	}
+	db := vpnDB(auth)
+	roleName = strings.ToLower(strings.TrimSpace(roleName))
+	if db == nil || cleanText(agentID) == "" || roleName == "" {
+		return defaultPayload
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return defaultPayload
+	}
+	var raw sql.NullString
+	err = conn.QueryRowContext(ctx, `SELECT agent_role_health FROM engine.devices WHERE LOWER(agent_id)=LOWER($1) ORDER BY last_seen DESC LIMIT 1`, agentID).Scan(&raw)
+	closeErr := conn.Close()
+	if err != nil || closeErr != nil || !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return defaultPayload
+	}
+	var parsed map[string]any
+	if json.Unmarshal([]byte(raw.String), &parsed) != nil {
+		return defaultPayload
+	}
+	roles, _ := parsed["roles"].([]any)
+	for _, item := range roles {
+		role, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		roleID := strings.ToLower(cleanText(role["role_id"]))
+		storedName := strings.ToLower(cleanText(role["role_name"]))
+		if storedName != roleName && roleID != roleName && roleID != "system:"+roleName {
+			continue
+		}
+		details, _ := role["details"].(map[string]any)
+		serviceState := cleanText(firstNonEmpty(details["service_state"], details["state"]))
+		listenerState := cleanText(firstNonEmpty(details["listener_state"], details["listener_ready"]))
+		status := firstText(strings.ToLower(cleanText(firstNonEmpty(role["status_code"], role["status"]))), "unknown")
+		ready := boolFromAny(details["ready"]) || (status == "healthy" && boolFromAny(firstNonEmpty(details["listener_ready"], listenerState)))
+		return map[string]any{
+			"status":         status,
+			"detail":         cleanText(role["detail"]),
+			"ready":          ready,
+			"service_state":  serviceState,
+			"listener_state": listenerState,
+			"last_ready_at":  coerceInt64(details["last_ready_at"]),
+			"details":        details,
 		}
 	}
 	return defaultPayload

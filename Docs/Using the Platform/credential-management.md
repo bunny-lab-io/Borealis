@@ -24,6 +24,17 @@ Credential Management stores reusable secrets for remote onboarding, SSH/WinRM a
 - Global credentials should be rare and intentionally named.
 - Scheduled jobs and onboarding use credential records by ID; secret material is not copied into job definitions.
 
+## Use Stored Credential for Windows RDP
+
+Remote Desktop can use credential when all following match:
+
+- Connection type is `Windows` or `WinRM`.
+- Credential type is `Machine` or `Domain`.
+- Username and password are present and do not need Aegis recovery.
+- Site scope is global or matches selected device site.
+
+Use `DOMAIN\\username` or user principal name when Windows domain context is required. Remote Desktop selector receives credential metadata only. Engine validates scope again, decrypts password server-side for session setup, and never returns stored secret to browser.
+
 ## Manage Aegis Cipher
 
 Credentials page also shows Aegis status and runtime actions after bootstrap. Use rotation when changing the cipher intentionally. Force reset is disaster recovery and destroys stored secret material that cannot be decrypted.
@@ -64,3 +75,4 @@ Credentials page also shows Aegis status and runtime actions after bootstrap. Us
     - Credential records live in `credentials`.
     - Secret fields store `aegis:v1:` envelopes after Aegis setup.
     - Job workers fetch decrypted credential material only at execution time through internal Engine paths.
+    - Windows RDP session setup uses same internal scheduler credential decryption path. Public request carries credential ID; Engine enforces device-site scope plus `machine|domain` and `windows|winrm` classification before sending resolved secret to authenticated site-worker.

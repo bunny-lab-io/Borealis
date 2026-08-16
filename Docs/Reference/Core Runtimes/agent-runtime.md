@@ -22,6 +22,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply with missing-tool and endpoint-path recovery, handshake-aware health, and `/api/agent/vpn/ready` reporting.
 - `internal/roles/remote_shell` - SYSTEM/root WireGuard-scoped TCP shell listener for Engine `vpn_shell_*` bridge traffic, using PowerShell on Windows and Bash/sh on Linux.
 - `internal/roles/vnc` - Windows UltraVNC always-on lifecycle, runtime credential broker, Engine `/api/agent/vnc/ensure` bootstrap, Socket.IO credential/start events, firewall scope, and listener readiness reporting. Linux VNC reports unsupported.
+- `internal/roles/rdp` - Windows native Remote Desktop lifecycle, Engine `/api/agent/rdp/ensure` bootstrap, `rdp_start` readiness events, WireGuard-scoped firewall rule, and `TermService` listener health. Linux RDP reports unsupported.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`; Linux current-user/tray UI remains pending.
 
 ## Agent Settings and Storage
@@ -62,6 +63,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
     - `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply and, on Linux, fresh peer handshake.
     - `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise VNC readiness and reconcile always-on VNC state without returning the VNC password.
+    - `POST /api/agent/rdp/ensure` (Device Authenticated) - return WireGuard firewall scope and reconcile native Windows RDP readiness without returning login credentials.
     - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one Engine-staged upload item for the File Management role.
     - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.
     - `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
@@ -114,6 +116,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
       - `software_inventory_refresh_request` operator-triggered software inventory refresh after icon/override or software action changes.
       - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
       - `vnc_start`, `vnc_stop`, `vnc_refresh`, and `vnc_credential_request` for Windows UltraVNC lifecycle and runtime password delivery.
+      - `rdp_start` for native Windows Remote Desktop service and listener readiness.
       - `agent_update_request` to start the local platform updater path.
       - `connect_agent` registration (agent socket registry).
     - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
@@ -133,6 +136,9 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - Heartbeats include queued `metadata_fields` from `metadata-queue.json` when present. Engine responses return `metadata_field_acks` for accepted or superseded queued fields; acked entries are removed from the queue. Engine remains source of truth.
     - Heartbeats/details also carry centralized role-supervisor health snapshots so the Device Details `Agent Health` tab can show current role/service status with desired state, observed state, last-checked timestamps, last healthy time, last error, and recovery-attempt counts. Startup status uses `POST /api/agent/status` under the separate `startup` context so later SYSTEM role-health heartbeats do not erase the timeline row.
     - The VNC role generates one shared UltraVNC password when the role starts, rotates it again every 24 hours by default (`BOREALIS_VNC_CREDENTIAL_ROTATION_SECONDS`), keeps it in memory only, and returns it to the Engine only through live Agent Socket.IO `vnc_credential_request` calls. The Agent does not probe UltraVNC auth locally by default because each loopback auth probe consumes an UltraVNC login attempt and can trip lockout before Guacamole connects. Set `BOREALIS_VNC_LOCAL_AUTH_VERIFY=1` only for focused diagnostics. The role keeps UltraVNC continuously running once it has the Engine /32 firewall scope, writes UltraVNC config under `%ProgramData%\UltraVNC\` with loopback allowed for local diagnostics, and reports `ready`, `service_state`, `listener_state`, `last_ready_at`, Windows `display_topology`, and Windows `display_virtual_bounds` through VNC ensure, credential, and role-health payloads even when no operator is currently connected.
+    - The RDP role enables native Windows Remote Desktop with `fDenyTSConnections=0`, sets `TermService` startup to automatic, starts service when needed, and checks local TCP listener readiness. It does not add or remove users from local groups and does not modify Group Policy.
+    - The RDP role creates only Windows Firewall rule `Borealis - RDP - WireGuard`, allowing inbound TCP 3389 from Engine WireGuard `/32` to Agent WireGuard `/32` on any Windows profile. Each ensure removes and recreates only that exact Borealis-owned rule so changed tunnel addresses are applied without mutating built-in Remote Desktop or unrelated firewall configuration.
+    - The RDP role posts `/api/agent/rdp/ensure` on startup and every 30 seconds, handles `rdp_start`, and publishes `system:rdp` health under display label `Borealis Agent - RDP`. Health includes `TermService` state, listener state, scoped addresses, firewall rule name, last readiness time, and last service error.
     - VNC role trace logs (`vnc_trace ...`) are disabled by default because the always-on health loop can otherwise produce high-volume logs during normal operation. Set `BOREALIS_VNC_TRACE=1` only for short diagnostic captures.
     - The UltraVNC config writer enables capture performance flags (`TurboMode`, full-screen polling defaults, `EnableDriver`, and `EnableHook`) when the official UltraVNC helper DLLs are present beside `winvnc.exe`.
     - Software inventory suppresses UltraVNC's known EXE/MSI-wrapper ARP noise row (`UNREGISTERED - Wrapped using MSI Wrapper`) and keeps the real `UltraVNC` installed-software row.
@@ -153,6 +159,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
     - UltraVNC role log: `Logs/UltraVNC/vnc.log`.
     - UltraVNC MSI install log: `Logs/UltraVNC/ultravnc-msi-install.log`.
+    - Native RDP role log: `Logs/RDP/rdp.log`.
 
     ### Troubleshooting flow
     - If enrollment fails, check:
@@ -179,6 +186,11 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
       - Check `Logs/WireGuard/wireguard.log` for tunnel lifecycle and WireGuard recovery events.
       - Call `POST /api/agent/vnc/ensure` and inspect `ready`, `service_state`, `listener_state`, `detail`, and `last_ready_at`.
       - Confirm the active collaboration session still exists from the Engine side with `GET /api/vnc/sessions`.
+    - If RDP fails:
+      - Check `Logs/RDP/rdp.log` and `Logs/WireGuard/wireguard.log`.
+      - Inspect `Borealis Agent - RDP` health for `TermService`, listener, local address, Engine address, and last error.
+      - Confirm endpoint Windows edition, Remote Desktop sign-in rights, and credential format. Borealis intentionally does not change account membership or Group Policy.
+      - Confirm `Borealis - RDP - WireGuard` uses current Agent and Engine WireGuard `/32` addresses. Do not enable broad built-in RDP firewall rules as workaround.
 
     ### Borealis Agent Codex (Full)
     Use this section for agent-only work (Borealis agent runtime under `Data/Agent` -> `/Agent`). Shared guidance is consolidated in `ui-and-notifications.md` and the Engine runtime notes.
@@ -217,17 +229,18 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
       - `Data/Agent/internal/roles/wireguard_tunnel` (Go tunnel lifecycle)
       - `Data/Agent/internal/roles/remote_shell` (Go VPN remote shell TCP server)
       - `Data/Agent/internal/roles/vnc` (Go Windows UltraVNC lifecycle and credential broker)
+      - `Data/Agent/internal/roles/rdp` (Go Windows native RDP lifecycle and WireGuard firewall scope)
 
     #### Execution contexts and roles
     - Go roles are explicit packages under `Data/Agent/internal/roles`.
-    - First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory including Windows domain/workgroup telemetry, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Engine-hosted Go Agent self-update.
+    - First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory including Windows domain/workgroup telemetry, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, Windows native RDP lifecycle over WireGuard, and Engine-hosted Go Agent self-update.
     - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
     - Service tasks depend on Windows service and scheduled-task creation rights; failures should surface through Engine logging and `Logs/Agent/role_recovery.log`.
 
     #### Platform parity
     - Windows is the reference path and has the broadest tested feature surface.
     - Linux Go runtime builds as `Agent`, self-stages when server URL and enrollment code are provided, installs through systemd, enables an hourly updater timer, and supports root/SYSTEM Bash quick jobs in first PR.
-    - Linux CURRENTUSER and tray UI are pending Go ports. Linux VNC is explicitly unsupported in the current Go role.
+    - Linux CURRENTUSER and tray UI are pending Go ports. Linux VNC and native RDP are explicitly unsupported in current Go roles.
 
     #### Ansible support
     - The agent no longer hosts an Ansible playbook execution role.

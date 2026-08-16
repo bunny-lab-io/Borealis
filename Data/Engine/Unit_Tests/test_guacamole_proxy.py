@@ -156,6 +156,105 @@ def test_guacamole_connect_arguments_include_performance_preference() -> None:
     ]
 
 
+def test_guacamole_rdp_connect_arguments_keep_credentials_server_side() -> None:
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.42",
+        port=3389,
+        password="domain-password",
+        created_at=0,
+        expires_at=120,
+        protocol="rdp",
+        username="nicole",
+        domain="LAB",
+        security="nla",
+        ignore_cert=True,
+    )
+
+    values = guacamole_connect_arguments(
+        session,
+        [
+            guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+            "hostname",
+            "port",
+            "username",
+            "password",
+            "domain",
+            "security",
+            "ignore-cert",
+            "disable-audio",
+            "resize-method",
+        ],
+    )
+
+    assert values == [
+        guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+        "10.255.0.42",
+        "3389",
+        "nicole",
+        "domain-password",
+        "LAB",
+        "nla",
+        "true",
+        "true",
+        "display-update",
+    ]
+
+
+def test_guacamole_rdp_handshake_selects_rdp(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "username",
+                "password",
+                "domain",
+                "security",
+                "ignore-cert",
+            ).encode("utf-8"),
+            encode_instruction("ready", "uuid-rdp").encode("utf-8"),
+        ]
+    )
+    writer = _FakeWriter()
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_BACKEND_VERIFY_SECONDS", 0)
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.42",
+        port=3389,
+        password="domain-password",
+        created_at=0,
+        expires_at=120,
+        protocol="rdp",
+        username="nicole",
+        domain="LAB",
+        security="nla",
+        ignore_cert=True,
+    )
+
+    uuid_value, _pending, _parser = asyncio.run(
+        guacamole_proxy._handshake_guacd(reader=reader, writer=writer, session=session)
+    )
+
+    assert uuid_value == "uuid-rdp"
+    handshake = GuacamoleProtocolParser().feed(b"".join(writer.writes).decode("utf-8"))
+    assert handshake[0] == ("select", ["rdp"])
+    assert next(args for opcode, args in handshake if opcode == "connect") == [
+        guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+        "10.255.0.42",
+        "3389",
+        "nicole",
+        "domain-password",
+        "LAB",
+        "nla",
+        "true",
+    ]
+
+
 def test_guacamole_image_mimetypes_follow_performance_preference() -> None:
     assert guacamole_proxy.guacamole_vnc_image_mimetypes(-2) == ("image/jpeg", "image/webp", "image/png")
     assert guacamole_proxy.guacamole_vnc_image_mimetypes(-1) == ("image/jpeg", "image/webp", "image/png")

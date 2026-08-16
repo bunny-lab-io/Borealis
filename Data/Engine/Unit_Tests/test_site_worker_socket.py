@@ -716,6 +716,56 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     assert session.restart_tunnel is None
 
 
+def test_site_worker_remote_desktop_registers_rdp_without_vnc_probe(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, _token = _runtime(tmp_path)
+    operation_token = _issue_remote_desktop_token(runtime)
+    monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
+    monkeypatch.setattr(
+        worker_socket,
+        "probe_vnc_security",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("RDP must not use VNC preflight")),
+    )
+    monkeypatch.setattr(
+        worker_socket,
+        "wait_for_vnc_auth_ready",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("RDP must not use VNC auth probe")),
+    )
+
+    response = runtime.app.test_client().post(
+        "/remote-desktop/vnc/session",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "operation_token": operation_token,
+            "protocol": "rdp",
+            "agent_id": AGENT_ID,
+            "host": "10.255.0.20",
+            "port": 3389,
+            "username": "nicole",
+            "password": "domain-password",
+            "domain": "LAB",
+            "security": "nla",
+            "ignore_cert": True,
+            "operator_id": "unit",
+            "session_id": "rdp-session-1",
+            "participant_id": "participant-1",
+            "role": "controller",
+        },
+    )
+
+    assert response.status_code == 200
+    session = runtime._guacamole_registry.consume(response.get_json()["token"])
+    assert session is not None
+    assert session.protocol == "rdp"
+    assert session.port == 3389
+    assert session.username == "nicole"
+    assert session.password == "domain-password"
+    assert session.domain == "LAB"
+    assert session.security == "nla"
+    assert session.ignore_cert is True
+
+
 def test_site_worker_remote_desktop_honors_request_scoped_vnc_auth_probe(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
