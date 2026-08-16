@@ -24,7 +24,12 @@ func vncViewersHandler(auth *authService) http.HandlerFunc {
 		health := guacdHealth(r.Context(), 350*time.Millisecond)
 		available := boolFromAny(health["enabled"]) && boolFromAny(health["available"])
 		writeJSON(w, http.StatusOK, map[string]any{
-			"default_viewer": "guacamole",
+			"default_viewer":   "guacamole",
+			"default_protocol": "vnc",
+			"protocols": []map[string]any{
+				{"id": "vnc", "label": "UltraVNC", "default": true},
+				{"id": "rdp", "label": "Windows RDP", "default": false},
+			},
 			"viewers": []map[string]any{
 				{
 					"id":        "guacamole",

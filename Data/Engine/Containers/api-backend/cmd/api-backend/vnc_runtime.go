@@ -101,20 +101,24 @@ func newVNCRuntime(auth *authService, vpn *vpnTunnelService) *vncRuntime {
 	}
 }
 
-func registerVNCRoutes(mux *http.ServeMux, auth *authService, vpn *vpnTunnelService, runtime *vncRuntime) {
+func registerVNCRoutes(mux *http.ServeMux, auth *authService, vpn *vpnTunnelService, runtime *vncRuntime, rdpRuntimes ...*rdpRuntime) {
 	if runtime == nil {
 		runtime = newVNCRuntime(auth, vpn)
 	}
+	rdp := newRDPRuntime(auth, vpn)
+	if len(rdpRuntimes) > 0 && rdpRuntimes[0] != nil {
+		rdp = rdpRuntimes[0]
+	}
 	mux.HandleFunc("GET /api/vnc/viewers", vncViewersHandler(auth))
-	mux.HandleFunc("POST /api/vnc/establish", vncEstablishHandler(auth, runtime))
-	mux.HandleFunc("POST /api/vnc/session", vncEstablishHandler(auth, runtime))
-	mux.HandleFunc("POST /api/vnc/disconnect", vncDisconnectHandler(auth, runtime))
+	mux.HandleFunc("POST /api/vnc/establish", vncEstablishHandler(auth, runtime, rdp))
+	mux.HandleFunc("POST /api/vnc/session", vncEstablishHandler(auth, runtime, rdp))
+	mux.HandleFunc("POST /api/vnc/disconnect", vncDisconnectHandler(auth, runtime, rdp))
 	mux.HandleFunc("POST /api/vnc/handoff", vncHandoffHandler(auth, runtime))
 	mux.HandleFunc("GET /api/vnc/sessions", vncSessionsHandler(auth, runtime))
 	mux.HandleFunc("POST /api/internal/vnc/session-event", vncInternalSessionEventHandler(auth, runtime))
 }
 
-func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+func vncEstablishHandler(auth *authService, runtime *vncRuntime, rdp *rdpRuntime) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		profile, err := auth.currentProfile(r.Context(), r)
 		if err != nil {
@@ -140,6 +144,21 @@ func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFun
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_viewer"})
 			return
 		}
+		protocol := strings.ToLower(firstText(cleanText(body["protocol"]), "vnc"))
+		if protocol != "vnc" && protocol != "rdp" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_protocol"})
+			return
+		}
+		if protocol == "rdp" {
+			if validationErr := validateRDPDisplayInput(body); validationErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_rdp_display", "detail": validationErr.Error()})
+				return
+			}
+			if validationErr := validateRDPRequestCredentialInput(body); validationErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_rdp_credentials", "detail": validationErr.Error()})
+				return
+			}
+		}
 		result, status, payloadErr := vpnAuthorizedDevice(r.Context(), auth, profile, requestedAgentID)
 		if payloadErr != nil {
 			writeJSON(w, status, payloadErr)
@@ -147,6 +166,11 @@ func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFun
 		}
 		if result.Route == nil {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "site_worker_unavailable", "message": "No active site-worker route is available for this device site."})
+			return
+		}
+		if protocol == "rdp" {
+			payload, statusCode := rdp.issueSession(r.Context(), r, profile, result, body)
+			writeJSON(w, statusCode, payload)
 			return
 		}
 		log.Printf("vnc_establish_request")
@@ -378,6 +402,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	snapshot["display_virtual_bounds"] = credential.DisplayVirtualBounds
 	return map[string]any{
 		"viewer":                 "guacamole",
+		"protocol":               "vnc",
 		"session_id":             session.SessionID,
 		"participant_id":         participant.ParticipantID,
 		"participant_role":       participant.Role,
@@ -862,7 +887,7 @@ func (v *vncRuntime) issueRemoteDesktopToken(profile operatorProfile, result rem
 	return v.signer.issueRemoteOpsSession(profile, result.Device, *result.Route, []string{"remote_desktop"}, time.Now().UTC(), defaultRemoteOpSessionTTL)
 }
 
-func vncDisconnectHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+func vncDisconnectHandler(auth *authService, runtime *vncRuntime, rdp *rdpRuntime) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		profile, err := auth.currentProfile(r.Context(), r)
 		if err != nil {
@@ -881,6 +906,16 @@ func vncDisconnectHandler(auth *authService, runtime *vncRuntime) http.HandlerFu
 		sessionID := cleanText(body["session_id"])
 		agentID := cleanText(body["agent_id"])
 		reason := firstText(cleanText(body["reason"]), "operator_disconnect")
+		protocol := strings.ToLower(firstText(cleanText(body["protocol"]), "vnc"))
+		if protocol != "vnc" && protocol != "rdp" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_protocol"})
+			return
+		}
+		if protocol == "rdp" {
+			payload, status := rdp.disconnect(r.Context(), profile, agentID, sessionID, cleanText(body["participant_id"]), reason)
+			writeJSON(w, status, payload)
+			return
+		}
 		closeSession := boolFromAny(body["close_session"])
 		session := runtime.sessionByID(sessionID)
 		if session == nil && agentID != "" {

@@ -950,18 +950,36 @@ class SiteWorkerSocketRuntime:
             if agent_id != str(claims.get("agent_id") or "").strip():
                 return jsonify({"error": "device_mismatch"}), 403
 
+            protocol = str(data.get("protocol") or "vnc").strip().lower()
+            if protocol not in {"vnc", "rdp"}:
+                return jsonify({"error": "invalid_remote_desktop_protocol"}), 400
             host = str(data.get("host") or data.get("virtual_ip") or "").split("/")[0].strip()
             try:
-                port = int(data.get("port") or 5900)
+                port = int(data.get("port") or (3389 if protocol == "rdp" else 5900))
             except Exception:
-                port = 5900
-            password = str(data.get("password") or "").strip()[:8]
+                port = 3389 if protocol == "rdp" else 5900
+            password = str(data.get("password") or "")
+            if protocol == "vnc":
+                password = password.strip()[:8]
+            username = str(data.get("username") or "").strip()
+            domain = str(data.get("domain") or "").strip()
+            security = str(data.get("security") or "nla").strip().lower()
+            ignore_cert = _normalize_bool(data.get("ignore_cert"), False)
             session_id = str(data.get("session_id") or "").strip()
             participant_id = str(data.get("participant_id") or "").strip()
             operator_id = str(data.get("operator_id") or "").strip()
             role = str(data.get("role") or "").strip()
             if not host or port <= 0 or not password or not session_id or not participant_id:
                 return jsonify({"error": "invalid_session_payload"}), 400
+            if protocol == "rdp":
+                if not username or len(username.encode("utf-8")) > 256:
+                    return jsonify({"error": "invalid_rdp_username"}), 400
+                if len(domain.encode("utf-8")) > 256:
+                    return jsonify({"error": "invalid_rdp_domain"}), 400
+                if len(password.encode("utf-8")) > 4096 or security != "nla":
+                    return jsonify({"error": "invalid_rdp_authentication"}), 400
+                if any(ord(char) < 32 or ord(char) == 127 for char in username + domain + password):
+                    return jsonify({"error": "invalid_rdp_authentication"}), 400
             try:
                 width = int(data.get("width") or 1024)
             except Exception:
@@ -976,6 +994,29 @@ class SiteWorkerSocketRuntime:
                 dpi = 96
             performance_preference = normalize_guacamole_performance_preference(data.get("performance_preference"))
             image_codec = normalize_guacamole_image_codec(data.get("image_codec"))
+            if protocol == "rdp":
+                guacamole_session = self._guacamole_registry.create(
+                    agent_id=agent_id,
+                    host=host,
+                    port=port,
+                    password=password,
+                    protocol="rdp",
+                    username=username,
+                    domain=domain,
+                    security=security,
+                    ignore_cert=ignore_cert,
+                    operator_id=operator_id,
+                    session_id=session_id,
+                    participant_id=participant_id,
+                    role=role,
+                    width=width,
+                    height=height,
+                    dpi=dpi,
+                    performance_preference=performance_preference,
+                    image_codec=image_codec,
+                )
+                self._log("remote_desktop_rdp_session_registered port={0}".format(port))
+                return jsonify({"status": "ok", "token": guacamole_session.token}), 200
             auth_probe_enabled = _normalize_bool(
                 data.get("auth_probe"),
                 _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False),

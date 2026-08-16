@@ -1,21 +1,23 @@
 # Remote Desktop
 
-Remote Desktop opens a shared browser VNC session to a Windows agent through Borealis-managed WireGuard and Apache Guacamole. Use it when visual support is faster than shell, file, process, or service tools.
+Remote Desktop opens Windows endpoint in browser through Borealis-managed WireGuard and Apache Guacamole. UltraVNC remains default protocol. Windows RDP provides native alternative when endpoint and credential support it.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Remote_Desktop.png" alt="Borealis Remote Desktop session" loading="lazy">
-  <figcaption>Remote Desktop uses browser VNC through Guacamole over the managed WireGuard tunnel.</figcaption>
+  <figcaption>Remote Desktop uses Guacamole over managed WireGuard tunnel.</figcaption>
 </figure>
 
 ## Launch Session
 
 1. Open a Windows device.
 2. Open `Remote Desktop`.
-3. Select `Launch Remote Desktop`.
-4. Wait for readiness checks.
-5. Work in the browser viewer.
+3. Under `Session Control`, choose `UltraVNC` or `Windows RDP`. UltraVNC is selected by default.
+4. Select launch action.
+5. For Windows RDP, select eligible stored Windows credential or enter username, password, and optional domain for current session.
+6. Wait for readiness checks.
+7. Work in browser viewer.
 
-If another operator already has the device open, Borealis joins the same shared collaboration session.
+UltraVNC keeps shared collaboration behavior. Windows RDP creates separate native RDP session.
 
 !!! info
 
@@ -24,7 +26,7 @@ If another operator already has the device open, Borealis joins the same shared 
 ## Use Session Controls
 
 - Reconnect if the browser stream drops after it was already ready.
-- Choose `Prefer Speed` or `Prefer Quality` when bandwidth or visual fidelity matters. Changing this preference reconnects the desktop stream so Guacamole can apply the codec choice.
+- Choose `Prefer Speed` or `Prefer Quality` when bandwidth or visual fidelity matters. For RDP, speed uses lower color depth and disables Windows visual effects; quality uses lossless full-color rendering and enables wallpaper, themes, font smoothing, full-window dragging, desktop composition, and menu animations. Changing preference reconnects desktop stream so Guacamole can apply complete profile.
 - Use the always-open display selector or the viewfinder to fit the full desktop or focus one monitor when the Windows endpoint has multiple displays.
 - After a display is selected, Borealis switches the viewer to `Fit`, clips video and mouse input to that display, and previews that display region by itself. The viewfinder center-fits multi-display layouts so wide monitor spans stay inside the sidebar preview.
 - Use `Fit` or `Scaled` when `Display: All` is selected. Single-display focus uses `Fit` only.
@@ -34,13 +36,21 @@ If another operator already has the device open, Borealis joins the same shared 
 ## Availability Rules
 
 - Remote Desktop needs a supported Windows agent.
-- Agent must be online with WireGuard and VNC roles healthy.
+- Agent must be online with WireGuard plus selected VNC or RDP role healthy.
 - `guacd` must be available on the Engine.
-- Browser traffic stays same-origin under Borealis HTTPS; no separate public VNC endpoint is used.
+- Browser traffic stays same-origin under Borealis HTTPS; no separate public VNC or RDP endpoint is used.
+- Windows RDP requires supported Windows edition and account allowed to sign in through Remote Desktop. Borealis does not add users to `Remote Desktop Users` or `Administrators`, and does not change Group Policy.
+- Stored RDP credentials must use `Windows` or `WinRM` connection type, `Machine` or `Domain` credential type, username, and password. Site-scoped credentials appear only for matching device site; global credentials appear for all sites.
+
+!!! info
+
+    New RDP sessions request current browser viewer resolution and track later viewer-size changes. Borealis does not yet enumerate or select existing Windows Remote Desktop Services sessions. Windows decides whether supplied account resumes existing session, and viewport update may resize resumed session. Multi-user terminal-server session selection remains unsupported.
 
 !!! warning
 
-    Do not expose endpoint VNC listeners directly. Borealis keeps UltraVNC traffic behind managed WireGuard reachability, site-worker routing, and same-origin Guacamole browser proxying.
+    Do not expose endpoint VNC or RDP listeners directly. Borealis keeps remote desktop traffic behind managed WireGuard reachability, site-worker routing, and same-origin Guacamole browser proxying.
+
+    Windows RDP role enables `TermService` and native Remote Desktop setting. It creates only `Borealis - RDP - WireGuard`: inbound TCP 3389 scoped to Agent WireGuard `/32` as local address and Engine WireGuard `/32` as remote address. It preserves unrelated firewall rules.
 
 !!! tip
 
@@ -51,11 +61,12 @@ If another operator already has the device open, Borealis joins the same shared 
     ### API endpoints
 
     - `GET /api/vnc/viewers` - report Guacamole availability.
-    - `POST /api/vnc/establish` - establish or join VNC collaboration session.
-    - `POST /api/vnc/disconnect` - leave or close session.
+    - `POST /api/vnc/establish` - establish VNC or RDP session selected by `protocol`; omitted protocol defaults to `vnc`.
+    - `POST /api/vnc/disconnect` - leave or close selected protocol session.
     - `POST /api/vnc/handoff` - reassign session-owner metadata.
     - `GET /api/vnc/sessions` - list active sessions.
     - `POST /api/agent/vnc/ensure` - agent readiness and session metadata.
+    - `POST /api/agent/rdp/ensure` - Agent-authenticated RDP WireGuard scope and role readiness.
 
     ### Related documentation
 
@@ -68,16 +79,22 @@ If another operator already has the device open, Borealis joins the same shared 
     ### Source map
 
     - Remote Desktop UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Desktop.jsx`
-    - VNC API: `Data/Engine/Containers/api-backend/data/services/API/devices/vnc.py`
-    - VNC proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/vnc_proxy.py`
+    - Remote Desktop API routing: `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go`
+    - RDP session broker: `Data/Engine/Containers/api-backend/cmd/api-backend/rdp_runtime.go`
     - Guacamole bridge: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/guacamole_proxy.py`
     - Agent VNC role: `Data/Agent/internal/roles/vnc/`
+    - Agent RDP role: `Data/Agent/internal/roles/rdp/`
 
     ### Runtime behavior
 
     - Engine asks the Agent for the current runtime VNC credential only when establishing a live session.
     - Browser receives a Borealis one-time token, not the UltraVNC password.
     - Guacamole connects through local `guacd`, then to the agent VNC listener over WireGuard.
+    - RDP launch accepts manual fields `rdp_username`, `rdp_password`, and optional `rdp_domain`, or `credential_id`. Manual password stays in current browser memory only for reconnects and is cleared on operator disconnect. Stored credential secret is decrypted inside Engine and never returned to browser; WebUI sends only credential ID.
+    - Engine repeats stored-credential site, credential-type, connection-type, username, and password checks before decrypting and forwarding session material through authenticated site-worker route.
+    - RDP uses Network Level Authentication (`security=nla`) and accepts endpoint-managed RDP certificate inside WireGuard path (`ignore-cert=true`). Guacamole disables RDP drive, printing, and audio redirection.
+    - Windows Agent RDP role sets `fDenyTSConnections=0`, configures `TermService` for automatic startup, starts service when needed, and reports role health as `Borealis Agent - RDP`. It never mutates local groups or Group Policy.
+    - RDP role owns only firewall rule `Borealis - RDP - WireGuard`. Rule allows TCP 3389 from Engine WireGuard `/32` to Agent WireGuard `/32`; ensure loop recreates this exact rule when tunnel addresses change and leaves unrelated Windows Firewall configuration untouched.
     - Engine checks for the VNC RFB banner before opening the browser socket. If the listener accepts TCP but does not speak RFB, startup fails as `vnc_backend_no_rfb_banner` so operators are not left waiting on a Guacamole retry loop.
     - VNC role keeps UltraVNC available after firewall scope and runtime credentials are ready.
     - Agent VNC config sets UltraVNC `[admin]` values `primary=1` and `secondary=1` so multi-monitor Windows endpoints start Guacamole sessions with the full desktop framebuffer instead of primary-only capture.
@@ -93,7 +110,8 @@ If another operator already has the device open, Borealis joins the same shared 
     - Guacamole startup treats post-ready backend status `519` as a target-side Guacamole transport failure after guacd has already tried its configured VNC autoretry path. Borealis keeps Guacamole VNC `autoretry=3` for parity with the pre-hardening Remote Desktop path, but the site-worker does not stack additional fresh guacd sessions for the same `519` failure. If guacd still fails, Engine records a Guacamole transport failure instead of assuming password failure. Guacd mirrors normal daemon output to K3s pod logs for `deployment/remote-desktop-guacd` and keeps only transient in-container file logs under `/tmp/borealis-guacd-logs`.
     - Explicit VNCAuth diagnostics can report `vnc_auth_failed`. The next establish request uses the existing Agent `vnc_auth_retry` reason so the Agent rotates the runtime VNC credential and rewrites UltraVNC config without changing Agent code. Password-not-enabled preflight failures are kept separate as `vnc_password_not_enabled` and do not start Agent credential rotation.
     - Engine treats `vnc_auth_retry` as single-flight per Agent. While UltraVNC is restarting or settling after credential rotation, additional establish requests receive `vnc_auth_retry_in_progress` or `vnc_auth_retry_settling` with `retry_after_seconds` instead of sending another credential rotation request. Auth retry and UltraVNC lockout settle hints are capped at 30 seconds; after that window, normal launches try the current credential through Guacamole, while explicit diagnostic launches can still request the RFB auth probe.
-    - Remote Desktop speed/quality preference is a two-state WebUI toggle. `Prefer Speed` sends performance `-2` and `image_codec=jpeg`; `Prefer Quality` sends performance `2` and `image_codec=png`. The setting flows from WebUI through the Go VNC broker into the site-worker Guacamole session. Changing it during an active or connecting session disconnects the browser stream and reconnects so Guacamole can renegotiate image codec and performance arguments.
+    - Remote Desktop speed/quality preference is a two-state WebUI toggle. `Prefer Speed` sends performance `-2` and `image_codec=jpeg`; `Prefer Quality` sends performance `2` and `image_codec=png`. For RDP, speed also selects 16-bit color and disables wallpaper, theming, font smoothing, full-window drag, desktop composition, and menu animations. Quality selects 24-bit color, forces lossless output, and enables all listed visual effects. Bitmap, offscreen, and glyph caches plus GFX pipeline remain enabled in both profiles. Setting flows from WebUI through Go broker into site-worker Guacamole session. Changing it during active or connecting session disconnects browser stream and reconnects so Guacamole can renegotiate image codec and performance arguments.
+    - WebUI measures remote desktop display surface before RDP establishment and sends validated `width`, `height`, and `dpi` values through Go broker. Guacamole starts session at that viewer size with `resize-method=display-update`; browser sends later Guacamole `size` instructions after debounced viewer resize events. Borealis does not inspect Windows session inventory, select among Remote Desktop Services users, or distinguish new sessions from resumed sessions. Windows owns account-session reconnection behavior, and display-update can resize resumed session.
     - WebUI display focus is client-side only: Guacamole keeps one full-framebuffer VNC session, while `Remote_Desktop.jsx` positions and scales the Guacamole display element inside an overflow-hidden clip layer to crop one monitor. `Display: All` supports `Fit` and `Scaled`; single-display focus forces `Fit` and clamps mouse coordinates to the selected display.
     - Windows Agent display topology prefers active monitor geometry from `EnumDisplayMonitors` when that data is at least as complete as `EnumDisplaySettingsEx`. This preserves physical positions such as secondary monitors to the left of the primary monitor instead of trusting a stale or flattened display-settings layout.
     - When live Agent topology only reports one display but the Guacamole framebuffer is clearly wider, WebUI uses `display_virtual_bounds` first to project the reported monitor into framebuffer coordinates, then uses reported framebuffer gaps when one monitor size is known. If Windows collapses the whole desktop into one very-wide display, WebUI uses aspect-ratio priors to expose best-effort display rows without hardcoding pixel resolutions.
