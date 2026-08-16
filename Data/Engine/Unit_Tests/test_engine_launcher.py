@@ -47,8 +47,12 @@ def test_agent_binary_redeploy_has_precommit_rollback() -> None:
 def test_engine_ip_fallback_is_resolved_for_every_network_mode() -> None:
     source = _engine_source()
     function = source.split("resolve_engine_ip_fallback() {", 1)[1].split("\nvalidate_engine_fqdn() {", 1)[0]
+    env_writer = source.split("write_compose_env() {", 1)[1].split("\ncompute_service_hash() {", 1)[0]
 
     assert 'normalize_engine_deployment_profile "${engine_profile}" >/dev/null' in function
     assert '== "internal-only"' not in function
     assert "detect_engine_ip_fallback" in function
+    fallback_resolution = env_writer.index('engine_ip_fallback="$(resolve_engine_ip_fallback "${engine_profile}")"')
+    local_ca_branch = env_writer.index('if [[ "${engine_profile}" == "internal-only" ]]')
+    assert fallback_resolution < local_ca_branch
     assert "BOREALIS_ENGINE_IP_FALLBACK=${engine_ip_fallback}" in source

@@ -8272,8 +8272,8 @@ write_compose_env() {
   local local_tls_cert=""
   local local_tls_key=""
   local local_ca_b64=""
+  engine_ip_fallback="$(resolve_engine_ip_fallback "${engine_profile}")"
   if [[ "${engine_profile}" == "internal-only" ]]; then
-    engine_ip_fallback="$(resolve_engine_ip_fallback "${engine_profile}")"
     local_ca_enabled=1
     local_ca_cert="$(local_ca_cert_path)"
     local_ca_key="$(local_ca_key_path)"
