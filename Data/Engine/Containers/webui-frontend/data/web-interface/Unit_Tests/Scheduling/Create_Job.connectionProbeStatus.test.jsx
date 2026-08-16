@@ -11,11 +11,11 @@ describe("scheduled job connection probe status", () => {
     const deadlineTs = 1_700_000_060;
 
     expect(connectionProbeStatusLabel("Establishing Connection", deadlineTs, 1_700_000_000_000))
-      .toBe("Establishing Connection - 60s Remaining");
+      .toBe("Establishing Connection - 60s Until Timeout");
     expect(connectionProbeStatusLabel("Establishing Connection", deadlineTs, 1_700_000_029_100))
-      .toBe("Establishing Connection - 31s Remaining");
+      .toBe("Establishing Connection - 31s Until Timeout");
     expect(connectionProbeStatusLabel("Establishing Connection", deadlineTs, 1_700_000_060_000))
-      .toBe("Establishing Connection - 0s Remaining");
+      .toBe("Establishing Connection - 0s Until Timeout");
   });
 
   it("does not replace unrelated job statuses", () => {

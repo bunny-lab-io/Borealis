@@ -587,7 +587,7 @@ export const connectionProbeStatusLabel = (status, deadlineTs, nowMs) => {
   const deadline = Number(deadlineTs || 0);
   if (!Number.isFinite(deadline) || deadline <= 0) return JOB_RESULT_THEME.establishing_connection.label;
   const remainingSeconds = Math.max(0, Math.ceil(deadline - Number(nowMs || Date.now()) / 1000));
-  return `Establishing Connection - ${remainingSeconds}s Remaining`;
+  return `Establishing Connection - ${remainingSeconds}s Until Timeout`;
 };
 
 export const statusPillTextTransform = (preserveCase = false) => (preserveCase ? "none" : "uppercase");
@@ -5408,42 +5408,31 @@ export default function CreateJob() {
               </GlassPanel>
             ) : (
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, flexGrow: 1, minHeight: 0 }}>
-                <GlassPanel>
-                  <Typography variant="subtitle1" sx={{ color: MAGIC_UI.textBright, mb: 0.5 }}>
-                    {effectiveHistorySubTabKey === "historical_run" ? `Historical Run - ${selectedHistoryRunLabel}` : "Devices"}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-                    {effectiveHistorySubTabKey === "historical_run"
-                      ? "Devices and output captured for the selected historical run."
-                      : "Devices targeted by this scheduled job. Use the built-in AG Grid column filters from each header to narrow the current run."}
-                  </Typography>
-                  <Box
-                    className={gridThemeClass}
-                    sx={{
-                      ...GRID_PANEL_SX,
-                      mt: 1.5,
-                      height: { xs: 520, md: 680 },
-                    }}
-                  >
-                    <AgGridReact
-                      rowData={jobHistoryGridRows}
-                      columnDefs={jobHistoryGridColumnDefs}
-                      defaultColDef={jobHistoryGridDefaultColDef}
-                      components={jobHistoryGridComponents}
-                      context={{ viewOutput: handleViewDeviceOutput, copyOutput: handleCopyDeviceOutput }}
-                      suppressCellFocus
-                      headerHeight={44}
-                      rowHeight={50}
-                      pagination
-                      paginationPageSize={100}
-                      paginationPageSizeSelector={[20, 50, 100]}
-                      overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No targets found for this job.</span>"
-                      getRowId={(params) => params.data?.id || params.rowIndex}
-                      onGridReady={handleJobHistoryGridReady}
-                      theme={gridTheme}
-                    />
-                  </Box>
-                </GlassPanel>
+                <Box
+                  className={gridThemeClass}
+                  sx={{
+                    ...GRID_PANEL_SX,
+                    height: { xs: 520, md: 680 },
+                  }}
+                >
+                  <AgGridReact
+                    rowData={jobHistoryGridRows}
+                    columnDefs={jobHistoryGridColumnDefs}
+                    defaultColDef={jobHistoryGridDefaultColDef}
+                    components={jobHistoryGridComponents}
+                    context={{ viewOutput: handleViewDeviceOutput, copyOutput: handleCopyDeviceOutput }}
+                    suppressCellFocus
+                    headerHeight={44}
+                    rowHeight={50}
+                    pagination
+                    paginationPageSize={100}
+                    paginationPageSizeSelector={[20, 50, 100]}
+                    overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No targets found for this job.</span>"
+                    getRowId={(params) => params.data?.id || params.rowIndex}
+                    onGridReady={handleJobHistoryGridReady}
+                    theme={gridTheme}
+                  />
+                </Box>
 
                 <JobStatusFlow />
               </Box>
