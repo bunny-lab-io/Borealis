@@ -332,6 +332,7 @@ New forms should validate before submit and expect the API to enforce the same r
     - Counts: show live counts when the page has them; `0` is acceptable for placeholder categories that are not fully implemented yet.
     - Selection behavior: pages may default to the highest-signal view when one is clearly preferred, but clicking the currently active segment should clear the filter and return the page to an unfiltered all-items view.
     - Summary copy: use a short sentence to the right of the control, for example `Showing 14 active filters` or `Showing 32 locally installed entries`.
+    - Scheduled Job History uses adjacent `Not Started` and `Started` Filter Sliders with one shared mutually exclusive selection. Show them on Current Run and selected dated-run tabs, not on Historical Runs summary list. Keep counts live from displayed occurrence device rows and let device AG Grid fill remaining page height.
     - Current implementation note: many pages still use a helper named `CountSliderGroup`. Treat that helper as the current code implementation of the Filter Slider pattern until Borealis consolidates it under the new name.
 
     #### Dialog Boxes and Confirmation Modals

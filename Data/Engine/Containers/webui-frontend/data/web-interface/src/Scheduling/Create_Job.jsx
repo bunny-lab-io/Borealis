@@ -18,7 +18,6 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  GlobalStyles,
   CircularProgress
 } from "@mui/material";
 import {
@@ -27,12 +26,8 @@ import {
   ContentCopy as ContentCopyIcon,
   FilterList as FilterListIcon,
   PendingActions as PendingActionsIcon,
-  WarningAmberRounded as WarningAmberRoundedIcon,
-  Sync as SyncIcon,
-  Timer as TimerIcon,
   Check as CheckIcon,
   PlayArrow as PlayArrowIcon,
-  Error as ErrorIcon,
   Refresh as RefreshIcon,
   Search as SearchIcon,
   Apps as AppsIcon,
@@ -70,8 +65,6 @@ import "prismjs/components/prism-bash";
 import "prismjs/components/prism-powershell";
 import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
-import ReactFlow, { Handle, Position } from "reactflow";
-import "reactflow/dist/style.css";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DirtyStatePill, DomainBadge } from "../Assemblies/Assembly_Badges";
@@ -553,6 +546,54 @@ const normalizeJobStatusKey = (status) => {
   if (normalized === "no devices targeted" || normalized === "no_devices_targeted") return "no_devices_targeted";
   if (normalized === "no eligible targets" || normalized === "no_eligible_targets") return "no_eligible_targets";
   return normalized;
+};
+
+export const JOB_HISTORY_STATUS_FILTER_GROUPS = Object.freeze([
+  Object.freeze({
+    key: "not_started",
+    label: "Not Started",
+    options: Object.freeze([
+      Object.freeze({ key: "pending", label: "Pending" }),
+      Object.freeze({ key: "expired", label: "Expired" }),
+      Object.freeze({ key: "skipped", label: "Skipped" }),
+    ]),
+  }),
+  Object.freeze({
+    key: "started",
+    label: "Started",
+    options: Object.freeze([
+      Object.freeze({ key: "running", label: "Running" }),
+      Object.freeze({ key: "failed", label: "Failed" }),
+      Object.freeze({ key: "warning", label: "Warning" }),
+      Object.freeze({ key: "success", label: "Success" }),
+    ]),
+  }),
+]);
+
+export const jobHistoryStatusFilterKey = (status) => {
+  const normalized = normalizeJobStatusKey(status);
+  if (normalized === "running" || normalized === "establishing_connection") return "running";
+  if (normalized === "failed" || normalized === "timed_out") return "failed";
+  if (["skipped", "no_devices_targeted", "no_eligible_targets"].includes(normalized)) return "skipped";
+  if (["expired", "warning", "success"].includes(normalized)) return normalized;
+  return "pending";
+};
+
+export const buildJobHistoryStatusCounts = (rows = []) => {
+  const totals = JOB_HISTORY_STATUS_FILTER_GROUPS
+    .flatMap((group) => group.options)
+    .reduce((acc, option) => ({ ...acc, [option.key]: 0 }), {});
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const key = jobHistoryStatusFilterKey(row?.job_status || row?.status || "");
+    totals[key] += 1;
+  });
+  return totals;
+};
+
+export const filterJobHistoryRowsByStatus = (rows = [], activeKey = "") => {
+  const entries = Array.isArray(rows) ? rows : [];
+  if (!activeKey) return entries;
+  return entries.filter((row) => jobHistoryStatusFilterKey(row?.job_status || row?.status || "") === activeKey);
 };
 
 const getJobStatusSortRank = (status) => {
@@ -1102,24 +1143,6 @@ const normalizeRemoteTransport = (value) => {
 
 const isWinRMExecContext = (value) => normalizeRemoteTransport(value) === "winrm";
 
-const hiddenHandleStyle = {
-  width: 12,
-  height: 12,
-  border: "none",
-  background: "transparent",
-  opacity: 0,
-  pointerEvents: "none"
-};
-
-const STATUS_META = {
-  pending: { label: "Pending", color: "#aab2bf", Icon: PendingActionsIcon },
-  running: { label: "Running", color: "#58a6ff", Icon: SyncIcon },
-  expired: { label: "Expired", color: "#aab2bf", Icon: TimerIcon },
-  success: { label: "Success", color: "#00d18c", Icon: CheckIcon },
-  warning: { label: "Warning", color: "#fbbf24", Icon: WarningAmberRoundedIcon },
-  failed: { label: "Failed", color: "#ff4f4f", Icon: ErrorIcon }
-};
-
 const normalizeFilterCatalog = (raw) => {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -1155,77 +1178,6 @@ const normalizeFilterCatalog = (raw) => {
     })
     .filter(Boolean);
 };
-
-function StatusNode({ data }) {
-  const { label, color, count, onClick, isActive, Icon } = data || {};
-  const displayCount = Number.isFinite(count) ? count : Number(count) || 0;
-  const borderColor = color || "#333";
-  const activeGlow = color ? `${color}55` : "rgba(88,166,255,0.35)";
-  const gradientLayer = color
-    ? `linear-gradient(140deg, rgba(8,12,24,0.92), ${color}1f)`
-    : "linear-gradient(140deg, rgba(8,12,24,0.92), rgba(14,20,38,0.85))";
-  const handleClick = useCallback((event) => {
-    event?.preventDefault();
-    event?.stopPropagation();
-    onClick && onClick();
-  }, [onClick]);
-  return (
-    <Box
-      onClick={handleClick}
-      sx={{
-        px: 5.4,
-        py: 3.8,
-        borderRadius: 2,
-        border: `1px solid ${borderColor}`,
-        boxShadow: isActive ? `0 0 25px ${activeGlow}` : "0 20px 40px rgba(2,6,23,0.65)",
-        cursor: "pointer",
-        minWidth: 324,
-        textAlign: "left",
-        transition: "border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease",
-        transform: isActive ? "translateY(-2px)" : "none",
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "flex-start",
-        position: "relative",
-        overflow: "hidden",
-        "&::before": {
-          content: '""',
-          position: "absolute",
-          inset: 0,
-          background: gradientLayer,
-          borderRadius: "inherit",
-          opacity: 0.95,
-          transition: "opacity 0.2s ease",
-        },
-        "&::after": {
-          content: '""',
-          position: "absolute",
-          inset: "-25% -40%",
-          background: color
-            ? `radial-gradient(circle at 30% 20%, ${color}30, transparent 55%)`
-            : "radial-gradient(circle at 30% 20%, rgba(125,183,255,0.3), transparent 55%)",
-          borderRadius: "inherit",
-          opacity: 0.65,
-          filter: "blur(0px)",
-          transition: "opacity 0.2s ease",
-        },
-        "&:hover::before": { opacity: 1 },
-        "&:hover::after": { opacity: 0.85 },
-      }}
-    >
-      <Handle type="target" position={Position.Left} id="left-top" style={{ ...hiddenHandleStyle, top: "32%", transform: "translateY(-50%)" }} isConnectable={false} />
-      <Handle type="target" position={Position.Left} id="left-bottom" style={{ ...hiddenHandleStyle, top: "68%", transform: "translateY(-50%)" }} isConnectable={false} />
-      <Handle type="source" position={Position.Right} id="right-top" style={{ ...hiddenHandleStyle, top: "32%", transform: "translateY(-50%)" }} isConnectable={false} />
-      <Handle type="source" position={Position.Right} id="right-bottom" style={{ ...hiddenHandleStyle, top: "68%", transform: "translateY(-50%)" }} isConnectable={false} />
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.2, position: "relative", zIndex: 2 }}>
-        {Icon ? <Icon sx={{ color: color || "#e6edf3", fontSize: 32 }} /> : null}
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, color: color || "#e6edf3", userSelect: "none", fontSize: "1.3rem" }}>
-          {`${displayCount} ${label || ""}`}
-        </Typography>
-      </Box>
-    </Box>
-  );
-}
 
 function SectionHeader({ title, action, sx }) {
   return (
@@ -2288,7 +2240,7 @@ export default function CreateJob() {
   }, [components, isPatchBatchJob, isPatchJob, patchJobBatch, targets.length]);
   const [deviceRows, setDeviceRows] = useState([]);
   const [historyClockMs, setHistoryClockMs] = useState(() => Date.now());
-  const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState("");
   const devicePickerGridApiRef = useRef(null);
   const filterPickerGridApiRef = useRef(null);
 
@@ -2964,25 +2916,10 @@ export default function CreateJob() {
     }
   }, []);
 
-  const deviceFiltered = useMemo(() => {
-    const matchStatusFilter = (status, filterKey) => {
-      if (filterKey === "pending") return status === "pending";
-      if (filterKey === "running") return status === "running" || status === "establishing_connection";
-      if (filterKey === "success") return status === "success";
-      if (filterKey === "warning") return status === "warning";
-      if (filterKey === "failed") return status === "failed" || status === "timed_out";
-      if (filterKey === "expired") return status === "expired";
-      return true;
-    };
-
-    return deviceRows.filter((row) => {
-      const normalizedStatus = normalizeJobStatusKey(row?.job_status || "");
-      if (deviceStatusFilter && !matchStatusFilter(normalizedStatus, deviceStatusFilter)) {
-        return false;
-      }
-      return true;
-    });
-  }, [deviceRows, deviceStatusFilter]);
+  const deviceFiltered = useMemo(
+    () => filterJobHistoryRowsByStatus(deviceRows, deviceStatusFilter),
+    [deviceRows, deviceStatusFilter]
+  );
 
   const jobHistoryGridRows = useMemo(
     () =>
@@ -3344,7 +3281,6 @@ export default function CreateJob() {
             })
           : []
       );
-      setJobSummary(jobPayload);
       const devices = Array.isArray(dev.devices) ? dev.devices.map((device) => ({
         ...device,
         activities: Array.isArray(device.activities) ? device.activities : [],
@@ -3352,7 +3288,6 @@ export default function CreateJob() {
       setDeviceRows(devices);
     } catch {
       setHistoryRows([]);
-      setJobSummary({});
       setDeviceRows([]);
     }
   }, [editing, effectiveHistorySubTabKey, initialJob?.id, selectedHistoryOccurrence]);
@@ -3578,258 +3513,21 @@ export default function CreateJob() {
     });
   }, [sortedHistory]);
 
-  // --- Job Progress (summary) ---
-  const [jobSummary, setJobSummary] = useState({});
-  const counts = jobSummary?.result_counts || {};
-
-  const deviceStatusCounts = useMemo(() => {
-    const base = { pending: 0, running: 0, success: 0, warning: 0, failed: 0, expired: 0 };
-    deviceRows.forEach((row) => {
-      const normalized = normalizeJobStatusKey(row?.job_status || "");
-      if (normalized === "pending") {
-        base.pending += 1;
-      } else if (normalized === "running" || normalized === "establishing_connection") {
-        base.running += 1;
-      } else if (normalized === "success") {
-        base.success += 1;
-      } else if (normalized === "warning") {
-        base.warning += 1;
-      } else if (normalized === "expired") {
-        base.expired += 1;
-      } else if (normalized === "failed" || normalized === "timed_out") {
-        base.failed += 1;
-      } else {
-        base.pending += 1;
-      }
-    });
-    return base;
-  }, [deviceRows]);
-
-  const statusCounts = useMemo(() => {
-    if (effectiveHistorySubTabKey === "historical_run") {
-      return deviceStatusCounts;
-    }
-    const summaryKeys = ["pending", "running", "success", "warning", "failed", "expired", "timed_out", "skipped"];
-    const hasSummaryCounts =
-      Number((counts || {}).total_targets ?? 0) > 0 ||
-      summaryKeys.some((key) => Number((counts || {})[key] ?? 0) > 0);
-    if (hasSummaryCounts) {
-      return {
-        pending: Number((counts || {}).pending ?? 0),
-        running: Number((counts || {}).running ?? 0),
-        success: Number((counts || {}).success ?? 0),
-        warning: Number((counts || {}).warning ?? 0),
-        failed: Number((counts || {}).failed ?? 0) + Number((counts || {}).timed_out ?? 0),
-        expired: Number((counts || {}).expired ?? 0),
-      };
-    }
-    return deviceStatusCounts;
-  }, [counts, deviceStatusCounts, effectiveHistorySubTabKey]);
-
-  const statusNodeTypes = useMemo(() => ({ statusNode: StatusNode }), []);
-
-  const handleStatusNodeClick = useCallback((key) => {
-    setDeviceStatusFilter((prev) => (prev === key ? null : key));
-  }, []);
-
-  const statusNodes = useMemo(() => [
-    {
-      id: "pending",
-      type: "statusNode",
-      position: { x: -420, y: 170 },
-      data: {
-        label: STATUS_META.pending.label,
-        color: STATUS_META.pending.color,
-        count: statusCounts.pending,
-        Icon: STATUS_META.pending.Icon,
-        onClick: () => handleStatusNodeClick("pending"),
-        isActive: deviceStatusFilter === "pending"
-      },
-      draggable: false,
-      selectable: false
-    },
-    {
-      id: "running",
-      type: "statusNode",
-      position: { x: 0, y: 170 },
-      data: {
-        label: STATUS_META.running.label,
-        color: STATUS_META.running.color,
-        count: statusCounts.running,
-        Icon: STATUS_META.running.Icon,
-        onClick: () => handleStatusNodeClick("running"),
-        isActive: deviceStatusFilter === "running"
-      },
-      draggable: false,
-      selectable: false
-    },
-    {
-      id: "expired",
-      type: "statusNode",
-      position: { x: 0, y: 340 },
-      data: {
-        label: STATUS_META.expired.label,
-        color: STATUS_META.expired.color,
-        count: statusCounts.expired,
-        Icon: STATUS_META.expired.Icon,
-        onClick: () => handleStatusNodeClick("expired"),
-        isActive: deviceStatusFilter === "expired"
-      },
-      draggable: false,
-      selectable: false
-    },
-    {
-      id: "success",
-      type: "statusNode",
-      position: { x: 420, y: 0 },
-      data: {
-        label: STATUS_META.success.label,
-        color: STATUS_META.success.color,
-        count: statusCounts.success,
-        Icon: STATUS_META.success.Icon,
-        onClick: () => handleStatusNodeClick("success"),
-        isActive: deviceStatusFilter === "success"
-      },
-      draggable: false,
-      selectable: false
-    },
-    {
-      id: "warning",
-      type: "statusNode",
-      position: { x: 420, y: 170 },
-      data: {
-        label: STATUS_META.warning.label,
-        color: STATUS_META.warning.color,
-        count: statusCounts.warning,
-        Icon: STATUS_META.warning.Icon,
-        onClick: () => handleStatusNodeClick("warning"),
-        isActive: deviceStatusFilter === "warning"
-      },
-      draggable: false,
-      selectable: false
-    },
-    {
-      id: "failed",
-      type: "statusNode",
-      position: { x: 420, y: 340 },
-      data: {
-        label: STATUS_META.failed.label,
-        color: STATUS_META.failed.color,
-        count: statusCounts.failed,
-        Icon: STATUS_META.failed.Icon,
-        onClick: () => handleStatusNodeClick("failed"),
-        isActive: deviceStatusFilter === "failed"
-      },
-      draggable: false,
-      selectable: false
-    }
-  ], [statusCounts, handleStatusNodeClick, deviceStatusFilter]);
-
-  const statusEdges = useMemo(() => [
-    {
-      id: "pending-running",
-      source: "pending",
-      target: "running",
-      sourceHandle: "right-top",
-      targetHandle: "left-top",
-      type: "smoothstep",
-      animated: true,
-      className: "status-flow-edge"
-    },
-    {
-      id: "pending-expired",
-      source: "pending",
-      target: "expired",
-      sourceHandle: "right-bottom",
-      targetHandle: "left-bottom",
-      type: "smoothstep",
-      animated: true,
-      className: "status-flow-edge"
-    },
-    {
-      id: "running-success",
-      source: "running",
-      target: "success",
-      sourceHandle: "right-top",
-      targetHandle: "left-top",
-      type: "smoothstep",
-      animated: true,
-      className: "status-flow-edge"
-    },
-    {
-      id: "running-warning",
-      source: "running",
-      target: "warning",
-      sourceHandle: "right-top",
-      targetHandle: "left-top",
-      type: "smoothstep",
-      animated: true,
-      className: "status-flow-edge"
-    },
-    {
-      id: "running-failed",
-      source: "running",
-      target: "failed",
-      sourceHandle: "right-bottom",
-      targetHandle: "left-bottom",
-      type: "smoothstep",
-      animated: true,
-      className: "status-flow-edge"
-    }
-  ], []);
-
-  const JobStatusFlow = () => (
-    <Box sx={{ mb: 2 }}>
-      <GlobalStyles
-        styles={{
-          "@keyframes statusFlowDash": {
-            "0%": { strokeDashoffset: 0 },
-            "100%": { strokeDashoffset: -24 },
-          },
-          ".status-flow-edge .react-flow__edge-path": {
-            strokeDasharray: "10 6",
-            animation: "statusFlowDash 1.2s linear infinite",
-            strokeWidth: 2,
-            stroke: MAGIC_UI.accentA,
-          },
-        }}
-      />
-      <Box sx={{ height: 380, p: 0, background: "transparent" }}>
-        <ReactFlow
-          nodes={statusNodes}
-          edges={statusEdges}
-          nodeTypes={statusNodeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.2 }}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          panOnDrag={false}
-          zoomOnScroll={false}
-          zoomOnPinch={false}
-          panOnScroll={false}
-          zoomOnDoubleClick={false}
-          preventScrolling={false}
-          onNodeClick={(_, node) => {
-            if (node?.id && STATUS_META[node.id]) handleStatusNodeClick(node.id);
-          }}
-          selectionOnDrag={false}
-          proOptions={{ hideAttribution: true }}
-          style={{ background: "transparent" }}
-        />
-      </Box>
-      {deviceStatusFilter ? (
-        <Box sx={{ pt: 1.25, display: "flex", alignItems: "center", gap: 1.5 }}>
-          <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
-            Showing devices with {STATUS_META[deviceStatusFilter]?.label || deviceStatusFilter} results
-          </Typography>
-          <Button size="small" sx={{ color: MAGIC_UI.accentA, textTransform: "none", p: 0 }} onClick={() => setDeviceStatusFilter(null)}>
-            Clear Filter
-          </Button>
-        </Box>
-      ) : null}
-    </Box>
+  const statusCounts = useMemo(() => buildJobHistoryStatusCounts(deviceRows), [deviceRows]);
+  const activeStatusFilterLabel = useMemo(
+    () => JOB_HISTORY_STATUS_FILTER_GROUPS
+      .flatMap((group) => group.options)
+      .find((option) => option.key === deviceStatusFilter)?.label || "",
+    [deviceStatusFilter]
   );
+  const statusFilterSummary = useMemo(() => {
+    const count = jobHistoryGridRows.length;
+    const noun = count === 1 ? "device" : "devices";
+    return activeStatusFilterLabel
+      ? `Showing ${count} ${noun} with ${activeStatusFilterLabel} status`
+      : `Showing ${count} ${noun}`;
+  }, [activeStatusFilterLabel, jobHistoryGridRows.length]);
+
   const inferLanguage = useCallback((path = "") => {
     const lower = String(path || "").toLowerCase();
     if (lower.endsWith(".ps1")) return "powershell";
@@ -4218,6 +3916,13 @@ export default function CreateJob() {
       } catch {}
     });
   }, []);
+  useEffect(() => {
+    const api = jobHistoryGridApiRef.current;
+    if (!api) return;
+    try {
+      api.paginationGoToFirstPage();
+    } catch {}
+  }, [deviceStatusFilter]);
   useEffect(() => {
     if (!jobHistoryGridApiRef.current) return;
     requestAnimationFrame(() => {
@@ -5407,12 +5112,64 @@ export default function CreateJob() {
                 </Box>
               </GlassPanel>
             ) : (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, flexGrow: 1, minHeight: 0 }}>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "flex-end",
+                    justifyContent: "space-between",
+                    columnGap: 1.5,
+                    rowGap: 1,
+                  }}
+                >
+                  <Box
+                    sx={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "flex-start",
+                      columnGap: 1,
+                      rowGap: 1,
+                    }}
+                  >
+                    {JOB_HISTORY_STATUS_FILTER_GROUPS.map((group) => (
+                      <Box
+                        key={group.key}
+                        sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}
+                      >
+                        <Typography
+                          component="span"
+                          sx={{
+                            color: "#58a6ff",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            lineHeight: 1.1,
+                            pl: 1,
+                          }}
+                        >
+                          {group.label}
+                        </Typography>
+                        <CountSliderGroup
+                          options={group.options}
+                          activeKey={deviceStatusFilter}
+                          counts={statusCounts}
+                          onChange={setDeviceStatusFilter}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, ml: "auto" }}>
+                    {statusFilterSummary}
+                  </Typography>
+                </Box>
+
                 <Box
                   className={gridThemeClass}
                   sx={{
                     ...GRID_PANEL_SX,
-                    height: { xs: 520, md: 680 },
+                    flex: "1 1 0",
+                    minHeight: { xs: 520, md: 0 },
+                    height: "100%",
                   }}
                 >
                   <AgGridReact
@@ -5433,8 +5190,6 @@ export default function CreateJob() {
                     theme={gridTheme}
                   />
                 </Box>
-
-                <JobStatusFlow />
               </Box>
             )}
           </Box>

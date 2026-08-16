@@ -55,7 +55,7 @@ Combined inventory is fallback-only and should not be normal output when probes 
 - SSH transfer defaults to `scp` with `-O`.
 - Each site worker runs at most two Ansible controller processes by default. Additional individual runs wait for controller capacity.
 - Scheduled SSH and WinRM admission waits up to 60 seconds for WireGuard and target-port readiness before skipping unavailable targets.
-- Job History renders that persisted deadline as `Establishing Connection - 60s Until Timeout` and updates it once per second, including after operator navigates away and returns. Current and selected historical run views render status AG Grid directly without a redundant device-section title or outer card.
+- Job History renders that persisted deadline as `Establishing Connection - 60s Until Timeout` and updates it once per second, including after operator navigates away and returns. Current and selected historical run views render adjacent status Filter Sliders above full-height AG Grid without a redundant device-section title, outer card, or status node graph.
 
 ## Failure Reading
 

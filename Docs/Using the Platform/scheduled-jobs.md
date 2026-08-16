@@ -32,6 +32,8 @@ Scheduled wall-clock times use the Engine host timezone. If the Engine host is c
 
 - Current Run shows live or latest run state.
 - Historical Runs groups past occurrences.
+- Current Run and selected dated-run tabs place `Not Started` and `Started` Filter Sliders above the device grid. Counts update with live device status, only one status can be selected across both sliders, and selecting the active status again returns to all devices.
+- `Not Started` contains Pending, Expired, and Skipped. `Started` contains Running, Failed, Warning, and Success. Connection probes count as Running, while timeouts count as Failed.
 - Device rows show target status, output, errors, and skipped reasons.
 - SSH and WinRM playbook rows show `Establishing Connection (ns)` while Engine checks WireGuard and target-port readiness. Countdown survives page navigation because probe deadline lives with run history.
 - Ansible playbooks store per-target or shared recap output depending on execution mode.
@@ -95,6 +97,7 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - Filter targets preserve allowed site scope from creation/edit time.
     - Remote SSH/WinRM Ansible requires active WireGuard peer IP and selected credential or service account path.
     - SSH/WinRM admission uses 60-second readiness window. Scheduler persists `Establishing Connection` on run and `establishing_connection` on target rows before probe. `updated_at` anchors API `connection_probe_deadline_ts`; `Create_Job.jsx` derives one-second countdown after reload or tab navigation.
+    - Job History current and selected dated-run tabs render one shared status-filter state through two Filter Sliders. Slider counts derive from current device rows, update with polling/realtime refresh, and filter AG Grid without changing Historical Runs summary list. AG Grid consumes remaining tab height; no status ReactFlow canvas remains.
     - Individual execution probes independently, so ready devices dispatch without waiting for unrelated target timeout. Shared execution waits for batch admission, excludes timed-out targets, then dispatches eligible inventory.
     - Patch install occurrences freeze target membership, queue `patch_install_run` work items, then call the site worker host-service bridge so the Agent SYSTEM socket performs WUA install work.
     - Patch policy evaluation runs from the scheduler manager before normal scheduled-job ticks. Due policies create immediate `job_kind=patch_install` jobs with `trigger=policy`, `policy_id`, and `policy_run_id` in the patch component.
