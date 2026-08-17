@@ -107,6 +107,7 @@ test("static server rejects malformed, invalid decoding, NUL, and traversal path
 test("static server serves directories, exact files, SPA routes, and MIME types", async () => {
   await withStaticServer(async ({ port }) => {
     assert.equal((await request(port, "/docs/")).body, "<html>docs</html>");
+    assert.equal((await request(port, "/docs")).body, "<html>docs</html>");
     const exact = await request(port, "/data.json");
     assert.equal(exact.status, 200);
     assert.equal(exact.headers["content-type"], "application/json; charset=utf-8");
