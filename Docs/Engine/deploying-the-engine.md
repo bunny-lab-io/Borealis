@@ -280,7 +280,7 @@ After deployment finishes:
 
     ### Bootstrap and runtime separation
 
-    - Engine API/backend source lives in `Data/Engine/Containers/api-backend/data/`.
+    - Engine public API source lives in `Data/Engine/Containers/api-backend/cmd/api-backend/`. Python under `Data/Engine/Containers/site-worker/data/` belongs to site workers and pre-API schema bootstrap; API image does not ship it.
     - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
     - Engine WebUI dev/HMR runtime source lives in `Engine/Services/webui-frontend/data/web-interface/` after first Engine deploy.
     - Agent source code lives in `Data/Agent/`.
@@ -316,7 +316,7 @@ After deployment finishes:
 
     ### Configuration precedence
 
-    Engine config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
+    Site-worker config is assembled by `Data/Engine/Containers/site-worker/data/config.py` in this order:
 
     1. Explicit overrides passed to the app factory.
     2. Environment variables prefixed with `BOREALIS_`.
@@ -325,7 +325,7 @@ After deployment finishes:
     Key defaults:
 
     - Database: `BOREALIS_DATABASE_URL` (required PostgreSQL connection URL)
-    - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot)
+    - Managed official assemblies: `Engine/Services/api-backend/cache/Aurora/` (generated Aurora checkout)
     - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`
     - Logs: `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/error.log`, `Engine/Services/api-backend/logs/api.log`
     - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, peer network `10.255.0.0/16`, shell port 47002

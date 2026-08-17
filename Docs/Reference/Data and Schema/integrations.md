@@ -23,7 +23,8 @@ Document external integrations used by Borealis, primarily the GitHub repository
     - [Engine Log Access](../../Using%20the%20Platform/engine-log-management.md)
 
     ### Integration implementation
-    - `Data/Engine/Containers/api-backend/data/integrations/github.py` implements `GitHubIntegration`.
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/repo_hash.go` owns repository-head lookup and cache behavior.
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/github_token.go` owns stored token management and verification.
     - The integration uses:
       - Cached results stored in `repo_hash_cache.json` (under the Engine cache directory).
       - Token storage in the `github_token` PostgreSQL table.
@@ -52,4 +53,4 @@ Document external integrations used by Borealis, primarily the GitHub repository
     ### Debug checklist
     - Token missing: call `/api/github/token` as Admin and confirm `has_token`.
     - API rate limit errors: inspect the response payload for `rate_limit` fields.
-    - Cache stale: use the `force_refresh` behavior in `GitHubIntegration` (via config or code).
+    - Cache stale: send `refresh=force` to repository-hash endpoint or inspect Go cache path.

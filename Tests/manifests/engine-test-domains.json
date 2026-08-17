@@ -1,0 +1,42 @@
+{
+  "test_root": "Data/Engine/Unit_Tests",
+  "runtime_owner": "site-worker",
+  "domains": {
+    "ansible": {
+      "description": "Site-worker Ansible runner behavior.",
+      "tests": [
+        "Data/Engine/Unit_Tests/test_ansible_runner.py"
+      ]
+    },
+    "core": {
+      "description": "Site-worker database bootstrap, edge settings, and secret configuration behavior.",
+      "tests": [
+        "Data/Engine/Unit_Tests/test_database_schema.py",
+        "Data/Engine/Unit_Tests/test_edge_runtime.py",
+        "Data/Engine/Unit_Tests/test_engine_secret_config.py"
+      ]
+    },
+    "files": {
+      "description": "Engine file-management behavior.",
+      "tests": [
+        "Data/Engine/Unit_Tests/test_file_management_api.py"
+      ]
+    },
+    "remote-access": {
+      "description": "Site-worker Guacamole, worker sockets, VNC proxy, and VPN shell behavior.",
+      "tests": [
+        "Data/Engine/Unit_Tests/test_guacamole_proxy.py",
+        "Data/Engine/Unit_Tests/test_site_worker_socket.py",
+        "Data/Engine/Unit_Tests/test_vnc_proxy.py",
+        "Data/Engine/Unit_Tests/test_vpn_shell.py"
+      ]
+    },
+    "scheduler": {
+      "description": "Retained scheduler queue and site-worker work-claim behavior.",
+      "tests": [
+        "Data/Engine/Unit_Tests/test_job_scheduler_queue.py"
+      ]
+    }
+  },
+  "all_only": []
+}

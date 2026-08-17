@@ -7,9 +7,9 @@ set -o pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
-RUNTIME_ROOT="${REPO_ROOT}/Engine"
-BACKUP_ROOT="${REPO_ROOT}/Engine.old"
+REPO_ROOT="${BOREALIS_MIGRATION_REPO_ROOT:-$(cd -- "${SCRIPT_DIR}/../../.." && pwd)}"
+RUNTIME_ROOT="${BOREALIS_MIGRATION_RUNTIME_ROOT:-${REPO_ROOT}/Engine}"
+BACKUP_ROOT="${BOREALIS_MIGRATION_BACKUP_ROOT:-${REPO_ROOT}/Engine.old}"
 DEPLOY_DIR="${RUNTIME_ROOT}/Deploy"
 
 log() {
@@ -26,6 +26,10 @@ command_exists() {
 }
 
 run_privileged() {
+  if [[ "${BOREALIS_MIGRATION_TEST_MODE:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
     return $?

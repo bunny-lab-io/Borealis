@@ -316,18 +316,18 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Engine auth bootstrap: `Data/Engine/Containers/api-backend/cmd/api-backend/bootstrap_*.go`.
     - Operator auth and passkeys: `Data/Engine/Containers/api-backend/cmd/api-backend/auth_*.go`.
     - Directory providers: `Data/Engine/Containers/api-backend/cmd/api-backend/directory_*.go`.
-    - Device enrollment and approvals: `Data/Engine/Containers/api-backend/cmd/api-backend/device_enrollment.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/device_approvals.go`.
+    - Device enrollment and approvals: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_enrollment.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go`.
     - Device containment routes: `Data/Engine/Containers/api-backend/cmd/api-backend/device_security.go`.
     - Engine tunnel runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go`.
     - Agent VPN routes: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go`.
     - Remote-operation session authorization: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_ops_sessions.go`.
     - Worker-backed command execution gate: `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`.
     - Scheduled target filtering: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_rerun.go`.
-    - Site-worker socket assignment gate: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`.
+    - Site-worker socket assignment gate: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker_socket.py`.
     - Agent WireGuard route validation: `Data/Agent/internal/roles/wireguard_tunnel/wireguard_tunnel.go`.
     - Agent auth client and token lifecycle: `Data/Agent/internal/auth`.
     - Agent token and key storage: `Data/Agent/internal/config`.
-    - WireGuard control socket: `Data/Engine/Containers/wireguard-tunnel/control_server.py`.
+    - WireGuard control socket: `Data/Engine/Containers/api-backend/internal/wireguardcontrol/server.go`.
     - WireGuard tunnel pod boundary: `Engine.sh` K3s `wireguard-tunnel` manifest and `Data/Engine/Containers/wireguard-tunnel/Dockerfile`.
     - Engine deployment identity, ownership repair, profile caps, and Compose env rendering: `Engine.sh`.
     - K3s baseline reconcile, bridge workload manifests, API/scheduler runtime-env Secret rendering, config hashes, API firewall unit, namespace labels, and node annotations: `Engine.sh`.
@@ -341,7 +341,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - WebUI field-class validation and `/api/*` fetch guard: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/utils/inputValidation.js` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/runtime/bootstrapClientRuntime.js`.
     - Scheduler-to-operator lifecycle calls and route ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
     - K3s site-worker pod template, fixed hostPath allowlist, HMAC lifecycle verbs, and host-loopback bridge annotations: `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go`.
-    - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
+    - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker.py`.
     - Scheduler image and entrypoint routing: `Data/Engine/Containers/job-scheduler/Dockerfile`, `Data/Engine/Containers/job-scheduler/entrypoint.sh`, and `Data/Engine/Containers/job-scheduler/healthcheck.sh`.
     - Remote Desktop guacd container runtime: `Data/Engine/Containers/remote-desktop-guacd/Dockerfile`, `Data/Engine/Containers/remote-desktop-guacd/entrypoint.sh`, and `Data/Engine/Containers/remote-desktop-guacd/healthcheck.sh`.
     - WebUI K3s bind-host and production route support: `Engine.sh`, `Data/Engine/Containers/traefik-edge/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/static-server.js`, and `Data/Engine/Containers/webui-frontend/healthcheck.js`.
@@ -482,7 +482,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - `parseWireGuardRuntimePrefixes` rejects unsafe overlay configuration before runtime starts: Engine address must be private IPv4 `/32`, peer network must be private IPv4 `/16` through `/30`, and the Engine address must sit inside that peer network.
     - `wireGuardRuntime.ensureLinuxFirewallLocked` always creates deterministic `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` chains. No environment flag disables those firewall chains.
     - Engine-side WireGuard firewall chains drop invalid packets, accept only established/related return traffic, drop new agent-originated host ingress over the tunnel, drop agent-to-agent forwarding, and drop agent-originated forwarding toward other networks.
-    - `wireguard-tunnel/control_server.py` rejects arbitrary privileged commands. It only accepts expected WireGuard listener, peer, interface, route, and Borealis firewall command shapes under service-local config and secret paths.
+    - Go `internal/wireguardcontrol` rejects arbitrary privileged commands. It only accepts expected WireGuard listener, peer, interface, route, and Borealis firewall command shapes under resolved service-local config and secret paths; symlink escapes are rejected.
     - K3s `traefik-edge` is a root pod exception for host-network low-port binding and strict ACME renewal. It uses UID `0` with the Borealis runtime group and only `NET_BIND_SERVICE` plus `DAC_OVERRIDE`; it does not run with privileged mode.
     - K3s `wireguard-tunnel` is a root pod exception for WireGuard interface setup. It uses UID `0` with the Borealis runtime group, host networking, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, and `no-new-privileges`; it does not run with full privileged mode.
     - WireGuard key and listener config files are `0640 borealis-engine:borealis-engine` so the API backend can write them and the root-but-capability-dropped tunnel pod can read them through its runtime group.
@@ -593,7 +593,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
     - Engine focused Go tests: `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.25.12/bin/go test ./cmd/api-backend`.
     - Agent focused Go tests: `cd Data/Agent && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./internal/roles/wireguard_tunnel`.
-    - Control socket tests: `/opt/Borealis/.cache/codex-engine-tests/bin/python3 -m pytest Data/Engine/Unit_Tests/test_wireguard_control_server.py`.
+    - Control socket tests: `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.25.12/bin/go test ./internal/wireguardcontrol`.
     - Engine remote-access domain wrapper: `BOREALIS_ENGINE_TEST_PYTHON=/opt/Borealis/.cache/codex-engine-tests/bin/python3 ./Engine_Unit_Tests.sh --domain remote-access`.
     - Runtime network validation still requires a disposable deployed Engine with at least two enrolled agents to prove packet-level agent-to-agent, agent-to-internal, and quarantine/revocation denial.
 

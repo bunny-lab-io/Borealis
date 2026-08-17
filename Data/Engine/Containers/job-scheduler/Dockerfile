@@ -6,7 +6,6 @@ ARG BOREALIS_ENGINE_RUNTIME_GID=64646
 RUN apk add --no-cache \
         bash \
         ca-certificates \
-        python3 \
         tzdata \
     && addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
     && adduser -S -D -H -u "${BOREALIS_ENGINE_RUNTIME_UID}" -G borealis-engine -s /sbin/nologin borealis-engine

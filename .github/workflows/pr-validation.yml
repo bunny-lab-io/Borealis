@@ -1,0 +1,333 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  BOREALIS_CI_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+  BOREALIS_CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  BOREALIS_CI_FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  changes:
+    name: Validation Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      agent: ${{ steps.agent.outputs.value }}
+      engine_go: ${{ steps.engine_go.outputs.value }}
+      engine_python: ${{ steps.engine_python.outputs.value }}
+      webui: ${{ steps.webui.outputs.value }}
+      database: ${{ steps.database.outputs.value }}
+      runtime_policy: ${{ steps.runtime_policy.outputs.value }}
+      containers: ${{ steps.containers.outputs.value }}
+      migration: ${{ steps.migration.outputs.value }}
+      docs: ${{ steps.docs.outputs.value }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: agent
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group agent --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: engine_go
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group engine-go --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: engine_python
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group engine-python --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: webui
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group webui --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: database
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group database --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: runtime_policy
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group runtime-policy --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: containers
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group containers --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: migration
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group migration --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+      - id: docs
+        run: echo "value=$(python3 Tests/helpers/changed_paths.py --group docs --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD")" >> "$GITHUB_OUTPUT"
+
+  repository-policy:
+    name: Repository Policy / static-and-inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.12
+          cache: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Tests/requirements-policy.txt
+      - name: Install policy tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Repository policy
+        run: ./Tests/run-repository-policy.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: repository-policy-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  agent-linux:
+    name: Agent / linux
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.22.12
+          cache-dependency-path: Data/Agent/go.sum
+      - run: ./Tests/run-agent.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: agent-linux-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  agent-windows:
+    name: Agent / windows
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.22.12
+          cache-dependency-path: Data/Agent/go.sum
+      - shell: pwsh
+        run: .\Tests\run-agent-windows.ps1
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: agent-windows-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  engine-go:
+    name: Engine / go-runtimes
+    needs: changes
+    if: needs.changes.outputs.engine_go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.12
+          cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+      - run: ./Tests/run-engine-go.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: engine-go-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  engine-python:
+    name: Engine / site-worker-python
+    needs: changes
+    if: needs.changes.outputs.engine_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt
+      - run: ./Tests/run-engine-python.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: engine-python-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  webui:
+    name: WebUI / test-and-build
+    needs: changes
+    if: needs.changes.outputs.webui == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Data/Engine/Containers/webui-frontend/data/web-interface/package-lock.json
+      - run: NPM_CONFIG_CACHE="$HOME/.npm" ./Tests/run-webui.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: webui-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  database:
+    name: Database / postgres-17
+    needs: changes
+    if: needs.changes.outputs.database == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
+      - run: ./Tests/run-database-postgres.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: database-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  runtime-policy:
+    name: Architecture / k3s-and-cutover
+    needs: changes
+    if: needs.changes.outputs.runtime_policy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.12
+          cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Tests/requirements-policy.txt
+      - run: python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
+      - run: ./Tests/run-k3s-policy.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: runtime-policy-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  containers:
+    name: Containers / affected-image-builds
+    needs: changes
+    if: needs.changes.outputs.containers == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.12
+          cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+      - run: ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: container-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  migration:
+    name: Migration / helper-contracts
+    needs: changes
+    if: needs.changes.outputs.migration == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./Tests/run-migration-helpers.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: migration-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  docs:
+    name: Documentation / strict-build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Tests/requirements-docs.txt
+      - run: ./Tests/run-docs.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: docs-results
+          path: Unit_Test_Results/
+          if-no-files-found: ignore
+
+  required:
+    name: PR Validation / required
+    if: always()
+    needs:
+      - changes
+      - repository-policy
+      - agent-linux
+      - agent-windows
+      - engine-go
+      - engine-python
+      - webui
+      - database
+      - runtime-policy
+      - containers
+      - migration
+      - docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful applicable checks
+        env:
+          BOREALIS_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["BOREALIS_NEEDS_JSON"])
+          bad = {name: value["result"] for name, value in needs.items() if value["result"] not in {"success", "skipped"}}
+          if bad:
+              print("Required validation failed:", bad, file=sys.stderr)
+              raise SystemExit(1)
+          print("All applicable PR validation jobs passed.")
+          PY

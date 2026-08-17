@@ -62,8 +62,8 @@ These hotload immediately in the Engine. Commit file-backed rules later when the
     ### Source map
 
     - Installed Software UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`
-    - Software APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
-    - Icon override loader: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons.py`
+    - Software APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/software.go`, `software_audit.go`, and `software_uninstall_dispatch.go`
+    - Override loaders: `Data/Engine/Containers/api-backend/cmd/api-backend/software_overrides.go` and `agent_reads.go`
     - Agent software role: `Data/Agent/internal/roles/software_management/`
 
     ### Runtime behavior
@@ -74,4 +74,4 @@ These hotload immediately in the Engine. Commit file-backed rules later when the
     - The device-level Installed Software UI formats `metadata.install_date` into the `Install Date` column and exposes source/confidence in a tooltip.
     - Engine normalizes rows into `device_software_inventory` for reliable filtering.
     - Uninstall actions run through signed quick-job execution and write Activity History.
-    - Override and blocklist JSON files live under `Data/Engine/Containers/api-backend/data/services/API/devices/`.
+    - Override and blocklist JSON paths are runtime configuration selected by `BOREALIS_SOFTWARE_ICON_OVERRIDES_PATH`, `BOREALIS_SOFTWARE_UNINSTALL_OVERRIDES_PATH`, and `BOREALIS_SOFTWARE_UNINSTALL_BLOCKLIST_PATH`; they are not API source files.

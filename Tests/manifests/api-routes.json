@@ -1,0 +1,1550 @@
+[
+  {
+    "pattern": "/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
+    "line": 159,
+    "class": "fallback",
+    "authentication": "shared-public-gate",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/admin/device-approvals",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go",
+    "line": 50,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/admin/enrollment-codes",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go",
+    "line": 48,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/agent/hash",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go",
+    "line": 53,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/assemblies",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go",
+    "line": 152,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/assemblies_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/assemblies/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go",
+    "line": 153,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/assemblies_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/auth/me",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 300,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/auth/mfa/reset",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 301,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/auth/passkeys",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 303,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/auth/passkeys/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 308,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/credentials",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go",
+    "line": 53,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/credentials/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go",
+    "line": 54,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device/activity/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/activity.go",
+    "line": 20,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/activity_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device/files/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_files.go",
+    "line": 21,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_files_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device/registry/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_registry.go",
+    "line": 13,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_registry_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device_filters",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go",
+    "line": 106,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device_filters/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go",
+    "line": 110,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device_list_views",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_views.go",
+    "line": 42,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/device_list_views/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_views.go",
+    "line": 43,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/directory/providers",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/directory.go",
+    "line": 83,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/directory/providers/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/directory.go",
+    "line": 85,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/directory/sites",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/directory.go",
+    "line": 86,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/github/token",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go",
+    "line": 55,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/credential/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 21,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/host-service-event",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 26,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/online-hosts",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 23,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/online-sites",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 24,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/public-base-url",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 25,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/service-account/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 22,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/vpn-prepare",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 28,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/vpn-sessions",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 27,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/work-items",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 29,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/internal/job-scheduler/workflow/start",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
+    "line": 30,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/onboarding/jobs/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go",
+    "line": 136,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/patches/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patches.go",
+    "line": 65,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/patches_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/patches/policies",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patches.go",
+    "line": 61,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/patches_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/patches/policies/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patches.go",
+    "line": 62,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/patches_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/scheduled_jobs",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go",
+    "line": 134,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/scheduled_jobs/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go",
+    "line": 135,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/ansible-runner-settings",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_settings.go",
+    "line": 21,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/k3s/operator",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
+    "line": 2096,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/logs",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go",
+    "line": 24,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/logs/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go",
+    "line": 25,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/overview",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go",
+    "line": 53,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_overview_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/services/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_actions.go",
+    "line": 20,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_actions_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/site-worker-settings",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_settings.go",
+    "line": 20,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/time",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_time.go",
+    "line": 15,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/timezones",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_time.go",
+    "line": 16,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/wireguard/recover",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_wireguard.go",
+    "line": 9,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_wireguard_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/server/workers",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_workers.go",
+    "line": 89,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_workers_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/sites",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 43,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/sites/device_map",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 44,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/software/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 35,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/system/go-backend/status",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
+    "line": 110,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/user_site_assignments/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/user_site_assignments.go",
+    "line": 43,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/user_site_assignments_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/users",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/users.go",
+    "line": 54,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/users_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/users/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/users.go",
+    "line": 55,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/users_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/watchdogs",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go",
+    "line": 168,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/watchdogs/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go",
+    "line": 169,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/api/workflows/",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/workflows.go",
+    "line": 105,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/workflows_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/health",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
+    "line": 109,
+    "class": "health",
+    "authentication": "none",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/healthz",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
+    "line": 207,
+    "class": "health",
+    "authentication": "none",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "/v1/command",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
+    "line": 208,
+    "class": "operator",
+    "authentication": "operator-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "DELETE /api/admin/enrollment-codes/{code_id}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go",
+    "line": 49,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/aegis/status",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go",
+    "line": 19,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/hash_list",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go",
+    "line": 54,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/install/download/{platform}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go",
+    "line": 55,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/install/download/{token}/{platform}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go",
+    "line": 56,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/metadata/{field_number}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_reads.go",
+    "line": 20,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_reads_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/software-management/overrides",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_reads.go",
+    "line": 21,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_reads_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/update/download/{artifact_id}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go",
+    "line": 54,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agent/update/manifest",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go",
+    "line": 53,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/agents",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 83,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/bootstrap/state",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 291,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device/details/{hostname}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 92,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device/patches/{hostname}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patches.go",
+    "line": 63,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/patches_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device/processes/{hostname}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go",
+    "line": 36,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_processes_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device/services/{hostname}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 30,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device/software/icon/{icon_hash}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 23,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device_filters/metadata",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go",
+    "line": 107,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/device_filters/search",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go",
+    "line": 108,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/devices",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 84,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/devices/search",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_search.go",
+    "line": 35,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/devices/{device_id}/metadata_fields",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go",
+    "line": 86,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/devices/{device_id}/watchdogs",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 85,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/devices/{guid}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 87,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/metadata_fields",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go",
+    "line": 84,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/patches/audit",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patches.go",
+    "line": 60,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/patches_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/realtime/events",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go",
+    "line": 37,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/repo/current_hash",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/repo_hash.go",
+    "line": 38,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/repo_hash_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/server/backup/export",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go",
+    "line": 114,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/software/audit",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 32,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/tunnel/active",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
+    "line": 217,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/tunnel/connect/status",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
+    "line": 216,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/tunnel/status",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
+    "line": 215,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/vnc/sessions",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 117,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "GET /api/vnc/viewers",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 112,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/admin/device-approvals/{approval_id}/approve",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go",
+    "line": 51,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/admin/device-approvals/{approval_id}/deny",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go",
+    "line": 52,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/aegis/force_reset",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go",
+    "line": 23,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/aegis/rotate",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go",
+    "line": 22,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/aegis/setup",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go",
+    "line": 20,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/aegis/unlock",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go",
+    "line": 21,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/details",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_ingest.go",
+    "line": 88,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_ingest_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/enroll/poll",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_enrollment.go",
+    "line": 110,
+    "class": "agent-enrollment",
+    "authentication": "public-enrollment-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_enrollment_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/enroll/request",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_enrollment.go",
+    "line": 109,
+    "class": "agent-enrollment",
+    "authentication": "public-enrollment-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_enrollment_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/heartbeat",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_ingest.go",
+    "line": 86,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_ingest_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/patches/install-progress",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patch_progress.go",
+    "line": 20,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/rdp/ensure",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go",
+    "line": 23,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/script/request",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_script.go",
+    "line": 6,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_script_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/status",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_ingest.go",
+    "line": 87,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_ingest_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/token/refresh",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_tokens.go",
+    "line": 88,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/vnc/ensure",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go",
+    "line": 22,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/vpn/ensure",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go",
+    "line": 20,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/vpn/ready",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go",
+    "line": 21,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/login",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 297,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/logout",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 298,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/mfa/verify",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 299,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/passkeys/authenticate/options",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 306,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/passkeys/authenticate/verify",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 307,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/passkeys/register/options",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 304,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/passkeys/register/verify",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 305,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/auth/password/reset",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 302,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/admin/mfa/verify",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 296,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/admin/recover",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 295,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/admin/setup",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 294,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/aegis/setup",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 292,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/aegis/unlock",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
+    "line": 293,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/backup/analyze",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go",
+    "line": 117,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/bootstrap/backup/restore",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go",
+    "line": 118,
+    "class": "public-bootstrap",
+    "authentication": "bootstrap-contract",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/description/{hostname}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 93,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/patches/{hostname}/refresh",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/patches.go",
+    "line": 64,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/patches_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/processes/{hostname}/terminate",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go",
+    "line": 37,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_processes_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/services/{hostname}/action",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 31,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/software/{hostname}/icon-override",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 25,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/software/{hostname}/refresh",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 24,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/software/{hostname}/uninstall",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 29,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/software/{hostname}/uninstall-block",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 27,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/software/{hostname}/uninstall-override",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 26,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/software/{hostname}/uninstall-unblock",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 28,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device/update-agent/{hostname}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_maintenance.go",
+    "line": 49,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_maintenance_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/device_filters/preview",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go",
+    "line": 109,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/device_filters_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/devices/agent-maintenance",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_maintenance.go",
+    "line": 48,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_maintenance_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/devices/{device_id}/watchdogs/overrides",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 86,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/devices/{guid}/purge",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 91,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/devices/{guid}/quarantine",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 88,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/devices/{guid}/revoke",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 90,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/devices/{guid}/unquarantine",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/devices.go",
+    "line": 89,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/directory/providers/certificate",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/directory.go",
+    "line": 84,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/internal/vnc/session-event",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 118,
+    "class": "internal-scheduler",
+    "authentication": "internal-hmac",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/notifications/notify",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/notifications.go",
+    "line": 16,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/notifications_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/remote-ops/session",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_ops_sessions.go",
+    "line": 85,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/scripts/quick_run",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/quick_run.go",
+    "line": 34,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/quick_run_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/server/backup/analyze",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go",
+    "line": 115,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/server/backup/restore",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go",
+    "line": 116,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_backup_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/shell/disconnect",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go",
+    "line": 46,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/shell/establish",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go",
+    "line": 45,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/sites/assign",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 46,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/sites/delete",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 45,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/sites/rename",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 47,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/sites/{site_id}/agent-install-links/{platform}/revoke",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 49,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/sites/{site_id}/auto-approval",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/sites.go",
+    "line": 48,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/software/action/{action}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 33,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/software/uninstall",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/software.go",
+    "line": 34,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/software_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/tunnel/connect",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
+    "line": 214,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/users/{username}/directory-cache",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/directory.go",
+    "line": 87,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/vnc/disconnect",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 115,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/vnc/establish",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 113,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/vnc/handoff",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 116,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/vnc/session",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go",
+    "line": 114,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "PUT /api/devices/{device_id}/metadata_fields/{field_number}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go",
+    "line": 87,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "PUT /api/metadata_fields/{field_number}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go",
+    "line": 85,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  }
+]

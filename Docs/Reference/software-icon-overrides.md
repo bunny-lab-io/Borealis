@@ -4,7 +4,7 @@ Software icon overrides are file-backed rules that fix missing or wrong installe
 
 ## Override File
 
-`Data/Engine/Containers/api-backend/data/services/API/devices/software_icons_overrides.json`
+`Engine/Services/api-backend/config/software_icons_overrides.json`
 
 ## Operator Path
 
@@ -61,8 +61,8 @@ Icon overrides match exact software `name`, case-insensitive. Version, publisher
 
     ### Implementation references
 
-    - Engine override loader: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons.py`
-    - Override data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons_overrides.json`
+    - Engine override loader: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_reads.go`
+    - Runtime data file: `Engine/Services/api-backend/config/software_icons_overrides.json`
     - Installed Software UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`
     - Agent software role: `Data/Agent/internal/roles/software_management/`
 

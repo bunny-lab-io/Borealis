@@ -62,8 +62,8 @@ Non-admin operators can only save filters inside their assigned site scope.
 
     ### Source map
 
-    - Matcher: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py`
-    - API: `Data/Engine/Containers/api-backend/data/services/API/filters/management.py`
+    - Filter API and matching: `Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go`
+    - Filter contract tests: `Data/Engine/Containers/api-backend/cmd/api-backend/device_filters_test.go`
     - UI routes: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx`
 
     ### Runtime behavior

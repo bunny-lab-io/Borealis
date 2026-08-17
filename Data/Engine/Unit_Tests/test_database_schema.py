@@ -29,6 +29,36 @@ def _table_columns(db_url: str, table_name: str) -> set[str]:
         conn.close()
 
 
+def test_engine_database_initialisation_creates_assembly_tables(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    progress: list[str] = []
+
+    database.initialise_engine_database(db_url, progress_callback=progress.append)
+
+    expected_columns = {
+        "assembly_guid",
+        "display_name",
+        "summary",
+        "assembly_type",
+        "assembly_subtype",
+        "payload_json",
+        "source_repo",
+        "source_path",
+        "source_version",
+        "content_hash",
+        "payload_size_bytes",
+        "created_at",
+        "updated_at",
+    }
+    for table_name in ("official_assemblies", "community_assemblies", "user_created_assemblies"):
+        assert _table_columns(db_url, table_name) == expected_columns
+    assert "assembly_guid" in _table_columns(db_url, "official_catalog_state")
+    assert "assemblies.official_assemblies" in progress
+    assert "activity_history" in progress
+    assert "devices" in progress
+    assert "job_scheduler_work_items" in progress
+
+
 def test_engine_database_initialisation_creates_vpn_key_lease_table(tmp_path) -> None:
     db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
     progress: list[str] = []

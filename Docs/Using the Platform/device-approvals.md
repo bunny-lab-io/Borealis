@@ -55,7 +55,7 @@ Sites can carry a temporary `auto_approve_until` window. During that window, saf
 
     ### Source map
 
-    - Approval API: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`
+    - Approval API: `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go`
     - Enrollment tables: `device_approvals`, `enrollment_code_failures`
     - Device approval route: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx`
 

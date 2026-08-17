@@ -1,0 +1,95 @@
+{
+  "agent": [
+    "Data/Agent/**",
+    "Tests/run-agent.sh",
+    "Tests/policy/check_agent_runner_parity.py",
+    "Tests/manifests/ci-paths.json",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "engine-go": [
+    "Data/Engine/Containers/api-backend/go.mod",
+    "Data/Engine/Containers/api-backend/go.sum",
+    "Data/Engine/Containers/api-backend/cmd/**",
+    "Data/Engine/Containers/api-backend/internal/**",
+    "Data/Engine/Containers/api-backend/build-api-backend.sh",
+    "Data/Engine/Containers/api-backend/entrypoint.sh",
+    "Data/Engine/Containers/borealis-operator/**",
+    "Data/Engine/Containers/job-scheduler/**",
+    "Data/Engine/Containers/traefik-edge/entrypoint.sh",
+    "Data/Engine/Containers/webui-frontend/data/web-interface/src/Login.jsx",
+    "Data/Engine/Containers/webui-frontend/data/web-interface/src/app/runtime/bootstrapClientRuntime.js",
+    "Engine.sh",
+    "Tests/run-engine-go.sh",
+    "Tests/tools/routeinventory/**",
+    "Tests/manifests/api-routes.json",
+    "Tests/policy/check_api_routes.py",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "engine-python": [
+    "Data/Engine/Containers/site-worker/data/**/*.py",
+    "Data/Engine/Containers/site-worker/data/engine-requirements.txt",
+    "Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt",
+    "Data/Engine/Unit_Tests/**",
+    "Engine_Unit_Tests.sh",
+    "Tests/run-engine-python.sh",
+    "Tests/manifests/engine-test-domains.json",
+    "Tests/policy/check_test_inventory.py",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "webui": [
+    "Data/Engine/Containers/webui-frontend/**",
+    "Tests/run-webui.sh",
+    "Tests/webui/**",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "database": [
+    "Data/Engine/Containers/site-worker/data/database.py",
+    "Data/Engine/Containers/site-worker/data/database_migrations.py",
+    "Data/Engine/Containers/site-worker/data/db/**",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/**/*database*",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/**/*sql*",
+    "Data/Engine/Unit_Tests/test_database_schema.py",
+    "Data/Engine/Containers/postgres-db/**",
+    "Tests/run-database-postgres.sh",
+    "Tests/integration/database/**",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "runtime-policy": [
+    "Engine.sh",
+    "Data/Engine/Containers/**",
+    "Docs/Reference/security-whitepaper.md",
+    "Docs/Reference/Core Runtimes/Stack_Breakdown.md",
+    "Docs/Engine/deploying-the-engine.md",
+    "Tests/run-k3s-policy.sh",
+    "Tests/requirements-policy.txt",
+    "Tests/policy/check_k3s_manifests.py",
+    "Tests/policy/check_api_cutover.py",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "containers": [
+    "Engine.sh",
+    ".dockerignore",
+    "Data/Agent/**",
+    "Data/Engine/Containers/**",
+    "Tests/run-containers.sh",
+    "Tests/helpers/affected_services.py",
+    "Tests/policy/check_build_manifest.py",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "migration": [
+    "Data/Engine/Containers/import-legacy-postgres-dump.sh",
+    "Data/Engine/Containers/sterilize-systemd-runtime.sh",
+    "Tests/integration/migration_helpers/**",
+    ".github/workflows/pr-validation.yml"
+  ],
+  "docs": [
+    "Docs/**",
+    "zensical.toml",
+    "Tests/run-docs.sh",
+    "Tests/README.md",
+    "Tests/requirements-docs.txt",
+    "Tests/policy/check_docs_references.py",
+    ".github/workflows/pages.yml",
+    ".github/workflows/pr-validation.yml"
+  ]
+}

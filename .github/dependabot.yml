@@ -104,7 +104,7 @@ updates:
           - "major"
 
   - package-ecosystem: "pip"
-    directory: "/Data/Engine/Containers/api-backend/data"
+    directory: "/Data/Engine/Containers/site-worker/data"
     schedule:
       interval: "weekly"
       day: "wednesday"

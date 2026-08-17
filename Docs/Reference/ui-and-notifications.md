@@ -558,7 +558,7 @@ New forms should validate before submit and expect the API to enforce the same r
     Use this guide to add, configure, and test transient toast notifications across Borealis. It documents the backend endpoint, frontend listener, payload contract, and quick Firefox console commands you can hand to operators for validation.
 
     #### Components and paths
-    - Backend endpoint: `Data/Engine/Containers/api-backend/data/services/API/notifications/management.py` (registered as `/api/notifications/notify`).
+    - Backend endpoint: `Data/Engine/Containers/api-backend/cmd/api-backend/notifications.go` (registered as `/api/notifications/notify`).
     - Frontend listener and renderer: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Notifications.jsx` (mounted in `src/app/shell/AppShell.jsx`).
     - Transport: Socket.IO event `borealis_notification` broadcast to connected WebUI clients.
 
@@ -568,7 +568,7 @@ New forms should validate before submit and expect the API to enforce the same r
       - Emits `borealis_notification` over Socket.IO (no persistence).
       - Logs via `service_log("notifications", ...)`.
     - Validation: Requires `message` in payload. `title` defaults to `"Notification"` if omitted.
-    - Registration: API group `notifications` is enabled by default via `DEFAULT_API_GROUPS` and `_GROUP_REGISTRARS` in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
+    - Registration: `registerNotificationRoutes` is called by Go API route setup in `Data/Engine/Containers/api-backend/cmd/api-backend/main.go`.
 
     #### Payload schema
     Send JSON body (session-authenticated):

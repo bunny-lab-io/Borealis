@@ -4,7 +4,7 @@ Software uninstall blocklist rules stop Borealis from trusting uninstall metadat
 
 ## Blocklist File
 
-`Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`
+`Engine/Services/api-backend/config/software_uninstall_blocklist.json`
 
 ## Operator Path
 
@@ -54,8 +54,8 @@ Use `Installed Software` row context menu first:
 
     ### Implementation references
 
-    - Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
-    - Blocklist data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`
+    - Engine resolver: `Data/Engine/Containers/api-backend/cmd/api-backend/software_overrides.go`
+    - Runtime data file: `Engine/Services/api-backend/config/software_uninstall_blocklist.json`
     - Installed Software UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`
 
     ### Behavior

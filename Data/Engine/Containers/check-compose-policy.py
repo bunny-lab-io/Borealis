@@ -7,6 +7,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import os
 from typing import Any
 
 
@@ -21,7 +22,7 @@ def fail(message: str) -> None:
 
 
 def compose_config() -> dict[str, Any]:
-    command = [
+    command = (["sudo"] if os.environ.get("BOREALIS_DOCKER_USE_SUDO") == "1" else []) + [
         "docker",
         "compose",
         "--env-file",

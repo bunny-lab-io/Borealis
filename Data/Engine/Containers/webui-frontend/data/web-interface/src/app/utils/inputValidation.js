@@ -173,7 +173,10 @@ export function sanitizePayload(value, field = "body", fieldClass = classifyInpu
   }
 
   if (typeof value !== "string") return { value, errors: [] };
-  const error = validateInputValue(field, value, fieldClass);
+  const validationValue = fieldClass === FIELD_CLASS.PLAIN_SINGLE_LINE
+    ? value.replace(/[\r\n\t]+/g, " ")
+    : value;
+  const error = validateInputValue(field, validationValue, fieldClass);
   if (error) return { value, errors: [{ field, message: error }] };
 
   if ([FIELD_CLASS.PLAIN_SINGLE_LINE, FIELD_CLASS.IDENTIFIER, FIELD_CLASS.SLUG, FIELD_CLASS.HOST, FIELD_CLASS.URL].includes(fieldClass)) {

@@ -81,7 +81,7 @@ UltraVNC keeps shared collaboration behavior. Windows RDP creates separate nativ
     - Remote Desktop UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Desktop.jsx`
     - Remote Desktop API routing: `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go`
     - RDP session broker: `Data/Engine/Containers/api-backend/cmd/api-backend/rdp_runtime.go`
-    - Guacamole bridge: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/guacamole_proxy.py`
+    - Guacamole bridge: `Data/Engine/Containers/site-worker/data/services/RemoteDesktop/guacamole_proxy.py`
     - Agent VNC role: `Data/Agent/internal/roles/vnc/`
     - Agent RDP role: `Data/Agent/internal/roles/rdp/`
 

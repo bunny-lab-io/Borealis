@@ -151,21 +151,9 @@ func agentSoftwareIconOverridesPath() string {
 	if value := strings.TrimSpace(os.Getenv("BOREALIS_SOFTWARE_ICON_OVERRIDES_PATH")); value != "" {
 		return value
 	}
-	candidates := []string{
-		"/opt/Borealis/Data/Engine/services/API/devices/software_icons_overrides.json",
-	}
 	projectRoot := strings.TrimSpace(os.Getenv("BOREALIS_PROJECT_ROOT"))
 	if projectRoot == "" {
 		projectRoot = "/opt/Borealis"
 	}
-	candidates = append(candidates,
-		filepath.Join(projectRoot, "Data", "Engine", "services", "API", "devices", "software_icons_overrides.json"),
-		filepath.Join(projectRoot, "Data", "Engine", "Containers", "api-backend", "data", "services", "API", "devices", "software_icons_overrides.json"),
-	)
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return candidates[0]
+	return filepath.Join(projectRoot, "Engine", "Services", "api-backend", "config", "software_icons_overrides.json")
 }

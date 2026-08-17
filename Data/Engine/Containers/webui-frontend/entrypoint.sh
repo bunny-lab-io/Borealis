@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-cd /opt/Borealis/Data/Engine/web-interface
+workdir="${BOREALIS_WEBUI_WORKDIR:-/opt/Borealis/Data/Engine/web-interface}"
+static_server="${BOREALIS_WEBUI_STATIC_SERVER_BIN:-/usr/local/bin/borealis-webui-static-server.js}"
+cd "${workdir}"
 
 mode="${BOREALIS_WEBUI_MODE:-prod}"
 port="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
@@ -14,7 +16,7 @@ case "${mode}" in
     ;;
   prod|production|"")
     export NODE_ENV=production
-    exec node /usr/local/bin/borealis-webui-static-server.js
+    exec node "${static_server}"
     ;;
   *)
     echo "Unsupported BOREALIS_WEBUI_MODE '${mode}'. Use prod or dev." >&2

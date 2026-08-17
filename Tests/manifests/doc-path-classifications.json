@@ -1,0 +1,10 @@
+{
+  "prefixes": {
+    "Engine/": "generated runtime path",
+    "Agent/": "generated Agent runtime path",
+    "Dependencies/": "downloaded tool cache",
+    "Engine/Data/Engine/": "historical pre-cutover runtime path",
+    "Data/Engine/services/": "historical pre-container source path",
+    "Data/Engine/Containers/job-scheduler/data": "future roadmap path"
+  }
+}

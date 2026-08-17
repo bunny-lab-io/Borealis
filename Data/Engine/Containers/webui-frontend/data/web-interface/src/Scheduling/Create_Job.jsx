@@ -172,7 +172,6 @@ const JOB_HISTORY_SUBTAB_KEY_BY_URL = Object.freeze({
   historical_run: "historical_run",
   current: "current",
   historical: "historical",
-  historical_run: "historical_run",
 });
 const JOB_HISTORY_SUBTAB_KEYS = Object.freeze(["current", "historical", "historical_run"]);
 

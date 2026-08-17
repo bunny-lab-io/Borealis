@@ -58,7 +58,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - WireGuard recovery: `Data/Engine/Containers/api-backend/cmd/api-backend/server_wireguard.go`
     - Log API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go`
     - Server Info UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Server_Info.jsx`
-    - Service actions: `Data/Engine/Containers/api-backend/data/services/job_scheduler/`
+    - Service actions: `Data/Engine/Containers/site-worker/data/services/job_scheduler/`
 
     ### Runtime behavior
 

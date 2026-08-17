@@ -7,7 +7,7 @@
         ".dockerignore",
         "Data/Engine/Containers/api-backend/go.mod",
         "Data/Engine/Containers/api-backend/go.sum",
-        "Data/Engine/Containers/api-backend/cmd/**",
+        "Data/Engine/Containers/api-backend/cmd/api-backend/**",
         "Data/Engine/Containers/api-backend/build-api-backend.sh",
         "Data/Engine/Containers/borealis-operator/**"
       ]
@@ -17,20 +17,13 @@
       "context": ".",
       "inputs": [
         ".dockerignore",
-        "Data/Engine/Containers/api-backend/data/**/*.py",
-        "Data/Engine/Containers/api-backend/data/**/*.txt",
-        "Data/Engine/Containers/api-backend/data/**/*.ini",
-        "Data/Engine/Containers/api-backend/data/alembic/**",
-        "Data/Engine/Containers/api-backend/data/Ansible/**",
-        "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
-        "Data/Agent/go.mod",
-        "Data/Agent/go.sum",
-        "Data/Agent/cmd/**",
-        "Data/Agent/internal/**",
-        "Data/Agent/Agent.ico",
-        "Data/Agent/Agent.syso",
-        "Data/Agent/Golang_Agent_Migration.md",
-        "Data/Engine/Containers/api-backend/**"
+        "Data/Agent/**",
+        "Data/Engine/Containers/api-backend/Dockerfile",
+        "Data/Engine/Containers/api-backend/build-api-backend.sh",
+        "Data/Engine/Containers/api-backend/cmd/api-backend/**",
+        "Data/Engine/Containers/api-backend/entrypoint.sh",
+        "Data/Engine/Containers/api-backend/go.mod",
+        "Data/Engine/Containers/api-backend/go.sum"
       ]
     },
     "job-scheduler": {
@@ -38,23 +31,10 @@
       "context": ".",
       "inputs": [
         ".dockerignore",
-        "Data/Engine/Containers/api-backend/data/**/*.py",
-        "Data/Engine/Containers/api-backend/data/**/*.txt",
-        "Data/Engine/Containers/api-backend/data/**/*.ini",
-        "Data/Engine/Containers/api-backend/data/alembic/**",
-        "Data/Engine/Containers/api-backend/data/Ansible/**",
-        "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
         "Data/Engine/Containers/api-backend/go.mod",
         "Data/Engine/Containers/api-backend/go.sum",
-        "Data/Engine/Containers/api-backend/cmd/**",
+        "Data/Engine/Containers/api-backend/cmd/api-backend/**",
         "Data/Engine/Containers/api-backend/build-api-backend.sh",
-        "Data/Agent/go.mod",
-        "Data/Agent/go.sum",
-        "Data/Agent/cmd/**",
-        "Data/Agent/internal/**",
-        "Data/Agent/Agent.ico",
-        "Data/Agent/Agent.syso",
-        "Data/Agent/Golang_Agent_Migration.md",
         "Data/Engine/Containers/job-scheduler/**"
       ]
     },
@@ -63,19 +43,7 @@
       "context": ".",
       "inputs": [
         ".dockerignore",
-        "Data/Engine/Containers/api-backend/data/**/*.py",
-        "Data/Engine/Containers/api-backend/data/**/*.txt",
-        "Data/Engine/Containers/api-backend/data/**/*.ini",
-        "Data/Engine/Containers/api-backend/data/alembic/**",
-        "Data/Engine/Containers/api-backend/data/Ansible/**",
-        "Data/Engine/Containers/api-backend/data/Official_Assemblies/**",
-        "Data/Agent/go.mod",
-        "Data/Agent/go.sum",
-        "Data/Agent/cmd/**",
-        "Data/Agent/internal/**",
-        "Data/Agent/Agent.ico",
-        "Data/Agent/Agent.syso",
-        "Data/Agent/Golang_Agent_Migration.md",
+        "Data/Agent/**",
         "Data/Engine/Containers/site-worker/**"
       ]
     },
@@ -120,9 +88,15 @@
     },
     "wireguard-tunnel": {
       "dockerfile": "Data/Engine/Containers/wireguard-tunnel/Dockerfile",
-      "context": "Data/Engine/Containers/wireguard-tunnel",
+      "context": ".",
       "inputs": [
-        "Data/Engine/Containers/wireguard-tunnel/.dockerignore",
+        ".dockerignore",
+        "Data/Engine/Containers/api-backend/build-api-backend.sh",
+        "Data/Engine/Containers/api-backend/cmd/wireguard-control/**",
+        "Data/Engine/Containers/api-backend/cmd/wireguard-control-client/**",
+        "Data/Engine/Containers/api-backend/go.mod",
+        "Data/Engine/Containers/api-backend/go.sum",
+        "Data/Engine/Containers/api-backend/internal/wireguardcontrol/**",
         "Data/Engine/Containers/wireguard-tunnel/**"
       ]
     }

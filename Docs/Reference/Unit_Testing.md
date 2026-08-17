@@ -1,131 +1,99 @@
-# Borealis Unit Testing
+# Borealis Validation and Unit Testing
 
-This page is the testing entrypoint for humans and Codex agents. Use the documented lane scripts first. They set the expected environment, write reports to one location, and keep Borealis-authored test entrypoints inside `Unit_Tests` folders.
-
-## What Unit Tests Mean Here
-- Unit tests check focused Borealis behavior with fake inputs, temporary files, mocks, and isolated helper objects.
-- Unit tests do not replace live Engine deployment, Agent enrollment, browser smoke testing, or remote-access validation against real devices.
-- Borealis tests lean on shared helpers so each test can say what behavior it checks instead of rebuilding fake Engine, fake device, or fake Role state every time.
+Repository-owned commands run same correctness rules locally and in pull requests. Start with narrow affected lane, then run full affected lane before review.
 
 ## Main Commands
-Run from the repository root.
+
+Run commands from repository root.
+
+```bash
+# Fast syntax, inventory, source-map, architecture, and dependency policies.
+./Tests/run-repository-policy.sh
+
+# Runtime test lanes.
+./Tests/run-agent.sh
+./Tests/run-engine-go.sh
+./Tests/run-engine-python.sh
+./Tests/run-webui.sh
+
+# Integration and build lanes.
+./Tests/run-database-postgres.sh
+./Tests/run-k3s-policy.sh
+./Tests/run-containers.sh        # Images affected by current worktree.
+./Tests/run-containers.sh --all  # Every production image.
+./Tests/run-migration-helpers.sh
+./Tests/run-docs.sh
+
+# Full portable suite. Builds every production image; container and PostgreSQL lanes need Docker.
+./Tests/run-all.sh
+```
+
+Compatibility entrypoints remain supported:
 
 ```bash
 ./Engine_Unit_Tests.sh
-```
-
-Runs every Engine Python unit test plus staged Engine WebUI unit tests.
-
-```bash
 ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh
 ```
-
-Runs Go Agent unit tests and Windows/Linux build checks from Linux or another POSIX shell.
 
 ```powershell
 .\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1
 ```
 
-Runs Go Agent unit tests and Windows/Linux build checks from Windows PowerShell.
+`Engine_Unit_Tests.sh` aggregates Engine Go, site-worker Python, and WebUI lanes. Agent wrappers run Go format, module, vet, test, and cross-platform build checks.
 
-## Domain Commands
-Use domain runs while iterating. Run full Engine or full Agent lane before handoff when change is broad, risky, or PR-ready.
+## Engine Domains
+
+Use inventory-backed site-worker Python domains while iterating:
 
 ```bash
 ./Engine_Unit_Tests.sh --list-domains
-./Engine_Unit_Tests.sh --domain devices
+./Engine_Unit_Tests.sh --domain go
+./Engine_Unit_Tests.sh --domain core
 ./Engine_Unit_Tests.sh --domain webui
 ```
 
-```bash
-./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --list-domains
-./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent
-```
-
-```powershell
-.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1 -ListDomains
-.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1 -Domain go-agent
-```
-
-Environment variables can also select domains:
-
-```bash
-BOREALIS_ENGINE_UNIT_TEST_DOMAIN=scheduler ./Engine_Unit_Tests.sh
-BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh
-```
-
-## Engine Domains
-| Domain | Purpose |
+| Domain | Coverage |
 | --- | --- |
-| `all` | All Engine Python tests and WebUI unit tests. |
-| `access` | Auth, Aegis, credentials, passkeys, MFA, password reset, and GitHub token API behavior. |
-| `agent-role` | Engine-side Agent RoleManager import and role health behavior. |
-| `ansible` | Engine Ansible runner behavior. |
-| `assemblies` | Assembly cache, import/export, payload, permission, execution type, and official catalog behavior. |
-| `core` | Core API, database schema bootstrap, edge runtime, Engine secret config, and web UI API checks. |
-| `devices` | Device APIs, purge flow, filters, and session inventory. |
-| `enrollment` | Agent enrollment and token API behavior. |
-| `files` | Engine file management API behavior. |
-| `rbac` | Role-based access control API behavior. |
-| `remote-access` | Guacamole, VNC, VPN shell/tunnel, WireGuard, site-worker sockets, and websocket registry behavior. |
-| `runtime-overrides` | Runtime override merge behavior. |
-| `scheduler` | Scheduler queue, scheduled jobs API, scheduler timing behavior, target parsing, and automatic onboarding job creation. |
-| `server` | Server information API behavior. |
-| `watchdogs` | Watchdog API behavior. |
-| `webui` | Engine WebUI Vitest lane only. |
-| `workflows` | Workflow runtime behavior. |
+| `all` | Engine Go, all site-worker Python, and WebUI lanes through compatibility entrypoint. |
+| `go` | Production Go API, scheduler, operator, WireGuard control, and cross-runtime contracts. |
+| `webui` | WebUI runtime-script tests, Vitest, and production build. |
+| `ansible` | Site-worker Ansible runner. |
+| `core` | Site-worker database bootstrap, edge settings, and secret configuration. |
+| `files` | Site-worker file-transfer behavior. |
+| `remote-access` | Site-worker Guacamole, worker socket, VNC, and VPN shell behavior. |
+| `scheduler` | Site-worker queue and work-claim behavior. |
 
-## Agent Domains
-| Domain | Purpose |
-| --- | --- |
-| `all` | Go Agent tests and Windows/Linux build checks. |
-| `go-agent` | Go Agent tests and Windows/Linux build checks. |
+`Tests/manifests/engine-test-domains.json` owns Python domain membership. Inventory policy fails for undocumented tests, missing files, duplicate ownership, or zero-test domains.
 
-## Test Locations
-- Engine Python unit tests: `Data/Engine/Unit_Tests/`.
-- Engine assembly unit tests: `Data/Engine/Unit_Tests/assemblies/`.
-- Agent test lane entrypoints: `Data/Agent/Unit_Tests/`.
-- Agent Go unit tests: package-local `*_test.go` files under `Data/Agent/cmd` and `Data/Agent/internal`.
-- WebUI unit tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
-- Runtime WebUI unit test cache, when prepared for tests: `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests/`.
+## Clean Workspace Contract
 
-## Results
-- Results write to `Unit_Test_Results/<runtime>-<timestamp>/`.
-- Go Agent lane writes `agent-go.log`.
-- Python lanes write `*-pytest.log` and `*-pytest.xml`.
-- Engine Python writes per-file JUnit XML under `engine-pytest-junit/`.
-- WebUI writes `engine-webui-vitest.log` and, when Vitest reaches report generation, `engine-webui-vitest.xml`.
-- `summary.txt` records domain and lane exit status.
-- Scripts set `PYTHONDONTWRITEBYTECODE=1` so source folders do not collect `__pycache__`.
+Runners keep dependencies, compiled output, caches, virtual environments, and reports outside staged source.
 
-## Expected Setup
-- Run scripts from repo root.
-- Engine tests prefer `Engine/bin/python` when available because Engine venv includes pytest.
-- Engine Go backend tests/builds use Go 1.25+; `Data/Engine/Containers/api-backend/build-api-backend.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
-- Agent tests use Go 1.22+; `Data/Agent/build-agent.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
-- WebUI tests require a prepared runtime cache at `Engine/Services/webui-frontend/cache/web-interface` with `node_modules` and `Unit_Tests`. Container deploys also seed editable dev/HMR source under `Engine/Services/webui-frontend/data/web-interface/`, but that source folder is not the test dependency cache.
-- Do not run npm or Vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; use a prepared runtime cache, the dev/HMR runtime source, or defer UI runtime validation to the operator redeploying the WebUI container.
-- Container launcher/static validation should start with shell and retired Compose policy checks before broader unit lanes:
-```bash
-bash -n Engine.sh
-docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
-python3 Data/Engine/Containers/check-compose-policy.py
-```
+- Results default to `Unit_Test_Results/<lane>-<timestamp>/`.
+- `BOREALIS_UNIT_TEST_RESULTS_DIR` overrides result location.
+- Site-worker Python creates clean virtual environment unless `BOREALIS_ENGINE_TEST_PYTHON` names prepared interpreter.
+- WebUI copies committed source to temporary workspace before `npm ci`, Vitest, and Vite build.
+- Go module tidy checks work against temporary module copy and fail on drift.
+- No lane writes `node_modules`, `__pycache__`, binaries, or generated configuration into staged source.
 
-## Shared Helpers
-- Engine helpers live under `Data/Engine/Unit_Tests/support/`.
-- `support/engine.py` builds isolated Engine test harnesses and authenticated clients.
-- `support/devices.py` creates fake devices, services, and inventory defaults.
-- `support/software_config.py` isolates icon override, uninstall override, and uninstall blocklist JSON.
-- Go tests should prefer package-local fakes and `httptest`/fake Socket.IO harnesses.
+## Prerequisites
 
-Prefer small helpers with clear names: fake Engine, fake devices, fake Role hooks, fake config files. Avoid one giant fake Borealis environment because it hides behavior and makes failures harder to read.
+- Agent: Go 1.22.12.
+- Engine API: Go 1.25.12.
+- WebUI: Node.js 22 and npm.
+- Site-worker Python and docs: Python 3 with `venv`.
+- Repository policy: ShellCheck, PowerShell, Node.js, `actionlint`, and dependencies in `Tests/requirements-policy.txt`.
+- Container and PostgreSQL lanes: Docker with local image-build permission.
+
+Missing tools fail clearly. No required lane silently skips.
+
+## CI Boundary
+
+Normal pull requests validate deterministic repository behavior. Full Engine deploy, live K3s readiness, Longhorn persistence, public DNS, TLS issuance, real Agent enrollment, browser interaction, and remote-device networking remain deployment or Tier 3 qualification responsibilities.
 
 ## Regression Tracking
-- No regression test should be deleted silently.
-- Fix stale expectation, document current failure, or quarantine with reason.
-- Add or update `Docs/testing-regressions.md` when a test protects known production, operator, or PR-review regression.
-- Use status labels from `Docs/testing-regressions.md`: `open`, `fixed`, `stale-test`, `environment-gap`, or `flaky`.
+
+Do not delete regression coverage silently. Update [Testing Regressions](testing-regressions.md) when test protects known production, operator, or review regression.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -133,16 +101,47 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 
     - [Testing Regressions](testing-regressions.md)
     - [Architecture Overview](architecture-overview.md)
-    - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-    - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+    - [Engine Runtime](Core%20Runtimes/engine-runtime.md)
+    - [Agent Runtime](Core%20Runtimes/agent-runtime.md)
 
-    - Read this page before choosing validation for codebase changes.
-    - Use documented lane scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
-    - For container deployment changes, run shell syntax checks for `Engine.sh`, validate `Data/Engine/Containers/compose.yaml` through `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`, then run `python3 Data/Engine/Containers/check-compose-policy.py`.
-    - Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
-    - For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
-    - Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.
-    - When adding Python or WebUI tests, place them under the nearest `Unit_Tests` folder and reuse helpers before inventing new setup code. When adding Go Agent tests, keep them package-local as `*_test.go` files and run them through the Agent lane scripts under `Data/Agent/Unit_Tests`.
-    - When a test needs fake Engine, fake device, fake config, or fake Role state, add helper capability under nearest `support/` package first, then call it from individual tests.
-    - Keep helper defaults realistic for Borealis code paths, and expose test-specific changes through keyword overrides.
-    - If domain membership changes, update this page and the matching lane script in same commit.
+    ### Source map
+
+    - Portable runners: `Tests/run-*.sh`.
+    - Windows Agent runner: `Tests/run-agent-windows.ps1`.
+    - Test-domain inventory: `Tests/manifests/engine-test-domains.json`.
+    - Path-to-gate inventory: `Tests/manifests/ci-paths.json`.
+    - Engine Go tests: package-local `*_test.go` under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Site-worker Python tests: `Data/Engine/Unit_Tests/`.
+    - Agent Go tests: package-local `*_test.go` under `Data/Agent/`.
+    - WebUI Vitest tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
+    - WebUI runtime contracts: `Tests/webui/runtime-scripts.test.js`.
+    - PostgreSQL integration: `Tests/integration/database/`.
+    - Migration helper tests: `Tests/integration/migration_helpers/`.
+
+    ### Validation selection
+
+    - Use `Tests/helpers/changed_paths.py` for stable CI group selection.
+    - Use `Tests/helpers/affected_services.py` for container image selection.
+    - Keep workflow YAML thin: checkout, tool setup/cache, repository command invocation, aggregate status, diagnostic artifact upload.
+    - Add public API routes to Go source, API docs, and generated route inventory in same change. Generator preserves reviewed route-specific test/exemption choices; new routes remain without evidence and fail policy until author records focused test or reviewed exemption.
+    - Add direct dependencies to lockfiles/manifests and `Docs/Reference/SBOM.md` in same change.
+
+    ### Python ownership audit
+
+    - Engine Python inventory contains 10 files across five domains. Every file exercises current site-worker execution, worker transport, remote access, or schema bootstrap reused by site-worker image.
+    - Go Agent wrapper coverage lives in `Data/Agent/internal/scripts/scripts_test.go`.
+    - Go auth, Assembly, metadata, workflow, Engine launcher, Traefik-entrypoint, and WebUI cookie-boundary coverage lives under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Go WireGuard control validation lives under `Data/Engine/Containers/api-backend/internal/wireguardcontrol/`.
+    - Removed Python suites must not return under new names. Behavior owned by Go belongs in package-local Go tests.
+
+    - `test_access_management_api.py` -> Go auth, Aegis, credential, passkey, password, cookie, and WebUI cookie-boundary tests.
+    - `assemblies/test_agent_powershell_wrapper.py` -> Agent `TestBuildPowerShellScriptPreservesAdvancedScriptPreamble`.
+    - `assemblies/test_cache.py` -> Go Assembly store/catalog tests plus retained site-worker schema-bootstrap test. Python cache-only timing checks retired with cache runtime.
+    - `assemblies/test_official_catalog.py` -> Go catalog refresh/import/cleanup, summary precedence, and canonical workflow document tests.
+    - `assemblies/test_payloads.py` -> Go Assembly store and handler tests. Retired filesystem payload mirror removed.
+    - `test_engine_launcher.py` -> Go repository-contract tests for command exposure, cutover order, rollback, and network-mode fallback.
+    - `test_metadata_fields.py` -> existing Go metadata definition, reserved-field, and device-value handler tests.
+    - `test_wireguard_control_server.py` -> Go WireGuard control runtime tests, including live Unix socket and privileged command allowlist.
+    - `test_workflow_runtime.py` -> Go `TestWorkflowUpdateSQLUsesExplicitColumnAllowlist`.
+
+    Traefik shell-entrypoint assertions moved from `test_edge_runtime.py` into Go repository-contract tests. Python file now tests only Python edge-settings loader still consumed by site workers.

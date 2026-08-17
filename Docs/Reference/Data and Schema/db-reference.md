@@ -318,12 +318,13 @@ finally:
     ### Source map
 
     - Deploy-time schema caller: `Engine.sh`
-    - Runtime schema setup: `Data/Engine/Containers/api-backend/data/database.py`
-    - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
+    - Runtime schema setup: `Data/Engine/Containers/site-worker/data/database.py`
+    - Startup migrations: `Data/Engine/Containers/site-worker/data/database_migrations.py`
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
-    - Scheduler queue leasing: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
-    - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`
-    - Bundled official assembly snapshot: `Data/Engine/Containers/api-backend/data/Official_Assemblies/`
+    - Scheduler queue leasing: `Data/Engine/Containers/site-worker/data/services/job_scheduler/queue.py`
+    - Authoritative Assembly schema and runtime store: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies_schema.go` and `assemblies.go`
+    - Pre-API schema Job compatibility bootstrap: `Data/Engine/Containers/site-worker/data/assembly_schema.py`
+    - Managed official catalog checkout: `Engine/Services/api-backend/cache/Aurora/`
 
     ### Troubleshooting queries
     ```sql
@@ -985,7 +986,7 @@ finally:
     - Notes:
     - Before Aegis setup, legacy plaintext values may still exist in the `*_encrypted` columns as migration input.
     - After Aegis setup, secret columns store ASCII `aegis:v1:` envelopes even though the schema type remains `BLOB`.
-    - The runtime decrypts credential secrets on demand through `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py`.
+    - Go runtime decrypts credential secrets on demand through `Data/Engine/Containers/api-backend/cmd/api-backend/aegis_crypto.go` and `credentials.go`.
     - Operator-facing credential APIs now wait for bootstrap phase `login_required`; stale operator sessions no longer bypass the lock state after restart.
     - If `metadata_json` contains `aegis_secret_state = "reset_required"`, the record survived an Aegis force reset but one or more stored secret fields were intentionally destroyed and must be re-entered.
 
@@ -996,7 +997,7 @@ finally:
     - Constraints and indexes:
     - `id` primary key, with Borealis using `id = 1`.
     - Used by:
-    - `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py` setup, unlock, rotation, migration, and force-reset flows.
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go`, `aegis_crypto.go`, and `aegis_lifecycle.go` setup, unlock, rotation, migration, and force-reset flows.
     - `/api/bootstrap/state`, `/api/bootstrap/aegis/setup`, `/api/bootstrap/aegis/unlock`, `/api/bootstrap/admin/*`, `/api/aegis/status`, `/api/aegis/rotate`, and `/api/aegis/force_reset`.
     - Notes:
     - `kdf_params_json` stores the per-install `scrypt` parameters and Base64 salt.
@@ -1147,7 +1148,7 @@ finally:
     - Engine startup validates this schema strictly and fails fast if legacy columns are still present.
     - `source_repo`, `source_path`, and `source_version` track Aurora provenance for official assemblies.
     - `content_hash` stores the Engine-computed canonical SHA-256 used for update detection.
-    - The bundled official snapshot is versioned under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a seed snapshot and synced into `assemblies.official_assemblies` on startup.
+    - Official catalog rows sync from managed Aurora checkout into `assemblies.official_assemblies`; optional bundled snapshots are generated runtime inputs, not committed API source.
     - Deploy-time schema setup and Go API startup both ensure the active `assemblies.*` tables exist before `/api/assemblies`, quick jobs, scheduled jobs, workflows, or watchdog remediation read them.
 
     ### `assemblies.official_catalog_state`

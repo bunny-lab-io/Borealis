@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ type fakeAssemblyStore struct {
 
 	states        map[string]officialCatalogState
 	deletedStates []string
+	deletedGUIDs  []string
 }
 
 func (s *fakeAssemblyStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -61,7 +63,8 @@ func (s *fakeAssemblyStore) updateAssembly(_ context.Context, _ string, payload 
 	return payload, http.StatusOK, nil
 }
 
-func (s *fakeAssemblyStore) deleteAssembly(_ context.Context, _ string) (map[string]any, int, error) {
+func (s *fakeAssemblyStore) deleteAssembly(_ context.Context, assemblyGUID string) (map[string]any, int, error) {
+	s.deletedGUIDs = append(s.deletedGUIDs, assemblyGUID)
 	return map[string]any{"status": "queued"}, http.StatusAccepted, nil
 }
 
@@ -299,5 +302,81 @@ func TestAssemblyCommunityImportAllowedAfterDevMode(t *testing.T) {
 	}
 	if store.importPayload["domain"] != "community" {
 		t.Fatalf("unexpected import payload %#v", store.importPayload)
+	}
+}
+
+func TestGoAssemblySchemaCoversEveryOwnedTable(t *testing.T) {
+	statements := strings.Join(goAssemblySchemaStatements(), "\n")
+	for _, table := range []string{
+		"assemblies.official_catalog_state",
+		"assemblies.official_assemblies",
+		"assemblies.community_assemblies",
+		"assemblies.user_created_assemblies",
+	} {
+		if !strings.Contains(statements, "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("Go schema is missing %s", table)
+		}
+	}
+}
+
+func TestOfficialCatalogSummaryPrefersNestedPayloadDescription(t *testing.T) {
+	document := map[string]any{
+		"summary":     "stale top-level summary",
+		"description": "older envelope description",
+	}
+	payload := map[string]any{"description": "fresh nested description"}
+	if got := officialCatalogSummary(document, payload); got != "fresh nested description" {
+		t.Fatalf("unexpected summary precedence %q", got)
+	}
+}
+
+func TestAssemblyWorkflowPayloadDecodesCanonicalBase64Document(t *testing.T) {
+	workflow := `{"tab_name":"Aurora Workflow","nodes":[{"id":"node-1"}],"edges":[]}`
+	document := map[string]any{
+		"assembly_guid": "aurora-workflow-guid",
+		"name":          "Aurora Workflow",
+		"type":          "workflow",
+		"workflow":      base64.StdEncoding.EncodeToString([]byte(workflow)),
+	}
+	payload, err := assemblyPayloadDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload["assembly_guid"] != "aurora-workflow-guid" || payload["tab_name"] != "Aurora Workflow" {
+		t.Fatalf("canonical workflow metadata was not preserved: %#v", payload)
+	}
+	if nodes, ok := payload["nodes"].([]any); !ok || len(nodes) != 1 {
+		t.Fatalf("canonical workflow nodes were not decoded: %#v", payload)
+	}
+	if got := assemblyInferType(document, payload); got != "workflow" {
+		t.Fatalf("canonical workflow type = %q", got)
+	}
+}
+
+func TestOfficialCatalogCleanupDeletesRevokedAuroraAssemblies(t *testing.T) {
+	store := &fakeAssemblyStore{
+		items: []map[string]any{{
+			"assembly_guid": "revoked-guid",
+			"display_name":  "Revoked Script",
+			"source":        assemblyDomainOfficial,
+			"source_path":   "scripts/windows/revoked.json",
+		}},
+		states: map[string]officialCatalogState{
+			"revoked-guid": {AssemblyGUID: "revoked-guid"},
+		},
+	}
+	service := &officialCatalogService{store: store, now: time.Now}
+	result := service.cleanupDeleted(context.Background(), officialCatalogManifest{
+		Source:  officialCatalogSourceAurora,
+		Entries: map[string]officialCatalogEntry{"retained-guid": {AssemblyGUID: "retained-guid"}},
+	})
+	if result["cleanup_performed"] != true || result["deleted_count"] != 1 {
+		t.Fatalf("unexpected cleanup result %#v", result)
+	}
+	if len(store.deletedGUIDs) != 1 || store.deletedGUIDs[0] != "revoked-guid" {
+		t.Fatalf("revoked assembly was not deleted: %#v", store.deletedGUIDs)
+	}
+	if len(store.deletedStates) != 1 || store.deletedStates[0] != "revoked-guid" {
+		t.Fatalf("revoked catalog state was not pruned: %#v", store.deletedStates)
 	}
 }

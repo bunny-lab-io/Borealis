@@ -863,6 +863,25 @@ func TestSoftwareAuditMetadataKeepsInstallDateProvenance(t *testing.T) {
 	}
 }
 
+func TestSoftwareRuleDefaultsUseRuntimeConfig(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BOREALIS_PROJECT_ROOT", root)
+	t.Setenv("BOREALIS_SOFTWARE_ICON_OVERRIDES_PATH", "")
+	t.Setenv("BOREALIS_SOFTWARE_UNINSTALL_OVERRIDES_PATH", "")
+	t.Setenv("BOREALIS_SOFTWARE_UNINSTALL_BLOCKLIST_PATH", "")
+
+	configRoot := filepath.Join(root, "Engine", "Services", "api-backend", "config")
+	if got, want := agentSoftwareIconOverridesPath(), filepath.Join(configRoot, "software_icons_overrides.json"); got != want {
+		t.Fatalf("icon override path = %q, want %q", got, want)
+	}
+	if got, want := softwareUninstallOverridesPath(), filepath.Join(configRoot, "software_uninstall_overrides.json"); got != want {
+		t.Fatalf("uninstall override path = %q, want %q", got, want)
+	}
+	if got, want := softwareUninstallBlocklistPath(), filepath.Join(configRoot, "software_uninstall_blocklist.json"); got != want {
+		t.Fatalf("uninstall blocklist path = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeDeviceServicePayloadMatchesPendingShape(t *testing.T) {
 	raw := sqlNullString(`{"reported_at":100,"services":[{"name":"Spooler","displayName":"Print Spooler","status":"active","captured_at":101},{"service_name":"Borealis Agent","state":"stop-pending","pending_action":"restart","pending_requested_at":102,"pending_requested_by":"operator"}]}`)
 	services, reportedAt := normalizeDeviceServicePayload(raw)

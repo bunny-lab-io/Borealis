@@ -6,6 +6,8 @@ repo_root="$(cd -- "${script_dir}/../../../.." && pwd)"
 minimum_go_major=1
 minimum_go_minor=25
 go_version="${BOREALIS_GO_VERSION:-1.25.12}"
+go_linux_amd64_sha256="234828b7a89e0e303d2556310ee549fbcf253d28de937bac3da13d6294262ac1"
+go_linux_arm64_sha256="8b5884aef89600aef5b0b051fb971f11f49bb996521e911f30f02a66884f7bd2"
 go_install_root="${BOREALIS_GO_INSTALL_ROOT:-${repo_root}/Dependencies/Go/go${go_version}}"
 version_value="${BOREALIS_API_BACKEND_VERSION:-$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || echo dev)}"
 output_root="${BOREALIS_GO_API_BACKEND_OUTPUT_ROOT:-${script_dir}/dist}"
@@ -37,6 +39,20 @@ download_file() {
   fi
 }
 
+go_archive_sha256() {
+  case "${go_version}:${go_arch}" in
+    1.25.12:amd64) printf '%s\n' "${go_linux_amd64_sha256}" ;;
+    1.25.12:arm64) printf '%s\n' "${go_linux_arm64_sha256}" ;;
+    *)
+      [ -n "${BOREALIS_GO_SHA256:-}" ] || {
+        printf 'No pinned checksum for Go %s linux-%s. Set BOREALIS_GO_SHA256 for an intentional override.\n' "${go_version}" "${go_arch}" >&2
+        exit 64
+      }
+      printf '%s\n' "${BOREALIS_GO_SHA256}"
+      ;;
+  esac
+}
+
 install_native_go() {
   if [ "$(uname -s)" != "Linux" ]; then
     printf 'Automatic Go install supports Linux only.\n' >&2
@@ -58,6 +74,8 @@ install_native_go() {
   unpack_dir="${tmp_dir}/unpack"
   printf 'Installing native Go %s into %s\n' "${go_version}" "${go_install_root}"
   download_file "${url}" "${archive_path}"
+  printf '%s  %s\n' "$(go_archive_sha256)" "${archive_path}" | sha256sum -c - >/dev/null \
+    || { printf 'Go %s linux-%s checksum verification failed.\n' "${go_version}" "${go_arch}" >&2; exit 1; }
   mkdir -p "${unpack_dir}" "$(dirname -- "${go_install_root}")"
   tar -C "${unpack_dir}" -xzf "${archive_path}"
   rm -rf "${go_install_root}"
@@ -79,8 +97,9 @@ go_cmd="$(command -v go)"
 mkdir -p "${output_root}"
 (
   cd "${script_dir}"
-  "${go_cmd}" mod tidy
-  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/api-backend" ./cmd/api-backend
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/api-backend" ./cmd/api-backend
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -mod=readonly -trimpath -buildvcs=false -o "${output_root}/wireguard-control" ./cmd/wireguard-control
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -mod=readonly -trimpath -buildvcs=false -o "${output_root}/wireguard-control-client" ./cmd/wireguard-control-client
 )
 
-printf 'Built Go api-backend binary at %s\n' "${output_root}/api-backend"
+printf 'Built Go Engine binaries under %s\n' "${output_root}"

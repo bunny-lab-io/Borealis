@@ -54,7 +54,7 @@ Define variables in the assembly when values should change by run. Borealis inje
 
     ### Source map
 
-    - Script execution API: `Data/Engine/Containers/api-backend/data/services/API/assemblies/execution.py`
+    - Script execution API: `Data/Engine/Containers/api-backend/cmd/api-backend/quick_run.go` and `agent_script.go`
     - Quick job dialog: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/Quick_Job_Dialog.jsx`
     - Agent system context role: `Data/Agent/internal/roles/system_context/`
     - Agent current-user role: `Data/Agent/internal/roles/current_user/`

@@ -4,7 +4,7 @@ Software uninstall overrides are file-backed rules that provide verified unatten
 
 ## Override File
 
-`Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`
+`Engine/Services/api-backend/config/software_uninstall_overrides.json`
 
 ## Operator Path
 
@@ -58,8 +58,8 @@ Overrides win before Borealis trusts registry `QuietUninstallString` metadata an
 
     ### Implementation references
 
-    - Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
-    - Override data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`
+    - Engine resolver: `Data/Engine/Containers/api-backend/cmd/api-backend/software_overrides.go`
+    - Runtime data file: `Engine/Services/api-backend/config/software_uninstall_overrides.json`
     - Installed Software UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`
 
     ### Authoring notes

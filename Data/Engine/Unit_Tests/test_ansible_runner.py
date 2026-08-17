@@ -83,7 +83,7 @@ class _FakeProcess:
 
 
 def _write_ansible_collections_manifest(project_root: Path) -> Path:
-    manifest = project_root / "Data" / "Engine" / "Containers" / "api-backend" / "data" / "Ansible" / "collections.yml"
+    manifest = project_root / "Data" / "Engine" / "Containers" / "site-worker" / "data" / "Ansible" / "collections.yml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
         "---\n"
