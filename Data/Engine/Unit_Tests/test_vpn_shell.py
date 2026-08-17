@@ -15,6 +15,8 @@ import threading
 import time
 import types
 
+import pytest
+
 import Data.Engine.services.WebSocket.vpn_shell as vpn_shell_module
 from Data.Engine.services.WebSocket.vpn_shell import ShellSession, VpnShellBridge
 
@@ -170,6 +172,24 @@ class _DummyTunnelService:
     def recover_transport(self, agent_id: str, *, trigger: str, reason: str | None = None):
         self.recover_calls.append((agent_id, str(trigger or ""), str(reason or "")))
         return {"status": "ok"}
+
+
+@pytest.fixture(autouse=True)
+def _close_started_shell_sessions(monkeypatch):
+    sessions: list[ShellSession] = []
+    original_start_reader = ShellSession.start_reader
+
+    def tracked_start_reader(session: ShellSession) -> None:
+        sessions.append(session)
+        original_start_reader(session)
+
+    monkeypatch.setattr(ShellSession, "start_reader", tracked_start_reader)
+    yield
+    for session in sessions:
+        session.close()
+        for task in (session._reader, session._heartbeat):
+            if isinstance(task, threading.Thread):
+                task.join(timeout=1.0)
 
 
 def test_shell_session_send_includes_message_metadata() -> None:
