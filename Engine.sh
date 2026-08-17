@@ -6988,12 +6988,11 @@ apply_runtime_service_ownership() {
     fi
     chmod 0700 "${RUNTIME_ROOT}/Services/postgres-db/state" 2>/dev/null || true
   fi
-  for path in \
-    "${RUNTIME_ROOT}/Services/postgres-db/run"; do
-    [[ -e "${path}" ]] || continue
+  path="${RUNTIME_ROOT}/Services/postgres-db/run"
+  if [[ -e "${path}" ]]; then
     chown -R "${postgres_uid}:${postgres_gid}" "${path}" 2>/dev/null || true
     chmod 0775 "${path}" 2>/dev/null || true
-  done
+  fi
 
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets" 2>/dev/null || true
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens" 2>/dev/null || true
@@ -10283,5 +10282,7 @@ main() {
   esac
 }
 
-main "$@"
-exit $?
+if [[ "${BOREALIS_ENGINE_LIBRARY_MODE:-0}" != "1" ]]; then
+  main "$@"
+  exit $?
+fi
