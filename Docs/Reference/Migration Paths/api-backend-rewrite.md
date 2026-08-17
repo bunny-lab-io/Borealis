@@ -120,7 +120,7 @@ Current tracker for the completed `api-backend` rewrite from Flask/Python to Go.
 
 | Dependency | Blocks |
 | --- | --- |
-| Done | No Python dependency blocks api-backend rewrite or route ownership. Retained Python is worker/helper runtime only: site-worker remote-ops sockets, file-transfer streaming, VNC proxy helpers, Ansible runner, crypto migration helpers, and assembly catalog/cache helpers. |
+| Done | No Python dependency blocks api-backend rewrite or route ownership. Retained Python is site-worker/schema runtime only: remote-ops sockets, file-transfer streaming, VNC proxy helpers, Ansible runner, and pre-API schema bootstrap. |
 
 ## Final Codebase Troubleshooting Issues
 

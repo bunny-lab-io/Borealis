@@ -1,23 +1,13 @@
-"""Helpers for Borealis-managed Let's Encrypt and Traefik runtime state.
-
-This module owns persisted public edge configuration stored under
-``Engine/Services/traefik-edge/state/Settings.json``. Engine.sh uses it to create/update the
-settings file, render Traefik configuration, and emit a small environment file
-that the Engine runtime can source without duplicating JSON parsing logic in
-shell.
-"""
+"""Load public-edge settings used by Python site-worker processes."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
-import shlex
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -64,10 +54,7 @@ DEFAULT_WEBUI_UPSTREAM_PORT = 8000
 DEFAULT_WEBUI_TRAFFIC_OWNER = "k3s"
 DEFAULT_VNC_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_VNC_UPSTREAM_PORT = 4823
-DEFAULT_VITE_UPSTREAM_HOST = "127.0.0.1"
-DEFAULT_VITE_UPSTREAM_PORT = 8000
 DEFAULT_VNC_PUBLIC_PATH = "/remote-desktop/vnc"
-DEFAULT_ACME_CHALLENGE_PATH = "/.well-known/acme-challenge/"
 DEFAULT_HTTP_PORT = 80
 DEFAULT_HTTPS_PORT = 443
 DEFAULT_WIREGUARD_PORT = 30000
@@ -105,18 +92,6 @@ def _normalize_text(value: Any) -> str:
         return ""
 
 
-def _split_trusted_ips(value: Any) -> list[str]:
-    ips: list[str] = []
-    seen: set[str] = set()
-    for raw in _normalize_text(value).replace("\n", ",").split(","):
-        text = "".join(str(raw).split())
-        if not text or text in seen:
-            continue
-        ips.append(text)
-        seen.add(text)
-    return ips
-
-
 def _split_hostnames(primary: str, aliases: Any) -> list[str]:
     hosts: list[str] = []
     seen: set[str] = set()
@@ -127,29 +102,6 @@ def _split_hostnames(primary: str, aliases: Any) -> list[str]:
         hosts.append(host)
         seen.add(host)
     return hosts or ["localhost"]
-
-
-def _host_rule(primary: str, aliases: Any) -> str:
-    return "Host(" + ",".join(f"`{host}`" for host in _split_hostnames(primary, aliases)) + ")"
-
-
-def _traefik_trusted_ip_lists() -> tuple[list[str], list[str]]:
-    trusted_proxy_ips = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS"))
-    forwarded_headers = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS"))
-    proxy_protocol = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS"))
-    return forwarded_headers or trusted_proxy_ips, proxy_protocol or trusted_proxy_ips
-
-
-def _append_trusted_ips_section(lines: list[str], section_name: str, trusted_ips: list[str]) -> None:
-    if not trusted_ips:
-        return
-    lines.extend(
-        [
-            f"    {section_name}:",
-            "      trustedIPs:",
-            *[f'        - "{trusted_ip}"' for trusted_ip in trusted_ips],
-        ]
-    )
 
 
 def _normalize_path(value: Any, *, default: str, ensure_leading_slash: bool = False) -> str:
@@ -356,280 +308,3 @@ def save_settings(settings: LetsEncryptSettings) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings.as_json_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
-
-
-def _write_private_text(path: Path, content: str, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(path, flags, mode)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(content)
-    os.chmod(path, mode)
-
-
-def _render_runtime_env(settings: LetsEncryptSettings) -> str:
-    pairs = {
-        "BOREALIS_PUBLIC_EDGE_ENABLED": "1" if settings.enabled else "0",
-        "BOREALIS_PUBLIC_BASE_URL": settings.public_base_url,
-        "BOREALIS_PUBLIC_HOSTNAME": settings.public_hostname,
-        "BOREALIS_PUBLIC_HOSTNAME_ALIASES": settings.fqdn_aliases,
-        "BOREALIS_PUBLIC_HTTPS_PORT": str(settings.https_port),
-        "BOREALIS_PUBLIC_HTTP_PORT": str(settings.http_port),
-        "BOREALIS_PUBLIC_VNC_PATH": settings.public_vnc_path,
-        "BOREALIS_PUBLIC_WIREGUARD_HOST": settings.public_wireguard_host,
-        "BOREALIS_PUBLIC_WIREGUARD_PORT": str(settings.public_wireguard_port),
-        "BOREALIS_VNC_WS_HOST": settings.vnc_upstream_host,
-        "BOREALIS_VNC_WS_PORT": str(settings.vnc_upstream_port),
-        "BOREALIS_WEBUI_TRAFFIC_OWNER": settings.webui_traffic_owner,
-        "BOREALIS_WEBUI_UPSTREAM_HOST": settings.webui_upstream_host,
-        "BOREALIS_WEBUI_UPSTREAM_PORT": str(settings.webui_upstream_port),
-        "BOREALIS_COOKIE_SECURE": "1",
-        "BOREALIS_LETSENCRYPT_SETTINGS_PATH": settings.settings_path,
-        "BOREALIS_TRAEFIK_STATIC_CONFIG_PATH": settings.traefik_static_config_path,
-        "BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH": settings.traefik_dynamic_config_path,
-        "BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR": str(Path(settings.traefik_dynamic_config_path).parent),
-        "BOREALIS_TRAEFIK_ACME_STORAGE_PATH": settings.acme_storage_path,
-        "BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS": os.environ.get("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS", ""),
-        "BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS": os.environ.get(
-            "BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS",
-            "",
-        ),
-        "BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS": os.environ.get(
-            "BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS",
-            "",
-        ),
-    }
-    lines = [f"export {key}={shlex.quote(value)}" for key, value in pairs.items()]
-    return "\n".join(lines) + "\n"
-
-
-def _render_static_config(settings: LetsEncryptSettings) -> str:
-    forwarded_headers, proxy_protocol = _traefik_trusted_ip_lists()
-    lines = [
-        "entryPoints:",
-        "  web:",
-        f'    address: ":{settings.http_port}"',
-    ]
-    _append_trusted_ips_section(lines, "forwardedHeaders", forwarded_headers)
-    lines.extend(
-        [
-            "  websecure:",
-            f'    address: ":{settings.https_port}"',
-        ]
-    )
-    _append_trusted_ips_section(lines, "forwardedHeaders", forwarded_headers)
-    _append_trusted_ips_section(lines, "proxyProtocol", proxy_protocol)
-    lines.extend(
-        [
-            "providers:",
-            "  file:",
-            f'    directory: "{Path(settings.traefik_dynamic_config_path).parent}"',
-            "    watch: true",
-            "certificatesResolvers:",
-            "  letsencrypt:",
-            "    acme:",
-            f'      email: "{settings.acme_email}"',
-            f'      storage: "{settings.acme_storage_path}"',
-            "      httpChallenge:",
-            "        entryPoint: web",
-            "log:",
-            "  level: INFO",
-            f'  filePath: "{Path(settings.logs_directory) / "traefik.log"}"',
-            "accessLog:",
-            f'  filePath: "{Path(settings.logs_directory) / "traefik-access.log"}"',
-            "",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _dev_ui_proxy_enabled() -> bool:
-    return _parse_bool(os.environ.get("BOREALIS_DEV_UI_PROXY_ENABLED"), default=False)
-
-
-def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
-    engine_url = f"http://{settings.engine_upstream_host}:{settings.engine_upstream_port}"
-    webui_url = f"http://{settings.webui_upstream_host}:{settings.webui_upstream_port}"
-    vnc_url = f"http://{settings.vnc_upstream_host}:{settings.vnc_upstream_port}"
-    vite_url = f"http://{DEFAULT_VITE_UPSTREAM_HOST}:{DEFAULT_VITE_UPSTREAM_PORT}"
-    challenge_path = DEFAULT_ACME_CHALLENGE_PATH
-    dev_ui_proxy_enabled = _dev_ui_proxy_enabled()
-    host_rule = _host_rule(settings.public_hostname, settings.fqdn_aliases)
-    router_lines = [
-        "http:",
-        "  middlewares:",
-        "    redirect-to-https:",
-        "      redirectScheme:",
-        "        scheme: https",
-        "        permanent: true",
-        "  routers:",
-        "    borealis-http:",
-        "      entryPoints:",
-        "        - web",
-        f'      rule: "{host_rule} && !PathPrefix(`{challenge_path}`)"',
-        "      middlewares:",
-        "        - redirect-to-https",
-        "      service: noop@internal",
-        "    borealis-api:",
-        "      entryPoints:",
-        "        - websecure",
-        f'      rule: "{host_rule} && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"',
-        "      service: borealis-api",
-        "      priority: 100",
-        "      tls:",
-        "        certResolver: letsencrypt",
-        "    borealis-vnc:",
-        "      entryPoints:",
-        "        - websecure",
-        f'      rule: "{host_rule} && PathPrefix(`{settings.public_vnc_path}`)"',
-        "      service: borealis-vnc",
-        "      priority: 90",
-        "      tls:",
-        "        certResolver: letsencrypt",
-    ]
-    if dev_ui_proxy_enabled:
-        router_lines.extend(
-            [
-                "    borealis-ui-dev:",
-                "      entryPoints:",
-                "        - websecure",
-                f'      rule: "{host_rule}"',
-                "      service: borealis-vite",
-                "      priority: 10",
-                "      tls:",
-                "        certResolver: letsencrypt",
-            ]
-        )
-    else:
-        router_lines.extend(
-            [
-                "    borealis-webui:",
-                "      entryPoints:",
-                "        - websecure",
-                f'      rule: "{host_rule}"',
-                "      service: borealis-webui",
-                "      priority: 10",
-                "      tls:",
-                "        certResolver: letsencrypt",
-            ]
-        )
-    service_lines = [
-        "  services:",
-        "    borealis-api:",
-        "      loadBalancer:",
-        "        servers:",
-        f'          - url: "{engine_url}"',
-    ]
-    if dev_ui_proxy_enabled:
-        service_lines.extend(
-            [
-                "    borealis-vite:",
-                "      loadBalancer:",
-                "        servers:",
-                f'          - url: "{vite_url}"',
-            ]
-        )
-    else:
-        service_lines.extend(
-            [
-                "    borealis-webui:",
-                "      loadBalancer:",
-                "        servers:",
-                f'          - url: "{webui_url}"',
-            ]
-        )
-    service_lines.extend(
-        [
-            "    borealis-vnc:",
-            "      loadBalancer:",
-            "        servers:",
-            f'          - url: "{vnc_url}"',
-        ]
-    )
-    return "\n".join(
-        [*router_lines, *service_lines, ""]
-    )
-
-
-def write_runtime_artifacts(settings: LetsEncryptSettings) -> Dict[str, str]:
-    save_settings(settings)
-
-    logs_dir = Path(settings.logs_directory)
-    logs_dir.mkdir(parents=True, exist_ok=True)
-
-    acme_path = Path(settings.acme_storage_path)
-    acme_path.parent.mkdir(parents=True, exist_ok=True)
-    if not acme_path.exists():
-        acme_path.write_text("{}", encoding="utf-8")
-    try:
-        os.chmod(acme_path, 0o600)
-    except Exception:
-        pass
-
-    runtime_env_path = Path(settings.runtime_env_path)
-    _write_private_text(runtime_env_path, _render_runtime_env(settings))
-
-    static_config_path = Path(settings.traefik_static_config_path)
-    static_config_path.parent.mkdir(parents=True, exist_ok=True)
-    static_config_path.write_text(_render_static_config(settings), encoding="utf-8")
-
-    dynamic_config_path = Path(settings.traefik_dynamic_config_path)
-    dynamic_config_path.parent.mkdir(parents=True, exist_ok=True)
-    dynamic_config_path.write_text(_render_dynamic_config(settings), encoding="utf-8")
-
-    return {
-        "settings_path": settings.settings_path,
-        "runtime_env_path": settings.runtime_env_path,
-        "acme_storage_path": settings.acme_storage_path,
-        "traefik_static_config_path": settings.traefik_static_config_path,
-        "traefik_dynamic_config_directory": str(dynamic_config_path.parent),
-        "traefik_dynamic_config_path": settings.traefik_dynamic_config_path,
-        "public_base_url": settings.public_base_url,
-        "public_hostname": settings.public_hostname,
-        "public_vnc_path": settings.public_vnc_path,
-    }
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage Borealis Let's Encrypt/Traefik runtime files.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    ensure_parser = subparsers.add_parser("ensure-files", help="Create/update Settings.json and Traefik runtime files.")
-    ensure_parser.add_argument("--settings-path", default=str(DEFAULT_SETTINGS_PATH))
-    ensure_parser.add_argument("--fqdn", default="")
-    ensure_parser.add_argument("--email", default="")
-
-    show_parser = subparsers.add_parser("show-json", help="Print the resolved settings JSON.")
-    show_parser.add_argument("--settings-path", default=str(DEFAULT_SETTINGS_PATH))
-
-    return parser
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
-    if args.command == "ensure-files":
-        settings = load_settings(
-            Path(args.settings_path),
-            create_if_missing=True,
-            seed_fqdn=args.fqdn,
-            seed_email=args.email,
-        )
-        artifacts = write_runtime_artifacts(settings)
-        json.dump({"settings": settings.as_json_dict(), "artifacts": artifacts}, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-        return 0
-
-    if args.command == "show-json":
-        settings = load_settings(Path(args.settings_path), create_if_missing=False)
-        json.dump(settings.as_json_dict(), sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-        return 0
-
-    parser.error("unknown command")
-    return 2
-
-
-if __name__ == "__main__":  # pragma: no cover - CLI helper
-    raise SystemExit(main())

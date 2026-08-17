@@ -98,6 +98,8 @@ mkdir -p "${output_root}"
 (
   cd "${script_dir}"
   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${version_value}" -o "${output_root}/api-backend" ./cmd/api-backend
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -mod=readonly -trimpath -buildvcs=false -o "${output_root}/wireguard-control" ./cmd/wireguard-control
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "${go_cmd}" build -mod=readonly -trimpath -buildvcs=false -o "${output_root}/wireguard-control-client" ./cmd/wireguard-control-client
 )
 
-printf 'Built Go api-backend binary at %s\n' "${output_root}/api-backend"
+printf 'Built Go Engine binaries under %s\n' "${output_root}"

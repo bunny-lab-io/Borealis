@@ -132,7 +132,7 @@ jobs:
           if-no-files-found: ignore
 
   engine-go:
-    name: Engine / go-api-scheduler-operator
+    name: Engine / go-runtimes
     needs: changes
     if: needs.changes.outputs.engine_go == 'true'
     runs-on: ubuntu-latest
@@ -152,7 +152,7 @@ jobs:
           if-no-files-found: ignore
 
   engine-python:
-    name: Engine / retained-python
+    name: Engine / site-worker-python
     needs: changes
     if: needs.changes.outputs.engine_python == 'true'
     runs-on: ubuntu-latest

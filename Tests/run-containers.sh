@@ -82,22 +82,44 @@ mkdir -p "${RESULT_DIR}"
 WORKSPACE="$(mktemp -d)"
 trap 'rm -rf "${WORKSPACE}"' EXIT
 git -C "${REPO_ROOT}" ls-files --cached --others --exclude-standard -z \
+  | while IFS= read -r -d '' path; do
+      [[ -e "${REPO_ROOT}/${path}" ]] && printf '%s\0' "${path}"
+    done \
   | tar -C "${REPO_ROOT}" --null --files-from=- -cf - \
   | tar -C "${WORKSPACE}" -xf -
 
-needs_go_binary=0
+needs_api_binary=0
+needs_wireguard_binary=0
 for service in "${SERVICES[@]}"; do
-  case "${service}" in api-backend|borealis-operator|job-scheduler) needs_go_binary=1 ;; esac
+  case "${service}" in
+    api-backend|borealis-operator|job-scheduler) needs_api_binary=1 ;;
+    wireguard-tunnel) needs_wireguard_binary=1 ;;
+  esac
 done
-if ((needs_go_binary)); then
+if ((needs_api_binary || needs_wireguard_binary)); then
   GO_BIN="$(resolve_go 1.25.12)"
   mkdir -p "${WORKSPACE}/Data/Engine/Containers/api-backend/dist"
-  printf '==> Prebuild shared Engine Go binary\n'
+fi
+if ((needs_api_binary)); then
+  printf '==> Prebuild shared Engine API binary\n'
   run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux CGO_ENABLED=0 \
     "${GO_BIN}" -C "${WORKSPACE}/Data/Engine/Containers/api-backend" build \
     -trimpath -buildvcs=false -mod=readonly \
     -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/api-backend" ./cmd/api-backend \
     >"${RESULT_DIR}/engine-go-prebuild.log" 2>&1
+fi
+if ((needs_wireguard_binary)); then
+  printf '==> Prebuild WireGuard control binaries\n'
+  run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux CGO_ENABLED=0 \
+    "${GO_BIN}" -C "${WORKSPACE}/Data/Engine/Containers/api-backend" build \
+    -trimpath -buildvcs=false -mod=readonly \
+    -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/wireguard-control" ./cmd/wireguard-control \
+    >"${RESULT_DIR}/wireguard-go-prebuild.log" 2>&1
+  run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux CGO_ENABLED=0 \
+    "${GO_BIN}" -C "${WORKSPACE}/Data/Engine/Containers/api-backend" build \
+    -trimpath -buildvcs=false -mod=readonly \
+    -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/wireguard-control-client" ./cmd/wireguard-control-client \
+    >>"${RESULT_DIR}/wireguard-go-prebuild.log" 2>&1
 fi
 
 build_image() {

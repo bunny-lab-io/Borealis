@@ -466,6 +466,34 @@ func TestWorkflowHandlersReportStoreErrors(t *testing.T) {
 	}
 }
 
+func TestWorkflowUpdateSQLUsesExplicitColumnAllowlist(t *testing.T) {
+	query, args, err := workflowUpdateSQL(
+		"engine.workflow_runs",
+		"id",
+		42,
+		map[string]any{"updated_at": int64(1700000000), "status": workflowStatusRunning},
+		workflowRunUpdateColumns,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query != "UPDATE engine.workflow_runs SET status=$1, updated_at=$2 WHERE id=$3" {
+		t.Fatalf("unexpected allowlisted update query %q", query)
+	}
+	if len(args) != 3 || args[0] != workflowStatusRunning || args[1] != int64(1700000000) || args[2] != int64(42) {
+		t.Fatalf("unexpected allowlisted update arguments %#v", args)
+	}
+	if _, _, err := workflowUpdateSQL(
+		"engine.workflow_runs",
+		"id",
+		42,
+		map[string]any{"status = 'Success'; DROP TABLE engine.workflow_runs; --": "ignored"},
+		workflowRunUpdateColumns,
+	); err == nil || !strings.Contains(err.Error(), "workflow_update_field_not_allowed") {
+		t.Fatalf("unknown workflow update column was not rejected: %v", err)
+	}
+}
+
 func workflowJSONRequest(method string, path string, body string) *http.Request {
 	request := workflowRequest(method, path)
 	request.Body = io.NopCloser(strings.NewReader(body))

@@ -322,7 +322,8 @@ finally:
     - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Scheduler queue leasing: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
-    - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`
+    - Authoritative Assembly schema and runtime store: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies_schema.go` and `assemblies.go`
+    - Pre-API schema Job compatibility bootstrap: `Data/Engine/Containers/api-backend/data/assembly_schema.py`
     - Managed official catalog checkout: `Engine/Services/api-backend/cache/Aurora/`
 
     ### Troubleshooting queries
@@ -985,7 +986,7 @@ finally:
     - Notes:
     - Before Aegis setup, legacy plaintext values may still exist in the `*_encrypted` columns as migration input.
     - After Aegis setup, secret columns store ASCII `aegis:v1:` envelopes even though the schema type remains `BLOB`.
-    - The runtime decrypts credential secrets on demand through `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py`.
+    - Go runtime decrypts credential secrets on demand through `Data/Engine/Containers/api-backend/cmd/api-backend/aegis_crypto.go` and `credentials.go`.
     - Operator-facing credential APIs now wait for bootstrap phase `login_required`; stale operator sessions no longer bypass the lock state after restart.
     - If `metadata_json` contains `aegis_secret_state = "reset_required"`, the record survived an Aegis force reset but one or more stored secret fields were intentionally destroyed and must be re-entered.
 
@@ -996,7 +997,7 @@ finally:
     - Constraints and indexes:
     - `id` primary key, with Borealis using `id = 1`.
     - Used by:
-    - `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py` setup, unlock, rotation, migration, and force-reset flows.
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go`, `aegis_crypto.go`, and `aegis_lifecycle.go` setup, unlock, rotation, migration, and force-reset flows.
     - `/api/bootstrap/state`, `/api/bootstrap/aegis/setup`, `/api/bootstrap/aegis/unlock`, `/api/bootstrap/admin/*`, `/api/aegis/status`, `/api/aegis/rotate`, and `/api/aegis/force_reset`.
     - Notes:
     - `kdf_params_json` stores the per-install `scrypt` parameters and Base64 salt.

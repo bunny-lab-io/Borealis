@@ -280,7 +280,7 @@ After deployment finishes:
 
     ### Bootstrap and runtime separation
 
-    - Engine API/backend source lives in `Data/Engine/Containers/api-backend/data/`.
+    - Engine public API source lives in `Data/Engine/Containers/api-backend/cmd/api-backend/`. Python under `Data/Engine/Containers/api-backend/data/` belongs to site workers and pre-API schema bootstrap; API image does not ship it.
     - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
     - Engine WebUI dev/HMR runtime source lives in `Engine/Services/webui-frontend/data/web-interface/` after first Engine deploy.
     - Agent source code lives in `Data/Agent/`.

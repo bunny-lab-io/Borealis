@@ -8674,7 +8674,7 @@ collect_build_cache_exports() {
 prepare_service_build_artifacts() {
   local service="$1"
   case "${service}" in
-    api-backend|job-scheduler|borealis-operator)
+    api-backend|job-scheduler|borealis-operator|wireguard-tunnel)
       if [[ "${GO_API_BACKEND_BINARY_PREPARED}" == "1" ]]; then
         printf '[%s] %s reusing prepared Go api-backend binary\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
         return 0

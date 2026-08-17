@@ -1,12 +1,12 @@
 # ======================================================
 # Data\Engine\security\__init__.py
-# Description: Exposes Engine-specific security helpers including TLS certificates and code-signing utilities.
+# Description: Exposes site-worker runtime-secret helper.
 #
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""Security helper exports for the Borealis Engine runtime."""
+"""Security helper still consumed by site-worker configuration."""
 
-from . import certificates, session_secret, signing
+from . import session_secret
 
-__all__ = ["certificates", "session_secret", "signing"]
+__all__ = ["session_secret"]

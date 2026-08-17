@@ -19,8 +19,6 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from ..security.certificates import project_root_path
-
 _TOKEN_ENV_ROOT = "BOREALIS_ENGINE_AUTH_TOKEN_ROOT"
 _KEY_FILENAME = "borealis-jwt-ed25519.key"
 
@@ -43,7 +41,7 @@ def _engine_runtime_root() -> Path:
     if env:
         env.mkdir(parents=True, exist_ok=True)
         return env
-    root = project_root_path() / "Engine"
+    root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or "/opt/Borealis").expanduser() / "Engine"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

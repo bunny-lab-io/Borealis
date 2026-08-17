@@ -1,33 +1,18 @@
 {
   "test_root": "Data/Engine/Unit_Tests",
+  "runtime_owner": "site-worker",
   "domains": {
-    "access": {
-      "description": "Aegis, authentication, credentials, MFA, passkeys, and access-management behavior.",
-      "tests": [
-        "Data/Engine/Unit_Tests/test_access_management_api.py"
-      ]
-    },
     "ansible": {
-      "description": "Engine-side Ansible runner behavior.",
+      "description": "Site-worker Ansible runner behavior.",
       "tests": [
         "Data/Engine/Unit_Tests/test_ansible_runner.py"
       ]
     },
-    "assemblies": {
-      "description": "Assembly cache, catalog, payload, and Agent PowerShell wrapper behavior.",
-      "tests": [
-        "Data/Engine/Unit_Tests/assemblies/test_agent_powershell_wrapper.py",
-        "Data/Engine/Unit_Tests/assemblies/test_cache.py",
-        "Data/Engine/Unit_Tests/assemblies/test_official_catalog.py",
-        "Data/Engine/Unit_Tests/assemblies/test_payloads.py"
-      ]
-    },
     "core": {
-      "description": "Database bootstrap, edge runtime, Engine launcher, and secret configuration behavior.",
+      "description": "Site-worker database bootstrap, edge settings, and secret configuration behavior.",
       "tests": [
         "Data/Engine/Unit_Tests/test_database_schema.py",
         "Data/Engine/Unit_Tests/test_edge_runtime.py",
-        "Data/Engine/Unit_Tests/test_engine_launcher.py",
         "Data/Engine/Unit_Tests/test_engine_secret_config.py"
       ]
     },
@@ -37,32 +22,19 @@
         "Data/Engine/Unit_Tests/test_file_management_api.py"
       ]
     },
-    "metadata": {
-      "description": "Reserved and operator-defined metadata-field behavior.",
-      "tests": [
-        "Data/Engine/Unit_Tests/test_metadata_fields.py"
-      ]
-    },
     "remote-access": {
-      "description": "Guacamole, site-worker sockets, VNC proxy, VPN shell, and WireGuard control behavior.",
+      "description": "Site-worker Guacamole, worker sockets, VNC proxy, and VPN shell behavior.",
       "tests": [
         "Data/Engine/Unit_Tests/test_guacamole_proxy.py",
         "Data/Engine/Unit_Tests/test_site_worker_socket.py",
         "Data/Engine/Unit_Tests/test_vnc_proxy.py",
-        "Data/Engine/Unit_Tests/test_vpn_shell.py",
-        "Data/Engine/Unit_Tests/test_wireguard_control_server.py"
+        "Data/Engine/Unit_Tests/test_vpn_shell.py"
       ]
     },
     "scheduler": {
       "description": "Retained scheduler queue and site-worker work-claim behavior.",
       "tests": [
         "Data/Engine/Unit_Tests/test_job_scheduler_queue.py"
-      ]
-    },
-    "workflows": {
-      "description": "Retained workflow runtime behavior.",
-      "tests": [
-        "Data/Engine/Unit_Tests/test_workflow_runtime.py"
       ]
     }
   },

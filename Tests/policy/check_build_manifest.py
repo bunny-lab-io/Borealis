@@ -49,17 +49,21 @@ def normalize_input(raw: object, service: str) -> tuple[str, bool]:
     fail(f"{service} input must be string or pattern/optional object")
 
 
-def tracked_files() -> list[str]:
+def repository_files() -> list[str]:
     proc = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=REPO_ROOT,
         check=True,
         stdout=subprocess.PIPE,
     )
-    return [item.decode("utf-8") for item in proc.stdout.split(b"\0") if item]
+    return [
+        item.decode("utf-8")
+        for item in proc.stdout.split(b"\0")
+        if item and (REPO_ROOT / item.decode("utf-8")).is_file()
+    ]
 
 
-TRACKED_FILES = tracked_files()
+REPOSITORY_FILES = repository_files()
 
 
 def pattern_matches(path: str, pattern: str) -> bool:
@@ -69,7 +73,7 @@ def pattern_matches(path: str, pattern: str) -> bool:
 
 
 def matching_files(pattern: str) -> list[Path]:
-    return [REPO_ROOT / path for path in TRACKED_FILES if pattern_matches(path, pattern)]
+    return [REPO_ROOT / path for path in REPOSITORY_FILES if pattern_matches(path, pattern)]
 
 
 def validate_service(name: str, entry: object) -> list[str]:

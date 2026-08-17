@@ -75,9 +75,9 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
     - Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
       The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
-    - VPN orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/` (WireGuard server and tunnel lifecycle).
+    - VPN orchestration: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go` plus `Data/Engine/Containers/api-backend/internal/wireguardcontrol/` (WireGuard API and privileged tunnel lifecycle).
     - Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
-    - Filters and targeting: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` (used by scheduled jobs and filter counts).
+    - Filters and targeting: `Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go` and `scheduled_jobs_rerun.go`.
     - Agent runtime: `Data/Agent/cmd/agent` plus packages under `Data/Agent/internal/`.
 
     ### End-to-end flow examples (use these to debug)

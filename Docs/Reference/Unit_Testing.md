@@ -38,33 +38,29 @@ Compatibility entrypoints remain supported:
 .\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1
 ```
 
-`Engine_Unit_Tests.sh` aggregates Engine Go, retained Python, and WebUI lanes. Agent wrappers run Go format, module, vet, test, and cross-platform build checks.
+`Engine_Unit_Tests.sh` aggregates Engine Go, site-worker Python, and WebUI lanes. Agent wrappers run Go format, module, vet, test, and cross-platform build checks.
 
 ## Engine Domains
 
-Use inventory-backed retained Python domains while iterating:
+Use inventory-backed site-worker Python domains while iterating:
 
 ```bash
 ./Engine_Unit_Tests.sh --list-domains
 ./Engine_Unit_Tests.sh --domain go
-./Engine_Unit_Tests.sh --domain metadata
+./Engine_Unit_Tests.sh --domain core
 ./Engine_Unit_Tests.sh --domain webui
 ```
 
 | Domain | Coverage |
 | --- | --- |
-| `all` | Engine Go, all retained Python, and WebUI lanes through compatibility entrypoint. |
-| `go` | Production Go API, scheduler, and operator packages. |
+| `all` | Engine Go, all site-worker Python, and WebUI lanes through compatibility entrypoint. |
+| `go` | Production Go API, scheduler, operator, WireGuard control, and cross-runtime contracts. |
 | `webui` | WebUI runtime-script tests, Vitest, and production build. |
-| `access` | Retained Aegis and access-management behavior. |
-| `ansible` | Retained Engine-side Ansible runner. |
-| `assemblies` | Retained assembly cache, catalog, payload, and Agent wrapper behavior. |
-| `core` | Database bootstrap, edge runtime, launcher, and secret configuration. |
-| `files` | Retained file-management worker behavior. |
-| `metadata` | Reserved and operator-defined metadata fields. |
-| `remote-access` | Retained Guacamole, site-worker socket, VNC, VPN shell, and WireGuard worker behavior. |
-| `scheduler` | Retained queue and site-worker work-claim behavior. |
-| `workflows` | Retained workflow runtime behavior. |
+| `ansible` | Site-worker Ansible runner. |
+| `core` | Site-worker database bootstrap, edge settings, and secret configuration. |
+| `files` | Site-worker file-transfer behavior. |
+| `remote-access` | Site-worker Guacamole, worker socket, VNC, and VPN shell behavior. |
+| `scheduler` | Site-worker queue and work-claim behavior. |
 
 `Tests/manifests/engine-test-domains.json` owns Python domain membership. Inventory policy fails for undocumented tests, missing files, duplicate ownership, or zero-test domains.
 
@@ -74,7 +70,7 @@ Runners keep dependencies, compiled output, caches, virtual environments, and re
 
 - Results default to `Unit_Test_Results/<lane>-<timestamp>/`.
 - `BOREALIS_UNIT_TEST_RESULTS_DIR` overrides result location.
-- Engine Python creates clean virtual environment unless `BOREALIS_ENGINE_TEST_PYTHON` names prepared interpreter.
+- Site-worker Python creates clean virtual environment unless `BOREALIS_ENGINE_TEST_PYTHON` names prepared interpreter.
 - WebUI copies committed source to temporary workspace before `npm ci`, Vitest, and Vite build.
 - Go module tidy checks work against temporary module copy and fail on drift.
 - No lane writes `node_modules`, `__pycache__`, binaries, or generated configuration into staged source.
@@ -84,7 +80,7 @@ Runners keep dependencies, compiled output, caches, virtual environments, and re
 - Agent: Go 1.22.12.
 - Engine API: Go 1.25.12.
 - WebUI: Node.js 22 and npm.
-- Retained Python and docs: Python 3 with `venv`.
+- Site-worker Python and docs: Python 3 with `venv`.
 - Repository policy: ShellCheck, PowerShell, Node.js, `actionlint`, and dependencies in `Tests/requirements-policy.txt`.
 - Container and PostgreSQL lanes: Docker with local image-build permission.
 
@@ -114,7 +110,7 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Test-domain inventory: `Tests/manifests/engine-test-domains.json`.
     - Path-to-gate inventory: `Tests/manifests/ci-paths.json`.
     - Engine Go tests: package-local `*_test.go` under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
-    - Retained Engine Python tests: `Data/Engine/Unit_Tests/`.
+    - Site-worker Python tests: `Data/Engine/Unit_Tests/`.
     - Agent Go tests: package-local `*_test.go` under `Data/Agent/`.
     - WebUI Vitest tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
     - WebUI runtime contracts: `Tests/webui/runtime-scripts.test.js`.
@@ -128,3 +124,23 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Keep workflow YAML thin: checkout, tool setup/cache, repository command invocation, aggregate status, diagnostic artifact upload.
     - Add public API routes to Go source, API docs, and generated route inventory in same change.
     - Add direct dependencies to lockfiles/manifests and `Docs/Reference/SBOM.md` in same change.
+
+    ### Python ownership audit
+
+    - Engine Python inventory contains 10 files across five domains. Every file exercises current site-worker execution, worker transport, remote access, or schema bootstrap reused by site-worker image.
+    - Go Agent wrapper coverage lives in `Data/Agent/internal/scripts/scripts_test.go`.
+    - Go auth, Assembly, metadata, workflow, Engine launcher, Traefik-entrypoint, and WebUI cookie-boundary coverage lives under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Go WireGuard control validation lives under `Data/Engine/Containers/api-backend/internal/wireguardcontrol/`.
+    - Removed Python suites must not return under new names. Behavior owned by Go belongs in package-local Go tests.
+
+    - `test_access_management_api.py` -> Go auth, Aegis, credential, passkey, password, cookie, and WebUI cookie-boundary tests.
+    - `assemblies/test_agent_powershell_wrapper.py` -> Agent `TestBuildPowerShellScriptPreservesAdvancedScriptPreamble`.
+    - `assemblies/test_cache.py` -> Go Assembly store/catalog tests plus retained site-worker schema-bootstrap test. Python cache-only timing checks retired with cache runtime.
+    - `assemblies/test_official_catalog.py` -> Go catalog refresh/import/cleanup, summary precedence, and canonical workflow document tests.
+    - `assemblies/test_payloads.py` -> Go Assembly store and handler tests. Retired filesystem payload mirror removed.
+    - `test_engine_launcher.py` -> Go repository-contract tests for command exposure, cutover order, rollback, and network-mode fallback.
+    - `test_metadata_fields.py` -> existing Go metadata definition, reserved-field, and device-value handler tests.
+    - `test_wireguard_control_server.py` -> Go WireGuard control runtime tests, including live Unix socket and privileged command allowlist.
+    - `test_workflow_runtime.py` -> Go `TestWorkflowUpdateSQLUsesExplicitColumnAllowlist`.
+
+    Traefik shell-entrypoint assertions moved from `test_edge_runtime.py` into Go repository-contract tests. Python file now tests only Python edge-settings loader still consumed by site workers.

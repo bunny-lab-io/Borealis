@@ -43,7 +43,7 @@ mkdir -p "${RESULT_DIR}/junit" "${RESULT_DIR}/tmp"
 python3 "${INVENTORY}" >/dev/null
 mapfile -t TEST_FILES < <(python3 "${INVENTORY}" --list-files "${DOMAIN}")
 ((${#TEST_FILES[@]} > 0)) || {
-  printf 'ENGINE PYTHON FAIL: domain %s resolved to zero tests.\n' "${DOMAIN}" >&2
+    printf 'SITE-WORKER PYTHON FAIL: domain %s resolved to zero tests.\n' "${DOMAIN}" >&2
   exit 2
 }
 
@@ -55,17 +55,17 @@ if [[ -z "${PYTHON_BIN}" ]]; then
   VENV_DIR="${RESULT_DIR}/venv"
   python3 -m venv "${VENV_DIR}"
   PYTHON_BIN="${VENV_DIR}/bin/python"
-  printf '==> Engine Python dependency install\n'
+  printf '==> Site-worker Python dependency install\n'
   run_timed "${INSTALL_TIMEOUT_SECONDS}" "${PYTHON_BIN}" -m pip install \
     --disable-pip-version-check --no-input -r "${REQUIREMENTS}" \
     >"${RESULT_DIR}/dependency-install.log" 2>&1
 fi
 [[ -x "${PYTHON_BIN}" ]] || {
-  printf 'ENGINE PYTHON FAIL: Python executable unavailable: %s\n' "${PYTHON_BIN}" >&2
+  printf 'SITE-WORKER PYTHON FAIL: Python executable unavailable: %s\n' "${PYTHON_BIN}" >&2
   exit 127
 }
 "${PYTHON_BIN}" -c 'import pytest' || {
-  printf 'ENGINE PYTHON FAIL: pytest missing from %s\n' "${PYTHON_BIN}" >&2
+  printf 'SITE-WORKER PYTHON FAIL: pytest missing from %s\n' "${PYTHON_BIN}" >&2
   exit 127
 }
 
@@ -82,7 +82,7 @@ for test_file in "${TEST_FILES[@]}"; do
     "${PYTHON_BIN}" -m pytest -q -p no:cacheprovider "${REPO_ROOT}/${test_file}" \
       --junitxml "${RESULT_DIR}/junit/${safe_name}.xml" \
       >>"${RESULT_DIR}/engine-python.log" 2>&1; then
-    printf 'ENGINE PYTHON FAIL: %s. See %s\n' "${test_file}" "${RESULT_DIR}/engine-python.log" >&2
+    printf 'SITE-WORKER PYTHON FAIL: %s. See %s\n' "${test_file}" "${RESULT_DIR}/engine-python.log" >&2
     status=1
   fi
 done
@@ -91,4 +91,4 @@ if ((status != 0)); then
   tail -n 120 "${RESULT_DIR}/engine-python.log" >&2 || true
   exit "${status}"
 fi
-printf 'Engine Python validation passed: %s files. Results: %s\n' "${#TEST_FILES[@]}" "${RESULT_DIR}"
+printf 'Site-worker Python validation passed: %s files. Results: %s\n' "${#TEST_FILES[@]}" "${RESULT_DIR}"

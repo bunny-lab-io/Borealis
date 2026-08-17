@@ -29,11 +29,19 @@ printf '==> Engine Go tests\n'
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" test ./... \
   >"${RESULT_DIR}/engine-go-test.log" 2>&1
 
-printf '==> Engine multi-role binary build\n'
+printf '==> Engine Go runtime binary builds\n'
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
   "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
   -o "${RESULT_DIR}/borealis-api-backend-go" ./cmd/api-backend \
   >"${RESULT_DIR}/engine-go-build.log" 2>&1
+run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+  "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
+  -o "${RESULT_DIR}/borealis-wireguard-control" ./cmd/wireguard-control \
+  >>"${RESULT_DIR}/engine-go-build.log" 2>&1
+run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+  "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
+  -o "${RESULT_DIR}/borealis-wireguard-control-client" ./cmd/wireguard-control-client \
+  >>"${RESULT_DIR}/engine-go-build.log" 2>&1
 
 python3 "${REPO_ROOT}/Tests/policy/check_api_cutover.py"
 python3 "${REPO_ROOT}/Tests/policy/check_api_routes.py"

@@ -69,8 +69,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | job-scheduler | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
 | job-scheduler | Bash | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | job-scheduler | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
-| job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode, with retired orchestrator code still compiled for legacy tests) | [BSD-3-Clause](https://go.dev/LICENSE) |
-| job-scheduler | Python 3 (used by detached `Engine.sh --service` helpers for manifest/env work) | [PSF License](https://docs.python.org/3/license.html) |
+| job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | job-scheduler | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | postgres-db | PostgreSQL container image (`postgres:17-bookworm`) | [PostgreSQL License plus Debian package licenses](https://www.postgresql.org/about/licence/) |
 | remote-desktop-guacd | Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
@@ -78,25 +77,15 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | remote-desktop-guacd | LibVNCServer / LibVNCClient | [GPL-2.0-or-later](https://github.com/LibVNC/libvncserver/blob/master/COPYING) |
 | site-worker | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
 | site-worker | Flask 3.1.3 | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| site-worker | flask-cors 6.0.5 | [MIT](https://spdx.org/licenses/MIT.html) |
 | site-worker | Flask-SocketIO 5.6.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | site-worker | eventlet 0.41.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | site-worker | cryptography 50.0.0 | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
 | site-worker | PyJWT 2.13.0 (`PyJWT[crypto]`) | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | pyotp 2.10.0 | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | qrcode 8.2 | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
-| site-worker | webauthn 3.0.0 | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
-| site-worker | Pillow 12.3.0 | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
 | site-worker | requests 2.34.2 | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
-| site-worker | aiohttp 3.14.3 | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
 | site-worker | python-socketio 5.16.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | site-worker | websockets 17.0.1 | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| site-worker | packaging 26.2 | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
-| site-worker | regex 2026.7.19 | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
 | site-worker | SQLAlchemy 2.0.51 | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | alembic 1.18.5 | [MIT](https://spdx.org/licenses/MIT.html) |
 | site-worker | psycopg 3.3.4 (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
-| site-worker | ldap3 2.9.1 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
 | site-worker | pytest 9.1.1 | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
 | site-worker | ansible-core 2.21.2 | [GPL-3.0-or-later](https://spdx.org/licenses/GPL-3.0-or-later.html) |
 | site-worker | ansible-runner 2.4.3 | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
@@ -161,9 +150,9 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | webui-frontend | @vitejs/plugin-react ^4.7.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | jsdom ^26.0.0 | [MIT](https://github.com/jsdom/jsdom/blob/main/LICENSE.txt) |
 | webui-frontend | vite ^6.4.3 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | vitest | [MIT](https://github.com/vitest-dev/vitest/blob/main/LICENSE) |
+| webui-frontend | vitest ^3.0.0 | [MIT](https://github.com/vitest-dev/vitest/blob/main/LICENSE) |
 | wireguard-tunnel | Debian Bookworm base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines / package-specific licenses](https://www.debian.org/legal/licenses/) |
-| wireguard-tunnel | Python (system Python on Linux) | [PSF License](https://docs.python.org/3/license.html) |
+| wireguard-tunnel | Go standard library/runtime (compiled into control server and client binaries) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | wireguard-tunnel | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |

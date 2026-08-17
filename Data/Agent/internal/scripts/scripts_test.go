@@ -68,6 +68,32 @@ func TestBuildPowerShellScriptSuppressesNoisyStreams(t *testing.T) {
 	}
 }
 
+func TestBuildPowerShellScriptPreservesAdvancedScriptPreamble(t *testing.T) {
+	content := "[CmdletBinding()]\nparam(\n    [string]$Version = '2501'\n)\n\nWrite-Host $Version\nWrite-Host $env:VERSION\n"
+	wrapped := BuildPowerShellScript(content, map[string]string{"VERSION": "2501"})
+	marker := "$__BorealisScript = {\n"
+	parts := strings.SplitN(wrapped, marker, 2)
+	if len(parts) != 2 {
+		t.Fatalf("missing script block marker in %q", wrapped)
+	}
+	if !strings.Contains(parts[0], "SetEnvironmentVariable('VERSION', '2501', 'Process')") {
+		t.Fatalf("environment prelude missing before script block: %q", parts[0])
+	}
+	bodyAndTail := strings.SplitN(parts[1], "\n}\n", 2)
+	if len(bodyAndTail) != 2 {
+		t.Fatalf("script block was not closed: %q", parts[1])
+	}
+	if !strings.HasPrefix(bodyAndTail[0], content) {
+		t.Fatalf("advanced preamble no longer starts script body: %q", bodyAndTail[0])
+	}
+	if strings.Contains(bodyAndTail[0], "SetEnvironmentVariable('VERSION', '2501', 'Process')") {
+		t.Fatalf("environment prelude was injected inside advanced script body: %q", bodyAndTail[0])
+	}
+	if bodyAndTail[1] != "& $__BorealisScript\n" {
+		t.Fatalf("unexpected script invocation tail: %q", bodyAndTail[1])
+	}
+}
+
 func TestCleanPowerShellStreamDecodesCliXMLAndDropsProgressOnlyPayloads(t *testing.T) {
 	progressOnly := "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\"><MS><PR N=\"Record\"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>"
 	if got := CleanPowerShellStream(progressOnly); got != "" {

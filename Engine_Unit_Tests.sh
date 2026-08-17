@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: ./Engine_Unit_Tests.sh [--domain DOMAIN] [--list-domains]
 
-Compatibility entrypoint for Engine Go, retained Python, and WebUI validation.
+Compatibility entrypoint for Engine Go, site-worker Python, and WebUI validation.
 Use Tests/run-engine-go.sh, Tests/run-engine-python.sh, or Tests/run-webui.sh
 when one lane is sufficient.
 EOF

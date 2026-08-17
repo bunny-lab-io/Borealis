@@ -16,7 +16,7 @@ from Data.Engine.db import get_database_manager
 import time
 from typing import Callable, Optional, Sequence
 
-from .assembly_management.databases import AssemblyDatabaseManager
+from .assembly_schema import ensure_assembly_tables
 from . import database_migrations
 from .services.job_scheduler.queue import ensure_job_scheduler_tables
 
@@ -68,7 +68,7 @@ def initialise_engine_database(
             "assemblies.community_assemblies",
             "assemblies.user_created_assemblies",
         ),
-        lambda: AssemblyDatabaseManager(database_url=database_url, logger=logger).initialise(),
+        lambda: ensure_assembly_tables(database_url, logger=logger),
     )
     conn = sqlite3.connect(database_url)
     try:

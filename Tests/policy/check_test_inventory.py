@@ -40,10 +40,13 @@ def discovered_tests(test_root: Path) -> set[str]:
 
 def validate(data: dict, docs_path: Path | None = None) -> dict[str, list[str]]:
     test_root_value = data.get("test_root")
+    runtime_owner = data.get("runtime_owner")
     domains_value = data.get("domains")
     all_only_value = data.get("all_only", [])
     if not isinstance(test_root_value, str) or not test_root_value:
         fail("test_root must be non-empty string")
+    if runtime_owner != "site-worker":
+        fail("runtime_owner must be site-worker; Go-owned tests belong in Go suites")
     if not isinstance(domains_value, dict) or not domains_value:
         fail("domains must be non-empty object")
     if not isinstance(all_only_value, list) or not all(isinstance(item, str) for item in all_only_value):

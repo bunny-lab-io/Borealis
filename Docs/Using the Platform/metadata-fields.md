@@ -88,7 +88,7 @@ Blank values queue a clear.
     ### Source map
 
     - Metadata API: `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`
-    - Shared metadata helpers: `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`
+    - Metadata definition and value helpers: `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`
     - Device list API payload: `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go`
     - Device list UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Admin UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Metadata_Field_List.jsx`
@@ -118,21 +118,18 @@ Blank values queue a clear.
     1. Choose an unused field number from `1` through `500`.
     2. If the field should link to an assembly, confirm the assembly is bundled or otherwise stable, then record its display name, GUID, and assembly type.
     3. Add the field to `reservedMetadataFields` in `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`.
-    4. Add the same field to `RESERVED_METADATA_FIELDS` in `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`.
-    5. Update the visible Reserved Fields table on this page with the field number, description, and linked assembly name, or `-` when the field is an unlinked placeholder.
-    6. Update tests that assert reserved labels, linked assembly metadata, and rename rejection:
+    4. Update the visible Reserved Fields table on this page with the field number, description, and linked assembly name, or `-` when the field is an unlinked placeholder.
+    5. Update tests that assert reserved labels, linked assembly metadata, and rename rejection:
         - `Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
-        - `Data/Engine/Unit_Tests/test_metadata_fields.py`
         - `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/Admin/Metadata_Field_List.reservedFields.test.jsx`
-    7. Run focused validation before handoff:
+    6. Run focused validation before handoff:
         - `/opt/Borealis/Dependencies/Go/go1.25.12/bin/gofmt -w Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
         - `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.25.12/bin/go test ./cmd/api-backend -run 'TestMetadata'`
-        - `python3 -m py_compile Data/Engine/Containers/api-backend/data/services/metadata_fields.py Data/Engine/Unit_Tests/test_metadata_fields.py`
         - `./Engine_Unit_Tests.sh --domain webui` when the WebUI runtime test cache exists.
 
     Reserved field records require these values:
 
-    - Field number: integer key in both backend maps.
+    - Field number: integer key in Go `reservedMetadataFields` map.
     - Description: immutable metadata field label shown in the admin editor and device metadata grid.
     - Assembly name: optional; tooltip shown when hovering a linked field number.
     - Assembly GUID: optional; route target for the linked field number.

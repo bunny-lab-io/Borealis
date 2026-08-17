@@ -63,7 +63,7 @@ Use official update actions when you want the Engine to sync newer Aurora catalo
 
     - Assembly APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go` and `assemblies_catalog.go`
     - Quick-run API: `Data/Engine/Containers/api-backend/cmd/api-backend/quick_run.go`
-    - Assembly cache: `Data/Engine/Containers/api-backend/data/assembly_management/`
+    - Assembly PostgreSQL store and schema: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go` and `assemblies_schema.go`
     - UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/`
     - Aurora cache: `Engine/Services/api-backend/cache/Aurora/`
     - Managed official catalog checkout: `Engine/Services/api-backend/cache/Aurora/`
@@ -73,4 +73,4 @@ Use official update actions when you want the Engine to sync newer Aurora catalo
     - Assembly tables live under PostgreSQL `assemblies.*`.
     - `assembly_type` routes records to script, workflow, or Ansible paths.
     - Official rows track Aurora provenance through source path, version, and content hash.
-    - Startup seeds bundled official assemblies and can sync Aurora when available.
+    - Go API reads bundled official assemblies and can sync Aurora when available. Retired Python Assembly cache, payload mirror, and catalog runtime no longer ship.

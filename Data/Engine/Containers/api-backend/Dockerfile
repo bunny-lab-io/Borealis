@@ -14,7 +14,6 @@ RUN apk add --no-cache \
 
 WORKDIR /opt/Borealis
 
-COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
 COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis-api-backend-go
 COPY Data/Engine/Containers/api-backend/entrypoint.sh /usr/local/bin/borealis-api-backend

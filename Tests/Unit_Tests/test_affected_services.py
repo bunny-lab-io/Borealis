@@ -18,7 +18,7 @@ class AffectedServicesTests(unittest.TestCase):
     def test_agent_change_rebuilds_consumers(self) -> None:
         self.assertEqual(
             affected_services(["Data/Agent/internal/config/config.go"], SERVICES),
-            ["api-backend", "job-scheduler", "site-worker"],
+            ["api-backend", "site-worker"],
         )
 
     def test_engine_go_change_rebuilds_multi_role_binary_consumers(self) -> None:
@@ -30,7 +30,7 @@ class AffectedServicesTests(unittest.TestCase):
     def test_python_change_rebuilds_python_consumers(self) -> None:
         self.assertEqual(
             affected_services(["Data/Engine/Containers/api-backend/data/database.py"], SERVICES),
-            ["api-backend", "job-scheduler", "site-worker"],
+            ["site-worker"],
         )
 
     def test_webui_change_only_rebuilds_webui(self) -> None:
