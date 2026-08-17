@@ -25,7 +25,7 @@ run_lane webui "${REPO_ROOT}/Tests/run-webui.sh"
 run_lane k3s-policy "${REPO_ROOT}/Tests/run-k3s-policy.sh"
 run_lane migration "${REPO_ROOT}/Tests/run-migration-helpers.sh"
 run_lane database "${REPO_ROOT}/Tests/run-database-postgres.sh"
-run_lane containers "${REPO_ROOT}/Tests/run-containers.sh"
+run_lane containers "${REPO_ROOT}/Tests/run-containers.sh" --all
 run_lane docs "${REPO_ROOT}/Tests/run-docs.sh"
 
 printf 'All portable validation passed. Results: %s\n' "${RESULT_ROOT}"

@@ -38,15 +38,24 @@ def classify(pattern: str) -> tuple[str, str]:
     return "operator-api", "operator-session"
 
 
-def focused_test(source: str) -> tuple[str | None, str | None]:
-    path = ROOT / source
-    candidate = path.with_name(path.stem + "_test.go")
-    if candidate.is_file():
-        return candidate.relative_to(ROOT).as_posix(), None
-    main_test = path.parent / "main_test.go"
-    if main_test.is_file():
-        return main_test.relative_to(ROOT).as_posix(), None
-    return None, "route registration covered by package-wide Go tests and shared authentication gate"
+def reviewed_evidence() -> dict[tuple[str, str], tuple[str | None, str | None]]:
+    """Load route-specific test choices already accepted into inventory.
+
+    New routes intentionally receive no automatic companion-file assignment.
+    Policy then fails until author records focused test or reviewed exemption.
+    """
+
+    try:
+        inventory = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(inventory, list):
+        return {}
+    return {
+        (entry["pattern"], entry["source"]): (entry.get("test"), entry.get("test_exemption"))
+        for entry in inventory
+        if isinstance(entry, dict) and isinstance(entry.get("pattern"), str) and isinstance(entry.get("source"), str)
+    }
 
 
 def main() -> int:
@@ -59,10 +68,11 @@ def main() -> int:
         stdout=subprocess.PIPE,
     )
     routes = json.loads(proc.stdout)
+    evidence = reviewed_evidence()
     inventory = []
     for route in routes:
         route_class, auth = classify(route["pattern"])
-        test_path, exemption = focused_test(route["source"])
+        test_path, exemption = evidence.get((route["pattern"], route["source"]), (None, None))
         inventory.append(
             {
                 **route,

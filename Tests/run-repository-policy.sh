@@ -61,7 +61,7 @@ python3 "${REPO_ROOT}/Data/Engine/Containers/check-compose-policy.py"
 python3 "${REPO_ROOT}/Tests/policy/check_agent_runner_parity.py"
 python3 "${REPO_ROOT}/Tests/policy/check_test_inventory.py"
 python3 "${REPO_ROOT}/Tests/policy/check_build_manifest.py"
-python3 -m unittest "${REPO_ROOT}/Tests/Unit_Tests/test_affected_services.py"
+python3 -m unittest discover -s "${REPO_ROOT}/Tests/Unit_Tests" -p 'test_*.py'
 python3 "${REPO_ROOT}/Tests/policy/check_docs_references.py"
 python3 "${REPO_ROOT}/Tests/policy/check_sbom.py"
 python3 "${REPO_ROOT}/Tests/policy/check_api_cutover.py"

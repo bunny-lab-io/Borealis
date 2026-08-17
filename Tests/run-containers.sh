@@ -12,20 +12,23 @@ TIMEOUT_SECONDS="${BOREALIS_CONTAINER_BUILD_TIMEOUT_SECONDS:-1800}"
 RESULT_DIR="$(result_dir_for containers)"
 BASE=""
 HEAD=""
+BUILD_ALL=0
 declare -a REQUESTED_SERVICES=()
 declare -a CHANGED_FILES=()
 
 usage() {
   cat <<'EOF'
-Usage: ./Tests/run-containers.sh [--base REF --head REF] [--file PATH] [--service NAME]
+Usage: ./Tests/run-containers.sh [--all | --base REF --head REF | --file PATH | --service NAME]
 
 Without arguments, resolves current tracked and untracked worktree changes.
+Use --all to build every production image declared in build-manifest.json.
 Set BOREALIS_DOCKER_USE_SUDO=1 when local Docker socket requires sudo.
 EOF
 }
 
 while (($#)); do
   case "$1" in
+    --all) BUILD_ALL=1; shift ;;
     --base) BASE="$2"; shift 2 ;;
     --head) HEAD="$2"; shift 2 ;;
     --file) CHANGED_FILES+=("$2"); shift 2 ;;
@@ -36,6 +39,10 @@ while (($#)); do
 done
 if [[ (-n "${BASE}" && -z "${HEAD}") || (-z "${BASE}" && -n "${HEAD}") ]]; then
   printf 'CONTAINER FAIL: --base and --head must be paired.\n' >&2
+  exit 2
+fi
+if ((BUILD_ALL)) && { [[ -n "${BASE}" ]] || ((${#REQUESTED_SERVICES[@]})) || ((${#CHANGED_FILES[@]})); }; then
+  printf 'CONTAINER FAIL: --all cannot be combined with base/head, file, or service selection.\n' >&2
   exit 2
 fi
 
@@ -51,7 +58,9 @@ fi
 python3 "${REPO_ROOT}/Tests/policy/check_build_manifest.py"
 
 mapfile -t ALL_SERVICES < <(python3 -c 'import json; print(*sorted(json.load(open("Data/Engine/Containers/build-manifest.json"))["services"]), sep="\n")')
-if ((${#REQUESTED_SERVICES[@]})); then
+if ((BUILD_ALL)); then
+  SERVICES=("${ALL_SERVICES[@]}")
+elif ((${#REQUESTED_SERVICES[@]})); then
   SERVICES=("${REQUESTED_SERVICES[@]}")
 else
   resolver=(python3 "${REPO_ROOT}/Tests/helpers/affected_services.py")

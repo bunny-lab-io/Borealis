@@ -19,11 +19,12 @@ Run commands from repository root.
 # Integration and build lanes.
 ./Tests/run-database-postgres.sh
 ./Tests/run-k3s-policy.sh
-./Tests/run-containers.sh
+./Tests/run-containers.sh        # Images affected by current worktree.
+./Tests/run-containers.sh --all  # Every production image.
 ./Tests/run-migration-helpers.sh
 ./Tests/run-docs.sh
 
-# Normal portable suite. Container and PostgreSQL lanes need Docker.
+# Full portable suite. Builds every production image; container and PostgreSQL lanes need Docker.
 ./Tests/run-all.sh
 ```
 
@@ -122,7 +123,7 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Use `Tests/helpers/changed_paths.py` for stable CI group selection.
     - Use `Tests/helpers/affected_services.py` for container image selection.
     - Keep workflow YAML thin: checkout, tool setup/cache, repository command invocation, aggregate status, diagnostic artifact upload.
-    - Add public API routes to Go source, API docs, and generated route inventory in same change.
+    - Add public API routes to Go source, API docs, and generated route inventory in same change. Generator preserves reviewed route-specific test/exemption choices; new routes remain without evidence and fail policy until author records focused test or reviewed exemption.
     - Add direct dependencies to lockfiles/manifests and `Docs/Reference/SBOM.md` in same change.
 
     ### Python ownership audit

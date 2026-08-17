@@ -144,7 +144,10 @@ def host_path_allowed(workload: str, host_path: str) -> bool:
         "wireguard-tunnel": ("Services/wireguard-tunnel",),
         "webui-frontend": ("Services/webui-frontend/data/web-interface/",),
     }
-    return any(suffix == prefix.rstrip("/") or suffix.startswith(prefix) for prefix in prefixes.get(workload, ()))
+    return any(
+        suffix == prefix.rstrip("/") or suffix.startswith(prefix.rstrip("/") + "/")
+        for prefix in prefixes.get(workload, ())
+    )
 
 
 def validate_workload(obj: dict, source: Path) -> None:
