@@ -316,7 +316,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Engine auth bootstrap: `Data/Engine/Containers/api-backend/cmd/api-backend/bootstrap_*.go`.
     - Operator auth and passkeys: `Data/Engine/Containers/api-backend/cmd/api-backend/auth_*.go`.
     - Directory providers: `Data/Engine/Containers/api-backend/cmd/api-backend/directory_*.go`.
-    - Device enrollment and approvals: `Data/Engine/Containers/api-backend/cmd/api-backend/device_enrollment.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/device_approvals.go`.
+    - Device enrollment and approvals: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_enrollment.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go`.
     - Device containment routes: `Data/Engine/Containers/api-backend/cmd/api-backend/device_security.go`.
     - Engine tunnel runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go`.
     - Agent VPN routes: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go`.

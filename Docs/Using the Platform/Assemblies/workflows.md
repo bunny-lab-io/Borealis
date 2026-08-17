@@ -62,7 +62,7 @@ Older saved workflows may open for repair but be blocked from manual run, webhoo
     - Sidebar: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor_Sidebar.jsx`
     - Node registry: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/nodeRegistry.js`
     - Node source: `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`
-    - Workflow API: `Data/Engine/Containers/api-backend/data/services/API/workflows/`
+    - Workflow API and runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/workflows.go` and `workflows_runtime.go`
 
     ### Runtime behavior
 

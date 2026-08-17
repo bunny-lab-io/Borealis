@@ -61,8 +61,8 @@ Use official update actions when you want the Engine to sync newer Aurora catalo
 
     ### Source map
 
-    - Assembly APIs: `Data/Engine/Containers/api-backend/data/services/API/assemblies/`
-    - Assembly runtime: `Data/Engine/Containers/api-backend/data/services/assemblies/service.py`
+    - Assembly APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go` and `assemblies_catalog.go`
+    - Quick-run API: `Data/Engine/Containers/api-backend/cmd/api-backend/quick_run.go`
     - Assembly cache: `Data/Engine/Containers/api-backend/data/assembly_management/`
     - UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/`
     - Aurora cache: `Engine/Services/api-backend/cache/Aurora/`

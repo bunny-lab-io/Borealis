@@ -65,8 +65,8 @@ Credentials page also shows Aegis status and runtime actions after bootstrap. Us
 
     ### Source map
 
-    - Credentials API: `Data/Engine/Containers/api-backend/data/services/API/access_management/credentials.py`
-    - Aegis service: `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py`
+    - Credentials API: `Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go` and `credentials_mutations.go`
+    - Aegis service: `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go`, `aegis_crypto.go`, and `aegis_lifecycle.go`
     - Credentials UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Credential_List.jsx`
     - Credential editor: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Credential_Editor.jsx`
 

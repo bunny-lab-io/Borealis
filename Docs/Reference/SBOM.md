@@ -18,7 +18,11 @@ Repeated entries are intentional when multiple Engine containers install the sam
 - `Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt`
 - `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`
 - `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`
+- `Data/Engine/Containers/webui-frontend/data/web-interface/package-lock.json`
 - `Data/Engine/Containers/webui-frontend/data/web-interface/src/vendor/guacamole/guacamole-common-js.js`
+- `Tests/requirements-policy.txt`
+- `Tests/requirements-docs.txt`
+- `.github/workflows/pr-validation.yml`
 
 ## Borealis Agent Dependencies
 
@@ -29,7 +33,7 @@ Repeated entries are intentional when multiple Engine containers install the sam
 | agent | golang.org/x/sys v0.28.0 | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
 | agent | WireGuard (Windows MSI package 1.1 / client 0.5.3 and Linux `wireguard-tools`) | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | agent | UltraVNC Server 1.8.2.1 | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
-| agent | Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| agent | Go toolchain 1.22.12 (native Linux build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
 
 ## Borealis Engine Dependencies
 
@@ -104,10 +108,10 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | site-worker | ansible.posix collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE) |
 | site-worker | community.general collection | [GPL-3.0-or-later](https://github.com/ansible-collections/community.general/blob/main/COPYING) |
 | site-worker | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
-| traefik-edge | Traefik container image (`traefik:v3.5`) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
+| traefik-edge | Traefik container image (`traefik:v3.7`) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
 | traefik-edge | Traefik (Borealis-managed local HTTPS edge and ACME client) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
 | webui-frontend | Node.js container base image (`node:22-alpine`) | [MIT plus Alpine package licenses](https://github.com/nodejs/node/blob/main/LICENSE) |
-| webui-frontend | @emotion/react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @emotion/react 11.14.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @emotion/styled 11.14.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @fortawesome/fontawesome-free 7.3.1 | [CC-BY-4.0 AND OFL-1.1 AND MIT](https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt) |
 | webui-frontend | @fontsource/ibm-plex-sans 5.3.0 | [OFL-1.1](https://openfontlicense.org/open-font-license-official-text/) |
@@ -115,47 +119,47 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | webui-frontend | @mui/material 7.3.11 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @mui/x-date-pickers 8.29.2 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @mui/x-tree-view 8.29.2 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @simplewebauthn/browser | [MIT](https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE) |
+| webui-frontend | @simplewebauthn/browser ^13.2.2 | [MIT](https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE) |
 | webui-frontend | ag-grid-community 34.3.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | ag-grid-react 34.3.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | Apache Guacamole Client (`guacamole-common-js`) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-client/blob/1.6.0/LICENSE) |
-| webui-frontend | @codemirror/lang-css | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-html | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-javascript | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-json | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-markdown 6.5.1 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-python | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-sql | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-xml | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-yaml | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-css 6.3.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-html 6.4.12 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-javascript 6.2.5 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-json 6.0.2 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-markdown 6.5.2 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-python 6.2.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-sql 6.10.0 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-xml 6.1.0 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-yaml 6.1.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/language 6.12.4 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/legacy-modes | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/legacy-modes 6.5.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lint 6.9.7 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/merge 6.12.2 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/search 6.7.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/state 6.7.1 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/theme-one-dark | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/view 6.43.7 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @lezer/highlight | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/theme-one-dark 6.1.3 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/view 6.43.8 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @lezer/highlight 1.2.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @uiw/react-codemirror 4.25.11 | [MIT](https://github.com/uiwjs/react-codemirror/blob/master/LICENSE) |
-| webui-frontend | codemirror | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | codemirror 6.0.2 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | dayjs 1.11.21 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | normalize.css | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | prismjs | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | normalize.css 8.0.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | prismjs 1.30.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react-simple-code-editor 0.14.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react 19.2.8 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-color | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-color 2.19.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react-dom 19.2.8 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-router-dom | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-router-dom ^7.0.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react-resizable 3.2.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react-markdown 8.0.7 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | reactflow | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-simple-keyboard 3.8.254 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | reactflow 11.11.4 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-simple-keyboard 3.8.256 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | socket.io-client 4.8.3 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @testing-library/jest-dom | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @testing-library/react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @testing-library/jest-dom ^6.0.0 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @testing-library/react ^16.0.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @vitejs/plugin-react ^4.7.0 | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | jsdom | [MIT](https://github.com/jsdom/jsdom/blob/main/LICENSE.txt) |
+| webui-frontend | jsdom ^26.0.0 | [MIT](https://github.com/jsdom/jsdom/blob/main/LICENSE.txt) |
 | webui-frontend | vite ^6.4.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | vitest | [MIT](https://github.com/vitest-dev/vitest/blob/main/LICENSE) |
 | wireguard-tunnel | Debian Bookworm base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines / package-specific licenses](https://www.debian.org/legal/licenses/) |
@@ -172,12 +176,17 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
 | shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | PyYAML 6.0.3 (repository validation manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
+| shared-engine | Zensical 0.0.55 (documentation validation and Pages build) | [MIT](https://github.com/zensical/zensical/blob/main/LICENSE) |
+| shared-engine | actionlint v1.7.7 (GitHub Actions workflow validation) | [MIT](https://github.com/rhysd/actionlint/blob/main/LICENSE.txt) |
+| shared-engine | ShellCheck (Ubuntu runner package used for shell validation) | [GPL-3.0-only](https://github.com/koalaman/shellcheck/blob/master/LICENSE) |
+| shared-engine | PowerShell (GitHub runner parser used for `.ps1` syntax validation) | [MIT](https://github.com/PowerShell/PowerShell/blob/master/LICENSE.txt) |
 
 ## Maintenance Notes
 
 - Update this file whenever a dependency is added, removed, upgraded to a materially different licensed product, bundled into `Dependencies/`, or downloaded by bootstrap/runtime scripts.
 - Keep Agent and Engine inventories separate so deployment reviewers can quickly assess licensing impact by runtime.
 - Keep Engine dependency entries under the service that installs or vendors them. Use `shared-engine` for deployment or cross-container orchestration dependencies.
-- If Borealis later adopts lockfiles or generated SBOM tooling, this file can be expanded to include resolved transitive dependencies.
+- WebUI lockfile records resolved transitive dependencies; SBOM policy validates direct manifest/lock alignment, while this human inventory remains focused on direct and bundled runtime dependencies.
 - Dependabot security updates stay enabled across monitored ecosystems, but routine version updates are rate-limited and grouped by runtime blast radius. Treat Agent Go, Engine Go, Python, WebUI, GitHub Actions, and Docker base-image updates as separate review lanes.
 - Python package majors, WebUI package majors, and Docker base-image major/runtime-line changes need planned upgrade work before merging. PostgreSQL major, Node major, and Python base-image minor/major jumps are intentionally suppressed from routine Dependabot version-update PRs.

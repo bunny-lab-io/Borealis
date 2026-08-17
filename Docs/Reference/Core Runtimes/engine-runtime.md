@@ -38,7 +38,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Alerts](../../Using%20the%20Platform/alerts.md)
 
     ### Source vs runtime
-    - Edit API/backend code in `Data/Engine/Containers/api-backend/data/`.
+    - Edit public API, scheduler, and operator Go code in `Data/Engine/Containers/api-backend/cmd/api-backend/`; retained Python database and worker support remains under `Data/Engine/Containers/api-backend/data/`.
     - Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/` for committed source changes. For rapid dev-mode HMR edits, use `Engine/Services/webui-frontend/data/web-interface/`.
     - Keep `Data/Engine/` for package shims, unit tests, and container roots.
     - Container source lives under `Data/Engine/Containers/` for Compose, Dockerfiles, build manifests, service entrypoints, and service-owned source trees.
@@ -150,7 +150,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - WebUI app-wide realtime uses `/api/realtime/events` SSE through `bootstrapClientRuntime.js`. Root `/socket.io` is not opened on normal page load or operator-presence sync; only explicitly allowlisted legacy workflow-node events can connect to that root Socket.IO path.
     - The WebUI image uses Node Alpine stages. The production target copies only built static output plus the dependency-free static server into the final image, while the development target keeps Vite and `node_modules` for HMR.
     - The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode so `Data.Engine.bootstrapper` skips Engine-side WebUI staging/build.
-    - The SPA handler in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
+    - WebUI hosting belongs only to K3s `webui-frontend`; Go API does not serve SPA compatibility routes.
 
     ### PostgreSQL profile notes
     - `Engine.sh --network-mode public|local deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
@@ -245,9 +245,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - UI shell bridge: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go`.
 
     #### WebUI and WebSocket migration
-    - Static/template handling: `Data/Engine/Containers/api-backend/data/services/WebUI`; deployment copy paths are wired through `Engine.sh` with TLS-aware URL generation. Production and dev container traffic are served by K3s `webui-frontend` through K3s Traefik after Stage 11.
-    - Stage 6 tasks: migration switch in the legacy server for WebUI delegation and porting device/admin API endpoints into Engine services.
-    - Stage 7 (queued): `register_realtime` hooks, Engine-side Socket.IO handlers, integration checks, legacy delegation updates.
+    - Static hosting lives in `Data/Engine/Containers/webui-frontend/static-server.js`; development hosting uses Vite from same container source. K3s Traefik routes both modes to `webui-frontend`.
+    - Go backend owns public API and operator realtime routes. Retained Python listeners are restricted to allowlisted site-worker transport and internal worker behavior.
 
     #### Platform parity
     - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine, Docker Buildx, and K3s, not Docker Desktop.

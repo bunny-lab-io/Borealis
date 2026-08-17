@@ -909,14 +909,14 @@ func softwareUninstallOverridesPath() string {
 	if value := strings.TrimSpace(os.Getenv("BOREALIS_SOFTWARE_UNINSTALL_OVERRIDES_PATH")); value != "" {
 		return value
 	}
-	return filepath.Join(projectRootPath(), "Data", "Engine", "Containers", "api-backend", "data", "services", "API", "devices", "software_uninstall_overrides.json")
+	return filepath.Join(projectRootPath(), "Engine", "Services", "api-backend", "config", "software_uninstall_overrides.json")
 }
 
 func softwareUninstallBlocklistPath() string {
 	if value := strings.TrimSpace(os.Getenv("BOREALIS_SOFTWARE_UNINSTALL_BLOCKLIST_PATH")); value != "" {
 		return value
 	}
-	return filepath.Join(projectRootPath(), "Data", "Engine", "Containers", "api-backend", "data", "services", "API", "devices", "software_uninstall_blocklist.json")
+	return filepath.Join(projectRootPath(), "Engine", "Services", "api-backend", "config", "software_uninstall_blocklist.json")
 }
 
 func projectRootPath() string {

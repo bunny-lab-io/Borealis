@@ -275,19 +275,20 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - [Software Uninstall Blocklist](../software-uninstall-blocklist.md)
 
     ### Where endpoints are defined
-    - Each API module begins with a header listing endpoints.
-    - Search under `Data/Engine/Containers/api-backend/data/services/API/` to find the authoritative source.
-    - The registry lives in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
+    - Production public routes are registered in Go domain files under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` composes route groups and shared authentication boundaries.
+    - Generated [API Route Inventory](api-route-inventory.md) records every literal mux route, source location, class, auth classification, and focused-test linkage.
 
     ### How to keep this doc accurate
     - When you add or remove a route, update:
-      1) The module header comment in the source file.
+      1) The Go domain source and focused route test.
       2) This `api-reference.md` page.
       3) The domain page (example: `device-auditing.md`).
+      4) `Tests/manifests/api-routes.json` through `python3 Tests/tools/generate_api_route_inventory.py`.
 
     ### Quick discovery workflow
-    - Use `rg "# - (GET|POST|PUT|DELETE)" Data/Engine/Containers/api-backend/data/services/API` to list endpoints.
-    - Cross-check auth requirements in each module (RequestAuthContext, session checks, or device auth decorators).
+    - Run `python3 Tests/policy/check_api_routes.py` to compare Go mux registrations with committed inventory and rendered reference.
+    - Cross-check auth requirements in each handler (`requireUser`, device authentication, administrator checks, or narrow internal HMAC contract).
     - If a route is Socket.IO only, document it in the relevant domain page instead of this REST list.
 
     ### Auth labels used in this doc
@@ -298,6 +299,7 @@ Public `/api/*` routes validate path/query/body input before domain work where s
 
     ### Example update scenario
     - You add `POST /api/devices/retire`:
-      - Update `Data/Engine/Containers/api-backend/data/services/API/devices/management.py` header.
+      - Add handler and registration to relevant Go domain file under `Data/Engine/Containers/api-backend/cmd/api-backend/`.
       - Add the endpoint under the Devices and Inventory section here.
       - Update `device-auditing.md` with behavior and UI impact.
+      - Add focused test and regenerate route inventory.

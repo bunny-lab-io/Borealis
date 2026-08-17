@@ -5,7 +5,7 @@ Explain how Borealis is structured and how the core components interact end to e
 ## Platform Shape
 Borealis has two main runtime sides: the Engine server and the Agent clients. The Engine gives operators one web interface for inventory, remote operations, automation, reporting, credentials, and security controls. Agents run on managed endpoints and connect outbound to the Engine.
 
-- **Engine (Server)**: Linux-hosted single-node control plane with Python backend services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI, split across isolated Docker containers.
+- **Engine (Server)**: Linux-hosted single-node K3s control plane with Go public API, retained Python worker services, PostgreSQL, Traefik, realtime transport, scheduling, automation, and web UI.
 - **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
 - **Transport**: Agents connect outbound to the Engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
 - **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.
@@ -16,11 +16,11 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     Treat the Engine as the control plane and Agents as workers. Operators use the web UI; Agents phone home, report state, and execute approved work.
 
 ## Core Components
-- Engine API backend: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, VNC WebSocket proxy, and Engine-side Ansible execution.
+- Engine API backend: Go HTTP and realtime runtime that owns public APIs, scheduling contracts, VPN orchestration, and VNC proxying; isolated retained Python workers own approved automation paths.
 - WebUI frontend: React single page app served by the WebUI container (Vite in dev, static build in prod).
 - Traefik edge: public HTTP/HTTPS edge, ACME, and same-origin routing for UI, `/api`, `/socket.io`, and `/remote-desktop/vnc`.
 - Agent: Go runtime binary (`Agent.exe`) that enrolls, reports heartbeat/status, executes scripts, and owns bootstrap/repair/update/runtime on installed hosts.
-- PostgreSQL database: container-owned PostgreSQL state under `Engine/Services/postgres-db/state`; stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
+- PostgreSQL database: K3s StatefulSet backed by Longhorn PVC; stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
 - Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with Aurora as the official authoring repo and a bundled seed snapshot kept in the Borealis repo.
 - Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via Apache Guacamole.
 
@@ -55,7 +55,8 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     ### Source map
 
     - `Data/Engine/` - Engine package shim, unit tests, and container source roots.
-    - `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/` - production Go API, scheduler, and operator source (authoritative public route owner).
+    - `Data/Engine/Containers/api-backend/data/` - retained Python database, automation, and site-worker support source.
     - `Data/Engine/Containers/` - Engine container, K3s workload, and retired Compose source (authoritative).
     - `Data/Agent/` - Agent source (authoritative).
     - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
@@ -68,9 +69,9 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
 
     ### Service map by folder
-    - Engine APIs: `Data/Engine/Containers/api-backend/data/services/API/` (grouped by domain, registered in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`).
+    - Engine APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/` (grouped by Go domain files and registered from `main.go`).
     - Engine realtime: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
-    - WebUI hosting: `Data/Engine/Containers/api-backend/data/services/WebUI/` (SPA static assets and 404 fallback).
+    - WebUI hosting: `Data/Engine/Containers/webui-frontend/static-server.js` and production build under WebUI container image.
     - WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
     - Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
       The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
@@ -94,7 +95,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     ### Runtime boundaries
     - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-    - Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
+    - Edit Engine public API source under `Data/Engine/Containers/api-backend/cmd/api-backend/`, retained Python worker source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then run affected repository validation before deploy.
 
     ### What to read first when debugging
     - Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.

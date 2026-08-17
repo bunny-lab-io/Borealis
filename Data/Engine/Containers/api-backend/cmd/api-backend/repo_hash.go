@@ -25,7 +25,7 @@ var repoHashCacheMu sync.Mutex
 var repoHashFetchHead = fetchGitHubRepoHead
 
 type repoHashCacheFile struct {
-	Version int                            `json:"version"`
+	Version int                           `json:"version"`
 	Entries map[string]repoHashCacheEntry `json:"entries"`
 }
 

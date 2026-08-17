@@ -60,7 +60,7 @@ Directory users cannot use local Borealis passwords or passkeys.
 
     - Directory API: `Data/Engine/Containers/api-backend/cmd/api-backend/directory.go`, `directory_management.go`, and `directory_ldap.go`
     - Directory UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`
-    - Auth flow: `Data/Engine/Containers/api-backend/data/services/API/access_management/login.py`
+    - Login and directory auth flow: `Data/Engine/Containers/api-backend/cmd/api-backend/auth_login.go`
 
     ### Runtime behavior
 
