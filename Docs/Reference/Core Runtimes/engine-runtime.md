@@ -52,7 +52,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Logs live under `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
     - Ansible runtime lives under `Engine/Services/api-backend/cache/Ansible/`.
     - TLS and signing certificates live under `Engine/Services/api-backend/secrets/Certificates/`.
-    - Bundled official assemblies live under `Data/Engine/Containers/api-backend/data/Official_Assemblies/`; managed Aurora checkout lives under `Engine/Services/api-backend/cache/Aurora/`.
+    - Managed Aurora checkout lives under `Engine/Services/api-backend/cache/Aurora/`. Optional bundled snapshots are generated runtime inputs, not committed API source.
     - The Compose project name is `borealis-engine`.
     - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`. Hashes use declared service inputs, not the repo-wide Git commit.
     - `api-backend`, `job-scheduler`, and `borealis-operator` share the Go api-backend binary. `Engine.sh` prepares that binary only after one of those images is known to need a Docker rebuild, then reuses it within the same deploy pass.

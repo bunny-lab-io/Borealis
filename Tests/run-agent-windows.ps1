@@ -50,14 +50,20 @@ function Invoke-Bounded {
 
 $Go = (Get-Command go -ErrorAction Stop).Source
 $GoFmt = Join-Path (Split-Path -Parent $Go) "gofmt.exe"
-$GoFiles = git -C $RepoRoot ls-files -- "Data/Agent/*.go"
-$Unformatted = & $GoFmt -l @GoFiles
-if ($Unformatted) { throw "GO FORMAT FAIL: $($Unformatted -join ', ')" }
 
 $TidyRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("borealis-agent-tidy-" + [guid]::NewGuid().ToString("N"))
 $BuildRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("borealis-agent-build-" + [guid]::NewGuid().ToString("N"))
 try {
     Copy-Item -Path $ModuleRoot -Destination $TidyRoot -Recurse
+    $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $GoFiles = Get-ChildItem -Path $TidyRoot -Recurse -Filter "*.go" | ForEach-Object { $_.FullName }
+    foreach ($GoFile in $GoFiles) {
+        $Content = [System.IO.File]::ReadAllText($GoFile).Replace("`r`n", "`n")
+        [System.IO.File]::WriteAllText($GoFile, $Content, $Utf8NoBom)
+    }
+    $Unformatted = & $GoFmt -l @GoFiles
+    if ($Unformatted) { throw "GO FORMAT FAIL: $($Unformatted -join ', ')" }
+
     Invoke-Bounded -Label "Agent Go module tidy" -FilePath $Go -Arguments @("mod", "tidy") -WorkingDirectory $TidyRoot -LogPath (Join-Path $ResultsDir "agent-go-tidy.log")
     $ModDifference = Compare-Object (Get-Content (Join-Path $ModuleRoot "go.mod")) (Get-Content (Join-Path $TidyRoot "go.mod"))
     $SumDifference = Compare-Object (Get-Content (Join-Path $ModuleRoot "go.sum")) (Get-Content (Join-Path $TidyRoot "go.sum"))

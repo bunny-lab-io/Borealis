@@ -66,7 +66,7 @@ Use official update actions when you want the Engine to sync newer Aurora catalo
     - Assembly cache: `Data/Engine/Containers/api-backend/data/assembly_management/`
     - UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/`
     - Aurora cache: `Engine/Services/api-backend/cache/Aurora/`
-    - Bundled official seed: `Data/Engine/Containers/api-backend/data/Official_Assemblies/`
+    - Managed official catalog checkout: `Engine/Services/api-backend/cache/Aurora/`
 
     ### Runtime behavior
 

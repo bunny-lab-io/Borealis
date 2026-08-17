@@ -32,6 +32,11 @@ class ImportLegacyDumpTests(unittest.TestCase):
         self.kubeconfig.write_text("fixture", encoding="utf-8")
         self.dump = self.temp / "legacy.sql"
         self.dump.write_text("SELECT 1;\n", encoding="utf-8")
+        for command in ("bash", "cat", "date", "dirname"):
+            source = shutil.which(command)
+            if source is None:
+                self.fail(f"required test command missing: {command}")
+            (self.bin / command).symlink_to(source)
 
     def tearDown(self) -> None:
         shutil.rmtree(self.temp)
@@ -52,7 +57,7 @@ class ImportLegacyDumpTests(unittest.TestCase):
             )
         env = {
             **os.environ,
-            "PATH": f"{self.bin}:/usr/bin:/bin",
+            "PATH": str(self.bin),
             "BOREALIS_TEST_COMMAND_LOG": str(self.log),
             "BOREALIS_TEST_IMPORTED_SQL": str(self.temp / "imported.sql"),
             "K3S_KUBECONFIG": str(self.kubeconfig),

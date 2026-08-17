@@ -66,7 +66,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - `Data/Engine/Containers/webui-frontend/data/web-interface/src/` - WebUI source.
     - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
     - `Engine/Services/api-backend/logs/` and `Agent/Logs/` - runtime logs.
-    - `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
+    - `Engine/Services/api-backend/cache/Aurora/` - generated managed checkout for official assembly catalog sync.
 
     ### Service map by folder
     - Engine APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/` (grouped by Go domain files and registered from `main.go`).

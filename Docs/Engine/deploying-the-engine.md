@@ -325,7 +325,7 @@ After deployment finishes:
     Key defaults:
 
     - Database: `BOREALIS_DATABASE_URL` (required PostgreSQL connection URL)
-    - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot)
+    - Managed official assemblies: `Engine/Services/api-backend/cache/Aurora/` (generated Aurora checkout)
     - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`
     - Logs: `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/error.log`, `Engine/Services/api-backend/logs/api.log`
     - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, peer network `10.255.0.0/16`, shell port 47002

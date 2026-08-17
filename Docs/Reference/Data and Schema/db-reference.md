@@ -323,7 +323,7 @@ finally:
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Scheduler queue leasing: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
     - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`
-    - Bundled official assembly snapshot: `Data/Engine/Containers/api-backend/data/Official_Assemblies/`
+    - Managed official catalog checkout: `Engine/Services/api-backend/cache/Aurora/`
 
     ### Troubleshooting queries
     ```sql
@@ -1147,7 +1147,7 @@ finally:
     - Engine startup validates this schema strictly and fails fast if legacy columns are still present.
     - `source_repo`, `source_path`, and `source_version` track Aurora provenance for official assemblies.
     - `content_hash` stores the Engine-computed canonical SHA-256 used for update detection.
-    - The bundled official snapshot is versioned under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a seed snapshot and synced into `assemblies.official_assemblies` on startup.
+    - Official catalog rows sync from managed Aurora checkout into `assemblies.official_assemblies`; optional bundled snapshots are generated runtime inputs, not committed API source.
     - Deploy-time schema setup and Go API startup both ensure the active `assemblies.*` tables exist before `/api/assemblies`, quick jobs, scheduled jobs, workflows, or watchdog remediation read them.
 
     ### `assemblies.official_catalog_state`
