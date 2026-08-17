@@ -5,8 +5,8 @@ eventlet==0.41.1
 cryptography==50.0.0
 PyJWT[crypto]==2.13.0
 requests==2.34.2
-python-socketio==5.16.3
+python-socketio==5.16.4
 websockets==17.0.1
-SQLAlchemy==2.0.51
+SQLAlchemy==2.0.52
 psycopg[binary]==3.3.4
 pytest==9.1.1
