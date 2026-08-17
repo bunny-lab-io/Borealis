@@ -363,6 +363,17 @@ Before running either command:
 * Use narrow tests first for fast iteration, then broader tests for PR readiness.
 * If test cannot run in current environment, state reason and exact command operator should run.
 
+## Portable Repository Validation
+* Keep deterministic correctness rules under `Tests/`; GitHub workflow YAML owns checkout, tool setup/cache, path selection, timeouts, aggregation, and diagnostic artifact upload only.
+* Start with `Tests/run-repository-policy.sh`, then use affected lane documented in `Docs/Reference/Unit_Testing.md`. Use `Tests/run-all.sh` for full normal portable suite.
+* Keep test dependencies, virtual environments, caches, reports, compiled binaries, and generated output outside staged source. WebUI validation copies source into temporary workspace and uses committed lockfile with `npm ci`.
+* Missing tools, missing files, zero-test domains, unmatched build inputs, and required lane skips must fail clearly.
+* Add new retained Engine Python tests to `Tests/manifests/engine-test-domains.json`. Keep domain documentation synchronized.
+* Add new public Go routes with focused test, API documentation, and regenerated `Tests/manifests/api-routes.json` through `Tests/tools/generate_api_route_inventory.py`.
+* Add direct dependencies with manifest or lockfile update plus `Docs/Reference/SBOM.md`; `Tests/policy/check_sbom.py` must pass.
+* Update `Data/Engine/Containers/build-manifest.json` when container build inputs change. Use `Tests/helpers/affected_services.py` and `Tests/run-containers.sh`; do not duplicate service-selection logic in workflows.
+* Keep live host, K3s, Longhorn, DNS, TLS, storage, network, enrolled Agent, and remote-device checks in deployment health or Tier 3 qualification, not normal PR validation.
+
 ## Database Work
 For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL:
 1. Use `Docs/index.md` to find database reference first.
