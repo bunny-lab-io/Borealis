@@ -24,12 +24,12 @@ RUN apt-get update \
 
 WORKDIR /opt/Borealis
 
-COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/engine-requirements.txt
-COPY Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt /tmp/engine-worker-requirements.txt
+COPY Data/Engine/Containers/site-worker/data/engine-requirements.txt /tmp/engine-requirements.txt
+COPY Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt /tmp/engine-worker-requirements.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/engine-worker-requirements.txt
 
-COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
+COPY Data/Engine/Containers/site-worker/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
 COPY Data/Engine/Containers/site-worker/entrypoint.sh /usr/local/bin/borealis-site-worker
 

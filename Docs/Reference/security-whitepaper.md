@@ -323,7 +323,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Remote-operation session authorization: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_ops_sessions.go`.
     - Worker-backed command execution gate: `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`.
     - Scheduled target filtering: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_rerun.go`.
-    - Site-worker socket assignment gate: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`.
+    - Site-worker socket assignment gate: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker_socket.py`.
     - Agent WireGuard route validation: `Data/Agent/internal/roles/wireguard_tunnel/wireguard_tunnel.go`.
     - Agent auth client and token lifecycle: `Data/Agent/internal/auth`.
     - Agent token and key storage: `Data/Agent/internal/config`.
@@ -341,7 +341,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - WebUI field-class validation and `/api/*` fetch guard: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/utils/inputValidation.js` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/runtime/bootstrapClientRuntime.js`.
     - Scheduler-to-operator lifecycle calls and route ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
     - K3s site-worker pod template, fixed hostPath allowlist, HMAC lifecycle verbs, and host-loopback bridge annotations: `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go`.
-    - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
+    - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker.py`.
     - Scheduler image and entrypoint routing: `Data/Engine/Containers/job-scheduler/Dockerfile`, `Data/Engine/Containers/job-scheduler/entrypoint.sh`, and `Data/Engine/Containers/job-scheduler/healthcheck.sh`.
     - Remote Desktop guacd container runtime: `Data/Engine/Containers/remote-desktop-guacd/Dockerfile`, `Data/Engine/Containers/remote-desktop-guacd/entrypoint.sh`, and `Data/Engine/Containers/remote-desktop-guacd/healthcheck.sh`.
     - WebUI K3s bind-host and production route support: `Engine.sh`, `Data/Engine/Containers/traefik-edge/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/static-server.js`, and `Data/Engine/Containers/webui-frontend/healthcheck.js`.

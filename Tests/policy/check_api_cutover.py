@@ -10,8 +10,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PYTHON_ROOT = ROOT / "Data/Engine/Containers/api-backend/data"
-ALLOWED_FLASK = "Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py"
+PYTHON_ROOT = ROOT / "Data/Engine/Containers/site-worker/data"
+ALLOWED_FLASK = "Data/Engine/Containers/site-worker/data/services/job_scheduler/worker_socket.py"
 
 
 def fail(message: str) -> None:
@@ -20,32 +20,32 @@ def fail(message: str) -> None:
 
 
 for removed in (
-    "Data/Engine/Containers/api-backend/data/services/API",
-    "Data/Engine/Containers/api-backend/data/services/WebUI",
-    "Data/Engine/Containers/api-backend/data/assembly_management",
-    "Data/Engine/Containers/api-backend/data/alembic",
-    "Data/Engine/Containers/api-backend/data/auth/device_auth.py",
-    "Data/Engine/Containers/api-backend/data/auth/dpop.py",
-    "Data/Engine/Containers/api-backend/data/auth/rate_limit.py",
-    "Data/Engine/Containers/api-backend/data/crypto",
-    "Data/Engine/Containers/api-backend/data/enrollment",
-    "Data/Engine/Containers/api-backend/data/integrations",
-    "Data/Engine/Containers/api-backend/data/public_endpoints.py",
-    "Data/Engine/Containers/api-backend/data/services/assemblies",
-    "Data/Engine/Containers/api-backend/data/services/auth",
-    "Data/Engine/Containers/api-backend/data/services/filters",
-    "Data/Engine/Containers/api-backend/data/services/VPN",
-    "Data/Engine/Containers/api-backend/data/services/aegis_cipher.py",
-    "Data/Engine/Containers/api-backend/data/services/ansible/recap.py",
-    "Data/Engine/Containers/api-backend/data/services/ansible/runtime_settings.py",
-    "Data/Engine/Containers/api-backend/data/services/ansible/ssh_auth.py",
-    "Data/Engine/Containers/api-backend/data/services/ansible/worker_dispatch.py",
-    "Data/Engine/Containers/api-backend/data/services/job_scheduler/runtime_settings.py",
-    "Data/Engine/Containers/api-backend/data/services/metadata_fields.py",
-    "Data/Engine/Containers/api-backend/data/services/remote_ops/agent_routes.py",
-    "Data/Engine/Containers/api-backend/data/services/remote_ops/worker_bridge.py",
-    "Data/Engine/Containers/api-backend/data/security/certificates.py",
-    "Data/Engine/Containers/api-backend/data/security/signing.py",
+    "Data/Engine/Containers/site-worker/data/services/API",
+    "Data/Engine/Containers/site-worker/data/services/WebUI",
+    "Data/Engine/Containers/site-worker/data/assembly_management",
+    "Data/Engine/Containers/site-worker/data/alembic",
+    "Data/Engine/Containers/site-worker/data/auth/device_auth.py",
+    "Data/Engine/Containers/site-worker/data/auth/dpop.py",
+    "Data/Engine/Containers/site-worker/data/auth/rate_limit.py",
+    "Data/Engine/Containers/site-worker/data/crypto",
+    "Data/Engine/Containers/site-worker/data/enrollment",
+    "Data/Engine/Containers/site-worker/data/integrations",
+    "Data/Engine/Containers/site-worker/data/public_endpoints.py",
+    "Data/Engine/Containers/site-worker/data/services/assemblies",
+    "Data/Engine/Containers/site-worker/data/services/auth",
+    "Data/Engine/Containers/site-worker/data/services/filters",
+    "Data/Engine/Containers/site-worker/data/services/VPN",
+    "Data/Engine/Containers/site-worker/data/services/aegis_cipher.py",
+    "Data/Engine/Containers/site-worker/data/services/ansible/recap.py",
+    "Data/Engine/Containers/site-worker/data/services/ansible/runtime_settings.py",
+    "Data/Engine/Containers/site-worker/data/services/ansible/ssh_auth.py",
+    "Data/Engine/Containers/site-worker/data/services/ansible/worker_dispatch.py",
+    "Data/Engine/Containers/site-worker/data/services/job_scheduler/runtime_settings.py",
+    "Data/Engine/Containers/site-worker/data/services/metadata_fields.py",
+    "Data/Engine/Containers/site-worker/data/services/remote_ops/agent_routes.py",
+    "Data/Engine/Containers/site-worker/data/services/remote_ops/worker_bridge.py",
+    "Data/Engine/Containers/site-worker/data/security/certificates.py",
+    "Data/Engine/Containers/site-worker/data/security/signing.py",
     "Data/Engine/Containers/wireguard-tunnel/control_server.py",
     "Data/Engine/Containers/wireguard-tunnel/control_client.py",
 ):
@@ -84,7 +84,7 @@ job_scheduler_dockerfile = (ROOT / "Data/Engine/Containers/job-scheduler/Dockerf
 wireguard_dockerfile = (ROOT / "Data/Engine/Containers/wireguard-tunnel/Dockerfile").read_text(encoding="utf-8")
 if "exec /usr/local/bin/borealis-api-backend-go" not in api_entrypoint:
     fail("api-backend entrypoint no longer executes Go binary")
-if "api-backend/data" in api_dockerfile or re.search(r"(?:^|\s)python3?(?:\s|$)", api_dockerfile, re.MULTILINE):
+if any(path in api_dockerfile for path in ("api-backend/data", "site-worker/data")) or re.search(r"(?:^|\s)python3?(?:\s|$)", api_dockerfile, re.MULTILINE):
     fail("api-backend image regained Python source or runtime")
 if 'exec /usr/local/bin/borealis-api-backend-go "${ROLE}"' not in scheduler_entrypoint:
     fail("job-scheduler entrypoint no longer executes Go binary with restricted role")

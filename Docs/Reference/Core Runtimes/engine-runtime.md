@@ -38,7 +38,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Alerts](../../Using%20the%20Platform/alerts.md)
 
     ### Source vs runtime
-    - Edit public API, scheduler, and operator Go code in `Data/Engine/Containers/api-backend/cmd/api-backend/`; retained Python database and worker support remains under `Data/Engine/Containers/api-backend/data/`.
+    - Edit public API, scheduler, and operator Go code in `Data/Engine/Containers/api-backend/cmd/api-backend/`; Python site-worker automation, remote-operation, and schema-bootstrap support lives under `Data/Engine/Containers/site-worker/data/`.
     - Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/` for committed source changes. For rapid dev-mode HMR edits, use `Engine/Services/webui-frontend/data/web-interface/`.
     - Keep `Data/Engine/` for package shims, unit tests, and container roots.
     - Container source lives under `Data/Engine/Containers/` for Compose, Dockerfiles, build manifests, service entrypoints, and service-owned source trees.
@@ -149,7 +149,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Dev UI runs Vite HMR from the K3s `webui-frontend` workload behind `traefik-edge`.
     - WebUI app-wide realtime uses `/api/realtime/events` SSE through `bootstrapClientRuntime.js`. Root `/socket.io` is not opened on normal page load or operator-presence sync; only explicitly allowlisted legacy workflow-node events can connect to that root Socket.IO path.
     - The WebUI image uses Node Alpine stages. The production target copies only built static output plus the dependency-free static server into the final image, while the development target keeps Vite and `node_modules` for HMR.
-    - The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode so `Data.Engine.bootstrapper` skips Engine-side WebUI staging/build.
+    - The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode. WebUI staging and serving remain owned by the separate `webui-frontend` workload.
     - WebUI hosting belongs only to K3s `webui-frontend`; Go API does not serve SPA compatibility routes.
 
     ### PostgreSQL profile notes

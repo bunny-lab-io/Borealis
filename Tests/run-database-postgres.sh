@@ -64,7 +64,7 @@ if [[ -z "${PYTHON_BIN}" ]]; then
   PYTHON_BIN="${RESULT_DIR}/venv/bin/python"
   run_timed "${TIMEOUT_SECONDS}" "${PYTHON_BIN}" -m pip install \
     --disable-pip-version-check --no-input \
-    -r "${REPO_ROOT}/Data/Engine/Containers/api-backend/data/engine-requirements.txt" \
+    -r "${REPO_ROOT}/Data/Engine/Containers/site-worker/data/engine-requirements.txt" \
     >"${RESULT_DIR}/dependency-install.log" 2>&1
 fi
 

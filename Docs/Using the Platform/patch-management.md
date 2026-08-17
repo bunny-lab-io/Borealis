@@ -120,7 +120,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Engine patch scheduler worker: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_patch_install.go`
     - Engine patch policy API and evaluator: `Data/Engine/Containers/api-backend/cmd/api-backend/patch_policies.go`
     - Engine patch policy scheduler hook: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_patch_policies.go`
-    - Engine schema bootstrap: `Data/Engine/Containers/api-backend/data/database.py`
+    - Engine schema bootstrap: `Data/Engine/Containers/site-worker/data/database.py`
     - Job creation UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`
     - Fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management.jsx`
     - OS placeholder pane: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Platform_Page.jsx`

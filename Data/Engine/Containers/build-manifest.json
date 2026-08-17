@@ -44,7 +44,6 @@
       "inputs": [
         ".dockerignore",
         "Data/Agent/**",
-        "Data/Engine/Containers/api-backend/data/**",
         "Data/Engine/Containers/site-worker/**"
       ]
     },

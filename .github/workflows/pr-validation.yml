@@ -163,7 +163,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt
+          cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt
       - run: ./Tests/run-engine-python.sh
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -205,7 +205,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: Data/Engine/Containers/api-backend/data/engine-requirements.txt
+          cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
       - run: ./Tests/run-database-postgres.sh
       - uses: actions/upload-artifact@v4
         if: failure()

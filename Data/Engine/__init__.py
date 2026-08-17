@@ -17,8 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-_CONTAINER_ENGINE_DATA = Path(__file__).resolve().parent / "Containers" / "api-backend" / "data"
-if _CONTAINER_ENGINE_DATA.is_dir():
-    container_data_path = str(_CONTAINER_ENGINE_DATA)
+_SITE_WORKER_ENGINE_DATA = Path(__file__).resolve().parent / "Containers" / "site-worker" / "data"
+if _SITE_WORKER_ENGINE_DATA.is_dir():
+    container_data_path = str(_SITE_WORKER_ENGINE_DATA)
     if container_data_path not in __path__:
         __path__.append(container_data_path)

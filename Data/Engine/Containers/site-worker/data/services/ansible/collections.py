@@ -30,7 +30,7 @@ def _project_root() -> Path:
             return candidate
         if (candidate / "Data" / "Engine" / "Ansible" / "collections.yml").is_file():
             return candidate
-        if (candidate / "Data" / "Engine" / "Containers" / "api-backend" / "data" / "Ansible" / "collections.yml").is_file():
+        if (candidate / "Data" / "Engine" / "Containers" / "site-worker" / "data" / "Ansible" / "collections.yml").is_file():
             return candidate
 
     raise RuntimeError("Unable to locate the Borealis project root for Engine Ansible collection staging.")
@@ -39,7 +39,7 @@ def _project_root() -> Path:
 def _resolve_ansible_collections_manifest(project_root: Path) -> Optional[Path]:
     candidates = (
         project_root / "Data" / "Engine" / "Ansible" / "collections.yml",
-        project_root / "Data" / "Engine" / "Containers" / "api-backend" / "data" / "Ansible" / "collections.yml",
+        project_root / "Data" / "Engine" / "Containers" / "site-worker" / "data" / "Ansible" / "collections.yml",
         Path(__file__).resolve().parents[2] / "Ansible" / "collections.yml",
     )
     for candidate in candidates:

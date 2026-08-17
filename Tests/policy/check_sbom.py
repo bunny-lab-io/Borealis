@@ -81,7 +81,7 @@ def main() -> int:
             failures.append(f"SBOM GO FAIL: {source} declares {name} {version}")
 
     requirement_files = [
-        ROOT / "Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt",
+        ROOT / "Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt",
         ROOT / "Tests/requirements-policy.txt",
         ROOT / "Tests/requirements-docs.txt",
     ]

@@ -13,7 +13,7 @@ FILE_TIMEOUT_SECONDS="${BOREALIS_ENGINE_UNIT_TEST_FILE_TIMEOUT_SECONDS:-900}"
 INSTALL_TIMEOUT_SECONDS="${BOREALIS_ENGINE_DEPENDENCY_TIMEOUT_SECONDS:-1200}"
 RESULT_DIR="$(result_dir_for engine-python)"
 INVENTORY="${REPO_ROOT}/Tests/policy/check_test_inventory.py"
-REQUIREMENTS="${REPO_ROOT}/Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt"
+REQUIREMENTS="${REPO_ROOT}/Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt"
 
 usage() {
   cat <<'EOF'

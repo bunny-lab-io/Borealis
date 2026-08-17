@@ -67,8 +67,8 @@ Duplicate uploads show a replace-or-skip decision before transfer begins.
     ### Source map
 
     - File API: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_files.go`
-    - Site-worker transfer runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`
-    - Shared transfer store: `Data/Engine/Containers/api-backend/data/services/remote_files/transfers.py`
+    - Site-worker transfer runtime: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker_socket.py`
+    - Shared transfer store: `Data/Engine/Containers/site-worker/data/services/remote_files/transfers.py`
     - File tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`
     - Agent file role: `Data/Agent/internal/roles/file_management/`
 

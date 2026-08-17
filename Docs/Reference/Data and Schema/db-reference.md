@@ -318,12 +318,12 @@ finally:
     ### Source map
 
     - Deploy-time schema caller: `Engine.sh`
-    - Runtime schema setup: `Data/Engine/Containers/api-backend/data/database.py`
-    - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
+    - Runtime schema setup: `Data/Engine/Containers/site-worker/data/database.py`
+    - Startup migrations: `Data/Engine/Containers/site-worker/data/database_migrations.py`
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
-    - Scheduler queue leasing: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
+    - Scheduler queue leasing: `Data/Engine/Containers/site-worker/data/services/job_scheduler/queue.py`
     - Authoritative Assembly schema and runtime store: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies_schema.go` and `assemblies.go`
-    - Pre-API schema Job compatibility bootstrap: `Data/Engine/Containers/api-backend/data/assembly_schema.py`
+    - Pre-API schema Job compatibility bootstrap: `Data/Engine/Containers/site-worker/data/assembly_schema.py`
     - Managed official catalog checkout: `Engine/Services/api-backend/cache/Aurora/`
 
     ### Troubleshooting queries

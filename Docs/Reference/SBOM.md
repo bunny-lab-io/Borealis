@@ -14,9 +14,9 @@ Repeated entries are intentional when multiple Engine containers install the sam
 - `Data/Engine/Containers/*/Dockerfile`
 - `Data/Engine/Containers/api-backend/go.mod`
 - `Data/Engine/Containers/api-backend/build-api-backend.sh`
-- `Data/Engine/Containers/api-backend/data/engine-requirements.txt`
-- `Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt`
-- `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`
+- `Data/Engine/Containers/site-worker/data/engine-requirements.txt`
+- `Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt`
+- `Data/Engine/Containers/site-worker/data/Ansible/collections.yml`
 - `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`
 - `Data/Engine/Containers/webui-frontend/data/web-interface/package-lock.json`
 - `Data/Engine/Containers/webui-frontend/data/web-interface/src/vendor/guacamole/guacamole-common-js.js`

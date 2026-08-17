@@ -80,7 +80,7 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - API: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs*.go`
     - Scheduler queue and tick manager: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`
     - Scheduled script/Ansible dispatch: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
-    - Site worker runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`
+    - Site worker runtime: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker.py`
     - UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/`
 
     ### Runtime behavior

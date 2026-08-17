@@ -56,7 +56,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     - `Data/Engine/` - Engine package shim, unit tests, and container source roots.
     - `Data/Engine/Containers/api-backend/cmd/api-backend/` - production Go API, scheduler, and operator source (authoritative public route owner).
-    - `Data/Engine/Containers/api-backend/data/` - retained Python database, automation, and site-worker support source.
+    - `Data/Engine/Containers/site-worker/data/` - Python site-worker automation, remote-operation, and schema-bootstrap source.
     - `Data/Engine/Containers/` - Engine container, K3s workload, and retired Compose source (authoritative).
     - `Data/Agent/` - Agent source (authoritative).
     - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
@@ -70,13 +70,13 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     ### Service map by folder
     - Engine APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/` (grouped by Go domain files and registered from `main.go`).
-    - Engine realtime: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
+    - Site-worker realtime: `Data/Engine/Containers/site-worker/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
     - WebUI hosting: `Data/Engine/Containers/webui-frontend/static-server.js` and production build under WebUI container image.
     - WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
     - Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
       The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
     - VPN orchestration: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go` plus `Data/Engine/Containers/api-backend/internal/wireguardcontrol/` (WireGuard API and privileged tunnel lifecycle).
-    - Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
+    - Site-worker remote desktop helpers: `Data/Engine/Containers/site-worker/data/services/RemoteDesktop/` (worker-side VNC transport helpers).
     - Filters and targeting: `Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go` and `scheduled_jobs_rerun.go`.
     - Agent runtime: `Data/Agent/cmd/agent` plus packages under `Data/Agent/internal/`.
 
@@ -95,7 +95,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     ### Runtime boundaries
     - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-    - Edit Engine public API source under `Data/Engine/Containers/api-backend/cmd/api-backend/`, retained Python worker source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then run affected repository validation before deploy.
+    - Edit Engine public API source under `Data/Engine/Containers/api-backend/cmd/api-backend/`, retained Python worker source under `Data/Engine/Containers/site-worker/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then run affected repository validation before deploy.
 
     ### What to read first when debugging
     - Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.
@@ -109,7 +109,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - WireGuard for remote protocol transport (shell, VNC, future protocols).
 
     ### Container service map
-    - `api-backend`: K3s ClusterIP `api-backend.borealis.svc:5001`, Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
+    - `api-backend`: K3s ClusterIP `api-backend.borealis.svc:5001`, Go Engine API, realtime transport, scheduler/workflows, VNC WebSocket proxy, and Ansible dispatch to site-workers.
     - `webui-frontend`: K3s ClusterIP `:8000` for production WebUI and dev/HMR after WebUI cutover.
     - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
     - `postgres-db`: K3s ClusterIP `postgres-db.borealis.svc:5432`, Longhorn-backed persistent database state.

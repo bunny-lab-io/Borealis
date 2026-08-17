@@ -29,7 +29,7 @@ class AffectedServicesTests(unittest.TestCase):
 
     def test_python_change_rebuilds_python_consumers(self) -> None:
         self.assertEqual(
-            affected_services(["Data/Engine/Containers/api-backend/data/database.py"], SERVICES),
+            affected_services(["Data/Engine/Containers/site-worker/data/database.py"], SERVICES),
             ["site-worker"],
         )
 

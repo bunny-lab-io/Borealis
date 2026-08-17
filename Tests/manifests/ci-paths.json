@@ -26,9 +26,9 @@
     ".github/workflows/pr-validation.yml"
   ],
   "engine-python": [
-    "Data/Engine/Containers/api-backend/data/**/*.py",
-    "Data/Engine/Containers/api-backend/data/engine-requirements.txt",
-    "Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt",
+    "Data/Engine/Containers/site-worker/data/**/*.py",
+    "Data/Engine/Containers/site-worker/data/engine-requirements.txt",
+    "Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt",
     "Data/Engine/Unit_Tests/**",
     "Engine_Unit_Tests.sh",
     "Tests/run-engine-python.sh",
@@ -43,9 +43,9 @@
     ".github/workflows/pr-validation.yml"
   ],
   "database": [
-    "Data/Engine/Containers/api-backend/data/database.py",
-    "Data/Engine/Containers/api-backend/data/database_migrations.py",
-    "Data/Engine/Containers/api-backend/data/db/**",
+    "Data/Engine/Containers/site-worker/data/database.py",
+    "Data/Engine/Containers/site-worker/data/database_migrations.py",
+    "Data/Engine/Containers/site-worker/data/db/**",
     "Data/Engine/Containers/api-backend/cmd/api-backend/**/*database*",
     "Data/Engine/Containers/api-backend/cmd/api-backend/**/*sql*",
     "Data/Engine/Unit_Tests/test_database_schema.py",

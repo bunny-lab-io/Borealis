@@ -16,8 +16,8 @@ REGRESSIONS = DOCS / "Reference/testing-regressions.md"
 DOMAIN_MANIFEST = ROOT / "Tests/manifests/engine-test-domains.json"
 CLASSIFICATIONS = ROOT / "Tests/manifests/doc-path-classifications.json"
 FORBIDDEN_CURRENT = (
-    "Data/Engine/Containers/api-backend/data/services/API/",
-    "Data/Engine/Containers/api-backend/data/services/WebUI/",
+    "Data/Engine/Containers/site-worker/data/services/API/",
+    "Data/Engine/Containers/site-worker/data/services/WebUI/",
 )
 SOURCE_SECTION = re.compile(
     r"^\s*### (?:Source map|Implementation references|Where endpoints are defined|Test Locations|Source vs runtime)\s*$",

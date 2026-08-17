@@ -410,7 +410,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - Engine container source and Compose policy: `Data/Engine/Containers/`.
     - Compose policy check: `Data/Engine/Containers/check-compose-policy.py`.
     - Web UI source: `Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
-    - API backend source: `Data/Engine/Containers/api-backend/data/`.
+    - API backend source: `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Retained site-worker and schema-bootstrap source: `Data/Engine/Containers/site-worker/data/`.
     - Job scheduler source: `Data/Engine/Containers/job-scheduler/data/`.
     - Current site worker orchestration code should be treated as bridge input until `borealis-operator` replaces it.
 
