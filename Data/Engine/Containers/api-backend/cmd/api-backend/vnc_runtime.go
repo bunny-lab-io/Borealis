@@ -17,14 +17,14 @@ import (
 )
 
 const (
-	defaultVNCEstablishDeadlineSeconds       = 30
-	defaultVNCLiveCredentialWaitSeconds      = 30
-	defaultVNCStartReadyWaitSeconds          = 20
+	defaultVNCEstablishDeadlineSeconds       = 75
+	defaultVNCLiveCredentialWaitSeconds      = 60
+	defaultVNCStartReadyWaitSeconds          = 60
 	defaultVNCStopDebounceSeconds            = 12
 	defaultVNCRFBReadyWaitSeconds            = 5
 	defaultVNCRecoveryReadyWaitSeconds       = 25
 	defaultVNCRestartReadyWaitSeconds        = 25
-	defaultVNCAuthRetryCredentialWaitSeconds = 20
+	defaultVNCAuthRetryCredentialWaitSeconds = 60
 	defaultVNCAuthRetryReadyWaitSeconds      = 20
 	defaultVNCAuthRetryCooldownSeconds       = 30
 	defaultVNCAuthLockoutCooldownSeconds     = 30
@@ -1546,9 +1546,10 @@ func requestVNCServerCredential(ctx context.Context, auth *authService, route *a
 		"event_name":      "vnc_credential_request",
 		"timeout_seconds": timeoutSeconds,
 		"payload": map[string]any{
-			"agent_id":   agentID,
-			"request_id": requestID,
-			"reason":     reason,
+			"agent_id":        agentID,
+			"request_id":      requestID,
+			"reason":          reason,
+			"timeout_seconds": timeoutSeconds,
 		},
 	}, time.Duration((timeoutSeconds+1)*float64(time.Second)))
 	if workerErr != nil {
@@ -1591,6 +1592,8 @@ func requestVNCStartReady(ctx context.Context, auth *authService, route *agentWo
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultVNCStartReadyWaitSeconds
 	}
+	payload = copyAnyMap(payload)
+	payload["timeout_seconds"] = timeoutSeconds
 	response, status, workerErr := callWorkerHostServiceEvent(ctx, auth, route, map[string]any{
 		"hostname":        hostname,
 		"service_mode":    serviceMode,

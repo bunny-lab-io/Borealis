@@ -152,6 +152,13 @@ func TestRequestRDPStartReadyUsesRDPAgentEvent(t *testing.T) {
 		if body["event_name"] != "rdp_start" || body["hostname"] != "LAB-AIO-01" {
 			t.Fatalf("unexpected worker body %#v", body)
 		}
+		if body["timeout_seconds"] != float64(1) {
+			t.Fatalf("unexpected timeout %#v", body["timeout_seconds"])
+		}
+		payload := body["payload"].(map[string]any)
+		if payload["timeout_seconds"] != float64(1) {
+			t.Fatalf("Agent payload missing readiness timeout %#v", payload)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"called":   true,
 			"response": map[string]any{"status": "ok", "ready": true},
@@ -170,5 +177,14 @@ func TestRequestRDPStartReadyUsesRDPAgentEvent(t *testing.T) {
 	)
 	if workerErr != nil || status != http.StatusOK || response["ready"] != true {
 		t.Fatalf("unexpected response status=%d response=%#v error=%#v", status, response, workerErr)
+	}
+}
+
+func TestRDPSlowDeviceBudgets(t *testing.T) {
+	if defaultRDPStartReadyWaitSeconds != 60 {
+		t.Fatalf("RDP Agent readiness budget must allow 60 seconds")
+	}
+	if defaultRDPEstablishDeadlineSeconds != 75 {
+		t.Fatalf("RDP establish budget must preserve post-readiness overhead")
 	}
 }

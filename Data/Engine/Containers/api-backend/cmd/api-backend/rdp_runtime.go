@@ -13,8 +13,8 @@ import (
 
 const (
 	defaultRDPBackendPort              = 3389
-	defaultRDPEstablishDeadlineSeconds = 30
-	defaultRDPStartReadyWaitSeconds    = 20
+	defaultRDPEstablishDeadlineSeconds = 75
+	defaultRDPStartReadyWaitSeconds    = 60
 	maxRDPUsernameLength               = 256
 	maxRDPDomainLength                 = 256
 	maxRDPPasswordLength               = 4096
@@ -403,6 +403,8 @@ func requestRDPStartReady(ctx context.Context, auth *authService, route *agentWo
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultRDPStartReadyWaitSeconds
 	}
+	payload = copyAnyMap(payload)
+	payload["timeout_seconds"] = timeoutSeconds
 	response, status, workerErr := callWorkerHostServiceEvent(ctx, auth, route, map[string]any{
 		"hostname":        hostname,
 		"service_mode":    serviceMode,

@@ -27,6 +27,9 @@ const (
 	serviceDisplayName         = "Borealis Agent - UltraVNC"
 	firewallRuleName           = "Borealis - VNC - UltraVNC"
 	recentReadyGraceSeconds    = 20
+	readinessAuditInterval     = 5 * time.Minute
+	ensureLockPollInterval     = 25 * time.Millisecond
+	maxReadinessRequestTimeout = 60 * time.Second
 	credentialRotationInterval = 24 * time.Hour
 )
 
@@ -86,6 +89,7 @@ type Manager struct {
 	lastReadyAt         int64
 	lastError           string
 	lastEnsureAt        int64
+	lastReconcileAt     int64
 	lastServiceState    string
 	lastListenerState   string
 	lastReady           bool
@@ -93,6 +97,7 @@ type Manager struct {
 	serviceName         string
 	vncExe              string
 	displayCollector    func() []map[string]any
+	listenerProbe       func(int) bool
 	stop                context.CancelFunc
 }
 
@@ -206,17 +211,36 @@ func (m *Manager) HandleStart(ctx context.Context, payload any) (any, error) {
 	m.logf("VNC start request received reason=%s session_id=%s port=%s", reason, cleanText(data["session_id"]), cleanText(data["port"]))
 	m.mu.Lock()
 	if value := data["port"]; value != nil {
-		m.port = resolveVNCPort(value)
+		port := resolveVNCPort(value)
+		if port != m.port {
+			m.lastReady = false
+			m.lastReconcileAt = 0
+		}
+		m.port = port
 	}
 	if allowed := parseAllowedIPs(data["allowed_ips"]); allowed != "" {
+		if allowed != m.allowedIPs {
+			m.lastReady = false
+			m.lastReconcileAt = 0
+		}
 		m.allowedIPs = allowed
 	}
 	if value, ok := data["remove_wallpaper"].(bool); ok {
+		if value != m.removeWallpaper {
+			m.lastReady = false
+			m.lastReconcileAt = 0
+		}
 		m.removeWallpaper = value
 	}
 	m.activeSessionID = cleanText(data["session_id"])
 	m.mu.Unlock()
-	err := m.ensureAlwaysOn(ctx, reason)
+	requestCtx, cancel := readinessRequestContext(ctx, data["timeout_seconds"])
+	defer cancel()
+	if supportsReadyFastPath(reason) && m.cachedReady() {
+		m.logf("VNC start ready fast_path=true reason=%s port=%d", reason, m.currentPort())
+		return map[string]any{"status": "ok", "ready": true}, nil
+	}
+	err := m.ensureAlwaysOn(requestCtx, reason)
 	if err != nil {
 		return map[string]any{"status": "error", "detail": err.Error()}, nil
 	}
@@ -282,7 +306,9 @@ func (m *Manager) HandleCredentialRequest(ctx context.Context, payload any) (any
 	if fastPath {
 		return m.credentialPayload(requestID, reason), nil
 	}
-	if err := m.ensureAlwaysOn(ctx, reason); err != nil {
+	requestCtx, cancel := readinessRequestContext(ctx, data["timeout_seconds"])
+	defer cancel()
+	if err := m.ensureAlwaysOn(requestCtx, reason); err != nil {
 		m.logf("VNC credential request ensure failed reason=%s request_id=%s error=%v", reason, requestID, err)
 		return m.credentialErrorPayload(requestID, reason, err), nil
 	}
@@ -445,12 +471,21 @@ func (m *Manager) ensureFromEngine(ctx context.Context, reason string) error {
 	}
 	if allowed := parseAllowedIPs(response["allowed_ips"]); allowed != "" {
 		m.mu.Lock()
+		if allowed != m.allowedIPs {
+			m.lastReady = false
+			m.lastReconcileAt = 0
+		}
 		m.allowedIPs = allowed
 		m.mu.Unlock()
 	}
 	if value := response["vnc_port"]; value != nil {
 		m.mu.Lock()
-		m.port = resolveVNCPort(value)
+		port := resolveVNCPort(value)
+		if port != m.port {
+			m.lastReady = false
+			m.lastReconcileAt = 0
+		}
+		m.port = port
 		m.mu.Unlock()
 	}
 	if sessionID := cleanText(response["session_id"]); sessionID != "" {
@@ -477,10 +512,33 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	if m == nil || !m.supported {
 		return nil
 	}
-	m.ensureMu.Lock()
-	defer m.ensureMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if isPassiveDisconnectEnsureReason(reason) && m.credentialFastPathReady() {
 		m.tracef("VNC ensure skipped reason=%s service=%s ready=true", reason, m.serviceName)
+		return nil
+	}
+	if m.skipCachedEnsure(reason) {
+		m.tracef("VNC ensure skipped reason=%s service=%s ready=true", reason, m.serviceName)
+		return nil
+	}
+	lockStarted := time.Now()
+	locked, err := m.acquireEnsure(ctx, isCoalescibleEnsureReason(reason))
+	if err != nil {
+		return err
+	}
+	if !locked {
+		m.tracef("VNC ensure skipped reason=%s service=%s busy=true", reason, m.serviceName)
+		return nil
+	}
+	defer m.ensureMu.Unlock()
+	m.logEnsurePhase(reason, "lock_wait", lockStarted)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.skipCachedEnsure(reason) {
+		m.tracef("VNC ensure skipped reason=%s service=%s ready_after_wait=true", reason, m.serviceName)
 		return nil
 	}
 	m.mu.Lock()
@@ -507,20 +565,30 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	if m.vncExe == "" {
 		return fmt.Errorf("UltraVNC winvnc.exe not found")
 	}
+	m.mu.Lock()
+	m.lastReconcileAt = time.Now().Unix()
+	m.mu.Unlock()
+	serviceQueryStarted := time.Now()
 	serviceStateBefore := m.queryServiceState(ctx, m.serviceName)
+	m.logEnsurePhase(reason, "service_query", serviceQueryStarted)
 	if routineEnsure && isServiceRunning(serviceStateBefore) {
 		m.tracef("VNC ensure start reason=%s service=%s state=%s port=%d allowed_ips=%s credential_revision=%d remove_wallpaper=%t", reason, m.serviceName, displayServiceState(serviceStateBefore), port, allowedIPs, revision, removeWallpaper)
 	} else {
 		m.logf("VNC ensure start reason=%s service=%s state=%s port=%d allowed_ips=%s credential_revision=%d remove_wallpaper=%t", reason, m.serviceName, displayServiceState(serviceStateBefore), port, allowedIPs, revision, removeWallpaper)
 	}
+	firewallStarted := time.Now()
 	if err := m.ensureFirewall(ctx, allowedIPs, port); err != nil {
-		m.logf("VNC firewall ensure failed: %v", err)
+		m.logf("VNC firewall ensure failed duration_ms=%d error=%v", time.Since(firewallStarted).Milliseconds(), err)
+	} else {
+		m.logEnsurePhase(reason, "firewall", firewallStarted)
 	}
+	configStarted := time.Now()
 	configPath, configChanged, err := m.ensureConfig(port, password, removeWallpaper)
 	if err != nil {
 		m.setError(err.Error())
 		return err
 	}
+	m.logEnsurePhase(reason, "config", configStarted)
 	if routineEnsure && !configChanged {
 		m.tracef("VNC config ensured path=%s changed=%t", configPath, configChanged)
 	} else {
@@ -532,6 +600,7 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	} else if !serviceConfigLoaded {
 		reloadReason = "initial_config_sync"
 	}
+	serviceStarted := time.Now()
 	if err := m.ensureService(ctx, reloadReason, reason); err != nil {
 		serviceState := m.queryServiceState(ctx, m.serviceName)
 		listenerState := "not_listening"
@@ -546,11 +615,14 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 		m.mu.Unlock()
 		return err
 	}
+	m.logEnsurePhase(reason, "service", serviceStarted)
 	m.mu.Lock()
 	m.serviceConfigLoaded = true
 	m.mu.Unlock()
-	listenerReady := m.waitForListener(port, listenerReadyWait)
+	listenerStarted := time.Now()
+	listenerReady := m.waitForListener(ctx, port, listenerReadyWait)
 	serviceState := m.queryServiceState(ctx, m.serviceName)
+	m.logEnsurePhase(reason, "listener", listenerStarted)
 	ready := listenerReady && isServiceRunning(serviceState)
 	listenerState := "not_listening"
 	if listenerReady {
@@ -785,7 +857,9 @@ func (m *Manager) waitForServiceNotRunning(ctx context.Context, service string, 
 		if !isServiceRunning(state) && !isServicePending(state) {
 			return true
 		}
-		sleepRemaining(deadline, 250*time.Millisecond)
+		if !sleepRemaining(ctx, deadline, 250*time.Millisecond) {
+			return false
+		}
 	}
 	state := m.queryServiceState(ctx, service)
 	return !isServiceRunning(state) && !isServicePending(state)
@@ -799,7 +873,9 @@ func (m *Manager) waitForServiceStable(ctx context.Context, service string, time
 		if !isServicePending(lastState) {
 			return lastState
 		}
-		sleepRemaining(deadline, 250*time.Millisecond)
+		if !sleepRemaining(ctx, deadline, 250*time.Millisecond) {
+			return lastState
+		}
 	}
 	if lastState == "" {
 		lastState = m.queryServiceState(ctx, service)
@@ -844,16 +920,22 @@ func (m *Manager) queryServicePID(ctx context.Context, service string) int {
 	return 0
 }
 
-func sleepRemaining(deadline time.Time, maxSleep time.Duration) {
+func sleepRemaining(ctx context.Context, deadline time.Time, maxSleep time.Duration) bool {
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
-		return
+		return false
 	}
 	if remaining < maxSleep {
-		time.Sleep(remaining)
-		return
+		maxSleep = remaining
 	}
-	time.Sleep(maxSleep)
+	timer := time.NewTimer(maxSleep)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (m *Manager) createService(ctx context.Context, service string) error {
@@ -897,18 +979,23 @@ func (m *Manager) ensureFirewall(ctx context.Context, allowedIPs string, port in
 	}
 	name := powerShellSingleQuoted(firewallRuleName)
 	remoteLiteral := powerShellSingleQuoted(remote)
+	description := powerShellSingleQuoted(fmt.Sprintf("Borealis managed VNC; port=%d; remote=%s", port, remote))
 	command := fmt.Sprintf(
 		"$ErrorActionPreference = 'Stop'; "+
-			"Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
-			"New-NetFirewallRule -DisplayName %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress %s -Profile Any | Out-Null",
-		name, name, port, remoteLiteral,
+			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
+			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; "+
+			"$addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.RemoteAddress -eq %s); "+
+			"if (-not $valid) { Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
+			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress %s -Profile Any | Out-Null }",
+		name, description, port, remoteLiteral, name, name, description, port, remoteLiteral,
 	)
 	result, err := m.runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {
-		return err
+		return commandExecutionError("VNC firewall ensure", result, err)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("%s", strings.TrimSpace(result.Stdout+"\n"+result.Stderr))
+		return fmt.Errorf("VNC firewall ensure failed: exit_code=%d output=%s", result.ExitCode, compactLogText(strings.TrimSpace(result.Stdout+"\n"+result.Stderr)))
 	}
 	return nil
 }
@@ -935,6 +1022,9 @@ func (m *Manager) queryServiceState(ctx context.Context, service string) string 
 }
 
 func (m *Manager) listenerReady(port int) bool {
+	if m != nil && m.listenerProbe != nil {
+		return m.listenerProbe(port)
+	}
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 750*time.Millisecond)
 	if err != nil {
 		return false
@@ -943,13 +1033,19 @@ func (m *Manager) listenerReady(port int) bool {
 	return true
 }
 
-func (m *Manager) waitForListener(port int, timeout time.Duration) bool {
+func (m *Manager) waitForListener(ctx context.Context, port int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if m.listenerReady(port) {
 			return true
 		}
-		time.Sleep(500 * time.Millisecond)
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
 	}
 	return m.listenerReady(port)
 }
@@ -960,6 +1056,8 @@ func (m *Manager) rotateCredential(reason string) {
 	m.controllerPassword = password
 	m.credentialRevision = revision
 	m.credentialIssuedAt = time.Now()
+	m.lastReady = false
+	m.lastReconcileAt = 0
 	m.mu.Unlock()
 	m.logf("VNC runtime credential rotated reason=%s revision=%d", reason, revision)
 }
@@ -979,6 +1077,78 @@ func (m *Manager) ready() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.lastReady
+}
+
+func (m *Manager) currentPort() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.port
+}
+
+func (m *Manager) cachedReady() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	port := m.port
+	ready := m.lastReady &&
+		isServiceRunning(m.lastServiceState) &&
+		strings.EqualFold(strings.TrimSpace(m.lastListenerState), "listening")
+	m.mu.Unlock()
+	if !ready {
+		return false
+	}
+	if m.listenerReady(port) {
+		return true
+	}
+	m.mu.Lock()
+	m.lastReady = false
+	m.lastListenerState = "not_listening"
+	m.mu.Unlock()
+	return false
+}
+
+func (m *Manager) skipCachedEnsure(reason string) bool {
+	if supportsReadyFastPath(reason) && !isRoutineEnsureReason(reason) {
+		return m.cachedReady()
+	}
+	if !isAuditCoalescingReason(reason) {
+		return false
+	}
+	m.mu.Lock()
+	lastReconcileAt := m.lastReconcileAt
+	m.mu.Unlock()
+	return lastReconcileAt > 0 && time.Since(time.Unix(lastReconcileAt, 0)) < readinessAuditInterval
+}
+
+func (m *Manager) acquireEnsure(ctx context.Context, coalesce bool) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if coalesce {
+		return m.ensureMu.TryLock(), nil
+	}
+	ticker := time.NewTicker(ensureLockPollInterval)
+	defer ticker.Stop()
+	for {
+		if m.ensureMu.TryLock() {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *Manager) logEnsurePhase(reason string, phase string, started time.Time) {
+	durationMS := time.Since(started).Milliseconds()
+	if isRoutineEnsureReason(reason) {
+		m.tracef("VNC ensure phase reason=%s phase=%s duration_ms=%d", reason, phase, durationMS)
+		return
+	}
+	m.logf("VNC ensure phase reason=%s phase=%s duration_ms=%d", reason, phase, durationMS)
 }
 
 func (m *Manager) credentialFastPathReady() bool {
@@ -1036,6 +1206,56 @@ func (m *Manager) tracef(format string, args ...any) {
 
 func isRoutineEnsureReason(reason string) bool {
 	return strings.EqualFold(strings.TrimSpace(reason), "always_on_check")
+}
+
+func supportsReadyFastPath(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "always_on_check", "vnc_establish", "vnc_session_start":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCoalescibleEnsureReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "always_on_check", "agent_startup", "role_supervisor_recovery":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAuditCoalescingReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "always_on_check", "role_supervisor_recovery":
+		return true
+	default:
+		return false
+	}
+}
+
+func readinessRequestContext(parent context.Context, value any) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	seconds, err := strconv.ParseFloat(cleanText(value), 64)
+	if err != nil || seconds <= 0 {
+		return context.WithCancel(parent)
+	}
+	timeout := time.Duration(seconds * float64(time.Second))
+	if timeout > maxReadinessRequestTimeout {
+		timeout = maxReadinessRequestTimeout
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func commandExecutionError(operation string, result commandResult, err error) error {
+	output := compactLogText(strings.TrimSpace(result.Stdout + "\n" + result.Stderr))
+	if output == "" {
+		return fmt.Errorf("%s failed: %w", operation, err)
+	}
+	return fmt.Errorf("%s failed: %w output=%s", operation, err, output)
 }
 
 func isPassiveDisconnectEnsureReason(reason string) bool {

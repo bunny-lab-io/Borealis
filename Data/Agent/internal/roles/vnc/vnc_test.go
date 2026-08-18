@@ -295,6 +295,85 @@ func TestCredentialRequestUsesFastPathWhenReady(t *testing.T) {
 	}
 }
 
+func TestCredentialRequestHonorsReadinessTimeout(t *testing.T) {
+	manager := &Manager{
+		authClient:         fakeVNCAuthClient{agentID: "agent-1"},
+		supported:          true,
+		controllerPassword: "bootpass",
+		credentialIssuedAt: time.Now(),
+		allowedIPs:         "10.255.0.1/32",
+		port:               5900,
+	}
+	manager.ensureMu.Lock()
+	defer manager.ensureMu.Unlock()
+
+	raw, err := manager.HandleCredentialRequest(context.Background(), map[string]any{
+		"agent_id":        "agent-1",
+		"request_id":      "request-1",
+		"reason":          "vnc_establish",
+		"timeout_seconds": 0.025,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := raw.(map[string]any)
+	if payload["status"] != "error" || !strings.Contains(payload["detail"].(string), context.DeadlineExceeded.Error()) {
+		t.Fatalf("expected bounded readiness failure, got %#v", payload)
+	}
+}
+
+func TestReadinessRequestContextCapsAtSixtySeconds(t *testing.T) {
+	ctx, cancel := readinessRequestContext(context.Background(), 120)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected readiness deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining < 59*time.Second || remaining > maxReadinessRequestTimeout {
+		t.Fatalf("unexpected readiness deadline %s", remaining)
+	}
+}
+
+func TestStartRequestUsesCachedReadyFastPath(t *testing.T) {
+	runnerCalls := 0
+	manager := &Manager{
+		authClient:         fakeVNCAuthClient{agentID: "agent-1"},
+		supported:          true,
+		serviceName:        serviceName,
+		port:               5900,
+		allowedIPs:         "10.255.0.1/32",
+		removeWallpaper:    true,
+		controllerPassword: "bootpass",
+		lastReady:          true,
+		lastReadyAt:        time.Now().Unix(),
+		lastServiceState:   "RUNNING",
+		lastListenerState:  "listening",
+		listenerProbe:      func(int) bool { return true },
+		runner: func(context.Context, time.Duration, string, ...string) (commandResult, error) {
+			runnerCalls++
+			return commandResult{}, errors.New("ready fast path should not run lifecycle commands")
+		},
+	}
+
+	raw, err := manager.HandleStart(context.Background(), map[string]any{
+		"agent_id":         "agent-1",
+		"session_id":       "session-1",
+		"reason":           "vnc_establish",
+		"port":             5900,
+		"allowed_ips":      "10.255.0.1/32",
+		"remove_wallpaper": true,
+		"timeout_seconds":  60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := raw.(map[string]any)
+	if payload["ready"] != true || runnerCalls != 0 {
+		t.Fatalf("unexpected fast-path response=%#v runner_calls=%d", payload, runnerCalls)
+	}
+}
+
 func TestHealthIncludesDisplayTopologyDetails(t *testing.T) {
 	manager := &Manager{
 		authClient:         fakeVNCAuthClient{agentID: "agent-1"},
@@ -375,7 +454,7 @@ func TestNormalizeFirewallRemoteRequiresSingleHost(t *testing.T) {
 	}
 }
 
-func TestEnsureFirewallRecreatesRule(t *testing.T) {
+func TestEnsureFirewallMutatesOnlyWhenManagedRuleDrifts(t *testing.T) {
 	manager := &Manager{}
 	var commands []string
 	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
@@ -393,6 +472,11 @@ func TestEnsureFirewallRecreatesRule(t *testing.T) {
 	}
 	command := commands[0]
 	for _, expected := range []string{
+		"$rules.Count -eq 1",
+		"Get-NetFirewallPortFilter",
+		"Get-NetFirewallAddressFilter",
+		"Borealis managed VNC; port=5900; remote=10.255.0.1/32",
+		"if (-not $valid)",
 		"Remove-NetFirewallRule",
 		"New-NetFirewallRule",
 		"-LocalPort 5900",
@@ -403,7 +487,19 @@ func TestEnsureFirewallRecreatesRule(t *testing.T) {
 		}
 	}
 	if strings.Contains(command, "Set-NetFirewallRule") {
-		t.Fatalf("firewall command should recreate rule instead of updating filters: %s", command)
+		t.Fatalf("firewall command should replace only drifted managed rule: %s", command)
+	}
+}
+
+func TestEnsureFirewallPreservesCommandFailureOutput(t *testing.T) {
+	manager := &Manager{
+		runner: func(context.Context, time.Duration, string, ...string) (commandResult, error) {
+			return commandResult{Stderr: "Access is denied.", ExitCode: 1}, errors.New("exit status 1")
+		},
+	}
+	err := manager.ensureFirewall(context.Background(), "10.255.0.1/32", 5900)
+	if err == nil || !strings.Contains(err.Error(), "Access is denied") {
+		t.Fatalf("expected PowerShell output in error, got %v", err)
 	}
 }
 
@@ -638,6 +734,58 @@ func TestEnsureAlwaysOnSerializesLifecycleWork(t *testing.T) {
 	}
 }
 
+func TestForegroundEnsureStopsWaitingWhenRequestExpires(t *testing.T) {
+	manager := &Manager{supported: true}
+	manager.ensureMu.Lock()
+	defer manager.ensureMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	err := manager.ensureAlwaysOn(ctx, "vnc_establish")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline while waiting for lifecycle lock, got %v", err)
+	}
+}
+
+func TestRoutineEnsureCoalescesWhenLifecycleBusy(t *testing.T) {
+	runnerCalls := 0
+	manager := &Manager{
+		supported: true,
+		runner: func(context.Context, time.Duration, string, ...string) (commandResult, error) {
+			runnerCalls++
+			return commandResult{}, nil
+		},
+	}
+	manager.ensureMu.Lock()
+	defer manager.ensureMu.Unlock()
+
+	if err := manager.ensureAlwaysOn(context.Background(), "always_on_check"); err != nil {
+		t.Fatal(err)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("coalesced routine ensure ran %d lifecycle commands", runnerCalls)
+	}
+}
+
+func TestRoutineEnsureSkipsHeavyAuditUntilDue(t *testing.T) {
+	runnerCalls := 0
+	manager := &Manager{
+		supported:       true,
+		lastReconcileAt: time.Now().Unix(),
+		runner: func(context.Context, time.Duration, string, ...string) (commandResult, error) {
+			runnerCalls++
+			return commandResult{}, nil
+		},
+	}
+
+	if err := manager.ensureAlwaysOn(context.Background(), "always_on_check"); err != nil {
+		t.Fatal(err)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("recent routine audit ran %d lifecycle commands", runnerCalls)
+	}
+}
+
 func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 	calls := []string{}
 	queryCount := 0
@@ -770,7 +918,7 @@ func TestEnsureServiceForceKillsStuckStopPendingService(t *testing.T) {
 	}
 }
 
-func TestEnsureAlwaysOnClearsReadyWhenServiceStopPending(t *testing.T) {
+func TestFullEnsureClearsReadyWhenServiceStopPending(t *testing.T) {
 	oldTransitionWait := serviceTransitionWait
 	oldForceKillWait := serviceTransitionForceKillWait
 	serviceTransitionWait = time.Millisecond
@@ -821,7 +969,7 @@ func TestEnsureAlwaysOnClearsReadyWhenServiceStopPending(t *testing.T) {
 		},
 	}
 
-	err = manager.ensureAlwaysOn(context.Background(), "vnc_establish")
+	err = manager.ensureAlwaysOn(context.Background(), "agent_startup")
 	if err == nil {
 		t.Fatal("expected STOP_PENDING service to fail readiness")
 	}

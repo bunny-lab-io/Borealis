@@ -168,7 +168,13 @@ func TestRequestVNCServerCredentialConsumesWorkerCallEnvelope(t *testing.T) {
 		if body["event_name"] != "vnc_credential_request" || body["hostname"] != "LAB-OPERATOR-01" {
 			t.Fatalf("unexpected worker body %#v", body)
 		}
+		if body["timeout_seconds"] != float64(1) {
+			t.Fatalf("unexpected timeout %#v", body["timeout_seconds"])
+		}
 		payload := body["payload"].(map[string]any)
+		if payload["timeout_seconds"] != float64(1) {
+			t.Fatalf("Agent payload missing readiness timeout %#v", payload)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"called": true,
 			"response": map[string]any{
@@ -258,6 +264,9 @@ func TestRequestVNCStartReadyConsumesWorkerCallEnvelope(t *testing.T) {
 		payload := body["payload"].(map[string]any)
 		if payload["session_id"] != "session-1" || payload["agent_id"] != "LAB-CAMERA-01_SYSTEM" {
 			t.Fatalf("unexpected start payload %#v", payload)
+		}
+		if payload["timeout_seconds"] != float64(12) {
+			t.Fatalf("Agent payload missing readiness timeout %#v", payload)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"called": true,
@@ -581,18 +590,27 @@ func TestVNCWaitOverridesClampToEstablishSLA(t *testing.T) {
 	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
 	t.Setenv("BOREALIS_VNC_START_READY_WAIT_SECONDS", "90")
 
-	if got := vncEstablishTimeout(); got != 30*time.Second {
-		t.Fatalf("establish deadline should clamp to 30s, got %s", got)
+	if got := vncEstablishTimeout(); got != 75*time.Second {
+		t.Fatalf("establish deadline should clamp to 75s, got %s", got)
 	}
-	if got := vncAuthRetryCooldown(); got != 30*time.Second {
-		t.Fatalf("auth retry cooldown should clamp to 30s, got %s", got)
+	if got := vncAuthRetryCooldown(); got != 75*time.Second {
+		t.Fatalf("auth retry cooldown should clamp to 75s, got %s", got)
 	}
-	if got := vncAuthLockoutCooldown(); got != 30*time.Second {
-		t.Fatalf("auth lockout cooldown should clamp to 30s, got %s", got)
+	if got := vncAuthLockoutCooldown(); got != 75*time.Second {
+		t.Fatalf("auth lockout cooldown should clamp to 75s, got %s", got)
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	if got := vncBoundedWaitSeconds("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, deadline); got > 20 {
 		t.Fatalf("bounded wait should clamp to remaining establish budget, got %.1fs", got)
+	}
+}
+
+func TestRemoteDesktopSlowDeviceBudgets(t *testing.T) {
+	if defaultVNCStartReadyWaitSeconds != 60 || defaultVNCLiveCredentialWaitSeconds != 60 {
+		t.Fatalf("VNC Agent readiness budgets must allow 60 seconds")
+	}
+	if defaultVNCEstablishDeadlineSeconds != 75 {
+		t.Fatalf("VNC establish budget must preserve post-readiness overhead")
 	}
 }
 
