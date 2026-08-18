@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+import sys
 import unittest
+from unittest.mock import patch
 
-from Tests.helpers.affected_services import affected_services
+from Tests.helpers.affected_services import affected_services, main
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +56,12 @@ class AffectedServicesTests(unittest.TestCase):
 
     def test_unknown_path_has_no_images(self) -> None:
         self.assertEqual(affected_services(["Docs/index.md"], SERVICES), [])
+
+    def test_cli_emits_no_empty_service_for_unknown_path(self) -> None:
+        output = StringIO()
+        with patch.object(sys, "argv", ["affected_services.py", "--file", "Docs/index.md"]), redirect_stdout(output):
+            self.assertEqual(main(), 0)
+        self.assertEqual(output.getvalue(), "")
 
 
 if __name__ == "__main__":
