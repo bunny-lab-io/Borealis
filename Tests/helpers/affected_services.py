@@ -95,7 +95,8 @@ def main() -> int:
     elif args.format == "github":
         print(json.dumps({"service": affected}, separators=(",", ":")))
     else:
-        print("\n".join(affected))
+        if affected:
+            print("\n".join(affected))
     return 0
 
 
