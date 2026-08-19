@@ -479,6 +479,7 @@ func TestEnsureFirewallMutatesOnlyWhenManagedRuleDrifts(t *testing.T) {
 		"if (-not $valid)",
 		"Remove-NetFirewallRule",
 		"New-NetFirewallRule",
+		"Borealis VNC firewall rule verification failed",
 		"-LocalPort 5900",
 		"-RemoteAddress '10.255.0.1/32'",
 	} {
@@ -488,6 +489,30 @@ func TestEnsureFirewallMutatesOnlyWhenManagedRuleDrifts(t *testing.T) {
 	}
 	if strings.Contains(command, "Set-NetFirewallRule") {
 		t.Fatalf("firewall command should replace only drifted managed rule: %s", command)
+	}
+}
+
+func TestEnsureAlwaysOnDoesNotReportReadyWhenFirewallReconciliationFails(t *testing.T) {
+	manager := &Manager{
+		supported:          true,
+		port:               5900,
+		allowedIPs:         "10.255.0.1/32",
+		controllerPassword: "password",
+		serviceName:        serviceName,
+		vncExe:             `C:\Program Files\UltraVNC\winvnc.exe`,
+		runner: func(_ context.Context, _ time.Duration, name string, _ ...string) (commandResult, error) {
+			if name == "powershell.exe" {
+				return commandResult{Stderr: "Access is denied.", ExitCode: 1}, errors.New("exit status 1")
+			}
+			return commandResult{Stdout: "STATE : 4 RUNNING", ExitCode: 0}, nil
+		},
+	}
+	err := manager.ensureAlwaysOn(context.Background(), "agent_startup")
+	if err == nil || !strings.Contains(err.Error(), "Access is denied") {
+		t.Fatalf("expected firewall reconciliation failure, got %v", err)
+	}
+	if manager.ready() {
+		t.Fatal("VNC reported ready after firewall reconciliation failed")
 	}
 }
 

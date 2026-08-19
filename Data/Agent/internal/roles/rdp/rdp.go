@@ -432,13 +432,22 @@ func buildFirewallCommand(engineAddress string, localAddress string, port int) s
 			"$addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
 			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.LocalAddress -eq %s) -and ([string]$addressFilter.RemoteAddress -eq %s); "+
 			"if (-not $valid) { Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
-			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -LocalAddress %s -RemoteAddress %s -Profile Any | Out-Null }",
+			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -LocalAddress %s -RemoteAddress %s -Profile Any | Out-Null; "+
+			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
+			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; $addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.LocalAddress -eq %s) -and ([string]$addressFilter.RemoteAddress -eq %s); "+
+			"if (-not $valid) { throw 'Borealis RDP firewall rule verification failed' } }",
 		name,
 		description,
 		port,
 		powerShellSingleQuoted(local),
 		powerShellSingleQuoted(remote),
 		name,
+		name,
+		description,
+		port,
+		powerShellSingleQuoted(local),
+		powerShellSingleQuoted(remote),
 		name,
 		description,
 		port,

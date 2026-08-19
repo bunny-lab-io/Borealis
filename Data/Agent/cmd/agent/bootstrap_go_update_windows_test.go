@@ -24,6 +24,9 @@ func TestDeferredReplacementScriptRunsValidationThroughExeShim(t *testing.T) {
 	if !strings.Contains(script, "Mark-AgentUpdateFailed") || !strings.Contains(script, "Ensure-AgentServiceRunning") {
 		t.Fatalf("deferred script does not mark failed update and restart service on failure")
 	}
+	if !strings.Contains(script, "--reconcile-update --config-path") || !strings.Contains(script, "reconcile-update:") {
+		t.Fatalf("deferred script does not reconcile mutable host state after replacement")
+	}
 }
 
 func TestDeferredRedeployReplacementScriptDoesNotRequireUpdateFinalize(t *testing.T) {

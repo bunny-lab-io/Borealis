@@ -579,9 +579,10 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	firewallStarted := time.Now()
 	if err := m.ensureFirewall(ctx, allowedIPs, port); err != nil {
 		m.logf("VNC firewall ensure failed duration_ms=%d error=%v", time.Since(firewallStarted).Milliseconds(), err)
-	} else {
-		m.logEnsurePhase(reason, "firewall", firewallStarted)
+		m.setError(err.Error())
+		return err
 	}
+	m.logEnsurePhase(reason, "firewall", firewallStarted)
 	configStarted := time.Now()
 	configPath, configChanged, err := m.ensureConfig(port, password, removeWallpaper)
 	if err != nil {
@@ -987,8 +988,13 @@ func (m *Manager) ensureFirewall(ctx context.Context, allowedIPs string, port in
 			"$addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
 			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.RemoteAddress -eq %s); "+
 			"if (-not $valid) { Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
-			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress %s -Profile Any | Out-Null }",
+			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress %s -Profile Any | Out-Null; "+
+			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
+			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; $addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.RemoteAddress -eq %s); "+
+			"if (-not $valid) { throw 'Borealis VNC firewall rule verification failed' } }",
 		name, description, port, remoteLiteral, name, name, description, port, remoteLiteral,
+		name, description, port, remoteLiteral,
 	)
 	result, err := m.runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {

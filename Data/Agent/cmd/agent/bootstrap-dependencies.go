@@ -42,8 +42,17 @@ const (
 )
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	return reconcileAgentDependencies(cfg, logger, false)
+}
+
+func ensureAgentDependenciesForUpdate(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	return reconcileAgentDependencies(cfg, logger, true)
+}
+
+func reconcileAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger, failOnError bool) error {
 	startedAt := time.Now()
 	logger.Tracef("Dependency coordinator start.")
+	var reconciliationErrors []error
 	optionalSteps := []struct {
 		name       string
 		dependency string
@@ -63,6 +72,9 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 			logger.Warnf("%s dependency deferred: %v", step.name, err)
 			writeTimeline(cfg, "failed", task, step.name+" dependency deferred: "+err.Error(), 1)
 			logger.Tracef("Dependency step deferred: %s duration=%s error=%v", step.name, time.Since(stepStartedAt).Round(time.Millisecond), err)
+			if failOnError {
+				reconciliationErrors = append(reconciliationErrors, fmt.Errorf("%s reconciliation: %w", step.name, err))
+			}
 			continue
 		}
 		writeConfigDependencyState(cfg, step.dependency, "healthy", "healthy", dependencyDesiredVersion(step.dependency), readConfigDependencyVersion(cfg, step.dependency), step.name+" dependency ready.", "")
@@ -70,8 +82,9 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 		logger.Tracef("Dependency step complete: %s duration=%s", step.name, time.Since(stepStartedAt).Round(time.Millisecond))
 	}
 	cleanupDependencyWorkspace(cfg, logger)
-	logger.Tracef("Dependency coordinator complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
-	return nil
+	reconciliationErr := errors.Join(reconciliationErrors...)
+	logger.Tracef("Dependency coordinator complete duration=%s strict=%t error=%v.", time.Since(startedAt).Round(time.Millisecond), failOnError, reconciliationErr)
+	return reconciliationErr
 }
 
 func dependencyDesiredVersion(name string) string {

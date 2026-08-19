@@ -77,7 +77,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     sudo /opt/Borealis/Agent/Agent --update-check --config-path /opt/Borealis/Agent/agent.json
     ```
 
-`--update-check` asks Engine for current Agent artifact manifest, downloads authenticated platform binary, verifies advertised SHA-256, and validates candidate with `--validate-config` before replacing runtime binary.
+`--update-check` asks Engine for current Agent artifact manifest, downloads authenticated platform binary, verifies advertised SHA-256, and validates candidate with `--validate-config` before replacing runtime binary. Windows changed-build updates preserve enrollment identity and trust, then revalidate Borealis-owned dependencies, services, scheduled tasks, runtime configuration, and scoped firewall state as Agent restarts.
 
 ### Validate Configuration
 
@@ -196,6 +196,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
     - Engine IP fallback dial policy: `Data/Agent/internal/auth/client.go`.
     - Socket.IO fallback dial hook: `Data/Agent/internal/transport/socketio.go`.
     - Deferred update finalization: `Data/Agent/cmd/agent/update_finalize.go`.
+    - Windows post-update host reconciliation: `Data/Agent/cmd/agent/update_reconcile_windows.go`; `--reconcile-update` is an internal deferred-updater flag.
     - Metadata queue implementation: `Data/Agent/internal/config/config.go`.
 
     ### Runtime behavior

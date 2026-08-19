@@ -37,6 +37,7 @@ func TestBuildFirewallCommandScopesOnlyBorealisRule(t *testing.T) {
 		"-LocalPort 3389",
 		"-LocalAddress '10.255.0.42/32'",
 		"-RemoteAddress '10.255.0.1/32'",
+		"Borealis RDP firewall rule verification failed",
 	} {
 		if !strings.Contains(command, expected) {
 			t.Fatalf("firewall command missing %q: %s", expected, command)

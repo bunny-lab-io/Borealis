@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeRDPCredentialStore struct {
@@ -186,5 +188,83 @@ func TestRDPSlowDeviceBudgets(t *testing.T) {
 	}
 	if defaultRDPEstablishDeadlineSeconds != 75 {
 		t.Fatalf("RDP establish budget must preserve post-readiness overhead")
+	}
+}
+
+func TestRDPTransportFailureForcesAgentReconciliationThenRetries(t *testing.T) {
+	var recoveryCalls atomic.Int32
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		payload := body["payload"].(map[string]any)
+		if payload["reason"] != "rdp_transport_recovery" {
+			t.Fatalf("unexpected recovery payload %#v", payload)
+		}
+		recoveryCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called":   true,
+			"response": map[string]any{"status": "ok", "ready": true},
+		})
+	}))
+	defer worker.Close()
+
+	waitCalls := 0
+	waiter := func(_ string, _ int, _ float64, _ float64) bool {
+		waitCalls++
+		return waitCalls == 2
+	}
+	payloadErr, status := ensureRDPWireGuardTransport(
+		context.Background(),
+		vncTestAuth(&fakeVNCStore{}),
+		routeForTestWorker(t, worker.URL),
+		"LAB-DC-01",
+		"system",
+		map[string]any{"agent_id": "LAB-DC-01_SYSTEM", "reason": "rdp_establish"},
+		"10.255.0.100",
+		3389,
+		waiter,
+	)
+	if payloadErr != nil || status != 0 || waitCalls != 2 || recoveryCalls.Load() != 1 {
+		t.Fatalf("unexpected recovery result status=%d error=%#v wait_calls=%d recovery_calls=%d", status, payloadErr, waitCalls, recoveryCalls.Load())
+	}
+}
+
+func TestRDPTransportFailureReturnsAfterSingleRecovery(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called":   true,
+			"response": map[string]any{"status": "ok", "ready": true},
+		})
+	}))
+	defer worker.Close()
+
+	waitCalls := 0
+	payloadErr, status := ensureRDPWireGuardTransport(
+		context.Background(),
+		vncTestAuth(&fakeVNCStore{}),
+		routeForTestWorker(t, worker.URL),
+		"LAB-DC-01",
+		"system",
+		map[string]any{"agent_id": "LAB-DC-01_SYSTEM"},
+		"10.255.0.100",
+		3389,
+		func(_ string, _ int, _ float64, _ float64) bool { waitCalls++; return false },
+	)
+	if status != http.StatusServiceUnavailable || cleanText(payloadErr["error"]) != "rdp_backend_not_ready" || waitCalls != 2 {
+		t.Fatalf("unexpected failed recovery status=%d error=%#v wait_calls=%d", status, payloadErr, waitCalls)
+	}
+}
+
+func TestRDPTransportProbeBudgetHonorsEstablishDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	budget := rdpTransportProbeBudget(ctx, 5)
+	if budget <= 0 || budget > 0.05 {
+		t.Fatalf("unexpected bounded probe budget %f", budget)
+	}
+	if budget := rdpTransportProbeBudget(context.Background(), 5); budget != 5 {
+		t.Fatalf("unexpected unbounded probe budget %f", budget)
 	}
 }

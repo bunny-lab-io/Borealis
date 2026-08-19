@@ -1651,7 +1651,11 @@ func waitForTCP(host string, port int, timeoutSeconds float64, pollSeconds float
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSeconds * float64(time.Second)))
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 750*time.Millisecond)
+		dialTimeout := 750 * time.Millisecond
+		if remaining := time.Until(deadline); dialTimeout > remaining {
+			dialTimeout = remaining
+		}
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), dialTimeout)
 		if err == nil {
 			_ = conn.Close()
 			return true

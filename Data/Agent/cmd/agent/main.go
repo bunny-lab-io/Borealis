@@ -32,6 +32,7 @@ func run() int {
 	var uninstallService bool
 	var printVersion bool
 	var updateCheck bool
+	var reconcileUpdate bool
 	var finalizeUpdate bool
 	var service bool
 	var watchdogCheck bool
@@ -54,6 +55,7 @@ func run() int {
 	flag.BoolVar(&installService, "install-service", false, "Install and start Borealis Agent service.")
 	flag.BoolVar(&uninstallService, "uninstall-service", false, "Uninstall Borealis Agent service.")
 	flag.BoolVar(&updateCheck, "update-check", false, "Run one Engine-hosted Agent update check.")
+	flag.BoolVar(&reconcileUpdate, "reconcile-update", false, "Reconcile mutable host state after Agent update.")
 	flag.BoolVar(&watchdogCheck, "watchdog-check", false, "Run one local Agent watchdog check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
 	flag.BoolVar(&validateConfig, "validate-config", false, "Validate agent.json compatibility and exit.")
@@ -87,6 +89,13 @@ func run() int {
 	}
 	if metadataCommand {
 		return runMetadataCommand(options.ConfigPath, flag.Args())
+	}
+	if reconcileUpdate {
+		if err := runPostUpdateReconciliation(options); err != nil {
+			fmt.Fprintf(os.Stderr, "reconcile update: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	exePath, err := os.Executable()
