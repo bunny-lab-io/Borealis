@@ -154,7 +154,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - Agent error log: `Logs/Agent/agent.error.log`.
     - Agent remote shell log: `Logs/Agent/remote_shell.log`.
     - Agent role/watchdog recovery log: `Logs/Agent/role_recovery.log`.
-    - Agent log retention defaults to `agent.log_retention_days: 1`; all Agent logs rotate daily and old rotated logs are pruned on the next write/start using that value.
+    - Agent log retention defaults to `agent.log_retention_days: 7`; all Agent logs rotate daily and old rotated logs are pruned on the next write/start using that value. Existing configs carrying previous generated default `1` migrate to `7` when loaded, while other positive custom retention values remain unchanged.
     - Agent bootstrap/update diagnostics: `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap truncates this file at each start and always writes verbose trace/command output there while keeping console/GUI output minimal. Deferred Windows self-replacement writes retry, hash verification, finalization, and task restart output to `Logs/Agent/updater.log`. Linux updater diagnostics use `bootstrap.log`.
     - WireGuard role log: `Logs/WireGuard/wireguard.log`.
     - WireGuard MSI install log: `Logs/WireGuard/wireguard-msi-install.log`.
@@ -209,7 +209,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - Keep Linux Agent installation separate from deployed Engine runtime roots.
 
     #### Logging
-    - Primary log: `Logs/Agent/agent.log` with daily rotation to `agent.log.YYYY-MM-DD`; retention defaults to one day through `agent.log_retention_days`.
+    - Primary log: `Logs/Agent/agent.log` with daily rotation to `agent.log.YYYY-MM-DD`; retention defaults to seven days through `agent.log_retention_days`. Agent, role, WireGuard, VNC, RDP, recovery, and updater writers use shared daily rotation/pruning. Ensure diagnostics remain available inside retained window.
     - Agent support logs: `Logs/Agent/bootstrap.log`, `Logs/Agent/remote_shell.log`, and `Logs/Agent/role_recovery.log`.
     - WireGuard logs: `Logs/WireGuard/wireguard.log` and `Logs/WireGuard/wireguard-msi-install.log`.
     - UltraVNC logs: `Logs/UltraVNC/vnc.log` and `Logs/UltraVNC/ultravnc-msi-install.log`.

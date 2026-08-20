@@ -20,9 +20,10 @@ const (
 	SchemaVersion           = 1
 	FileName                = "agent.json"
 	MetadataQueueFileName   = "metadata-queue.json"
-	DefaultLogRetentionDays = 1
+	DefaultLogRetentionDays = 7
 	MetadataFieldCount      = 500
 	MetadataValueMaxLength  = 1024
+	legacyLogRetentionDays  = 1
 )
 
 var fileMu sync.Mutex
@@ -564,7 +565,7 @@ func (c *AgentConfig) ApplyDefaults() {
 	c.Trust.EngineCAPEM = NormalizeEngineCAPEM(c.Trust.EngineCAPEM)
 	c.RemoteOps = normalizeRemoteOpsSection(c.RemoteOps)
 	c.Agent.Update = normalizeUpdateSection(c.Agent.Update)
-	if c.Agent.LogRetentionDays <= 0 {
+	if c.Agent.LogRetentionDays <= 0 || c.Agent.LogRetentionDays == legacyLogRetentionDays {
 		c.Agent.LogRetentionDays = DefaultLogRetentionDays
 	}
 	if len(c.Agent.DependencyState) > 0 {

@@ -121,6 +121,7 @@ Back to Docs Index: ../../Docs/index.md
 78. Converted Windows Agent runtime from a primary scheduled task to the native `BorealisAgent` service using `--service`, added SCM recovery actions, and retained scheduled tasks only for AutoUpdater and Watchdog.
 79. Added `agent.log_retention_days` default `1`, `agent.liveness`, daily Agent log rotation/pruning, stale-liveness watchdog recovery, and centralized `Logs/Agent/role_recovery.log` role/watchdog recovery logging.
 80. Added branch-retirement recovery so Windows and Linux update checks switch missing source refs back to `stable/main`, and Engine heartbeat responses can trigger the same correction after the self-remediation window.
+81. Raised default Agent log retention from one to seven calendar days, migrated configs carrying previous generated one-day default, and retained daily rotation plus ensure diagnostics across Agent, role, recovery, and updater logs.
 
 ## In Progress
 

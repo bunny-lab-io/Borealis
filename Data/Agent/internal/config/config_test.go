@@ -99,6 +99,20 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsMigratesLegacyLogRetention(t *testing.T) {
+	cfg := AgentConfig{Agent: AgentSection{LogRetentionDays: legacyLogRetentionDays}}
+	cfg.ApplyDefaults()
+	if cfg.Agent.LogRetentionDays != DefaultLogRetentionDays {
+		t.Fatalf("legacy log retention = %d, want %d", cfg.Agent.LogRetentionDays, DefaultLogRetentionDays)
+	}
+
+	cfg.Agent.LogRetentionDays = 14
+	cfg.ApplyDefaults()
+	if cfg.Agent.LogRetentionDays != 14 {
+		t.Fatalf("custom log retention changed to %d", cfg.Agent.LogRetentionDays)
+	}
+}
+
 func TestValidateServerURLForEnrollmentRejectsRawIP(t *testing.T) {
 	if err := ValidateServerURLForEnrollment("https://192.0.2.10"); err == nil {
 		t.Fatal("raw IP server URL accepted")
