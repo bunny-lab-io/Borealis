@@ -579,14 +579,14 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	firewallStarted := time.Now()
 	if err := m.ensureFirewall(ctx, allowedIPs, port); err != nil {
 		m.logf("VNC firewall ensure failed duration_ms=%d error=%v", time.Since(firewallStarted).Milliseconds(), err)
-		m.setError(err.Error())
+		m.setNotReadyError(err.Error())
 		return err
 	}
 	m.logEnsurePhase(reason, "firewall", firewallStarted)
 	configStarted := time.Now()
 	configPath, configChanged, err := m.ensureConfig(port, password, removeWallpaper)
 	if err != nil {
-		m.setError(err.Error())
+		m.setNotReadyError(err.Error())
 		return err
 	}
 	m.logEnsurePhase(reason, "config", configStarted)
@@ -979,22 +979,22 @@ func (m *Manager) ensureFirewall(ctx context.Context, allowedIPs string, port in
 		return fmt.Errorf("invalid VNC firewall remote scope: %s", allowedIPs)
 	}
 	name := powerShellSingleQuoted(firewallRuleName)
-	remoteLiteral := powerShellSingleQuoted(remote)
+	remoteLiteral := powerShellSingleQuoted(strings.TrimSuffix(remote, "/32"))
 	description := powerShellSingleQuoted(fmt.Sprintf("Borealis managed VNC; port=%d; remote=%s", port, remote))
 	command := fmt.Sprintf(
 		"$ErrorActionPreference = 'Stop'; "+
 			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
 			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; "+
 			"$addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
-			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.RemoteAddress -eq %s); "+
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and (([string]$addressFilter.RemoteAddress -eq %s) -or ([string]$addressFilter.RemoteAddress -eq %s)); "+
 			"if (-not $valid) { Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
 			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress %s -Profile Any | Out-Null; "+
 			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
 			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; $addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
-			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.RemoteAddress -eq %s); "+
-			"if (-not $valid) { throw 'Borealis VNC firewall rule verification failed' } }",
-		name, description, port, remoteLiteral, name, name, description, port, remoteLiteral,
-		name, description, port, remoteLiteral,
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and (([string]$addressFilter.RemoteAddress -eq %s) -or ([string]$addressFilter.RemoteAddress -eq %s)); "+
+			"if (-not $valid) { throw ('Borealis VNC firewall rule verification failed rules=' + ([string]$rules.Count) + ' enabled=' + ([string]$rule.Enabled) + ' direction=' + ([string]$rule.Direction) + ' action=' + ([string]$rule.Action) + ' protocol=' + ([string]$portFilter.Protocol) + ' port=' + ([string]$portFilter.LocalPort) + ' remote=' + ([string]$addressFilter.RemoteAddress)) } }",
+		name, description, port, remoteLiteral, powerShellSingleQuoted(remote), name, name, description, port, remoteLiteral,
+		name, description, port, remoteLiteral, powerShellSingleQuoted(remote),
 	)
 	result, err := m.runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {
@@ -1186,6 +1186,13 @@ func (m *Manager) agentID() string {
 
 func (m *Manager) setError(message string) {
 	m.mu.Lock()
+	m.lastError = strings.TrimSpace(message)
+	m.mu.Unlock()
+}
+
+func (m *Manager) setNotReadyError(message string) {
+	m.mu.Lock()
+	m.lastReady = false
 	m.lastError = strings.TrimSpace(message)
 	m.mu.Unlock()
 }

@@ -35,15 +35,24 @@ func TestBuildFirewallCommandScopesOnlyBorealisRule(t *testing.T) {
 		"Get-NetFirewallAddressFilter",
 		"if (-not $valid)",
 		"-LocalPort 3389",
-		"-LocalAddress '10.255.0.42/32'",
-		"-RemoteAddress '10.255.0.1/32'",
+		"-LocalAddress '10.255.0.42'",
+		"-RemoteAddress '10.255.0.1'",
+		"LocalAddress -eq '10.255.0.42/32'",
+		"RemoteAddress -eq '10.255.0.1/32'",
 		"Borealis RDP firewall rule verification failed",
+		"local=' + ([string]$addressFilter.LocalAddress)",
+		"remote=' + ([string]$addressFilter.RemoteAddress)",
 	} {
 		if !strings.Contains(command, expected) {
 			t.Fatalf("firewall command missing %q: %s", expected, command)
 		}
 	}
-	for _, forbidden := range []string{"Set-NetFirewallProfile", "Remote Desktop Users", "Enable-NetFirewallRule -DisplayGroup"} {
+	for _, forbidden := range []string{"-LocalAddress '10.255.0.42/32'", "-RemoteAddress '10.255.0.1/32'"} {
+		if strings.Contains(command, forbidden) {
+			t.Fatalf("firewall command should use Windows single-host form %q: %s", forbidden, command)
+		}
+	}
+	for _, forbidden := range []string{"Set-NetFirewallProfile", "Remote Desktop Users", "Enable-NetFirewallRule -DisplayGroup", "%!"} {
 		if strings.Contains(command, forbidden) {
 			t.Fatalf("firewall command contains broad mutation %q: %s", forbidden, command)
 		}

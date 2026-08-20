@@ -481,7 +481,9 @@ func TestEnsureFirewallMutatesOnlyWhenManagedRuleDrifts(t *testing.T) {
 		"New-NetFirewallRule",
 		"Borealis VNC firewall rule verification failed",
 		"-LocalPort 5900",
-		"-RemoteAddress '10.255.0.1/32'",
+		"-RemoteAddress '10.255.0.1'",
+		"RemoteAddress -eq '10.255.0.1/32'",
+		"remote=' + ([string]$addressFilter.RemoteAddress)",
 	} {
 		if !strings.Contains(command, expected) {
 			t.Fatalf("firewall command missing %q: %s", expected, command)
@@ -489,6 +491,12 @@ func TestEnsureFirewallMutatesOnlyWhenManagedRuleDrifts(t *testing.T) {
 	}
 	if strings.Contains(command, "Set-NetFirewallRule") {
 		t.Fatalf("firewall command should replace only drifted managed rule: %s", command)
+	}
+	if strings.Contains(command, "-RemoteAddress '10.255.0.1/32'") {
+		t.Fatalf("firewall command should use Windows single-host form: %s", command)
+	}
+	if strings.Contains(command, "%!") {
+		t.Fatalf("firewall command contains formatting error: %s", command)
 	}
 }
 
@@ -513,6 +521,24 @@ func TestEnsureAlwaysOnDoesNotReportReadyWhenFirewallReconciliationFails(t *test
 	}
 	if manager.ready() {
 		t.Fatal("VNC reported ready after firewall reconciliation failed")
+	}
+}
+
+func TestFirewallFailureInvalidatesCachedReadiness(t *testing.T) {
+	manager := &Manager{
+		port:               5900,
+		lastReady:          true,
+		lastServiceState:   "RUNNING",
+		lastListenerState:  "listening",
+		controllerPassword: "password",
+		allowedIPs:         "10.255.0.1/32",
+		listenerProbe:      func(int) bool { return true },
+	}
+
+	manager.setNotReadyError("VNC firewall ensure failed")
+
+	if manager.ready() || manager.cachedReady() || manager.credentialFastPathReady() {
+		t.Fatal("VNC firewall failure left cached readiness usable")
 	}
 }
 

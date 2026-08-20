@@ -425,33 +425,39 @@ func buildFirewallCommand(engineAddress string, localAddress string, port int) s
 	}
 	name := powerShellSingleQuoted(firewallRuleName)
 	description := powerShellSingleQuoted(fmt.Sprintf("Borealis managed RDP; port=%d; local=%s; remote=%s", port, local, remote))
+	localFilter := powerShellSingleQuoted(strings.TrimSuffix(local, "/32"))
+	remoteFilter := powerShellSingleQuoted(strings.TrimSuffix(remote, "/32"))
 	return fmt.Sprintf(
 		"$ErrorActionPreference = 'Stop'; "+
 			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
 			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; "+
 			"$addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
-			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.LocalAddress -eq %s) -and ([string]$addressFilter.RemoteAddress -eq %s); "+
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and (([string]$addressFilter.LocalAddress -eq %s) -or ([string]$addressFilter.LocalAddress -eq %s)) -and (([string]$addressFilter.RemoteAddress -eq %s) -or ([string]$addressFilter.RemoteAddress -eq %s)); "+
 			"if (-not $valid) { Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
 			"New-NetFirewallRule -DisplayName %s -Description %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -LocalAddress %s -RemoteAddress %s -Profile Any | Out-Null; "+
 			"$rules = @(Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue); $rule = $rules | Select-Object -First 1; "+
 			"$portFilter = if ($null -ne $rule) { $rule | Get-NetFirewallPortFilter }; $addressFilter = if ($null -ne $rule) { $rule | Get-NetFirewallAddressFilter }; "+
-			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and ([string]$addressFilter.LocalAddress -eq %s) -and ([string]$addressFilter.RemoteAddress -eq %s); "+
-			"if (-not $valid) { throw 'Borealis RDP firewall rule verification failed' } }",
+			"$valid = ($rules.Count -eq 1) -and ([string]$rule.Description -eq %s) -and ([string]$rule.Enabled -eq 'True') -and ([string]$rule.Direction -eq 'Inbound') -and ([string]$rule.Action -eq 'Allow') -and ([string]$portFilter.Protocol -eq 'TCP') -and ([string]$portFilter.LocalPort -eq '%d') -and (([string]$addressFilter.LocalAddress -eq %s) -or ([string]$addressFilter.LocalAddress -eq %s)) -and (([string]$addressFilter.RemoteAddress -eq %s) -or ([string]$addressFilter.RemoteAddress -eq %s)); "+
+			"if (-not $valid) { throw ('Borealis RDP firewall rule verification failed rules=' + ([string]$rules.Count) + ' enabled=' + ([string]$rule.Enabled) + ' direction=' + ([string]$rule.Direction) + ' action=' + ([string]$rule.Action) + ' protocol=' + ([string]$portFilter.Protocol) + ' port=' + ([string]$portFilter.LocalPort) + ' local=' + ([string]$addressFilter.LocalAddress) + ' remote=' + ([string]$addressFilter.RemoteAddress)) } }",
 		name,
 		description,
 		port,
+		localFilter,
 		powerShellSingleQuoted(local),
+		remoteFilter,
 		powerShellSingleQuoted(remote),
 		name,
 		name,
 		description,
 		port,
-		powerShellSingleQuoted(local),
-		powerShellSingleQuoted(remote),
+		localFilter,
+		remoteFilter,
 		name,
 		description,
 		port,
+		localFilter,
 		powerShellSingleQuoted(local),
+		remoteFilter,
 		powerShellSingleQuoted(remote),
 	)
 }
