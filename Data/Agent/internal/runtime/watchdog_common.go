@@ -42,7 +42,7 @@ func watchdogUpdateState(configPath string, cfg agentconfig.AgentConfig, now tim
 
 func updateOperationActive(update agentconfig.AgentUpdateSection) bool {
 	switch strings.ToLower(strings.TrimSpace(update.Status)) {
-	case "requested", "config_written", "updater_started", "running", "staging", "restarting", "verifying", "rollback_requested", "rollback_started", "factory_reset_requested", "factory_reset_started":
+	case "requested", "config_written", "updater_started", "running", "staging", "restarting", "awaiting_reconnect", "awaiting_health", "verifying", "rollback_requested", "rollback_started", "factory_reset_requested", "factory_reset_started":
 		return strings.TrimSpace(update.OperationID) != ""
 	default:
 		return false

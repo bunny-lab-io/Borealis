@@ -44,10 +44,11 @@ func finalizeDeferredUpdate(configPath string, buildID string, expectedSHA256 st
 	current.Agent.InstalledBuildID = normalizedBuildID
 	if current.Agent.Update.OperationID != "" {
 		now := time.Now().Unix()
-		current.Agent.Update.Status = "success"
+		current.Agent.Update.Status = "awaiting_reconnect"
 		current.Agent.Update.UpdatedAt = now
-		current.Agent.Update.CompletedAt = now
+		current.Agent.Update.CompletedAt = 0
 		current.Agent.Update.LastError = ""
+		current.Agent.Update.InstalledBuildAfter = normalizedBuildID
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return err

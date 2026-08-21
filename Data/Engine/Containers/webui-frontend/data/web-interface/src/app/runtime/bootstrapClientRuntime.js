@@ -4,6 +4,7 @@ import { installBorealisInputValidationGuard } from "../utils/inputValidation.js
 let bootstrapped = false;
 const GO_REALTIME_EVENTS = [
   "agent_status_changed",
+  "agent_update_progress_changed",
   "device_inventory_changed",
   "device_services_changed",
   "borealis_notification",

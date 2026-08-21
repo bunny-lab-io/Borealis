@@ -43,6 +43,16 @@ describe("Device Summary workspace URL state", () => {
     ).toBe("?tab=inventory&view=software");
   });
 
+  it("preserves only operation deep link in Agent Updates workspace", () => {
+    expect(
+      createDeviceWorkspaceSearch(
+        "?tab=remote_ops&view=files&working_directory=C%3A%5CUsers&registry_path=HKLM%5CSOFTWARE&operation_id=op-42",
+        "remote_ops",
+        "agent_updates"
+      )
+    ).toBe("?tab=remote_ops&view=agent_updates&operation_id=op-42");
+  });
+
   it("cleans direct URL params against current workspace context", () => {
     const fileParams = new URLSearchParams(
       "tab=remote_ops&view=files&registry_path=HKLM%5CSOFTWARE&working_directory=C%3A%5CUsers"

@@ -95,6 +95,9 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService, broadcaster
 	registerAgentIngestRoutes(mux, auth, signer, verifier, broadcaster)
 	if realtime, ok := broadcaster.(*operatorRealtimeHub); ok {
 		registerAgentPatchProgressRoutes(mux, auth, signer, verifier, realtime)
+		registerAgentUpdateProgressRoute(mux, auth, signer, verifier, realtime)
+	} else {
+		registerAgentUpdateProgressRoute(mux, auth, signer, verifier, nil)
 	}
 	return nil
 }

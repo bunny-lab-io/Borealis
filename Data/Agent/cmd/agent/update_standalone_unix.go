@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,7 +31,7 @@ type linuxUpdateManifest struct {
 	ArtifactFormat string `json:"artifact_format"`
 }
 
-func runStandaloneUpdateCheck(options agentruntime.Options) error {
+func runStandaloneUpdateCheck(options agentruntime.Options) (resultErr error) {
 	configPath := strings.TrimSpace(options.ConfigPath)
 	if configPath == "" {
 		resolved, err := agentconfig.PathFromBinary()
@@ -81,10 +82,20 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if installed == "" {
 		installed = agentconfig.NormalizeBuildID(options.BuildID)
 	}
-	return runLinuxManifestUpdateCheck(ctx, client, configPath, &cfg, installed)
+	reporter := newUpdateProgressReporter(configPath, nil)
+	if updateOperationIsActive(reporter.operation()) {
+		reporter.emit("requesting_agent_update", "", "success", "Agent Received Request", "Agent persisted update operation before acknowledgement.", "")
+		reporter.emit("resolving_engine_artifact", "", "running", "Resolving Engine Artifact", "Requesting current authenticated Agent artifact manifest.", "")
+	}
+	defer func() {
+		if resultErr != nil && updateOperationIsActive(reporter.operation()) {
+			reporter.emit("update_completed", "", "failed", "Agent Update Failed", resultErr.Error(), "failed")
+		}
+	}()
+	return runLinuxManifestUpdateCheck(ctx, client, configPath, &cfg, reporter, installed)
 }
 
-func runLinuxManifestUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, installed string) error {
+func runLinuxManifestUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, reporter *updateProgressReporter, installed string) error {
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
 		removeLinuxUpdateStatus(configPath)
@@ -96,8 +107,42 @@ func runLinuxManifestUpdateCheck(ctx context.Context, client *auth.Client, confi
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		removeLinuxUpdateStatus(configPath)
+		operation := reporter.operation()
+		if !updateOperationIsActive(operation) || operation.Source == updateSourceHourly {
+			return nil
+		}
+		reporter.setBuilds(target, installed, installed)
+		reporter.emit("resolving_engine_artifact", "", "success", "Current Binary Retained", "Installed Agent binary already matches Engine artifact.", "")
+		reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "skipped", "Skipped When Current", "Binary download not required for install-equivalent repair.", "")
+		reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "skipped", "Skipped When Current", "Current installed binary retained.", "")
+		identityBefore := agentUpdateIdentityFingerprint(configPath)
+		reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "running", "Protecting Agent Identity/Trust", "Capturing non-secret identity and trust fingerprint.", "")
+		reporter.emit("quiescing_managed_components", "", "running", "Quiescing Managed Components", "Stopping Borealis-managed systemd services and WireGuard interface.", "")
+		if err := quiesceLinuxUpdateComponents(configPath, reporter); err != nil {
+			return err
+		}
+		reporter.emit("quiescing_managed_components", "", "success", "Managed Components Stopped", "Borealis-managed Linux services stopped.", "")
+		reporter.emit("staging_agent_binary", "", "skipped", "Skipped When Current", "Installed Agent binary already matches target build.", "")
+		reporter.emit("reconciling_agent_host", "", "running", "Reconciling Agent Host", "Rewriting managed systemd units, timers, and service state.", "")
+		if err := agentruntime.InstallService(filepath.Join(filepath.Dir(configPath), "Agent")); err != nil {
+			return err
+		}
+		if identityBefore == "" || identityBefore != agentUpdateIdentityFingerprint(configPath) {
+			return fmt.Errorf("Agent identity/trust verification failed after Linux same-build reconciliation")
+		}
+		reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "success", "Identity/Trust Preserved", "Non-secret identity and trust fingerprint remained unchanged.", "")
+		reporter.emit("reconciling_agent_host", "", "success", "Agent Host Reconciled", "Managed systemd units, timers, and service state reconciled.", "")
+		markConfigUpdateOperation(configPath, "awaiting_health", "")
+		reporter.emit("starting_agent_runtime", "", "success", "Borealis Agent Service Started", "Agent systemd service restart completed.", "")
+		reporter.emit("waiting_agent_reconnection", "", "running", "Waiting for Agent Reconnection", "Waiting for matching heartbeat and required role health.", "")
 		return nil
 	}
+	if !updateOperationIsActive(reporter.operation()) {
+		reporter.ensureHourlyOperation(target, installed)
+		reporter.emit("requesting_agent_update", "", "success", "Hourly Update Checker", "New Engine artifact detected; durable update operation created.", "")
+	}
+	reporter.setBuilds(target, installed, "")
+	reporter.emit("resolving_engine_artifact", "", "success", "Update Available", "Engine artifact differs from installed Agent build.", "")
 	downloadURL := strings.TrimSpace(manifest.DownloadPath)
 	if downloadURL == "" {
 		return fmt.Errorf("update manifest did not provide Engine artifact path")
@@ -106,9 +151,13 @@ func runLinuxManifestUpdateCheck(ctx context.Context, client *auth.Client, confi
 		downloadURL = strings.TrimRight(client.BaseURL(), "/") + downloadURL
 	}
 	archivePath := filepath.Join(updaterDir(configPath), "agent-update.zip")
+	reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "running", "Downloading Agent Artifact", "Downloading authenticated Engine artifact.", "")
 	if err := downloadLinuxUpdateArtifact(ctx, client, downloadURL, archivePath); err != nil {
+		reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "failed", "Download Failed", err.Error(), "")
 		return err
 	}
+	reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "success", "Download Complete", "Agent artifact downloaded from Engine.", "")
+	reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "running", "Verifying Agent Artifact", "Validating artifact checksum and configuration compatibility.", "")
 	if strings.TrimSpace(manifest.ArtifactSHA256) != "" {
 		actual, err := sha256File(archivePath)
 		if err != nil {
@@ -118,11 +167,41 @@ func runLinuxManifestUpdateCheck(ctx context.Context, client *auth.Client, confi
 			return fmt.Errorf("update checksum mismatch expected=%s actual=%s", manifest.ArtifactSHA256, actual)
 		}
 	}
-	if err := stageLinuxAgentUpdate(configPath, archivePath); err != nil {
+	identityBefore := agentUpdateIdentityFingerprint(configPath)
+	reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "success", "Verification Complete", "Artifact checksum verification passed.", "")
+	reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "running", "Protecting Agent Identity/Trust", "Capturing non-secret identity and trust fingerprint before replacement.", "")
+	reporter.emit("quiescing_managed_components", "", "running", "Quiescing Managed Components", "Stopping Borealis-managed systemd services and WireGuard interface.", "")
+	if err := quiesceLinuxUpdateComponents(configPath, reporter); err != nil {
 		return err
 	}
+	reporter.emit("quiescing_managed_components", "", "success", "Managed Components Stopped", "Borealis-managed Linux services stopped.", "")
+	reporter.emit("staging_agent_binary", "", "running", "Staging Agent Binary", "Replacing installed runtime with verified candidate.", "")
+	backupPath, err := stageLinuxAgentUpdate(configPath, archivePath)
+	if err != nil {
+		reporter.emit("staging_agent_binary", "", "failed", "Agent Binary Failed to Stage", err.Error(), "")
+		return err
+	}
+	reporter.emit("staging_agent_binary", "", "success", "Agent Binary Staged", "Verified Agent binary replaced atomically.", "")
+	reporter.emit("reconciling_agent_host", "", "running", "Reconciling Agent Host", "Rewriting managed systemd units, timers, and service state.", "")
+	destination := filepath.Join(filepath.Dir(configPath), "Agent")
+	if err := agentruntime.InstallService(destination); err != nil {
+		if restoreErr := restoreLinuxAgentUpdate(destination, backupPath); restoreErr != nil {
+			return fmt.Errorf("start updated Linux Agent: %w; restore previous runtime: %v", err, restoreErr)
+		}
+		_ = agentruntime.InstallService(destination)
+		return fmt.Errorf("start updated Linux Agent: %w; previous runtime restored", err)
+	}
+	_ = os.Remove(backupPath)
 	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
-	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
+	if identityBefore == "" || identityBefore != agentUpdateIdentityFingerprint(configPath) {
+		return fmt.Errorf("Agent identity/trust verification failed after Linux binary replacement")
+	}
+	reporter.setBuilds(target, installed, target)
+	reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "success", "Identity/Trust Preserved", "Non-secret identity and trust fingerprint remained unchanged.", "")
+	reporter.emit("reconciling_agent_host", "", "success", "Agent Host Reconciled", "Managed systemd units, timers, and service state reconciled.", "")
+	markConfigUpdateOperation(configPath, "awaiting_health", "")
+	reporter.emit("starting_agent_runtime", "", "success", "Borealis Agent Service Started", "Agent systemd service restart completed.", "")
+	reporter.emit("waiting_agent_reconnection", "", "running", "Waiting for Agent Reconnection", "Waiting for matching heartbeat and required role health.", "")
 	return nil
 }
 
@@ -196,29 +275,121 @@ func downloadLinuxUpdateArtifact(ctx context.Context, client *auth.Client, rawUR
 	return os.Rename(temp, destination)
 }
 
-func stageLinuxAgentUpdate(configPath string, archivePath string) error {
+func stageLinuxAgentUpdate(configPath string, archivePath string) (string, error) {
 	binary, err := linuxAgentBinaryFromArchive(archivePath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	return stageLinuxAgentBinary(configPath, binary)
 }
 
-func stageLinuxAgentBinary(configPath string, binary []byte) error {
+func stageLinuxAgentBinary(configPath string, binary []byte) (string, error) {
 	destination := filepath.Join(filepath.Dir(configPath), "Agent")
 	pending := destination + ".update"
 	if err := os.WriteFile(pending, binary, 0o700); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Chmod(pending, 0o700); err != nil {
 		_ = os.Remove(pending)
-		return err
+		return "", err
 	}
 	if err := validateLinuxAgentUpdateCandidate(configPath, pending); err != nil {
 		_ = os.Remove(pending)
+		return "", err
+	}
+	backup := destination + ".previous"
+	_ = os.Remove(backup)
+	if err := copyLinuxAgentFile(destination, backup); err != nil {
+		_ = os.Remove(pending)
+		return "", err
+	}
+	if err := os.Rename(pending, destination); err != nil {
+		_ = os.Remove(pending)
+		_ = os.Remove(backup)
+		return "", err
+	}
+	return backup, nil
+}
+
+func quiesceLinuxUpdateComponents(configPath string, reporter *updateProgressReporter) error {
+	var stopErrors []error
+	for _, unit := range []struct {
+		name  string
+		phase string
+		label string
+	}{
+		{"borealis-agent-watchdog.timer", "stopping_borealis_agent_service", "Borealis Watchdog Timer"},
+		{"borealis-agent-watchdog.service", "stopping_borealis_agent_service", "Borealis Watchdog Service"},
+		{"borealis-agent.service", "stopping_borealis_agent_service", "Borealis Agent Service"},
+	} {
+		reporter.emit(unit.phase, "quiescing_managed_components", "running", "Stopping "+unit.label, "Requesting bounded systemd stop.", "")
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		output, err := exec.CommandContext(stopCtx, "systemctl", "stop", unit.name).CombinedOutput()
+		stopContextErr := stopCtx.Err()
+		stopCancel()
+		if stopContextErr != nil {
+			err = stopContextErr
+		}
+		if err != nil && !strings.Contains(strings.ToLower(string(output)), "not loaded") {
+			stopErr := fmt.Errorf("stop %s: %w: %s", unit.name, err, strings.TrimSpace(string(output)))
+			reporter.emit(unit.phase, "quiescing_managed_components", "failed", unit.label+" Failed to Stop", stopErr.Error(), "")
+			stopErrors = append(stopErrors, stopErr)
+			continue
+		}
+		reporter.emit(unit.phase, "quiescing_managed_components", "success", unit.label+" Stopped", "Managed systemd unit stopped or was not installed.", "")
+	}
+	wireguardConfig := filepath.Join(filepath.Dir(configPath), "wireguard.conf")
+	reporter.emit("stopping_wireguard_service", "quiescing_managed_components", "running", "Stopping WireGuard Service", "Stopping Borealis-managed WireGuard interface.", "")
+	wireGuardCtx, wireGuardCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	output, err := exec.CommandContext(wireGuardCtx, "wg-quick", "down", wireguardConfig).CombinedOutput()
+	wireGuardContextErr := wireGuardCtx.Err()
+	wireGuardCancel()
+	if wireGuardContextErr != nil {
+		err = wireGuardContextErr
+	}
+	if err != nil {
+		text := strings.ToLower(string(output))
+		if !strings.Contains(text, "not a wireguard interface") && !strings.Contains(text, "does not exist") && !errors.Is(err, exec.ErrNotFound) {
+			stopErr := fmt.Errorf("stop WireGuard interface: %w: %s", err, strings.TrimSpace(string(output)))
+			reporter.emit("stopping_wireguard_service", "quiescing_managed_components", "failed", "WireGuard Service Failed to Stop", stopErr.Error(), "")
+			stopErrors = append(stopErrors, stopErr)
+		}
+	}
+	reporter.emit("stopping_wireguard_service", "quiescing_managed_components", "success", "WireGuard Service Stopped", "WireGuard interface stopped or was not active.", "")
+	return errors.Join(stopErrors...)
+}
+
+func copyLinuxAgentFile(source string, destination string) error {
+	in, err := os.Open(source)
+	if err != nil {
 		return err
 	}
-	return os.Rename(pending, destination)
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(destination)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(destination)
+		return closeErr
+	}
+	return os.Chmod(destination, 0o700)
+}
+
+func restoreLinuxAgentUpdate(destination string, backup string) error {
+	if strings.TrimSpace(backup) == "" {
+		return fmt.Errorf("previous Agent runtime backup missing")
+	}
+	if err := os.Rename(backup, destination); err != nil {
+		return err
+	}
+	return os.Chmod(destination, 0o700)
 }
 
 func validateLinuxAgentUpdateCandidate(configPath string, candidate string) error {
@@ -276,13 +447,11 @@ func writeLinuxInstalledBuildID(configPath string, cfg *agentconfig.AgentConfig,
 	if buildID == "" || strings.EqualFold(buildID, "dev") {
 		return nil
 	}
-	if cfg == nil {
-		loaded, err := agentconfig.LoadOrCreate(configPath)
-		if err != nil {
-			return err
-		}
-		cfg = &loaded
+	loaded, err := agentconfig.LoadOrCreate(configPath)
+	if err != nil {
+		return err
 	}
+	cfg = &loaded
 	cfg.Agent.InstalledBuildID = buildID
 	if err := agentconfig.Save(configPath, cfg); err != nil {
 		return err

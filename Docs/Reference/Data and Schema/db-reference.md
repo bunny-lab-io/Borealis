@@ -31,6 +31,7 @@ scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
 scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
 activity_history.metadata_json.patch_progress stores latest scheduled Windows patch install progress.
+activity_history.metadata_json.agent_update stores durable Agent update operation and event timeline without separate schema table.
 
 patch_policies (id) ----------< patch_policy_sites (policy_id)
 patch_policies (id) ----------< patch_policy_targets (policy_id)
@@ -613,7 +614,7 @@ finally:
     #### `activity_history`
     - Status: Active.
     - Purpose: Execution/activity ledger for quick jobs and job-like actions.
-    - Columns: `id`, `hostname`, `script_path`, `script_name`, `script_type`, `ran_at`, `status`, `stdout`, `stderr`.
+    - Columns: `id`, `hostname`, `script_path`, `script_name`, `script_type`, `ran_at`, `status`, `stdout`, `stderr`, `queue_lane`, `activity_kind`, `metadata_json`, `started_at`, `updated_at`, `finished_at`.
     - Constraints and indexes:
     - `id` autoincrement primary key.
     - Used by:
@@ -622,6 +623,8 @@ finally:
     - WebSocket `quick_job_result` updates.
     - Activity APIs (`/api/device/activity/*`).
     - Linked from `scheduled_job_run_activity.activity_id`.
+    - Notes:
+    - `metadata_json.agent_update` stores operation/source/requester/build correlation plus bounded structured event history for `job_kind=agent_maintenance` runs. This reuses existing JSON ledger; no migration is required.
 
     #### `device_list_views`
     - Status: Active.

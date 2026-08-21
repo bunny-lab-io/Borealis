@@ -223,7 +223,7 @@ func startAgentRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	if !waitForServiceRunning(agentruntime.WindowsServiceName, 30*time.Second) {
-		logger.Warnf("Borealis Agent service did not report RUNNING before timeout.")
+		return fmt.Errorf("Borealis Agent service did not report RUNNING before timeout")
 	} else {
 		logger.Tracef("Borealis Agent service reported RUNNING.")
 	}

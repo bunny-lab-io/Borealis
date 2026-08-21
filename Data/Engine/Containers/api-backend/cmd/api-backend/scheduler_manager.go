@@ -823,6 +823,9 @@ func (m *goSchedulerManager) runGlobalWorkItem(ctx context.Context, item schedul
 }
 
 func (m *goSchedulerManager) processAgentMaintenanceWork(ctx context.Context) error {
+	if err := m.expireTimedOutAgentMaintenanceRuns(ctx); err != nil {
+		return err
+	}
 	leaseSeconds := int64(schedulerAgentMaintenanceSocketWaitSeconds() + 120)
 	for i := 0; i < envInt("BOREALIS_AGENT_MAINTENANCE_MANAGER_BATCH", 4, 1, 32); i++ {
 		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindAgentMaintenanceRun}, "job-scheduler", leaseSeconds)
@@ -932,7 +935,75 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	if responseStatus != "" {
 		stdout += "Agent response status=" + responseStatus + "\n"
 	}
+	if responseStatus == "active" {
+		activeOperationID := cleanText(response["operation_id"])
+		stdout += fmt.Sprintf("Request coalesced with active operation_id=%s.\n", firstText(activeOperationID, "unknown"))
+		return m.updateAgentMaintenanceRunStatus(ctx, runID, "Skipped", stdout, "")
+	}
 	return m.updateAgentMaintenanceRunStatus(ctx, runID, "Running", stdout, "")
+}
+
+func (m *goSchedulerManager) expireTimedOutAgentMaintenanceRuns(ctx context.Context) error {
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	now := time.Now().Unix()
+	cutoff := now - int64(envInt("BOREALIS_AGENT_UPDATE_TIMEOUT_SECONDS", 900, 60, 86400))
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackQuietly(tx)
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE engine.scheduled_job_runs AS r
+		   SET status='Timed Out', updated_at=$1, finished_ts=$1,
+		       error='Agent update did not report terminal health before timeout.'
+		  FROM engine.scheduled_jobs AS j
+		 WHERE j.id=r.job_id
+		   AND COALESCE(j.job_kind, '')='agent_maintenance'
+		   AND LOWER(COALESCE(r.status, '')) IN ('pending', 'running')
+		   AND COALESCE(r.started_ts, r.created_at) <= $2
+		 RETURNING r.id
+	`, now, cutoff)
+	if err != nil {
+		return err
+	}
+	runIDs := []int64{}
+	for rows.Next() {
+		var runID int64
+		if err := rows.Scan(&runID); err != nil {
+			rows.Close()
+			return err
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, runID := range runIDs {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.scheduled_job_run_targets
+			   SET resolution_status='unresolved',
+			       resolution_reason='Agent update did not report terminal health before timeout.'
+			 WHERE run_id=$1
+		`, runID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.activity_history AS h
+			   SET status='Timed Out', updated_at=$2, finished_at=$2,
+			       stderr=COALESCE(h.stderr, '') || 'Agent update did not report terminal health before timeout.\n'
+			  FROM engine.scheduled_job_run_activity AS a
+			 WHERE a.activity_id=h.id AND a.run_id=$1
+		`, runID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func schedulerAgentMaintenanceSocketWaitSeconds() int {
@@ -1035,7 +1106,7 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 	defer conn.Close()
 	now := time.Now().Unix()
 	var finished any
-	if stringInSet(status, "Success", "Failed", "Skipped") {
+	if stringInSet(status, "Success", "Failed", "Timed Out", "Skipped") {
 		finished = now
 	}
 	errorText := truncateString(stderr, 512)
@@ -1052,7 +1123,7 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 		return err
 	}
 	resolutionStatus := "eligible"
-	if status == "Failed" {
+	if status == "Failed" || status == "Timed Out" {
 		resolutionStatus = "unresolved"
 	}
 	if _, err := tx.ExecContext(ctx, `

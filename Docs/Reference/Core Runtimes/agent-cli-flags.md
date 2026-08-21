@@ -193,6 +193,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
     - Windows service and scheduled-task wiring: `Data/Agent/internal/runtime/service_windows.go` and `Data/Agent/cmd/agent/bootstrap-tasks.go`.
     - Linux service and timer wiring: `Data/Agent/internal/runtime/service_unix.go`.
     - Standalone update checks: `Data/Agent/cmd/agent/update_standalone_windows.go` and `Data/Agent/cmd/agent/update_standalone_unix.go`.
+    - Durable update progress and authenticated upload: `Data/Agent/cmd/agent/update_progress.go`, `Data/Agent/internal/runtime/update_health.go`, and `agent.update.events` in `agent.json`.
     - Engine IP fallback dial policy: `Data/Agent/internal/auth/client.go`.
     - Socket.IO fallback dial hook: `Data/Agent/internal/transport/socketio.go`.
     - Deferred update finalization: `Data/Agent/cmd/agent/update_finalize.go`.
@@ -206,6 +207,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
     - `--server-url` or `--site-enrollment-code` implies `--install-service` in runtime parser.
     - Agent CLI has no repository ref or release-channel arguments. Agent source identity comes from Engine build that published current artifact.
     - Fresh install detection treats `--server-url` or `--site-enrollment-code`/`--enrollment-code` as fresh-deploy intent. Validation requires both server URL and enrollment code before service installation starts. Re-deploy stops Borealis-managed components and preserves existing `agent.json` identity/trust state instead of wiping the install root.
+    - Operator-triggered `--update-check` runs install-equivalent reconciliation even when build is current. Hourly current-build `--update-check` exits non-disruptively; changed-build hourly checks create durable progress history.
     - Fresh install and runtime server URL overrides require an Engine FQDN. Raw IPs and `localhost` are rejected before enrollment config is written.
     - `--server-ip-fallback` stores a bare non-loopback IP as `server_ip_fallback`. REST, update, file-transfer, software-override, and Socket.IO connections first try the FQDN normally. If that TCP dial fails, they connect to the fallback IP while keeping the original FQDN as the HTTP host and TLS SNI name. Linux WireGuard setup first tries the Engine-provided FQDN endpoint and rewrites the local `wireguard.conf` endpoint to the fallback IP only when `wg-quick up` reports endpoint DNS resolution failure.
     - `--trusted-engine-ca-b64` decodes and stores the Borealis local CA PEM in `agent.json` at `trust.engine_ca_pem`. The Go auth client appends that CA to the system trust pool for REST and Socket.IO without disabling hostname validation.

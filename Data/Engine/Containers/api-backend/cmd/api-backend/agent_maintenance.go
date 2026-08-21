@@ -47,6 +47,7 @@ type agentMaintenanceRunRef struct {
 func registerAgentMaintenanceRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("POST /api/devices/agent-maintenance", agentMaintenanceBulkHandler(auth))
 	mux.HandleFunc("POST /api/device/update-agent/{hostname}", deviceAgentUpdateHandler(auth))
+	mux.HandleFunc("GET /api/devices/{device_guid}/agent-updates", agentUpdateHistoryHandler(auth))
 }
 
 func agentMaintenanceBulkHandler(auth *authService) http.HandlerFunc {
@@ -117,52 +118,22 @@ func deviceAgentUpdateHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, status, map[string]any{"error": err.Error()})
 			return
 		}
-		if snapshot.Route == nil {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":   "agent_unavailable",
-				"message": "The agent SYSTEM socket is not available to start the local AutoUpdater task.",
-			})
+		maintenanceStore, ok := auth.store.(agentMaintenanceStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "agent_maintenance_unavailable"})
 			return
 		}
-
-		requestedAt := time.Now().Unix()
-		operationID := newUUIDString()
-		eventPayload := map[string]any{
-			"operation_id": operationID,
-			"hostname":     firstText(snapshot.Hostname, r.PathValue("hostname")),
-			"agent_id":     snapshot.AgentID,
-			"requested_at": requestedAt,
-			"requested_by": firstText(profile.Username, "unknown"),
-		}
-		response, _, workerErr := callWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
-			"hostname":        firstText(snapshot.Hostname, r.PathValue("hostname")),
-			"service_mode":    "system",
-			"event_name":      "agent_update_request",
-			"timeout_seconds": 30.0,
-			"payload":         eventPayload,
-		}, 31*time.Second)
-		if workerErr != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":   "agent_unavailable",
-				"message": agentUpdateUnavailableMessage(workerErr),
-			})
-			return
-		}
-		if strings.EqualFold(cleanText(response["status"]), "error") {
-			detail := firstText(cleanText(response["detail"]), cleanText(response["message"]), cleanText(response["error"]), "Agent rejected the AutoUpdater request.")
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":   "agent_unavailable",
-				"message": "The agent rejected the local AutoUpdater request: " + detail,
-			})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":       "queued",
-			"hostname":     firstText(snapshot.Hostname, r.PathValue("hostname")),
-			"agent_id":     snapshot.AgentID,
-			"operation_id": operationID,
-			"requested_at": requestedAt,
+		ctx, cancel = requestTimeout(r.Context(), auth)
+		defer cancel()
+		payload, status, err := maintenanceStore.queueAgentMaintenance(ctx, profile, agentMaintenanceRequest{
+			Action:      agentMaintenanceUpdateAction,
+			DeviceGUIDs: []string{snapshot.GUID},
 		})
+		if err != nil {
+			writeJSON(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
 	}
 }
 
@@ -242,6 +213,7 @@ func (s *postgresOperatorStore) queueAgentMaintenance(ctx context.Context, profi
 			"operation_id":         operationID,
 			"kind":                 request.Action,
 			"action":               request.Action,
+			"source":               "operator_initiated",
 			"hostname":             device.Hostname,
 			"guid":                 device.GUID,
 			"requested_at":         now,
@@ -587,17 +559,6 @@ func uniqueAgentMaintenanceGUIDs(values []string) []string {
 
 func agentMaintenanceJobName(action string) string {
 	return "Update Borealis Agent"
-}
-
-func agentUpdateUnavailableMessage(workerErr map[string]any) string {
-	detail := firstText(cleanText(workerErr["detail"]), cleanText(workerErr["message"]), cleanText(workerErr["error"]))
-	if strings.TrimSpace(detail) == "" {
-		return "The agent SYSTEM socket is not available to start the local AutoUpdater task."
-	}
-	if strings.EqualFold(cleanText(workerErr["error"]), "agent_error") {
-		return "The agent rejected the local AutoUpdater request: " + detail
-	}
-	return "The agent SYSTEM socket is not available to start the local AutoUpdater task."
 }
 
 func agentMaintenanceSiteScope(siteID sql.NullInt64) int64 {

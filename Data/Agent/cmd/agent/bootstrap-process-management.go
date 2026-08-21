@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,6 +23,13 @@ type windowsProcessInfo struct {
 	ProcessID      uint32 `json:"ProcessId"`
 	ExecutablePath string `json:"ExecutablePath"`
 	CommandLine    string `json:"CommandLine"`
+}
+
+type windowsServiceProcessInfo struct {
+	Name      string `json:"Name"`
+	State     string `json:"State"`
+	ProcessID uint32 `json:"ProcessId"`
+	PathName  string `json:"PathName"`
 }
 
 type deferredAgentReplacement struct {
@@ -121,6 +129,92 @@ func stopBorealisProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 		}
 	}
 	logger.Tracef("Stale process scan complete: killed=%d", killed)
+}
+
+func stopBorealisOwnedServiceForUpdate(name string, cfg BootstrapConfig, timeout time.Duration, logger *BootstrapLogger) error {
+	before, _ := queryWindowsServiceProcessInfo(name)
+	stopServiceAndWait(name, timeout, logger)
+	state, exists := queryServiceState(name)
+	if !exists || strings.EqualFold(state, "STOPPED") {
+		return nil
+	}
+	if before.ProcessID == 0 || !isBorealisOwnedServiceProcess(name, before.PathName, cfg.InstallDir) {
+		return fmt.Errorf("managed service %s stayed %s and process ownership could not be verified", name, state)
+	}
+	logger.Tracef("Managed service graceful stop timed out; terminating verified service process: name=%s pid=%d path=%s", name, before.ProcessID, before.PathName)
+	killProcessTree(int(before.ProcessID))
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		state, exists = queryServiceState(name)
+		if !exists || strings.EqualFold(state, "STOPPED") {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("managed service %s did not stop after scoped process termination", name)
+}
+
+func queryWindowsServiceProcessInfo(name string) (windowsServiceProcessInfo, error) {
+	escapedName := strings.ReplaceAll(strings.TrimSpace(name), "'", "''")
+	script := fmt.Sprintf(
+		`$ErrorActionPreference='Stop'; $item = Get-CimInstance Win32_Service -Filter "Name='%s'" | Select-Object Name,State,ProcessId,PathName; if ($item) { ConvertTo-Json -InputObject $item -Compress -Depth 3 }`,
+		escapedName,
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, powershellPath(), "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if ctx.Err() != nil {
+		return windowsServiceProcessInfo{}, ctx.Err()
+	}
+	if err != nil {
+		return windowsServiceProcessInfo{}, fmt.Errorf("query service process %s: %w: %s", name, err, strings.TrimSpace(string(output)))
+	}
+	if strings.TrimSpace(string(output)) == "" {
+		return windowsServiceProcessInfo{}, nil
+	}
+	var info windowsServiceProcessInfo
+	if err := json.Unmarshal(output, &info); err != nil {
+		return windowsServiceProcessInfo{}, err
+	}
+	return info, nil
+}
+
+func isBorealisOwnedServiceProcess(serviceName string, pathName string, installDir string) bool {
+	exePath := windowsServiceExecutablePath(pathName)
+	if exePath == "" {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(exePath))
+	switch strings.ToLower(strings.TrimSpace(serviceName)) {
+	case strings.ToLower(agentruntime.WindowsServiceName):
+		return samePath(exePath, filepath.Join(installDir, "Agent.exe"))
+	case strings.ToLower(ultraVNCServiceName):
+		return base == "winvnc.exe" || base == "winvnc64.exe"
+	case strings.ToLower(wireGuardManagerServiceName),
+		"borealiswireguardtunnel",
+		"wireguardtunnel$wireguard",
+		"wireguardtunnel$borealis",
+		"wireguardtunnel$borealis-wg":
+		return base == "wireguard.exe"
+	default:
+		return false
+	}
+}
+
+func windowsServiceExecutablePath(pathName string) string {
+	value := strings.TrimSpace(pathName)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, `"`) {
+		if end := strings.Index(value[1:], `"`); end >= 0 {
+			return strings.TrimSpace(value[1 : end+1])
+		}
+	}
+	if index := strings.IndexAny(value, " \t"); index >= 0 {
+		value = value[:index]
+	}
+	return strings.Trim(value, `"`)
 }
 
 func killProcessTree(pid int) {

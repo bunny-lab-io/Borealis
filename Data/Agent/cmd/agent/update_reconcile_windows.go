@@ -35,7 +35,22 @@ func runPostUpdateReconciliation(options agentruntime.Options) error {
 		return err
 	}
 	defer closeLog()
-	return reconcileAgentUpdateHost(cfg, logger)
+	reporter := newUpdateProgressReporter(configPath, logger)
+	identityBefore := agentUpdateIdentityFingerprint(configPath)
+	reporter.emit("staging_agent_binary", "", "success", "Agent Binary Staged After Recovery", "Deferred scoped replacement completed and installed binary was verified.", "")
+	reporter.emit("reconciling_agent_host", "", "running", "Reconciling Agent Host", "Repairing dependencies, scheduled tasks, services, and runtime configuration.", "")
+	if err := reconcileAgentUpdateHost(cfg, logger); err != nil {
+		reporter.emit("reconciling_agent_host", "", "failed", "Agent Host Reconciliation Failed", err.Error(), "")
+		return err
+	}
+	if identityBefore == "" || identityBefore != agentUpdateIdentityFingerprint(configPath) {
+		return fmt.Errorf("Agent identity/trust verification failed after deferred replacement")
+	}
+	reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "success", "Identity/Trust Preserved", "Non-secret identity and trust fingerprint remained unchanged.", "")
+	reporter.emit("reconciling_agent_host", "", "success", "Agent Host Reconciled", "Dependencies, tasks, and services reconciled.", "")
+	markConfigUpdateOperation(configPath, "awaiting_reconnect", "")
+	reporter.emit("waiting_agent_reconnection", "", "running", "Waiting for Agent Reconnection", "Waiting for matching heartbeat and required role health.", "")
+	return nil
 }
 
 func reconcileAgentUpdateHost(cfg BootstrapConfig, logger *BootstrapLogger) error {

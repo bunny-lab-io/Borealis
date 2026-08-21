@@ -3,12 +3,14 @@
 package agentruntime
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -25,12 +27,12 @@ func PrepareInstallForFreshDeploy(exePath string) error {
 	if isPathInside(filepath.Clean(exePath), root) {
 		return nil
 	}
-	_ = exec.Command("systemctl", "stop", linuxServiceName).Run()
-	_ = exec.Command("systemctl", "stop", linuxUpdaterTimerName).Run()
-	_ = exec.Command("systemctl", "stop", linuxUpdaterServiceName).Run()
-	_ = exec.Command("systemctl", "stop", linuxWatchdogTimerName).Run()
-	_ = exec.Command("systemctl", "stop", linuxWatchdogServiceName).Run()
-	_ = exec.Command("wg-quick", "down", filepath.Join(root, "Agent", "wireguard.conf")).Run()
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxServiceName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxUpdaterTimerName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxUpdaterServiceName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxWatchdogTimerName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxWatchdogServiceName)
+	_ = runLinuxServiceCommand("wg-quick", "down", filepath.Join(root, "Agent", "wireguard.conf"))
 	return nil
 }
 
@@ -127,28 +129,49 @@ WantedBy=timers.target
 	if err := os.WriteFile("/etc/systemd/system/"+linuxWatchdogTimerName, []byte(watchdogTimer), 0o644); err != nil {
 		return err
 	}
-	_ = exec.Command("systemctl", "daemon-reload").Run()
-	_ = exec.Command("systemctl", "enable", linuxServiceName).Run()
-	_ = exec.Command("systemctl", "enable", "--now", linuxUpdaterTimerName).Run()
-	_ = exec.Command("systemctl", "enable", "--now", linuxWatchdogTimerName).Run()
-	return exec.Command("systemctl", "restart", linuxServiceName).Run()
+	if err := runLinuxServiceCommand("systemctl", "daemon-reload"); err != nil {
+		return err
+	}
+	if err := runLinuxServiceCommand("systemctl", "enable", linuxServiceName); err != nil {
+		return err
+	}
+	if err := runLinuxServiceCommand("systemctl", "enable", "--now", linuxUpdaterTimerName); err != nil {
+		return err
+	}
+	if err := runLinuxServiceCommand("systemctl", "enable", "--now", linuxWatchdogTimerName); err != nil {
+		return err
+	}
+	return runLinuxServiceCommand("systemctl", "restart", linuxServiceName)
 }
 
 func UninstallService() error {
-	_ = exec.Command("systemctl", "stop", linuxServiceName).Run()
-	_ = exec.Command("systemctl", "stop", linuxUpdaterTimerName).Run()
-	_ = exec.Command("systemctl", "stop", linuxUpdaterServiceName).Run()
-	_ = exec.Command("systemctl", "stop", linuxWatchdogTimerName).Run()
-	_ = exec.Command("systemctl", "stop", linuxWatchdogServiceName).Run()
-	_ = exec.Command("systemctl", "disable", linuxServiceName).Run()
-	_ = exec.Command("systemctl", "disable", linuxUpdaterTimerName).Run()
-	_ = exec.Command("systemctl", "disable", linuxWatchdogTimerName).Run()
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxServiceName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxUpdaterTimerName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxUpdaterServiceName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxWatchdogTimerName)
+	_ = runLinuxServiceCommand("systemctl", "stop", linuxWatchdogServiceName)
+	_ = runLinuxServiceCommand("systemctl", "disable", linuxServiceName)
+	_ = runLinuxServiceCommand("systemctl", "disable", linuxUpdaterTimerName)
+	_ = runLinuxServiceCommand("systemctl", "disable", linuxWatchdogTimerName)
 	_ = os.Remove("/etc/systemd/system/" + linuxServiceName)
 	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterServiceName)
 	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterTimerName)
 	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogServiceName)
 	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogTimerName)
-	return exec.Command("systemctl", "daemon-reload").Run()
+	return runLinuxServiceCommand("systemctl", "daemon-reload")
+}
+
+func runLinuxServiceCommand(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s timed out: %w", name, ctx.Err())
+	}
+	if err != nil {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func copyFile(source string, destination string, mode os.FileMode) error {

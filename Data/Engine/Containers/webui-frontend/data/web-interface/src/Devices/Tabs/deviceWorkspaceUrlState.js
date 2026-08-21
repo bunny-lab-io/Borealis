@@ -9,7 +9,7 @@ export const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
 });
 
 export const WORKSPACE_VIEW_OPTIONS = Object.freeze({
-  remote_ops: ["shell", "files", "registry", "processes", "services"],
+  remote_ops: ["shell", "files", "registry", "processes", "services", "agent_updates"],
   inventory: ["summary", "software", "patches"],
   config: ["metadata"],
 });
@@ -35,15 +35,18 @@ export const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
   activity: { workspace: "history" },
   remote_shell: { workspace: "remote_ops", view: "shell" },
   shell: { workspace: "remote_ops", view: "shell" },
+  agent_update: { workspace: "remote_ops", view: "agent_updates" },
+  agent_updates: { workspace: "remote_ops", view: "agent_updates" },
   agent_health: { workspace: "inventory", view: "summary" },
   health: { workspace: "inventory", view: "summary" },
 });
 
-const REMOTE_OPS_CONTEXT_PARAMS = Object.freeze(["working_directory", "registry_path"]);
+const REMOTE_OPS_CONTEXT_PARAMS = Object.freeze(["working_directory", "registry_path", "operation_id"]);
 const EMPTY_CONTEXT_PARAMS = new Set();
 const REMOTE_OPS_CONTEXT_PARAMS_BY_VIEW = Object.freeze({
   files: new Set(["working_directory"]),
   registry: new Set(["registry_path"]),
+  agent_updates: new Set(["operation_id"]),
 });
 
 export const normalizeWorkspaceKey = (value, fallback = "inventory") => {

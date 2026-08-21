@@ -307,20 +307,30 @@ func (c *Client) StoreServerSigningKey(value string) error {
 }
 
 func (c *Client) StoreAgentUpdateOperation(operationID string, kind string) (agentconfig.AgentUpdateSection, error) {
+	return c.StoreAgentUpdateOperationDetails(agentconfig.AgentUpdateSection{
+		OperationID: operationID,
+		Kind:        kind,
+	})
+}
+
+func (c *Client) StoreAgentUpdateOperationDetails(operation agentconfig.AgentUpdateSection) (agentconfig.AgentUpdateSection, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now().Unix()
-	if strings.TrimSpace(operationID) == "" {
-		operationID = fmt.Sprintf("%d", now)
+	if strings.TrimSpace(operation.OperationID) == "" {
+		operation.OperationID = fmt.Sprintf("%d", now)
 	}
-	operation := agentconfig.AgentUpdateSection{
-		OperationID: strings.TrimSpace(operationID),
-		Kind:        strings.TrimSpace(kind),
-		Status:      "config_written",
-		StartedAt:   now,
-		UpdatedAt:   now,
-		DeadlineAt:  now + int64(15*time.Minute/time.Second),
+	operation.OperationID = strings.TrimSpace(operation.OperationID)
+	operation.Kind = strings.TrimSpace(operation.Kind)
+	if strings.TrimSpace(operation.Source) == "" {
+		operation.Source = "operator_initiated"
 	}
+	operation.Status = "requested"
+	operation.StartedAt = now
+	operation.UpdatedAt = now
+	operation.DeadlineAt = now + int64(15*time.Minute/time.Second)
+	operation.CompletedAt = 0
+	operation.LastError = ""
 	c.cfg.Agent.Update = operation
 	if err := agentconfig.Save(c.configPath, c.cfg); err != nil {
 		return agentconfig.AgentUpdateSection{}, err

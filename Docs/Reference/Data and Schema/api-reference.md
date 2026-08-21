@@ -88,6 +88,7 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/devices/<guid>/revoke` (Admin) - mark a device revoked, bump its token version, revoke refresh tokens, and disconnect active WireGuard/VNC runtime state.
     - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
     - `POST /api/devices/agent-maintenance` (Token Authenticated) - queue on-demand updates to current Engine Agent artifact for selected devices. Requests create `agent_maintenance` scheduled-job history and site-worker `agent_maintenance_run` work items; site workers fan out to agents through internal socket bridge.
+    - `GET /api/devices/<guid>/agent-updates?operation_id=<operation-id>&limit=<1-100>` (Token Authenticated) - return site-scoped active and historical Agent update operations, structured event timelines, build transition, failure summary, and Scheduled Job correlation.
     - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
     - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
     - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
@@ -112,7 +113,8 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/patches/policies/<policy_id>/preview` (Token Authenticated) - preview targets, role-filtered target/exclusion row counts, dynamic filter conflicts, and parent override warnings for a saved policy.
     - `GET /api/device/patches/<hostname>` (Token Authenticated) - list normalized patch inventory for one in-scope device.
     - `POST /api/device/patches/<hostname>/refresh` (Token Authenticated) - queue an immediate patch inventory refresh over the device SYSTEM socket.
-    - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
+    - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - compatibility route that resolves in-scope device then queues same authoritative `agent_maintenance` Scheduled Job path as bulk/dashboard updates.
+    - `POST /api/agent/update/progress` (Device Authenticated) - append one or more bounded structured Agent update events, create hourly changed-build Scheduled Job history when needed, update run/activity terminal state, and emit `agent_update_progress_changed` over Go SSE.
     - `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the Device Summary `File Management` roots view for an in-scope device.
     - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.
     - `POST /api/device/files/<hostname>/upload/conflicts` (Token Authenticated) - preflight upload name conflicts in one remote directory for an in-scope device.
@@ -296,6 +298,13 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - Token Authenticated: operator session or bearer token.
     - Device Authenticated: agent JWT access token.
     - Admin: operator must have Admin role.
+
+    ### Agent update input contract
+
+    - `device_guid` is canonical GUID path input. `operation_id` is identifier-class text capped at 128 characters in body/query. Agent Updates frontend does not expose free-form entry for either value; backend validates both before storage or lookup.
+    - `source` is enum-class text: `operator_initiated` or `hourly_update_checker`. `requested_by` is attribution text capped at 128 characters. Build identifiers are bounded to 128 characters.
+    - Progress `event_id` is required opaque event identity capped at 256 characters. `phase_id` and optional `parent_phase_id` are phase identifiers capped at 96 characters. `state` and `terminal_status` use closed enums.
+    - `summary` is diagnostic display text capped at 240 characters; `detail` is diagnostic display text capped at 1024 characters. Agent and Engine remove NULs, bound lengths, and redact access-token, refresh-token, private-key, and password labels. Frontend renders values as React text, never HTML. Focused Engine and WebUI tests cover validation, redaction, deep links, and topology mapping.
 
     ### Example update scenario
     - You add `POST /api/devices/retire`:
