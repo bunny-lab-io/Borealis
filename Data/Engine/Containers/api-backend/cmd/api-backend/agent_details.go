@@ -221,7 +221,7 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 	}
 
 	if len(updateStatus) > 0 {
-		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, hostname, updateStatus, firstText(agentHash, cleanText(mergedSummary["agent_build_id"]), cleanText(mergedSummary["agent_hash"])))
+		_, _ = s.reconcileAgentMaintenanceHeartbeat(ctx, hostname, updateStatus, firstText(agentHash, cleanText(mergedSummary["agent_build_id"]), cleanText(mergedSummary["agent_hash"])))
 	}
 	return agentDetailsUpdateResult{
 		Payload:           map[string]any{"status": "ok"},

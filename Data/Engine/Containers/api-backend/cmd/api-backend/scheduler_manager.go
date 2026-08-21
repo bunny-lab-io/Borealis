@@ -45,6 +45,7 @@ const (
 	schedulerDefaultWorkerHistorySeconds = 300
 	schedulerMinWorkerHistorySeconds     = 60
 	schedulerMaxWorkerHistorySeconds     = 86400
+	agentMaintenanceTimeoutMessage       = "Agent update did not report terminal health before timeout."
 )
 
 type goSchedulerManager struct {
@@ -959,14 +960,14 @@ func (m *goSchedulerManager) expireTimedOutAgentMaintenanceRuns(ctx context.Cont
 	rows, err := tx.QueryContext(ctx, `
 		UPDATE engine.scheduled_job_runs AS r
 		   SET status='Timed Out', updated_at=$1, finished_ts=$1,
-		       error='Agent update did not report terminal health before timeout.'
+		       error=$3
 		  FROM engine.scheduled_jobs AS j
 		 WHERE j.id=r.job_id
 		   AND COALESCE(j.job_kind, '')='agent_maintenance'
 		   AND LOWER(COALESCE(r.status, '')) IN ('pending', 'running')
 		   AND COALESCE(r.started_ts, r.created_at) <= $2
 		 RETURNING r.id
-	`, now, cutoff)
+	`, now, cutoff, agentMaintenanceTimeoutMessage)
 	if err != nil {
 		return err
 	}
@@ -984,22 +985,34 @@ func (m *goSchedulerManager) expireTimedOutAgentMaintenanceRuns(ctx context.Cont
 		return err
 	}
 	rows.Close()
+	if len(runIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.job_scheduler_work_items
+			   SET status=$1, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=$2,
+			       error=$3, finished_at=$2, updated_at=$2
+			 WHERE kind=$4
+			   AND run_id=ANY($5)
+			   AND status=$6
+		`, workStatusCancelled, now, agentMaintenanceTimeoutMessage, schedulerKindAgentMaintenanceRun, pq.Array(runIDs), workStatusQueued); err != nil {
+			return err
+		}
+	}
 	for _, runID := range runIDs {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE engine.scheduled_job_run_targets
 			   SET resolution_status='unresolved',
-			       resolution_reason='Agent update did not report terminal health before timeout.'
+			       resolution_reason=$2
 			 WHERE run_id=$1
-		`, runID); err != nil {
+		`, runID, agentMaintenanceTimeoutMessage); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE engine.activity_history AS h
 			   SET status='Timed Out', updated_at=$2, finished_at=$2,
-			       stderr=COALESCE(h.stderr, '') || 'Agent update did not report terminal health before timeout.\n'
+			       stderr=COALESCE(h.stderr, '') || $3
 			  FROM engine.scheduled_job_run_activity AS a
 			 WHERE a.activity_id=h.id AND a.run_id=$1
-		`, runID, now); err != nil {
+		`, runID, now, agentMaintenanceTimeoutMessage+"\n"); err != nil {
 			return err
 		}
 	}

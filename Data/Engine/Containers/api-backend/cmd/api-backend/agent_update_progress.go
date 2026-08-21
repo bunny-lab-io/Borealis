@@ -66,6 +66,8 @@ func registerAgentUpdateProgressRoute(mux *http.ServeMux, auth *authService, sig
 	mux.HandleFunc("POST /api/agent/update/progress", agentUpdateProgressHandler(auth, signer, dpop, realtime))
 }
 
+const agentUpdateProgressChangedKey = "_agent_update_progress_changed"
+
 func agentUpdateProgressHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, realtime *operatorRealtimeHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceCtx, failure := authenticateDeviceBearer(r.Context(), r, auth, signer, dpop)
@@ -95,7 +97,7 @@ func agentUpdateProgressHandler(auth *authService, signer *agentJWTSigner, dpop 
 			writeJSON(w, status, map[string]any{"error": err.Error()})
 			return
 		}
-		if realtime != nil {
+		if realtime != nil && boolFromAny(payload["changed"]) {
 			_ = realtime.emit(agentUpdateProgressEventName, map[string]any{
 				"device_guid":  normalizeCanonicalGUID(deviceCtx.GUID),
 				"operation_id": request.OperationID,
@@ -344,6 +346,20 @@ func (s *postgresOperatorStore) recordAgentUpdateProgress(ctx context.Context, d
 	}
 	update["events"] = existingEvents
 	update["status"] = agentUpdateHistoryStatus(cleanText(update["status"]), ref.RunStatus)
+	if len(acceptedEvents) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		committed = true
+		return map[string]any{
+			"status":                   cleanText(update["status"]),
+			"operation_id":             request.OperationID,
+			"scheduled_job_id":         ref.JobID,
+			"scheduled_job_run_id":     ref.RunID,
+			"engine_receive_timestamp": time.Now().Unix(),
+			"changed":                  false,
+		}, http.StatusOK, nil
+	}
 	metadata["operation_id"] = request.OperationID
 	metadata["requested_by"] = request.RequestedBy
 	metadata["agent_update_source"] = request.Source
@@ -400,6 +416,7 @@ func (s *postgresOperatorStore) recordAgentUpdateProgress(ctx context.Context, d
 		"scheduled_job_id":         ref.JobID,
 		"scheduled_job_run_id":     ref.RunID,
 		"engine_receive_timestamp": now,
+		"changed":                  true,
 	}, http.StatusOK, nil
 }
 

@@ -15,10 +15,11 @@ type agentIngestTestStore struct {
 	deviceAuthFound  bool
 	requiredVersion  *int
 
-	heartbeatGUID    string
-	heartbeatPayload map[string]any
-	heartbeatStatus  int
-	heartbeatErr     error
+	heartbeatGUID            string
+	heartbeatPayload         map[string]any
+	heartbeatStatus          int
+	heartbeatErr             error
+	heartbeatProgressChanged bool
 
 	statusGUID    string
 	statusPayload map[string]any
@@ -57,9 +58,10 @@ func (s *agentIngestTestStore) updateAgentHeartbeat(_ context.Context, deviceCtx
 		return nil, status, s.heartbeatErr
 	}
 	return map[string]any{
-		"status":              "ok",
-		"poll_after_ms":       int64(15000),
-		"metadata_field_acks": []string{"field_009"},
+		"status":                      "ok",
+		"poll_after_ms":               int64(15000),
+		"metadata_field_acks":         []string{"field_009"},
+		agentUpdateProgressChangedKey: s.heartbeatProgressChanged,
 	}, status, nil
 }
 
@@ -154,6 +156,51 @@ func TestAgentHeartbeatHandlerPassesAuthenticatedPayload(t *testing.T) {
 	acks, _ := payload["metadata_field_acks"].([]any)
 	if len(acks) != 1 || acks[0] != "field_009" {
 		t.Fatalf("unexpected ack payload %+v", payload)
+	}
+}
+
+func TestAgentHeartbeatHandlerBroadcastsOnlyNewUpdateProgress(t *testing.T) {
+	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
+	signer := testAgentJWTSigner(t)
+	signer.now = func() time.Time { return time.Unix(1700000000, 0) }
+	token, err := signer.issueAccessToken(guid, "fingerprint", 4, agentAccessTokenTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &agentIngestTestStore{
+		deviceAuthFound: true,
+		deviceAuthRecord: deviceBearerAuthRecord{
+			GUID:         guid,
+			Fingerprint:  "fingerprint",
+			TokenVersion: 4,
+			Status:       "active",
+		},
+		heartbeatProgressChanged: true,
+	}
+	broadcaster := &fakeAgentStatusBroadcaster{}
+	auth := &authService{store: store, timeout: time.Second}
+	body := `{"agent_update_status":{"operation_id":"operation-42","source":"operator_initiated","state":"success"}}`
+
+	first := httptest.NewRecorder()
+	firstRequest := httptest.NewRequest(http.MethodPost, "/api/agent/heartbeat", strings.NewReader(body))
+	firstRequest.Header.Set("Authorization", "Bearer "+token)
+	agentHeartbeatHandler(auth, signer, &dpopVerifier{seenJTI: map[string]time.Time{}}, broadcaster).ServeHTTP(first, firstRequest)
+
+	if first.Code != http.StatusOK || len(broadcaster.deviceEvents) != 1 {
+		t.Fatalf("expected new progress broadcast, code=%d events=%+v body=%s", first.Code, broadcaster.deviceEvents, first.Body.String())
+	}
+	if strings.Contains(first.Body.String(), agentUpdateProgressChangedKey) {
+		t.Fatalf("internal progress flag leaked in heartbeat response: %s", first.Body.String())
+	}
+
+	store.heartbeatProgressChanged = false
+	second := httptest.NewRecorder()
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/agent/heartbeat", strings.NewReader(body))
+	secondRequest.Header.Set("Authorization", "Bearer "+token)
+	agentHeartbeatHandler(auth, signer, &dpopVerifier{seenJTI: map[string]time.Time{}}, broadcaster).ServeHTTP(second, secondRequest)
+
+	if second.Code != http.StatusOK || len(broadcaster.deviceEvents) != 1 {
+		t.Fatalf("expected duplicate progress without broadcast, code=%d events=%+v body=%s", second.Code, broadcaster.deviceEvents, second.Body.String())
 	}
 }
 

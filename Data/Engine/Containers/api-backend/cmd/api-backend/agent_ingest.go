@@ -120,7 +120,9 @@ func agentHeartbeatHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 			writeJSON(w, status, map[string]any{"error": err.Error()})
 			return
 		}
-		if updateStatus, ok := payload["agent_update_status"].(map[string]any); ok && cleanText(updateStatus["operation_id"]) != "" && len(broadcasters) > 0 && broadcasters[0] != nil {
+		updateProgressChanged, _ := response[agentUpdateProgressChangedKey].(bool)
+		delete(response, agentUpdateProgressChangedKey)
+		if updateStatus, ok := payload["agent_update_status"].(map[string]any); updateProgressChanged && ok && cleanText(updateStatus["operation_id"]) != "" && len(broadcasters) > 0 && broadcasters[0] != nil {
 			if err := broadcasters[0].broadcastDeviceEvent(r.Context(), agentUpdateProgressEventName, map[string]any{
 				"device_guid":  normalizeCanonicalGUID(deviceCtx.GUID),
 				"operation_id": cleanText(updateStatus["operation_id"]),
@@ -515,17 +517,22 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 	}
 	committed = true
 
+	updateProgressChanged := false
 	if len(updateStatus) > 0 {
-		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, targetGUID, updateStatus, agentBuildID)
+		updateProgressChanged, err = s.reconcileAgentMaintenanceHeartbeat(ctx, targetGUID, updateStatus, agentBuildID)
+		if err != nil {
+			logDebug("agents", "agent update heartbeat reconciliation failed: "+err.Error())
+		}
 	}
 
 	response := map[string]any{
-		"status":              "ok",
-		"poll_after_ms":       int64(15000),
-		"site_id":             nullableInt64(siteID),
-		"site_name":           siteName,
-		"metadata_fields":     metadataSync["updates"],
-		"metadata_field_acks": metadataSync["acks"],
+		"status":                      "ok",
+		"poll_after_ms":               int64(15000),
+		"site_id":                     nullableInt64(siteID),
+		"site_name":                   siteName,
+		"metadata_fields":             metadataSync["updates"],
+		"metadata_field_acks":         metadataSync["acks"],
+		agentUpdateProgressChangedKey: updateProgressChanged,
 	}
 	return response, http.StatusOK, nil
 }
@@ -866,10 +873,10 @@ func upsertAgentMetadataValueTx(ctx context.Context, tx *sql.Tx, guid string, re
 	return err
 }
 
-func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.Context, deviceGUID string, updateStatus map[string]any, installedBuildID string) error {
+func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.Context, deviceGUID string, updateStatus map[string]any, installedBuildID string) (bool, error) {
 	operationID := cleanText(updateStatus["operation_id"])
 	if operationID == "" || deviceGUID == "" {
-		return nil
+		return false, nil
 	}
 	events := make([]map[string]any, 0, 16)
 	for _, event := range mapSlice(updateStatus["events"]) {
@@ -881,7 +888,7 @@ func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.C
 	if len(events) == 0 {
 		state := strings.ToLower(cleanText(firstNonEmpty(updateStatus["state"], updateStatus["status"])))
 		if state == "" {
-			return nil
+			return false, nil
 		}
 		terminal := ""
 		if stringSetContains(map[string]bool{"success": true, "completed": true, "complete": true}, state) {
@@ -910,8 +917,12 @@ func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.C
 		InstalledBuildAfter:  firstText(sanitizeAgentUpdateText(updateStatus["installed_build_after"], 128), sanitizeAgentUpdateText(installedBuildID, 128)),
 		Events:               events,
 	}
-	_, _, err := s.recordAgentUpdateProgress(ctx, deviceBearerAuthContext{GUID: deviceGUID}, request)
-	return err
+	result, _, err := s.recordAgentUpdateProgress(ctx, deviceBearerAuthContext{GUID: deviceGUID}, request)
+	if err != nil {
+		return false, err
+	}
+	changed, _ := result["changed"].(bool)
+	return changed, nil
 }
 
 func normalizeAgentServiceMode(value any) string {
