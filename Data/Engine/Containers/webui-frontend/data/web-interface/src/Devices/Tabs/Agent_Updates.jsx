@@ -30,7 +30,7 @@ const AGENT_UPDATE_GRID_THEME = themeQuartz.withParams({
 });
 
 const AGENT_UPDATE_PHASES = [
-  { id: "requesting_agent_update", label: "Agent Received Request" },
+  { id: "requesting_agent_update", label: "Agent Recieved Update Command" },
   { id: "resolving_engine_artifact", label: "Resolving Engine Artifact" },
   { id: "downloading_agent_artifact", label: "Downloading Agent Artifact" },
   { id: "verifying_agent_artifact", label: "Verifying Agent Artifact" },
@@ -41,12 +41,46 @@ const AGENT_UPDATE_PHASES = [
   { id: "stopping_wireguard_service", label: "WireGuard Services", depth: 1 },
   { id: "evaluating_rdp_service", label: "Native RDP Service", depth: 1 },
   { id: "staging_agent_binary", label: "Staging Agent Binary" },
-  { id: "reconciling_agent_host", label: "Reconciling Agent Host" },
-  { id: "starting_agent_runtime", label: "Starting Agent Runtime" },
+  { id: "reconciling_agent_host", label: "Repairing Agent Configuration" },
+  { id: "starting_agent_runtime", label: "Starting Borealis Agent Service" },
   { id: "waiting_agent_reconnection", label: "Waiting for Reconnection" },
-  { id: "verifying_post_update_health", label: "Verifying Post-Update Health" },
-  { id: "update_completed", label: "Update Completed" },
+  { id: "verifying_post_update_health", label: "Checking Post-Update Agent Role Health" },
+  { id: "update_completed", label: "Agent Update Completed" },
 ];
+
+const AGENT_UPDATE_SUMMARY_LABELS = new Map([
+  ["Agent Received Request", "Agent Recieved Update Command"],
+  ["Current Binary Retained", "Current Agent Already Up-To-Date"],
+  ["Skipped When Current", "Skipped When Already Up-To-Date"],
+  ["Managed Components Stopped", "Stopped Services"],
+  ["Agent Host Reconciled", "Agent Configuration Repaired"],
+  ["Engine Socket", "Engine Socket Connection"],
+  ["Post-Update Health Verified", "Post-Update Agent Role Health"],
+  ["SYSTEM Context", "Role: SYSTEM Context"],
+  ["Current User Context", "Role: Current User Context"],
+  ["Device Auditor", "Role: Device Inventory"],
+  ["File Mangement", "Role: File Management"],
+  ["File Management", "Role: File Management"],
+  ["Process Management", "Role: Process Management"],
+  ["Registry Management", "Role: Registry Editor"],
+  ["Remote Shell", "Role: Remote Shell"],
+  ["Borealis Agent - RDP", "Service: Borealis Agent - RDP"],
+  ["Service Management", "Role: Service Management"],
+  ["Patch Management", "Role: Patch Management"],
+  ["Software Management", "Role: Software Management"],
+  ["UltraVNC Service", "Service: UltraVNC"],
+  ["WireGuard VPN", "Service: WireGuard"],
+  ["Borealis Agent Service Started", "Started Borealis Agent Service"],
+  ["Update Completed", "Agent Update Completed"],
+]);
+
+const AGENT_UPDATE_HEALTH_SERVICE_PHASES = new Set([
+  "role:system:rdp",
+  "role:system:vnc",
+  "role:system:wireguard_tunnel",
+]);
+
+const AGENT_UPDATE_PROMOTED_HEALTH_PHASES = new Set(["role:system:engine_socket"]);
 
 const AGENT_UPDATE_AUTO_SIZE_COLUMNS = ["status", "source_label", "requested_by", "started_label", "duration_label"];
 
@@ -122,29 +156,50 @@ function phaseTone(state = "pending") {
 function timelineStep(phase, event = {}) {
   const state = normalizedText(event.state || "pending").toLowerCase();
   const tone = phaseTone(state);
+  const sourceLabel = normalizedText(event.summary) || phase.label;
   return {
     id: phase.id,
-    label: normalizedText(event.summary) || phase.label,
+    label: AGENT_UPDATE_SUMMARY_LABELS.get(sourceLabel) || sourceLabel,
     detail: normalizedText(event.detail),
     state,
     visualState: tone.visualState,
     color: tone.color,
     depth: Number(phase.depth || 0),
+    isGroup: Boolean(phase.isGroup),
     retryCount: Number(event.retry_count || 0),
   };
+}
+
+function timelineGroup(id, label, children = []) {
+  const visualStates = children.map(({ visualState }) => visualState);
+  let state = "pending";
+  if (visualStates.includes("failed")) state = "failed";
+  else if (visualStates.includes("active")) state = "running";
+  else if (visualStates.length > 0 && visualStates.every((value) => ["complete", "skipped"].includes(value))) state = "success";
+  else if (visualStates.some((value) => ["complete", "skipped"].includes(value))) state = "running";
+  return timelineStep({ id, label, depth: 1, isGroup: true }, { state });
 }
 
 export function buildAgentUpdateTimeline(operation = null) {
   const events = Array.isArray(operation?.events) ? operation.events : [];
   const latest = latestEventsByPhase(events);
   const known = new Set(AGENT_UPDATE_PHASES.map(({ id }) => id));
-  const roleSteps = Array.from(latest.entries())
+  const healthSteps = Array.from(latest.entries())
     .filter(([id]) => id.startsWith("role:") && !known.has(id))
-    .map(([id, event]) => timelineStep({ id, label: id.slice(5), depth: 1 }, event));
+    .map(([id, event]) => timelineStep({ id, label: id.slice(5), depth: 2 }, event));
+  const promotedHealthSteps = healthSteps
+    .filter(({ id }) => AGENT_UPDATE_PROMOTED_HEALTH_PHASES.has(id))
+    .map((step) => ({ ...step, depth: 0 }));
+  const roleSteps = healthSteps.filter(({ id }) => !AGENT_UPDATE_HEALTH_SERVICE_PHASES.has(id) && !AGENT_UPDATE_PROMOTED_HEALTH_PHASES.has(id));
+  const serviceSteps = healthSteps.filter(({ id }) => AGENT_UPDATE_HEALTH_SERVICE_PHASES.has(id));
   const steps = [];
   for (const phase of AGENT_UPDATE_PHASES) {
+    if (phase.id === "waiting_agent_reconnection") steps.push(...promotedHealthSteps);
     steps.push(timelineStep(phase, latest.get(phase.id)));
-    if (phase.id === "verifying_post_update_health") steps.push(...roleSteps);
+    if (phase.id === "verifying_post_update_health") {
+      steps.push(timelineGroup("post_update_roles", "Roles", roleSteps), ...roleSteps);
+      steps.push(timelineGroup("post_update_services", "Services", serviceSteps), ...serviceSteps);
+    }
   }
   return steps;
 }
@@ -235,11 +290,11 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
       cellRenderer: ({ value }) => <Chip size="small" color={operationStatusTone(value)} variant="outlined" label={normalizedText(value).replaceAll("_", " ") || "Unknown"} />,
     },
     { field: "source_label", headerName: "Source", minWidth: 170, cellClass: "auto-col-tight" },
-    { field: "requested_by", headerName: "Requested By", minWidth: 140, cellClass: "auto-col-tight" },
+    { field: "requested_by", headerName: "Requested By", minWidth: 150, cellClass: "auto-col-tight" },
     { field: "started_label", headerName: "Started", minWidth: 180, cellClass: "auto-col-tight" },
     { field: "duration_label", headerName: "Duration", minWidth: 110, cellClass: "auto-col-tight" },
     {
-      field: "scheduled_job_id", headerName: "Job", minWidth: 130, flex: 1, cellClass: "auto-col-tight",
+      field: "scheduled_job_id", headerName: "Job", minWidth: 130, flex: 1, resizable: false, cellClass: "auto-col-tight",
       cellRenderer: ({ value }) => value ? (
         <Button size="small" endIcon={<OpenInNewRoundedIcon fontSize="small" />} onClick={(event) => { event.stopPropagation(); onOpenJob?.(value); }}>
           Job {value}
@@ -295,28 +350,26 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
     >
       <Box data-testid="agent-update-timeline-island" sx={AGENT_UPDATE_ISLAND_SX}>
         <Box sx={{ px: 2, py: 1.75, borderBottom: "1px solid rgba(148,163,184,0.18)", flexShrink: 0 }}>
-          <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>Update timeline</Typography>
-          <Typography
-            title={selectedOperation ? `Operation ${selectedOperation.operation_id}` : undefined}
-            sx={{ color: MAGIC_UI.textMuted, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-          >
-            {selectedOperation
-              ? `Operation ${selectedOperation.operation_id} · ${formatAgentUpdateDuration(selectedOperation.started_at, Number(selectedOperation.ended_at || 0) || now)}`
-              : "No Agent update operation recorded."}
-          </Typography>
+          <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>Update Timeline</Typography>
         </Box>
         <Box role="list" aria-label="Agent update timeline" sx={{ flexGrow: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.75 }}>
           {timeline.map((step, index) => {
             const isLast = index === timeline.length - 1;
+            const depth = Math.max(0, step.depth);
+            const previousDepth = index > 0 ? Math.max(0, timeline[index - 1].depth) : -1;
+            const nextDepth = !isLast ? Math.max(0, timeline[index + 1].depth) : -1;
+            const treeIndent = 22;
+            const markerCenter = 10;
+            const markerLeft = depth * treeIndent;
             const showDetail = ["active", "failed", "skipped"].includes(step.visualState) && Boolean(step.detail);
             const connectorColor =
               step.visualState === "complete"
-                ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(52,211,153,0.16))"
+                ? "rgba(52,211,153,0.62)"
                 : step.visualState === "active"
-                  ? "linear-gradient(180deg, rgba(125,211,252,0.95), rgba(125,211,252,0.18))"
+                  ? "rgba(125,211,252,0.68)"
                   : step.visualState === "failed"
-                    ? "linear-gradient(180deg, rgba(251,113,133,0.9), rgba(251,113,133,0.18))"
-                    : "rgba(148,163,184,0.18)";
+                    ? "rgba(251,113,133,0.68)"
+                    : "rgba(148,163,184,0.32)";
             return (
               <Box
                 key={step.id}
@@ -325,13 +378,76 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
                   display: "flex",
                   alignItems: "stretch",
                   gap: 1.25,
-                  width: step.depth ? "calc(100% - 18px)" : "100%",
-                  ml: step.depth ? 2.25 : 0,
+                  width: "100%",
                 }}
               >
-                <Box sx={{ width: 22, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                <Box sx={{ width: markerLeft + 22, minHeight: 20, position: "relative", flexShrink: 0 }}>
+                  {Array.from({ length: depth }, (_, level) => {
+                    const continuesBelow = level === 0 ? nextDepth >= 0 : nextDepth > level;
+                    return (
+                      <Box
+                        key={`${step.id}-ancestor-${level}`}
+                        sx={{
+                          position: "absolute",
+                          zIndex: 0,
+                          top: 0,
+                          bottom: continuesBelow ? 0 : `calc(100% - ${markerCenter}px)`,
+                          left: level * treeIndent + markerCenter - 1,
+                          width: 2,
+                          borderRadius: 999,
+                          background: connectorColor,
+                        }}
+                      />
+                    );
+                  })}
+                  {depth > 0 ? (
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        zIndex: 0,
+                        top: markerCenter - 1,
+                        left: markerLeft - treeIndent + markerCenter,
+                        width: treeIndent,
+                        height: 2,
+                        borderRadius: 999,
+                        background: connectorColor,
+                      }}
+                    />
+                  ) : null}
+                  {index > 0 && (depth === 0 || previousDepth === depth) ? (
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        zIndex: 0,
+                        top: 0,
+                        height: markerCenter,
+                        left: markerLeft + markerCenter - 1,
+                        width: 2,
+                        borderRadius: 999,
+                        background: connectorColor,
+                      }}
+                    />
+                  ) : null}
+                  {!isLast && nextDepth >= depth ? (
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        zIndex: 0,
+                        top: markerCenter,
+                        bottom: 0,
+                        left: markerLeft + markerCenter - 1,
+                        width: 2,
+                        borderRadius: 999,
+                        background: connectorColor,
+                      }}
+                    />
+                  ) : null}
                   <Box
                     sx={{
+                      position: "absolute",
+                      zIndex: 1,
+                      top: 0,
+                      left: markerLeft,
                       width: 20,
                       height: 20,
                       display: "flex",
@@ -356,17 +472,14 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
                       <StagePendingIcon sx={{ fontSize: 18 }} />
                     )}
                   </Box>
-                  {!isLast ? (
-                    <Box sx={{ mt: 0.4, mb: 0.2, width: 2, flexGrow: 1, minHeight: showDetail ? 22 : 14, borderRadius: 999, background: connectorColor }} />
-                  ) : null}
                 </Box>
                 <Box sx={{ pt: 0.05, pb: isLast ? 0 : 0.65, minWidth: 0, flexGrow: 1 }}>
                   <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 1 }}>
                     <Typography
                       sx={{
                         color: step.visualState === "pending" ? MAGIC_UI.textMuted : MAGIC_UI.textBright,
-                        fontSize: step.depth ? "0.78rem" : "0.85rem",
-                        fontWeight: ["active", "complete"].includes(step.visualState) ? 600 : 500,
+                        fontSize: step.isGroup ? "0.82rem" : step.depth > 1 ? "0.76rem" : step.depth ? "0.78rem" : "0.85rem",
+                        fontWeight: step.isGroup ? 700 : ["active", "complete"].includes(step.visualState) ? 600 : 500,
                         letterSpacing: 0.2,
                         minWidth: 0,
                       }}

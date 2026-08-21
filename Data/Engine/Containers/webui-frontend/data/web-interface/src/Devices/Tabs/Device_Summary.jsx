@@ -4074,8 +4074,8 @@ export default function DeviceSummary() {
           width: "100%",
           display: "flex",
           flexDirection: "column",
-          borderRadius: 3,
-          overflow: "hidden",
+          borderRadius: agentUpdatesWorkspaceActive ? 0 : 3,
+          overflow: agentUpdatesWorkspaceActive ? "visible" : "hidden",
         }}
       >
         <Box
@@ -4083,15 +4083,16 @@ export default function DeviceSummary() {
             flexGrow: 1,
             minHeight: 0,
             minWidth: 0,
-            overflowX: "hidden",
+            overflowX: agentUpdatesWorkspaceActive ? "visible" : "hidden",
             display: "flex",
             flexDirection: "column",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderRadius: 3,
-            background:
-              "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
-              "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
-            boxShadow: MAGIC_UI.glow,
+            border: agentUpdatesWorkspaceActive ? "none" : `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: agentUpdatesWorkspaceActive ? 0 : 3,
+            background: agentUpdatesWorkspaceActive
+              ? "transparent"
+              : "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
+                "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
+            boxShadow: agentUpdatesWorkspaceActive ? "none" : MAGIC_UI.glow,
           }}
         >
           {!agentUpdatesWorkspaceActive ? (
@@ -4107,7 +4108,7 @@ export default function DeviceSummary() {
             id="device-summary-workspace-scrollhost"
             sx={{
               flexGrow: 1,
-              p: { xs: 1.5, md: 2 },
+              p: agentUpdatesWorkspaceActive ? 0 : { xs: 1.5, md: 2 },
               minHeight: 0,
               minWidth: 0,
               overflowX: "hidden",
