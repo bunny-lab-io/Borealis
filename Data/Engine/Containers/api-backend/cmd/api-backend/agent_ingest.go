@@ -83,12 +83,12 @@ var globalAgentStatusCache = &agentStatusCache{entries: map[string]agentStatusCa
 var globalAgentDetailsCache = &agentDetailsCache{entries: map[string]agentDetailsCacheEntry{}}
 
 func registerAgentIngestRoutes(mux *http.ServeMux, auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, broadcaster agentStatusBroadcaster) {
-	mux.HandleFunc("POST /api/agent/heartbeat", agentHeartbeatHandler(auth, signer, dpop))
+	mux.HandleFunc("POST /api/agent/heartbeat", agentHeartbeatHandler(auth, signer, dpop, broadcaster))
 	mux.HandleFunc("POST /api/agent/status", agentStatusHandler(auth, signer, dpop, broadcaster, globalAgentStatusCache))
 	mux.HandleFunc("POST /api/agent/details", agentDetailsHandler(auth, signer, dpop, broadcaster, globalAgentDetailsCache))
 }
 
-func agentHeartbeatHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier) http.HandlerFunc {
+func agentHeartbeatHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, broadcasters ...agentStatusBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
@@ -119,6 +119,17 @@ func agentHeartbeatHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 		if err != nil {
 			writeJSON(w, status, map[string]any{"error": err.Error()})
 			return
+		}
+		updateProgressChanged, _ := response[agentUpdateProgressChangedKey].(bool)
+		delete(response, agentUpdateProgressChangedKey)
+		if updateStatus, ok := payload["agent_update_status"].(map[string]any); updateProgressChanged && ok && cleanText(updateStatus["operation_id"]) != "" && len(broadcasters) > 0 && broadcasters[0] != nil {
+			if err := broadcasters[0].broadcastDeviceEvent(r.Context(), agentUpdateProgressEventName, map[string]any{
+				"device_guid":  normalizeCanonicalGUID(deviceCtx.GUID),
+				"operation_id": cleanText(updateStatus["operation_id"]),
+				"source":       normalizeAgentUpdateSource(updateStatus["source"]),
+			}); err != nil {
+				logDebug("agents", "agent_update_progress_changed heartbeat broadcast failed: "+err.Error())
+			}
 		}
 		writeJSON(w, status, response)
 	}
@@ -506,18 +517,22 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 	}
 	committed = true
 
+	updateProgressChanged := false
 	if len(updateStatus) > 0 {
-		reconcileHostname := firstText(cleanText(updates["hostname"]), hostname, rowHostname)
-		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, reconcileHostname, updateStatus, agentBuildID)
+		updateProgressChanged, err = s.reconcileAgentMaintenanceHeartbeat(ctx, targetGUID, updateStatus, agentBuildID)
+		if err != nil {
+			logDebug("agents", "agent update heartbeat reconciliation failed: "+err.Error())
+		}
 	}
 
 	response := map[string]any{
-		"status":              "ok",
-		"poll_after_ms":       int64(15000),
-		"site_id":             nullableInt64(siteID),
-		"site_name":           siteName,
-		"metadata_fields":     metadataSync["updates"],
-		"metadata_field_acks": metadataSync["acks"],
+		"status":                      "ok",
+		"poll_after_ms":               int64(15000),
+		"site_id":                     nullableInt64(siteID),
+		"site_name":                   siteName,
+		"metadata_fields":             metadataSync["updates"],
+		"metadata_field_acks":         metadataSync["acks"],
+		agentUpdateProgressChangedKey: updateProgressChanged,
 	}
 	return response, http.StatusOK, nil
 }
@@ -858,110 +873,56 @@ func upsertAgentMetadataValueTx(ctx context.Context, tx *sql.Tx, guid string, re
 	return err
 }
 
-func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.Context, hostname string, updateStatus map[string]any, installedBuildID string) error {
+func (s *postgresOperatorStore) reconcileAgentMaintenanceHeartbeat(ctx context.Context, deviceGUID string, updateStatus map[string]any, installedBuildID string) (bool, error) {
 	operationID := cleanText(updateStatus["operation_id"])
-	if operationID == "" || hostname == "" {
-		return nil
+	if operationID == "" || deviceGUID == "" {
+		return false, nil
 	}
-	rawState := strings.ToLower(cleanText(firstNonEmpty(updateStatus["state"], updateStatus["status"])))
-	if rawState == "" {
-		return nil
+	events := make([]map[string]any, 0, 16)
+	for _, event := range mapSlice(updateStatus["events"]) {
+		normalized := normalizeAgentUpdateProgressEvent(event)
+		if cleanText(normalized["phase_id"]) != "" {
+			events = append(events, normalized)
+		}
 	}
-	runStatus := "Running"
-	activityStatus := "Running"
-	var finished any
-	stderr := ""
-	now := time.Now().Unix()
-	if stringSetContains(map[string]bool{"success": true, "completed": true, "complete": true, "up_to_date": true, "applied": true}, rawState) {
-		runStatus = "Success"
-		activityStatus = "Success"
-		finished = now
-	} else if stringSetContains(map[string]bool{"failed": true, "error": true}, rawState) {
-		runStatus = "Failed"
-		activityStatus = "Failed"
-		finished = now
-		stderr = firstText(cleanText(updateStatus["last_error"]), "Agent update operation failed.")
+	if len(events) == 0 {
+		state := strings.ToLower(cleanText(firstNonEmpty(updateStatus["state"], updateStatus["status"])))
+		if state == "" {
+			return false, nil
+		}
+		terminal := ""
+		if stringSetContains(map[string]bool{"success": true, "completed": true, "complete": true}, state) {
+			terminal = "success"
+		} else if stringSetContains(map[string]bool{"failed": true, "error": true, "timed_out": true}, state) {
+			terminal = map[bool]string{true: "timed_out", false: "failed"}[state == "timed_out"]
+		}
+		events = append(events, normalizeAgentUpdateProgressEvent(map[string]any{
+			"event_id":        operationID + ":heartbeat:" + state,
+			"phase_id":        "agent_heartbeat",
+			"state":           state,
+			"agent_timestamp": coerceInt64(updateStatus["updated_at"]),
+			"summary":         "Agent heartbeat reported update state.",
+			"detail":          cleanText(updateStatus["last_error"]),
+			"terminal_status": terminal,
+		}))
 	}
-	stdout := fmt.Sprintf("Agent reported operation_id=%s state=%s artifact_source=%s installed_build_id=%s\n", operationID, rawState, agentArtifactSourceEngine, firstText(installedBuildID, "-"))
-
-	conn, err := s.db.Conn(ctx)
+	request := agentUpdateProgressRequest{
+		OperationID:          operationID,
+		ScheduledJobID:       coerceInt64(updateStatus["scheduled_job_id"]),
+		ScheduledJobRunID:    coerceInt64(updateStatus["scheduled_job_run_id"]),
+		Source:               firstText(normalizeAgentUpdateSource(updateStatus["source"]), "operator_initiated"),
+		RequestedBy:          sanitizeAgentUpdateText(updateStatus["requested_by"], 128),
+		TargetBuildID:        sanitizeAgentUpdateText(updateStatus["target_build_id"], 128),
+		InstalledBuildBefore: sanitizeAgentUpdateText(updateStatus["installed_build_before"], 128),
+		InstalledBuildAfter:  firstText(sanitizeAgentUpdateText(updateStatus["installed_build_after"], 128), sanitizeAgentUpdateText(installedBuildID, 128)),
+		Events:               events,
+	}
+	result, _, err := s.recordAgentUpdateProgress(ctx, deviceBearerAuthContext{GUID: deviceGUID}, request)
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	rows, err := tx.QueryContext(ctx, `
-		SELECT r.id, h.id
-		  FROM engine.scheduled_job_runs r
-		  JOIN engine.scheduled_job_run_activity s ON s.run_id=r.id
-		  JOIN engine.activity_history h ON h.id=s.activity_id
-		  JOIN engine.scheduled_jobs j ON j.id=r.job_id
-		 WHERE LOWER(COALESCE(h.hostname, ''))=LOWER($1)
-		   AND (COALESCE(h.metadata_json, '') LIKE $2 OR COALESCE(h.stdout, '') LIKE $2)
-		   AND COALESCE(j.job_kind, '')='agent_maintenance'
-		   AND LOWER(COALESCE(r.status, '')) NOT IN ('success', 'failed', 'skipped')
-	`, hostname, "%"+operationID+"%")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	type pair struct{ runID, activityID int64 }
-	pairs := []pair{}
-	for rows.Next() {
-		var item pair
-		if err := rows.Scan(&item.runID, &item.activityID); err != nil {
-			return err
-		}
-		pairs = append(pairs, item)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, item := range pairs {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE engine.scheduled_job_runs
-			   SET status=$1, updated_at=$2, finished_ts=COALESCE($3, finished_ts), error=$4
-			 WHERE id=$5
-		`, runStatus, now, finished, truncateMetadataText(stderr, 512), item.runID); err != nil {
-			return err
-		}
-		resolutionStatus := "eligible"
-		if runStatus == "Failed" {
-			resolutionStatus = "unresolved"
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE engine.scheduled_job_run_targets
-			   SET resolution_status=$1, resolution_reason=$2
-			 WHERE run_id=$3
-		`, resolutionStatus, truncateMetadataText(stderr, 512), item.runID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE engine.activity_history
-			   SET status=$1,
-			       stdout=COALESCE(stdout, '') || $2,
-			       stderr=COALESCE(stderr, '') || $3,
-			       updated_at=$4,
-			       finished_at=COALESCE($5, finished_at)
-			 WHERE id=$6
-		`, activityStatus, stdout, map[bool]string{true: stderr + "\n", false: ""}[stderr != ""], now, finished, item.activityID); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+	changed, _ := result["changed"].(bool)
+	return changed, nil
 }
 
 func normalizeAgentServiceMode(value any) string {

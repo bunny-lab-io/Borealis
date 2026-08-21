@@ -25,6 +25,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Installed Software` shows software inventory and software actions.
 - `Patch Management` shows pending and installed Windows patch inventory and can open Scheduled Job drafts for ad-hoc Windows update installs.
 - `Services`, `Processes`, `File Management`, `Registry`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
+- `Agent Updates` under Backend Tools starts install-equivalent Agent repair and shows live or historical update timeline, status, duration, failure detail, and Scheduled Job links beside full-height history grid.
 - `Activity History` shows quick job and automation output tied to the device, with scheduled-job activity names linking back to the job history and task timelines showing start, finish, and compact duration.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
 - `Agent Health` shows startup flow and role health separately from online/offline status.
@@ -48,6 +49,15 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - Software, patch, service, or process data stale: use the tab refresh action or wait for the next agent poll.
 - Current-user automation unavailable: check session helper readiness in Agent Health and session inventory.
 
+## Update Agent
+
+1. Open `Backend Tools > Agent Updates` from Device Summary.
+2. Select `Update Now`.
+3. Confirm service interruption. Borealis may restart Agent, UltraVNC, and WireGuard managed services. Native Windows RDP remains running unless its health path requires recovery.
+4. Keep Agent Updates open to follow live progress. Selecting historical row loads its timeline; Scheduled Job link opens authoritative run history.
+
+Operator-requested updates perform install-equivalent repair even when installed binary already matches Engine artifact. Device identity, enrollment, trust, and Engine association stay preserved. Hourly checks remain non-disruptive when no newer artifact exists.
+
 ??? example "Detailed Codex Breakdown"
 
     ### API endpoints
@@ -56,6 +66,8 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `GET /api/devices/search?hostname=<query>` - shared hostname search.
     - `GET /api/devices/<guid>` - device summary by GUID.
     - `POST /api/devices/agent-maintenance` - queue current Engine artifact update jobs for selected devices.
+    - `GET /api/devices/<guid>/agent-updates?operation_id=<operation-id>&limit=<1-100>` - load site-scoped Agent update history and active operation.
+    - `POST /api/agent/update/progress` - accept authenticated Agent progress events and correlate them with Scheduled Job history.
     - `POST /api/devices/<guid>/quarantine` - admin containment action that blocks jobs and remote access without deleting inventory.
     - `POST /api/devices/<guid>/unquarantine` - admin restore action for quarantined devices.
     - `POST /api/devices/<guid>/revoke` - admin trust revocation that blocks token refresh and remote access.
@@ -82,6 +94,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - Device APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go` and related `device_*` Go files.
     - Device List UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Device Summary UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
+    - Agent Updates UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Updates.jsx`
     - Registry Editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Registry_Editor.jsx`
     - Patch Management tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Patch_Management.jsx`
     - Agent Health UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`
@@ -92,6 +105,8 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
     - Device List status is derived from `devices.last_seen` plus the site-worker Agent socket registry exposed through `/api/devices` as `agent_socket`.
     - Bulk `Update Agent` posts selected Agent GUIDs to `/api/devices/agent-maintenance` with `action=update_now`, which creates `agent_maintenance` scheduled-job history and site-worker work items.
+    - Canonical Agent Updates URL is `?tab=remote_ops&view=agent_updates`; `operation_id` deep-links one operation and is removed when operator leaves that workspace.
+    - Agent update progress emits `agent_update_progress_changed` through Go SSE. UI refetches on matching device events and retains active/idle polling fallback.
     - `GET /api/devices` enriches device rows by fetching each visible site worker's `/agents` snapshot once, then matching system sockets by hostname, Agent ID, or GUID.
     - Site List drilldowns use `/devices?site=<site_id>&status=<connected|disconnected|offline>`; Device List normalizes those status tokens to `Connected`, `Disconnected`, or `Offline`.
     - Heartbeat-only online state without a confirmed Agent socket renders as `Disconnected`, not `Connected`.

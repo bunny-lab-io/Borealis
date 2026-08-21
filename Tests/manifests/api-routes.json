@@ -747,6 +747,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "GET /api/devices/{device_guid}/agent-updates",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_maintenance.go",
+    "line": 50,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_progress_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "GET /api/devices/{device_id}/metadata_fields",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go",
     "line": 86,
@@ -794,7 +803,7 @@
   {
     "pattern": "GET /api/realtime/events",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go",
-    "line": 37,
+    "line": 38,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime_test.go",
@@ -1005,6 +1014,15 @@
     "class": "agent",
     "authentication": "device-token-dpop",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/agent/update/progress",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_progress.go",
+    "line": 66,
+    "class": "agent",
+    "authentication": "device-token-dpop",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/agent_update_progress_test.go",
     "test_exemption": null
   },
   {

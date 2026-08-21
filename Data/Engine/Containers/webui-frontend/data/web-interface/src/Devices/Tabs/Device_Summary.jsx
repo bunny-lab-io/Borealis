@@ -12,6 +12,10 @@ import {
   Tooltip,
   Typography,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   ListItemButton,
   ListItemText,
   Menu,
@@ -55,6 +59,7 @@ import { RuntimeRoleHealthBreakdown } from "./Agent_Startup_Flow.jsx";
 import DeviceMetadataTab from "./Device_Metadata.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
+import AgentUpdates, { agentUpdateIsActive, openAgentUpdateJob, useAgentUpdateHistory } from "./Agent_Updates.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../../app/providers/AuthContext.jsx";
@@ -1491,6 +1496,7 @@ export default function DeviceSummary() {
     metadata: true,
   });
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
   const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const softwareRefreshTimersRef = useRef([]);
@@ -1820,6 +1826,22 @@ export default function DeviceSummary() {
   const activityHostname = useMemo(() => {
     return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
   }, [meta?.hostname, summary.hostname, agent?.hostname, device?.hostname]);
+  const agentUpdateDeviceGuid = useMemo(
+    () => meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || agent?.agent_guid || agent?.guid || "",
+    [agent?.agent_guid, agent?.guid, device?.agent_guid, device?.guid, meta.agentGuid, summary.agent_guid]
+  );
+  const agentUpdateHistory = useAgentUpdateHistory(agentUpdateDeviceGuid);
+  const activeAgentUpdate = agentUpdateHistory.active_operation;
+  const selectedAgentUpdateOperationId = String(deviceSearchParams.get("operation_id") || "").trim();
+  const openAgentUpdateStatus = useCallback((operationId = "") => {
+    const params = new URLSearchParams(location.search || "");
+    params.set("tab", "remote_ops");
+    params.set("view", "agent_updates");
+    if (operationId) params.set("operation_id", operationId);
+    else params.delete("operation_id");
+    pruneDeviceWorkspaceContextParams(params, "remote_ops", "agent_updates");
+    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { state: location.state });
+  }, [location.pathname, location.search, location.state, navigate]);
   const quickJobTargetRecords = useMemo(
     () =>
       quickJobTargets.map((hostname) => ({
@@ -1928,7 +1950,7 @@ export default function DeviceSummary() {
   }, [activityHostname]);
 
   const requestAgentUpdate = useCallback(async () => {
-    const targetGuid = meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || "";
+    const targetGuid = agentUpdateDeviceGuid;
     const targetHost = activityHostname || targetGuid;
     if (!targetGuid || updateAgentBusy) return;
     setUpdateAgentBusy(true);
@@ -1951,11 +1973,14 @@ export default function DeviceSummary() {
         throw new Error(message);
       }
       await notifyOperator({
-        title: "AutoUpdater Requested",
-        message: `Queued ${targetHost} to start its local AutoUpdater task immediately.`,
+        title: "Agent Update Requested",
+        message: `Queued install-equivalent Agent update for ${targetHost}.`,
         icon: "update",
         variant: "info",
       });
+      const operationID = String(data?.queued?.[0]?.operation_id || "").trim();
+      await agentUpdateHistory.refresh({ silent: true });
+      openAgentUpdateStatus(operationID);
     } catch (err) {
       await notifyOperator({
         title: "Agent Update Failed",
@@ -1966,7 +1991,7 @@ export default function DeviceSummary() {
     } finally {
       setUpdateAgentBusy(false);
     }
-  }, [activityHostname, device?.agent_guid, device?.guid, meta.agentGuid, notifyOperator, summary.agent_guid, updateAgentBusy]);
+  }, [activityHostname, agentUpdateDeviceGuid, agentUpdateHistory.refresh, notifyOperator, openAgentUpdateStatus, updateAgentBusy]);
 
   const handleDescriptionDraftChange = useCallback((nextDescription) => {
     descriptionDraftRef.current = String(nextDescription ?? "");
@@ -3543,6 +3568,8 @@ export default function DeviceSummary() {
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
   const pageSubtitle = `${readiness.headline} - Agent ${status || "Unknown"} - ${readiness.detail}`;
+  const agentUpdatesWorkspaceActive =
+    activeWorkspaceKey === "remote_ops" && normalizeWorkspaceView("remote_ops", activeWorkspaceView) === "agent_updates";
   const deviceOperatingSystem = readFirstNonEmptyValue(
     meta.operatingSystem,
     summary.operating_system,
@@ -3560,19 +3587,30 @@ export default function DeviceSummary() {
     [deviceOperatingSystem]
   );
 
-  const pageHeaderActions = useMemo(
-    () => [
-      {
-        id: "device-summary-actions",
-        label: "Actions",
-        icon: <MoreHorizIcon />,
+  const pageHeaderActions = useMemo(() => {
+    const actions = [];
+    if (agentUpdatesWorkspaceActive) {
+      actions.push({
+        id: "agent-update-now",
+        label: "Update Now",
+        icon: <SystemUpdateAltRoundedIcon />,
         tone: "primary",
-        disabled: !activityHostname,
-        onClick: (event) => setMenuAnchor(event.currentTarget),
-      },
-    ],
-    [activityHostname]
-  );
+        disabled: !agentUpdateDeviceGuid || updateAgentBusy || agentUpdateIsActive(activeAgentUpdate),
+        loading: updateAgentBusy,
+        onClick: () => setUpdateConfirmOpen(true),
+      });
+      return actions;
+    }
+    actions.push({
+      id: "device-summary-actions",
+      label: "Actions",
+      icon: <MoreHorizIcon />,
+      tone: "primary",
+      disabled: !activityHostname,
+      onClick: (event) => setMenuAnchor(event.currentTarget),
+    });
+    return actions;
+  }, [activeAgentUpdate, activityHostname, agentUpdateDeviceGuid, agentUpdatesWorkspaceActive, updateAgentBusy]);
 
   const renderDeviceNavBadge = (badge) =>
     badge ? (
@@ -3765,6 +3803,13 @@ export default function DeviceSummary() {
               active={activeView("remote_ops", "services")}
               onClick={() => setActiveWorkspace("remote_ops", "services")}
             />
+            <SidebarNavRow
+              icon={<SystemUpdateAltRoundedIcon fontSize="small" />}
+              label="Agent Updates"
+              active={activeView("remote_ops", "agent_updates")}
+              onClick={() => setActiveWorkspace("remote_ops", "agent_updates")}
+              badge={agentUpdateIsActive(activeAgentUpdate) ? "1" : ""}
+            />
           </SidebarSection>
 
           <SidebarSection sectionId="protection" title="Protection">
@@ -3848,6 +3893,15 @@ export default function DeviceSummary() {
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {view === "files"
             ? renderFileManagementTab()
+            : view === "agent_updates"
+              ? (
+                <AgentUpdates
+                  history={agentUpdateHistory}
+                  selectedOperationId={selectedAgentUpdateOperationId}
+                  onSelectOperation={(operationID) => openAgentUpdateStatus(operationID)}
+                  onOpenJob={(jobID) => openAgentUpdateJob(navigate, jobID)}
+                />
+              )
             : view === "registry"
               ? (
                 <RemoteRegistryEditorTab device={tunnelDevice || device} />
@@ -3889,6 +3943,7 @@ export default function DeviceSummary() {
   const deviceNavigationSidebar = useMemo(
     () => renderDeviceNavigationSidebar(),
     [
+      activeAgentUpdate,
       activeWorkspaceKey,
       activeWorkspaceView,
       deviceId,
@@ -3902,9 +3957,11 @@ export default function DeviceSummary() {
   );
 
   useRoutePageChrome({
-    title: displayHostname,
-    subtitle: pageSubtitle,
-    Icon: DeviceSummaryPageIcon,
+    title: agentUpdatesWorkspaceActive ? "Agent Updates" : displayHostname,
+    subtitle: agentUpdatesWorkspaceActive
+      ? "Remote trigger agent updates on-demand and see historical agent update history."
+      : pageSubtitle,
+    Icon: agentUpdatesWorkspaceActive ? SystemUpdateAltRoundedIcon : DeviceSummaryPageIcon,
     actions: pageHeaderActions,
     navigationSidebar: deviceNavigationSidebar,
   });
@@ -3979,10 +4036,10 @@ export default function DeviceSummary() {
           New Watchdog
         </MenuItem>
         <MenuItem
-          disabled={!activityHostname || updateAgentBusy}
+          disabled={!agentUpdateDeviceGuid || updateAgentBusy || agentUpdateIsActive(activeAgentUpdate)}
           onClick={() => {
             setMenuAnchor(null);
-            requestAgentUpdate();
+            setUpdateConfirmOpen(true);
           }}
         >
           Update Agent
@@ -4017,8 +4074,8 @@ export default function DeviceSummary() {
           width: "100%",
           display: "flex",
           flexDirection: "column",
-          borderRadius: 3,
-          overflow: "hidden",
+          borderRadius: agentUpdatesWorkspaceActive ? 0 : 3,
+          overflow: agentUpdatesWorkspaceActive ? "visible" : "hidden",
         }}
       >
         <Box
@@ -4026,29 +4083,32 @@ export default function DeviceSummary() {
             flexGrow: 1,
             minHeight: 0,
             minWidth: 0,
-            overflowX: "hidden",
+            overflowX: agentUpdatesWorkspaceActive ? "visible" : "hidden",
             display: "flex",
             flexDirection: "column",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderRadius: 3,
-            background:
-              "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
-              "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
-            boxShadow: MAGIC_UI.glow,
+            border: agentUpdatesWorkspaceActive ? "none" : `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: agentUpdatesWorkspaceActive ? 0 : 3,
+            background: agentUpdatesWorkspaceActive
+              ? "transparent"
+              : "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
+                "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
+            boxShadow: agentUpdatesWorkspaceActive ? "none" : MAGIC_UI.glow,
           }}
         >
-          <DeviceReadinessHeader
-            engineConnection={engineConnection}
-            roleHealthSummary={roleHealthSummary}
-            agentManagementSummary={agentManagementSummary}
-            agentManagementGroups={agentManagementGroups}
-            agentHealthRows={agentHealthRows}
-          />
+          {!agentUpdatesWorkspaceActive ? (
+            <DeviceReadinessHeader
+              engineConnection={engineConnection}
+              roleHealthSummary={roleHealthSummary}
+              agentManagementSummary={agentManagementSummary}
+              agentManagementGroups={agentManagementGroups}
+              agentHealthRows={agentHealthRows}
+            />
+          ) : null}
           <Box
             id="device-summary-workspace-scrollhost"
             sx={{
               flexGrow: 1,
-              p: { xs: 1.5, md: 2 },
+              p: agentUpdatesWorkspaceActive ? 0 : { xs: 1.5, md: 2 },
               minHeight: 0,
               minWidth: 0,
               overflowX: "hidden",
@@ -4070,6 +4130,33 @@ export default function DeviceSummary() {
           setClearDialogOpen(false);
         }}
       />
+
+      <Dialog
+        open={updateConfirmOpen}
+        onClose={() => setUpdateConfirmOpen(false)}
+        PaperProps={{ sx: { bgcolor: "#08101f", color: "#e2e8f0", border: `1px solid ${MAGIC_UI.panelBorder}` } }}
+      >
+        <DialogTitle>Update Agent now?</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ color: MAGIC_UI.textMuted, maxWidth: 560 }}>
+            Update may restart Borealis Agent, UltraVNC, and WireGuard managed services. Native Windows RDP restarts only when unhealthy. Agent identity, enrollment, trust, and Engine association remain preserved.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setUpdateConfirmOpen(false)} color="inherit">Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={updateAgentBusy}
+            onClick={() => {
+              setUpdateConfirmOpen(false);
+              void requestAgentUpdate();
+            }}
+            sx={{ background: BOREALIS_PRIMARY_GRADIENT, color: "#06101d", fontWeight: 800 }}
+          >
+            Update Now
+          </Button>
+        </DialogActions>
+      </Dialog>
 
     </Box>
   );

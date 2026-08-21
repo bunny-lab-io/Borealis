@@ -58,15 +58,36 @@ type AgentStateSection struct {
 }
 
 type AgentUpdateSection struct {
-	OperationID      string `json:"operation_id,omitempty"`
-	Kind             string `json:"kind,omitempty"`
-	Status           string `json:"status,omitempty"`
-	StartedAt        int64  `json:"started_at,omitempty"`
-	UpdatedAt        int64  `json:"updated_at,omitempty"`
-	CompletedAt      int64  `json:"completed_at,omitempty"`
-	DeadlineAt       int64  `json:"deadline_at,omitempty"`
-	LastError        string `json:"last_error,omitempty"`
-	RecoveryAttempts int    `json:"recovery_attempts,omitempty"`
+	OperationID          string             `json:"operation_id,omitempty"`
+	Kind                 string             `json:"kind,omitempty"`
+	Source               string             `json:"source,omitempty"`
+	RequestedBy          string             `json:"requested_by,omitempty"`
+	ScheduledJobID       int64              `json:"scheduled_job_id,omitempty"`
+	ScheduledJobRunID    int64              `json:"scheduled_job_run_id,omitempty"`
+	Status               string             `json:"status,omitempty"`
+	TargetBuildID        string             `json:"target_build_id,omitempty"`
+	InstalledBuildBefore string             `json:"installed_build_before,omitempty"`
+	InstalledBuildAfter  string             `json:"installed_build_after,omitempty"`
+	StartedAt            int64              `json:"started_at,omitempty"`
+	UpdatedAt            int64              `json:"updated_at,omitempty"`
+	CompletedAt          int64              `json:"completed_at,omitempty"`
+	DeadlineAt           int64              `json:"deadline_at,omitempty"`
+	LastError            string             `json:"last_error,omitempty"`
+	RecoveryAttempts     int                `json:"recovery_attempts,omitempty"`
+	Events               []AgentUpdateEvent `json:"events,omitempty"`
+}
+
+type AgentUpdateEvent struct {
+	EventID        string `json:"event_id,omitempty"`
+	PhaseID        string `json:"phase_id"`
+	ParentPhaseID  string `json:"parent_phase_id,omitempty"`
+	State          string `json:"state"`
+	AgentTimestamp int64  `json:"agent_timestamp"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	Summary        string `json:"summary,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	RetryCount     int    `json:"retry_count,omitempty"`
+	TerminalStatus string `json:"terminal_status,omitempty"`
 }
 
 type AgentLivenessSection struct {
@@ -854,8 +875,25 @@ func saveMetadataQueueUnlocked(path string, queue MetadataQueue) error {
 func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {
 	update.OperationID = strings.TrimSpace(update.OperationID)
 	update.Kind = strings.TrimSpace(update.Kind)
+	update.Source = strings.ToLower(strings.TrimSpace(update.Source))
+	update.RequestedBy = strings.TrimSpace(update.RequestedBy)
 	update.Status = strings.ToLower(strings.TrimSpace(update.Status))
+	update.TargetBuildID = NormalizeBuildID(update.TargetBuildID)
+	update.InstalledBuildBefore = NormalizeBuildID(update.InstalledBuildBefore)
+	update.InstalledBuildAfter = NormalizeBuildID(update.InstalledBuildAfter)
 	update.LastError = strings.TrimSpace(update.LastError)
+	if len(update.Events) > 128 {
+		update.Events = append([]AgentUpdateEvent(nil), update.Events[len(update.Events)-128:]...)
+	}
+	for index := range update.Events {
+		update.Events[index].EventID = strings.TrimSpace(update.Events[index].EventID)
+		update.Events[index].PhaseID = strings.ToLower(strings.TrimSpace(update.Events[index].PhaseID))
+		update.Events[index].ParentPhaseID = strings.ToLower(strings.TrimSpace(update.Events[index].ParentPhaseID))
+		update.Events[index].State = strings.ToLower(strings.TrimSpace(update.Events[index].State))
+		update.Events[index].Summary = strings.TrimSpace(update.Events[index].Summary)
+		update.Events[index].Detail = strings.TrimSpace(update.Events[index].Detail)
+		update.Events[index].TerminalStatus = strings.ToLower(strings.TrimSpace(update.Events[index].TerminalStatus))
+	}
 	return update
 }
 

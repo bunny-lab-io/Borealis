@@ -19,15 +19,33 @@ func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, erro
 		return map[string]any{"status": "error", "detail": "agent unavailable"}, nil
 	}
 	body, _ := payload.(map[string]any)
+	if current, err := agentconfig.Load(a.configPath); err == nil && updateOperationActive(current.Agent.Update) {
+		return map[string]any{
+			"status":       "active",
+			"operation_id": current.Agent.Update.OperationID,
+			"detail":       "Agent update already underway.",
+		}, nil
+	}
 	operation := a.previewUpdateOperation(
 		stringFromPayload(body, "operation_id", "request_id"),
 		"update_now",
 	)
+	operation.Source = stringFromPayload(body, "source")
+	if operation.Source == "" {
+		operation.Source = "operator_initiated"
+	}
+	operation.RequestedBy = stringFromPayload(body, "requested_by")
+	operation.ScheduledJobID = int64FromPayload(body, "scheduled_job_id", "job_id")
+	operation.ScheduledJobRunID = int64FromPayload(body, "scheduled_job_run_id", "run_id")
+	stored, err := a.authClient.StoreAgentUpdateOperationDetails(operation)
+	if err != nil {
+		return map[string]any{"status": "error", "detail": "could not persist update operation"}, nil
+	}
 	response := map[string]any{
 		"status":       "ok",
-		"operation_id": operation.OperationID,
+		"operation_id": stored.OperationID,
 	}
-	return a.responseWithUpdateAfterAck(response, operation, "update request"), nil
+	return a.responseWithUpdateAfterAck(response, stored, "update request"), nil
 }
 
 func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) (any, error) {
@@ -39,7 +57,7 @@ func (a *Agent) responseWithUpdateAfterAck(response map[string]any, operation ag
 		return response
 	}
 	return agenttransport.NewAfterAckResponse(response, func() {
-		a.storeUpdateAndStartLocalUpdaterAsync(operation, reason)
+		a.startLocalUpdaterAsync(operation, reason)
 	})
 }
 
@@ -58,26 +76,15 @@ func (a *Agent) previewUpdateOperation(operationID string, kind string) agentcon
 	}
 }
 
-func (a *Agent) storeUpdateAndStartLocalUpdaterAsync(operation agentconfig.AgentUpdateSection, reason string) {
+func (a *Agent) startLocalUpdaterAsync(operation agentconfig.AgentUpdateSection, reason string) {
 	if a == nil {
 		return
 	}
 	configPath := a.configPath
 	logger := a.logger
-	authClient := a.authClient
 	go func() {
-		stored, err := authClient.StoreAgentUpdateOperation(
-			operation.OperationID,
-			operation.Kind,
-		)
-		if err != nil {
-			if logger != nil {
-				logger.Printf("update operation state failed after %s ack: %v", reason, err)
-			}
-			return
-		}
 		if logger != nil {
-			logger.Printf("update operation stored after %s ack operation_id=%s", reason, stored.OperationID)
+			logger.Printf("update operation starting after %s ack operation_id=%s", reason, operation.OperationID)
 		}
 		if err := startLocalUpdaterForRequest(configPath); err != nil {
 			markUpdateOperationStatus(configPath, "failed", err.Error())
@@ -88,6 +95,24 @@ func (a *Agent) storeUpdateAndStartLocalUpdaterAsync(operation agentconfig.Agent
 		}
 		markUpdateOperationStatus(configPath, "updater_started", "")
 	}()
+}
+
+func int64FromPayload(payload map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		value, exists := payload[key]
+		if !exists {
+			continue
+		}
+		switch typed := value.(type) {
+		case int64:
+			return typed
+		case int:
+			return int64(typed)
+		case float64:
+			return int64(typed)
+		}
+	}
+	return 0
 }
 
 func stringFromPayload(payload map[string]any, keys ...string) string {
@@ -136,17 +161,30 @@ func writeInstalledBuildID(configPath string, buildID string) error {
 		return err
 	}
 	cfg.Agent.InstalledBuildID = buildID
-	if cfg.Agent.Update.OperationID != "" {
+	if updateOperationCanEnterHealthGate(cfg.Agent.Update) {
 		now := time.Now().Unix()
-		cfg.Agent.Update.Status = "success"
+		cfg.Agent.Update.Status = "awaiting_health"
 		cfg.Agent.Update.UpdatedAt = now
-		cfg.Agent.Update.CompletedAt = now
+		cfg.Agent.Update.CompletedAt = 0
 		cfg.Agent.Update.LastError = ""
+		cfg.Agent.Update.InstalledBuildAfter = buildID
 	}
 	if err := agentconfig.Save(configPath, &cfg); err != nil {
 		return err
 	}
 	return nil
+}
+
+func updateOperationCanEnterHealthGate(update agentconfig.AgentUpdateSection) bool {
+	if strings.TrimSpace(update.OperationID) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(update.Status)) {
+	case "staging", "restarting", "awaiting_reconnect", "awaiting_health", "verifying", "recovering":
+		return true
+	default:
+		return false
+	}
 }
 
 func markUpdateOperationStatus(configPath string, status string, detail string) {

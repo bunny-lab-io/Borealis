@@ -5,8 +5,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +39,37 @@ func TestSchedulerManagerComputeNextRunMatchesPythonIntervals(t *testing.T) {
 	}
 	if got := schedulerComputeNextRun("every_15_minutes", &start, &last, now); got == nil || *got != schedulerFloorMinute(last)+15*60 {
 		t.Fatalf("interval run mismatch: %v", got)
+	}
+}
+
+func TestExpireTimedOutAgentMaintenanceRunsCancelsQueuedWork(t *testing.T) {
+	state := &schedulerTimeoutDriverState{}
+	driverName := fmt.Sprintf("scheduler-agent-maintenance-timeout-%d", time.Now().UnixNano())
+	sql.Register(driverName, schedulerTimeoutDriver{state: state})
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatalf("open fake db: %v", err)
+	}
+	defer db.Close()
+
+	manager := &goSchedulerManager{store: &postgresOperatorStore{db: db}}
+	if err := manager.expireTimedOutAgentMaintenanceRuns(context.Background()); err != nil {
+		t.Fatalf("expire timed-out maintenance runs: %v", err)
+	}
+	if !state.committed {
+		t.Fatal("timeout transaction did not commit")
+	}
+	sequence := strings.Join(state.execs, "\n")
+	workIndex := strings.Index(sequence, "update engine.job_scheduler_work_items")
+	targetIndex := strings.Index(sequence, "update engine.scheduled_job_run_targets")
+	if workIndex < 0 {
+		t.Fatalf("queued work cancellation missing: %s", sequence)
+	}
+	if targetIndex < 0 || workIndex > targetIndex {
+		t.Fatalf("queued work must be cancelled before timeout bookkeeping: %s", sequence)
+	}
+	if len(state.workArgs) != 6 || state.workArgs[0] != workStatusCancelled || state.workArgs[5] != workStatusQueued {
+		t.Fatalf("unexpected queued work cancellation arguments: %+v", state.workArgs)
 	}
 }
 
@@ -820,4 +855,97 @@ func TestApplyScheduledSSHCredentialHostVarsUsesDocumentedAuthFlags(t *testing.T
 	if hostVars["ansible_become"] != true || hostVars["ansible_become_method"] != "sudo" || hostVars["ansible_become_user"] != "root" || hostVars["ansible_become_password"] != "become-secret" {
 		t.Fatalf("missing scheduled become vars %#v", hostVars)
 	}
+}
+
+type schedulerTimeoutDriverState struct {
+	execs     []string
+	workArgs  []any
+	committed bool
+}
+
+type schedulerTimeoutDriver struct {
+	state *schedulerTimeoutDriverState
+}
+
+func (d schedulerTimeoutDriver) Open(_ string) (driver.Conn, error) {
+	return &schedulerTimeoutConn{state: d.state}, nil
+}
+
+type schedulerTimeoutConn struct {
+	state *schedulerTimeoutDriverState
+}
+
+func (c *schedulerTimeoutConn) Prepare(_ string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (c *schedulerTimeoutConn) Close() error {
+	return nil
+}
+
+func (c *schedulerTimeoutConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *schedulerTimeoutConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	return schedulerTimeoutTx{state: c.state}, nil
+}
+
+func (c *schedulerTimeoutConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	if strings.Contains(normalized, "update engine.scheduled_job_runs as r") {
+		return &schedulerTimeoutRows{
+			columns: []string{"id"},
+			values:  [][]driver.Value{{int64(77)}},
+		}, nil
+	}
+	return nil, fmt.Errorf("unexpected query: %s", normalized)
+}
+
+func (c *schedulerTimeoutConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	c.state.execs = append(c.state.execs, normalized)
+	if strings.Contains(normalized, "update engine.job_scheduler_work_items") {
+		c.state.workArgs = make([]any, 0, len(args))
+		for _, arg := range args {
+			c.state.workArgs = append(c.state.workArgs, arg.Value)
+		}
+	}
+	return driver.RowsAffected(1), nil
+}
+
+type schedulerTimeoutTx struct {
+	state *schedulerTimeoutDriverState
+}
+
+func (tx schedulerTimeoutTx) Commit() error {
+	tx.state.committed = true
+	return nil
+}
+
+func (tx schedulerTimeoutTx) Rollback() error {
+	return nil
+}
+
+type schedulerTimeoutRows struct {
+	columns []string
+	values  [][]driver.Value
+	index   int
+}
+
+func (r *schedulerTimeoutRows) Columns() []string {
+	return r.columns
+}
+
+func (r *schedulerTimeoutRows) Close() error {
+	return nil
+}
+
+func (r *schedulerTimeoutRows) Next(dest []driver.Value) error {
+	if r.index >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.index])
+	r.index++
+	return nil
 }

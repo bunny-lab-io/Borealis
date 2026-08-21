@@ -164,33 +164,18 @@ func TestAgentMaintenanceBulkHandlerPropagatesStoreErrors(t *testing.T) {
 	}
 }
 
-func TestDeviceAgentUpdateHandlerQueuesWorkerCall(t *testing.T) {
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/remote-ops/host-service/call" {
-			t.Fatalf("unexpected worker path %s", r.URL.Path)
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body["event_name"] != "agent_update_request" || body["service_mode"] != "system" {
-			t.Fatalf("unexpected worker body %+v", body)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"called": true,
-			"response": map[string]any{
-				"status": "ok",
-			},
-		})
-	}))
-	defer worker.Close()
-
+func TestDeviceAgentUpdateHandlerQueuesSchedulerJob(t *testing.T) {
 	store := &agentMaintenanceTestStore{
 		profile: operatorProfile{Username: "operator", Role: "Admin"},
 		processContext: deviceProcessContext{
+			GUID:     "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
 			Hostname: "LAB-OPERATOR-01",
 			AgentID:  "LAB-OPERATOR-01_SYSTEM",
-			Route:    routeForTestWorker(t, worker.URL),
+		},
+		payload: map[string]any{
+			"status": "queued",
+			"job_id": int64(123),
+			"queued": []any{map[string]any{"hostname": "LAB-OPERATOR-01", "operation_id": "op-42"}},
 		},
 	}
 	auth := testAgentMaintenanceAuth(store)
@@ -208,18 +193,21 @@ func TestDeviceAgentUpdateHandlerQueuesWorkerCall(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["status"] != "queued" || payload["hostname"] != "LAB-OPERATOR-01" || payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" {
+	if payload["status"] != "queued" || payload["job_id"].(float64) != 123 {
 		t.Fatalf("unexpected payload %+v", payload)
 	}
-	if payload["operation_id"] == "" {
-		t.Fatalf("missing operation id %+v", payload)
+	if !store.called || len(store.request.DeviceGUIDs) != 1 || store.request.DeviceGUIDs[0] != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" {
+		t.Fatalf("expected Scheduler-backed maintenance request, got %+v", store.request)
 	}
 }
 
-func TestDeviceAgentUpdateHandlerReturnsConflictWithoutRoute(t *testing.T) {
+func TestDeviceAgentUpdateHandlerQueuesWithoutActiveSocket(t *testing.T) {
 	store := &agentMaintenanceTestStore{
-		profile:        operatorProfile{Username: "operator", Role: "Admin"},
-		processContext: deviceProcessContext{Hostname: "LAB-OPERATOR-01", AgentID: "LAB-OPERATOR-01_SYSTEM"},
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		processContext: deviceProcessContext{
+			GUID: "2540DA38-E2B1-45B9-9113-BF7CF0E1778A", Hostname: "LAB-OPERATOR-01", AgentID: "LAB-OPERATOR-01_SYSTEM",
+		},
+		payload: map[string]any{"status": "queued", "job_id": int64(124), "queued": []any{}},
 	}
 	auth := testAgentMaintenanceAuth(store)
 	recorder := httptest.NewRecorder()
@@ -229,8 +217,8 @@ func TestDeviceAgentUpdateHandlerReturnsConflictWithoutRoute(t *testing.T) {
 
 	deviceAgentUpdateHandler(auth).ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK || !store.called {
+		t.Fatalf("expected Scheduler queue despite offline socket, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

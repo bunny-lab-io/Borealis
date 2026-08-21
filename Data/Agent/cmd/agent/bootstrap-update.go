@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -26,10 +27,20 @@ type updateManifest struct {
 	DownloadPath   string `json:"download_path"`
 }
 
-func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
+func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) (resultErr error) {
 	startedAt := time.Now()
 	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
-	markConfigUpdateOperation(configPath, "running", "")
+	reporter := newUpdateProgressReporter(configPath, logger)
+	if updateOperationIsActive(reporter.operation()) {
+		markConfigUpdateOperation(configPath, "running", "")
+		reporter.emit("requesting_agent_update", "", "success", "Agent Received Request", "Agent persisted update operation before acknowledgement.", "")
+		reporter.emit("resolving_engine_artifact", "", "running", "Resolving Engine Artifact", "Requesting current authenticated Agent artifact manifest.", "")
+	}
+	defer func() {
+		if resultErr != nil && updateOperationIsActive(reporter.operation()) {
+			reporter.emit("update_completed", "", "failed", "Agent Update Failed", resultErr.Error(), "failed")
+		}
+	}()
 	_ = logutil.RotateAndPrune(
 		filepath.Join(cfg.InstallDir, "Logs", "Agent", "updater.log"),
 		logutil.RetentionDaysFromConfig(configPath),
@@ -54,10 +65,10 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	installed := readConfigInstalledBuildID(cfg)
 	logger.Tracef("Agent update check start: source=engine installed_build_id=%s", installed)
-	return runEngineManifestUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
+	return runEngineManifestUpdateCheck(cfg, logger, reporter, installed, startedAt, serverURL, token, engineHTTPClient)
 }
 
-func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string, engineHTTPClient *http.Client) error {
+func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, reporter *updateProgressReporter, installed string, startedAt time.Time, serverURL string, token string, engineHTTPClient *http.Client) error {
 	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
 	manifest, err := fetchUpdateManifest(engineHTTPClient, serverURL, token, installed)
 	if err != nil {
@@ -70,12 +81,46 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent update check: up to date (%s).", target)
-		if err := ensureAgentTasks(cfg, logger); err != nil {
-			logger.Warnf("Agent service/task reconciliation skipped: %v", err)
+		operation := reporter.operation()
+		if !updateOperationIsActive(operation) || operation.Source == updateSourceHourly {
+			logger.Tracef("Agent update check complete: up_to_date non_disruptive=true duration=%s", time.Since(startedAt).Round(time.Millisecond))
+			return nil
 		}
-		logger.Tracef("Agent update check complete: up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
+		reporter.setBuilds(target, installed, installed)
+		reporter.emit("resolving_engine_artifact", "", "success", "Current Binary Retained", "Installed Agent binary already matches Engine artifact.", "")
+		reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "skipped", "Skipped When Current", "Binary download not required for install-equivalent repair.", "")
+		reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "skipped", "Skipped When Current", "Current installed binary retained.", "")
+		identityBefore := agentUpdateIdentityFingerprint(configPath)
+		reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "running", "Protecting Agent Identity/Trust", "Capturing non-secret identity and trust fingerprint.", "")
+		reporter.emit("quiescing_managed_components", "", "running", "Quiescing Managed Components", "Stopping Borealis-managed services before same-build reconciliation.", "")
+		if err := quiesceBorealisUpdateComponents(cfg, logger, reporter); err != nil {
+			return err
+		}
+		reporter.emit("quiescing_managed_components", "", "success", "Managed Components Stopped", "Borealis-managed services stopped or reached bounded recovery handling.", "")
+		reporter.emit("staging_agent_binary", "", "skipped", "Skipped When Current", "Installed Agent binary already matches target build.", "")
+		reporter.emit("reconciling_agent_host", "", "running", "Reconciling Agent Host", "Repairing dependencies, scheduled tasks, services, and runtime configuration.", "")
+		if err := reconcileAndStartAgentAfterUpdate(cfg, logger); err != nil {
+			reporter.emit("reconciling_agent_host", "", "failed", "Agent Host Reconciliation Failed", err.Error(), "")
+			return err
+		}
+		identityAfter := agentUpdateIdentityFingerprint(configPath)
+		if identityBefore == "" || identityBefore != identityAfter {
+			return fmt.Errorf("Agent identity/trust verification failed after same-build reconciliation")
+		}
+		reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "success", "Identity/Trust Preserved", "Non-secret identity and trust fingerprint remained unchanged.", "")
+		reporter.emit("reconciling_agent_host", "", "success", "Agent Host Reconciled", "Dependencies, tasks, and services reconciled.", "")
+		markConfigUpdateOperation(configPath, "awaiting_health", "")
+		reporter.emit("starting_agent_runtime", "", "success", "Borealis Agent Service Started", "Agent service start command completed.", "")
+		reporter.emit("waiting_agent_reconnection", "", "running", "Waiting for Agent Reconnection", "Waiting for matching heartbeat and required role health.", "")
+		logger.Tracef("Agent operator repair complete: same_build duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
+	if !updateOperationIsActive(reporter.operation()) {
+		reporter.ensureHourlyOperation(target, installed)
+		reporter.emit("requesting_agent_update", "", "success", "Hourly Update Checker", "New Engine artifact detected; durable update operation created.", "")
+	}
+	reporter.setBuilds(target, installed, "")
+	reporter.emit("resolving_engine_artifact", "", "success", "Update Available", "Engine artifact differs from installed Agent build.", "")
 	downloadURL := strings.TrimSpace(manifest.DownloadPath)
 	if downloadURL == "" {
 		return fmt.Errorf("update manifest did not provide Engine artifact path")
@@ -85,10 +130,14 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	}
 	archivePath := filepath.Join(updateTempDir(cfg), "agent-update.zip")
 	markConfigUpdateOperation(configPath, "staging", "")
+	reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "running", "Downloading Agent Artifact", "Downloading authenticated Engine artifact.", "")
 	logger.Tracef("Agent update artifact download start: source=engine url=%s archive=%s", downloadURL, archivePath)
 	if err := downloadUpdateArtifact(engineHTTPClient, downloadURL, token, archivePath); err != nil {
+		reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "failed", "Download Failed", err.Error(), "")
 		return err
 	}
+	reporter.emit("downloading_agent_artifact", "resolving_engine_artifact", "success", "Download Complete", "Agent artifact downloaded from Engine.", "")
+	reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "running", "Verifying Agent Artifact", "Validating artifact checksum and configuration compatibility.", "")
 	if manifest.ArtifactSHA256 != "" {
 		logger.Tracef("Agent update checksum verification start: archive=%s", archivePath)
 		actual, err := sha256File(archivePath)
@@ -108,11 +157,21 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	sourceRoot := extractRoot
 	logger.Tracef("Agent update source resolved: %s", sourceRoot)
 	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
+		reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "failed", "Verification Failed", err.Error(), "")
 		return err
 	}
-	quiesceBorealisUpdateComponents(cfg, logger)
+	reporter.emit("verifying_agent_artifact", "downloading_agent_artifact", "success", "Verification Complete", "Artifact checksum and Agent configuration validation passed.", "")
+	identityBefore := agentUpdateIdentityFingerprint(configPath)
+	reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "running", "Protecting Agent Identity/Trust", "Capturing non-secret identity and trust fingerprint before replacement.", "")
+	reporter.emit("quiescing_managed_components", "", "running", "Quiescing Managed Components", "Stopping Borealis-managed services before replacement.", "")
+	if err := quiesceBorealisUpdateComponents(cfg, logger, reporter); err != nil {
+		return err
+	}
+	reporter.emit("quiescing_managed_components", "", "success", "Managed Components Stopped", "Borealis-managed components reached stopped state or scoped recovery handling.", "")
+	reporter.emit("staging_agent_binary", "", "running", "Staging Agent Binary", "Replacing installed runtime with verified candidate.", "")
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
+		reporter.emit("staging_agent_binary", "", "failed", "Agent Binary Failed to Stage", err.Error(), "")
 		if recoveryErr := startAgentRuntime(cfg, logger); recoveryErr != nil {
 			return fmt.Errorf("stage Agent update: %w; restart existing Agent after staging failure: %v", err, recoveryErr)
 		}
@@ -120,35 +179,63 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	}
 	if deferred {
 		markConfigUpdateOperation(configPath, "restarting", "")
+		reporter.emit("staging_agent_binary", "", "recovering", "Waiting for Agent.exe Handles", "Deferred scoped self-replacement scheduled.", "")
 		logger.Infof("Agent update staged (%s); deferred replacement will finalize after Agent.exe exits.", target)
 		logger.Tracef("Agent update check complete: deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
+	reporter.emit("staging_agent_binary", "", "success", "Agent Binary Staged", "Verified Agent binary replaced atomically.", "")
+	reporter.emit("reconciling_agent_host", "", "running", "Reconciling Agent Host", "Repairing dependencies, scheduled tasks, services, and runtime configuration.", "")
 	if err := reconcileAndStartAgentAfterUpdate(cfg, logger); err != nil {
+		reporter.emit("reconciling_agent_host", "", "failed", "Agent Host Reconciliation Failed", err.Error(), "")
 		return err
 	}
 	writeInstalledBuildID(cfg, target)
-	markConfigUpdateOperation(configPath, "success", "")
+	if identityBefore == "" || identityBefore != agentUpdateIdentityFingerprint(configPath) {
+		return fmt.Errorf("Agent identity/trust verification failed after binary replacement")
+	}
+	reporter.setBuilds(target, installed, target)
+	reporter.emit("protecting_agent_identity_trust", "verifying_agent_artifact", "success", "Identity/Trust Preserved", "Non-secret identity and trust fingerprint remained unchanged.", "")
+	reporter.emit("reconciling_agent_host", "", "success", "Agent Host Reconciled", "Dependencies, tasks, and services reconciled.", "")
+	markConfigUpdateOperation(configPath, "awaiting_health", "")
+	reporter.emit("starting_agent_runtime", "", "success", "Borealis Agent Service Started", "Agent service start command completed.", "")
+	reporter.emit("waiting_agent_reconnection", "", "running", "Waiting for Agent Reconnection", "Waiting for matching heartbeat and required role health.", "")
 	logger.Infof("Agent update applied (%s).", target)
 	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 
-func quiesceBorealisUpdateComponents(cfg BootstrapConfig, logger *BootstrapLogger) {
+func quiesceBorealisUpdateComponents(cfg BootstrapConfig, logger *BootstrapLogger, reporter *updateProgressReporter) error {
 	logger.Tracef("Update component quiesce starting before runtime replacement.")
-	for _, serviceName := range []string{
-		agentruntime.WindowsServiceName,
-		ultraVNCServiceName,
-		wireGuardManagerServiceName,
-		"BorealisWireGuardTunnel",
-		"WireGuardTunnel$wireguard",
-		"WireGuardTunnel$Borealis",
-		"WireGuardTunnel$borealis-wg",
-	} {
-		stopServiceAndWait(serviceName, 30*time.Second, logger)
+	for _, taskName := range []string{legacyAgentTaskName, agentWatchdogTaskName} {
+		stopScheduledTask(taskName, logger)
 	}
-	stopBorealisProcesses(cfg, logger)
-	logger.Tracef("Update component quiesce complete.")
+	services := []struct {
+		name  string
+		phase string
+		label string
+	}{
+		{agentruntime.WindowsServiceName, "stopping_borealis_agent_service", "Borealis Agent Service"},
+		{ultraVNCServiceName, "stopping_ultravnc_service", "UltraVNC Service"},
+		{wireGuardManagerServiceName, "stopping_wireguard_service", "WireGuard Manager Service"},
+		{"BorealisWireGuardTunnel", "stopping_wireguard_service", "Borealis WireGuard Tunnel"},
+		{"WireGuardTunnel$wireguard", "stopping_wireguard_service", "WireGuard Tunnel"},
+		{"WireGuardTunnel$Borealis", "stopping_wireguard_service", "Borealis WireGuard Tunnel"},
+		{"WireGuardTunnel$borealis-wg", "stopping_wireguard_service", "Borealis WireGuard Tunnel"},
+	}
+	var stopErrors []error
+	for _, service := range services {
+		reporter.emit(service.phase, "quiescing_managed_components", "running", "Stopping "+service.label, "Requesting graceful service stop.", "")
+		if err := stopBorealisOwnedServiceForUpdate(service.name, cfg, 30*time.Second, logger); err != nil {
+			reporter.emit(service.phase, "quiescing_managed_components", "failed", service.label+" Failed to Stop", err.Error(), "")
+			stopErrors = append(stopErrors, err)
+			continue
+		}
+		reporter.emit(service.phase, "quiescing_managed_components", "success", service.label+" Stopped", "Service stopped or was not installed.", "")
+	}
+	reporter.emit("evaluating_rdp_service", "quiescing_managed_components", "success", "RDP Service Healthy - Restart Not Required", "Native Windows TermService is OS-owned and was not restarted during update.", "")
+	logger.Tracef("Update component quiesce complete using exact managed task/service ownership.")
+	return errors.Join(stopErrors...)
 }
 
 func bootstrapEngineHTTPClient(cfg BootstrapConfig) (*http.Client, error) {

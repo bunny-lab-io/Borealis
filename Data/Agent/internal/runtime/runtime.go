@@ -693,6 +693,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		roleSnapshotFromHealth("system:vnc", "vnc", "UltraVNC Service", "system", vncHealth.Status, vncHealth.StatusCode, vncHealth.Detail, vncHealth.Details, now),
 		roleSnapshotFromHealth("system:wireguard_tunnel", "wireguard_tunnel", "WireGuard VPN", "system", wireGuardHealth.Status, wireGuardHealth.StatusCode, wireGuardHealth.Detail, wireGuardHealth.Details, now),
 	})
+	reconcileUpdateWithRoleHealth(a.configPath, roleHealthPayload, a.options.BuildID)
 	payload := map[string]any{
 		"hostname":          a.hostname,
 		"service_mode":      auth.NormalizeServiceMode(a.options.ServiceMode),
@@ -726,14 +727,22 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	payload["installed_build_id"] = installedBuildID
 	if strings.TrimSpace(cfg.Agent.Update.OperationID) != "" {
 		payload["agent_update_status"] = map[string]any{
-			"operation_id": cfg.Agent.Update.OperationID,
-			"kind":         cfg.Agent.Update.Kind,
-			"state":        cfg.Agent.Update.Status,
-			"started_at":   cfg.Agent.Update.StartedAt,
-			"updated_at":   cfg.Agent.Update.UpdatedAt,
-			"completed_at": cfg.Agent.Update.CompletedAt,
-			"deadline_at":  cfg.Agent.Update.DeadlineAt,
-			"last_error":   cfg.Agent.Update.LastError,
+			"operation_id":           cfg.Agent.Update.OperationID,
+			"kind":                   cfg.Agent.Update.Kind,
+			"state":                  cfg.Agent.Update.Status,
+			"started_at":             cfg.Agent.Update.StartedAt,
+			"updated_at":             cfg.Agent.Update.UpdatedAt,
+			"completed_at":           cfg.Agent.Update.CompletedAt,
+			"deadline_at":            cfg.Agent.Update.DeadlineAt,
+			"last_error":             cfg.Agent.Update.LastError,
+			"source":                 cfg.Agent.Update.Source,
+			"requested_by":           cfg.Agent.Update.RequestedBy,
+			"scheduled_job_id":       cfg.Agent.Update.ScheduledJobID,
+			"scheduled_job_run_id":   cfg.Agent.Update.ScheduledJobRunID,
+			"target_build_id":        cfg.Agent.Update.TargetBuildID,
+			"installed_build_before": cfg.Agent.Update.InstalledBuildBefore,
+			"installed_build_after":  cfg.Agent.Update.InstalledBuildAfter,
+			"events":                 cfg.Agent.Update.Events,
 		}
 	}
 	a.updateUIHeartbeat(payload)

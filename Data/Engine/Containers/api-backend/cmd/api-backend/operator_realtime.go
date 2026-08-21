@@ -14,8 +14,9 @@ import (
 const operatorRealtimeEventsPath = "/api/realtime/events"
 
 var allowedOperatorDeviceEvents = map[string]struct{}{
-	"device_inventory_changed": {},
-	"device_services_changed":  {},
+	"agent_update_progress_changed": {},
+	"device_inventory_changed":      {},
+	"device_services_changed":       {},
 }
 
 type operatorRealtimeEvent struct {
