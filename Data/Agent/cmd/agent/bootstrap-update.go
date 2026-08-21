@@ -110,10 +110,12 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
 		return err
 	}
-	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
-	stopBorealisProcesses(cfg, logger)
+	quiesceBorealisUpdateComponents(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
+		if recoveryErr := startAgentRuntime(cfg, logger); recoveryErr != nil {
+			return fmt.Errorf("stage Agent update: %w; restart existing Agent after staging failure: %v", err, recoveryErr)
+		}
 		return err
 	}
 	if deferred {
@@ -122,8 +124,7 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 		logger.Tracef("Agent update check complete: deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
 	}
-	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
-	if err := ensureAgentTasks(cfg, logger); err != nil {
+	if err := reconcileAndStartAgentAfterUpdate(cfg, logger); err != nil {
 		return err
 	}
 	writeInstalledBuildID(cfg, target)
@@ -131,6 +132,23 @@ func runEngineManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, 
 	logger.Infof("Agent update applied (%s).", target)
 	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func quiesceBorealisUpdateComponents(cfg BootstrapConfig, logger *BootstrapLogger) {
+	logger.Tracef("Update component quiesce starting before runtime replacement.")
+	for _, serviceName := range []string{
+		agentruntime.WindowsServiceName,
+		ultraVNCServiceName,
+		wireGuardManagerServiceName,
+		"BorealisWireGuardTunnel",
+		"WireGuardTunnel$wireguard",
+		"WireGuardTunnel$Borealis",
+		"WireGuardTunnel$borealis-wg",
+	} {
+		stopServiceAndWait(serviceName, 30*time.Second, logger)
+	}
+	stopBorealisProcesses(cfg, logger)
+	logger.Tracef("Update component quiesce complete.")
 }
 
 func bootstrapEngineHTTPClient(cfg BootstrapConfig) (*http.Client, error) {

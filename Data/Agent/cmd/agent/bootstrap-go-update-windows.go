@@ -236,6 +236,17 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
       Write-UpdaterLog "Attempt $attempt failed: finalize exited $LASTEXITCODE."
       exit 1
     }
+    $reconcileOutput = & $destination --reconcile-update --config-path $configPath 2>&1
+    foreach ($line in $reconcileOutput) { Write-UpdaterLog ("reconcile-update: " + $line) }
+    if ($LASTEXITCODE -ne 0) {
+      $reason = "post-update host reconciliation exited $LASTEXITCODE"
+      Write-UpdaterLog ("Attempt $attempt failed: " + $reason + ".")
+      Mark-AgentUpdateFailed $reason
+      if (!(Ensure-AgentServiceRunning)) {
+        Write-UpdaterLog "Post-update reconciliation failure recovery could not restart Borealis Agent service."
+      }
+      exit 1
+    }
     if (!(Ensure-AgentServiceRunning)) {
       Write-UpdaterLog "Attempt $attempt failed: service did not reach Running after replacement."
       exit 1

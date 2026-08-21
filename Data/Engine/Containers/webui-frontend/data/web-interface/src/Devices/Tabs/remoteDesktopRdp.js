@@ -2,6 +2,7 @@ import { FIELD_CLASS, validateInputValue } from "../../app/utils/inputValidation
 
 export const REMOTE_DESKTOP_PROTOCOL_VNC = "vnc";
 export const REMOTE_DESKTOP_PROTOCOL_RDP = "rdp";
+export const REMOTE_DESKTOP_CONNECT_DEADLINE_MS = 75_000;
 export const RDP_USERNAME_MAX_LENGTH = 256;
 export const RDP_DOMAIN_MAX_LENGTH = 256;
 export const RDP_PASSWORD_MAX_LENGTH = 4096;

@@ -13,8 +13,8 @@ import (
 
 const (
 	defaultRDPBackendPort              = 3389
-	defaultRDPEstablishDeadlineSeconds = 30
-	defaultRDPStartReadyWaitSeconds    = 20
+	defaultRDPEstablishDeadlineSeconds = 75
+	defaultRDPStartReadyWaitSeconds    = 60
 	maxRDPUsernameLength               = 256
 	maxRDPDomainLength                 = 256
 	maxRDPPasswordLength               = 4096
@@ -81,7 +81,7 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 		return map[string]any{"error": "virtual_ip_missing"}, http.StatusInternalServerError
 	}
 	allowedIPs := cleanText(firstNonEmpty(tunnelPayload["allowed_ips"], tunnelPayload["engine_virtual_ip"]))
-	startResponse, startStatus, startErr := requestRDPStartReady(ctx, r.auth, result.Route, result.Device.Hostname, serviceModeFromAgentID(agentID), map[string]any{
+	startPayload := map[string]any{
 		"agent_id":          agentID,
 		"port":              rdpPort,
 		"rdp_port":          rdpPort,
@@ -89,18 +89,14 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 		"engine_virtual_ip": tunnelPayload["engine_virtual_ip"],
 		"virtual_ip":        tunnelPayload["virtual_ip"],
 		"reason":            "rdp_establish",
-	}, defaultRDPStartReadyWaitSeconds)
+	}
+	startResponse, startStatus, startErr := requestRDPStartReady(ctx, r.auth, result.Route, result.Device.Hostname, serviceModeFromAgentID(agentID), startPayload, defaultRDPStartReadyWaitSeconds)
 	log.Printf("rdp_start_ready ready=%t status=%d error=%s", startErr == nil && boolFromAny(startResponse["ready"]), startStatus, cleanText(startErr["error"]))
 	if startErr != nil {
 		return startErr, startStatus
 	}
-	if !waitForTCP(host, rdpPort, 5, 0.25) {
-		return map[string]any{
-			"error":  "rdp_backend_not_ready",
-			"detail": "RDP listener did not accept a WireGuard connection.",
-			"host":   host,
-			"port":   rdpPort,
-		}, http.StatusServiceUnavailable
+	if transportErr, transportStatus := ensureRDPWireGuardTransport(ctx, r.auth, result.Route, result.Device.Hostname, serviceModeFromAgentID(agentID), startPayload, host, rdpPort, waitForTCP); transportErr != nil {
+		return transportErr, transportStatus
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
@@ -192,6 +188,57 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 			},
 		},
 	}, http.StatusOK
+}
+
+type rdpTCPWaiter func(host string, port int, timeoutSeconds float64, pollSeconds float64) bool
+
+func ensureRDPWireGuardTransport(ctx context.Context, auth *authService, route *agentWorkerRoute, hostname string, serviceMode string, startPayload map[string]any, host string, port int, waiter rdpTCPWaiter) (map[string]any, int) {
+	if waiter == nil {
+		waiter = waitForTCP
+	}
+	if waiter(host, port, rdpTransportProbeBudget(ctx, 5), 0.25) {
+		return nil, 0
+	}
+	agentID := cleanText(startPayload["agent_id"])
+	log.Printf("rdp_transport_probe_failed agent_id=%s hostname=%s host=%s port=%d recovery=true", agentID, hostname, host, port)
+	recoveryPayload := copyAnyMap(startPayload)
+	recoveryPayload["reason"] = "rdp_transport_recovery"
+	recoveryResponse, recoveryStatus, recoveryErr := requestRDPStartReady(ctx, auth, route, hostname, serviceMode, recoveryPayload, defaultRDPStartReadyWaitSeconds)
+	log.Printf("rdp_transport_recovery_ready agent_id=%s hostname=%s host=%s port=%d ready=%t status=%d error=%s", agentID, hostname, host, port, recoveryErr == nil && boolFromAny(recoveryResponse["ready"]), recoveryStatus, cleanText(recoveryErr["error"]))
+	if recoveryErr != nil {
+		return recoveryErr, recoveryStatus
+	}
+	if waiter(host, port, rdpTransportProbeBudget(ctx, 5), 0.25) {
+		log.Printf("rdp_transport_recovery_succeeded agent_id=%s hostname=%s host=%s port=%d", agentID, hostname, host, port)
+		return nil, 0
+	}
+	return map[string]any{
+		"error":  "rdp_backend_not_ready",
+		"detail": "RDP listener did not accept a WireGuard connection after Agent reconciliation.",
+		"host":   host,
+		"port":   port,
+	}, http.StatusServiceUnavailable
+}
+
+func rdpTransportProbeBudget(ctx context.Context, maximumSeconds float64) float64 {
+	if maximumSeconds <= 0 {
+		return 0
+	}
+	if ctx == nil {
+		return maximumSeconds
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return maximumSeconds
+	}
+	remaining := time.Until(deadline).Seconds()
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining < maximumSeconds {
+		return remaining
+	}
+	return maximumSeconds
 }
 
 func (r *rdpRuntime) resolveCredential(ctx context.Context, device remoteOpsSessionDevice, body map[string]any) (rdpConnectionCredential, int, map[string]any) {
@@ -403,6 +450,8 @@ func requestRDPStartReady(ctx context.Context, auth *authService, route *agentWo
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultRDPStartReadyWaitSeconds
 	}
+	payload = copyAnyMap(payload)
+	payload["timeout_seconds"] = timeoutSeconds
 	response, status, workerErr := callWorkerHostServiceEvent(ctx, auth, route, map[string]any{
 		"hostname":        hostname,
 		"service_mode":    serviceMode,

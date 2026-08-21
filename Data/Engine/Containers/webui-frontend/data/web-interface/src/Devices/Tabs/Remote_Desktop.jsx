@@ -60,6 +60,7 @@ import {
   RDP_USERNAME_MAX_LENGTH,
   rdpCredentialLabel,
   rdpViewportDimensions,
+  REMOTE_DESKTOP_CONNECT_DEADLINE_MS,
   REMOTE_DESKTOP_PROTOCOL_RDP,
   REMOTE_DESKTOP_PROTOCOL_VNC,
 } from "./remoteDesktopRdp.js";
@@ -316,7 +317,6 @@ function retryAfterMsFromPayload(data) {
   return Math.min(Math.ceil(seconds * 1000), 120000);
 }
 
-const VNC_CONNECT_DEADLINE_MS = 30000;
 const VNC_AUTO_RETRY_ATTEMPTS = 2;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_SESSION_RECONNECT_ATTEMPTS = 3;
@@ -2158,7 +2158,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     if (selectedProtocol === REMOTE_DESKTOP_PROTOCOL_RDP && !rdpCredential) {
       throw buildRetryableError("RDP credential required.", false);
     }
-    const timeoutMs = Math.max(1, Math.min(VNC_CONNECT_DEADLINE_MS, Number(options.timeoutMs || VNC_CONNECT_DEADLINE_MS)));
+    const timeoutMs = Math.max(
+      1,
+      Math.min(
+        REMOTE_DESKTOP_CONNECT_DEADLINE_MS,
+        Number(options.timeoutMs || REMOTE_DESKTOP_CONNECT_DEADLINE_MS)
+      )
+    );
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timeoutId = controller
       ? window.setTimeout(() => {
@@ -2219,7 +2225,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       return data;
     } catch (err) {
       if (err?.name === "AbortError") {
-        throw buildRetryableError("Remote desktop setup exceeded 30 seconds.", false);
+        throw buildRetryableError("Remote desktop setup exceeded 75 seconds.", false);
       }
       if (err?.retryable !== false) {
         const retryableError = buildRetryableError(err?.message || err, true);
@@ -2619,7 +2625,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
     const connectToken = connectAttemptRef.current + 1;
     connectAttemptRef.current = connectToken;
-    const connectDeadlineAt = Date.now() + VNC_CONNECT_DEADLINE_MS;
+    const connectDeadlineAt = Date.now() + REMOTE_DESKTOP_CONNECT_DEADLINE_MS;
     const remainingConnectMs = () => Math.max(0, connectDeadlineAt - Date.now());
     manualDisconnectRef.current = false;
     setStatusMessage("");
@@ -2641,7 +2647,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         try {
           const setupBudgetMs = remainingConnectMs();
           if (setupBudgetMs <= 0) {
-            throw buildRetryableError("Remote desktop connection exceeded 30 seconds.", false);
+            throw buildRetryableError("Remote desktop connection exceeded 75 seconds.", false);
           }
           const sessionData = await requestTunnel({ timeoutMs: setupBudgetMs, authProbe: authProbeOnNextEstablish });
           authProbeOnNextEstablish = false;

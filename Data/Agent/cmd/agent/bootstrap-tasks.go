@@ -138,6 +138,19 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
 	logger.Tracef("Ensuring Agent service and scheduled support tasks: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
+	if err := ensureAgentSupportTasks(cfg, logger); err != nil {
+		return err
+	}
+	if err := agentruntime.InstallService(agentExe); err != nil {
+		return err
+	}
+	logger.Tracef("Agent service and support tasks ensured duration=%s.", time.Since(startedAt).Round(time.Millisecond))
+	return nil
+}
+
+func ensureAgentSupportTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
+	logger.Tracef("Ensuring Agent scheduled support tasks: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
 	if !fileExists(agentExe) {
 		return fmt.Errorf("Agent.exe not found at %s", agentExe)
 	}
@@ -148,10 +161,6 @@ func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err := ensureAgentWatchdogTask(cfg, logger); err != nil {
 		return err
 	}
-	if err := agentruntime.InstallService(agentExe); err != nil {
-		return err
-	}
-	logger.Tracef("Agent service and support tasks ensured duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 

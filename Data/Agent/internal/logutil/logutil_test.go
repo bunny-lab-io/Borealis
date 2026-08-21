@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 func TestRotateAndPruneKeepsOnlyConfiguredRetention(t *testing.T) {
@@ -36,6 +38,16 @@ func TestRotateAndPruneKeepsOnlyConfiguredRetention(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".2026-05-16"); !os.IsNotExist(err) {
 		t.Fatalf("stale rotated log should be pruned, stat err=%v", err)
+	}
+}
+
+func TestRetentionDaysFromConfigMigratesLegacyDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), agentconfig.FileName)
+	if err := os.WriteFile(path, []byte(`{"agent":{"log_retention_days":1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := RetentionDaysFromConfig(path); got != agentconfig.DefaultLogRetentionDays {
+		t.Fatalf("retention days = %d, want %d", got, agentconfig.DefaultLogRetentionDays)
 	}
 }
 
@@ -77,5 +89,39 @@ func TestRotatingWriterRollsOnDayBoundary(t *testing.T) {
 	}
 	if !rotated {
 		t.Fatalf("expected rotated log in %s", dir)
+	}
+}
+
+func TestRotateAndPruneDefaultKeepsSevenCalendarDays(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.log")
+	now := time.Date(2026, 8, 20, 9, 0, 0, 0, time.Local)
+	activeTime := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local)
+	oldestKeptTime := time.Date(2026, 8, 14, 12, 0, 0, 0, time.Local)
+	staleTime := time.Date(2026, 8, 13, 12, 0, 0, 0, time.Local)
+
+	for file, modifiedAt := range map[string]time.Time{
+		path:                 activeTime,
+		path + ".2026-08-14": oldestKeptTime,
+		path + ".2026-08-13": staleTime,
+	} {
+		if err := os.WriteFile(file, []byte("log\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(file, modifiedAt, modifiedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := RotateAndPrune(path, agentconfig.DefaultLogRetentionDays, now); err != nil {
+		t.Fatalf("RotateAndPrune failed: %v", err)
+	}
+	for _, kept := range []string{path + ".2026-08-19", path + ".2026-08-14"} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("seven-day retention removed %s: %v", kept, err)
+		}
+	}
+	if _, err := os.Stat(path + ".2026-08-13"); !os.IsNotExist(err) {
+		t.Fatalf("log older than seven calendar days was not pruned: %v", err)
 	}
 }

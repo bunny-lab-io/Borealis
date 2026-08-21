@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   buildRDPConnectionCredential,
   eligibleRDPCredentials,
+  REMOTE_DESKTOP_CONNECT_DEADLINE_MS,
   rdpViewportDimensions,
   validateManualRDPCredential,
 } from "../../../src/Devices/Tabs/remoteDesktopRdp.js";
 
 describe("remote desktop RDP credentials", () => {
+  it("keeps browser setup open for slow Agent readiness", () => {
+    expect(REMOTE_DESKTOP_CONNECT_DEADLINE_MS).toBe(75_000);
+  });
+
   it("offers only usable global and matching-site Windows credentials", () => {
     const credentials = [
       { id: 1, name: "Global Windows", credential_type: "machine", connection_type: "windows", username: "admin", has_password: true },
