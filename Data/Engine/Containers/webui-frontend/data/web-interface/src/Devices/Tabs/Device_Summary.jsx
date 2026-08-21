@@ -3589,16 +3589,6 @@ export default function DeviceSummary() {
 
   const pageHeaderActions = useMemo(() => {
     const actions = [];
-    if (agentUpdatesWorkspaceActive || agentUpdateIsActive(activeAgentUpdate)) {
-      actions.push({
-        id: "agent-update-status",
-        label: "Update Status",
-        icon: <SystemUpdateAltRoundedIcon />,
-        tone: "secondary",
-        disabled: !activeAgentUpdate,
-        onClick: () => openAgentUpdateStatus(activeAgentUpdate?.operation_id || selectedAgentUpdateOperationId),
-      });
-    }
     if (agentUpdatesWorkspaceActive) {
       actions.push({
         id: "agent-update-now",
@@ -3620,7 +3610,7 @@ export default function DeviceSummary() {
       onClick: (event) => setMenuAnchor(event.currentTarget),
     });
     return actions;
-  }, [activeAgentUpdate, activityHostname, agentUpdateDeviceGuid, agentUpdatesWorkspaceActive, openAgentUpdateStatus, selectedAgentUpdateOperationId, updateAgentBusy]);
+  }, [activeAgentUpdate, activityHostname, agentUpdateDeviceGuid, agentUpdatesWorkspaceActive, updateAgentBusy]);
 
   const renderDeviceNavBadge = (badge) =>
     badge ? (

@@ -1,12 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip, Stack, Tooltip, Typography } from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip, Typography } from "@mui/material";
+import {
+  AutorenewRounded as StageActiveIcon,
+  CheckCircleRounded as StageCompleteIcon,
+  ErrorOutlineRounded as StageErrorIcon,
+  ExpandMore as ExpandMoreIcon,
+  OpenInNewRounded as OpenInNewRoundedIcon,
+  RadioButtonUncheckedRounded as StagePendingIcon,
+  RemoveCircleOutlineRounded as StageSkippedIcon,
+} from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { themeQuartz } from "ag-grid-community";
-import ReactFlow, { Background, Controls, MarkerType } from "reactflow";
-import "reactflow/dist/style.css";
-import PageBodyFrame from "../../PageBodyFrame.jsx";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import { MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 
@@ -25,26 +29,39 @@ const AGENT_UPDATE_GRID_THEME = themeQuartz.withParams({
   rowHeight: 44,
 });
 
-const PHASES = [
-  ["requesting_agent_update", "Agent Received Request", 20, 20],
-  ["resolving_engine_artifact", "Resolving Engine Artifact", 310, 20],
-  ["downloading_agent_artifact", "Downloading Agent Artifact", 600, 20],
-  ["verifying_agent_artifact", "Verifying Agent Artifact", 890, 20],
-  ["protecting_agent_identity_trust", "Protecting Identity/Trust", 20, 130],
-  ["quiescing_managed_components", "Quiescing Managed Components", 310, 130],
-  ["staging_agent_binary", "Staging Agent Binary", 600, 130],
-  ["reconciling_agent_host", "Reconciling Agent Host", 890, 130],
-  ["starting_agent_runtime", "Starting Agent Runtime", 20, 450],
-  ["waiting_agent_reconnection", "Waiting for Reconnection", 310, 450],
-  ["verifying_post_update_health", "Verifying Post-Update Health", 600, 450],
-  ["update_completed", "Update Completed", 890, 450],
-  ["stopping_borealis_agent_service", "Borealis Agent", 20, 285],
-  ["stopping_ultravnc_service", "UltraVNC", 310, 285],
-  ["stopping_wireguard_service", "WireGuard", 600, 285],
-  ["evaluating_rdp_service", "Native RDP", 890, 285],
+const AGENT_UPDATE_PHASES = [
+  { id: "requesting_agent_update", label: "Agent Received Request" },
+  { id: "resolving_engine_artifact", label: "Resolving Engine Artifact" },
+  { id: "downloading_agent_artifact", label: "Downloading Agent Artifact" },
+  { id: "verifying_agent_artifact", label: "Verifying Agent Artifact" },
+  { id: "protecting_agent_identity_trust", label: "Protecting Identity/Trust" },
+  { id: "quiescing_managed_components", label: "Quiescing Managed Components" },
+  { id: "stopping_borealis_agent_service", label: "Borealis Agent Service", depth: 1 },
+  { id: "stopping_ultravnc_service", label: "UltraVNC Service", depth: 1 },
+  { id: "stopping_wireguard_service", label: "WireGuard Services", depth: 1 },
+  { id: "evaluating_rdp_service", label: "Native RDP Service", depth: 1 },
+  { id: "staging_agent_binary", label: "Staging Agent Binary" },
+  { id: "reconciling_agent_host", label: "Reconciling Agent Host" },
+  { id: "starting_agent_runtime", label: "Starting Agent Runtime" },
+  { id: "waiting_agent_reconnection", label: "Waiting for Reconnection" },
+  { id: "verifying_post_update_health", label: "Verifying Post-Update Health" },
+  { id: "update_completed", label: "Update Completed" },
 ];
 
-const MAIN_PHASE_IDS = PHASES.slice(0, 12).map(([id]) => id);
+const AGENT_UPDATE_AUTO_SIZE_COLUMNS = ["status", "source_label", "requested_by", "started_label", "duration_label"];
+
+const AGENT_UPDATE_ISLAND_SX = {
+  minWidth: 0,
+  minHeight: 0,
+  height: "100%",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  borderRadius: 3,
+  background: MAGIC_UI.panelBg,
+  boxShadow: "0 18px 45px rgba(2,6,23,0.5)",
+};
 
 function normalizedText(value) {
   return String(value ?? "").trim();
@@ -83,85 +100,53 @@ function latestEventsByPhase(events = []) {
 
 function phaseTone(state = "pending") {
   switch (normalizedText(state).toLowerCase()) {
-    case "success": return { color: "#34d399", background: "rgba(52,211,153,0.12)" };
-    case "failed": return { color: "#fb7185", background: "rgba(251,113,133,0.12)" };
-    case "timed_out": return { color: "#f87171", background: "rgba(248,113,113,0.12)" };
-    case "running": return { color: "#7dd3fc", background: "rgba(125,211,252,0.13)" };
-    case "recovering": return { color: "#fbbf24", background: "rgba(251,191,36,0.13)" };
-    case "skipped": return { color: "#94a3b8", background: "rgba(148,163,184,0.1)" };
-    default: return { color: "#64748b", background: "rgba(100,116,139,0.08)" };
+    case "success":
+      return { visualState: "complete", color: MAGIC_UI.accentC };
+    case "failed":
+    case "timed_out":
+      return { visualState: "failed", color: "#fb7185" };
+    case "running":
+    case "recovering":
+    case "requested":
+    case "awaiting_reconnect":
+    case "awaiting_health":
+    case "verifying":
+      return { visualState: "active", color: MAGIC_UI.accentA };
+    case "skipped":
+      return { visualState: "skipped", color: MAGIC_UI.textMuted };
+    default:
+      return { visualState: "pending", color: "rgba(148, 163, 184, 0.58)" };
   }
 }
 
-export function buildAgentUpdateGraph(operation = null) {
+function timelineStep(phase, event = {}) {
+  const state = normalizedText(event.state || "pending").toLowerCase();
+  const tone = phaseTone(state);
+  return {
+    id: phase.id,
+    label: normalizedText(event.summary) || phase.label,
+    detail: normalizedText(event.detail),
+    state,
+    visualState: tone.visualState,
+    color: tone.color,
+    depth: Number(phase.depth || 0),
+    retryCount: Number(event.retry_count || 0),
+  };
+}
+
+export function buildAgentUpdateTimeline(operation = null) {
   const events = Array.isArray(operation?.events) ? operation.events : [];
   const latest = latestEventsByPhase(events);
-  const nodes = PHASES.map(([id, fallbackLabel, x, y]) => {
-    const event = latest.get(id) || {};
-    const state = normalizedText(event.state || "pending").toLowerCase();
-    const tone = phaseTone(state);
-    return {
-      id,
-      position: { x, y },
-      data: {
-        label: (
-          <Tooltip arrow title={normalizedText(event.detail) || `${fallbackLabel}: ${state.replaceAll("_", " ")}`}>
-            <Stack spacing={0.35}>
-              <Typography sx={{ color: "#e2e8f0", fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
-                {normalizedText(event.summary) || fallbackLabel}
-              </Typography>
-              <Typography sx={{ color: tone.color, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.7 }}>
-                {state.replaceAll("_", " ")}
-              </Typography>
-            </Stack>
-          </Tooltip>
-        ),
-      },
-      draggable: false,
-      selectable: false,
-      style: {
-        width: 250,
-        minHeight: 58,
-        color: "#e2e8f0",
-        background: tone.background,
-        border: `1px solid ${tone.color}`,
-        borderRadius: 10,
-        boxShadow: "0 10px 28px rgba(2,6,23,0.5)",
-      },
-    };
-  });
-
-  const known = new Set(PHASES.map(([id]) => id));
-  const roleEvents = Array.from(latest.entries()).filter(([id]) => id.startsWith("role:") && !known.has(id));
-  roleEvents.forEach(([id, event], index) => {
-    const state = normalizedText(event.state || "pending").toLowerCase();
-    const tone = phaseTone(state);
-    nodes.push({
-      id,
-      position: { x: 20 + (index % 4) * 290, y: 565 + Math.floor(index / 4) * 70 },
-      data: { label: `${normalizedText(event.summary) || id.slice(5)} · ${state.replaceAll("_", " ")}` },
-      draggable: false,
-      selectable: false,
-      style: { width: 250, minHeight: 48, color: tone.color, background: tone.background, border: `1px solid ${tone.color}`, borderRadius: 10 },
-    });
-  });
-
-  const edgeStyle = { stroke: "#7dd3fc", strokeWidth: 1.6 };
-  const edges = MAIN_PHASE_IDS.slice(0, -1).map((source, index) => ({
-    id: `${source}-${MAIN_PHASE_IDS[index + 1]}`,
-    source,
-    target: MAIN_PHASE_IDS[index + 1],
-    animated: latest.get(source)?.state === "running",
-    style: edgeStyle,
-    markerEnd: { type: MarkerType.ArrowClosed, color: "#7dd3fc" },
-  }));
-  ["stopping_borealis_agent_service", "stopping_ultravnc_service", "stopping_wireguard_service", "evaluating_rdp_service"].forEach((target) => {
-    edges.push({ id: `quiesce-${target}`, source: "quiescing_managed_components", target, style: edgeStyle, markerEnd: { type: MarkerType.ArrowClosed, color: "#7dd3fc" } });
-  });
-  roleEvents.forEach(([target]) => {
-    edges.push({ id: `health-${target}`, source: "verifying_post_update_health", target, style: edgeStyle, markerEnd: { type: MarkerType.ArrowClosed, color: "#7dd3fc" } });
-  });
-  return { nodes, edges };
+  const known = new Set(AGENT_UPDATE_PHASES.map(({ id }) => id));
+  const roleSteps = Array.from(latest.entries())
+    .filter(([id]) => id.startsWith("role:") && !known.has(id))
+    .map(([id, event]) => timelineStep({ id, label: id.slice(5), depth: 1 }, event));
+  const steps = [];
+  for (const phase of AGENT_UPDATE_PHASES) {
+    steps.push(timelineStep(phase, latest.get(phase.id)));
+    if (phase.id === "verifying_post_update_health") steps.push(...roleSteps);
+  }
+  return steps;
 }
 
 export function useAgentUpdateHistory(deviceGuid = "") {
@@ -220,12 +205,13 @@ function operationStatusTone(status = "") {
 
 export default function AgentUpdates({ history, selectedOperationId = "", onSelectOperation, onOpenJob }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  const gridApiRef = useRef(null);
   const operations = Array.isArray(history?.operations) ? history.operations : [];
   const selectedOperation = useMemo(
     () => operations.find((operation) => normalizedText(operation.operation_id) === normalizedText(selectedOperationId)) || history?.active_operation || operations[0] || null,
     [history?.active_operation, operations, selectedOperationId]
   );
-  const graph = useMemo(() => buildAgentUpdateGraph(selectedOperation), [selectedOperation]);
+  const timeline = useMemo(() => buildAgentUpdateTimeline(selectedOperation), [selectedOperation]);
 
   useEffect(() => {
     if (!agentUpdateIsActive(selectedOperation)) return undefined;
@@ -239,26 +225,21 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
       ...operation,
       source_label: operation.source === "hourly_update_checker" ? "Hourly Update Checker" : "Operator Initiated",
       started_label: formatAgentUpdateTimestamp(operation.started_at),
-      ended_label: agentUpdateIsActive(operation) ? "In progress" : formatAgentUpdateTimestamp(operation.ended_at),
       duration_label: formatAgentUpdateDuration(operation.started_at, end),
-      build_label: [operation.installed_build_before, operation.installed_build_after || operation.target_build_id].filter(Boolean).join(" → ") || "—",
     };
   }), [now, operations]);
 
   const columns = useMemo(() => [
-    { field: "operation_id", headerName: "Operation ID", minWidth: 220 },
-    { field: "source_label", headerName: "Source", minWidth: 180 },
     {
-      field: "status", headerName: "Status", minWidth: 135,
+      field: "status", headerName: "Status", minWidth: 125, cellClass: "auto-col-tight",
       cellRenderer: ({ value }) => <Chip size="small" color={operationStatusTone(value)} variant="outlined" label={normalizedText(value).replaceAll("_", " ") || "Unknown"} />,
     },
-    { field: "requested_by", headerName: "Requested By", minWidth: 150 },
-    { field: "started_label", headerName: "Started", minWidth: 180 },
-    { field: "ended_label", headerName: "Ended", minWidth: 180 },
-    { field: "duration_label", headerName: "Duration", minWidth: 120 },
-    { field: "build_label", headerName: "Installed Build", minWidth: 220 },
+    { field: "source_label", headerName: "Source", minWidth: 170, cellClass: "auto-col-tight" },
+    { field: "requested_by", headerName: "Requested By", minWidth: 140, cellClass: "auto-col-tight" },
+    { field: "started_label", headerName: "Started", minWidth: 180, cellClass: "auto-col-tight" },
+    { field: "duration_label", headerName: "Duration", minWidth: 110, cellClass: "auto-col-tight" },
     {
-      field: "scheduled_job_id", headerName: "Job", minWidth: 130, flex: 1,
+      field: "scheduled_job_id", headerName: "Job", minWidth: 130, flex: 1, cellClass: "auto-col-tight",
       cellRenderer: ({ value }) => value ? (
         <Button size="small" endIcon={<OpenInNewRoundedIcon fontSize="small" />} onClick={(event) => { event.stopPropagation(); onOpenJob?.(value); }}>
           Job {value}
@@ -267,53 +248,185 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
     },
   ], [onOpenJob]);
 
+  const autoSizeHistoryColumns = useCallback((api = gridApiRef.current) => {
+    if (!api || history?.loading || rows.length === 0) return;
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (callback) => window.setTimeout(callback, 0);
+    schedule(() => {
+      try {
+        api.autoSizeColumns(AGENT_UPDATE_AUTO_SIZE_COLUMNS, true);
+      } catch {
+        // Grid can be disposed before deferred sizing runs.
+      }
+    });
+  }, [history?.loading, rows.length]);
+
+  useEffect(() => {
+    autoSizeHistoryColumns();
+  }, [autoSizeHistoryColumns, operations]);
+
   const failedEvents = (Array.isArray(selectedOperation?.events) ? selectedOperation.events : []).filter((event) => ["failed", "timed_out"].includes(normalizedText(event?.state).toLowerCase()));
-  const graphStack = (
-    <Stack spacing={1.5}>
-      <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={1}>
-        <Box>
-          <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>Update topology and progress</Typography>
-          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: 13 }}>
-            {selectedOperation ? `Operation ${selectedOperation.operation_id} · ${formatAgentUpdateDuration(selectedOperation.started_at, Number(selectedOperation.ended_at || 0) || now)}` : "No Agent update operation recorded."}
-          </Typography>
-        </Box>
-        {selectedOperation ? <Chip color={operationStatusTone(selectedOperation.status)} variant="outlined" label={normalizedText(selectedOperation.status).replaceAll("_", " ")} /> : null}
-      </Stack>
-      <Box sx={{ height: 430, border: "1px solid rgba(125,211,252,0.2)", borderRadius: 2, background: "rgba(2,6,23,0.72)", overflow: "hidden" }}>
-        <ReactFlow nodes={graph.nodes} edges={graph.edges} fitView fitViewOptions={{ padding: 0.14 }} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag zoomOnDoubleClick={false} proOptions={{ hideAttribution: true }}>
-          <Background color="rgba(125,211,252,0.16)" gap={24} size={1} />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-      </Box>
-      {selectedOperation?.failure_summary || failedEvents.length ? (
-        <Accordion disableGutters sx={{ bgcolor: "rgba(127,29,29,0.18)", border: "1px solid rgba(248,113,113,0.35)", color: "#fecaca" }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: "#fecaca" }} />}>
-            <Typography sx={{ fontWeight: 700 }}>Failure details</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            <Typography sx={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{selectedOperation.failure_summary || "Agent reported failed update phase."}</Typography>
-            {failedEvents.map((event) => (
-              <Box key={event.event_id || `${event.phase_id}-${event.agent_timestamp}`} sx={{ mt: 1 }}>
-                <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{event.summary || event.phase_id}</Typography>
-                <Typography sx={{ color: "#fca5a5", fontSize: 12 }}>{event.detail || "No additional Agent diagnostic detail."} Retry count: {Number(event.retry_count || 0)}.</Typography>
-              </Box>
-            ))}
-          </AccordionDetails>
-        </Accordion>
-      ) : null}
-    </Stack>
-  );
 
   return (
-    <PageBodyFrame
-      variant="grid_with_stack"
-      fillHeight={false}
-      outerSx={{ p: 0, minHeight: 760 }}
-      shellSx={{ minHeight: 760 }}
-      stack={graphStack}
-      main={(
-        <Box sx={{ minHeight: 380, height: 430, fontFamily: gridFontFamily }}>
-          {history?.error ? <Alert severity="error" sx={{ m: 2 }}>{history.error}</Alert> : null}
+    <Box
+      data-testid="agent-updates-layout"
+      sx={{
+        flex: "1 1 0",
+        width: "100%",
+        height: { xs: "auto", lg: "100%" },
+        minWidth: 0,
+        minHeight: { xs: 900, lg: 0 },
+        display: "grid",
+        gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(280px, 1fr) minmax(0, 2fr)" },
+        gridTemplateRows: { xs: "minmax(420px, auto) minmax(460px, 1fr)", lg: "minmax(0, 1fr)" },
+        gap: 2,
+        overflow: "hidden",
+        "@keyframes agentUpdateTimelineSpin": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+        "@keyframes agentUpdateTimelinePulse": {
+          "0%": { boxShadow: "0 0 0 0 rgba(125, 211, 252, 0.28)" },
+          "70%": { boxShadow: "0 0 0 10px rgba(125, 211, 252, 0)" },
+          "100%": { boxShadow: "0 0 0 0 rgba(125, 211, 252, 0)" },
+        },
+      }}
+    >
+      <Box data-testid="agent-update-timeline-island" sx={AGENT_UPDATE_ISLAND_SX}>
+        <Box sx={{ px: 2, py: 1.75, borderBottom: "1px solid rgba(148,163,184,0.18)", flexShrink: 0 }}>
+          <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>Update timeline</Typography>
+          <Typography
+            title={selectedOperation ? `Operation ${selectedOperation.operation_id}` : undefined}
+            sx={{ color: MAGIC_UI.textMuted, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+          >
+            {selectedOperation
+              ? `Operation ${selectedOperation.operation_id} · ${formatAgentUpdateDuration(selectedOperation.started_at, Number(selectedOperation.ended_at || 0) || now)}`
+              : "No Agent update operation recorded."}
+          </Typography>
+        </Box>
+        <Box role="list" aria-label="Agent update timeline" sx={{ flexGrow: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.75 }}>
+          {timeline.map((step, index) => {
+            const isLast = index === timeline.length - 1;
+            const showDetail = ["active", "failed", "skipped"].includes(step.visualState) && Boolean(step.detail);
+            const connectorColor =
+              step.visualState === "complete"
+                ? "linear-gradient(180deg, rgba(52,211,153,0.9), rgba(52,211,153,0.16))"
+                : step.visualState === "active"
+                  ? "linear-gradient(180deg, rgba(125,211,252,0.95), rgba(125,211,252,0.18))"
+                  : step.visualState === "failed"
+                    ? "linear-gradient(180deg, rgba(251,113,133,0.9), rgba(251,113,133,0.18))"
+                    : "rgba(148,163,184,0.18)";
+            return (
+              <Box
+                key={step.id}
+                role="listitem"
+                sx={{
+                  display: "flex",
+                  alignItems: "stretch",
+                  gap: 1.25,
+                  width: step.depth ? "calc(100% - 18px)" : "100%",
+                  ml: step.depth ? 2.25 : 0,
+                }}
+              >
+                <Box sx={{ width: 22, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                  <Box
+                    sx={{
+                      width: 20,
+                      height: 20,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: step.color,
+                      borderRadius: "50%",
+                      ...(step.visualState === "active"
+                        ? { background: "rgba(125,211,252,0.12)", animation: "agentUpdateTimelinePulse 1.8s ease-out infinite" }
+                        : null),
+                    }}
+                  >
+                    {step.visualState === "complete" ? (
+                      <StageCompleteIcon sx={{ fontSize: 18 }} />
+                    ) : step.visualState === "active" ? (
+                      <StageActiveIcon sx={{ fontSize: 18, animation: "agentUpdateTimelineSpin 1.15s linear infinite" }} />
+                    ) : step.visualState === "failed" ? (
+                      <StageErrorIcon sx={{ fontSize: 18 }} />
+                    ) : step.visualState === "skipped" ? (
+                      <StageSkippedIcon sx={{ fontSize: 18 }} />
+                    ) : (
+                      <StagePendingIcon sx={{ fontSize: 18 }} />
+                    )}
+                  </Box>
+                  {!isLast ? (
+                    <Box sx={{ mt: 0.4, mb: 0.2, width: 2, flexGrow: 1, minHeight: showDetail ? 22 : 14, borderRadius: 999, background: connectorColor }} />
+                  ) : null}
+                </Box>
+                <Box sx={{ pt: 0.05, pb: isLast ? 0 : 0.65, minWidth: 0, flexGrow: 1 }}>
+                  <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 1 }}>
+                    <Typography
+                      sx={{
+                        color: step.visualState === "pending" ? MAGIC_UI.textMuted : MAGIC_UI.textBright,
+                        fontSize: step.depth ? "0.78rem" : "0.85rem",
+                        fontWeight: ["active", "complete"].includes(step.visualState) ? 600 : 500,
+                        letterSpacing: 0.2,
+                        minWidth: 0,
+                      }}
+                    >
+                      {step.label}
+                    </Typography>
+                    <Typography sx={{ color: step.color, fontSize: "0.62rem", fontWeight: 700, letterSpacing: 0.7, textTransform: "uppercase", flexShrink: 0 }}>
+                      {step.state.replaceAll("_", " ")}
+                    </Typography>
+                  </Box>
+                  {showDetail ? (
+                    <Typography sx={{ mt: 0.2, color: step.visualState === "failed" ? "#fb7185" : step.color, fontSize: "0.72rem", lineHeight: 1.35 }}>
+                      {step.detail}{step.retryCount ? ` Retry count: ${step.retryCount}.` : ""}
+                    </Typography>
+                  ) : null}
+                </Box>
+              </Box>
+            );
+          })}
+          {selectedOperation?.failure_summary || failedEvents.length ? (
+            <Accordion disableGutters sx={{ mt: 1.5, bgcolor: "rgba(127,29,29,0.18)", border: "1px solid rgba(248,113,113,0.35)", color: "#fecaca" }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: "#fecaca" }} />}>
+                <Typography sx={{ fontWeight: 700 }}>Failure details</Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Typography sx={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{selectedOperation.failure_summary || "Agent reported failed update phase."}</Typography>
+                {failedEvents.map((event) => (
+                  <Box key={event.event_id || `${event.phase_id}-${event.agent_timestamp}`} sx={{ mt: 1 }}>
+                    <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{event.summary || event.phase_id}</Typography>
+                    <Typography sx={{ color: "#fca5a5", fontSize: 12 }}>{event.detail || "No additional Agent diagnostic detail."} Retry count: {Number(event.retry_count || 0)}.</Typography>
+                  </Box>
+                ))}
+              </AccordionDetails>
+            </Accordion>
+          ) : null}
+        </Box>
+      </Box>
+
+      <Box
+        data-testid="agent-update-history-island"
+        sx={{
+          ...AGENT_UPDATE_ISLAND_SX,
+          fontFamily: gridFontFamily,
+          "& .ag-root-wrapper": { height: "100%", border: "none", borderRadius: 0 },
+          "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            textAlign: "left",
+            padding: "8px 12px 8px 18px",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+            paddingLeft: "12px",
+            paddingRight: "9px",
+          },
+          "& .ag-row-hover": { backgroundColor: "rgba(73,156,196,0.2) !important" },
+        }}
+      >
+        {history?.error ? <Alert severity="error" sx={{ m: 2, flexShrink: 0 }}>{history.error}</Alert> : null}
+        <Box sx={{ flexGrow: 1, minHeight: 0 }}>
           <AgGridReact
             theme={AGENT_UPDATE_GRID_THEME}
             rowData={rows}
@@ -327,11 +440,15 @@ export default function AgentUpdates({ history, selectedOperationId = "", onSele
             paginationPageSizeSelector={[20, 50, 100]}
             suppressCellFocus
             loading={Boolean(history?.loading)}
+            onGridReady={({ api }) => {
+              gridApiRef.current = api;
+              autoSizeHistoryColumns(api);
+            }}
             onRowClicked={({ data }) => onSelectOperation?.(data?.operation_id)}
           />
         </Box>
-      )}
-    />
+      </Box>
+    </Box>
   );
 }
 

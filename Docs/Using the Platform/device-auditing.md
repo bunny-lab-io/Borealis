@@ -25,7 +25,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Installed Software` shows software inventory and software actions.
 - `Patch Management` shows pending and installed Windows patch inventory and can open Scheduled Job drafts for ad-hoc Windows update installs.
 - `Services`, `Processes`, `File Management`, `Registry`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
-- `Agent Updates` under Backend Tools starts install-equivalent Agent repair and shows live or historical update topology, status, duration, failure detail, and Scheduled Job links.
+- `Agent Updates` under Backend Tools starts install-equivalent Agent repair and shows live or historical update timeline, status, duration, failure detail, and Scheduled Job links beside full-height history grid.
 - `Activity History` shows quick job and automation output tied to the device, with scheduled-job activity names linking back to the job history and task timelines showing start, finish, and compact duration.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
 - `Agent Health` shows startup flow and role health separately from online/offline status.
@@ -54,7 +54,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 1. Open `Backend Tools > Agent Updates` from Device Summary.
 2. Select `Update Now`.
 3. Confirm service interruption. Borealis may restart Agent, UltraVNC, and WireGuard managed services. Native Windows RDP remains running unless its health path requires recovery.
-4. Keep Agent Updates open to follow live progress, or select `Update Status` later. Historical rows link to authoritative Scheduled Job history.
+4. Keep Agent Updates open to follow live progress. Selecting historical row loads its timeline; Scheduled Job link opens authoritative run history.
 
 Operator-requested updates perform install-equivalent repair even when installed binary already matches Engine artifact. Device identity, enrollment, trust, and Engine association stay preserved. Hourly checks remain non-disruptive when no newer artifact exists.
 
