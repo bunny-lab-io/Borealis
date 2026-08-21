@@ -272,22 +272,23 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	if startErr != nil {
 		return startErr, startStatus
 	}
-	fastReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_FAST_READY_WAIT_SECONDS", 1.0, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
-	log.Printf("vnc_rfb_probe_fast port=%d ready=%t", vncPort, fastReady)
-	rfbReady := fastReady
-	if !fastReady {
-		rfbReady = waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_READY_WAIT_SECONDS", defaultVNCRFBReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_READY_POLL_INTERVAL_SECONDS", 0.5))
+	fastWaitSeconds := vncBoundedWaitSeconds("BOREALIS_VNC_RFB_FAST_READY_WAIT_SECONDS", 1.0, establishDeadline)
+	fastProbe := waitForRFBServer(host, vncPort, fastWaitSeconds, vncEnvFloat("BOREALIS_VNC_RFB_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	logVNCRFBProbe("vnc_rfb_probe_fast", vncPort, fastProbe)
+	rfbProbe := fastProbe
+	rfbWaitSeconds := fastWaitSeconds
+	if !fastProbe.Ready {
+		recoveryWaitSeconds := vncBoundedWaitSeconds("BOREALIS_VNC_RFB_READY_WAIT_SECONDS", defaultVNCRFBReadyWaitSeconds, establishDeadline)
+		recoveryProbe := waitForRFBServer(host, vncPort, recoveryWaitSeconds, vncEnvFloat("BOREALIS_VNC_RFB_READY_POLL_INTERVAL_SECONDS", 0.5))
+		logVNCRFBProbe("vnc_rfb_probe_recovery", vncPort, recoveryProbe)
+		rfbProbe = recoveryProbe
+		rfbProbe.Attempts += fastProbe.Attempts
+		rfbProbe.ElapsedMS += fastProbe.ElapsedMS
+		rfbWaitSeconds += recoveryWaitSeconds
 	}
-	log.Printf("vnc_rfb_probe_recovery port=%d ready=%t", vncPort, rfbReady)
-	if !rfbReady {
+	if !rfbProbe.Ready {
 		v.recordError(session.SessionID, "vnc_backend_no_rfb_banner")
-		return map[string]any{
-			"error":   "vnc_backend_no_rfb_banner",
-			"detail":  "VNC listener accepted TCP but did not send an RFB banner.",
-			"host":    host,
-			"port":    vncPort,
-			"timeout": defaultVNCRFBReadyWaitSeconds,
-		}, http.StatusServiceUnavailable
+		return vncRFBProbeFailurePayload(rfbProbe, host, vncPort, rfbWaitSeconds), http.StatusServiceUnavailable
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
@@ -353,15 +354,16 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 					}, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
 					log.Printf("vnc_auth_retry_start_ready ready=%t status=%d error=%s revision=%d", retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), session.CredentialRevision)
 					if retryStartErr == nil {
-						retryReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
-						log.Printf("vnc_auth_retry_rfb_probe port=%d ready=%t", vncPort, retryReady)
-						if retryReady {
+						retryWaitSeconds := vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline)
+						retryProbe := waitForRFBServer(host, vncPort, retryWaitSeconds, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
+						logVNCRFBProbe("vnc_auth_retry_rfb_probe", vncPort, retryProbe)
+						if retryProbe.Ready {
 							workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, true)
 							log.Printf("vnc_auth_retry_worker_session_response status=%d error=%s", workerStatus, cleanText(workerErr["error"]))
 							retrySucceeded = workerErr == nil
 						} else {
 							workerStatus = http.StatusServiceUnavailable
-							workerErr = map[string]any{"error": "vnc_backend_no_rfb_banner", "detail": "vnc_auth_retry_rfb_probe_failed"}
+							workerErr = vncRFBProbeFailurePayload(retryProbe, host, vncPort, retryWaitSeconds)
 						}
 					} else {
 						workerStatus = retryStartStatus
@@ -1672,14 +1674,33 @@ func waitForTCP(host string, port int, timeoutSeconds float64, pollSeconds float
 	return false
 }
 
-func waitForRFBServer(host string, port int, timeoutSeconds float64, pollSeconds float64) bool {
+type vncRFBProbeResult struct {
+	Ready     bool
+	Stage     string
+	Attempts  int
+	ElapsedMS int64
+	BytesRead int
+	Error     string
+}
+
+func waitForRFBServer(host string, port int, timeoutSeconds float64, pollSeconds float64) vncRFBProbeResult {
+	startedAt := time.Now()
 	if host == "" || port <= 0 || timeoutSeconds <= 0 {
-		return false
+		return vncRFBProbeResult{
+			Stage:     "invalid_target",
+			ElapsedMS: time.Since(startedAt).Milliseconds(),
+			Error:     "invalid VNC probe target or timeout",
+		}
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSeconds * float64(time.Second)))
+	result := vncRFBProbeResult{Stage: "dial_failed"}
 	for time.Now().Before(deadline) {
-		if probeRFBServer(host, port, 750*time.Millisecond) {
-			return true
+		attempt := probeRFBServer(host, port, 750*time.Millisecond)
+		attempt.Attempts = result.Attempts + 1
+		attempt.ElapsedMS = time.Since(startedAt).Milliseconds()
+		result = attempt
+		if result.Ready {
+			return result
 		}
 		sleep := time.Duration(pollSeconds * float64(time.Second))
 		if sleep <= 0 {
@@ -1690,27 +1711,97 @@ func waitForRFBServer(host string, port int, timeoutSeconds float64, pollSeconds
 		}
 		time.Sleep(sleep)
 	}
-	return false
+	result.ElapsedMS = time.Since(startedAt).Milliseconds()
+	return result
 }
 
-func probeRFBServer(host string, port int, timeout time.Duration) bool {
+func probeRFBServer(host string, port int, timeout time.Duration) vncRFBProbeResult {
+	startedAt := time.Now()
+	result := vncRFBProbeResult{Attempts: 1}
+	finish := func() vncRFBProbeResult {
+		result.ElapsedMS = time.Since(startedAt).Milliseconds()
+		return result
+	}
 	if host == "" || port <= 0 {
-		return false
+		result.Stage = "invalid_target"
+		result.Error = "invalid VNC probe target"
+		return finish()
 	}
 	if timeout <= 0 {
 		timeout = 750 * time.Millisecond
 	}
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
 	if err != nil {
-		return false
+		result.Stage = "dial_failed"
+		result.Error = vncRFBProbeError(err)
+		return finish()
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	banner := make([]byte, 12)
-	if _, err := io.ReadFull(conn, banner); err != nil {
-		return false
+	bytesRead, err := io.ReadFull(conn, banner)
+	result.BytesRead = bytesRead
+	if err != nil {
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			result.Stage = "banner_read_timeout"
+		} else {
+			result.Stage = "banner_short_read"
+		}
+		result.Error = vncRFBProbeError(err)
+		return finish()
 	}
-	return strings.HasPrefix(string(banner), "RFB ")
+	if !strings.HasPrefix(string(banner), "RFB ") {
+		result.Stage = "invalid_banner"
+		result.Error = "unexpected RFB banner"
+		return finish()
+	}
+	result.Ready = true
+	result.Stage = "rfb_ready"
+	return finish()
+}
+
+func vncRFBProbeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := strings.Join(strings.Fields(err.Error()), " ")
+	if len(value) > 256 {
+		value = value[:256]
+	}
+	return value
+}
+
+func logVNCRFBProbe(event string, port int, result vncRFBProbeResult) {
+	errorText := result.Error
+	if errorText == "" {
+		errorText = "none"
+	}
+	log.Printf("%s port=%d ready=%t stage=%s attempts=%d duration_ms=%d bytes_read=%d error=%s", event, port, result.Ready, result.Stage, result.Attempts, result.ElapsedMS, result.BytesRead, errorText)
+}
+
+func vncRFBProbeFailurePayload(result vncRFBProbeResult, host string, port int, timeoutSeconds float64) map[string]any {
+	detail := "VNC backend did not become RFB-ready before readiness timeout."
+	switch result.Stage {
+	case "dial_failed":
+		detail = "VNC backend did not accept a TCP connection before readiness timeout."
+	case "banner_read_timeout":
+		detail = "VNC backend accepted TCP but did not send a complete RFB banner before readiness timeout."
+	case "banner_short_read":
+		detail = "VNC backend closed the connection before sending a complete RFB banner."
+	case "invalid_banner":
+		detail = "VNC backend accepted TCP but returned an invalid RFB banner."
+	}
+	return map[string]any{
+		"error":            "vnc_backend_no_rfb_banner",
+		"detail":           detail,
+		"host":             host,
+		"port":             port,
+		"timeout":          timeoutSeconds,
+		"probe_stage":      result.Stage,
+		"probe_attempts":   result.Attempts,
+		"probe_elapsed_ms": result.ElapsedMS,
+	}
 }
 
 func initialDisplaySize(bounds map[string]any, topology []map[string]any) (int, int) {

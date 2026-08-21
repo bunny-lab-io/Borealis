@@ -619,8 +619,12 @@ func TestProbeRFBServerRequiresBanner(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	})
 
-	if probeRFBServer(host, port, 100*time.Millisecond) {
-		t.Fatalf("TCP-only listener should not count as RFB ready")
+	result := probeRFBServer(host, port, 100*time.Millisecond)
+	if result.Ready {
+		t.Fatalf("TCP-only listener should not count as RFB ready: %#v", result)
+	}
+	if result.Stage != "banner_read_timeout" {
+		t.Fatalf("TCP-only listener stage=%q want banner_read_timeout", result.Stage)
 	}
 }
 
@@ -629,8 +633,74 @@ func TestProbeRFBServerAcceptsBanner(t *testing.T) {
 		_, _ = conn.Write([]byte("RFB 003.008\n"))
 	})
 
-	if !probeRFBServer(host, port, 500*time.Millisecond) {
-		t.Fatalf("RFB banner should count as VNC backend ready")
+	result := probeRFBServer(host, port, 500*time.Millisecond)
+	if !result.Ready || result.Stage != "rfb_ready" {
+		t.Fatalf("RFB banner should count as VNC backend ready: %#v", result)
+	}
+	if result.BytesRead != 12 || result.Attempts != 1 {
+		t.Fatalf("RFB banner diagnostics incomplete: %#v", result)
+	}
+}
+
+func TestProbeRFBServerClassifiesShortBanner(t *testing.T) {
+	host, port := startRFBTestServer(t, func(conn net.Conn) {
+		_, _ = conn.Write([]byte("RFB "))
+	})
+
+	result := probeRFBServer(host, port, 500*time.Millisecond)
+	if result.Ready || result.Stage != "banner_short_read" {
+		t.Fatalf("short RFB banner diagnostics wrong: %#v", result)
+	}
+	if result.BytesRead != 4 {
+		t.Fatalf("short RFB banner bytes=%d want 4", result.BytesRead)
+	}
+}
+
+func TestProbeRFBServerClassifiesInvalidBanner(t *testing.T) {
+	host, port := startRFBTestServer(t, func(conn net.Conn) {
+		_, _ = conn.Write([]byte("NOT-RFB-DATA"))
+	})
+
+	result := probeRFBServer(host, port, 500*time.Millisecond)
+	if result.Ready || result.Stage != "invalid_banner" {
+		t.Fatalf("invalid RFB banner diagnostics wrong: %#v", result)
+	}
+}
+
+func TestProbeRFBServerClassifiesDialFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	result := probeRFBServer("127.0.0.1", port, 500*time.Millisecond)
+	if result.Ready || result.Stage != "dial_failed" {
+		t.Fatalf("dial failure diagnostics wrong: %#v", result)
+	}
+	if result.Error == "" {
+		t.Fatalf("dial failure should retain sanitized socket error")
+	}
+}
+
+func TestVNCRFBProbeFailurePayloadUsesProbeStage(t *testing.T) {
+	cases := map[string]string{
+		"dial_failed":         "VNC backend did not accept a TCP connection before readiness timeout.",
+		"banner_read_timeout": "VNC backend accepted TCP but did not send a complete RFB banner before readiness timeout.",
+		"banner_short_read":   "VNC backend closed the connection before sending a complete RFB banner.",
+		"invalid_banner":      "VNC backend accepted TCP but returned an invalid RFB banner.",
+	}
+	for stage, detail := range cases {
+		result := vncRFBProbeFailurePayload(vncRFBProbeResult{Stage: stage, Attempts: 3, ElapsedMS: 1250}, "10.255.0.100", 5900, 6)
+		if result["detail"] != detail || result["probe_stage"] != stage {
+			t.Fatalf("stage %s payload=%#v", stage, result)
+		}
+		if result["probe_attempts"] != 3 || result["probe_elapsed_ms"] != int64(1250) {
+			t.Fatalf("stage %s diagnostics missing: %#v", stage, result)
+		}
 	}
 }
 
