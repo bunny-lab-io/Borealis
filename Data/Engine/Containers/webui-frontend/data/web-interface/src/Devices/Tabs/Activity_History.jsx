@@ -63,6 +63,9 @@ const HISTORY_STATUS_THEME = {
 
 const ACTIVITY_LINK_COLOR = "#58a6ff";
 const ACTIVITY_CONNECTOR_COLOR = ACTIVITY_LINK_COLOR;
+const ACTIVITY_COLUMN_MIN_WIDTH = 220;
+const ACTIVITY_COLUMN_MAX_WIDTH = 360;
+const ACTIVITY_CONNECTOR_RESERVE_PX = 64;
 
 function objectValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -162,7 +165,10 @@ function browserTextWidth(text) {
 export function historyActivityColumnWidth(rows = [], measureText = browserTextWidth) {
   const labels = ["Activity", ...(Array.isArray(rows) ? rows.map((row) => row?.activity_label || historyActivityLabel(row)) : [])];
   const widest = labels.reduce((maxWidth, label) => Math.max(maxWidth, Number(measureText(label) || 0)), 0);
-  return Math.max(190, Math.ceil(widest + 72));
+  return Math.min(
+    ACTIVITY_COLUMN_MAX_WIDTH,
+    Math.max(ACTIVITY_COLUMN_MIN_WIDTH, Math.ceil(widest + ACTIVITY_CONNECTOR_RESERVE_PX))
+  );
 }
 
 export function decorateHistoryActivityRows(rows = []) {
@@ -472,7 +478,7 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
     zIndex: 1,
     display: "inline-flex",
     minWidth: 0,
-    maxWidth: "100%",
+    maxWidth: groupSize > 1 ? `calc(100% - ${ACTIVITY_CONNECTOR_RESERVE_PX}px)` : "100%",
     alignItems: "center",
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -899,8 +905,9 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         headerName: "Activity",
         field: "activity_group_key",
         colId: "activity",
-        flex: 1,
-        minWidth: activityColumnMinWidth,
+        width: activityColumnMinWidth,
+        minWidth: ACTIVITY_COLUMN_MIN_WIDTH,
+        maxWidth: ACTIVITY_COLUMN_MAX_WIDTH,
         valueGetter: (params) => params.data?.activity_group_key || historyActivityGroupKey(params.data || {}),
         filterValueGetter: (params) => params.data?.activity_label || historyActivityLabel(params.data || {}),
         tooltipValueGetter: (params) => params.data?.activity_label || historyActivityLabel(params.data || {}),
@@ -923,8 +930,8 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         colId: "timeline",
         field: "started_at",
         flex: 0,
-        width: 390,
-        minWidth: 340,
+        width: 415,
+        minWidth: 365,
         valueGetter: (params) => params.data?.activity_group_sort_value || activityTimelineSortValue(params.data || {}),
         tooltipValueGetter: (params) => {
           const timeline = activityTimelineParts(params.data || {});
@@ -946,8 +953,8 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "StdOut / StdErr",
         colId: "stdout",
-        flex: 0,
-        width: 220,
+        flex: 1,
+        minWidth: 180,
         sortable: false,
         filter: false,
         cellRenderer: "HistoryActionsCell",

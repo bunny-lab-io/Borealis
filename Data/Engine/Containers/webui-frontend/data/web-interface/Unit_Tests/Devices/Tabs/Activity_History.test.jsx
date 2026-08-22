@@ -124,13 +124,15 @@ describe("Activity History helpers", () => {
     expect(rows[0].activity_group_index).toBe(0);
   });
 
-  it("sizes activity column from widest label plus padding", () => {
+  it("sizes activity column from widest label within compact bounds", () => {
     const rows = decorateHistoryActivityRows([
       { id: 1, script_display_name: "Short", script_type: "powershell" },
       { id: 2, scheduled_job_name: "Long Scheduled Job Name", metadata: { scheduled_job_id: 7 } },
     ]);
 
-    expect(historyActivityColumnWidth(rows, (value) => String(value).length * 10)).toBe(302);
+    expect(historyActivityColumnWidth(rows, (value) => String(value).length * 10)).toBe(294);
+    expect(historyActivityColumnWidth(rows, () => 10)).toBe(220);
+    expect(historyActivityColumnWidth(rows, () => 500)).toBe(360);
   });
 
   it("adds group size metadata for multi-task activities", () => {
