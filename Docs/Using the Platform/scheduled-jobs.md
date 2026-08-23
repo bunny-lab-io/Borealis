@@ -86,6 +86,7 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     ### Runtime behavior
 
     - `job-scheduler` owns scheduled ticks, queue leases, service-action queueing, and K3s site-worker reconciliation. K3s workload/site-worker lifecycle goes through `borealis-operator`; WireGuard reconcile goes through the mounted tunnel control socket. Docker/Compose helper execution is retired after Stage 11.
+    - Quick Job creation stores Assembly `domain` and `domainLabel` beside Assembly GUID in scheduled component JSON. Scheduled Job source badges use current catalog provenance first, saved component provenance second, and `Unknown` only when neither source exists; missing provenance must never imply `User-Created`.
     - `job_kind=patch_install` stores a single `patch_install` component, uses system execution context, and bypasses assembly credential selection.
     - New Patch Management drafts expose only the `Schedule` tab in `Create_Job.jsx`; Patch Management supplies job name, patch component, target list, and system execution context.
     - New Patch Management drafts include an internal `return_to` route so successful creation returns to the originating fleet or device Patch Management page.

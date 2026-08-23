@@ -354,7 +354,7 @@ export default function ScheduledJobsList({ refreshToken }) {
               component.script_path ||
               component.path ||
               "Assembly";
-            const domainValue = (record?.domain || component.domain || "user").toLowerCase();
+            const domainValue = String(record?.domain || component.domain || "unknown").trim().toLowerCase();
             const domainMeta = resolveDomainMeta(domainValue);
             const assemblyGuid =
               component.assembly_guid ||
