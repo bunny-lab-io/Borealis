@@ -377,6 +377,8 @@ export default function QuickJobDialog({
             display_name: selectedName,
             path: componentPath,
             description: selectedRecord.summary || selectedRecord.description || parsed.metadata?.summary || "",
+            domain: selectedRecord.domain || "user",
+            domainLabel: selectedRecord.domainLabel || selectedRecord.domain || "User-Created",
             variables: activeVariables,
             variable_values: valueMap,
           },
