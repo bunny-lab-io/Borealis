@@ -387,7 +387,7 @@ export default function ActiveAlerts() {
         field: "watchdog_name",
         headerName: "Watchdog",
         minWidth: 220,
-        width: 260,
+        flex: 1,
         cellRenderer: (params) => {
           const watchdogId = params?.data?.watchdog_id;
           const watchdogName = String(params?.value || "").trim();
@@ -515,8 +515,10 @@ export default function ActiveAlerts() {
                 sortModel: [{ colId: "opened_at", sort: "desc" }],
               },
             }}
+            pagination
+            paginationPageSize={20}
+            paginationPageSizeSelector={[20, 50, 100]}
             animateRows
-            domLayout="autoHeight"
           />
         </Box>
       }
