@@ -71,7 +71,7 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine/de
     Authoring rules:
 
     - Keep new documentation inside closest domain folder.
-    - Do not manually add pages to `../zensical.toml`; Zensical discovers Markdown files from `Docs/`.
+    - Do not manually add pages to `Docs/zensical.toml`; Zensical discovers Markdown files from `Docs/`.
     - Use ASCII unless existing file already uses Unicode.
     - Avoid duplicating long source code; link to files and summarize behavior.
     - Document UI and backend components together when both change.

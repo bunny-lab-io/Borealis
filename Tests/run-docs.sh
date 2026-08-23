@@ -20,16 +20,17 @@ run_timed "${TIMEOUT_SECONDS}" "${VENV_DIR}/bin/python" -m pip install \
   >"${RESULT_DIR}/dependency-install.log" 2>&1
 
 printf '==> Strict Zensical build\n'
-run_timed "${TIMEOUT_SECONDS}" "${VENV_DIR}/bin/zensical" build --clean --strict \
+run_timed "${TIMEOUT_SECONDS}" "${VENV_DIR}/bin/zensical" build \
+  --config-file "${REPO_ROOT}/Docs/zensical.toml" --clean --strict \
   >"${RESULT_DIR}/zensical-build.log" 2>&1
 
-find "${REPO_ROOT}/site" -type f \( \
+find "${REPO_ROOT}/Docs/site" -type f \( \
   -iname '*.psd' -o -iname '*.psb' -o -iname '*.xcf' -o \
   -iname '*.ai' -o -iname '*.sketch' \
 \) -delete
 
-[[ -f "${REPO_ROOT}/site/index.html" ]] || {
-  printf 'DOCS FAIL: strict build lacks site/index.html.\n' >&2
+[[ -f "${REPO_ROOT}/Docs/site/index.html" ]] || {
+  printf 'DOCS FAIL: strict build lacks Docs/site/index.html.\n' >&2
   exit 1
 }
 printf 'Documentation validation passed. Results: %s\n' "${RESULT_DIR}"
