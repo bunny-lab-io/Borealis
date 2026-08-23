@@ -28,26 +28,27 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Agent Updates` under Backend Tools starts install-equivalent Agent repair and shows live or historical update timeline, status, duration, failure detail, and Scheduled Job links beside full-height history grid.
 - `Activity History` shows quick job and automation output tied to the device, with scheduled-job activity names linking back to the job history and task timelines showing start, finish, and compact duration.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
-- `Agent Health` shows startup flow and role health separately from online/offline status.
+- Expanded `Agent Health` stays at the top of the Device Summary sidebar. Open `Agent Connection` for API WebSocket, heartbeat, and secure-tunnel status; open `Roles` for runtime-role status.
+- Colored glyphs provide compact health state. Hover any connection or role for curated details and use its copy button, or use the copy button beside `Agent Connection` or `Roles` to copy the full subsection.
 
 ## Understand Status
 
 - `Connected` means the Engine saw a recent heartbeat and the site worker reports the Agent management socket is connected.
 - `Disconnected` means the Engine saw a recent heartbeat, but the site-worker management connection is not healthy.
 - `Offline` means heartbeat age exceeded the online window.
-- Agent Health explains startup and role state; it does not replace connection status.
+- Agent Health consolidates connection and role state without replacing Device List connection status.
 - Stale inventory means the device may be online but a specific role has not published fresh data yet.
 
 !!! tip
 
-    Start with Device Summary and Agent Health before opening logs. Most device-side issues show as stale heartbeat, failed role, missing helper readiness, or offline state.
+    Start with the Device Summary sidebar's Agent Health section before opening logs. Most device-side issues show as stale heartbeat, failed role, missing helper readiness, or offline state.
 
 ## Common Checks
 
 - Device missing from normal inventory: verify it is approved and assigned to a site you can see.
 - Wrong site: update site assignment from Sites or the device assignment flow.
 - Software, patch, service, or process data stale: use the tab refresh action or wait for the next agent poll.
-- Current-user automation unavailable: check session helper readiness in Agent Health and session inventory.
+- Current-user automation unavailable: hover `Execution Context: Current User` under Agent Health and check session inventory.
 
 ## Update Agent
 
@@ -98,6 +99,7 @@ Operator-requested updates perform install-equivalent repair even when installed
     - Registry Editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Registry_Editor.jsx`
     - Patch Management tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Patch_Management.jsx`
     - Agent Health UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`
+    - Agent Health sidebar and tooltip UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Startup_Flow.jsx` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
     - Agent audit role: `Data/Agent/internal/roles/device_audit/`
     - Agent patch role: `Data/Agent/internal/roles/patch_management/`
 
@@ -110,6 +112,8 @@ Operator-requested updates perform install-equivalent repair even when installed
     - `GET /api/devices` enriches device rows by fetching each visible site worker's `/agents` snapshot once, then matching system sockets by hostname, Agent ID, or GUID.
     - Site List drilldowns use `/devices?site=<site_id>&status=<connected|disconnected|offline>`; Device List normalizes those status tokens to `Connected`, `Disconnected`, or `Offline`.
     - Heartbeat-only online state without a confirmed Agent socket renders as `Disconnected`, not `Connected`.
+    - Device Summary Agent Health merges the Agent-reported Engine Socket role into `API Websocket Connection` and the Agent-reported WireGuard role into `Secure Tunnel`; those two signals do not repeat under `Roles`.
+    - Secure Tunnel detail includes virtual IP, tunnel ID, and Agent ID as connection context rather than presenting identifiers as separate health checks.
     - Heavy inventory lands through `/api/agent/details`; heartbeat carries lightweight metrics and metadata deltas.
     - Session inventory includes helper readiness fields so current-user execution can distinguish a logged-in user from a helper-ready session.
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.
