@@ -120,7 +120,7 @@ Keep in mind that admonitions require correct indentation, otherwise they will b
 * Keep screenshots on `Docs/screenshots.md` by default.
 * Landing pages may carry one high-signal screenshot.
 * Topic pages should stay screenshot-free unless operator intentionally adds one.
-* Do not manually maintain page navigation in `zensical.toml`.  Zensical handles this automatically on its own.
+* Do not manually maintain page navigation in `Docs/zensical.toml`.  Zensical handles this automatically on its own.
 * Zensical auto-discovers Markdown folders and pages from `Docs/`; place pages in correct folder and use `index.md` for folder landing pages.
 
 ## Interacting with Codebase

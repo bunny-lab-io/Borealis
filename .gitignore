@@ -26,4 +26,4 @@ __pycache__
 .pytest_cache/
 Unit_Test_Results/
 Updater.log
-/site/
+/Docs/site/

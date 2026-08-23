@@ -18,7 +18,7 @@ Repository commands below own deterministic correctness rules. GitHub Actions se
 | `./Tests/run-docs.sh` | Pinned clean Zensical strict build | Python 3 and venv |
 | `./Tests/run-all.sh` | All normal portable lanes | Combined prerequisites above |
 
-Set `BOREALIS_DOCKER_USE_SUDO=1` where local Docker socket requires sudo. Results, virtual environments, caches, compiled output, and reports stay under ignored `Unit_Test_Results/`, temporary workspaces, or ignored `site/`.
+Set `BOREALIS_DOCKER_USE_SUDO=1` where local Docker socket requires sudo. Results, virtual environments, caches, compiled output, and reports stay under ignored `Unit_Test_Results/`, temporary workspaces, or ignored `Docs/site/`.
 
 ## Path-to-Gate Behavior
 

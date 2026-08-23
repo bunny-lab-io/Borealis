@@ -5,7 +5,6 @@ on:
     branches: [main]
     paths:
       - "Docs/**"
-      - "zensical.toml"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -39,21 +38,21 @@ jobs:
 
       - name: Prune Pages artifact
         run: |
-          find site -type f \( \
+          find Docs/site -type f \( \
             -iname '*.psd' -o \
             -iname '*.psb' -o \
             -iname '*.xcf' -o \
             -iname '*.ai' -o \
             -iname '*.sketch' \
           \) -delete
-          du -sh site
-          find site -type f -printf '%s\t%p\n' | sort -nr | head -40
+          du -sh Docs/site
+          find Docs/site -type f -printf '%s\t%p\n' | sort -nr | head -40
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         timeout-minutes: 5
         with:
-          path: site
+          path: Docs/site
 
   deploy:
     runs-on: ubuntu-latest

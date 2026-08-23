@@ -26,7 +26,7 @@ SOURCE_SECTION = re.compile(
 NEXT_SECTION = re.compile(r"^\s*### ")
 BACKTICK = re.compile(r"`([^`]+)`")
 SOURCE_PREFIXES = ("Data/", "Tests/", ".github/")
-SOURCE_FILES = {"AGENTS.md", "Engine.sh", "Engine_Unit_Tests.sh", "zensical.toml"}
+SOURCE_FILES = {"AGENTS.md", "Engine.sh", "Engine_Unit_Tests.sh", "Docs/zensical.toml"}
 
 
 def fail(message: str, failures: list[str]) -> None:

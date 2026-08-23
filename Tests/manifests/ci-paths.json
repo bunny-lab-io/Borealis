@@ -84,7 +84,7 @@
   ],
   "docs": [
     "Docs/**",
-    "zensical.toml",
+    "Docs/zensical.toml",
     "Tests/run-docs.sh",
     "Tests/README.md",
     "Tests/requirements-docs.txt",

@@ -6,7 +6,7 @@ site_url = "https://bunny-lab-io.github.io/Borealis/"
 repo_url = "https://github.com/bunny-lab-io/Borealis"
 repo_name = "bunny-lab-io/Borealis"
 edit_uri = "edit/main/Docs/"
-docs_dir = "Docs"
+docs_dir = "."
 site_dir = "site"
 extra_css = ["stylesheets/extra.css"]
 
