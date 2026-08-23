@@ -55,7 +55,14 @@ import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import RemoteRegistryEditorTab from "./Remote_Registry_Editor.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
 import { buildAgentHealthRows } from "./Agent_Health.jsx";
-import { RuntimeRoleHealthBreakdown } from "./Agent_Startup_Flow.jsx";
+import {
+  CopyHealthButton,
+  CopyableHealthTooltip,
+  RuntimeRoleHealthSidebarRows,
+  buildHealthCopyText,
+  buildRuntimeHealthTooltipRows,
+  getRuntimeHealthTooltipDetail,
+} from "./Agent_Startup_Flow.jsx";
 import DeviceMetadataTab from "./Device_Metadata.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
@@ -155,7 +162,6 @@ const NAV_TAB_COLORS = {
   activeBg:
     "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
-const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
 const BOREALIS_PRIMARY_GRADIENT = "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)";
 const HARDWARE_SUMMARY_SECTION_SX = {
@@ -984,107 +990,87 @@ const DescriptionCellEditor = React.memo(function DescriptionCellEditor({
   );
 });
 
-function getDeviceReadinessToneStyles(tone) {
-  if (tone === "danger") {
-    return {
-      border: "rgba(248,113,113,0.42)",
-      background: "linear-gradient(135deg, rgba(127,29,29,0.42), rgba(15,23,42,0.74))",
-      icon: "#fca5a5",
-      accent: "#fca5a5",
-    };
-  }
-  if (tone === "warning") {
-    return {
-      border: "rgba(250,204,21,0.42)",
-      background: "linear-gradient(135deg, rgba(113,63,18,0.42), rgba(15,23,42,0.74))",
-      icon: "#fde68a",
-      accent: "#fde68a",
-    };
-  }
-  if (tone === "ready") {
-    return {
-      border: "rgba(52,211,153,0.38)",
-      background: "linear-gradient(135deg, rgba(6,78,59,0.38), rgba(15,23,42,0.74))",
-      icon: MAGIC_UI.accentC,
-      accent: MAGIC_UI.accentC,
-    };
-  }
-  return {
-    border: MAGIC_UI.panelBorder,
-    background: "linear-gradient(135deg, rgba(15,23,42,0.82), rgba(7,11,24,0.72))",
-    icon: MAGIC_UI.accentA,
-    accent: MAGIC_UI.accentA,
-  };
-}
-
-function DeviceReadinessStatusPill({ id, label, value, tone = "muted", onClick = null, valueColor = "" }) {
-  const toneStyles = getDeviceReadinessToneStyles(tone);
+function DeviceSidebarHealthGroup({ id, label, summary, icon, expanded, onChange, copyText = "", children }) {
   return (
-    <Box
-      component={onClick ? "button" : "div"}
-      type={onClick ? "button" : undefined}
-      key={id}
-      onClick={onClick || undefined}
+    <Accordion
+      expanded={expanded}
+      onChange={(_, nextExpanded) => onChange(id, nextExpanded)}
+      square
+      disableGutters
       sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 0.8,
-        minHeight: 30,
-        px: 1.15,
-        borderRadius: 999,
-        border: `1px solid ${toneStyles.border}`,
-        background: "rgba(2,6,23,0.44)",
-        minWidth: 0,
-        cursor: onClick ? "pointer" : "default",
-        font: "inherit",
-        textDecoration: "none",
-        "&:hover": onClick
-          ? {
-              borderColor: "rgba(125,183,255,0.52)",
-              background: "rgba(125,211,252,0.07)",
-            }
-          : undefined,
-        "&:focus-visible": onClick
-          ? {
-              outline: `2px solid ${BOREALIS_LINK_COLOR}`,
-              outlineOffset: 2,
-            }
-          : undefined,
+        mx: 0.45,
+        my: "0 !important",
+        bgcolor: "transparent",
+        background: "transparent !important",
+        backgroundColor: "transparent !important",
+        backgroundImage: "none !important",
+        border: 0,
+        boxShadow: "none",
+        position: "relative",
+        "&:before": { display: "none" },
       }}
     >
-      <Typography
-        component="span"
-        sx={{
-          color: MAGIC_UI.textMuted,
-          fontSize: "0.68rem",
-          letterSpacing: 0.4,
-          textTransform: "uppercase",
-          fontWeight: 700,
-          lineHeight: 1,
-          whiteSpace: "nowrap",
-        }}
+      <Tooltip
+        title={<CopyableHealthTooltip title={label} status={summary || ""} />}
+        arrow
+        placement="right"
       >
-        {label}
-      </Typography>
-      <Typography
-        component="span"
-        title={String(value || "")}
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon sx={{ color: NAV_TAB_COLORS.iconActive, fontSize: 18 }} />}
+          sx={{
+            minHeight: 40,
+            pl: 1.55,
+            pr: 0.85,
+            py: 0,
+            borderRadius: 0,
+            color: NAV_TAB_COLORS.text,
+            background: "transparent",
+            backgroundColor: "transparent",
+            backgroundImage: "none",
+            transition: "background 160ms ease, color 160ms ease, transform 120ms ease",
+            "&:hover": { background: NAV_TAB_COLORS.hover, backgroundColor: NAV_TAB_COLORS.hover },
+            "&.Mui-expanded": { minHeight: 40, background: "transparent", backgroundColor: "transparent" },
+            "&.Mui-expanded:hover": { background: NAV_TAB_COLORS.hover, backgroundColor: NAV_TAB_COLORS.hover },
+            "& .MuiAccordionSummary-content": { my: 0, minWidth: 0, alignItems: "center" },
+            "& .MuiAccordionSummary-content.Mui-expanded": { my: 0 },
+          }}
+        >
+          <Box sx={{ color: NAV_TAB_COLORS.icon, display: "flex", alignItems: "center", mr: 1, flexShrink: 0 }}>
+            {icon}
+          </Box>
+          <Typography sx={{ color: "inherit", fontSize: "0.8rem", fontWeight: 400, lineHeight: 1.45 }} noWrap>
+            {label}
+          </Typography>
+        </AccordionSummary>
+      </Tooltip>
+      {copyText ? (
+        <CopyHealthButton
+          copyText={copyText}
+          label={`Copy all ${label} health details`}
+          sx={{
+            position: "absolute",
+            top: 8,
+            right: 31,
+            zIndex: 2,
+            color: NAV_TAB_COLORS.iconActive,
+            "&:hover": { backgroundColor: NAV_TAB_COLORS.hover },
+          }}
+        />
+      ) : null}
+      <AccordionDetails
         sx={{
-          color: valueColor || toneStyles.accent,
-          fontSize: "0.76rem",
-          fontWeight: 700,
-          lineHeight: 1.1,
-          minWidth: 0,
-          maxWidth: { xs: 180, md: 260 },
+          p: 0,
+          mx: 0.35,
+          mb: 0.45,
+          borderLeft: "1px solid rgba(125,183,255,0.13)",
+          borderRadius: 1,
+          backgroundColor: "rgba(2,6,23,0.38)",
           overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          textDecoration: "none",
         }}
       >
-        {value}
-      </Typography>
-    </Box>
+        {children}
+      </AccordionDetails>
+    </Accordion>
   );
 }
 
@@ -1129,219 +1115,144 @@ function getDeviceReadinessConnectionRowMeta(tone) {
   };
 }
 
-function renderDeviceReadinessConnectionTooltip(row) {
-  return (
-    <Box sx={{ maxWidth: 300 }}>
-      <Typography sx={{ color: "#fff", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.25 }}>
-        {row.label}: {row.value}
-      </Typography>
-      <Typography sx={{ color: "rgba(226,232,240,0.86)", fontSize: "0.68rem", lineHeight: 1.35, mt: 0.45 }}>
-        {row.detail}
-      </Typography>
-    </Box>
-  );
+const HEALTHY_AGENT_ROLE_STATUS_CODES = new Set([
+  "healthy",
+  "loaded",
+  "ok",
+  "online",
+  "running",
+  "ready",
+  "complete",
+  "completed",
+]);
+const WARNING_AGENT_ROLE_STATUS_CODES = new Set(["pending", "recovering", "reconnecting", "starting", "stale"]);
+const MUTED_AGENT_ROLE_STATUS_CODES = new Set(["", "unknown", "missing", "not_applicable", "unsupported"]);
+
+function getAgentRoleHealthTone(roleHealth) {
+  if (!roleHealth) return "muted";
+  const statusCode = String(roleHealth?.statusCode || roleHealth?.status || "").trim().toLowerCase();
+  if (HEALTHY_AGENT_ROLE_STATUS_CODES.has(statusCode)) return "ready";
+  if (WARNING_AGENT_ROLE_STATUS_CODES.has(statusCode)) return "warning";
+  if (MUTED_AGENT_ROLE_STATUS_CODES.has(statusCode)) return "muted";
+  return "danger";
 }
 
-function DeviceReadinessConnectionRow({ row, index }) {
+function renderDeviceReadinessConnectionTooltip(row) {
+  return <CopyableHealthTooltip title={row.label} status={row.value} rows={row.tooltipRows} detail={row.detail} />;
+}
+
+function DeviceSidebarHealthConnectionRow({ row, index }) {
   const rowMeta = getDeviceReadinessConnectionRowMeta(row.tone);
   const RowIcon = rowMeta.Icon;
   return (
     <Tooltip key={`${row.group || "connection"}-${row.label}-${index}`} title={renderDeviceReadinessConnectionTooltip(row)} arrow placement="right">
-      <Box sx={{ minWidth: 0, width: "100%" }}>
-        <Box
-          sx={{
-            width: "100%",
-            minHeight: 31,
-            px: 0.65,
-            py: 0.4,
-            borderRadius: 1.3,
-            border: `1px solid ${rowMeta.border}`,
-            background: rowMeta.background,
-            color: MAGIC_UI.textBright,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            gap: 0.65,
-            textAlign: "left",
-            overflow: "hidden",
-            cursor: "help",
-            "&:hover": {
-              borderColor: rowMeta.hoverBorder,
-              background: rowMeta.hoverBackground,
-            },
-          }}
-        >
-          <RowIcon sx={{ color: rowMeta.color, fontSize: 15, flexShrink: 0 }} />
-          <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
-              {row.label}
-            </Typography>
-            <Typography sx={{ mt: 0.1, color: rowMeta.color, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
-              {row.value}
-            </Typography>
-          </Box>
+      <Box
+        aria-label={`${row.label}: ${row.value}`}
+        sx={{
+          minHeight: 34,
+          px: 0.8,
+          py: 0.45,
+          borderRadius: 1,
+          color: MAGIC_UI.textBright,
+          display: "flex",
+          alignItems: "center",
+          gap: 0.7,
+          minWidth: 0,
+          cursor: "help",
+          transition: "background 140ms ease",
+          "&:hover": { background: "rgba(125,183,255,0.08)" },
+        }}
+      >
+        <RowIcon sx={{ color: rowMeta.color, fontSize: 15, flexShrink: 0 }} />
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography sx={{ color: NAV_TAB_COLORS.text, fontSize: "0.67rem", fontWeight: 500, lineHeight: 1.15 }} noWrap>
+            {row.label}
+          </Typography>
         </Box>
       </Box>
     </Tooltip>
   );
 }
 
-const DeviceReadinessHeader = React.memo(function DeviceReadinessHeader({
-  engineConnection,
+const DeviceSidebarHealth = React.memo(function DeviceSidebarHealth({
   roleHealthSummary,
   agentManagementSummary,
   agentManagementGroups,
   agentHealthRows,
 }) {
-  const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
-  const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
-  const readinessPills = useMemo(
-    () => [
-      {
-        id: "engine-connection",
-        label: "Agent Management",
-        value: engineConnection.value,
-        tone: engineConnection.tone,
-        valueColor: BOREALIS_LINK_COLOR,
-        onClick: (event) => setAgentManagementAnchor(event.currentTarget),
-      },
-      {
-        id: "roles",
-        label: "Roles",
-        value: roleHealthSummary.label,
-        tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
-        valueColor: BOREALIS_LINK_COLOR,
-        onClick: (event) => setRoleHealthAnchor(event.currentTarget),
-      },
-    ],
-    [
-      engineConnection.tone,
-      engineConnection.value,
-      roleHealthSummary.count,
-      roleHealthSummary.label,
-      roleHealthSummary.unhealthyCount,
-    ]
+  const [expandedGroups, setExpandedGroups] = useState({ management: false, roles: false });
+  const handleGroupChange = useCallback((groupId, expanded) => {
+    setExpandedGroups((previous) => ({ ...previous, [groupId]: expanded }));
+  }, []);
+  const agentManagementRows = useMemo(
+    () => agentManagementGroups.flatMap((group) => group.rows || []),
+    [agentManagementGroups]
+  );
+  const agentConnectionCopyText = useMemo(
+    () =>
+      [
+        "Agent Connection",
+        ...agentManagementRows.map((row) =>
+          buildHealthCopyText({
+            title: row.label,
+            status: row.value,
+            rows: row.tooltipRows,
+            detail: row.detail,
+          })
+        ),
+      ].join("\n\n"),
+    [agentManagementRows]
+  );
+  const roleHealthCopyText = useMemo(
+    () =>
+      [
+        `Roles - ${roleHealthSummary.label}`,
+        ...agentHealthRows.map((entry) => {
+          const rows = buildRuntimeHealthTooltipRows(entry);
+          return buildHealthCopyText({
+            title: entry?.name || "Runtime health",
+            status: entry?.status || "Unknown",
+            rows,
+            detail: getRuntimeHealthTooltipDetail(entry, rows),
+          });
+        }),
+      ].join("\n\n"),
+    [agentHealthRows, roleHealthSummary.label]
   );
 
   return (
-    <>
-      <Box
-        sx={{
-          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
-          background:
-            "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
-            "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
-          px: { xs: 1.5, md: 2 },
-          py: 1.15,
-          display: "flex",
-          alignItems: "center",
-          minWidth: 0,
-        }}
+    <Box sx={{ px: 0.15, pb: 0.35, minWidth: 0 }}>
+      <DeviceSidebarHealthGroup
+        id="management"
+        label="Agent Connection"
+        summary={agentManagementSummary}
+        icon={<LanRoundedIcon fontSize="small" />}
+        expanded={expandedGroups.management}
+        onChange={handleGroupChange}
+        copyText={agentConnectionCopyText}
       >
-        <Stack
-          direction="row"
-          spacing={0.75}
-          useFlexGap
-          flexWrap="wrap"
-          justifyContent="flex-start"
-          sx={{ minWidth: 0 }}
-        >
-          {readinessPills.map((pill) => (
-            <DeviceReadinessStatusPill key={pill.id} {...pill} />
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 0.2, p: 0.35 }}>
+          {agentManagementRows.map((row, index) => (
+            <DeviceSidebarHealthConnectionRow
+              key={`${row.group || "connection"}-${row.label}-${index}`}
+              row={row}
+              index={index}
+            />
           ))}
-        </Stack>
-      </Box>
-      <Menu
-        anchorEl={agentManagementAnchor}
-        open={Boolean(agentManagementAnchor)}
-        onClose={() => setAgentManagementAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.98)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderRadius: 2,
-            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
-            p: 0.8,
-            mt: 0.7,
-            overflow: "visible",
-          },
-        }}
-      >
-        <Box
-          sx={{
-            width: 430,
-            maxWidth: "calc(100vw - 40px)",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-            p: 1.1,
-          }}
-        >
-          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
-            Agent management connection
-          </Typography>
-          <Typography sx={{ mt: 0.2, color: engineConnection.tone === "ready" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
-            {agentManagementSummary}
-          </Typography>
-          <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
-            {agentManagementGroups.map((group, groupIndex) => (
-              <Box key={group.label} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
-                <Typography
-                  sx={{
-                    mb: 0.35,
-                    color: MAGIC_UI.textMuted,
-                    fontSize: "0.58rem",
-                    fontWeight: 800,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {group.label}
-                </Typography>
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
-                  {group.rows.map((row, index) => (
-                    <DeviceReadinessConnectionRow key={`${row.group || "connection"}-${row.label}-${index}`} row={row} index={index} />
-                  ))}
-                </Box>
-              </Box>
-            ))}
-          </Box>
         </Box>
-      </Menu>
-      <Menu
-        anchorEl={roleHealthAnchor}
-        open={Boolean(roleHealthAnchor)}
-        onClose={() => setRoleHealthAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.98)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderRadius: 2,
-            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
-            p: 0.8,
-            mt: 0.7,
-            overflow: "visible",
-          },
-        }}
+      </DeviceSidebarHealthGroup>
+      <DeviceSidebarHealthGroup
+        id="roles"
+        label="Roles"
+        summary={roleHealthSummary.label}
+        icon={<DeveloperBoardRoundedIcon fontSize="small" />}
+        expanded={expandedGroups.roles}
+        onChange={handleGroupChange}
+        copyText={roleHealthCopyText}
       >
-        <RuntimeRoleHealthBreakdown
-          runtimeRows={agentHealthRows}
-          sx={{
-            width: 430,
-            maxWidth: "calc(100vw - 40px)",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-          }}
-        />
-      </Menu>
-    </>
+        <RuntimeRoleHealthSidebarRows runtimeRows={agentHealthRows} />
+      </DeviceSidebarHealthGroup>
+    </Box>
   );
 });
 
@@ -1489,6 +1400,7 @@ export default function DeviceSummary() {
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [expandedDeviceNavSections, setExpandedDeviceNavSections] = useState({
+    health: true,
     inventory: true,
     backend: true,
     protection: true,
@@ -3130,6 +3042,21 @@ export default function DeviceSummary() {
     () => buildAgentHealthRows(Array.isArray(agentRoleHealthPayload?.roles) ? agentRoleHealthPayload.roles : [], formatTimestamp),
     [agentRoleHealthPayload, formatTimestamp]
   );
+  const engineSocketRoleHealth = useMemo(
+    () => agentHealthRows.find((entry) => entry?.presentationKey === "enginesocket") || null,
+    [agentHealthRows]
+  );
+  const wireGuardRoleHealth = useMemo(
+    () => agentHealthRows.find((entry) => entry?.presentationKey === "wireguardtunnel") || null,
+    [agentHealthRows]
+  );
+  const sidebarAgentHealthRows = useMemo(
+    () =>
+      agentHealthRows.filter(
+        (entry) => !["enginesocket", "wireguardtunnel"].includes(String(entry?.presentationKey || ""))
+      ),
+    [agentHealthRows]
+  );
 
   const renderTopLevelFieldCell = useCallback((params) => {
     const row = params?.data && typeof params.data === "object" ? params.data : {};
@@ -3342,7 +3269,7 @@ export default function DeviceSummary() {
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
   const statusIsOnline = String(status || "").trim().toLowerCase() === "online";
   const roleHealthSummary = useMemo(() => {
-    const roles = Array.isArray(agentHealthRows) ? agentHealthRows : [];
+    const roles = Array.isArray(sidebarAgentHealthRows) ? sidebarAgentHealthRows : [];
     const unhealthyRoles = roles.filter((role) => {
       const health = String(role?.statusCode || role?.status || "").trim().toLowerCase();
       if (!health) return false;
@@ -3358,10 +3285,10 @@ export default function DeviceSummary() {
             ? `${unhealthyRoles.length}/${roles.length} Roles Degraded`
             : `${roles.length} Roles Healthy`,
     };
-  }, [agentHealthRows]);
+  }, [sidebarAgentHealthRows]);
   const dataFreshnessLabel = useMemo(() => {
     const rawLastSeen = meta.lastSeen || summary.last_seen || device?.last_seen || agent?.last_seen || 0;
-    return formatDateValue(rawLastSeen, "No heartbeat").replace(" AM", "AM").replace(" PM", "PM");
+    return formatDateValue(rawLastSeen, "No heartbeat");
   }, [agent?.last_seen, device?.last_seen, formatDateValue, meta.lastSeen, summary.last_seen]);
   const tunnelConnection = useMemo(() => {
     const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
@@ -3385,38 +3312,88 @@ export default function DeviceSummary() {
     }
     return { value: "Unavailable", tone: "danger", detail: "Agent must heartbeat before management socket can be confirmed." };
   }, [statusIsOnline, tunnelInfo?.agent_socket]);
-  const engineConnection = useMemo(() => {
-    if (statusIsOnline && tunnelInfo?.agent_socket) {
-      return { value: "Connected", tone: "ready" };
+  const websocketConnection = useMemo(() => {
+    const roleTone = getAgentRoleHealthTone(engineSocketRoleHealth);
+    let value = agentSocketConnection.value;
+    let tone = agentSocketConnection.tone;
+    if (roleTone === "danger") {
+      value = value === "Unavailable" ? value : "Degraded";
+      tone = "danger";
+    } else if (roleTone === "warning" && tone === "ready") {
+      value = "Degraded";
+      tone = "warning";
     }
-    if (statusIsOnline) {
-      return { value: "Reconnecting", tone: "warning" };
+    return {
+      value,
+      tone,
+      tooltipRows: [
+        { label: "Engine registry", value: agentSocketConnection.value },
+        { label: "Agent report", value: engineSocketRoleHealth?.status || "No role report" },
+        ...buildRuntimeHealthTooltipRows(engineSocketRoleHealth),
+      ],
+      detail:
+        tone === "ready"
+          ? ""
+          : [agentSocketConnection.detail, engineSocketRoleHealth?.detail].filter(Boolean).join("\n"),
+    };
+  }, [agentSocketConnection, engineSocketRoleHealth]);
+  const secureTunnelConnection = useMemo(() => {
+    const roleTone = getAgentRoleHealthTone(wireGuardRoleHealth);
+    const transportReady = tunnelInfo?.listener_healthy !== false;
+    let value = tunnelConnection.value;
+    let tone = tunnelConnection.tone;
+    if (tunnelConnection.tone === "ready" && !transportReady) {
+      value = "Degraded";
+      tone = "danger";
+    } else if (roleTone === "danger") {
+      value = value === "Down" || value === "Error" ? value : "Degraded";
+      tone = "danger";
+    } else if (roleTone === "warning" && tone === "ready") {
+      value = "Degraded";
+      tone = "warning";
     }
-    return { value: "Offline", tone: "danger" };
-  }, [statusIsOnline, tunnelInfo?.agent_socket]);
+    return {
+      value,
+      tone,
+      tooltipRows: [
+        { label: "Engine transport", value: tunnelConnection.value },
+        { label: "Transport readiness", value: transportReady ? "Ready" : "Not ready" },
+        { label: "Agent report", value: wireGuardRoleHealth?.status || "No role report" },
+        ...buildRuntimeHealthTooltipRows(wireGuardRoleHealth),
+        { label: "Virtual IP", value: tunnelInfo?.virtual_ip || "Not assigned" },
+        { label: "Tunnel ID", value: tunnelInfo?.tunnel_id || "No active tunnel" },
+        { label: "Agent ID", value: tunnelAgentId || "Unavailable" },
+      ],
+      detail:
+        tone === "ready"
+          ? ""
+          : [tunnelConnection.detail, wireGuardRoleHealth?.detail].filter(Boolean).join("\n"),
+    };
+  }, [tunnelAgentId, tunnelConnection, tunnelInfo?.listener_healthy, tunnelInfo?.tunnel_id, tunnelInfo?.virtual_ip, wireGuardRoleHealth]);
   const readiness = useMemo(() => {
-    const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
     const updateState = String(meta.agentUpdateState || summary.agent_update_state || "").trim().toLowerCase();
     const versionState = String(meta.agentVersionStatus || summary.agent_version_status || "").trim().toLowerCase();
-    const tunnelBlocked = ["down", "error"].includes(tunnelStatus) || tunnelInfo?.agent_socket === false;
+    const managementBlocked =
+      ["warning", "danger"].includes(websocketConnection.tone) ||
+      ["warning", "danger"].includes(secureTunnelConnection.tone);
     const updateFailed = updateState === "failed" || Boolean(meta.agentUpdateError || summary.agent_update_error);
     const needsUpdate = versionState.includes("need") || versionState.includes("outdated");
-    const healthBlocked = !statusIsOnline || tunnelBlocked || updateFailed || roleHealthSummary.unhealthyCount > 0;
+    const healthBlocked = !statusIsOnline || managementBlocked || updateFailed || roleHealthSummary.unhealthyCount > 0;
     const storageBlocked = hardwareOverview.storageCritical > 0;
     if (healthBlocked) {
       return {
         tone: "danger",
         headline: !statusIsOnline
           ? "Agent unreachable"
-          : tunnelBlocked
+          : managementBlocked
             ? "Remote control degraded"
             : updateFailed
               ? "Agent updater failed"
               : "Agent role degraded",
         detail: !statusIsOnline
           ? "Recover control before running backend tools."
-          : tunnelBlocked
-            ? "Agent heartbeat is online while the management socket reconnects."
+          : managementBlocked
+            ? "Agent heartbeat is online while remote-management health recovers."
             : updateFailed
               ? "Review updater state and startup flow."
               : "Role health needs review.",
@@ -3442,97 +3419,67 @@ export default function DeviceSummary() {
     meta.agentUpdateState,
     meta.agentVersionStatus,
     roleHealthSummary.unhealthyCount,
+    secureTunnelConnection.tone,
     statusIsOnline,
     summary.agent_update_error,
     summary.agent_update_state,
     summary.agent_version_status,
-    tunnelInfo?.agent_socket,
-    tunnelInfo?.status,
+    websocketConnection.tone,
   ]);
   const agentManagementDetails = useMemo(
     () => [
       {
-        group: "Connection",
-        label: "Agent Status",
+        group: "Health",
+        label: "Heartbeat",
         value: status || "Unknown",
         tone: statusIsOnline ? "ready" : "danger",
-        detail: "Latest heartbeat-derived agent state.",
+        tooltipRows: [{ label: "Last heartbeat", value: dataFreshnessLabel }],
+        detail: "",
       },
       {
-        group: "Connection",
-        label: "Agent Socket",
-        value: agentSocketConnection.value,
-        tone: agentSocketConnection.tone,
-        detail: agentSocketConnection.detail,
+        group: "Health",
+        label: "API Websocket Connection",
+        value: websocketConnection.value,
+        tone: websocketConnection.tone,
+        tooltipRows: websocketConnection.tooltipRows,
+        detail: websocketConnection.detail,
       },
       {
-        group: "Connection",
-        label: "WireGuard",
-        value: tunnelConnection.value,
-        tone: tunnelConnection.tone,
-        detail: tunnelConnection.detail,
+        group: "Health",
+        label: "Secure Tunnel",
+        value: secureTunnelConnection.value,
+        tone: secureTunnelConnection.tone,
+        tooltipRows: secureTunnelConnection.tooltipRows,
+        detail: secureTunnelConnection.detail,
       },
-      {
-        group: "Connection",
-        label: "Last Heartbeat",
-        value: dataFreshnessLabel,
-        tone: statusIsOnline ? "ready" : "warning",
-        detail: "Most recent agent heartbeat received by Engine.",
-      },
-      {
-        group: "Connection",
-        label: "Tunnel Listener",
-        value: tunnelInfo?.listener_healthy === false ? "Unhealthy" : "Healthy",
-        tone: tunnelInfo?.listener_healthy === false ? "danger" : "ready",
-        detail: "Engine-side tunnel listener health.",
-      },
-      {
-        group: "Identifiers",
-        label: "Virtual IP",
-        value: tunnelInfo?.virtual_ip || "No tunnel IP",
-        tone: tunnelInfo?.virtual_ip ? "ready" : "muted",
-        detail: "WireGuard address assigned to this agent tunnel.",
-      },
-      {
-        group: "Identifiers",
-        label: "Tunnel ID",
-        value: tunnelInfo?.tunnel_id || "No active tunnel",
-        tone: tunnelInfo?.tunnel_id ? "ready" : "muted",
-        detail: "Current Engine tunnel record identifier.",
-      },
-      {
-        group: "Identifiers",
-        label: "Agent ID",
-        value: tunnelAgentId || "Unavailable",
-        tone: tunnelAgentId ? "ready" : "muted",
-        detail: "Identifier used for tunnel status lookup.",
-      },
-    ],
+    ].sort((left, right) => String(left.label || "").localeCompare(String(right.label || ""))),
     [
-      agentSocketConnection.detail,
-      agentSocketConnection.tone,
-      agentSocketConnection.value,
       dataFreshnessLabel,
+      secureTunnelConnection.detail,
+      secureTunnelConnection.tone,
+      secureTunnelConnection.tooltipRows,
+      secureTunnelConnection.value,
       status,
       statusIsOnline,
-      tunnelAgentId,
-      tunnelConnection.detail,
-      tunnelConnection.tone,
-      tunnelConnection.value,
-      tunnelInfo?.listener_healthy,
-      tunnelInfo?.tunnel_id,
-      tunnelInfo?.virtual_ip,
+      websocketConnection.detail,
+      websocketConnection.tone,
+      websocketConnection.tooltipRows,
+      websocketConnection.value,
     ]
   );
   const agentManagementSummary = useMemo(() => {
     if (!statusIsOnline) return "Agent heartbeat offline.";
-    if (engineConnection.value !== "Connected") return "Agent heartbeat online, management socket reconnecting.";
-    if (tunnelConnection.value !== "Connected") return "Management socket connected, tunnel not active.";
-    return "Management socket and WireGuard tunnel connected.";
-  }, [engineConnection.value, statusIsOnline, tunnelConnection.value]);
+    if (websocketConnection.value !== "Connected") {
+      return `Heartbeat online; API websocket ${websocketConnection.value.toLowerCase()}.`;
+    }
+    if (secureTunnelConnection.value !== "Connected") {
+      return `API websocket connected; secure tunnel ${secureTunnelConnection.value.toLowerCase()}.`;
+    }
+    return "API websocket, heartbeat, and secure tunnel healthy.";
+  }, [secureTunnelConnection.value, statusIsOnline, websocketConnection.value]);
   const agentManagementGroups = useMemo(
     () =>
-      ["Connection", "Identifiers"]
+      ["Health"]
         .map((label) => ({
           label,
           rows: agentManagementDetails.filter((entry) => entry.group === label),
@@ -3540,20 +3487,20 @@ export default function DeviceSummary() {
         .filter((group) => group.rows.length),
     [agentManagementDetails]
   );
-  const remoteToolsBadgeCount = [
+  const remoteToolsBlocked = [
     !statusIsOnline,
     tunnelInfo?.agent_socket === false,
     ["down", "error"].includes(String(tunnelInfo?.status || "").trim().toLowerCase()),
-  ].filter(Boolean).length;
+  ].some(Boolean);
   const workspaceBadges = useMemo(
     () => ({
       storage: hardwareOverview.storageCritical > 0 ? String(hardwareOverview.storageCritical) : "",
       protection: "",
       history: "",
-      shell: remoteToolsBadgeCount > 0 ? String(remoteToolsBadgeCount) : "",
+      shell: remoteToolsBlocked ? "1" : "",
       config: "",
     }),
-    [hardwareOverview.storageCritical, remoteToolsBadgeCount]
+    [hardwareOverview.storageCritical, remoteToolsBlocked]
   );
 
   const renderFileManagementTab = () => <RemoteFileManagementTab device={tunnelDevice} />;
@@ -3725,6 +3672,14 @@ export default function DeviceSummary() {
     return (
       <Box sx={DEVICE_NAV_SIDEBAR_SX}>
         <Box sx={{ flex: 1, overflowY: "auto", p: 0.25 }}>
+          <SidebarSection sectionId="health" title="Agent Health">
+            <DeviceSidebarHealth
+              roleHealthSummary={roleHealthSummary}
+              agentManagementSummary={agentManagementSummary}
+              agentManagementGroups={agentManagementGroups}
+              agentHealthRows={sidebarAgentHealthRows}
+            />
+          </SidebarSection>
           <SidebarSection sectionId="inventory" title="Inventory">
             <SidebarNavRow
               icon={<InfoOutlinedIcon fontSize="small" />}
@@ -3946,11 +3901,15 @@ export default function DeviceSummary() {
       activeAgentUpdate,
       activeWorkspaceKey,
       activeWorkspaceView,
+      agentManagementGroups,
+      agentManagementSummary,
       deviceId,
       expandedDeviceNavSections,
       navigate,
       requestSummarySectionScroll,
+      roleHealthSummary,
       setActiveWorkspace,
+      sidebarAgentHealthRows,
       tunnelDevice,
       workspaceBadges,
     ]
@@ -4095,15 +4054,6 @@ export default function DeviceSummary() {
             boxShadow: agentUpdatesWorkspaceActive ? "none" : MAGIC_UI.glow,
           }}
         >
-          {!agentUpdatesWorkspaceActive ? (
-            <DeviceReadinessHeader
-              engineConnection={engineConnection}
-              roleHealthSummary={roleHealthSummary}
-              agentManagementSummary={agentManagementSummary}
-              agentManagementGroups={agentManagementGroups}
-              agentHealthRows={agentHealthRows}
-            />
-          ) : null}
           <Box
             id="device-summary-workspace-scrollhost"
             sx={{

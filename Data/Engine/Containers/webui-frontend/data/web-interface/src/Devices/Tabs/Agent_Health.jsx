@@ -12,8 +12,8 @@ const AGENT_HEALTH_KIND = Object.freeze({
 const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   deviceaudit: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
   deviceauditor: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
-  contextsystem: { label: "System Context", kind: AGENT_HEALTH_KIND.role },
-  contextcurrentuser: { label: "Current User Context", kind: AGENT_HEALTH_KIND.role },
+  contextsystem: { label: "Execution Context: SYSTEM/root", kind: AGENT_HEALTH_KIND.role },
+  contextcurrentuser: { label: "Execution Context: Current User", kind: AGENT_HEALTH_KIND.role },
   remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   servicecontrol: { label: "Service Control", kind: AGENT_HEALTH_KIND.role },

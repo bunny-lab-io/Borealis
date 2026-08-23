@@ -1,6 +1,8 @@
-import React, { useMemo } from "react";
-import { Box, Tooltip, Typography } from "@mui/material";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Box, IconButton, Tooltip, Typography } from "@mui/material";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
+import DoneRoundedIcon from "@mui/icons-material/DoneRounded";
 import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
@@ -158,60 +160,306 @@ function buildRuntimeGroupSummary(runtimeRows) {
   return pieces.length ? pieces.join(" · ") : "Awaiting role telemetry";
 }
 
-function buildRuntimeHealthTooltip(entry) {
-  if (!entry) return "";
+function formatHealthBoolean(value, trueLabel = "Yes", falseLabel = "No") {
+  if (value === true || String(value).trim().toLowerCase() === "true") return trueLabel;
+  if (value === false || String(value).trim().toLowerCase() === "false") return falseLabel;
+  return String(value || "").trim();
+}
+
+function formatHealthTimestamp(value) {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return "";
+  const timestampMs = numericValue > 1e12 ? numericValue : numericValue * 1000;
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return "";
+  const dateText = date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const timeText = date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${dateText} @ ${timeText}`;
+}
+
+function readHealthObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  const text = String(value || "").trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function buildRuntimeHealthTooltipRows(entry) {
+  if (!entry) return [];
   const details = entry.detailsMap && typeof entry.detailsMap === "object" ? entry.detailsMap : {};
-  const detailRows = Object.entries(details)
-    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== "")
-    .slice(0, 8);
+  const rows = [];
+  const addRow = (label, value) => {
+    if (value === null || value === undefined || String(value).trim() === "") return;
+    rows.push({ label, value: String(value) });
+  };
+  const addTimestamp = (label, value) => {
+    const formatted = formatHealthTimestamp(value);
+    if (formatted) addRow(label, formatted);
+  };
+  const key = String(entry.presentationKey || "").trim().toLowerCase();
+
+  if (entry.lastCheckedText) addRow("Checked", entry.lastCheckedText);
+  const statusCode = String(entry.statusCode || entry.status || "").trim().toLowerCase();
+  const healthy = ["healthy", "loaded", "ok", "online", "running", "ready", "complete", "completed"].includes(statusCode);
+  if (entry.lastSuccessText && (!healthy || entry.lastSuccessText !== entry.lastCheckedText)) {
+    addRow("Last healthy", entry.lastSuccessText);
+  }
+  if (entry.contextLabel && String(entry.contextLabel).trim().toLowerCase() !== "system") {
+    const title = String(entry.name || "").trim().toLowerCase();
+    if (!title.includes(String(entry.contextLabel).trim().toLowerCase())) addRow("Context", entry.contextLabel);
+  }
+  const desired = String(entry.desiredState || "").trim().toLowerCase();
+  const observed = String(entry.observedState || "").trim().toLowerCase();
+  if (!healthy || (desired && desired !== "running") || (observed && !["ready", "running"].includes(observed))) {
+    addRow("Desired / observed", `${entry.desiredState || "Unknown"} / ${entry.observedState || "Unknown"}`);
+  }
+  if (entry.recoveryAttempts) addRow("Recovery attempts", entry.recoveryAttempts);
+  if (entry.lastError) addRow("Last error", entry.lastError);
+
+  if (key === "enginesocket") {
+    addRow("Socket", details.socket_state);
+    if (Number(details.socket_state_age_seconds) >= 0) addRow("State age", `${details.socket_state_age_seconds} seconds`);
+  } else if (key === "wireguardtunnel") {
+    addRow("Endpoint", details.endpoint);
+  } else if (key === "rdp") {
+    addRow("Engine address", details.engine_address);
+    addRow("Firewall rule", details.firewall_rule);
+    if (details.listener_ip || details.listener_port) {
+      addRow("Listener", `${details.listener_ip || "0.0.0.0"}:${details.listener_port || "Unknown"}`);
+    }
+  } else if (key === "vnc" || key === "ultravnc" || key === "ultravncservice") {
+    addRow("Allowed Engine IPs", details.allowed_ips);
+    addRow("Displays", details.display_count);
+    const bounds = readHealthObject(details.display_virtual_bounds || details.display_virtual_bounds_json);
+    if (bounds.width && bounds.height) addRow("Desktop bounds", `${bounds.width} × ${bounds.height}`);
+  } else if (key === "contextcurrentuser") {
+    addRow("Broker", String(details.broker_mode || "").replace(/[_-]+/g, " "));
+    addRow("Ready helpers", details.ready_helpers);
+    addRow("Loaded sessions", details.loaded_helper_sessions);
+  } else if (key === "deviceauditor" || key === "deviceaudit") {
+    addRow("CPU telemetry", formatHealthBoolean(details.cpu_present, "Available", "Unavailable"));
+    addRow("Memory items", details.memory_items);
+    addRow("Network items", details.network_items);
+    addRow("Storage items", details.storage_items);
+  } else if (key === "filemanagement") {
+    addRow("Listener", details.listener_state);
+    addRow("Active transfers", details.active_transfers);
+    addTimestamp("Last transfer", details.last_transfer_at);
+  } else if (key === "patchmanagement") {
+    addRow("Available patches", details.patch_count);
+    addRow("Install active", formatHealthBoolean(details.install_running));
+    addTimestamp("Inventory refreshed", details.last_refresh_at);
+    addTimestamp("Last install", details.last_install_at);
+  } else if (key === "processmanagement") {
+    addRow("Processes", details.process_count);
+    addTimestamp("Inventory refreshed", details.last_refresh_at);
+  } else if (key === "registrymanagement") {
+    addRow("Listener", details.listener_state);
+    addRow("Platform", details.platform);
+    addRow("Mode", details.service_mode);
+    addTimestamp("Last mutation", details.last_mutation_at);
+  } else if (key === "remoteshell") {
+    addRow("Active session", formatHealthBoolean(details.active_session));
+    if (details.listener_ip || details.listener_port) {
+      addRow("Listener", `${details.listener_ip || "0.0.0.0"}:${details.listener_port || "Unknown"}`);
+    }
+  } else if (key === "servicemanagement") {
+    addRow("Services", details.service_count);
+    addTimestamp("Inventory refreshed", details.last_refresh_at);
+  } else if (key === "softwaremanagement") {
+    addRow("Software records", details.software_count);
+    addTimestamp("Inventory refreshed", details.last_refresh_at);
+  }
+
+  if (![
+    "enginesocket",
+    "wireguardtunnel",
+    "rdp",
+    "vnc",
+    "ultravnc",
+    "ultravncservice",
+    "contextsystem",
+    "contextcurrentuser",
+    "deviceauditor",
+    "deviceaudit",
+    "filemanagement",
+    "patchmanagement",
+    "processmanagement",
+    "registrymanagement",
+    "remoteshell",
+    "servicemanagement",
+    "softwaremanagement",
+  ].includes(key)) {
+    const hiddenKeys = new Set([
+      "desired_state",
+      "observed_state",
+      "running_status",
+      "runtime",
+      "supervisor_revision",
+      "refresh_interval_ms",
+    ]);
+    Object.entries(details)
+      .filter(([detailKey, value]) => {
+        const normalizedKey = String(detailKey || "").trim().toLowerCase();
+        return (
+          !hiddenKeys.has(normalizedKey) &&
+          !normalizedKey.endsWith("_json") &&
+          value !== null &&
+          value !== undefined &&
+          String(value).trim() !== ""
+        );
+      })
+      .slice(0, 5)
+      .forEach(([detailKey, value]) => addRow(String(detailKey).replace(/[_-]+/g, " "), value));
+  }
+
+  return rows;
+}
+
+export function getRuntimeHealthTooltipDetail(entry, rows = buildRuntimeHealthTooltipRows(entry)) {
+  const detail = String(entry?.detail || "").trim();
+  if (!detail) return "";
+  const statusCode = String(entry?.statusCode || entry?.status || "").trim().toLowerCase();
+  const healthy = ["healthy", "loaded", "ok", "online", "running", "ready", "complete", "completed"].includes(statusCode);
+  const key = String(entry?.presentationKey || "").trim().toLowerCase();
+  const hasRoleSpecificEvidence = (Array.isArray(rows) ? rows : []).some(
+    (row) => !["Checked", "Last healthy", "Context", "Desired / observed", "Recovery attempts", "Last error"].includes(row?.label)
+  );
+  if (!healthy || key === "contextsystem" || !hasRoleSpecificEvidence) return detail;
+  return "";
+}
+
+async function copyHealthText(text) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  if (typeof document === "undefined") return;
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+}
+
+export function buildHealthCopyText({ title, status = "", rows = [], detail = "" }) {
+  const cleanRows = Array.isArray(rows)
+    ? rows.filter((row) => row?.label && row?.value !== null && row?.value !== undefined && String(row.value).trim() !== "")
+    : [];
+  return [
+    title,
+    status ? `Status: ${status}` : "",
+    ...cleanRows.map((row) => `${row.label}: ${row.value}`),
+    detail ? `\n${detail}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function CopyHealthButton({ copyText = "", label = "Copy health details", sx = {} }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+    },
+    []
+  );
+
+  const handleCopy = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!copyText) return;
+    try {
+      await copyHealthText(copyText);
+      setCopied(true);
+      if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <Box sx={{ maxWidth: 360, py: 0.25 }}>
-      <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.8rem", fontWeight: 760, lineHeight: 1.25 }}>
-        {entry.name || "Runtime health"}
-      </Typography>
-      <Typography sx={{ mt: 0.55, color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
-        Status: {entry.status || "Unknown"}
-      </Typography>
-      {entry.lastCheckedText ? (
-        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
-          Last checked: {entry.lastCheckedText}
+    <IconButton
+      size="small"
+      aria-label={copied ? `${label} copied` : label}
+      title={copied ? "Copied" : label}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={handleCopy}
+      sx={{ p: 0.35, flexShrink: 0, color: copied ? MAGIC_UI.accentC : MAGIC_UI.accentA, ...sx }}
+    >
+      {copied ? <DoneRoundedIcon sx={{ fontSize: 16 }} /> : <ContentCopyRoundedIcon sx={{ fontSize: 15 }} />}
+    </IconButton>
+  );
+}
+
+export function CopyableHealthTooltip({ title, status = "", rows = [], detail = "" }) {
+  const cleanRows = Array.isArray(rows)
+    ? rows.filter((row) => row?.label && row?.value !== null && row?.value !== undefined && String(row.value).trim() !== "")
+    : [];
+  const copyText = buildHealthCopyText({ title, status, rows: cleanRows, detail });
+
+  return (
+    <Box sx={{ width: 280, maxWidth: "calc(100vw - 64px)", py: 0.25 }}>
+      <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1 }}>
+        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.8rem", fontWeight: 760, lineHeight: 1.25 }}>
+          {title || "Health details"}
+        </Typography>
+        <CopyHealthButton copyText={copyText} />
+      </Box>
+      {status ? (
+        <Typography sx={{ mt: 0.45, color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
+          <Box component="span" sx={{ color: MAGIC_UI.textBright, fontWeight: 760 }}>
+            Status:
+          </Box>{" "}
+          {status}
         </Typography>
       ) : null}
-      {entry.lastSuccessText ? (
-        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
-          Last healthy: {entry.lastSuccessText}
+      {cleanRows.map((row, index) => (
+        <Typography key={`${row.label}-${index}`} sx={{ color: MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.35 }}>
+          <Box component="span" sx={{ color: MAGIC_UI.textBright, fontWeight: 760 }}>
+            {row.label}:
+          </Box>{" "}
+          {row.value}
         </Typography>
-      ) : null}
-      {entry.contextLabel ? (
-        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
-          Context: {entry.contextLabel}
-        </Typography>
-      ) : null}
-      {entry.desiredState || entry.observedState ? (
-        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
-          Desired: {entry.desiredState || "Unknown"} · Observed: {entry.observedState || "Unknown"}
-        </Typography>
-      ) : null}
-      {entry.recoveryAttempts ? (
-        <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.7rem", lineHeight: 1.35 }}>
-          Recovery attempts: {entry.recoveryAttempts}
-        </Typography>
-      ) : null}
-      {detailRows.length ? (
-        <Box sx={{ mt: 0.55 }}>
-          {detailRows.map(([key, value]) => (
-            <Typography key={key} sx={{ color: MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.35 }}>
-              {String(key).replace(/[_-]+/g, " ")}: {String(value)}
-            </Typography>
-          ))}
-        </Box>
-      ) : null}
-      {entry.detail ? (
+      ))}
+      {detail ? (
         <Typography sx={{ mt: 0.65, color: MAGIC_UI.textBright, fontSize: "0.69rem", lineHeight: 1.35, whiteSpace: "pre-wrap" }}>
-          {entry.detail}
+          {detail}
         </Typography>
       ) : null}
     </Box>
+  );
+}
+
+function buildRuntimeHealthTooltip(entry) {
+  if (!entry) return "";
+  const rows = buildRuntimeHealthTooltipRows(entry);
+  return (
+    <CopyableHealthTooltip
+      title={entry.name || "Runtime health"}
+      status={entry.status || "Unknown"}
+      rows={rows}
+      detail={getRuntimeHealthTooltipDetail(entry, rows)}
+    />
   );
 }
 
@@ -362,6 +610,76 @@ export function RuntimeRoleHealthBreakdown({ runtimeRows, sx = {} }) {
           </Typography>
         )}
       </Box>
+    </Box>
+  );
+}
+
+export function RuntimeRoleHealthSidebarRows({ runtimeRows }) {
+  const rows = Array.isArray(runtimeRows) ? runtimeRows : [];
+  if (!rows.length) {
+    return (
+      <Typography sx={{ px: 1, py: 0.8, color: MAGIC_UI.textMuted, fontSize: "0.66rem", lineHeight: 1.35 }}>
+        Role telemetry has not reported yet.
+      </Typography>
+    );
+  }
+
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.2,
+        p: 0.35,
+        "@keyframes agentTimelineSpin": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+      }}
+    >
+      {rows.map((entry, index) => {
+        const rowState = normalizeRuntimeHealthState(entry?.statusCode);
+        const rowColor = getRuntimeStatusColor(entry?.statusCode);
+        const rowMeta = STARTUP_STATE_META[rowState] || STARTUP_STATE_META.pending;
+        const RowIcon = rowMeta.Icon;
+        return (
+          <Tooltip key={entry?.id || `runtime-sidebar-${index}`} title={buildRuntimeHealthTooltip(entry)} arrow placement="right">
+            <Box
+              aria-label={`${entry?.name || `Runtime ${index + 1}`}: ${entry?.status || "Unknown"}`}
+              sx={{
+                minHeight: 34,
+                px: 0.8,
+                py: 0.45,
+                borderRadius: 1,
+                color: MAGIC_UI.textBright,
+                display: "flex",
+                alignItems: "center",
+                gap: 0.7,
+                minWidth: 0,
+                cursor: "help",
+                transition: "background 140ms ease",
+                "&:hover": {
+                  background: "rgba(125,183,255,0.08)",
+                },
+              }}
+            >
+              <RowIcon
+                sx={{
+                  color: rowColor,
+                  fontSize: 15,
+                  flexShrink: 0,
+                  animation: rowState === "active" ? "agentTimelineSpin 1.15s linear infinite" : "none",
+                }}
+              />
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography sx={{ color: "#cbd5e1", fontSize: "0.67rem", fontWeight: 500, lineHeight: 1.15 }} noWrap>
+                  {entry?.name || `Runtime ${index + 1}`}
+                </Typography>
+              </Box>
+            </Box>
+          </Tooltip>
+        );
+      })}
     </Box>
   );
 }
