@@ -167,6 +167,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | system-upgrade-controller `v0.20.1` (gated one-server-at-time K3s upgrade controller) | [Apache-2.0](https://github.com/rancher/system-upgrade-controller/blob/master/LICENSE) |
 | shared-engine | rancher/k3s-upgrade (exact K3s target version, runtime image must be pinned by sha256 digest) | [Apache-2.0](https://github.com/k3s-io/k3s-upgrade/blob/master/LICENSE) |
 | shared-engine | Longhorn `v1.12.0` default K3s storage baseline manifest (installed by `Engine.sh` unless `BOREALIS_K3S_LONGHORN_ENABLED=0`) | [Apache-2.0](https://github.com/longhorn/longhorn/blob/master/LICENSE) |
+| shared-engine | Kubernetes CSI external-snapshotter `v8.5.0` snapshot CRDs and common snapshot controller (required for CloudNativePG Longhorn snapshots; controller image pinned by manifest-list digest) | [Apache-2.0](https://github.com/kubernetes-csi/external-snapshotter/blob/master/LICENSE) |
 | shared-engine | Kubernetes e2e BusyBox `1.36.1-1` (`registry.k8s.io/e2e-test-images/busybox`, digest-pinned probe conformance helper) | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Open-iSCSI / `iscsi-initiator-utils` host dependency for Longhorn volumes (installed by `Engine.sh` when missing) | [GPL-2.0-only](https://github.com/open-iscsi/open-iscsi/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |

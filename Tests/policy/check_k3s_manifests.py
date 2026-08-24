@@ -124,6 +124,78 @@ def validate_pinned_dependency_adoption_contract() -> None:
     if "longhorn)" not in source or '${kubectl_bin} apply -f "${target}"' not in source:
         fail("cluster bootstrap must preserve standalone Longhorn client-side ownership during adoption")
 
+    try:
+        dependency_lock = (ROOT / "Data/Engine/K3s/cluster/dependencies.lock").read_text(encoding="utf-8")
+        workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read snapshot dependency contract: {exc}")
+    for dependency in (
+        "csi-volume-snapshot-class-crd|v8.5.0|",
+        "csi-volume-snapshot-content-crd|v8.5.0|",
+        "csi-volume-snapshot-crd|v8.5.0|",
+    ):
+        if dependency not in dependency_lock:
+            fail(f"cluster dependency lock lost {dependency.rstrip('|')}")
+    if "rollout restart deployment/cnpg-controller-manager" not in workflow:
+        fail("cluster bootstrap must restart CNPG after installing snapshot CRDs")
+
+
+def validate_snapshot_controller_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/snapshot-controller.yaml"
+    try:
+        objects = [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot parse snapshot controller manifest: {exc}")
+    deployments = [
+        item
+        for item in objects
+        if item.get("kind") == "Deployment"
+        and (item.get("metadata") or {}).get("name") == "snapshot-controller"
+    ]
+    if len(deployments) != 1:
+        fail("snapshot controller manifest must contain one Deployment")
+    deployment = deployments[0]
+    if (deployment.get("spec") or {}).get("replicas") != 2:
+        fail("snapshot controller must retain two leader-elected replicas")
+    pod = (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {})
+    containers = pod.get("containers") or []
+    if len(containers) != 1:
+        fail("snapshot controller must contain one container")
+    container = containers[0]
+    if container.get("image") != "registry.k8s.io/sig-storage/snapshot-controller@sha256:74ca61ab13e978f03cf0f336a607281d15f04cda0a38a881306365473b28a3d8":
+        fail("snapshot controller image must retain v8.5.0 manifest-list digest")
+    if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
+        fail("snapshot controller must retain separate startup, readiness, and liveness probes")
+    security = container.get("securityContext") or {}
+    expected_security = {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": True,
+        "runAsUser": 65532,
+        "runAsGroup": 65532,
+    }
+    for field, expected in expected_security.items():
+        if security.get(field) != expected:
+            fail(f"snapshot controller securityContext {field} must be {expected!r}")
+    if set(((security.get("capabilities") or {}).get("drop") or [])) != {"ALL"}:
+        fail("snapshot controller must drop ALL capabilities")
+    resources = container.get("resources") or {}
+    if not resources.get("requests") or not resources.get("limits"):
+        fail("snapshot controller must declare resource requests and limits")
+    if not pod.get("topologySpreadConstraints"):
+        fail("snapshot controller must retain topology spread constraints")
+    pdbs = [item for item in objects if item.get("kind") == "PodDisruptionBudget"]
+    if len(pdbs) != 1 or ((pdbs[0].get("spec") or {}).get("minAvailable")) != 1:
+        fail("snapshot controller must retain minAvailable=1 disruption budget")
+    for item in objects:
+        labels = (item.get("metadata") or {}).get("labels") or {}
+        if labels.get("app.kubernetes.io/part-of") != "borealis":
+            fail(f"snapshot controller {item.get('kind')} lost Borealis ownership label")
+        if item.get("kind") in {"ClusterRole", "Role"}:
+            for rule in item.get("rules") or []:
+                if "*" in (rule.get("resources") or []) or "*" in (rule.get("verbs") or []):
+                    fail("snapshot controller RBAC contains wildcard")
+
 
 def validate_api_release_identity_contract() -> None:
     try:
@@ -356,6 +428,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_cluster_controller_contract()
     validate_node_manager_service_contract()
     validate_pinned_dependency_adoption_contract()
+    validate_snapshot_controller_contract()
     validate_api_release_identity_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:

@@ -154,6 +154,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - `BorealisCluster`, `BorealisNodeAdmission`, `BorealisNodeRuntime`, and `BorealisClusterOperation` hold desired/runtime Kubernetes state.
     - PostgreSQL tables `borealis_cluster_state`, `borealis_cluster_nodes`, `borealis_cluster_admissions`, `borealis_cluster_operations`, `borealis_cluster_operation_events`, `borealis_cluster_events`, `borealis_cluster_invitations`, `borealis_cluster_realtime_outbox`, and `borealis_cluster_leases` hold audit, events, invitations, outbox, and singleton leases.
     - Node manager accepts fixed verbs only, including persistent K3s membership fence and exact-version probe conformance. It never exposes arbitrary command or remote-shell execution. Manager stays active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control plane recovery without losing operation process.
+    - K3s does not bundle CSI VolumeSnapshot API resources. Cluster bootstrap checksum-pins external-snapshotter `v8.5.0` CRDs, deploys digest-pinned common snapshot controller with leader election and probes, then restarts CloudNativePG so daily Longhorn snapshot support is discovered before database migration.
     - Cluster API replicas expose separate TLS 1.3 mTLS-only Aegis key receiver from `aegis_cluster_fanout.go`; cert-manager assets and headless Service live in `Data/Engine/K3s/cluster/aegis-mtls.yaml`.
 
     ### Qualification

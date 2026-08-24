@@ -1,5 +1,8 @@
 # name|version|URL|SHA-256
 kube-vip-sbom|v1.1.0|https://github.com/kube-vip/kube-vip/releases/download/v1.1.0/kube-vip-sbom.cyclonedx.json|c573d45721ba8428bd203a1f41f66ae36fd0b96b09408736116da70069c813e8
+csi-volume-snapshot-class-crd|v8.5.0|https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.5.0/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml|75e6565aac2c0f2949ed13ea884bbaa388cb7be576b558b709cf1168e011828d
+csi-volume-snapshot-content-crd|v8.5.0|https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.5.0/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml|895a3c1e73b60f06a0deb566dd123d01bdf1b2efc5d5ff5231ff8bbcf42dafc7
+csi-volume-snapshot-crd|v8.5.0|https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.5.0/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml|b032116e987fb1d7d93cec7d942833adeb9d95c9bdc7e00c10b280c2fe4a6c33
 cloudnative-pg|v1.30.0|https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.0.yaml|f8bede43fe4ee0d478c2355b204a36876b2ae4faac60f2a9452280b293da3b88
 cert-manager|v1.21.1|https://github.com/cert-manager/cert-manager/releases/download/v1.21.1/cert-manager.yaml|5f6a499b8c1857d57f560f536e0dcc830914b45c420899fe7ad0692c8624e408
 system-upgrade-controller|v0.20.1|https://github.com/rancher/system-upgrade-controller/releases/download/v0.20.1/system-upgrade-controller.yaml|11ba712de8b887b937e521a7278bcd37ba06975c581646903fd8ae8e296f3bfc

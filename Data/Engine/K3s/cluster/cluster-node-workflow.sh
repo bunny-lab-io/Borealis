@@ -76,6 +76,15 @@ for attempt in {1..120}; do
 done
 
 "${script_dir}/apply-pinned-dependencies.sh"
+k3s kubectl wait --for=condition=Established crd/volumesnapshotclasses.snapshot.storage.k8s.io --timeout=2m
+k3s kubectl wait --for=condition=Established crd/volumesnapshotcontents.snapshot.storage.k8s.io --timeout=2m
+k3s kubectl wait --for=condition=Established crd/volumesnapshots.snapshot.storage.k8s.io --timeout=2m
+k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${script_dir}/snapshot-controller.yaml"
+k3s kubectl -n kube-system rollout status deployment/snapshot-controller --timeout=5m
+# CNPG discovers VolumeSnapshot capability during startup. Restart also repairs a
+# prior bootstrap attempt where operator started before snapshot CRDs existed.
+k3s kubectl -n cnpg-system rollout restart deployment/cnpg-controller-manager
+k3s kubectl -n cnpg-system rollout status deployment/cnpg-controller-manager --timeout=5m
 k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${script_dir}/aegis-mtls.yaml"
 k3s kubectl -n "${namespace}" wait --for=condition=Ready certificate/borealis-cluster-ca --timeout=5m
 k3s kubectl -n "${namespace}" wait --for=condition=Ready certificate/borealis-api-aegis-mtls --timeout=5m
