@@ -159,6 +159,16 @@ verify_cnpg_cutover_runtime "$cnpg_url"
         self.assertLess(discovery, readiness)
         self.assertIn("Site worker %s was not recreated after database cutover", workflow)
 
+    def test_root_cluster_workflow_uses_scoped_git_safe_directory(self):
+        workflow = (
+            REPO_ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'git -c "safe.directory=${repo_root}" -C "${repo_root}" rev-parse HEAD',
+            workflow,
+        )
+        self.assertNotIn("git config --global", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -320,7 +320,10 @@ spec:
 EOF
 
 node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
-revision="$(git -C "${repo_root}" rev-parse HEAD)"
+# Node manager runs this workflow as root while operator checkout normally belongs
+# to non-root account. Trust only already-resolved repository path for this call;
+# never mutate global Git safe.directory configuration on Engine host.
+revision="$(git -c "safe.directory=${repo_root}" -C "${repo_root}" rev-parse HEAD)"
 python3 "${script_dir}/reconcile-node-workloads.py" \
   --node "${node_name}" \
   --revision "${revision}" \
