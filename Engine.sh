@@ -10545,7 +10545,8 @@ ensure_borealis_node_manager() {
   run_privileged chmod 0640 "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"
   run_privileged install -m 0644 -o root -g root "${service_source}" "/etc/systemd/system/${BOREALIS_NODE_MANAGER_SERVICE}"
   run_privileged systemctl daemon-reload
-  run_privileged systemctl enable --now "${BOREALIS_NODE_MANAGER_SERVICE}"
+  run_privileged systemctl enable "${BOREALIS_NODE_MANAGER_SERVICE}"
+  run_privileged systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"
   sleep 2
   if ! run_privileged systemctl is-active --quiet "${BOREALIS_NODE_MANAGER_SERVICE}"; then
     run_privileged systemctl status "${BOREALIS_NODE_MANAGER_SERVICE}" --no-pager >> "${BUILD_LOG}" 2>&1 || true

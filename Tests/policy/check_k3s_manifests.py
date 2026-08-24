@@ -97,6 +97,7 @@ def validate_node_manager_service_contract() -> None:
         "RuntimeDirectory=borealis": "managed runtime directory",
         "ConfigurationDirectory=borealis": "managed configuration directory",
         "ProtectSystem=strict": "strict filesystem protection",
+        "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s": "fixed-operation Borealis and K3s write paths",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK": "Unix socket, K3s API, release-fetch, and host network-inspection contract",
     }
     for marker, description in required.items():
@@ -108,6 +109,8 @@ def validate_node_manager_service_contract() -> None:
         fail(f"cannot read Engine node-manager installer: {exc}")
     if 'install -d -m 0750 -o root -g root "$(dirname -- "${BOREALIS_NODE_MANAGER_TOKEN_FILE}")"' not in engine_source:
         fail("Engine node-manager installer must correct configuration-directory ownership and mode")
+    if 'systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"' not in engine_source:
+        fail("Engine node-manager installer must restart service after replacing binary or unit")
 
 
 def fail(message: str) -> None:

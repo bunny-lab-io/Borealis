@@ -1251,7 +1251,10 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if _, err := run(context.Background(), "", "systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	_, err = run(context.Background(), "", "systemctl", "enable", "--now", "borealis-node-manager.service")
+	if _, err := run(context.Background(), "", "systemctl", "enable", "borealis-node-manager.service"); err != nil {
+		return err
+	}
+	_, err = run(context.Background(), "", "systemctl", "restart", "borealis-node-manager.service")
 	return err
 }
 
