@@ -1220,7 +1220,10 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if err := os.WriteFile("/usr/local/sbin/borealis-node-manager", binary, 0o750); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(defaultSecretPath), 0o750); err != nil {
+	if err := ensureSecureDirectory(filepath.Dir(defaultSecretPath)); err != nil {
+		return err
+	}
+	if err := os.Chown(filepath.Dir(defaultSecretPath), 0, 0); err != nil {
 		return err
 	}
 	if _, err := os.Stat(defaultSecretPath); errors.Is(err, os.ErrNotExist) {
@@ -1250,6 +1253,13 @@ func installLocalNodeManagerService(repoRoot string) error {
 	}
 	_, err = run(context.Background(), "", "systemctl", "enable", "--now", "borealis-node-manager.service")
 	return err
+}
+
+func ensureSecureDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o750); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o750)
 }
 
 func requiredRelease(params map[string]any) string {

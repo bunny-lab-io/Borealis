@@ -102,6 +102,12 @@ def validate_node_manager_service_contract() -> None:
     for marker, description in required.items():
         if marker not in source:
             fail(f"node-manager systemd unit lost {description}")
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Engine node-manager installer: {exc}")
+    if 'install -d -m 0750 -o root -g root "$(dirname -- "${BOREALIS_NODE_MANAGER_TOKEN_FILE}")"' not in engine_source:
+        fail("Engine node-manager installer must correct configuration-directory ownership and mode")
 
 
 def fail(message: str) -> None:

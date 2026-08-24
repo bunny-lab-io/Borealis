@@ -130,3 +130,20 @@ func TestRunGitScopesSafeDirectoryToSelectedWorktree(t *testing.T) {
 		t.Fatal("empty Git worktree path accepted")
 	}
 }
+
+func TestEnsureSecureDirectoryCorrectsExistingPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "borealis")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSecureDirectory(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o750 {
+		t.Fatalf("directory mode=%#o, want 0750", got)
+	}
+}

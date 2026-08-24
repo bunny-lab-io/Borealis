@@ -10531,6 +10531,7 @@ ensure_borealis_node_manager() {
   local service_source="${K3S_CLUSTER_ASSET_DIR}/node-manager.service"
   [[ -x "${staged_binary}" ]] || die "Node-manager binary missing after API backend build: ${staged_binary}"
   [[ -f "${service_source}" ]] || die "Node-manager systemd unit missing: ${service_source}"
+  run_privileged install -d -m 0750 -o root -g root "$(dirname -- "${BOREALIS_NODE_MANAGER_TOKEN_FILE}")"
   run_privileged install -m 0750 -o root -g root "${staged_binary}" "${BOREALIS_NODE_MANAGER_BINARY}"
   if ! run_privileged test -s "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"; then
     local token_file=""
