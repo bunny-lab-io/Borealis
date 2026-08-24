@@ -26,6 +26,27 @@ CAPABILITY_ALLOWLIST = {
 }
 
 
+def validate_probe_conformance_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/run-probe-conformance.sh"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read K3s probe conformance script: {exc}")
+    required = {
+        "/state/fail-liveness": "controlled liveness failure",
+        ".status.containerStatuses[0].containerID": "replacement container identity check",
+        ".status.containerStatuses[0].started": "replacement startup state check",
+        "replacement startup-probe:failure": "replacement startup execution proof",
+        "replacement liveness-probe:": "premature replacement liveness rejection",
+        "Kubernetes issue 141155": "upstream regression context",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"probe conformance lost {description}")
+    if "kill -KILL 1" in source or "kill -TERM 1" in source:
+        fail("probe conformance must trigger restart through liveness failure, not direct PID 1 signal")
+
+
 def fail(message: str) -> None:
     print(f"K3S POLICY FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -243,6 +264,7 @@ def main() -> int:
 
 
 def validate(objects: list[tuple[Path, dict]]) -> None:
+    validate_probe_conformance_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)
