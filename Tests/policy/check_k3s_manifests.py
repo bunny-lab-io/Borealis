@@ -113,6 +113,16 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
 
 
+def validate_api_release_identity_contract() -> None:
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Engine API manifest renderer: {exc}")
+    for marker in ('"release_version=${release_version}"', '"source_sha=${source_sha}"'):
+        if marker not in engine_source:
+            fail("API manifest cache must include immutable Engine release identity")
+
+
 def fail(message: str) -> None:
     print(f"K3S POLICY FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -333,6 +343,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_probe_conformance_contract()
     validate_cluster_controller_contract()
     validate_node_manager_service_contract()
+    validate_api_release_identity_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)

@@ -3867,6 +3867,8 @@ render_k3s_api_backend_bridge_manifest() {
   local memory_limit="$6"
   local cpu_limit="$7"
   local traffic_owner="$8"
+  local release_version="$9"
+  local source_sha="${10}"
   local service_host
   service_host="$(api_backend_service_dns_name)"
   cat <<EOF
@@ -4028,9 +4030,9 @@ $(k3s_timezone_env_entries)
             - name: BOREALIS_K3S_UPGRADE_IMAGE
               value: "${K3S_UPGRADE_IMAGE}"
             - name: BOREALIS_ENGINE_RELEASE_VERSION
-              value: "$(engine_release_version)"
+              value: "${release_version}"
             - name: BOREALIS_ENGINE_SOURCE_SHA
-              value: "$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
+              value: "${source_sha}"
             - name: HOME
               value: "/tmp"
           startupProbe:
@@ -4175,6 +4177,8 @@ ensure_k3s_api_backend_bridge() {
   local traffic_owner
   local service_host
   local pids_limit
+  local release_version
+  local source_sha
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
@@ -4184,6 +4188,8 @@ ensure_k3s_api_backend_bridge() {
   traffic_owner="$(resolve_api_backend_traffic_owner)"
   service_host="$(api_backend_service_dns_name)"
   pids_limit="$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
+  release_version="$(engine_release_version)"
+  source_sha="$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
 
   local config_hash
   config_hash="$(
@@ -4203,6 +4209,8 @@ ensure_k3s_api_backend_bridge() {
       "cpu_limit=${cpu_limit}" \
       "pids_limit=${pids_limit}" \
       "traffic_owner=${traffic_owner}" \
+      "release_version=${release_version}" \
+      "source_sha=${source_sha}" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
       "project_root=${ENGINE_HOST_ROOT}" \
@@ -4235,6 +4243,8 @@ ensure_k3s_api_backend_bridge() {
     "${memory_limit}" \
     "${cpu_limit}" \
     "${traffic_owner}" \
+    "${release_version}" \
+    "${source_sha}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
