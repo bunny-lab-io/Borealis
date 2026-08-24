@@ -10756,7 +10756,7 @@ try:
     value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 except Exception:
     raise SystemExit(1)
-if value.get("id") == "pod-restart-policy-startup-probe-v1" and value.get("status") == "passed" and value.get("k3s_version") == sys.argv[2]:
+if value.get("id") == "pod-restart-policy-startup-probe-v2" and value.get("status") == "passed" and value.get("k3s_version") == sys.argv[2] and value.get("trials") == 10:
     print("passed")
 else:
     print("failed")

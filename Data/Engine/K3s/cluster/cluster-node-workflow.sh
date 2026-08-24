@@ -36,7 +36,7 @@ try:
     result = json.loads(path.read_text(encoding="utf-8"))
 except Exception as exc:
     raise SystemExit(f"Stable K3s probe conformance result unavailable: {exc}")
-if result.get("status") != "passed" or result.get("id") != "pod-restart-policy-startup-probe-v1" or result.get("k3s_version") != expected:
+if result.get("status") != "passed" or result.get("id") != "pod-restart-policy-startup-probe-v2" or result.get("k3s_version") != expected or result.get("trials") != 10:
     raise SystemExit("Stable K3s probe conformance does not match running version; cluster mode remains disabled")
 PY
 

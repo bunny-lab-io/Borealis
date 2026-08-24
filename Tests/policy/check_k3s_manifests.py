@@ -42,6 +42,9 @@ def validate_probe_conformance_contract() -> None:
         "nodeName: __BOREALIS_CONFORMANCE_NODE__": "local K3s node pin",
         'node_name="$(hostname -s': "local K3s node identity",
         "/etc/rancher/k3s/borealis-probe-conformance.json": "sandbox-writable conformance result path",
+        "trial_count=10": "ten consecutive restart trials",
+        '"trials":%s': "consecutive-trial result evidence",
+        "pod-restart-policy-startup-probe-v2": "multi-trial conformance contract",
     }
     for marker, description in required.items():
         if marker not in source:
@@ -71,6 +74,8 @@ def validate_probe_conformance_contract() -> None:
             fail(f"conformance record consumer {relative} lost fixed sandbox-writable path")
         if "/var/lib/rancher/k3s/server/borealis-probe-conformance.json" in consumer_source:
             fail(f"conformance record consumer {relative} retained read-only server-state path")
+        if "pod-restart-policy-startup-probe-v2" not in consumer_source:
+            fail(f"conformance record consumer {relative} does not require multi-trial contract")
 
 
 def validate_cluster_controller_contract() -> None:

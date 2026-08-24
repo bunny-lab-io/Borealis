@@ -859,7 +859,7 @@ func clusterProbeConformancePassed() bool {
 
 func clusterProbeConformancePayload() map[string]any {
 	status := firstText(strings.TrimSpace(os.Getenv("BOREALIS_K3S_PROBE_CONFORMANCE")), "not-run")
-	return map[string]any{"id": "pod-restart-policy-startup-probe-v1", "status": status, "cluster_activation_allowed": status == "passed"}
+	return map[string]any{"id": "pod-restart-policy-startup-probe-v2", "status": status, "required_consecutive_trials": 10, "cluster_activation_allowed": status == "passed"}
 }
 
 func writeClusterError(w http.ResponseWriter, err error) {
@@ -1077,7 +1077,7 @@ func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, cu
 	var manifest clusterReleaseManifest
 	manifestErr := clusterGitHubJSON(ctx, manifestURL, &manifest)
 	runningK3s := strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION"))
-	selectable := manifestErr == nil && manifest.SchemaVersion == 1 && manifest.ClusterCompatible && clusterReleaseRE.MatchString(manifest.MinimumRollingVersion) && textInSet(manifest.DatabaseMigration, "none", "expand-contract") && clusterK3sRE.MatchString(manifest.RequiredK3sBaseline) && manifest.RequiredK3sConformance == "pod-restart-policy-startup-probe-v1"
+	selectable := manifestErr == nil && manifest.SchemaVersion == 1 && manifest.ClusterCompatible && clusterReleaseRE.MatchString(manifest.MinimumRollingVersion) && textInSet(manifest.DatabaseMigration, "none", "expand-contract") && clusterK3sRE.MatchString(manifest.RequiredK3sBaseline) && manifest.RequiredK3sConformance == "pod-restart-policy-startup-probe-v2"
 	reason := ""
 	if manifestErr != nil {
 		reason = "release lacks cluster compatibility manifest"

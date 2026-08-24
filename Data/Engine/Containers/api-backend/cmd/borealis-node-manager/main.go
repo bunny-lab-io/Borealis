@@ -413,8 +413,9 @@ func (m *manager) runK3sProbeConformance(ctx context.Context, expectedVersion st
 		ID         string `json:"id"`
 		Status     string `json:"status"`
 		K3sVersion string `json:"k3s_version"`
+		Trials     int    `json:"trials"`
 	}
-	if json.Unmarshal(raw, &result) != nil || result.ID != "pod-restart-policy-startup-probe-v1" || result.Status != "passed" || result.K3sVersion != expectedVersion {
+	if json.Unmarshal(raw, &result) != nil || result.ID != "pod-restart-policy-startup-probe-v2" || result.Status != "passed" || result.K3sVersion != expectedVersion || result.Trials != 10 {
 		return nil, errors.New("K3s probe conformance result does not match upgraded version")
 	}
 	return map[string]any{"node_name": m.nodeName, "k3s_version": expectedVersion, "probe_conformance": "passed", "output": truncate(output, 8192)}, nil
