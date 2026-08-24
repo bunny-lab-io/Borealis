@@ -72,11 +72,12 @@ type clusterController struct {
 }
 
 type kubernetesClusterStepRunner struct {
-	kube            *kubernetesAPIClient
-	namespace       string
-	actionImage     string
-	soak            time.Duration
-	jobPollInterval time.Duration
+	kube                          *kubernetesAPIClient
+	namespace                     string
+	actionImage                   string
+	soak                          time.Duration
+	jobPollInterval               time.Duration
+	clusterInitAuthorizationGrace time.Duration
 }
 
 func clusterControllerMode() bool {
@@ -1413,6 +1414,9 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 			return err
 		}
 	}
+	if verb == "EnrollCluster" {
+		return r.waitClusterInitJob(ctx, jobName)
+	}
 	return r.waitJob(ctx, jobName)
 }
 
@@ -1615,11 +1619,24 @@ func clusterActionJobManifest(name, namespace, nodeName, imageRef string, args [
 }
 
 func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) error {
+	return r.waitJobWithAuthorizationTransition(ctx, name, false)
+}
+
+func (r *kubernetesClusterStepRunner) waitClusterInitJob(ctx context.Context, name string) error {
+	return r.waitJobWithAuthorizationTransition(ctx, name, true)
+}
+
+func (r *kubernetesClusterStepRunner) waitJobWithAuthorizationTransition(ctx context.Context, name string, allowClusterInitAuthorizationTransition bool) error {
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, name)
 	pollInterval := r.jobPollInterval
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
 	}
+	authorizationGrace := r.clusterInitAuthorizationGrace
+	if authorizationGrace <= 0 {
+		authorizationGrace = 2 * time.Minute
+	}
+	var authorizationFailureStarted time.Time
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -1628,10 +1645,18 @@ func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if !transientKubernetesAPIError(err) {
+			if allowClusterInitAuthorizationTransition && clusterInitAuthorizationTransitionError(err) {
+				if authorizationFailureStarted.IsZero() {
+					authorizationFailureStarted = time.Now()
+				}
+				if time.Since(authorizationFailureStarted) >= authorizationGrace {
+					return fmt.Errorf("cluster-init Kubernetes authorization did not recover within %s: %w", authorizationGrace, err)
+				}
+			} else if !transientKubernetesAPIError(err) {
 				return err
 			}
 		} else {
+			authorizationFailureStarted = time.Time{}
 			status := nestedMap(job, "status")
 			if coerceInt64(status["succeeded"]) > 0 {
 				return nil
@@ -1646,6 +1671,14 @@ func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) 
 		case <-ticker.C:
 		}
 	}
+}
+
+func clusterInitAuthorizationTransitionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "returned http 401") || strings.Contains(message, "returned http 403")
 }
 
 func transientKubernetesAPIError(err error) bool {

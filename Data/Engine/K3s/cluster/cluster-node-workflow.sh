@@ -98,6 +98,10 @@ sed -e "s|\${BOREALIS_CLUSTER_INTERFACE}|${interface}|g" \
 k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${vip_manifest}"
 find "$(dirname -- "${vip_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${vip_manifest}")" -delete
 for daemonset in kube-vip-borealis-control kube-vip-borealis-edge; do
+  # Existing kube-vip processes surrender their leases during K3s datastore
+  # restart. Reapplying an unchanged DaemonSet does not restart those processes,
+  # so force one bounded restart before checking leases and host addresses.
+  k3s kubectl -n kube-system rollout restart "daemonset/${daemonset}"
   k3s kubectl -n kube-system rollout status "daemonset/${daemonset}" --timeout=3m
 done
 for lease in borealis-control-vip borealis-edge-vip; do

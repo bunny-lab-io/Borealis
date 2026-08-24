@@ -368,6 +368,18 @@ def validate_k3s_peer_allowlist_contract() -> None:
             fail(f"Engine K3s peer allowlist lost {description}")
 
 
+def validate_cluster_enable_vip_recovery_contract() -> None:
+    try:
+        workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read cluster node workflow: {exc}")
+    restart = 'k3s kubectl -n kube-system rollout restart "daemonset/${daemonset}"'
+    rollout = 'k3s kubectl -n kube-system rollout status "daemonset/${daemonset}" --timeout=3m'
+    address = 'for vip in "${control_vip}" "${edge_vip}"; do'
+    if restart not in workflow or workflow.find(restart) > workflow.find(rollout) or workflow.find(rollout) > workflow.find(address):
+        fail("cluster enable must restart kube-vip after K3s datastore conversion before address verification")
+
+
 def fail(message: str) -> None:
     print(f"K3S POLICY FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -595,6 +607,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_cluster_workload_handoff_contract()
     validate_api_release_identity_contract()
     validate_k3s_peer_allowlist_contract()
+    validate_cluster_enable_vip_recovery_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)

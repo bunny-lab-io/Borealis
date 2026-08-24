@@ -79,6 +79,52 @@ func TestWaitJobRejectsPermanentKubernetesAPIError(t *testing.T) {
 	}
 }
 
+func TestClusterInitJobToleratesBoundedAuthorizationTransition(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests <= 2 {
+			http.Error(w, "forbidden during datastore restart", http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"succeeded": 1}})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:                          &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:                     "borealis",
+		jobPollInterval:               time.Millisecond,
+		clusterInitAuthorizationGrace: 50 * time.Millisecond,
+	}
+	if err := runner.waitClusterInitJob(context.Background(), "cluster-test"); err != nil {
+		t.Fatalf("cluster-init authorization transition failed Job wait: %v", err)
+	}
+	if requests != 3 {
+		t.Fatalf("unexpected cluster-init Job poll count %d", requests)
+	}
+}
+
+func TestClusterInitJobRejectsPersistentAuthorizationFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:                          &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:                     "borealis",
+		jobPollInterval:               time.Millisecond,
+		clusterInitAuthorizationGrace: 3 * time.Millisecond,
+	}
+	if err := runner.waitClusterInitJob(context.Background(), "cluster-test"); err == nil || !strings.Contains(err.Error(), "authorization did not recover") {
+		t.Fatalf("expected persistent cluster-init authorization failure, got %v", err)
+	}
+	if requests < 2 {
+		t.Fatalf("cluster-init authorization failure was not retried: %d requests", requests)
+	}
+}
+
 func TestClusterUpdateOrdersNonLeadersBeforeLeaders(t *testing.T) {
 	nodes := []clusterControllerNode{
 		{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{"postgres_primary": true, "edge_vip_owner": true}},
