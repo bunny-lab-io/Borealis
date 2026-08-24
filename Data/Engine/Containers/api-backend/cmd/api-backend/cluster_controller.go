@@ -75,7 +75,6 @@ func clusterAdmissionWorkloadActions(nodeID string) []clusterAdmissionNodeAction
 		{stepName: "admit:" + nodeID + ":redeploy", verb: "RedeployRevision"},
 		{stepName: "admit:" + nodeID + ":candidate_health", verb: "InspectCandidateHealth", soakAfter: true},
 		{stepName: "admit:" + nodeID + ":promote", verb: "PromoteCandidate"},
-		{stepName: "admit:" + nodeID + ":health", verb: "InspectHealth"},
 	}
 }
 
@@ -1087,7 +1086,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 			return err
 		}
 		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{
-			"borealis.io/application-state":         "active",
+			"borealis.io/application-state":         "drained",
 			"borealis.io/edge-eligible":             "false",
 			"borealis.io/scheduler-eligible":        "false",
 			"borealis.io/postgres-primary-eligible": "false",
@@ -1142,8 +1141,56 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 				}
 			}
 		}
-		if err := r.minimumReadySoak(ctx, node.Name); err != nil {
+		// Start and prove local WireGuard while all cluster roles remain fenced.
+		// Eligibility is enabled only after active workload soak completes.
+		if err := r.scaleNodeWorkload(ctx, node.Name, "wireguard-tunnel", true); err != nil {
 			return err
+		}
+		healthStep := clusterControllerStep{Name: "admit:" + node.ID + ":active_health", NodeID: node.ID}
+		if err := r.nodeActionJob(ctx, redeploy, healthStep, node, "InspectHealth"); err != nil {
+			return err
+		}
+		timer := time.NewTimer(r.soak)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if err := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: healthStep.Name + ":soak", NodeID: node.ID}, node, "InspectHealth"); err != nil {
+			return err
+		}
+		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{
+			"borealis.io/edge-eligible":             "true",
+			"borealis.io/scheduler-eligible":        "true",
+			"borealis.io/postgres-primary-eligible": "true",
+		}); err != nil {
+			return err
+		}
+		activationErr := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health", NodeID: node.ID}, node, "InspectHealth")
+		if activationErr == nil {
+			timer = time.NewTimer(r.soak)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				activationErr = ctx.Err()
+			case <-timer.C:
+			}
+		}
+		if activationErr == nil {
+			activationErr = r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health:soak", NodeID: node.ID}, node, "InspectHealth")
+		}
+		if activationErr == nil {
+			activationErr = r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":exit_drain", NodeID: node.ID}, node, "ExitApplicationDrain")
+		}
+		if activationErr != nil {
+			_ = r.patchNodeLabels(ctx, node.Name, map[string]string{
+				"borealis.io/edge-eligible":             "false",
+				"borealis.io/scheduler-eligible":        "false",
+				"borealis.io/postgres-primary-eligible": "false",
+			})
+			_ = r.scaleNodeWorkload(ctx, node.Name, "wireguard-tunnel", false)
+			return activationErr
 		}
 	}
 	return r.recordClusterIntent(ctx, operation, clusterControllerStep{Name: "apply_membership"})
@@ -1334,7 +1381,34 @@ func (r *kubernetesClusterStepRunner) scaleNodeWorkload(ctx context.Context, nod
 		replicas = 1
 	}
 	var result map[string]any
-	return r.kube.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", r.namespace, name), map[string]any{"spec": map[string]any{"replicas": replicas}}, "application/merge-patch+json", &result, 30*time.Second)
+	path = fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", r.namespace, name)
+	if err := r.kube.doJSON(ctx, http.MethodPatch, path, map[string]any{"spec": map[string]any{"replicas": replicas}}, "application/merge-patch+json", &result, 30*time.Second); err != nil {
+		return err
+	}
+	if !active {
+		return nil
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := r.kube.getJSON(ctx, path, &result); err != nil {
+			return err
+		}
+		spec := nestedMap(result, "spec")
+		status := nestedMap(result, "status")
+		metadata := nestedMap(result, "metadata")
+		if coerceInt64(status["observedGeneration"]) >= coerceInt64(metadata["generation"]) &&
+			coerceInt64(status["availableReplicas"]) >= coerceInt64(spec["replicas"]) &&
+			coerceInt64(status["readyReplicas"]) >= coerceInt64(spec["replicas"]) &&
+			coerceInt64(status["updatedReplicas"]) >= coerceInt64(spec["replicas"]) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s workload on node %s did not become available: %w", appName, nodeName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (r *kubernetesClusterStepRunner) ensurePostgresPrimaryOnNode(ctx context.Context, nodeName string) error {
