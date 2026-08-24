@@ -27,6 +27,11 @@ apply_manifest() {
       # Attestation checksum verifies release identity. Borealis-owned kube-vip
       # manifest pins same release image and is applied with cluster foundation.
       ;;
+    longhorn)
+      # Standalone Engine already owns Longhorn through client-side apply.
+      # Preserve that ownership while converging to cluster-pinned manifest.
+      ${kubectl_bin} apply -f "${target}"
+      ;;
     *)
       ${kubectl_bin} apply --server-side --field-manager=borealis-cluster-bootstrap -f "${target}"
       ;;

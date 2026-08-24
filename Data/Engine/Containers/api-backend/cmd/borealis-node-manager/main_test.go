@@ -111,6 +111,20 @@ func TestK3sConformanceVerbRequiresStableVersion(t *testing.T) {
 	}
 }
 
+func TestTruncateDiagnosticPreservesFailureContext(t *testing.T) {
+	value := "command start:" + strings.Repeat("x", 100) + ":fatal tail"
+	got := truncateDiagnostic(value, 48)
+	if len(got) != 48 {
+		t.Fatalf("unexpected diagnostic length %d", len(got))
+	}
+	if !strings.HasPrefix(got, "command start:") || !strings.HasSuffix(got, ":fatal tail") {
+		t.Fatalf("diagnostic lost head or tail: %q", got)
+	}
+	if !strings.Contains(got, "output truncated") {
+		t.Fatalf("diagnostic lacks truncation marker: %q", got)
+	}
+}
+
 func TestRunGitScopesSafeDirectoryToSelectedWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is unavailable")

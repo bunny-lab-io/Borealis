@@ -1163,7 +1163,7 @@ func installJoinedK3sServer(nodeName, managementIP, serverURL, tokenFile, versio
 	command.Stdin = bytes.NewReader(installer)
 	command.Env = append(os.Environ(), "INSTALL_K3S_VERSION="+version, "INSTALL_K3S_EXEC=server")
 	if output, err := command.CombinedOutput(); err != nil {
-		return fmt.Errorf("K3s install failed: %w: %s", err, truncate(strings.TrimSpace(string(output)), 2048))
+		return fmt.Errorf("K3s install failed: %w: %s", err, truncateDiagnostic(strings.TrimSpace(string(output)), 2048))
 	}
 	for attempt := 0; attempt < 90; attempt++ {
 		if _, err := run(context.Background(), "", "systemctl", "is-active", "--quiet", "k3s.service"); err == nil {
@@ -1325,7 +1325,7 @@ func run(ctx context.Context, workdir, binary string, args ...string) (string, e
 	}
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("%s failed: %w: %s", filepath.Base(binary), err, truncate(strings.TrimSpace(string(output)), 2048))
+		return string(output), fmt.Errorf("%s failed: %w: %s", filepath.Base(binary), err, truncateDiagnostic(strings.TrimSpace(string(output)), 2048))
 	}
 	return string(output), nil
 }
@@ -1344,6 +1344,20 @@ func truncate(value string, maximum int) string {
 		return value
 	}
 	return value[:maximum]
+}
+
+func truncateDiagnostic(value string, maximum int) string {
+	if len(value) <= maximum {
+		return value
+	}
+	const marker = "\n... output truncated ...\n"
+	if maximum <= len(marker) {
+		return value[len(value)-maximum:]
+	}
+	contentLength := maximum - len(marker)
+	headLength := contentLength / 2
+	tailLength := contentLength - headLength
+	return value[:headLength] + marker + value[len(value)-tailLength:]
 }
 
 func envDefault(key, fallback string) string {

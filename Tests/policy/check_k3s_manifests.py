@@ -115,6 +115,16 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
 
 
+def validate_pinned_dependency_adoption_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/apply-pinned-dependencies.sh"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read pinned dependency installer: {exc}")
+    if "longhorn)" not in source or '${kubectl_bin} apply -f "${target}"' not in source:
+        fail("cluster bootstrap must preserve standalone Longhorn client-side ownership during adoption")
+
+
 def validate_api_release_identity_contract() -> None:
     try:
         engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
@@ -345,6 +355,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_probe_conformance_contract()
     validate_cluster_controller_contract()
     validate_node_manager_service_contract()
+    validate_pinned_dependency_adoption_contract()
     validate_api_release_identity_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
