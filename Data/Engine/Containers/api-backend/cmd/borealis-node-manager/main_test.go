@@ -198,6 +198,18 @@ func TestRunGitScopesSafeDirectoryToSelectedWorktree(t *testing.T) {
 	}
 }
 
+func TestEngineChildScopesGitSafeDirectoryWithoutGlobalMutation(t *testing.T) {
+	got := gitSafeDirectoryEnvironment("/opt/Borealis")
+	want := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=safe.directory",
+		"GIT_CONFIG_VALUE_0=/opt/Borealis",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected Engine child Git environment: %#v", got)
+	}
+}
+
 func TestEnsureSecureDirectoryCorrectsExistingPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "borealis")
 	if err := os.Mkdir(path, 0o755); err != nil {

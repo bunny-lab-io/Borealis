@@ -130,6 +130,7 @@ def validate_node_manager_service_contract() -> None:
         "pinned and Spegel-ready": "pinned distributed image completion contract",
         "ensure_cluster_wireguard_routes": "shared full and scoped route DaemonSet reconciliation",
         "rollout status daemonset/borealis-wireguard-routes": "route DaemonSet readiness wait",
+        'git -c "safe.directory=${SCRIPT_DIR}"': "command-scoped root Engine Git trust",
         "docker.io:": "Borealis local-image registry mirror",
         "registry.k8s.io:": "Kubernetes dependency registry mirror",
         "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",

@@ -11029,7 +11029,7 @@ reconcile_cluster_node_workloads() {
   cluster_mode_enabled || return 0
   local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
   local revision=""
-  revision="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
+  revision="$(git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)"
   local args=(
     --node "${node_name}"
     --revision "${revision}"
@@ -11042,7 +11042,7 @@ reconcile_cluster_node_workloads() {
 
 cluster_node_redeploy() {
   [[ "${CLUSTER_TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || die "Cluster node redeploy requires --revision with lowercase 40-character commit SHA."
-  [[ "$(git -C "${SCRIPT_DIR}" rev-parse HEAD)" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster node redeploy revision does not match worktree HEAD."
+  [[ "$(git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster node redeploy revision does not match worktree HEAD."
   cluster_mode_enabled || die "Cluster node redeploy requires enabled Borealis cluster."
   local cluster_runtime_env=""
   cluster_runtime_env="$(mktemp)"

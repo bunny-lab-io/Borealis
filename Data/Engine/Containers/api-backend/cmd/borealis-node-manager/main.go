@@ -464,7 +464,12 @@ func (m *manager) redeployStagedRevision(ctx context.Context, targetSHA string) 
 		return nil, errors.New("pinned staged worktree is unavailable")
 	}
 	enginePath := filepath.Join(stageRoot, "Engine.sh")
-	output, err := run(ctx, stageRoot, "/usr/bin/env", "BOREALIS_ENGINE_HOST_ROOT="+m.repoRoot, "BOREALIS_ENGINE_RUNTIME_ROOT="+filepath.Join(m.repoRoot, "Engine"), "/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA)
+	engineEnv := append(gitSafeDirectoryEnvironment(stageRoot),
+		"BOREALIS_ENGINE_HOST_ROOT="+m.repoRoot,
+		"BOREALIS_ENGINE_RUNTIME_ROOT="+filepath.Join(m.repoRoot, "Engine"),
+		"/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA,
+	)
+	output, err := run(ctx, stageRoot, "/usr/bin/env", engineEnv...)
 	if err != nil {
 		return nil, err
 	}
@@ -652,11 +657,23 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	if info, err := os.Stat(enginePath); err != nil || info.Mode().IsRegular() == false {
 		return nil, errors.New("Engine.sh missing from repository root")
 	}
-	output, err := run(ctx, m.repoRoot, "/usr/bin/env", "BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate", "/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA)
+	engineEnv := append(gitSafeDirectoryEnvironment(m.repoRoot),
+		"BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate",
+		"/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA,
+	)
+	output, err := run(ctx, m.repoRoot, "/usr/bin/env", engineEnv...)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"revision": targetSHA, "redeployed": true, "output": truncate(output, 8192)}, nil
+}
+
+func gitSafeDirectoryEnvironment(repoRoot string) []string {
+	return []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=safe.directory",
+		"GIT_CONFIG_VALUE_0=" + repoRoot,
+	}
 }
 
 func (m *manager) promoteCandidate(ctx context.Context, targetSHA string) (map[string]any, error) {
