@@ -6,7 +6,7 @@ set -o pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../../../.." && pwd)"
 namespace="${BOREALIS_K3S_NAMESPACE:-borealis}"
-result_file="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/var/lib/rancher/k3s/server/borealis-probe-conformance.json}"
+result_file="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/etc/rancher/k3s/borealis-probe-conformance.json}"
 operation="${1:-}"
 control_vip="${2:-}"
 edge_vip="${3:-}"

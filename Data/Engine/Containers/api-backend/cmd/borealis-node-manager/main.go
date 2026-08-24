@@ -404,7 +404,7 @@ func (m *manager) runK3sProbeConformance(ctx context.Context, expectedVersion st
 	if err != nil {
 		return nil, err
 	}
-	resultPath := envDefault("BOREALIS_K3S_PROBE_CONFORMANCE_FILE", "/var/lib/rancher/k3s/server/borealis-probe-conformance.json")
+	resultPath := envDefault("BOREALIS_K3S_PROBE_CONFORMANCE_FILE", "/etc/rancher/k3s/borealis-probe-conformance.json")
 	raw, err := os.ReadFile(resultPath)
 	if err != nil {
 		return nil, err

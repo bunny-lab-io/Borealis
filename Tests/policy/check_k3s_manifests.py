@@ -41,12 +41,36 @@ def validate_probe_conformance_contract() -> None:
         "Kubernetes issue 141155": "upstream regression context",
         "nodeName: __BOREALIS_CONFORMANCE_NODE__": "local K3s node pin",
         'node_name="$(hostname -s': "local K3s node identity",
+        "/etc/rancher/k3s/borealis-probe-conformance.json": "sandbox-writable conformance result path",
     }
     for marker, description in required.items():
         if marker not in source:
             fail(f"probe conformance lost {description}")
     if "kill -KILL 1" in source or "kill -TERM 1" in source:
         fail("probe conformance must trigger restart through liveness failure, not direct PID 1 signal")
+    service_path = ROOT / "Data/Engine/K3s/cluster/node-manager.service"
+    try:
+        service_source = service_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read node-manager service: {exc}")
+    if "ReadWritePaths=" not in service_source or "/etc/rancher/k3s" not in service_source:
+        fail("node-manager sandbox must allow fixed conformance result directory")
+    if "/var/lib/rancher/k3s/server" in service_source:
+        fail("node-manager sandbox must not receive broad K3s server-state write access")
+    for relative in (
+        "Engine.sh",
+        "Data/Engine/K3s/cluster/cluster-node-workflow.sh",
+        "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/main.go",
+    ):
+        consumer = ROOT / relative
+        try:
+            consumer_source = consumer.read_text(encoding="utf-8")
+        except OSError as exc:
+            fail(f"cannot read conformance record consumer {relative}: {exc}")
+        if "/etc/rancher/k3s/borealis-probe-conformance.json" not in consumer_source:
+            fail(f"conformance record consumer {relative} lost fixed sandbox-writable path")
+        if "/var/lib/rancher/k3s/server/borealis-probe-conformance.json" in consumer_source:
+            fail(f"conformance record consumer {relative} retained read-only server-state path")
 
 
 def validate_cluster_controller_contract() -> None:

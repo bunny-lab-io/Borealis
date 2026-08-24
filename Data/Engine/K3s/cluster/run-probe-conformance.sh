@@ -4,7 +4,7 @@ set -o nounset
 set -o pipefail
 
 namespace="borealis-probe-conformance-$$"
-result_file="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/var/lib/rancher/k3s/server/borealis-probe-conformance.json}"
+result_file="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/etc/rancher/k3s/borealis-probe-conformance.json}"
 kubectl=(k3s kubectl)
 
 # Reproduce Kubernetes issue 141155: replacement must run startup probes before liveness resumes.
