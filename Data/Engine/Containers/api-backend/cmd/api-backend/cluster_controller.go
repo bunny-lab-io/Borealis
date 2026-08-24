@@ -72,10 +72,11 @@ type clusterController struct {
 }
 
 type kubernetesClusterStepRunner struct {
-	kube        *kubernetesAPIClient
-	namespace   string
-	actionImage string
-	soak        time.Duration
+	kube            *kubernetesAPIClient
+	namespace       string
+	actionImage     string
+	soak            time.Duration
+	jobPollInterval time.Duration
 }
 
 func clusterControllerMode() bool {
@@ -1615,19 +1616,29 @@ func clusterActionJobManifest(name, namespace, nodeName, imageRef string, args [
 
 func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) error {
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, name)
-	ticker := time.NewTicker(2 * time.Second)
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
 		var job map[string]any
 		if err := r.kube.getJSON(ctx, path, &job); err != nil {
-			return err
-		}
-		status := nestedMap(job, "status")
-		if coerceInt64(status["succeeded"]) > 0 {
-			return nil
-		}
-		if coerceInt64(status["failed"]) > 0 {
-			return fmt.Errorf("node action Job %s failed", name)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !transientKubernetesAPIError(err) {
+				return err
+			}
+		} else {
+			status := nestedMap(job, "status")
+			if coerceInt64(status["succeeded"]) > 0 {
+				return nil
+			}
+			if coerceInt64(status["failed"]) > 0 {
+				return fmt.Errorf("node action Job %s failed", name)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -1635,6 +1646,41 @@ func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) 
 		case <-ticker.C:
 		}
 	}
+}
+
+func transientKubernetesAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, status := range []string{
+		"returned http 429",
+		"returned http 500",
+		"returned http 502",
+		"returned http 503",
+		"returned http 504",
+	} {
+		if strings.Contains(message, status) {
+			return true
+		}
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		return true
+	}
+	for _, fragment := range []string{
+		"connection refused",
+		"connection reset",
+		"connection aborted",
+		"server closed idle connection",
+		"tls handshake timeout",
+		"unexpected eof",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *kubernetesClusterStepRunner) waitNodeEndpointsWithdrawn(ctx context.Context, nodeName string) error {
