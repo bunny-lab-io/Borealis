@@ -18,6 +18,7 @@ func TestClusterControllerStepTimeoutCoversLongNodeActions(t *testing.T) {
 		want time.Duration
 	}{
 		{step: "apply_cluster_foundation", want: 95 * time.Minute},
+		{step: "node:id:stage_revision_images", want: 65 * time.Minute},
 		{step: "node:id:redeploy_revision", want: 65 * time.Minute},
 		{step: "node:id:promote_candidate", want: 65 * time.Minute},
 		{step: "node:id:fetch_release", want: 35 * time.Minute},
@@ -50,6 +51,196 @@ func TestClusterControllerCandidateCannotAcquireOperationLease(t *testing.T) {
 	t.Setenv("BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "true")
 	if !clusterControllerEligible() {
 		t.Fatal("promoted cluster controller did not regain eligibility")
+	}
+}
+
+func TestClusterNodeRuntimeStateSeparatesDesiredAndObservedState(t *testing.T) {
+	node := clusterControllerNode{
+		ID:               "11111111-1111-4111-8111-111111111111",
+		Name:             "engine-1",
+		ApplicationState: "active",
+		ReleaseTag:       "2026.08.24",
+		ReleaseSHA:       strings.Repeat("a", 40),
+		DrainReason:      "update",
+		Roles:            map[string]any{"edge_vip_owner": true},
+		ProbeHealth:      map[string]any{"readiness": "passed"},
+	}
+	kubernetesNode := map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{"borealis.io/application-state": "drained"}},
+		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False"}}},
+	}
+	spec, status, err := clusterNodeRuntimeState(node, kubernetesNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanText(spec["desiredApplicationState"]) != "active" || cleanText(status["observedApplicationState"]) != "drained" || status["nodeReady"] != false {
+		t.Fatalf("desired/observed node runtime state collapsed: spec=%#v status=%#v", spec, status)
+	}
+	if cleanText(spec["desiredSHA"]) != node.ReleaseSHA || cleanText(nestedMap(status, "roles")["edge_vip_owner"]) != "true" {
+		t.Fatalf("node runtime release/roles missing: spec=%#v status=%#v", spec, status)
+	}
+}
+
+func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testing.T) {
+	clusterID := "11111111-1111-4111-8111-111111111111"
+	operationID := "22222222-2222-4222-8222-222222222222"
+	state := clusterControllerState{
+		ClusterID:       clusterID,
+		Enabled:         true,
+		Status:          "Mixed Version",
+		ActiveSize:      3,
+		DesiredSize:     5,
+		ControlPlaneVIP: "192.0.2.10",
+		EdgeVIP:         "192.0.2.11",
+		BaselineRelease: "2026.08.24",
+		BaselineSHA:     strings.Repeat("a", 40),
+		HMRState:        "inactive",
+		ActiveOperation: operationID,
+		Config:          map[string]any{"k3s_version": "v1.36.3+k3s1"},
+	}
+	spec, status, err := clusterResourceState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coerceInt64(spec["activeSize"]) != 3 || coerceInt64(spec["desiredSize"]) != 5 {
+		t.Fatalf("cluster desired sizes missing: %#v", spec)
+	}
+	if cleanText(status["phase"]) != "Mixed Version" || cleanText(status["activeOperationID"]) != operationID {
+		t.Fatalf("cluster runtime status missing: %#v", status)
+	}
+	conditions := anySlice(status["conditions"])
+	if len(conditions) != 1 || cleanText(nestedMap(map[string]any{"condition": conditions[0]}, "condition")["status"]) != "True" {
+		t.Fatalf("serving mixed-version cluster marked unavailable: %#v", status)
+	}
+
+	admission := clusterControllerAdmission{
+		ID:           "33333333-3333-4333-8333-333333333333",
+		NodeName:     "engine-2",
+		Hostname:     "engine-2.example.test",
+		ManagementIP: "192.0.2.12",
+		Architecture: "amd64",
+		OSVersion:    "Ubuntu 24.04",
+		State:        "Approved",
+		ApprovedBy:   "admin",
+		ApprovedAt:   1787600000,
+	}
+	admissionSpec, admissionStatus, err := clusterAdmissionResourceState(admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanText(admissionSpec["managementIP"]) != admission.ManagementIP || cleanText(admissionStatus["state"]) != "Approved" {
+		t.Fatalf("admission desired/runtime state missing: spec=%#v status=%#v", admissionSpec, admissionStatus)
+	}
+
+	operation := clusterControllerOperationResource{Operation: clusterControllerOperation{
+		ID:            operationID,
+		Kind:          "engine_update",
+		State:         "running",
+		CurrentStep:   "node:" + admission.ID + ":inspect_health",
+		TargetNodeID:  admission.ID,
+		TargetRelease: "2026.08.24",
+		TargetSHA:     strings.Repeat("b", 40),
+		Attempt:       2,
+	}}
+	operationSpec, operationStatus, err := clusterOperationResourceState(operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanText(operationSpec["step"]) != operation.Operation.CurrentStep || cleanText(operationStatus["state"]) != "running" || coerceInt64(operationStatus["attempt"]) != 2 {
+		t.Fatalf("operation desired/runtime state missing: spec=%#v status=%#v", operationSpec, operationStatus)
+	}
+}
+
+func TestClusterMergePatchRemovesControllerOwnedStaleFields(t *testing.T) {
+	patch := clusterMergePatchMap(
+		map[string]any{"state": "failed", "error": "old failure", "observedAt": int64(1)},
+		map[string]any{"state": "running", "observedAt": int64(2)},
+	)
+	if cleanText(patch["state"]) != "running" || coerceInt64(patch["observedAt"]) != 2 || patch["error"] != nil {
+		t.Fatalf("merge patch did not clear stale controller field: %#v", patch)
+	}
+}
+
+func TestNodeRuntimeReconcileCreatesStatusAndAvoidsNoopWrites(t *testing.T) {
+	var object map[string]any
+	creates := 0
+	specPatches := 0
+	statusPatches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && object == nil:
+			http.Error(w, "missing", http.StatusNotFound)
+		case request.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(object)
+		case request.Method == http.MethodPost:
+			creates++
+			if err := json.NewDecoder(request.Body).Decode(&object); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(object)
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/status"):
+			statusPatches++
+			var patch map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			object["status"] = patch["status"]
+			_ = json.NewEncoder(w).Encode(object)
+		case request.Method == http.MethodPatch:
+			specPatches++
+			var patch map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			currentSpec := nestedMap(object, "spec")
+			for key, value := range nestedMap(patch, "spec") {
+				if value == nil {
+					delete(currentSpec, key)
+				} else {
+					currentSpec[key] = value
+				}
+			}
+			object["spec"] = currentSpec
+			_ = json.NewEncoder(w).Encode(object)
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace: "borealis",
+	}
+	node := clusterControllerNode{
+		ID:               "11111111-1111-4111-8111-111111111111",
+		Name:             "engine-1",
+		ApplicationState: "active",
+		ReleaseTag:       "2026.08.24",
+		ReleaseSHA:       strings.Repeat("a", 40),
+		Roles:            map[string]any{"scheduler_leader": true},
+		ProbeHealth:      map[string]any{"readiness": "passed"},
+	}
+	kubernetesNode := map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{"borealis.io/application-state": "active"}},
+		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+	}
+	if err := runner.reconcileNodeRuntime(context.Background(), node, kubernetesNode, 1787600000); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.reconcileNodeRuntime(context.Background(), node, kubernetesNode, 1787600060); err != nil {
+		t.Fatal(err)
+	}
+	node.ApplicationState = "drained"
+	node.ReleaseTag = ""
+	node.ReleaseSHA = ""
+	if err := runner.reconcileNodeRuntime(context.Background(), node, kubernetesNode, 1787600120); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 || specPatches != 1 || statusPatches != 2 {
+		t.Fatalf("node runtime writes create=%d spec=%d status=%d", creates, specPatches, statusPatches)
+	}
+	if _, present := nestedMap(object, "spec")["desiredRelease"]; present {
+		t.Fatalf("stale optional desired release survived merge patch: %#v", object)
 	}
 }
 
@@ -185,7 +376,7 @@ func TestClusterUpdateOrdersNonLeadersBeforeLeaders(t *testing.T) {
 		{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2", Roles: map[string]any{}},
 		{ID: "33333333-3333-4333-8333-333333333333", Name: "engine-3", Roles: map[string]any{"scheduler_leader": true}},
 	}
-	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("a", 40), Payload: map[string]any{"scope": "all"}}
+	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("a", 40), Payload: map[string]any{"scope": "all", "compatibility": map[string]any{"database_migration": "expand-contract"}}}
 	steps, err := clusterOperationSteps(operation, nodes)
 	if err != nil {
 		t.Fatalf("build steps: %v", err)
@@ -205,13 +396,36 @@ func TestClusterUpdateOrdersNonLeadersBeforeLeaders(t *testing.T) {
 	}
 }
 
+func TestClusterUpdateKeepsPinnedNodeOrderAfterRoleMovement(t *testing.T) {
+	nodes := []clusterControllerNode{
+		{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{"scheduler_leader": true}},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2", Roles: map[string]any{}},
+		{ID: "33333333-3333-4333-8333-333333333333", Name: "engine-3", Roles: map[string]any{}},
+	}
+	operation := clusterControllerOperation{Payload: map[string]any{
+		"scope":           "all",
+		"update_node_ids": []any{nodes[1].ID, nodes[2].ID, nodes[0].ID},
+	}}
+	// Runtime leadership moves while earlier node drains. Persisted order must
+	// remain operation order instead of being recomputed from changing roles.
+	nodes[1].Roles["scheduler_leader"] = true
+	delete(nodes[0].Roles, "scheduler_leader")
+	ordered, err := clusterUpdateNodes(operation, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordered[0].ID != nodes[1].ID || ordered[1].ID != nodes[2].ID || ordered[2].ID != nodes[0].ID {
+		t.Fatalf("pinned update order changed after role movement: %#v", ordered)
+	}
+}
+
 func TestClusterUpdateStateMachineRestoresEveryNodeBeforeFinalize(t *testing.T) {
 	nodes := []clusterControllerNode{
 		{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{}},
 		{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2", Roles: map[string]any{}},
 		{ID: "33333333-3333-4333-8333-333333333333", Name: "engine-3", Roles: map[string]any{}},
 	}
-	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("b", 40), Payload: map[string]any{"scope": "all"}}
+	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("b", 40), Payload: map[string]any{"scope": "all", "compatibility": map[string]any{"database_migration": "expand-contract"}}}
 	steps, err := clusterOperationSteps(operation, nodes)
 	if err != nil {
 		t.Fatalf("build steps: %v", err)
@@ -232,11 +446,32 @@ func TestClusterUpdateStateMachineRestoresEveryNodeBeforeFinalize(t *testing.T) 
 	if len(drained) != 3 || len(restored) != 3 {
 		t.Fatalf("state machine omitted nodes drained=%v restored=%v", drained, restored)
 	}
+	expandIndex, finalizeIndex, firstStageIndex, firstRedeployIndex, firstCandidateIndex, lastExitIndex := -1, -1, -1, -1, -1, -1
+	for index, step := range steps {
+		switch {
+		case step.Name == "expand_schema":
+			expandIndex = index
+		case step.Name == "finalize_schema":
+			finalizeIndex = index
+		case firstStageIndex == -1 && strings.HasSuffix(step.Name, ":stage_revision_images"):
+			firstStageIndex = index
+		case firstRedeployIndex == -1 && strings.HasSuffix(step.Name, ":redeploy_revision"):
+			firstRedeployIndex = index
+		case firstCandidateIndex == -1 && strings.HasSuffix(step.Name, ":inspect_candidate_health"):
+			firstCandidateIndex = index
+		}
+		if strings.HasSuffix(step.Name, ":exit_drain") {
+			lastExitIndex = index
+		}
+	}
+	if !(firstStageIndex < expandIndex && expandIndex < firstRedeployIndex && firstRedeployIndex < firstCandidateIndex && lastExitIndex < finalizeIndex) {
+		t.Fatalf("unsafe expand/finalize order: %#v", steps)
+	}
 }
 
 func TestClusterUpdateVerifiesIsolatedCandidateBeforePromotion(t *testing.T) {
 	node := clusterControllerNode{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{}}
-	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("c", 40), Payload: map[string]any{"scope": "all"}}
+	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("c", 40), Payload: map[string]any{"scope": "all", "compatibility": map[string]any{"database_migration": "expand-contract"}}}
 	steps, err := clusterOperationSteps(operation, []clusterControllerNode{node})
 	if err != nil {
 		t.Fatalf("build steps: %v", err)
@@ -250,6 +485,48 @@ func TestClusterUpdateVerifiesIsolatedCandidateBeforePromotion(t *testing.T) {
 		if positions[ordered[index-1]] >= positions[ordered[index]] {
 			t.Fatalf("unsafe candidate order: %#v", positions)
 		}
+	}
+}
+
+func TestClusterUpdateWithoutDatabaseMigrationOmitsSchemaPhases(t *testing.T) {
+	node := clusterControllerNode{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{}}
+	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.08.23", TargetSHA: strings.Repeat("d", 40), Payload: map[string]any{"scope": "all", "compatibility": map[string]any{"database_migration": "none"}}}
+	steps, err := clusterOperationSteps(operation, []clusterControllerNode{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if step.Name == "expand_schema" || step.Name == "finalize_schema" {
+			t.Fatalf("database_migration=none included schema phase: %#v", steps)
+		}
+	}
+}
+
+func TestClusterSchemaFinalizeRequiresEveryActiveNodeAtTarget(t *testing.T) {
+	target := strings.Repeat("e", 40)
+	nodes := []clusterControllerNode{{ReleaseSHA: target}, {ReleaseSHA: strings.Repeat("f", 40)}}
+	if clusterAllNodesAtRevision(nodes, target) {
+		t.Fatal("mixed-version cluster permitted contract finalization")
+	}
+	nodes[1].ReleaseSHA = target
+	if !clusterAllNodesAtRevision(nodes, target) {
+		t.Fatal("uniform target revision blocked contract finalization")
+	}
+	if clusterAllNodesAtRevision(nil, target) || clusterAllNodesAtRevision(nodes, "not-a-sha") {
+		t.Fatal("invalid finalization input accepted")
+	}
+}
+
+func TestClusterSchemaNodeActionPinsPhaseAndRevision(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	operation := clusterControllerOperation{
+		TargetSHA: revision,
+		Payload:   map[string]any{"schema_phase": "expand"},
+	}
+	want := []string{"client", "--verb", "RunSchemaPhase", "--schema-phase", "expand", "--target-sha", revision}
+	got := clusterNodeActionArgs(operation, "RunSchemaPhase")
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("schema node action args=%q want %q", got, want)
 	}
 }
 

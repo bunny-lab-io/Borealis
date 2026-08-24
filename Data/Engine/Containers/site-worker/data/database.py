@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.db import get_database_manager
@@ -27,6 +28,9 @@ def _generate_install_code() -> str:
 
 
 SchemaProgressCallback = Callable[[str], None]
+
+_CLUSTER_SCHEMA_PHASES = frozenset({"expand", "finalize"})
+_CLUSTER_RELEASE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _notify_schema_progress(progress_callback: Optional[SchemaProgressCallback], table_name: str) -> None:
@@ -102,6 +106,7 @@ def initialise_engine_database(
                 "cluster_audit_events",
                 "realtime_outbox",
                 "cluster_application_leases",
+                "cluster_schema_phases",
             ),
             lambda: _ensure_cluster_control_tables(conn, logger=logger),
         )
@@ -164,6 +169,83 @@ def initialise_engine_database(
             raise
     finally:
         conn.close()
+
+
+def run_cluster_schema_phase(
+    database_url: str,
+    phase: str,
+    release_sha: str,
+    *,
+    progress_callback: Optional[SchemaProgressCallback] = None,
+) -> bool:
+    """Run one fixed rolling-update schema phase and record its completion."""
+
+    database_url = str(database_url or "").strip()
+    phase = str(phase or "").strip()
+    release_sha = str(release_sha or "").strip()
+    if not database_url:
+        raise ValueError("Engine database URL is required for cluster schema phase")
+    if phase not in _CLUSTER_SCHEMA_PHASES:
+        raise ValueError("Cluster schema phase must be expand or finalize")
+    if not _CLUSTER_RELEASE_SHA_RE.fullmatch(release_sha):
+        raise ValueError("Cluster schema release SHA must be 40 lowercase hexadecimal characters")
+
+    manager = get_database_manager(database_url)
+    manager.ensure_schemas()
+    conn = sqlite3.connect(database_url)
+    try:
+        _ensure_cluster_schema_phase_table(conn)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT completed_at FROM cluster_schema_phases WHERE release_sha = ? AND phase = ?",
+                (release_sha, phase),
+            )
+            if cur.fetchone() is not None:
+                conn.commit()
+                return False
+            if phase == "finalize":
+                cur.execute(
+                    "SELECT completed_at FROM cluster_schema_phases WHERE release_sha = ? AND phase = 'expand'",
+                    (release_sha,),
+                )
+                if cur.fetchone() is None:
+                    raise RuntimeError("Cluster schema finalize requires completed expand phase")
+        finally:
+            cur.close()
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Expand runs every additive, backward-compatible initializer shipped by
+    # target release before its first candidate can serve. Finalize currently
+    # has no destructive migrations; it remains explicit so future releases
+    # can add contract-only work without changing controller/node contracts.
+    if phase == "expand":
+        initialise_engine_database(database_url, progress_callback=progress_callback)
+
+    completed_at = int(time.time())
+    conn = sqlite3.connect(database_url)
+    try:
+        _ensure_cluster_schema_phase_table(conn)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO cluster_schema_phases(release_sha, phase, completed_at)
+                VALUES (?, ?, ?)
+                """,
+                (release_sha, phase, completed_at),
+            )
+        finally:
+            cur.close()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return True
 
 
 def _apply_engine_migrations(
@@ -996,6 +1078,7 @@ def _ensure_cluster_control_tables(conn: sqlite3.Connection, *, logger: Optional
             )
             """
         )
+        _ensure_cluster_schema_phase_table(conn, cursor=cur)
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure cluster control tables: %s", exc, exc_info=True)
@@ -1003,6 +1086,29 @@ def _ensure_cluster_control_tables(conn: sqlite3.Connection, *, logger: Optional
             raise
     finally:
         cur.close()
+
+
+def _ensure_cluster_schema_phase_table(
+    conn: sqlite3.Connection,
+    *,
+    cursor: Optional[sqlite3.Cursor] = None,
+) -> None:
+    owned_cursor = cursor is None
+    cur = cursor or conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_schema_phases (
+                release_sha TEXT NOT NULL,
+                phase TEXT NOT NULL CHECK(phase IN ('expand','finalize')),
+                completed_at INTEGER NOT NULL,
+                PRIMARY KEY (release_sha, phase)
+            )
+            """
+        )
+    finally:
+        if owned_cursor:
+            cur.close()
 
 
 def _ensure_device_filters(conn: sqlite3.Connection, *, logger: Optional[logging.Logger] = None) -> None:

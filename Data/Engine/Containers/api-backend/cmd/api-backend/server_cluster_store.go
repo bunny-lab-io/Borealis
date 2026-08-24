@@ -140,6 +140,12 @@ func (s *postgresOperatorStore) ensureClusterSchema(ctx context.Context) error {
 			expires_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS engine.cluster_schema_phases (
+			release_sha TEXT NOT NULL,
+			phase TEXT NOT NULL CHECK(phase IN ('expand','finalize')),
+			completed_at BIGINT NOT NULL,
+			PRIMARY KEY (release_sha, phase)
+		)`,
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -473,6 +479,39 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		if (clusterStatus != "Healthy" && clusterStatus != "Mixed Version") || healthyCount < minimumHealthy {
 			return nil, fmt.Errorf("%w: rolling update requires healthy quorum and spare application capacity", errClusterConflict)
 		}
+	}
+	if mutation.Kind == "engine_update" || mutation.Kind == "k3s_update" {
+		rows, queryErr := tx.QueryContext(ctx, `SELECT id,node_name,roles_json FROM engine.cluster_nodes WHERE membership_state='Active' ORDER BY node_name`)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		nodes := make([]clusterControllerNode, 0, 5)
+		for rows.Next() {
+			var node clusterControllerNode
+			var rolesJSON string
+			if scanErr := rows.Scan(&node.ID, &node.Name, &rolesJSON); scanErr != nil {
+				rows.Close()
+				return nil, scanErr
+			}
+			node.Roles = parseClusterJSON(rolesJSON)
+			nodes = append(nodes, node)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return nil, rowsErr
+		}
+		if rowsErr := rows.Close(); rowsErr != nil {
+			return nil, rowsErr
+		}
+		ordered, orderErr := clusterUpdateNodes(clusterControllerOperation{TargetNodeID: mutation.TargetNodeID, Payload: mutation.Payload}, nodes)
+		if orderErr != nil {
+			return nil, fmt.Errorf("%w: %v", errClusterConflict, orderErr)
+		}
+		pinnedOrder := make([]string, 0, len(ordered))
+		for _, node := range ordered {
+			pinnedOrder = append(pinnedOrder, node.ID)
+		}
+		mutation.Payload["update_node_ids"] = pinnedOrder
 	}
 	operationID := newClusterUUID()
 	now := time.Now().UTC().Unix()

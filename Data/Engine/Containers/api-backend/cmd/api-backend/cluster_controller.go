@@ -51,7 +51,42 @@ type clusterControllerNode struct {
 	ApplicationState string
 	ReleaseTag       string
 	ReleaseSHA       string
+	DrainReason      string
 	Roles            map[string]any
+	ProbeHealth      map[string]any
+}
+
+type clusterControllerState struct {
+	ClusterID       string
+	Enabled         bool
+	Status          string
+	ActiveSize      int64
+	DesiredSize     int64
+	ControlPlaneVIP string
+	EdgeVIP         string
+	BaselineRelease string
+	BaselineSHA     string
+	HMRState        string
+	HMRNodeID       string
+	ActiveOperation string
+	Config          map[string]any
+}
+
+type clusterControllerAdmission struct {
+	ID           string
+	NodeName     string
+	Hostname     string
+	ManagementIP string
+	Architecture string
+	OSVersion    string
+	State        string
+	ApprovedBy   string
+	ApprovedAt   int64
+}
+
+type clusterControllerOperationResource struct {
+	Operation clusterControllerOperation
+	ErrorText string
 }
 
 type clusterControllerStep struct {
@@ -88,7 +123,9 @@ type clusterController struct {
 	holder                     string
 	now                        func() time.Time
 	lastPrune                  atomic.Int64
+	lastCustomResourceSync     atomic.Int64
 	lastRuntimeRoleObservation string
+	lastCustomResourceError    string
 }
 
 type kubernetesClusterStepRunner struct {
@@ -210,6 +247,7 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	}
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
 		c.observeRuntimeRoles(ctx, runner)
+		c.observeCustomResources(ctx, runner)
 		if recovered, recoveryErr := c.reconcileLostHMRNode(ctx, runner); recoveryErr != nil || recovered {
 			return recoveryErr
 		}
@@ -217,6 +255,15 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	operation, ok, err := c.claimOperation(ctx)
 	if err != nil || !ok {
 		return err
+	}
+	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
+		if err := runner.recordClusterIntent(ctx, operation, clusterControllerStep{Name: operation.CurrentStep, NodeID: operation.TargetNodeID}); err != nil {
+			// Cluster enablement installs CRDs during foundation step. Until then,
+			// PostgreSQL remains authoritative and later reconciliation creates CR.
+			if operation.Kind != "cluster_enable" {
+				return err
+			}
+		}
 	}
 	nodes, err := c.activeNodes(ctx)
 	if err != nil {
@@ -226,12 +273,15 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if err != nil {
 		return c.failOperation(ctx, operation, err)
 	}
-	stepIndex := 0
+	stepIndex := -1
 	for i := range steps {
 		if steps[i].Name == operation.CurrentStep {
 			stepIndex = i
 			break
 		}
+	}
+	if stepIndex < 0 {
+		return c.failOperation(ctx, operation, fmt.Errorf("recorded operation step %q is not valid for current operation state", operation.CurrentStep))
 	}
 	step := steps[stepIndex]
 	stepCtx, cancel := context.WithTimeout(ctx, clusterControllerStepTimeout(step.Name))
@@ -262,6 +312,27 @@ func (c *clusterController) observeRuntimeRoles(ctx context.Context, runner *kub
 	}
 }
 
+func (c *clusterController) observeCustomResources(ctx context.Context, runner *kubernetesClusterStepRunner) {
+	now := c.now().UTC().Unix()
+	if now-c.lastCustomResourceSync.Load() < 10 {
+		return
+	}
+	err := c.reconcileCustomResources(ctx, runner, now)
+	if err == nil {
+		c.lastCustomResourceSync.Store(now)
+		if c.lastCustomResourceError != "" {
+			log.Printf("cluster custom-resource reconciliation recovered")
+			c.lastCustomResourceError = ""
+		}
+		return
+	}
+	message := err.Error()
+	if message != c.lastCustomResourceError {
+		log.Printf("cluster custom-resource reconciliation pending: %v", err)
+		c.lastCustomResourceError = message
+	}
+}
+
 func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *kubernetesClusterStepRunner) error {
 	conn, err := c.store.db.Conn(ctx)
 	if err != nil {
@@ -284,12 +355,19 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 	if err != nil {
 		return err
 	}
+	kubernetesNodes := make(map[string]map[string]any, len(nodes))
+	for _, node := range nodes {
+		var payload map[string]any
+		if err := runner.kube.getJSON(ctx, "/api/v1/nodes/"+node.Name, &payload); err != nil {
+			return err
+		}
+		kubernetesNodes[node.Name] = payload
+	}
 	conn, err = c.store.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	for _, node := range nodes {
+	for index, node := range nodes {
 		if node.Roles == nil {
 			node.Roles = map[string]any{}
 		}
@@ -298,14 +376,165 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 			node.Roles[role] = owner != "" && owner == node.Name
 		}
 		after := marshalClusterJSON(node.Roles)
-		if before == after {
-			continue
+		if before != after {
+			if _, err := conn.ExecContext(ctx, `UPDATE engine.cluster_nodes SET roles_json=$1,updated_at=$2 WHERE id=$3`, after, c.now().UTC().Unix(), node.ID); err != nil {
+				conn.Close()
+				return err
+			}
 		}
-		if _, err := conn.ExecContext(ctx, `UPDATE engine.cluster_nodes SET roles_json=$1,updated_at=$2 WHERE id=$3`, after, c.now().UTC().Unix(), node.ID); err != nil {
+		nodes[index] = node
+	}
+	if err := conn.Close(); err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		if err := runner.reconcileNodeRuntime(ctx, node, kubernetesNodes[node.Name], c.now().UTC().Unix()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (c *clusterController) reconcileCustomResources(ctx context.Context, runner *kubernetesClusterStepRunner, observedAt int64) error {
+	state, admissions, operations, err := c.customResourceSnapshot(ctx)
+	if err != nil || !state.Enabled {
+		return err
+	}
+	if err := runner.reconcileClusterResource(ctx, state, observedAt); err != nil {
+		return err
+	}
+	for _, admission := range admissions {
+		if err := runner.reconcileAdmissionResource(ctx, admission, observedAt); err != nil {
+			return err
+		}
+	}
+	for _, operation := range operations {
+		if err := runner.reconcileOperationResource(ctx, operation, observedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *clusterController) customResourceSnapshot(ctx context.Context) (clusterControllerState, []clusterControllerAdmission, []clusterControllerOperationResource, error) {
+	conn, err := c.store.db.Conn(ctx)
+	if err != nil {
+		return clusterControllerState{}, nil, nil, err
+	}
+	var state clusterControllerState
+	var enabled int64
+	var configJSON string
+	err = conn.QueryRowContext(ctx, `
+		SELECT cluster_id,enabled,status,active_size,desired_size,
+		       COALESCE(control_plane_vip,''),COALESCE(edge_vip,''),
+		       COALESCE(baseline_release,''),COALESCE(baseline_sha,''),
+		       hmr_state,COALESCE(hmr_node_id,''),COALESCE(active_operation_id,''),config_json
+		  FROM engine.cluster_state WHERE id=1
+	`).Scan(
+		&state.ClusterID,
+		&enabled,
+		&state.Status,
+		&state.ActiveSize,
+		&state.DesiredSize,
+		&state.ControlPlaneVIP,
+		&state.EdgeVIP,
+		&state.BaselineRelease,
+		&state.BaselineSHA,
+		&state.HMRState,
+		&state.HMRNodeID,
+		&state.ActiveOperation,
+		&configJSON,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		conn.Close()
+		return clusterControllerState{}, nil, nil, nil
+	}
+	if err != nil {
+		conn.Close()
+		return clusterControllerState{}, nil, nil, err
+	}
+	state.Enabled = enabled == 1
+	if !state.Enabled {
+		conn.Close()
+		return state, nil, nil, nil
+	}
+
+	admissionRows, err := conn.QueryContext(ctx, `
+		SELECT id,node_name,hostname,management_ip,architecture,os_version,state,
+		       COALESCE(approved_by,''),COALESCE(approved_at,0)
+		  FROM engine.cluster_admissions ORDER BY updated_at DESC LIMIT 25
+	`)
+	if err != nil {
+		conn.Close()
+		return clusterControllerState{}, nil, nil, err
+	}
+	admissions := make([]clusterControllerAdmission, 0, 5)
+	for admissionRows.Next() {
+		var admission clusterControllerAdmission
+		if err := admissionRows.Scan(
+			&admission.ID,
+			&admission.NodeName,
+			&admission.Hostname,
+			&admission.ManagementIP,
+			&admission.Architecture,
+			&admission.OSVersion,
+			&admission.State,
+			&admission.ApprovedBy,
+			&admission.ApprovedAt,
+		); err != nil {
+			admissionRows.Close()
+			conn.Close()
+			return clusterControllerState{}, nil, nil, err
+		}
+		admissions = append(admissions, admission)
+	}
+	if err := admissionRows.Err(); err != nil {
+		admissionRows.Close()
+		conn.Close()
+		return clusterControllerState{}, nil, nil, err
+	}
+	admissionRows.Close()
+
+	operationRows, err := conn.QueryContext(ctx, `
+		SELECT id,kind,state,current_step,COALESCE(target_node_id,''),
+		       COALESCE(target_release,''),COALESCE(target_sha,''),COALESCE(error_text,''),attempt
+		  FROM engine.cluster_operations ORDER BY updated_at DESC LIMIT 25
+	`)
+	if err != nil {
+		conn.Close()
+		return clusterControllerState{}, nil, nil, err
+	}
+	operations := make([]clusterControllerOperationResource, 0, 25)
+	for operationRows.Next() {
+		var resource clusterControllerOperationResource
+		if err := operationRows.Scan(
+			&resource.Operation.ID,
+			&resource.Operation.Kind,
+			&resource.Operation.State,
+			&resource.Operation.CurrentStep,
+			&resource.Operation.TargetNodeID,
+			&resource.Operation.TargetRelease,
+			&resource.Operation.TargetSHA,
+			&resource.ErrorText,
+			&resource.Operation.Attempt,
+		); err != nil {
+			operationRows.Close()
+			conn.Close()
+			return clusterControllerState{}, nil, nil, err
+		}
+		operations = append(operations, resource)
+	}
+	if err := operationRows.Err(); err != nil {
+		operationRows.Close()
+		conn.Close()
+		return clusterControllerState{}, nil, nil, err
+	}
+	operationRows.Close()
+	if err := conn.Close(); err != nil {
+		return clusterControllerState{}, nil, nil, err
+	}
+	state.Config = parseClusterJSON(configJSON)
+	return state, admissions, operations, nil
 }
 
 func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *kubernetesClusterStepRunner) (bool, error) {
@@ -419,7 +648,7 @@ func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *ku
 
 func clusterControllerStepTimeout(step string) time.Duration {
 	switch {
-	case strings.HasSuffix(step, ":redeploy_revision"), strings.HasSuffix(step, ":promote_candidate"):
+	case strings.HasSuffix(step, ":stage_revision_images"), strings.HasSuffix(step, ":redeploy_revision"), strings.HasSuffix(step, ":promote_candidate"):
 		return 65 * time.Minute
 	case strings.HasSuffix(step, ":prepare_restore"):
 		return 15 * time.Minute
@@ -431,7 +660,7 @@ func clusterControllerStepTimeout(step string) time.Duration {
 		return 95 * time.Minute
 	case step == "apply_membership":
 		return 45 * time.Minute
-	case step == "pre_change_snapshot", step == "migrate_postgres", step == "finalize_schema", step == "prepare_postgres_removal", step == "scale_postgres_membership":
+	case step == "pre_change_snapshot", step == "migrate_postgres", step == "expand_schema", step == "finalize_schema", step == "prepare_postgres_removal", step == "scale_postgres_membership":
 		return 20 * time.Minute
 	default:
 		return 5 * time.Minute
@@ -446,13 +675,23 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		if err != nil {
 			return nil, err
 		}
-		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"}, clusterControllerStep{Name: "expand_schema"})
-		for _, node := range ordered {
-			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "fetch_release", "redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"} {
+		migration := cleanText(clusterCompatibilityMap(operation.Payload["compatibility"])["database_migration"])
+		if !textInSet(migration, "none", "expand-contract") {
+			return nil, errors.New("Engine update lacks supported database migration contract")
+		}
+		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"})
+		for index, node := range ordered {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "fetch_release", "stage_revision_images", "redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"} {
 				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
+				if migration == "expand-contract" && index == 0 && action == "stage_revision_images" {
+					base = append(base, clusterControllerStep{Name: "expand_schema", NodeID: node.ID})
+				}
 			}
 		}
-		return append(base, clusterControllerStep{Name: "finalize_schema"}, clusterControllerStep{Name: "verify_cluster"}), nil
+		if migration == "expand-contract" {
+			base = append(base, clusterControllerStep{Name: "finalize_schema", NodeID: ordered[0].ID})
+		}
+		return append(base, clusterControllerStep{Name: "verify_cluster"}), nil
 	case "k3s_update":
 		ordered, err := clusterUpdateNodes(operation, nodes)
 		if err != nil {
@@ -571,6 +810,30 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 }
 
 func clusterUpdateNodes(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerNode, error) {
+	if pinned := anySlice(operation.Payload["update_node_ids"]); len(pinned) > 0 {
+		expected := len(nodes)
+		if cleanText(operation.Payload["scope"]) == "node" {
+			expected = 1
+		}
+		if len(pinned) != expected {
+			return nil, errors.New("pinned update order does not match operation scope")
+		}
+		selected := make([]clusterControllerNode, 0, len(pinned))
+		seen := make(map[string]bool, len(pinned))
+		for _, rawID := range pinned {
+			id := cleanText(rawID)
+			if seen[id] {
+				return nil, errors.New("pinned update order contains duplicate node")
+			}
+			seen[id] = true
+			node := clusterNodeByID(nodes, id)
+			if node.ID == "" {
+				return nil, fmt.Errorf("pinned update node %s is not active", id)
+			}
+			selected = append(selected, node)
+		}
+		return selected, nil
+	}
 	selected := append([]clusterControllerNode(nil), nodes...)
 	if cleanText(operation.Payload["scope"]) == "node" {
 		selected = nil
@@ -655,6 +918,18 @@ func clusterNodeByID(nodes []clusterControllerNode, id string) clusterController
 	return clusterControllerNode{}
 }
 
+func clusterAllNodesAtRevision(nodes []clusterControllerNode, revision string) bool {
+	if len(nodes) == 0 || !clusterControllerSHARegex.MatchString(revision) {
+		return false
+	}
+	for _, node := range nodes {
+		if node.ReleaseSHA != revision {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 	now := c.now().UTC().Unix()
 	expires := now + int64(clusterControllerLeaseTTL/time.Second)
@@ -736,7 +1011,7 @@ func (c *clusterController) activeNodes(ctx context.Context) ([]clusterControlle
 	}
 	defer conn.Close()
 	rows, err := conn.QueryContext(ctx, `
-		SELECT id, node_name, application_state, COALESCE(release_tag,''), COALESCE(release_sha,''), roles_json
+		SELECT id, node_name, application_state, COALESCE(release_tag,''), COALESCE(release_sha,''), COALESCE(drain_reason,''), roles_json, probe_health_json
 		  FROM engine.cluster_nodes WHERE membership_state='Active' ORDER BY node_name
 	`)
 	if err != nil {
@@ -747,10 +1022,12 @@ func (c *clusterController) activeNodes(ctx context.Context) ([]clusterControlle
 	for rows.Next() {
 		var node clusterControllerNode
 		var rolesJSON string
-		if err := rows.Scan(&node.ID, &node.Name, &node.ApplicationState, &node.ReleaseTag, &node.ReleaseSHA, &rolesJSON); err != nil {
+		var probesJSON string
+		if err := rows.Scan(&node.ID, &node.Name, &node.ApplicationState, &node.ReleaseTag, &node.ReleaseSHA, &node.DrainReason, &rolesJSON, &probesJSON); err != nil {
 			return nil, err
 		}
 		node.Roles = parseClusterJSON(rolesJSON)
+		node.ProbeHealth = parseClusterJSON(probesJSON)
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()
@@ -854,10 +1131,13 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state='active',drain_reason=NULL,updated_at=$1 WHERE membership_state='Active'`, now)
 		}
 	case "engine_update":
-		if cleanText(operation.Payload["scope"]) == "all" {
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET baseline_release=$1,baseline_sha=$2,status='Healthy',updated_at=$3 WHERE id=1`, operation.TargetRelease, operation.TargetSHA, now)
-		} else {
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Mixed Version',updated_at=$1 WHERE id=1`, now)
+		var remaining int64
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active' AND COALESCE(release_sha,'')<>$1`, operation.TargetSHA).Scan(&remaining); err == nil {
+			if remaining == 0 {
+				_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET baseline_release=$1,baseline_sha=$2,status='Healthy',updated_at=$3 WHERE id=1`, operation.TargetRelease, operation.TargetSHA, now)
+			} else {
+				_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Mixed Version',updated_at=$1 WHERE id=1`, now)
+			}
 		}
 	case "k3s_update":
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Healthy',config_json=jsonb_set(COALESCE(NULLIF(config_json,''),'{}')::jsonb,'{k3s_version}',to_jsonb($1::text),true)::text,updated_at=$2 WHERE id=1`, operation.TargetRelease, now)
@@ -999,9 +1279,22 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return r.scaleCNPG(ctx, int(coerceInt64(operation.Payload["target_size"])))
 	}
 	if step.Name == "expand_schema" || step.Name == "finalize_schema" {
-		// Migration phases are target-owned jobs. Manifest declares expand/contract safety;
-		// node-scoped redeploy applies phase-specific jobs idempotently.
-		return nil
+		node := clusterNodeByID(nodes, step.NodeID)
+		if node.ID == "" {
+			return errors.New("schema phase target is not an active node")
+		}
+		if step.Name == "finalize_schema" {
+			if !clusterAllNodesAtRevision(nodes, operation.TargetSHA) {
+				// Node-scoped updates keep contract work pending until last active
+				// node reaches target revision through later explicit update.
+				return nil
+			}
+		}
+		phase := strings.TrimSuffix(step.Name, "_schema")
+		phaseOperation := operation
+		phaseOperation.Payload = copyMap(operation.Payload)
+		phaseOperation.Payload["schema_phase"] = phase
+		return r.nodeActionJob(ctx, phaseOperation, step, node, "RunSchemaPhase")
 	}
 	if step.Name == "verify_cluster" || step.Name == "verify_quorum" || step.Name == "verify_postgres" {
 		return r.verifyReadyEndpoints(ctx)
@@ -1198,6 +1491,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return r.verifyMemberRemoved(ctx, operation, node.Name, nodes)
 		case "fetch_release":
 			return r.nodeActionJob(ctx, operation, step, node, "FetchRelease")
+		case "stage_revision_images":
+			return r.nodeActionJob(ctx, operation, step, node, "StageRevisionImages")
 		case "redeploy_revision":
 			return r.nodeActionJob(ctx, operation, step, node, "RedeployRevision")
 		case "apply_k3s_upgrade":
@@ -1693,6 +1988,321 @@ func kubernetesNodeReady(node map[string]any) bool {
 	return false
 }
 
+func clusterNodeRuntimeState(node clusterControllerNode, kubernetesNode map[string]any) (map[string]any, map[string]any, error) {
+	if !clusterUUIDRE.MatchString(node.ID) || !clusterControllerNodeRegex.MatchString(node.Name) {
+		return nil, nil, errors.New("cluster node runtime identity is invalid")
+	}
+	desiredApplicationState := cleanText(node.ApplicationState)
+	if !textInSet(desiredApplicationState, "active", "drained", "standby") {
+		desiredApplicationState = "standby"
+	}
+	spec := map[string]any{
+		"nodeID":                  node.ID,
+		"nodeName":                node.Name,
+		"desiredApplicationState": desiredApplicationState,
+	}
+	if clusterReleaseRE.MatchString(node.ReleaseTag) {
+		spec["desiredRelease"] = node.ReleaseTag
+	}
+	if clusterControllerSHARegex.MatchString(node.ReleaseSHA) {
+		spec["desiredSHA"] = node.ReleaseSHA
+	}
+	observedApplicationState := cleanText(nestedMap(nestedMap(kubernetesNode, "metadata"), "labels")["borealis.io/application-state"])
+	if !textInSet(observedApplicationState, "active", "drained", "standby") {
+		observedApplicationState = desiredApplicationState
+	}
+	conditionStatus := "False"
+	conditionReason := "KubernetesNodeNotReady"
+	if kubernetesNodeReady(kubernetesNode) {
+		conditionStatus = "True"
+		conditionReason = "KubernetesNodeReady"
+	}
+	status := map[string]any{
+		"observedApplicationState": observedApplicationState,
+		"nodeReady":                conditionStatus == "True",
+		"releaseTag":               node.ReleaseTag,
+		"releaseSHA":               node.ReleaseSHA,
+		"drainReason":              node.DrainReason,
+		"roles":                    copyMap(node.Roles),
+		"probeHealth":              copyMap(node.ProbeHealth),
+		"conditions": []any{map[string]any{
+			"type":   "Ready",
+			"status": conditionStatus,
+			"reason": conditionReason,
+		}},
+	}
+	return spec, status, nil
+}
+
+func clusterRuntimeMapEqual(current, desired map[string]any, ignoredKeys ...string) bool {
+	left := copyMap(current)
+	right := copyMap(desired)
+	for _, key := range ignoredKeys {
+		delete(left, key)
+		delete(right, key)
+	}
+	return marshalClusterJSON(left) == marshalClusterJSON(right)
+}
+
+func clusterMergePatchMap(current, desired map[string]any) map[string]any {
+	patch := copyMap(desired)
+	for key := range current {
+		if _, present := desired[key]; !present {
+			patch[key] = nil
+		}
+	}
+	return patch
+}
+
+func (r *kubernetesClusterStepRunner) reconcileNodeRuntime(ctx context.Context, node clusterControllerNode, kubernetesNode map[string]any, observedAt int64) error {
+	spec, status, err := clusterNodeRuntimeState(node, kubernetesNode)
+	if err != nil {
+		return err
+	}
+	return r.reconcileNamespacedClusterResource(
+		ctx,
+		"borealisnoderuntimes",
+		node.Name,
+		"BorealisNodeRuntime",
+		map[string]string{
+			"app.kubernetes.io/name":    "borealis-node-runtime",
+			"app.kubernetes.io/part-of": "borealis",
+			"borealis.io/node-id":       node.ID,
+		},
+		spec,
+		status,
+		observedAt,
+	)
+}
+
+func clusterResourceState(state clusterControllerState) (map[string]any, map[string]any, error) {
+	if !clusterUUIDRE.MatchString(state.ClusterID) || !state.Enabled {
+		return nil, nil, errors.New("cluster custom-resource identity is invalid")
+	}
+	if !textInSet(fmt.Sprint(state.ActiveSize), "1", "3", "5") || !textInSet(fmt.Sprint(state.DesiredSize), "1", "3", "5") {
+		return nil, nil, errors.New("cluster custom-resource size is invalid")
+	}
+	controlVIP := net.ParseIP(state.ControlPlaneVIP)
+	edgeVIP := net.ParseIP(state.EdgeVIP)
+	if len(validateClusterIP("control_plane_vip", state.ControlPlaneVIP)) != 0 || len(validateClusterIP("edge_vip", state.EdgeVIP)) != 0 || controlVIP.Equal(edgeVIP) {
+		return nil, nil, errors.New("cluster custom-resource VIPs are invalid")
+	}
+	spec := map[string]any{
+		"activeSize":      state.ActiveSize,
+		"desiredSize":     state.DesiredSize,
+		"controlPlaneVIP": state.ControlPlaneVIP,
+		"edgeVIP":         state.EdgeVIP,
+	}
+	if clusterReleaseRE.MatchString(state.BaselineRelease) {
+		spec["baselineRelease"] = state.BaselineRelease
+	}
+	if clusterControllerSHARegex.MatchString(state.BaselineSHA) {
+		spec["baselineSHA"] = state.BaselineSHA
+	}
+	if clusterUUIDRE.MatchString(state.HMRNodeID) {
+		spec["hmrNodeID"] = state.HMRNodeID
+	}
+	ready := textInSet(state.Status, "Healthy", "Mixed Version", "HMR Non-HA")
+	conditionStatus := "False"
+	conditionReason := "ClusterNotReady"
+	if ready {
+		conditionStatus = "True"
+		conditionReason = "ClusterServing"
+	}
+	status := map[string]any{
+		"clusterID":     state.ClusterID,
+		"phase":         state.Status,
+		"activeSize":    state.ActiveSize,
+		"desiredSize":   state.DesiredSize,
+		"hmrState":      state.HMRState,
+		"configuration": copyMap(state.Config),
+		"conditions": []any{map[string]any{
+			"type":   "Ready",
+			"status": conditionStatus,
+			"reason": conditionReason,
+		}},
+	}
+	if clusterUUIDRE.MatchString(state.HMRNodeID) {
+		status["hmrNodeID"] = state.HMRNodeID
+	}
+	if clusterUUIDRE.MatchString(state.ActiveOperation) {
+		status["activeOperationID"] = state.ActiveOperation
+	}
+	return spec, status, nil
+}
+
+func (r *kubernetesClusterStepRunner) reconcileClusterResource(ctx context.Context, state clusterControllerState, observedAt int64) error {
+	spec, status, err := clusterResourceState(state)
+	if err != nil {
+		return err
+	}
+	return r.reconcileNamespacedClusterResource(
+		ctx,
+		"borealisclusters",
+		"borealis",
+		"BorealisCluster",
+		map[string]string{
+			"app.kubernetes.io/name":    "borealis-cluster",
+			"app.kubernetes.io/part-of": "borealis",
+		},
+		spec,
+		status,
+		observedAt,
+	)
+}
+
+func clusterAdmissionResourceState(admission clusterControllerAdmission) (map[string]any, map[string]any, error) {
+	if !clusterUUIDRE.MatchString(admission.ID) || len(validateClusterNodeName("node_name", admission.NodeName)) != 0 {
+		return nil, nil, errors.New("cluster admission custom-resource identity is invalid")
+	}
+	if err := validateHostInput("hostname", admission.Hostname); err != nil || len(admission.Hostname) > clusterHostnameMaxLength {
+		return nil, nil, errors.New("cluster admission hostname is invalid")
+	}
+	if len(validateClusterIP("management_ip", admission.ManagementIP)) != 0 {
+		return nil, nil, errors.New("cluster admission management IP is invalid")
+	}
+	if !textInSet(admission.Architecture, "amd64", "arm64") || admission.OSVersion == "" || len(admission.OSVersion) > 64 {
+		return nil, nil, errors.New("cluster admission platform is invalid")
+	}
+	spec := map[string]any{
+		"admissionID":  admission.ID,
+		"nodeName":     admission.NodeName,
+		"hostname":     admission.Hostname,
+		"managementIP": admission.ManagementIP,
+		"architecture": admission.Architecture,
+		"osVersion":    admission.OSVersion,
+	}
+	status := map[string]any{
+		"state": admission.State,
+	}
+	if admission.ApprovedBy != "" {
+		status["approvedBy"] = admission.ApprovedBy
+	}
+	if admission.ApprovedAt > 0 {
+		status["approvedAt"] = admission.ApprovedAt
+	}
+	return spec, status, nil
+}
+
+func (r *kubernetesClusterStepRunner) reconcileAdmissionResource(ctx context.Context, admission clusterControllerAdmission, observedAt int64) error {
+	spec, status, err := clusterAdmissionResourceState(admission)
+	if err != nil {
+		return err
+	}
+	return r.reconcileNamespacedClusterResource(
+		ctx,
+		"borealisnodeadmissions",
+		admission.ID,
+		"BorealisNodeAdmission",
+		map[string]string{
+			"app.kubernetes.io/name":    "borealis-node-admission",
+			"app.kubernetes.io/part-of": "borealis",
+			"borealis.io/node-name":     admission.NodeName,
+		},
+		spec,
+		status,
+		observedAt,
+	)
+}
+
+func clusterOperationResourceState(resource clusterControllerOperationResource) (map[string]any, map[string]any, error) {
+	operation := resource.Operation
+	if !clusterUUIDRE.MatchString(operation.ID) || operation.Kind == "" || len(operation.Kind) > 64 || operation.CurrentStep == "" || len(operation.CurrentStep) > 128 {
+		return nil, nil, errors.New("cluster operation custom-resource identity is invalid")
+	}
+	spec := map[string]any{
+		"operationID": operation.ID,
+		"kind":        operation.Kind,
+		"step":        operation.CurrentStep,
+	}
+	if clusterUUIDRE.MatchString(operation.TargetNodeID) {
+		spec["targetNodeID"] = operation.TargetNodeID
+	}
+	if clusterReleaseRE.MatchString(operation.TargetRelease) {
+		spec["targetRelease"] = operation.TargetRelease
+	}
+	if clusterControllerSHARegex.MatchString(operation.TargetSHA) {
+		spec["targetSHA"] = operation.TargetSHA
+	}
+	status := map[string]any{
+		"state":   operation.State,
+		"attempt": operation.Attempt,
+	}
+	if resource.ErrorText != "" {
+		status["error"] = resource.ErrorText
+	}
+	return spec, status, nil
+}
+
+func (r *kubernetesClusterStepRunner) reconcileOperationResource(ctx context.Context, resource clusterControllerOperationResource, observedAt int64) error {
+	spec, status, err := clusterOperationResourceState(resource)
+	if err != nil {
+		return err
+	}
+	return r.reconcileNamespacedClusterResource(
+		ctx,
+		"borealisclusteroperations",
+		resource.Operation.ID,
+		"BorealisClusterOperation",
+		map[string]string{
+			"app.kubernetes.io/name":     "borealis-cluster-operation",
+			"app.kubernetes.io/part-of":  "borealis",
+			"borealis.io/operation-kind": clusterActionStepLabel(resource.Operation.Kind),
+		},
+		spec,
+		status,
+		observedAt,
+	)
+}
+
+func (r *kubernetesClusterStepRunner) reconcileNamespacedClusterResource(
+	ctx context.Context,
+	resource string,
+	name string,
+	kind string,
+	labels map[string]string,
+	spec map[string]any,
+	status map[string]any,
+	observedAt int64,
+) error {
+	path := fmt.Sprintf("/apis/engine.borealis.io/v1alpha1/namespaces/%s/%s/%s", r.namespace, resource, name)
+	collectionPath := fmt.Sprintf("/apis/engine.borealis.io/v1alpha1/namespaces/%s/%s", r.namespace, resource)
+	var existing map[string]any
+	err := r.kube.getJSON(ctx, path, &existing)
+	if err != nil && !strings.Contains(err.Error(), "returned HTTP 404") {
+		return err
+	}
+	if err != nil {
+		manifest := map[string]any{
+			"apiVersion": "engine.borealis.io/v1alpha1",
+			"kind":       kind,
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": r.namespace,
+				"labels":    labels,
+			},
+			"spec": spec,
+		}
+		if err := r.kube.doJSON(ctx, http.MethodPost, collectionPath, manifest, "application/json", &existing, 30*time.Second); err != nil {
+			return err
+		}
+	} else if !clusterRuntimeMapEqual(nestedMap(existing, "spec"), spec) {
+		specPatch := clusterMergePatchMap(nestedMap(existing, "spec"), spec)
+		if err := r.kube.doJSON(ctx, http.MethodPatch, path, map[string]any{"spec": specPatch}, "application/merge-patch+json", &existing, 30*time.Second); err != nil {
+			return err
+		}
+	}
+	currentStatus := nestedMap(existing, "status")
+	if clusterRuntimeMapEqual(currentStatus, status, "observedAt") {
+		return nil
+	}
+	status = copyMap(status)
+	status["observedAt"] = observedAt
+	status = clusterMergePatchMap(currentStatus, status)
+	var updated map[string]any
+	return r.kube.doJSON(ctx, http.MethodPatch, path+"/status", map[string]any{"status": status}, "application/merge-patch+json", &updated, 30*time.Second)
+}
+
 func (r *kubernetesClusterStepRunner) kubernetesLeaseOwner(ctx context.Context, name string) (string, error) {
 	if name != "borealis-control-vip" && name != "borealis-edge-vip" {
 		return "", errors.New("unsupported cluster lease")
@@ -1906,26 +2516,7 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		if !strings.Contains(err.Error(), "returned HTTP 404") {
 			return err
 		}
-		args := []string{"client", "--verb", verb}
-		if verb == "PreflightRelease" || verb == "FetchRelease" || verb == "StagePinnedRelease" {
-			args = append(args, "--release-tag", operation.TargetRelease, "--target-sha", operation.TargetSHA)
-		}
-		if verb == "RedeployRevision" || verb == "RedeployStagedRevision" || verb == "PromoteCandidate" {
-			args = append(args, "--target-sha", operation.TargetSHA)
-		}
-		if verb == "RunK3sProbeConformance" {
-			args = append(args, "--k3s-version", operation.TargetRelease)
-		}
-		if verb == "EnterApplicationDrain" || verb == "PrepareMemberRemoval" {
-			args = append(args, "--reason", firstText(cleanText(operation.Payload["reason"]), operation.Kind))
-		}
-		if verb == "EnrollCluster" {
-			args = append(args,
-				"--control-plane-vip", cleanText(operation.Payload["control_plane_vip"]),
-				"--edge-vip", cleanText(operation.Payload["edge_vip"]),
-				"--target-sha", cleanText(operation.Payload["baseline_sha"]),
-			)
-		}
+		args := clusterNodeActionArgs(operation, verb)
 		manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, r.actionImage, args, operation.ID, step.Name)
 		if err := r.kube.doJSON(ctx, http.MethodPost, fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs", r.namespace), manifest, "application/json", &existing, 30*time.Second); err != nil {
 			return err
@@ -1935,6 +2526,33 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		return r.waitClusterInitJob(ctx, jobName)
 	}
 	return r.waitJob(ctx, jobName)
+}
+
+func clusterNodeActionArgs(operation clusterControllerOperation, verb string) []string {
+	args := []string{"client", "--verb", verb}
+	if verb == "PreflightRelease" || verb == "FetchRelease" || verb == "StagePinnedRelease" {
+		args = append(args, "--release-tag", operation.TargetRelease, "--target-sha", operation.TargetSHA)
+	}
+	if verb == "StageRevisionImages" || verb == "RedeployRevision" || verb == "RedeployStagedRevision" || verb == "PromoteCandidate" {
+		args = append(args, "--target-sha", operation.TargetSHA)
+	}
+	if verb == "RunSchemaPhase" {
+		args = append(args, "--schema-phase", cleanText(operation.Payload["schema_phase"]), "--target-sha", operation.TargetSHA)
+	}
+	if verb == "RunK3sProbeConformance" {
+		args = append(args, "--k3s-version", operation.TargetRelease)
+	}
+	if verb == "EnterApplicationDrain" || verb == "PrepareMemberRemoval" {
+		args = append(args, "--reason", firstText(cleanText(operation.Payload["reason"]), operation.Kind))
+	}
+	if verb == "EnrollCluster" {
+		args = append(args,
+			"--control-plane-vip", cleanText(operation.Payload["control_plane_vip"]),
+			"--edge-vip", cleanText(operation.Payload["edge_vip"]),
+			"--target-sha", cleanText(operation.Payload["baseline_sha"]),
+		)
+	}
+	return args
 }
 
 func (r *kubernetesClusterStepRunner) applyK3sUpgrade(ctx context.Context, operation clusterControllerOperation, node clusterControllerNode) error {
@@ -2569,13 +3187,9 @@ func (r *kubernetesClusterStepRunner) pruneDailyCNPGBackups(ctx context.Context,
 }
 
 func (r *kubernetesClusterStepRunner) recordClusterIntent(ctx context.Context, operation clusterControllerOperation, step clusterControllerStep) error {
-	name := "borealis"
-	path := fmt.Sprintf("/apis/engine.borealis.io/v1alpha1/namespaces/%s/borealisclusteroperations/%s", r.namespace, operation.ID)
-	patch := map[string]any{"spec": map[string]any{"operationID": operation.ID, "kind": operation.Kind, "step": step.Name, "targetNodeID": step.NodeID, "targetRelease": operation.TargetRelease, "targetSHA": operation.TargetSHA}}
-	var output map[string]any
-	if err := r.kube.doJSON(ctx, http.MethodPatch, path, patch, "application/merge-patch+json", &output, 30*time.Second); err == nil {
-		return nil
+	operation.CurrentStep = step.Name
+	if operation.State == "" {
+		operation.State = "running"
 	}
-	manifest := map[string]any{"apiVersion": "engine.borealis.io/v1alpha1", "kind": "BorealisClusterOperation", "metadata": map[string]any{"name": operation.ID, "namespace": r.namespace, "labels": map[string]string{"app.kubernetes.io/name": name}}, "spec": patch["spec"]}
-	return r.kube.doJSON(ctx, http.MethodPost, fmt.Sprintf("/apis/engine.borealis.io/v1alpha1/namespaces/%s/borealisclusteroperations", r.namespace), manifest, "application/json", &output, 30*time.Second)
+	return r.reconcileOperationResource(ctx, clusterControllerOperationResource{Operation: operation}, time.Now().UTC().Unix())
 }

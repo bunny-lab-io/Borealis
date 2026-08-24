@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,15 +19,48 @@ func TestNodeManagerActionTimeoutAllowsBoundedBootstrapAndRedeploy(t *testing.T)
 		want time.Duration
 	}{
 		{verb: "EnrollCluster", want: 90 * time.Minute},
+		{verb: "StageRevisionImages", want: 60 * time.Minute},
 		{verb: "RedeployRevision", want: 60 * time.Minute},
 		{verb: "RedeployStagedRevision", want: 60 * time.Minute},
 		{verb: "PromoteCandidate", want: 60 * time.Minute},
+		{verb: "RunSchemaPhase", want: 20 * time.Minute},
 		{verb: "Status", want: 30 * time.Minute},
 	}
 	for _, test := range tests {
 		if got := nodeManagerActionTimeout(test.verb); got != test.want {
 			t.Fatalf("nodeManagerActionTimeout(%q)=%s want %s", test.verb, got, test.want)
 		}
+	}
+}
+
+func TestRequiredSchemaPhaseAcceptsOnlyFixedValues(t *testing.T) {
+	for _, phase := range []string{"expand", "finalize"} {
+		if got := requiredSchemaPhase(map[string]any{"schema_phase": phase}); got != phase {
+			t.Fatalf("requiredSchemaPhase(%q)=%q", phase, got)
+		}
+	}
+	for _, phase := range []string{"", "contract", "expand; touch /tmp/unsafe"} {
+		if got := requiredSchemaPhase(map[string]any{"schema_phase": phase}); got != "" {
+			t.Fatalf("unsafe schema phase %q accepted as %q", phase, got)
+		}
+	}
+}
+
+func TestAgentPathProbeRequiresExpectedAuthenticationBoundary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && request.URL.Path == "/api/agent/heartbeat" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.NotFound(w, request)
+	}))
+	defer server.Close()
+	address := server.Listener.Addr().(*net.TCPAddr)
+	if err := probeHTTPExpectedStatus(context.Background(), address.IP.String(), address.Port, http.MethodPost, "/api/agent/heartbeat", http.StatusUnauthorized); err != nil {
+		t.Fatalf("Agent path probe failed: %v", err)
+	}
+	if err := probeHTTPExpectedStatus(context.Background(), address.IP.String(), address.Port, http.MethodGet, "/missing", http.StatusUnauthorized); err == nil {
+		t.Fatal("missing Agent path accepted as healthy")
 	}
 }
 

@@ -28,6 +28,7 @@ COMPOSE_ENV="${DEPLOY_DIR}/compose.env"
 RUNTIME_ENV="${DEPLOY_DIR}/runtime.env"
 WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
+CLUSTER_STAGED_REVISION_FILE="${DEPLOY_DIR}/cluster-staged-revision"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
 K3S_NAMESPACE="${BOREALIS_K3S_NAMESPACE:-borealis}"
@@ -151,6 +152,7 @@ CLUSTER_NON_HA_ACKNOWLEDGED=0
 CLUSTER_CONTROL_PLANE_VIP=""
 CLUSTER_EDGE_VIP=""
 CLUSTER_TARGET_REVISION=""
+CLUSTER_SCHEMA_PHASE=""
 if [[ -n "${REPO_REF}" ]]; then
   REPO_REF_EXPLICIT=1
 fi
@@ -1937,7 +1939,7 @@ parse_launch_options() {
   LAUNCH_ARGS=()
   while (($#)); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision|--schema-phase)
         [[ $# -ge 2 ]] || die "Missing value for ${1}."
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
@@ -1956,6 +1958,7 @@ parse_launch_options() {
           --control-plane-vip) CLUSTER_CONTROL_PLANE_VIP="$2" ;;
           --edge-vip) CLUSTER_EDGE_VIP="$2" ;;
           --revision) CLUSTER_TARGET_REVISION="$2" ;;
+          --schema-phase) CLUSTER_SCHEMA_PHASE="$2" ;;
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="$2"
             REPO_REF_EXPLICIT=1
@@ -1965,12 +1968,12 @@ parse_launch_options() {
             ;;
         esac
         case "$1" in
-          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision|--schema-phase) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift 2
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--control-plane-vip=*|--edge-vip=*|--revision=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--control-plane-vip=*|--edge-vip=*|--revision=*|--schema-phase=*)
         local key="${1%%=*}"
         local value="${1#*=}"
         case "${key}" in
@@ -1990,6 +1993,7 @@ parse_launch_options() {
           --control-plane-vip) CLUSTER_CONTROL_PLANE_VIP="${value}" ;;
           --edge-vip) CLUSTER_EDGE_VIP="${value}" ;;
           --revision) CLUSTER_TARGET_REVISION="${value}" ;;
+          --schema-phase) CLUSTER_SCHEMA_PHASE="${value}" ;;
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="${value}"
             REPO_REF_EXPLICIT=1
@@ -1999,7 +2003,7 @@ parse_launch_options() {
             ;;
         esac
         case "${key}" in
-          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision|--schema-phase) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift
@@ -11040,10 +11044,14 @@ reconcile_cluster_node_workloads() {
   python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" "${args[@]}"
 }
 
-cluster_node_redeploy() {
-  [[ "${CLUSTER_TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || die "Cluster node redeploy requires --revision with lowercase 40-character commit SHA."
-  [[ "$(git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster node redeploy revision does not match worktree HEAD."
-  cluster_mode_enabled || die "Cluster node redeploy requires enabled Borealis cluster."
+validate_cluster_node_revision() {
+  local action="$1"
+  [[ "${CLUSTER_TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || die "Cluster node ${action} requires --revision with lowercase 40-character commit SHA."
+  [[ "$(git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster node ${action} revision does not match worktree HEAD."
+  cluster_mode_enabled || die "Cluster node ${action} requires enabled Borealis cluster."
+}
+
+stage_cluster_node_revision_images() {
   local cluster_runtime_env=""
   cluster_runtime_env="$(mktemp)"
   k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json \
@@ -11075,6 +11083,29 @@ for key,value in sorted((payload.get("data") or {}).items()):
     [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
     import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
   done
+  local marker_temp=""
+  marker_temp="$(mktemp "${DEPLOY_DIR}/cluster-staged-revision.XXXXXX")"
+  printf '%s\n' "${CLUSTER_TARGET_REVISION}" > "${marker_temp}"
+  run_privileged install -m 0600 "${marker_temp}" "${CLUSTER_STAGED_REVISION_FILE}"
+  find "$(dirname -- "${marker_temp}")" -maxdepth 1 -type f -name "$(basename -- "${marker_temp}")" -delete
+}
+
+cluster_node_stage_revision() {
+  validate_cluster_node_revision "image staging"
+  stage_cluster_node_revision_images
+  BOREALIS_CLUSTER_API_IMAGE="${IMAGE_TAGS[api-backend]}" "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" redeploy
+}
+
+cluster_node_redeploy() {
+  validate_cluster_node_revision "redeploy"
+  local staged_revision=""
+  [[ -r "${CLUSTER_STAGED_REVISION_FILE}" ]] && staged_revision="$(tr -d '[:space:]' < "${CLUSTER_STAGED_REVISION_FILE}")"
+  if [[ "${staged_revision}" == "${CLUSTER_TARGET_REVISION}" && -f "${IMAGE_MANIFEST}" ]]; then
+    load_existing_image_tags
+  else
+    stage_cluster_node_revision_images
+  fi
+  [[ -n "${IMAGE_TAGS[api-backend]:-}" ]] || die "Cluster node redeploy staged API image is unavailable."
   BOREALIS_CLUSTER_API_IMAGE="${IMAGE_TAGS[api-backend]}" "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" redeploy
   local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
   local reconcile_args=(
@@ -11090,6 +11121,177 @@ for key,value in sorted((payload.get("data") or {}).items()):
   python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" "${reconcile_args[@]}"
 }
 
+render_cluster_schema_phase_job_manifest() {
+  local job_name="$1"
+  local image="$2"
+  local node_name="$3"
+  local phase="$4"
+  local revision="$5"
+  local runtime_uid="$6"
+  local runtime_gid="$7"
+  cat <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${job_name}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-cluster-schema
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: database
+    borealis.io/schema-phase: "${phase}"
+  annotations:
+    borealis.io/revision: "${revision}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: borealis-cluster-schema
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: database
+        borealis.io/schema-phase: "${phase}"
+      annotations:
+        borealis.io/revision: "${revision}"
+    spec:
+      nodeName: ${node_name}
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cluster-schema
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -u
+            - -c
+            - |
+              import os
+              from Data.Engine.database import run_cluster_schema_phase
+              changed = run_cluster_schema_phase(
+                  os.environ["BOREALIS_DATABASE_URL"],
+                  os.environ["BOREALIS_CLUSTER_SCHEMA_PHASE"],
+                  os.environ["BOREALIS_CLUSTER_TARGET_REVISION"],
+                  progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True),
+              )
+              print("BOREALIS_CLUSTER_SCHEMA_PHASE\t" + ("applied" if changed else "already-complete"), flush=True)
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_CLUSTER_SCHEMA_PHASE
+              value: "${phase}"
+            - name: BOREALIS_CLUSTER_TARGET_REVISION
+              value: "${revision}"
+            - name: PYTHONPATH
+              value: "/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent"
+            - name: HOME
+              value: "/tmp"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: api-backend-root
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+EOF
+}
+
+cluster_schema_phase() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Cluster schema phase requires root."
+  [[ "${CLUSTER_SCHEMA_PHASE}" == "expand" || "${CLUSTER_SCHEMA_PHASE}" == "finalize" ]] || die "Cluster schema phase requires --schema-phase expand or finalize."
+  [[ "${CLUSTER_TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || die "Cluster schema phase requires --revision with lowercase 40-character commit SHA."
+  [[ "$(git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster schema phase revision does not match worktree HEAD."
+  cluster_mode_enabled || die "Cluster schema phase requires enabled Borealis cluster."
+  local staged_revision=""
+  [[ -r "${CLUSTER_STAGED_REVISION_FILE}" ]] && staged_revision="$(tr -d '[:space:]' < "${CLUSTER_STAGED_REVISION_FILE}")"
+  [[ "${staged_revision}" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster schema phase requires matching staged target images."
+  [[ -f "${IMAGE_MANIFEST}" ]] || die "Cluster schema phase requires target image manifest."
+  mkdir -p "${DEPLOY_DIR}"
+  touch "${BUILD_LOG}"
+
+  local image=""
+  image="$(python3 - "${IMAGE_MANIFEST}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+try:
+    payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    image = str((((payload.get("services") or {}).get("site-worker") or {}).get("image") or "")).strip()
+except Exception as exc:
+    raise SystemExit(f"invalid target image manifest: {exc}")
+if len(image) > 255 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]*", image):
+    raise SystemExit("invalid target site-worker image reference")
+print(image)
+PY
+)"
+  [[ -n "${image}" ]] || die "Cluster schema phase target site-worker image is unavailable."
+
+  local node_name=""
+  node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+  [[ "${node_name}" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || die "Cluster schema phase node name is invalid."
+  local job_name="borealis-schema-${CLUSTER_SCHEMA_PHASE}-${CLUSTER_TARGET_REVISION:0:12}"
+  local manifest_file=""
+  manifest_file="$(mktemp "${DEPLOY_DIR}/cluster-schema-phase.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_cluster_schema_phase_job_manifest \
+    "${job_name}" \
+    "${image}" \
+    "${node_name}" \
+    "${CLUSTER_SCHEMA_PHASE}" \
+    "${CLUSTER_TARGET_REVISION}" \
+    "$(resolve_runtime_owner_uid)" \
+    "$(resolve_runtime_owner_gid)" \
+    > "${manifest_file}"
+
+  k3s_kubectl -n "${K3S_NAMESPACE}" delete "job/${job_name}" --ignore-not-found=true --wait=true >> "${BUILD_LOG}" 2>&1 || true
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    die "Failed to create clustered ${CLUSTER_SCHEMA_PHASE} schema Job. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=complete "job/${job_name}" --timeout=15m >> "${BUILD_LOG}" 2>&1; then
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods -l "job-name=${job_name}" -o wide >> "${BUILD_LOG}" 2>&1 || true
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${job_name}" --tail=240 >> "${BUILD_LOG}" 2>&1 || true
+    die "Clustered ${CLUSTER_SCHEMA_PHASE} schema phase failed. See ${BUILD_LOG}."
+  fi
+  k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${job_name}" --tail=240
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -11099,7 +11301,9 @@ Usage:
   Engine.sh --redeploy-agent-binaries
   Engine.sh --cluster-prepare-node
   Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4
+  Engine.sh --cluster-stage-revision --revision COMMIT_SHA
   Engine.sh --cluster-node-redeploy --revision COMMIT_SHA
+  Engine.sh --cluster-schema-phase --schema-phase <expand|finalize> --revision COMMIT_SHA
 EOF
 }
 
@@ -11142,6 +11346,14 @@ main() {
     --cluster-node-redeploy)
       [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-node-redeploy --revision COMMIT_SHA"
       cluster_node_redeploy
+      ;;
+    --cluster-stage-revision)
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-stage-revision --revision COMMIT_SHA"
+      cluster_node_stage_revision
+      ;;
+    --cluster-schema-phase)
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-schema-phase --schema-phase <expand|finalize> --revision COMMIT_SHA"
+      cluster_schema_phase
       ;;
     -h|--help|help)
       usage

@@ -84,6 +84,7 @@ func client(args []string) {
 	verb := flags.String("verb", "", "Fixed node-manager action")
 	release := flags.String("release-tag", "", "Dotted numeric release tag")
 	targetSHA := flags.String("target-sha", "", "Pinned lowercase commit SHA")
+	schemaPhase := flags.String("schema-phase", "", "Fixed cluster schema phase")
 	k3sVersion := flags.String("k3s-version", "", "Stable K3s version")
 	reason := flags.String("reason", "", "Single-line drain reason")
 	controlVIP := flags.String("control-plane-vip", "", "K3s control-plane VIP")
@@ -94,7 +95,9 @@ func client(args []string) {
 		"PrepareApplicationRestore": true,
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
-		"InspectHealth": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"StageRevisionImages": true,
+		"InspectHealth":       true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"RunSchemaPhase":         true,
 		"PrepareMemberRemoval":   true,
 		"RunK3sProbeConformance": true,
 		"CreateEtcdSnapshot":     true,
@@ -108,6 +111,9 @@ func client(args []string) {
 	}
 	if strings.TrimSpace(*targetSHA) != "" {
 		params["target_sha"] = strings.ToLower(strings.TrimSpace(*targetSHA))
+	}
+	if strings.TrimSpace(*schemaPhase) != "" {
+		params["schema_phase"] = strings.ToLower(strings.TrimSpace(*schemaPhase))
 	}
 	if strings.TrimSpace(*k3sVersion) != "" {
 		params["k3s_version"] = strings.TrimSpace(*k3sVersion)
@@ -310,8 +316,10 @@ func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
 	case "EnrollCluster":
 		return 90 * time.Minute
-	case "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
+	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
 		return 60 * time.Minute
+	case "RunSchemaPhase":
+		return 20 * time.Minute
 	default:
 		return 30 * time.Minute
 	}
@@ -342,6 +350,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.stagePinnedRelease(ctx, requiredRelease(request.Params), requiredSHA(request.Params))
 	case "RedeployRevision":
 		return m.redeployRevision(ctx, requiredSHA(request.Params))
+	case "StageRevisionImages":
+		return m.stageRevisionImages(ctx, requiredSHA(request.Params))
 	case "RedeployStagedRevision":
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
@@ -350,6 +360,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":
 		return m.promoteCandidate(ctx, requiredSHA(request.Params))
+	case "RunSchemaPhase":
+		return m.runSchemaPhase(ctx, requiredSchemaPhase(request.Params), requiredSHA(request.Params))
 	case "PrepareMemberRemoval":
 		return m.prepareMemberRemoval(ctx, requiredReason(request.Params))
 	case "RunK3sProbeConformance":
@@ -756,6 +768,62 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	return map[string]any{"revision": targetSHA, "redeployed": true, "output": truncate(output, 8192)}, nil
 }
 
+func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (map[string]any, error) {
+	if !shaPattern.MatchString(targetSHA) {
+		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
+	}
+	current, err := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+	if err != nil || strings.ToLower(strings.TrimSpace(current)) != targetSHA {
+		return nil, errors.New("worktree HEAD does not match requested revision")
+	}
+	enginePath := filepath.Join(m.repoRoot, "Engine.sh")
+	if info, statErr := os.Stat(enginePath); statErr != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("Engine.sh missing from repository root")
+	}
+	engineEnv, err := m.engineChildEnvironment(m.repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	engineEnv = append(engineEnv,
+		"/usr/bin/bash", enginePath, "--cluster-stage-revision", "--revision", targetSHA,
+	)
+	output, err := run(ctx, m.repoRoot, "/usr/bin/env", engineEnv...)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"revision": targetSHA, "images_staged": true, "output": truncate(output, 8192)}, nil
+}
+
+func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA string) (map[string]any, error) {
+	if phase != "expand" && phase != "finalize" {
+		return nil, errors.New("schema_phase must be expand or finalize")
+	}
+	if !shaPattern.MatchString(targetSHA) {
+		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
+	}
+	current, err := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+	if err != nil || strings.ToLower(strings.TrimSpace(current)) != targetSHA {
+		return nil, errors.New("worktree HEAD does not match schema phase revision")
+	}
+	enginePath := filepath.Join(m.repoRoot, "Engine.sh")
+	if info, statErr := os.Stat(enginePath); statErr != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("Engine.sh missing from repository root")
+	}
+	engineEnv, err := m.engineChildEnvironment(m.repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	engineEnv = append(engineEnv,
+		"/usr/bin/bash", enginePath,
+		"--cluster-schema-phase", "--schema-phase", phase, "--revision", targetSHA,
+	)
+	output, err := run(ctx, m.repoRoot, "/usr/bin/env", engineEnv...)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"revision": targetSHA, "schema_phase": phase, "completed": true, "output": truncate(output, 8192)}, nil
+}
+
 func gitSafeDirectoryEnvironment(repoRoot string) []string {
 	return []string{
 		"GIT_CONFIG_COUNT=1",
@@ -823,7 +891,10 @@ func (m *manager) inspectCandidateHealth(ctx context.Context) (map[string]any, e
 			return nil, fmt.Errorf("candidate API probe %s failed: %w", path, err)
 		}
 	}
-	return map[string]any{"node_name": m.nodeName, "candidate_isolated": true, "candidate_address": address, "workloads": workloads}, nil
+	if err := probeHTTPExpectedStatus(ctx, address, port, http.MethodPost, "/api/agent/heartbeat", http.StatusUnauthorized); err != nil {
+		return nil, fmt.Errorf("candidate Agent API path probe failed: %w", err)
+	}
+	return map[string]any{"node_name": m.nodeName, "candidate_isolated": true, "candidate_address": address, "agent_path": "passed", "workloads": workloads}, nil
 }
 
 func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
@@ -854,11 +925,16 @@ func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
 	if !podListHasReadyPod([]byte(postgres)) {
 		return nil, errors.New("CloudNativePG has no ready instance")
 	}
-	if err := probeHTTP(ctx, directAddress, directPort, "/startup"); err != nil {
-		return nil, fmt.Errorf("direct API startup probe failed: %w", err)
+	for _, path := range []string{"/startup", "/live"} {
+		if err := probeHTTP(ctx, directAddress, directPort, path); err != nil {
+			return nil, fmt.Errorf("direct API probe %s failed: %w", path, err)
+		}
 	}
 	if err := probeHTTP(ctx, serviceAddress, servicePort, "/ready"); err != nil {
 		return nil, fmt.Errorf("API Service readiness probe failed: %w", err)
+	}
+	if err := probeHTTPExpectedStatus(ctx, serviceAddress, servicePort, http.MethodPost, "/api/agent/heartbeat", http.StatusUnauthorized); err != nil {
+		return nil, fmt.Errorf("Agent API Service path probe failed: %w", err)
 	}
 	if nodeLabelTrue([]byte(node), "borealis.io/edge-eligible") {
 		edgeVIP, err := clusterEdgeVIP([]byte(cluster))
@@ -1159,9 +1235,13 @@ func podListHasReadyPod(raw []byte) bool {
 }
 
 func probeHTTP(ctx context.Context, host string, port int, path string) error {
+	return probeHTTPExpectedStatus(ctx, host, port, http.MethodGet, path, http.StatusOK)
+}
+
+func probeHTTPExpectedStatus(ctx context.Context, host string, port int, method, path string, expectedStatus int) error {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "http://"+net.JoinHostPort(host, fmt.Sprint(port))+path, nil)
+	request, err := http.NewRequestWithContext(probeCtx, method, "http://"+net.JoinHostPort(host, fmt.Sprint(port))+path, nil)
 	if err != nil {
 		return err
 	}
@@ -1170,8 +1250,8 @@ func probeHTTP(ctx context.Context, host string, port int, path string) error {
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", response.StatusCode)
+	if response.StatusCode != expectedStatus {
+		return fmt.Errorf("HTTP %d, expected %d", response.StatusCode, expectedStatus)
 	}
 	return nil
 }
@@ -1563,6 +1643,14 @@ func requiredSHA(params map[string]any) string {
 		return ""
 	}
 	if _, err := hex.DecodeString(value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func requiredSchemaPhase(params map[string]any) string {
+	value := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["schema_phase"])))
+	if value != "expand" && value != "finalize" {
 		return ""
 	}
 	return value

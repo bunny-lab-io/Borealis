@@ -314,6 +314,7 @@ finally:
     - `engine.cluster_audit_events` stores actor/action/result audit history.
     - `engine.realtime_outbox` stores cluster UI notifications pending publish.
     - `engine.cluster_application_leases` provides singleton controller, scheduler, HMR, update, membership, and maintenance ownership.
+    - `engine.cluster_schema_phases` records completed `expand` and `finalize` phases by immutable release SHA. Finalize requires same release's expand record. Rows make controller retry and restart idempotent and remain inside PostgreSQL/CNPG recovery snapshots.
 
     Kubernetes CRDs keep desired/runtime topology. PostgreSQL keeps audit/event history and lease serialization; neither surface replaces other.
 
@@ -333,6 +334,7 @@ finally:
     ### Source map
 
     - Deploy-time schema caller: `Engine.sh`
+    - Rolling cluster schema entrypoint: `Data.Engine.database.run_cluster_schema_phase`, invoked only through fixed node-manager `RunSchemaPhase` and `Engine.sh --cluster-schema-phase` contracts.
     - Runtime schema setup: `Data/Engine/Containers/site-worker/data/database.py`
     - Startup migrations: `Data/Engine/Containers/site-worker/data/database_migrations.py`
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`

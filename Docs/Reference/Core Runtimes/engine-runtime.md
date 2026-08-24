@@ -116,6 +116,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine.sh --network-mode public|local --service remote-desktop-guacd rebuild dev|prod`: rebuild the guacd image, retire any stale Compose guacd container, and reconcile the K3s guacd Deployment to the refreshed image.
     - `Engine.sh --network-mode public|local --service wireguard-tunnel reconcile`: query the WireGuard control socket from the K3s tunnel pod.
     - `Engine.sh --redeploy-agent-binaries`: hot-publish current Engine Agent artifact and readiness-first rotate outdated active site workers. Existing deployed mode/network state is reused; unrelated Engine images and workloads are not rebuilt.
+    - `Engine.sh --cluster-stage-revision --revision COMMIT_SHA`: internal root/node-manager contract that builds/imports target images without starting candidate workloads, then records staged SHA only after every import succeeds.
+    - `Engine.sh --cluster-schema-phase --schema-phase expand|finalize --revision COMMIT_SHA`: internal root/node-manager contract for rolling Engine updates. It requires enabled cluster plus exact local `HEAD`, selects target `site-worker` image from local image manifest, and runs tokenless non-root Job pinned to current node. Operators use Cluster Management updates instead of calling command directly.
 
     ### One-shot legacy migration helpers
     - `Data/Engine/Containers/sterilize-systemd-runtime.sh`: migration-only helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
@@ -157,6 +159,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     ### PostgreSQL profile notes
     - `Engine.sh --network-mode public|local deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
     - `Engine.sh --network-mode public|local deploy` reconciles K3s `postgres-db`, waits for StatefulSet readiness, and runs `Data.Engine.database.initialise_engine_database` from the current `site-worker` image as a K3s Job before API/scheduler traffic-owner reconciliation.
+    - Cluster-aware Engine updates run `Data.Engine.database.run_cluster_schema_phase` from target `site-worker` image. Expand applies additive initializers before first target candidate health gate. Finalize records or applies contract work only after every active node reaches target SHA. `engine.cluster_schema_phases` rejects finalize-before-expand and makes repeated Jobs no-op safely.
     - K3s PostgreSQL remains single-replica and non-HA in v1. Normal deploys must not delete the Longhorn PVC, rotate generated DB credentials, or rerun the Compose cutover import once `borealis.io/traffic-owner=k3s`.
     - Profile tuning owns Engine DB pool values, PostgreSQL startup settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`.
     - Site-worker scheduled-lane values are active work-item slots: Homelab `5`, Small Business `8`, MSP / Production `12`, and Enterprise `16`. Enterprise Clustered remains docs-only at `16` per node.

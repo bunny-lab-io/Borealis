@@ -109,6 +109,10 @@ render_k3s_postgres_statefulset_manifest \
 render_k3s_postgres_schema_job_manifest \
   "borealis/api-backend:fixture" "fixture-hash" "64646" "64646" \
   >"${OUTPUT_DIR}/postgres-schema.yaml"
+render_cluster_schema_phase_job_manifest \
+  "borealis-schema-expand-0123456789ab" "borealis/site-worker:fixture" "engine-1" "expand" \
+  "0123456789abcdef0123456789abcdef01234567" "64646" "64646" \
+  >"${OUTPUT_DIR}/cluster-schema.yaml"
 render_k3s_webui_frontend_bridge_manifest \
   "borealis/webui-frontend:fixture" "prod" "fixture-hash" "64646" "64646" "8000" "512Mi" "1" "k3s" \
   >"${OUTPUT_DIR}/webui-prod.yaml"

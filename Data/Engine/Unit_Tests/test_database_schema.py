@@ -100,6 +100,65 @@ def test_engine_database_initialisation_creates_cluster_control_tables(tmp_path)
         "state",
         "details_json",
     }
+    assert _table_columns(db_url, "cluster_schema_phases") == {
+        "release_sha",
+        "phase",
+        "completed_at",
+    }
+
+
+def test_cluster_schema_phases_are_ordered_and_idempotent(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    release_sha = "a" * 40
+    progress: list[str] = []
+
+    assert database.run_cluster_schema_phase(
+        db_url,
+        "expand",
+        release_sha,
+        progress_callback=progress.append,
+    )
+    assert "devices" in progress
+    assert not database.run_cluster_schema_phase(db_url, "expand", release_sha)
+    assert database.run_cluster_schema_phase(db_url, "finalize", release_sha)
+    assert not database.run_cluster_schema_phase(db_url, "finalize", release_sha)
+
+    conn = dbapi.connect(db_url)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT phase FROM cluster_schema_phases WHERE release_sha = ? ORDER BY phase",
+            (release_sha,),
+        )
+        assert [row[0] for row in cur.fetchall()] == ["expand", "finalize"]
+    finally:
+        conn.close()
+
+
+def test_cluster_schema_finalize_rejects_missing_expand(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    try:
+        database.run_cluster_schema_phase(db_url, "finalize", "b" * 40)
+    except RuntimeError as exc:
+        assert "requires completed expand" in str(exc)
+    else:
+        raise AssertionError("finalize succeeded before expand")
+
+
+def test_cluster_schema_phase_rejects_unbounded_contract_values(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    for phase, revision in (
+        ("contract", "c" * 40),
+        ("EXPAND", "c" * 40),
+        ("expand", "not-a-sha"),
+        ("expand", "C" * 40),
+    ):
+        try:
+            database.run_cluster_schema_phase(db_url, phase, revision)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unsafe schema phase input accepted: {phase} {revision}")
 
 
 def test_engine_database_initialisation_creates_vpn_key_lease_table(tmp_path) -> None:

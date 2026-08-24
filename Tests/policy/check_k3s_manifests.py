@@ -698,6 +698,27 @@ def validate_postgres(objects: list[tuple[Path, dict]]) -> None:
         fail("postgres-db PVC lost Borealis Longhorn StorageClass")
 
 
+def validate_cluster_schema_job(objects: list[tuple[Path, dict]]) -> None:
+    jobs = [
+        obj
+        for source, obj in objects
+        if source.name == "cluster-schema.yaml" and obj.get("kind") == "Job"
+    ]
+    if len(jobs) != 1:
+        fail("expected one rendered rolling cluster schema Job")
+    pod = jobs[0].get("spec", {}).get("template", {}).get("spec", {})
+    if pod.get("nodeName") != "engine-1":
+        fail("rolling cluster schema Job must stay pinned to selected update node")
+    containers = pod.get("containers") or []
+    command = containers[0].get("command") if containers else []
+    command_text = "\n".join(str(item) for item in command or [])
+    if "run_cluster_schema_phase" not in command_text or "/bin/sh" in command_text or "/bin/bash" in command_text:
+        fail("rolling cluster schema Job must invoke fixed Python schema contract without shell")
+    environment = {item.get("name"): item.get("value") for item in (containers[0].get("env") or [])}
+    if environment.get("BOREALIS_CLUSTER_SCHEMA_PHASE") != "expand" or environment.get("BOREALIS_CLUSTER_TARGET_REVISION") != "0123456789abcdef0123456789abcdef01234567":
+        fail("rolling cluster schema Job lost immutable phase/revision inputs")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifests", type=Path)
@@ -742,6 +763,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     required = {
         ("api-backend.yaml", "api-backend"),
         ("borealis-operator.yaml", "borealis-operator"),
+        ("cluster-schema.yaml", "borealis-schema-expand-0123456789ab"),
         ("job-scheduler.yaml", "job-scheduler"),
         ("postgres-db.yaml", "postgres-db"),
         ("postgres-schema.yaml", "postgres-db-schema-initializer"),
@@ -754,6 +776,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     if seen_workloads != required:
         fail(f"rendered workload set drifted: missing={sorted(required - seen_workloads)}, extra={sorted(seen_workloads - required)}")
     validate_postgres(objects)
+    validate_cluster_schema_job(objects)
     print(f"K3S POLICY PASS: {len(objects)} rendered objects satisfy namespace, RBAC, token, privilege, hostPath, network, Service, probe, and storage policies")
 
 
