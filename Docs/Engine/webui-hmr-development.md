@@ -8,6 +8,9 @@ Use this workflow when testing Engine WebUI changes on a K3s-based Borealis Engi
 - Keep durable WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`.
 - Treat `Engine/Services/webui-frontend/data/web-interface/` as disposable runtime source for live HMR sessions.
 
+!!! danger "Cluster-wide non-HA mode"
+    On clustered Engine, every dev deploy and WebUI dev rebuild requests exclusive HMR operation. Admin must complete step-up authentication and type `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto current node, so application HA remains unavailable until production restore completes. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
+
 ## Start Dev WebUI
 Use a scoped WebUI rebuild when the Engine stack already exists and only the frontend needs dev mode.
 
@@ -26,6 +29,8 @@ Use a scoped WebUI rebuild when the Engine stack already exists and only the fro
     ```
 
 Use full dev deploy when shared Engine configuration changed or when switching a stale stack into dev mode:
+
+For non-interactive clustered use, append `--acknowledge-cluster-non-ha`. Interactive CLI always requires exact typed confirmation.
 
 === "Local"
 
@@ -120,11 +125,14 @@ cd /opt/Borealis
 sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
 ```
 
+On cluster, production command requests HMR exit. Controller restores saved pinned production release, keeps local edits untouched, verifies target, and restores standby workloads one node at time. Failed restore leaves HMR state and warning visible for explicit recovery.
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
 
     - [Updating the Engine](updating-the-engine.md)
+    - [Managing Engine Clusters](managing-engine-clusters.md)
     - [Engine Maintenance Commands](engine-maintenance-commands.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)

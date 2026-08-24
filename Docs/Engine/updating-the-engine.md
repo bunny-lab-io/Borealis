@@ -1,6 +1,9 @@
 # Updating the Engine
 Use this page when updating an existing Borealis Engine host from the Git repository.
 
+!!! warning "Clustered Engines"
+    Do not run host-by-host `git pull` or direct production deploy on clustered Engine. Use **Admin > Cluster Management > Updates** so Borealis pins immutable release SHA, drains one node, transfers roles, validates candidate, and restores service before moving to next node. See [Managing Engine Clusters](managing-engine-clusters.md).
+
 !!! info "Expected path"
     Run these commands from the Engine host. They pull current staging files and redeploy the production container stack. Keep the same network mode used during install. Use `sudo` for `Engine.sh` unless the shell user can access `/var/run/docker.sock`.
 
@@ -61,6 +64,7 @@ When only Agent source changed, use `bash Engine.sh --redeploy-agent-binaries` f
     ### Related documentation
 
     - [Engine Deployment](deploying-the-engine.md)
+    - [Managing Engine Clusters](managing-engine-clusters.md)
     - [WebUI HMR Development](webui-hmr-development.md)
     - [Service Maintenance Commands](engine-maintenance-commands.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)

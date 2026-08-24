@@ -17,7 +17,8 @@ CONTAINER_SOURCE_DIR="${SCRIPT_DIR}/Data/Engine/Containers"
 COMPOSE_FILE="${CONTAINER_SOURCE_DIR}/compose.yaml"
 BUILD_MANIFEST="${CONTAINER_SOURCE_DIR}/build-manifest.json"
 ENV_EXAMPLE="${CONTAINER_SOURCE_DIR}/compose.env.example"
-RUNTIME_ROOT="${SCRIPT_DIR}/Engine"
+ENGINE_HOST_ROOT="${BOREALIS_ENGINE_HOST_ROOT:-${SCRIPT_DIR}}"
+RUNTIME_ROOT="${BOREALIS_ENGINE_RUNTIME_ROOT:-${ENGINE_HOST_ROOT}/Engine}"
 AGENT_STAGED_SOURCE_DIR="${SCRIPT_DIR}/Data/Agent"
 AGENT_UPDATE_CACHE_ROOT="${RUNTIME_ROOT}/Services/api-backend/cache/AgentUpdates"
 WEBUI_STAGED_SOURCE_DIR="${CONTAINER_SOURCE_DIR}/webui-frontend/data/web-interface"
@@ -35,9 +36,15 @@ K3S_CONFIG_DIR="${BOREALIS_K3S_CONFIG_DIR:-/etc/rancher/k3s/config.yaml.d}"
 K3S_BOREALIS_CONFIG="${BOREALIS_K3S_CONFIG_PATH:-${K3S_CONFIG_DIR}/10-borealis.yaml}"
 K3S_KUBECONFIG="${BOREALIS_K3S_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 K3S_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-baseline.sha256"
+K3S_CLUSTER_ASSET_DIR="${SCRIPT_DIR}/Data/Engine/K3s/cluster"
+K3S_PROBE_CONFORMANCE_FILE="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/var/lib/rancher/k3s/server/borealis-probe-conformance.json}"
+BOREALIS_NODE_MANAGER_BINARY="${BOREALIS_NODE_MANAGER_BINARY:-/usr/local/sbin/borealis-node-manager}"
+BOREALIS_NODE_MANAGER_TOKEN_FILE="${BOREALIS_NODE_MANAGER_TOKEN_FILE:-/etc/borealis/node-manager.token}"
+BOREALIS_NODE_MANAGER_SERVICE="${BOREALIS_NODE_MANAGER_SERVICE:-borealis-node-manager.service}"
 K3S_FIREWALL_SCRIPT="${BOREALIS_K3S_FIREWALL_SCRIPT:-/usr/local/lib/borealis/k3s-api-firewall.sh}"
 K3S_FIREWALL_SERVICE="${BOREALIS_K3S_FIREWALL_SERVICE:-borealis-k3s-api-firewall.service}"
 K3S_API_PORT="${BOREALIS_K3S_API_PORT:-6443}"
+K3S_PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS:-}"
 K3S_CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 K3S_SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
 K3S_KUBECONFIG_MODE="${BOREALIS_K3S_KUBECONFIG_MODE:-0600}"
@@ -45,7 +52,7 @@ K3S_CONTAINER_LOG_MAX_SIZE="${BOREALIS_K3S_CONTAINER_LOG_MAX_SIZE:-}"
 K3S_CONTAINER_LOG_MAX_FILES="${BOREALIS_K3S_CONTAINER_LOG_MAX_FILES:-}"
 K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
 K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
-K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
+K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
 K3S_BASELINE_VERSION="1"
 K3S_LONGHORN_ENABLED="${BOREALIS_K3S_LONGHORN_ENABLED:-1}"
 K3S_LONGHORN_NAMESPACE="${BOREALIS_K3S_LONGHORN_NAMESPACE:-longhorn-system}"
@@ -127,6 +134,10 @@ ENGINE_DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-}"
 SYNC_REQUESTED=0
 DISTRO_ID="unknown"
 LAUNCH_ARGS=()
+CLUSTER_NON_HA_ACKNOWLEDGED=0
+CLUSTER_CONTROL_PLANE_VIP=""
+CLUSTER_EDGE_VIP=""
+CLUSTER_TARGET_REVISION=""
 if [[ -n "${REPO_REF}" ]]; then
   REPO_REF_EXPLICIT=1
 fi
@@ -1913,7 +1924,7 @@ parse_launch_options() {
   LAUNCH_ARGS=()
   while (($#)); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision)
         [[ $# -ge 2 ]] || die "Missing value for ${1}."
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
@@ -1929,6 +1940,9 @@ parse_launch_options() {
             export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
             export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
             ;;
+          --control-plane-vip) CLUSTER_CONTROL_PLANE_VIP="$2" ;;
+          --edge-vip) CLUSTER_EDGE_VIP="$2" ;;
+          --revision) CLUSTER_TARGET_REVISION="$2" ;;
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="$2"
             REPO_REF_EXPLICIT=1
@@ -1938,12 +1952,12 @@ parse_launch_options() {
             ;;
         esac
         case "$1" in
-          --network-mode|--network_mode|--deployment-profile|--deployment_profile) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift 2
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--control-plane-vip=*|--edge-vip=*|--revision=*)
         local key="${1%%=*}"
         local value="${1#*=}"
         case "${key}" in
@@ -1960,6 +1974,9 @@ parse_launch_options() {
             export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
             export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
             ;;
+          --control-plane-vip) CLUSTER_CONTROL_PLANE_VIP="${value}" ;;
+          --edge-vip) CLUSTER_EDGE_VIP="${value}" ;;
+          --revision) CLUSTER_TARGET_REVISION="${value}" ;;
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="${value}"
             REPO_REF_EXPLICIT=1
@@ -1969,7 +1986,7 @@ parse_launch_options() {
             ;;
         esac
         case "${key}" in
-          --network-mode|--network_mode|--deployment-profile|--deployment_profile) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift
@@ -1980,6 +1997,10 @@ parse_launch_options() {
         ;;
       -EngineDev|--EngineDev|--engine-dev)
         LAUNCH_ARGS=(deploy dev)
+        shift
+        ;;
+      --acknowledge-cluster-non-ha)
+        CLUSTER_NON_HA_ACKNOWLEDGED=1
         shift
         ;;
       --zip-url|--zip-path|--zip-url=*|--zip-path=*)
@@ -2217,6 +2238,15 @@ validate_k3s_baseline_settings() {
     || die "BOREALIS_K3S_CLUSTER_CIDR must be an IPv4 CIDR, for example 10.42.0.0/16."
   [[ "${K3S_SERVICE_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
     || die "BOREALIS_K3S_SERVICE_CIDR must be an IPv4 CIDR, for example 10.43.0.0/16."
+  if [[ -n "${K3S_PEER_CIDRS}" ]]; then
+    python3 - "${K3S_PEER_CIDRS}" <<'PY' || die "BOREALIS_K3S_PEER_CIDRS must be comma-separated private IPv4 CIDRs."
+import ipaddress, sys
+for raw in sys.argv[1].split(","):
+    network = ipaddress.ip_network(raw.strip(), strict=False)
+    if network.version != 4 or not network.is_private:
+        raise SystemExit(1)
+PY
+  fi
   if [[ -n "${K3S_CONTAINER_LOG_MAX_SIZE}" ]]; then
     [[ "${K3S_CONTAINER_LOG_MAX_SIZE}" =~ ^[1-9][0-9]*([EPTGMK]i?|m)?$ ]] \
       || die "BOREALIS_K3S_CONTAINER_LOG_MAX_SIZE must be a Kubernetes quantity like 10Mi."
@@ -2455,6 +2485,7 @@ disable:
   - "traefik"
   - "servicelb"
 secrets-encryption: true
+embedded-registry: true
 node-label:
   - "borealis.io/engine-node=true"
 EOF
@@ -2478,6 +2509,7 @@ CHAIN="BOREALIS-K3S-API"
 PORT="${BOREALIS_K3S_API_PORT:-6443}"
 CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
+PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS:-}"
 
 iptables -N "${CHAIN}" 2>/dev/null || true
 iptables -F "${CHAIN}"
@@ -2488,11 +2520,29 @@ for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
   iptables -A "${CHAIN}" -i cni+ -s "${cidr}" -j ACCEPT
   iptables -A "${CHAIN}" -i flannel+ -s "${cidr}" -j ACCEPT
 done
+if [ -n "${PEER_CIDRS}" ]; then
+  old_ifs="${IFS}"
+  IFS=','
+  for cidr in ${PEER_CIDRS}; do
+    iptables -A "${CHAIN}" -s "${cidr}" -j ACCEPT
+  done
+  IFS="${old_ifs}"
+fi
 iptables -A "${CHAIN}" -j DROP
 
 if ! iptables -C INPUT -p tcp --dport "${PORT}" -j "${CHAIN}" 2>/dev/null; then
   iptables -I INPUT 1 -p tcp --dport "${PORT}" -j "${CHAIN}"
 fi
+for tcp_ports in 2379:2381 10250 5001; do
+  if ! iptables -C INPUT -p tcp --dport "${tcp_ports}" -j "${CHAIN}" 2>/dev/null; then
+    iptables -I INPUT 1 -p tcp --dport "${tcp_ports}" -j "${CHAIN}"
+  fi
+done
+for udp_port in 8472 51820 51821; do
+  if ! iptables -C INPUT -p udp --dport "${udp_port}" -j "${CHAIN}" 2>/dev/null; then
+    iptables -I INPUT 1 -p udp --dport "${udp_port}" -j "${CHAIN}"
+  fi
+done
 EOF
 }
 
@@ -2509,6 +2559,7 @@ Type=oneshot
 Environment=BOREALIS_K3S_API_PORT=${K3S_API_PORT}
 Environment=BOREALIS_K3S_CLUSTER_CIDR=${K3S_CLUSTER_CIDR}
 Environment=BOREALIS_K3S_SERVICE_CIDR=${K3S_SERVICE_CIDR}
+Environment="BOREALIS_K3S_PEER_CIDRS=${K3S_PEER_CIDRS}"
 ExecStart=${K3S_FIREWALL_SCRIPT}
 RemainAfterExit=yes
 
@@ -2737,6 +2788,10 @@ label_k3s_nodes() {
     k3s_kubectl label "${node_ref}" \
       app.kubernetes.io/part-of=borealis \
       borealis.io/engine-node=true \
+      borealis.io/application-state=active \
+      borealis.io/edge-eligible=true \
+      borealis.io/scheduler-eligible=true \
+      borealis.io/postgres-primary-eligible=true \
       --overwrite >> "${BUILD_LOG}" 2>&1
     k3s_kubectl annotate "${node_ref}" \
       borealis.io/k3s-baseline-version="${K3S_BASELINE_VERSION}" \
@@ -3512,6 +3567,7 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app.kubernetes.io/name: borealis-operator
@@ -3573,7 +3629,7 @@ $(k3s_timezone_env_entries)
             - name: BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST
               value: "${site_worker_image_allowlist}"
             - name: BOREALIS_PROJECT_ROOT
-              value: "${SCRIPT_DIR}"
+              value: "${ENGINE_HOST_ROOT}"
             - name: BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME
               value: "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}"
             - name: BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH
@@ -3582,9 +3638,18 @@ $(k3s_timezone_env_entries)
               value: "${runtime_uid}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_GID
               value: "${runtime_gid}"
+            - name: BOREALIS_DRAIN_FILE
+              value: "/tmp/borealis-draining"
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 60
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /live
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -3592,12 +3657,16 @@ $(k3s_timezone_env_entries)
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /ready
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 25m
@@ -3612,8 +3681,14 @@ $(k3s_timezone_env_entries)
               drop: ["ALL"]
           volumeMounts:
 $(k3s_timezone_volume_mount_entries)
+            - name: tmp
+              mountPath: /tmp
       volumes:
 $(k3s_timezone_volume_entries)
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
 ---
 apiVersion: v1
 kind: Service
@@ -3667,7 +3742,7 @@ ensure_borealis_operator_bridge() {
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   site_worker_runtime_secret_hash="$(borealis_site_worker_runtime_secret_hash)"
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${ENGINE_HOST_ROOT}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then
@@ -3857,7 +3932,10 @@ spec:
       app.kubernetes.io/name: api-backend
       app.kubernetes.io/part-of: borealis
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       labels:
@@ -3880,6 +3958,30 @@ spec:
       enableServiceLinks: false
       hostNetwork: false
       dnsPolicy: ClusterFirst
+      terminationGracePeriodSeconds: 45
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: borealis.io/application-state
+                    operator: In
+                    values: ["active"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: api-backend
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: api-backend
       securityContext:
         runAsNonRoot: true
         runAsUser: ${runtime_uid}
@@ -3914,26 +4016,41 @@ $(k3s_timezone_env_entries)
               value: "1"
             - name: BOREALIS_K3S_API_BACKEND_BRIDGE
               value: "1"
+            - name: BOREALIS_K3S_PROBE_CONFORMANCE
+              value: "$(k3s_probe_conformance_status)"
+            - name: BOREALIS_K3S_VERSION
+              value: "$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}' || true)"
+            - name: BOREALIS_ENGINE_RELEASE_VERSION
+              value: "$(engine_release_version)"
+            - name: BOREALIS_ENGINE_SOURCE_SHA
+              value: "$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
             - name: HOME
               value: "/tmp"
-          livenessProbe:
-            exec:
-              command:
-                - borealis-api-backend-go
-                - api-healthcheck
-            initialDelaySeconds: 20
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 60
           readinessProbe:
-            exec:
-              command:
-                - borealis-api-backend-go
-                - api-healthcheck
-            initialDelaySeconds: 5
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 12
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 75m
@@ -4081,7 +4198,7 @@ ensure_k3s_api_backend_bridge() {
       "traffic_owner=${traffic_owner}" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
-      "project_root=${SCRIPT_DIR}" \
+      "project_root=${ENGINE_HOST_ROOT}" \
       "log_retention_mounts=wireguard-logs-v1" \
       | sha256sum | awk '{print $1}'
   )"
@@ -4374,12 +4491,16 @@ metadata:
 spec:
   replicas: ${replicas}
   revisionHistoryLimit: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app.kubernetes.io/name: job-scheduler
       app.kubernetes.io/part-of: borealis
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       labels:
@@ -4400,6 +4521,18 @@ spec:
       enableServiceLinks: false
       hostNetwork: false
       dnsPolicy: ClusterFirst
+      terminationGracePeriodSeconds: 60
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: borealis.io/application-state
+                    operator: In
+                    values: ["active"]
+                  - key: borealis.io/scheduler-eligible
+                    operator: In
+                    values: ["true"]
       securityContext:
         runAsNonRoot: true
         runAsUser: ${runtime_uid}
@@ -4430,22 +4563,33 @@ $(k3s_timezone_env_entries)
               value: "k3s"
             - name: HOME
               value: "/tmp"
-          livenessProbe:
+          startupProbe:
             exec:
               command:
                 - borealis-job-scheduler-healthcheck
-            initialDelaySeconds: 20
-            periodSeconds: 10
+            periodSeconds: 2
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 90
           readinessProbe:
             exec:
               command:
                 - borealis-job-scheduler-healthcheck
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: 2
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "kill -0 1"
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 50m
@@ -4574,7 +4718,7 @@ ensure_k3s_job_scheduler() {
       "internal_api_base=${internal_api_base}" \
       "site_worker_lifecycle=k3s" \
       "replicas=${replicas}" \
-      "project_root=${SCRIPT_DIR}" \
+      "project_root=${ENGINE_HOST_ROOT}" \
       "wireguard_run=${RUNTIME_ROOT}/Services/wireguard-tunnel/run" \
       | sha256sum | awk '{print $1}'
   )"
@@ -5455,6 +5599,7 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app.kubernetes.io/name: webui-frontend
@@ -5480,6 +5625,22 @@ spec:
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: borealis.io/application-state
+                    operator: In
+                    values: ["active"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app.kubernetes.io/name: webui-frontend}
       securityContext:
         runAsNonRoot: true
         runAsUser: ${runtime_uid}
@@ -5509,22 +5670,34 @@ $(k3s_timezone_env_entries)
               value: "/opt/Borealis/Data/Engine/web-interface/node_modules/.vite"
             - name: HOME
               value: "/tmp"
-          livenessProbe:
+          startupProbe:
             exec:
               command:
                 - borealis-webui-healthcheck
-            initialDelaySeconds: 20
-            periodSeconds: 10
+                - startup
+            periodSeconds: 2
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 90
           readinessProbe:
             exec:
               command:
                 - borealis-webui-healthcheck
-            initialDelaySeconds: 5
+                - ready
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - borealis-webui-healthcheck
+                - live
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 50m
@@ -5676,6 +5849,7 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app.kubernetes.io/name: remote-desktop-guacd
@@ -5701,6 +5875,22 @@ spec:
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: borealis.io/application-state
+                    operator: In
+                    values: ["active"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app.kubernetes.io/name: remote-desktop-guacd}
       securityContext:
         runAsNonRoot: true
         runAsUser: ${runtime_uid}
@@ -5728,22 +5918,34 @@ $(k3s_timezone_env_entries)
               value: "/tmp/borealis-guacd-logs"
             - name: HOME
               value: "/tmp"
-          livenessProbe:
+          startupProbe:
             exec:
               command:
                 - borealis-guacd-healthcheck
-            initialDelaySeconds: 10
-            periodSeconds: 10
+                - startup
+            periodSeconds: 2
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 60
           readinessProbe:
             exec:
               command:
                 - borealis-guacd-healthcheck
-            initialDelaySeconds: 5
+                - ready
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - borealis-guacd-healthcheck
+                - live
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 25m
@@ -6089,22 +6291,29 @@ spec:
 $(k3s_timezone_env_entries)
             - name: HOME
               value: "/tmp"
-          livenessProbe:
+          startupProbe:
             exec:
-              command:
-                - borealis-wireguard-healthcheck
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 6
+              command: ["sh", "-c", "test -S \"\${BOREALIS_WIREGUARD_CONTROL_SOCKET:-/opt/Borealis/Engine/Services/wireguard-tunnel/run/control.sock}\""]
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 90
           readinessProbe:
             exec:
               command:
                 - borealis-wireguard-healthcheck
-            initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "kill -0 1"]
+            periodSeconds: 10
             timeoutSeconds: 2
-            failureThreshold: 12
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "borealis-wireguard-control-client withdraw || true; sleep 5"]
           resources:
             requests:
               cpu: 25m
@@ -6289,6 +6498,7 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app.kubernetes.io/name: traefik-edge
@@ -6314,6 +6524,18 @@ spec:
       enableServiceLinks: false
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      terminationGracePeriodSeconds: 45
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: borealis.io/application-state
+                    operator: In
+                    values: ["active"]
+                  - key: borealis.io/edge-eligible
+                    operator: In
+                    values: ["true"]
       securityContext:
         runAsUser: 0
         runAsGroup: ${runtime_gid}
@@ -6340,26 +6562,37 @@ spec:
           env:
             - name: HOME
               value: "/tmp"
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "test ! -e /tmp/borealis-draining && traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             exec:
               command:
                 - sh
                 - -c
                 - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
-            initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 6
-          readinessProbe:
-            exec:
-              command:
-                - sh
-                - -c
-                - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 25m
@@ -8317,7 +8550,7 @@ write_compose_env() {
   fi
 
   cat > "${RUNTIME_ENV}" <<EOF
-BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
+BOREALIS_PROJECT_ROOT=${ENGINE_HOST_ROOT}
 BOREALIS_ENGINE_SOURCE_BUILD_ID=${engine_source_build_id}
 BOREALIS_ENGINE_SOURCE_BRANCH=${engine_source_branch}
 BOREALIS_COMPOSE_PROJECT_NAME=${PROJECT_NAME}
@@ -9332,6 +9565,12 @@ prepare_runtime() {
 deploy_engine() {
   local mode
   mode="$(normalize_mode "${1:-prod}")"
+  local hmr_guard_status=0
+  cluster_hmr_guard "${mode}" all || hmr_guard_status=$?
+  if [[ "${hmr_guard_status}" -eq 10 ]]; then
+    return 0
+  fi
+  [[ "${hmr_guard_status}" -eq 0 ]] || return "${hmr_guard_status}"
   local network_mode
   network_mode="$(resolve_engine_network_mode)"
   log_deploy_header "${mode}" "${network_mode}"
@@ -9344,6 +9583,7 @@ deploy_engine() {
   prepare_runtime "${mode}"
   ensure_engine_agent_install_cache
   build_images "${mode}"
+  ensure_borealis_node_manager
   export_image_manifest_env
   write_image_manifest "${mode}"
   local desired_postgres_traffic_owner=""
@@ -9371,6 +9611,7 @@ deploy_engine() {
   fi
   ensure_k3s_engine_database_schema "${mode}"
   ensure_k3s_api_backend_bridge "${mode}"
+  ensure_cluster_controller_baseline
   ensure_k3s_traefik_edge "${mode}"
   retire_compose_job_scheduler_container
   ensure_k3s_job_scheduler "${mode}"
@@ -9409,6 +9650,9 @@ deploy_engine() {
     retire_compose_traefik_edge_container
     retire_compose_site_worker_orchestrator_container
     retire_compose_docker_proxy_container
+    if cluster_mode_enabled; then
+      reconcile_cluster_node_workloads
+    fi
     write_deploy_manifest "${mode}" "retired" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -9426,6 +9670,14 @@ service_action() {
   [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [dev|prod]"
   validate_service "${service}"
   mode="$(normalize_mode "${mode}")"
+  if [[ "${service}" == "webui-frontend" && "${action}" == "rebuild" ]]; then
+    local hmr_guard_status=0
+    cluster_hmr_guard "${mode}" webui-frontend || hmr_guard_status=$?
+    if [[ "${hmr_guard_status}" -eq 10 ]]; then
+      return 0
+    fi
+    [[ "${hmr_guard_status}" -eq 0 ]] || return "${hmr_guard_status}"
+  fi
   ensure_engine_dependencies
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
@@ -9574,6 +9826,9 @@ service_action() {
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
       log_status "${service}" "Skipping Compose - Retired" "${C_DIM}"
       reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
+      if cluster_mode_enabled; then
+        reconcile_cluster_node_workloads "${service}"
+      fi
       retire_compose_webui_container
       retire_compose_api_backend_container
       retire_compose_job_scheduler_container
@@ -9937,18 +10192,23 @@ for container in spec.get("containers") or []:
         if str(env.get("name") or "") == "BOREALIS_SITE_WORKER_CONTAINER_NAME":
             env["value"] = candidate_name
     container["readinessProbe"] = {
-        "httpGet": {"path": "/health", "port": "remote-ops"},
-        "initialDelaySeconds": 2,
+        "httpGet": {"path": "/ready", "port": "remote-ops"},
         "periodSeconds": 2,
         "timeoutSeconds": 1,
-        "failureThreshold": 30,
+        "failureThreshold": 3,
     }
     container["livenessProbe"] = {
-        "httpGet": {"path": "/health", "port": "remote-ops"},
+        "httpGet": {"path": "/live", "port": "remote-ops"},
         "initialDelaySeconds": 15,
         "periodSeconds": 10,
         "timeoutSeconds": 2,
         "failureThreshold": 3,
+    }
+    container["startupProbe"] = {
+        "httpGet": {"path": "/startup", "port": "remote-ops"},
+        "periodSeconds": 2,
+        "timeoutSeconds": 1,
+        "failureThreshold": 60,
     }
 candidate = {
     "apiVersion": "v1",
@@ -10231,6 +10491,297 @@ redeploy_agent_binaries() {
   trap dashboard_finish EXIT
 }
 
+k3s_probe_conformance_status() {
+  [[ -s "${K3S_PROBE_CONFORMANCE_FILE}" ]] || {
+    printf '%s\n' "failed"
+    return 0
+  }
+  local running_version=""
+  running_version="$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}' || true)"
+  python3 - "${K3S_PROBE_CONFORMANCE_FILE}" "${running_version}" <<'PY' 2>/dev/null || printf '%s\n' "failed"
+import json, pathlib, sys
+try:
+    value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if value.get("id") == "pod-restart-policy-startup-probe-v1" and value.get("status") == "passed" and value.get("k3s_version") == sys.argv[2]:
+    print("passed")
+else:
+    print("failed")
+PY
+}
+
+engine_release_version() {
+  git -C "${SCRIPT_DIR}" tag --points-at HEAD 2>/dev/null \
+    | grep -E '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(\.[0-9]+)?$' \
+    | sort -V \
+    | tail -n 1 \
+    || true
+}
+
+ensure_borealis_node_manager() {
+  local staged_binary="${CONTAINER_SOURCE_DIR}/api-backend/dist/borealis-node-manager"
+  local service_source="${K3S_CLUSTER_ASSET_DIR}/node-manager.service"
+  [[ -x "${staged_binary}" ]] || die "Node-manager binary missing after API backend build: ${staged_binary}"
+  [[ -f "${service_source}" ]] || die "Node-manager systemd unit missing: ${service_source}"
+  run_privileged install -m 0750 -o root -g root "${staged_binary}" "${BOREALIS_NODE_MANAGER_BINARY}"
+  if ! run_privileged test -s "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"; then
+    local token_file=""
+    token_file="$(mktemp)"
+    umask 077
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "${token_file}"
+    run_privileged install -m 0640 -o root -g 64646 -D "${token_file}" "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"
+    find "$(dirname -- "${token_file}")" -maxdepth 1 -type f -name "$(basename -- "${token_file}")" -delete
+  fi
+  run_privileged chown root:64646 "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"
+  run_privileged chmod 0640 "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"
+  run_privileged install -m 0644 -o root -g root "${service_source}" "/etc/systemd/system/${BOREALIS_NODE_MANAGER_SERVICE}"
+  run_privileged systemctl daemon-reload
+  run_privileged systemctl enable --now "${BOREALIS_NODE_MANAGER_SERVICE}"
+}
+
+ensure_cluster_controller_baseline() {
+  local api_image=""
+  api_image="$(service_image_tag_or_previous api-backend borealis-engine/api-backend:local)"
+  [[ "${api_image}" =~ :sha-[0-9a-f]{12,64}$ || "${api_image}" =~ @sha256:[0-9a-f]{64}$ ]] \
+    || die "Cluster controller requires immutable API image; saw ${api_image}."
+  k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${K3S_CLUSTER_ASSET_DIR}/crds.yaml" >> "${BUILD_LOG}" 2>&1
+  local manifest_file=""
+  manifest_file="$(mktemp "${DEPLOY_DIR}/cluster-controller.XXXXXX.yaml")"
+  sed "s|borealis-engine/api-backend:sha-000000000000|${api_image}|g" "${K3S_CLUSTER_ASSET_DIR}/controller.yaml" > "${manifest_file}"
+  k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1
+  find "$(dirname -- "${manifest_file}")" -maxdepth 1 -type f -name "$(basename -- "${manifest_file}")" -delete
+  k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${K3S_CLUSTER_ASSET_DIR}/application-availability.yaml" >> "${BUILD_LOG}" 2>&1
+  if cluster_mode_enabled; then
+    local route_image=""
+    route_image="$(service_image_tag_or_previous wireguard-tunnel borealis-engine/wireguard-tunnel:local)"
+    local route_manifest=""
+    route_manifest="$(mktemp "${DEPLOY_DIR}/wireguard-route-daemon.XXXXXX.yaml")"
+    sed "s|borealis-engine/wireguard-tunnel:sha-000000000000|${route_image}|g" "${K3S_CLUSTER_ASSET_DIR}/wireguard-route-daemonset.yaml" > "${route_manifest}"
+    k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${route_manifest}" >> "${BUILD_LOG}" 2>&1
+    find "$(dirname -- "${route_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${route_manifest}")" -delete
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/borealis-cluster-controller --replicas=0 >> "${BUILD_LOG}" 2>&1
+    local controller_clones=""
+    controller_clones="$(k3s_kubectl -n "${K3S_NAMESPACE}" get deployment \
+      -l 'borealis.io/node-workload=true,app.kubernetes.io/name=borealis-cluster-controller' \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.availableReplicas}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)"
+    awk '$2 + 0 >= 1 { ready = 1 } END { exit !ready }' <<< "${controller_clones}" \
+      || die "Enabled cluster has no available per-node controller replica. See ${BUILD_LOG}."
+    return 0
+  fi
+  k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/borealis-cluster-controller --timeout=180s >> "${BUILD_LOG}" 2>&1 \
+    || die "Cluster controller did not become ready. See ${BUILD_LOG}."
+}
+
+cluster_mode_enabled() {
+  k3s_cluster_installed || return 1
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 1
+  [[ "$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.activeSize}' 2>/dev/null || true)" =~ ^(1|3|5)$ ]]
+}
+
+cluster_api_request() {
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  local api_url="${BOREALIS_CLUSTER_API_URL:-}"
+  local token="${BOREALIS_CLUSTER_ADMIN_TOKEN:-}"
+  [[ -n "${api_url}" && -n "${token}" ]] \
+    || die "Clustered CLI operation requires BOREALIS_CLUSTER_API_URL and recent BOREALIS_CLUSTER_ADMIN_TOKEN."
+  local auth_file=""
+  auth_file="$(mktemp)"
+  chmod 0600 "${auth_file}"
+  printf 'Authorization: Bearer %s\n' "${token}" > "${auth_file}"
+  local curl_args=(-fsS --proto '=https' --tlsv1.2 -X "${method}" -H "@${auth_file}" -H 'Accept: application/json')
+  if [[ -n "${body}" ]]; then
+    curl_args+=(-H 'Content-Type: application/json' --data-binary "${body}")
+  fi
+  if [[ -n "${BOREALIS_CLUSTER_CA_FILE:-}" ]]; then
+    curl_args+=(--cacert "${BOREALIS_CLUSTER_CA_FILE}")
+  fi
+  curl "${curl_args[@]}" "${api_url%/}${path}"
+  local status=$?
+  find "$(dirname -- "${auth_file}")" -maxdepth 1 -type f -name "$(basename -- "${auth_file}")" -delete
+  return "${status}"
+}
+
+cluster_wait_for_operation() {
+  local operation_id="$1"
+  local attempt=""
+  local snapshot=""
+  local state=""
+  for attempt in {1..1800}; do
+    snapshot="$(cluster_api_request GET /api/server/cluster)" || return 1
+    state="$(python3 -c 'import json,sys
+operation_id=sys.argv[1]
+payload=json.load(sys.stdin)
+print(next((str(item.get("state") or "unknown") for item in (payload.get("operations") or []) if item.get("id") == operation_id), "missing"))' "${operation_id}" <<< "${snapshot}")"
+    case "${state}" in
+      succeeded) return 0 ;;
+      failed|cancelled|missing) die "Cluster operation ${operation_id} ended as ${state}." ;;
+    esac
+    sleep 2
+  done
+  die "Cluster operation ${operation_id} did not complete within 60 minutes."
+}
+
+cluster_hmr_guard() {
+  local mode="$1"
+  local service="${2:-all}"
+  cluster_mode_enabled || return 0
+  [[ "${mode}" == "dev" || "${mode}" == "prod" ]] || return 0
+  local snapshot=""
+  snapshot="$(cluster_api_request GET /api/server/cluster)"
+  local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+  local state_line=""
+  state_line="$(python3 -c 'import json,sys
+payload=json.load(sys.stdin)
+node_name=sys.argv[1]
+node_id=next((str(node.get("id") or "") for node in (payload.get("nodes") or []) if node.get("node_name") == node_name), "")
+hmr=payload.get("hmr") or {}
+print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_id") or ""))))' "${node_name}" <<< "${snapshot}")"
+  local node_id=""
+  local hmr_state=""
+  local hmr_node_id=""
+  IFS=$'\t' read -r node_id hmr_state hmr_node_id <<< "${state_line}"
+  [[ -n "${node_id}" ]] || die "Current node ${node_name} is not an active Engine cluster node."
+  if [[ "${mode}" == "dev" && "${hmr_state}" == "active" && "${hmr_node_id}" == "${node_id}" ]]; then
+    return 0
+  fi
+  if [[ "${mode}" == "prod" && "${hmr_state}" != "active" ]]; then
+    die "Cluster production deploys require Cluster Management Update Node/Update All. Direct deploy prod is blocked."
+  fi
+
+  local confirmation=""
+  local endpoint=""
+  local body=""
+  if [[ "${mode}" == "dev" ]]; then
+    printf '%s\n' "This moves all Borealis application traffic to this node and places every other Engine node in drained standby. Cluster loses application HA until production mode is restored." >&2
+    if [[ -t 0 ]]; then
+      read -r -p "Type ENABLE HMR to continue: " confirmation
+      [[ "${confirmation}" == "ENABLE HMR" ]] || die "HMR activation cancelled."
+    else
+      [[ "${CLUSTER_NON_HA_ACKNOWLEDGED}" -eq 1 ]] || die "Non-interactive clustered DEV mode requires --acknowledge-cluster-non-ha."
+    fi
+    endpoint="/api/server/cluster/hmr/start"
+    body="$(printf '{\"node_id\":\"%s\",\"confirmation\":\"ENABLE HMR\"}' "${node_id}")"
+  else
+    endpoint="/api/server/cluster/hmr/exit"
+    body='{"confirmation":"EXIT HMR"}'
+  fi
+  local response=""
+  response="$(cluster_api_request POST "${endpoint}" "${body}")"
+  local operation_id=""
+  operation_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id") or "")' <<< "${response}")"
+  [[ "${operation_id}" =~ ^[0-9a-f-]{36}$ ]] || die "Cluster HMR request did not return operation ID."
+  cluster_wait_for_operation "${operation_id}"
+  if [[ "${mode}" == "prod" ]]; then
+    printf 'Pinned production release restored cluster-wide; local HMR source preserved.\n'
+    return 10
+  fi
+  printf 'Cluster entered non-HA HMR mode on %s; starting %s DEV workload.\n' "${node_name}" "${service}"
+}
+
+cluster_enable_engine() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || exec sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE bash "${SCRIPT_DIR}/Engine.sh" --cluster-enable --control-plane-vip "${CLUSTER_CONTROL_PLANE_VIP}" --edge-vip "${CLUSTER_EDGE_VIP}"
+  [[ "$(k3s_probe_conformance_status)" == "passed" ]] || die "Stable K3s probe conformance missing or stale. Run ${K3S_CLUSTER_ASSET_DIR}/run-probe-conformance.sh first."
+  [[ -n "${CLUSTER_CONTROL_PLANE_VIP}" && -n "${CLUSTER_EDGE_VIP}" ]] || die "Cluster enable requires --control-plane-vip and --edge-vip."
+  [[ -f "${IMAGE_MANIFEST}" ]] || die "Existing Engine deployment missing image manifest."
+  load_existing_image_tags
+  local api_image="${IMAGE_TAGS[api-backend]:-}"
+  [[ -n "${api_image}" ]] || die "Existing immutable API image unavailable."
+  if [[ "${BOREALIS_CLUSTER_ENROLL_OPERATION:-0}" != "1" ]]; then
+    local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+    local interface=""
+    local management_ip=""
+    local architecture=""
+    interface="$(ip -4 route show default | awk 'NR == 1 {print $5}')"
+    management_ip="$(ip -o -4 address show dev "${interface}" scope global | awk 'NR == 1 {sub(/\/.*/, "", $4); print $4}')"
+    case "$(uname -m)" in
+      x86_64|amd64) architecture="amd64" ;;
+      aarch64|arm64) architecture="arm64" ;;
+      *) die "Cluster mode supports amd64 or arm64 only." ;;
+    esac
+    local body=""
+    body="$(python3 - "${CLUSTER_CONTROL_PLANE_VIP}" "${CLUSTER_EDGE_VIP}" "${node_name}" "${management_ip}" "${architecture}" <<'PY'
+import json, sys
+print(json.dumps({
+    "control_plane_vip": sys.argv[1],
+    "edge_vip": sys.argv[2],
+    "node_name": sys.argv[3],
+    "management_ip": sys.argv[4],
+    "architecture": sys.argv[5],
+    "confirmation": "ENABLE CLUSTER",
+}, separators=(",", ":")))
+PY
+)"
+    local response=""
+    response="$(cluster_api_request POST /api/server/cluster/enable "${body}")"
+    local operation_id=""
+    operation_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id") or "")' <<< "${response}")"
+    [[ "${operation_id}" =~ ^[0-9a-f-]{36}$ ]] || die "Cluster enable request did not return operation ID."
+    cluster_wait_for_operation "${operation_id}"
+    return 0
+  fi
+  BOREALIS_CLUSTER_API_IMAGE="${api_image}" BOREALIS_CLUSTER_ACTIVE_SIZE=1 "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" enable "${CLUSTER_CONTROL_PLANE_VIP}" "${CLUSTER_EDGE_VIP}"
+  ensure_cluster_controller_baseline
+}
+
+reconcile_cluster_node_workloads() {
+  local service="${1:-}"
+  cluster_mode_enabled || return 0
+  local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+  local revision=""
+  revision="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
+  local args=(
+    --node "${node_name}"
+    --revision "${revision}"
+    --image-manifest "${IMAGE_MANIFEST}"
+    --initialize
+  )
+  [[ -n "${service}" ]] && args+=(--service "${service}")
+  python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" "${args[@]}"
+}
+
+cluster_node_redeploy() {
+  [[ "${CLUSTER_TARGET_REVISION}" =~ ^[0-9a-f]{40}$ ]] || die "Cluster node redeploy requires --revision with lowercase 40-character commit SHA."
+  [[ "$(git -C "${SCRIPT_DIR}" rev-parse HEAD)" == "${CLUSTER_TARGET_REVISION}" ]] || die "Cluster node redeploy revision does not match worktree HEAD."
+  cluster_mode_enabled || die "Cluster node redeploy requires enabled Borealis cluster."
+  local cluster_runtime_env=""
+  cluster_runtime_env="$(mktemp)"
+  k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json \
+    | python3 -c 'import base64,json,re,sys
+payload=json.load(sys.stdin)
+for key,value in sorted((payload.get("data") or {}).items()):
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", key):
+        raise SystemExit("invalid runtime environment key")
+    decoded=base64.b64decode(value, validate=True).decode("utf-8")
+    if any(char in decoded for char in "\r\n\x00"):
+        raise SystemExit("runtime environment value is not single-line")
+    print(f"{key}={decoded}")' > "${cluster_runtime_env}"
+  [[ -s "${cluster_runtime_env}" ]] || die "Cluster runtime Secret could not hydrate node deployment environment."
+  local network_mode=""
+  network_mode="$(awk -F= '$1 == "BOREALIS_ENGINE_NETWORK_MODE" {print substr($0, index($0, "=") + 1); exit}' "${cluster_runtime_env}")"
+  ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "${network_mode}")"
+  export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  prepare_runtime prod
+  run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
+  find "$(dirname -- "${cluster_runtime_env}")" -maxdepth 1 -type f -name "$(basename -- "${cluster_runtime_env}")" -delete
+  build_images prod
+  export_image_manifest_env
+  write_image_manifest prod
+  local service=""
+  for service in "${BUILD_ROLES[@]}"; do
+    [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
+    import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
+  done
+  BOREALIS_CLUSTER_API_IMAGE="${IMAGE_TAGS[api-backend]}" "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" redeploy
+  local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+  python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" \
+    --node "${node_name}" \
+    --revision "${CLUSTER_TARGET_REVISION}" \
+    --image-manifest "${IMAGE_MANIFEST}"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -10238,6 +10789,8 @@ Usage:
   Engine.sh --network-mode <public|local> --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
   Engine.sh --redeploy-agent-binaries
+  Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4
+  Engine.sh --cluster-node-redeploy --revision COMMIT_SHA
 EOF
 }
 
@@ -10268,6 +10821,14 @@ main() {
     --redeploy-agent-binaries)
       [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --redeploy-agent-binaries"
       redeploy_agent_binaries
+      ;;
+    --cluster-enable)
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4"
+      cluster_enable_engine
+      ;;
+    --cluster-node-redeploy)
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-node-redeploy --revision COMMIT_SHA"
+      cluster_node_redeploy
       ;;
     -h|--help|help)
       usage

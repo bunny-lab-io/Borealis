@@ -9,6 +9,7 @@
         "Data/Engine/Containers/api-backend/go.sum",
         "Data/Engine/Containers/api-backend/cmd/api-backend/**",
         "Data/Engine/Containers/api-backend/build-api-backend.sh",
+        "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/**",
         "Data/Engine/Containers/borealis-operator/**"
       ]
     },
@@ -21,9 +22,12 @@
         "Data/Engine/Containers/api-backend/Dockerfile",
         "Data/Engine/Containers/api-backend/build-api-backend.sh",
         "Data/Engine/Containers/api-backend/cmd/api-backend/**",
+        "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/**",
+        "Data/Engine/K3s/cluster/**",
         "Data/Engine/Containers/api-backend/entrypoint.sh",
         "Data/Engine/Containers/api-backend/go.mod",
-        "Data/Engine/Containers/api-backend/go.sum"
+        "Data/Engine/Containers/api-backend/go.sum",
+        "Data/Engine/release-manifest.json"
       ]
     },
     "job-scheduler": {
@@ -94,6 +98,7 @@
         "Data/Engine/Containers/api-backend/build-api-backend.sh",
         "Data/Engine/Containers/api-backend/cmd/wireguard-control/**",
         "Data/Engine/Containers/api-backend/cmd/wireguard-control-client/**",
+        "Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/**",
         "Data/Engine/Containers/api-backend/go.mod",
         "Data/Engine/Containers/api-backend/go.sum",
         "Data/Engine/Containers/api-backend/internal/wireguardcontrol/**",

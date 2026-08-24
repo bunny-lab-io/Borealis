@@ -90,6 +90,21 @@ def initialise_engine_database(
         _run_schema_step(progress_callback, ("credentials",), lambda: _ensure_credentials(conn, logger=logger))
         _run_schema_step(progress_callback, ("github_token",), lambda: _ensure_github_token(conn, logger=logger))
         _run_schema_step(progress_callback, ("aegis_cipher_state",), lambda: _ensure_aegis_cipher_state(conn, logger=logger))
+        _run_schema_step(
+            progress_callback,
+            (
+                "cluster_state",
+                "cluster_nodes",
+                "cluster_invitations",
+                "cluster_admissions",
+                "cluster_operations",
+                "cluster_operation_events",
+                "cluster_audit_events",
+                "realtime_outbox",
+                "cluster_application_leases",
+            ),
+            lambda: _ensure_cluster_control_tables(conn, logger=logger),
+        )
         _run_schema_step(progress_callback, ("device_filters",), lambda: _ensure_device_filters(conn, logger=logger))
         _run_schema_step(progress_callback, ("device_filter_sites",), lambda: _ensure_device_filter_sites(conn, logger=logger))
         _run_schema_step(progress_callback, ("device_software_inventory",), lambda: _ensure_device_software_inventory(conn, logger=logger))
@@ -818,6 +833,172 @@ def _ensure_aegis_cipher_state(conn: sqlite3.Connection, *, logger: Optional[log
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure aegis_cipher_state table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_cluster_control_tables(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_state (
+                id INTEGER PRIMARY KEY,
+                cluster_id TEXT UNIQUE NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'Standalone',
+                active_size INTEGER NOT NULL DEFAULT 1,
+                desired_size INTEGER NOT NULL DEFAULT 1,
+                control_plane_vip TEXT,
+                edge_vip TEXT,
+                baseline_release TEXT,
+                baseline_sha TEXT,
+                hmr_state TEXT NOT NULL DEFAULT 'inactive',
+                hmr_node_id TEXT,
+                active_operation_id TEXT,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_nodes (
+                id TEXT PRIMARY KEY,
+                node_name TEXT UNIQUE NOT NULL,
+                hostname TEXT NOT NULL,
+                management_ip TEXT NOT NULL,
+                architecture TEXT NOT NULL,
+                os_version TEXT NOT NULL,
+                membership_state TEXT NOT NULL DEFAULT 'Pending Quorum',
+                application_state TEXT NOT NULL DEFAULT 'standby',
+                release_tag TEXT,
+                release_sha TEXT,
+                drain_reason TEXT,
+                roles_json TEXT NOT NULL DEFAULT '{}',
+                probe_health_json TEXT NOT NULL DEFAULT '{}',
+                last_seen_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_nodes_membership ON cluster_nodes(membership_state, node_name)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_invitations (
+                id TEXT PRIMARY KEY,
+                cluster_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                token_hash TEXT UNIQUE NOT NULL,
+                created_by TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                consumed_at INTEGER,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_invitations_expiry ON cluster_invitations(expires_at, consumed_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_admissions (
+                id TEXT PRIMARY KEY,
+                invitation_id TEXT UNIQUE NOT NULL,
+                cluster_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                management_ip TEXT NOT NULL,
+                architecture TEXT NOT NULL,
+                os_version TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'Pending Quorum',
+                approved_by TEXT,
+                approved_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_admissions_state ON cluster_admissions(state, created_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_operations (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                state TEXT NOT NULL,
+                current_step TEXT NOT NULL,
+                target_node_id TEXT,
+                target_release TEXT,
+                target_sha TEXT,
+                requested_by TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                error_text TEXT,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_operations_state ON cluster_operations(state, created_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_operation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_id TEXT,
+                admission_id TEXT,
+                cluster_id TEXT,
+                event_type TEXT NOT NULL,
+                state TEXT NOT NULL,
+                message TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_operation_events_operation ON cluster_operation_events(operation_id, id)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_id TEXT,
+                result TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_audit_events_created ON cluster_audit_events(created_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS realtime_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_name TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                published_at INTEGER
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_realtime_outbox_pending ON realtime_outbox(published_at, id)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_application_leases (
+                name TEXT PRIMARY KEY,
+                holder TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure cluster control tables: %s", exc, exc_info=True)
         else:
             raise
     finally:

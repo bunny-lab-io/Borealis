@@ -134,6 +134,8 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 
 K3s is a host-level control-plane baseline plus locked-down workload migration path, not a broad runtime mutation API. It gives Borealis a future migration target while each workload keeps an explicit cutover and rollback boundary.
 
+Multi-node mode adds narrow cluster-controller RBAC plus root-owned `borealis-node-manager`. Node manager accepts only enroll, fetch, fast-forward checkout, revision redeploy, health inspection, drain, fencing, and status operations authenticated over local Unix socket. It has no arbitrary command or remote-shell operation. K3s secrets encryption, checksum-pinned infrastructure manifests, immutable application images, explicit peer firewall allowlists, separate control/edge VIPs, and per-node required affinity bound cluster trust surface.
+
 - `Engine.sh` writes K3s bootstrap and fixed operator manifests during deployment. Runtime services do not receive kubeconfig, Kubernetes API credentials, or kubectl access; they must call `borealis-operator` for allowlisted K3s lifecycle work.
 - Borealis writes its K3s config as `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml` and records the desired hash in `Engine/Deploy/k3s-baseline.sha256`.
 - Bundled K3s Traefik and ServiceLB stay disabled so the Borealis-managed K3s `traefik-edge` workload remains the only ingress owner, certificate owner, and dynamic route-file reader.

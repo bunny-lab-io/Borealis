@@ -14,6 +14,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Remote desktop proxy: `Data/Engine/Containers/api-backend/cmd/api-backend/vnc.go` and `vnc_runtime.go` (Apache Guacamole VNC bridge through local `guacd`).
 - Assemblies: `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go` and `assemblies_catalog.go`.
 - Watchdog runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go` and `watchdogs_runtime.go`.
+- Cluster runtime: `server_cluster.go`, `server_cluster_store.go`, and `cluster_controller.go` own Admin/API contracts, durable operation state, leadership transfer, per-node drain/update/HMR workflows, and recovery. Root node mutations pass through fixed verbs in `cmd/borealis-node-manager`; application workloads never receive host shell contract.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -26,6 +27,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     ### Related documentation
 
     - [Architecture Overview](../../Reference/architecture-overview.md)
+    - [Managing Engine Clusters](../../Engine/managing-engine-clusters.md)
     - [Docker Stack Breakdown](Stack_Breakdown.md)
     - [Database Reference](../Data%20and%20Schema/db-reference.md)
     - [Security Whitepaper](../../Reference/security-whitepaper.md)

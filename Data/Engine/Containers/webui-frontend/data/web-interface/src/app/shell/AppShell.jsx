@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
+  Alert,
   AppBar,
   Box,
   Breadcrumbs,
@@ -158,6 +159,7 @@ export default function AppShell() {
   const [managePasskeyAction, setManagePasskeyAction] = useState({ id: null, type: "" });
   const [newPasskeyLabel, setNewPasskeyLabel] = useState("");
   const [removePasskeyTarget, setRemovePasskeyTarget] = useState(null);
+  const [clusterBanner, setClusterBanner] = useState(null);
 
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
@@ -240,6 +242,25 @@ export default function AppShell() {
 
     return () => {
       document.title = APP_DOCUMENT_TITLE;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshClusterBanner = async () => {
+      try {
+        const response = await fetch("/api/server/cluster/banner", { credentials: "include", cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (active && response.ok) setClusterBanner(payload);
+      } catch {
+        // Main route owns error reporting; banner polling stays silent.
+      }
+    };
+    void refreshClusterBanner();
+    const timer = window.setInterval(refreshClusterBanner, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -734,6 +755,19 @@ export default function AppShell() {
               minWidth: 0,
             }}
           >
+            {clusterBanner?.hmr_state && clusterBanner.hmr_state !== "inactive" ? (
+              <Alert severity="warning" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
+                Cluster-wide non-HA HMR active. All Borealis application traffic runs on designated HMR node; standby nodes remain drained until pinned production release is restored.
+              </Alert>
+            ) : clusterBanner?.status === "Degraded Quorum" ? (
+              <Alert severity="error" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
+                Cluster degraded. Failed node remains drained; Admin retry or recovery required.
+              </Alert>
+            ) : clusterBanner?.active_operation ? (
+              <Alert severity="info" sx={{ borderRadius: 0, flexShrink: 0 }}>
+                Cluster operation {clusterBanner.active_operation.kind} · {clusterBanner.active_operation.current_step} · {clusterBanner.active_operation.state}
+              </Alert>
+            ) : null}
             {hasPageHeader ? (
               <Box sx={{ px: 3, pt: 3, pb: 1.5, flexShrink: 0 }}>
                 <Box

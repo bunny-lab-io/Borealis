@@ -488,7 +488,7 @@ func classifyInputField(field string) inputFieldClass {
 	switch {
 	case strings.Contains(key, "password"), strings.Contains(key, "cipher"), strings.Contains(key, "secret"),
 		strings.Contains(key, "token"), strings.Contains(key, "pem"), strings.Contains(key, "private_key"),
-		strings.Contains(key, "backup"):
+		strings.Contains(key, "backup"), key == "invite_bundle":
 		return inputClassSecret
 	case strings.Contains(key, "script"), strings.Contains(key, "code"), strings.Contains(key, "content"),
 		strings.Contains(key, "stdout"), strings.Contains(key, "stderr"), strings.Contains(key, "command"),

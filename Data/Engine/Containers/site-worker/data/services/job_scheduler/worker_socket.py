@@ -363,9 +363,23 @@ class SiteWorkerSocketRuntime:
         self._ansible_runner = runner
 
     def _register_routes(self) -> None:
+        @self.app.route("/startup", methods=["GET"])
+        def _startup():
+            return jsonify({"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id})
+
+        @self.app.route("/live", methods=["GET"])
+        def _live():
+            return jsonify({"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id})
+
+        @self.app.route("/ready", methods=["GET"])
+        def _ready():
+            if os.path.exists("/tmp/borealis-draining"):
+                return jsonify({"status": "draining", "worker_guid": self.worker_guid, "site_id": self.site_id}), 503
+            return jsonify({"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id})
+
         @self.app.route("/health", methods=["GET"])
         def _health():
-            return jsonify({"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id})
+            return _ready()
 
         @self.app.route("/agents", methods=["GET"])
         def _agents():

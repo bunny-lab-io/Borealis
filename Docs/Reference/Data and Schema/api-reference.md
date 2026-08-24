@@ -260,11 +260,19 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached runtime service action through `job-scheduler`; supported K3s workload restarts route through `borealis-operator`, and K3s WireGuard reconcile routes through the mounted control socket. Docker/Compose helper actions are retired after Stage 11. Supported actions are `api-backend restart`, `webui-frontend restart`, `postgres-db restart`, `remote-desktop-guacd restart`, `traefik-edge reload`, and `wireguard-tunnel reconcile`. WebUI rebuilds are CLI-only through `Engine.sh --network-mode public|local --service webui-frontend rebuild prod|dev`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
     - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
+    - `GET /api/server/cluster` and `GET /api/server/cluster/events` (Admin) - cluster roles, node/probe/release state, quorum, HMR, operations, and event history.
+    - `POST /api/server/cluster/enable`, `/invitations`, `/admissions/{id}/approve`, and `/membership/scale` (Admin plus recent step-up for mutations) - gated enablement and paired membership workflow.
+    - `POST /api/server/cluster/nodes/{id}/maintenance`, `/nodes/{id}/remove`, `/postgres/switchover`, and `/postgres/emergency-failover` (Admin plus recent step-up) - node/database maintenance operations.
+    - `GET /api/server/cluster/releases` (Admin) - published stable GitHub release catalog with immutable SHA and compatibility results.
+    - `POST /api/server/cluster/hmr/start`, `/hmr/exit`, and `/updates` (Admin plus recent step-up) - exclusive cluster-wide HMR or rolling release workflow.
+    - `POST /api/server/cluster/operations/{id}/retry` and `/cancel` (Admin plus recent step-up) - explicit recovery for halted operations.
+    - `POST /api/bootstrap/cluster/join` and `GET /api/bootstrap/cluster/join/{id}/events` (Invitation Authenticated) - bounded one-use node enrollment and approval event polling.
     - `/api/server/logs*` (Admin) - retired log access surface. Authenticated administrators receive `410 Gone`; log inspection is CLI-only through [Engine Log Access](../../Using%20the%20Platform/engine-log-management.md).
 
     ### Related documentation
 
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+    - [Managing Engine Clusters](../../Engine/managing-engine-clusters.md)
     - [Database Reference](db-reference.md)
     - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
     - [Watchdogs](../../Using%20the%20Platform/watchdogs.md)

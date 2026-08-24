@@ -190,7 +190,9 @@ After the first install, update and redeploy from the checked-out Borealis repos
 ### K3s Cluster
 Every full Engine deploy now creates or repairs a single-node K3s cluster baseline before retired Docker Compose reconciliation. K3s owns PostgreSQL, API backend, job-scheduler, WireGuard tunnel, Traefik edge, WebUI, remote-desktop-guacd, site-worker pods, and per-worker ClusterIP Services.
 
-`Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down the cluster.
+Multi-node mode is separate, gated conversion. It supports one, three, or five homogeneous Ubuntu nodes, per-node application workloads, separate control/edge VIPs, CloudNativePG, paired quorum admission, cluster-wide HMR isolation, and one-node-at-time release updates. Read [Managing Engine Clusters](managing-engine-clusters.md) before attempting conversion. Production conversion requires explicit operator checkpoint after stable-K3s conformance and disposable three/five-node qualification.
+
+`Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down cluster. Multi-node firewall rules permit only explicitly configured private peer CIDRs for K3s API, etcd, kubelet, Spegel, flannel, and WireGuard ports.
 
 K3s keeps bundled Traefik and ServiceLB disabled so Borealis-owned Traefik remains the only public ingress. Borealis also installs `borealis-k3s-api-firewall.service`, which applies a host iptables chain for TCP `6443`. The rule allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
 

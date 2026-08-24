@@ -55,6 +55,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 ## Important PostgreSQL Behavior
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
 - Current Engine PostgreSQL traffic uses the K3s `postgres-db` StatefulSet and Longhorn PVC. The old `Engine/Services/postgres-db/state` directory is preserved as retired host state and is not deleted during normal deploy.
+- Cluster conversion migrates standalone StatefulSet into CloudNativePG once, validates imported state, cuts Service traffic over, and retains old PVC plus encrypted logical dump. Three nodes use one synchronous replica acknowledgement; five use two. Writes block when durability quorum disappears, preventing stale promotion.
 - Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
 - Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
 - Borealis now treats database connections as short-lived pooled resources. Request handlers and background services should fetch rows, release the connection, and then perform Python-side enrichment, JSON shaping, crypto, GitHub lookups, or target expansion outside the transaction boundary.
@@ -302,6 +303,18 @@ finally:
 ```
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Cluster control tables
+
+    - `engine.cluster_state` stores singleton topology, VIPs, baseline release/SHA, HMR state, and active operation.
+    - `engine.cluster_nodes` stores membership/application state, management identity, release, roles, drain reason, and probe health.
+    - `engine.cluster_invitations` and `engine.cluster_admissions` store bounded one-use invite metadata and paired approvals.
+    - `engine.cluster_operations` plus `engine.cluster_operation_events` store restart-safe state machine and ordered events.
+    - `engine.cluster_audit_events` stores actor/action/result audit history.
+    - `engine.realtime_outbox` stores cluster UI notifications pending publish.
+    - `engine.cluster_application_leases` provides singleton controller, scheduler, HMR, update, membership, and maintenance ownership.
+
+    Kubernetes CRDs keep desired/runtime topology. PostgreSQL keeps audit/event history and lease serialization; neither surface replaces other.
 
     ### API endpoints
 

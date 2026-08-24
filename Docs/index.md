@@ -50,6 +50,7 @@ Status means productized support in current Borealis codebase and docs, not long
     | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. |
     | Code Signing | Sign script delivery and enforce trusted execution payloads. |
     | REST/API Surface | Expose authenticated APIs for devices, jobs, files, registry, processes, services, software, filters, sites, logs, and runtime operations. |
+    | Engine Clustering | Coordinate gated one/three/five-node K3s topology, per-node application workloads, quorum-aware maintenance, cluster-wide HMR isolation, and rolling stable-release updates. |
     | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
 
 ## Getting Started
@@ -84,6 +85,7 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine/de
     Documentation Map:
 
     - [Engine Deployment](Engine/deploying-the-engine.md) - install path, architecture, security, UI rules, and testing entrypoints.
+    - [Managing Engine Clusters](Engine/managing-engine-clusters.md) - quorum, probes, HMR isolation, membership, rolling updates, and recovery.
     - [Screenshots](screenshots.md) - visual tour of Borealis operator surfaces.
     - [Using the Platform](Using%20the%20Platform/index.md) - operator workflows for devices, sites, remote operations, automation, access, logs, and software.
     - [Assemblies](Using%20the%20Platform/Assemblies/assemblies.md) - scripts, workflows, Ansible playbooks, quick jobs, and Aurora content.

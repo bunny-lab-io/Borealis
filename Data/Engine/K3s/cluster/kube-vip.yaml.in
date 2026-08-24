@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: kube-vip-borealis, namespace: kube-system}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: kube-vip-borealis}
+rules:
+  - apiGroups: [""]
+    resources: ["services", "services/status", "nodes", "endpoints"]
+    verbs: ["list", "get", "watch", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["list", "get", "watch", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: kube-vip-borealis}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: kube-vip-borealis}
+subjects:
+  - {kind: ServiceAccount, name: kube-vip-borealis, namespace: kube-system}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-vip-borealis-control
+  namespace: kube-system
+spec:
+  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-control}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: kube-vip-borealis-control, app.kubernetes.io/part-of: borealis}}
+    spec:
+      serviceAccountName: kube-vip-borealis
+      hostNetwork: true
+      terminationGracePeriodSeconds: 20
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      nodeSelector: {borealis.io/engine-node: "true"}
+      containers:
+        - name: kube-vip
+          image: ghcr.io/kube-vip/kube-vip@sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410
+          imagePullPolicy: IfNotPresent
+          args: [manager]
+          env:
+            - {name: vip_arp, value: "true"}
+            - {name: vip_interface, value: "${BOREALIS_CLUSTER_INTERFACE}"}
+            - {name: vip_address, value: "${BOREALIS_CONTROL_PLANE_VIP}"}
+            - {name: vip_leaderelection, value: "true"}
+            - {name: vip_leasename, value: borealis-control-vip}
+            - {name: vip_leaseduration, value: "10"}
+            - {name: vip_renewdeadline, value: "5"}
+            - {name: vip_retryperiod, value: "2"}
+            - {name: cp_enable, value: "true"}
+            - {name: svc_enable, value: "false"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {add: ["NET_ADMIN", "NET_RAW"], drop: ["ALL"]}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-vip-borealis-edge
+  namespace: kube-system
+spec:
+  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-edge}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: kube-vip-borealis-edge, app.kubernetes.io/part-of: borealis}}
+    spec:
+      serviceAccountName: kube-vip-borealis
+      hostNetwork: true
+      terminationGracePeriodSeconds: 20
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      nodeSelector: {borealis.io/engine-node: "true", borealis.io/edge-eligible: "true"}
+      containers:
+        - name: kube-vip
+          image: ghcr.io/kube-vip/kube-vip@sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410
+          imagePullPolicy: IfNotPresent
+          args: [manager]
+          env:
+            - {name: vip_arp, value: "true"}
+            - {name: vip_interface, value: "${BOREALIS_CLUSTER_INTERFACE}"}
+            - {name: vip_address, value: "${BOREALIS_EDGE_VIP}"}
+            - {name: vip_leaderelection, value: "true"}
+            - {name: vip_leasename, value: borealis-edge-vip}
+            - {name: vip_leaseduration, value: "10"}
+            - {name: vip_renewdeadline, value: "5"}
+            - {name: vip_retryperiod, value: "2"}
+            - {name: cp_enable, value: "true"}
+            - {name: svc_enable, value: "false"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {add: ["NET_ADMIN", "NET_RAW"], drop: ["ALL"]}

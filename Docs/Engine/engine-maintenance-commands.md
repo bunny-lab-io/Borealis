@@ -27,6 +27,8 @@ sudo bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 !!! warning "Service commands are targeted"
     A service command only touches the named component. If multiple services changed, run the normal deployment command from [Updating the Engine](updating-the-engine.md).
 
+    Clustered release, node, PostgreSQL, membership, and HMR maintenance belongs in [Cluster Management](managing-engine-clusters.md). Direct production deploy is blocked while cluster mode is active.
+
 !!! tip "WebUI HMR"
     Use [WebUI HMR Development](webui-hmr-development.md) for frontend-only edit loops. `webui-frontend rebuild dev` syncs staged WebUI source into the runtime HMR copy and reconciles only the WebUI workload when WebUI inputs changed.
 
@@ -82,6 +84,7 @@ Traefik dynamic routes keep same ClusterIP target. No Traefik reload or route-fi
     ### Related documentation
 
     - [Updating the Engine](updating-the-engine.md)
+    - [Managing Engine Clusters](managing-engine-clusters.md)
     - [WebUI HMR Development](webui-hmr-development.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)

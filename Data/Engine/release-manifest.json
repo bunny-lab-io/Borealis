@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "cluster_compatible": true,
+  "minimum_rolling_version": "2026.08.0",
+  "maximum_version_skew_releases": 1,
+  "database_migration": "none",
+  "required_k3s_baseline": "v1.36.3+k3s1",
+  "required_k3s_probe_conformance": "pod-restart-policy-startup-probe-v1"
+}

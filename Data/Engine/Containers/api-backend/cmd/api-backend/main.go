@@ -75,6 +75,13 @@ func main() {
 		return
 	}
 
+	if clusterControllerMode() {
+		if err := runClusterController(rootCtx, cfg); err != nil {
+			log.Fatalf("borealis-cluster-controller exited: %v", err)
+		}
+		return
+	}
+
 	if retiredSiteWorkerOrchestratorMode() {
 		log.Fatalf("site-worker-orchestrator runtime mode is retired; use borealis-operator managed K3s site-worker lifecycle")
 		return
@@ -107,6 +114,9 @@ func main() {
 	rdpRuntime := newRDPRuntime(auth, vpnRuntime)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg))
+	mux.HandleFunc("/startup", apiStartupHandler())
+	mux.HandleFunc("/live", apiLivenessHandler())
+	mux.HandleFunc("/ready", apiReadinessHandler(auth))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg))
 	registerRealtimeRoutes(mux, auth, operatorRealtime)
 	registerAuthRoutes(mux, auth, fallback)
@@ -124,6 +134,7 @@ func main() {
 	registerTunnelRoutes(mux, auth, vpnRuntime)
 	registerServerTimeRoutes(mux, auth)
 	registerServerOverviewRoutes(mux, auth, operatorRealtime, fallback)
+	registerServerClusterRoutes(mux, auth)
 	registerBorealisOperatorRoutes(mux, auth)
 	registerServerSettingsRoutes(mux, auth, fallback)
 	registerServerWorkerRoutes(mux, auth, fallback)
@@ -168,6 +179,9 @@ func main() {
 		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.ListenPort),
 		Handler:           withRequestHeaders(withPublicInputValidation(mux)),
 		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	serverExited := make(chan error, 1)
@@ -184,6 +198,7 @@ func main() {
 	serverAlreadyExited := false
 	select {
 	case <-rootCtx.Done():
+		apiDraining.Store(true)
 		log.Printf("shutdown requested")
 	case err := <-serverExited:
 		serverAlreadyExited = true

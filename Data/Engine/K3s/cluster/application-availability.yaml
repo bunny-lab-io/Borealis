@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: borealis-agent-artifacts
+  namespace: borealis
+  labels:
+    app.kubernetes.io/name: borealis-agent-artifacts
+    app.kubernetes.io/part-of: borealis
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: borealis-longhorn
+  resources:
+    requests:
+      storage: 4Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: api-backend, namespace: borealis}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: api-backend}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: webui-frontend, namespace: borealis}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: webui-frontend}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: job-scheduler, namespace: borealis}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: job-scheduler}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: traefik-edge, namespace: borealis}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: traefik-edge}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: remote-desktop-guacd, namespace: borealis}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app.kubernetes.io/name: remote-desktop-guacd}}

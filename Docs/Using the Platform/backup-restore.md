@@ -50,6 +50,8 @@ Agents keep trust when the restored Engine remains reachable at the same FQDN th
 
 K3s Engines use the same encrypted Backup/Restore workflow. Export, Analyze, and Import run through the K3s `api-backend` pod and the active `BOREALIS_DATABASE_URL`, which points at the ClusterIP `postgres-db.borealis.svc:5432` after K3s PostgreSQL cutover.
 
+Clustered Engines also create daily CloudNativePG/Longhorn snapshots with fourteen-snapshot retention plus pre-change snapshots. Those snapshots support in-cluster rollback and PostgreSQL recovery only. They do not replace encrypted off-cluster exports or off-cluster disaster recovery. Cluster conversion retains standalone PostgreSQL PVC plus encrypted migration dump indefinitely.
+
 Use **Analyze** first when validating a backup on a running production Engine. Analyze decrypts the backup, verifies the Aegis metadata, checks supported table/file identifiers, and compares backup columns against the current PostgreSQL schema without deleting current data or writing imported rows.
 
 !!! danger

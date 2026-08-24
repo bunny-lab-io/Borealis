@@ -10,6 +10,7 @@ Repeated entries are intentional when multiple Engine containers install the sam
 - `Data/Agent/build-agent.sh`
 - `Engine.sh`
 - `Data/Engine/Containers/build-manifest.json`
+- `Data/Engine/K3s/cluster/dependencies.lock`
 - `Data/Engine/Containers/compose.yaml`
 - `Data/Engine/Containers/*/Dockerfile`
 - `Data/Engine/Containers/api-backend/go.mod`
@@ -159,8 +160,13 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
 | shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
-| shared-engine | K3s Kubernetes runtime (single-node baseline installed by `Engine.sh`; stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
+| shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
+| shared-engine | kube-vip `v1.1.0` (control-plane and Borealis edge VIP leases; checksum-pinned SBOM artifact) | [Apache-2.0](https://github.com/kube-vip/kube-vip/blob/main/LICENSE) |
+| shared-engine | CloudNativePG `v1.30.0` (cluster PostgreSQL operator and synchronous replication) | [Apache-2.0](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/LICENSE) |
+| shared-engine | cert-manager `v1.21.1` (cluster workload mTLS certificate lifecycle) | [Apache-2.0](https://github.com/cert-manager/cert-manager/blob/master/LICENSE) |
+| shared-engine | system-upgrade-controller `v0.20.1` (gated one-server-at-time K3s upgrade controller) | [Apache-2.0](https://github.com/rancher/system-upgrade-controller/blob/master/LICENSE) |
 | shared-engine | Longhorn `v1.12.0` default K3s storage baseline manifest (installed by `Engine.sh` unless `BOREALIS_K3S_LONGHORN_ENABLED=0`) | [Apache-2.0](https://github.com/longhorn/longhorn/blob/master/LICENSE) |
+| shared-engine | Kubernetes e2e BusyBox `1.36.1-1` (`registry.k8s.io/e2e-test-images/busybox`, digest-pinned probe conformance helper) | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Open-iSCSI / `iscsi-initiator-utils` host dependency for Longhorn volumes (installed by `Engine.sh` when missing) | [GPL-2.0-only](https://github.com/open-iscsi/open-iscsi/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |

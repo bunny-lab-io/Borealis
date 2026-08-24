@@ -57,6 +57,49 @@ def test_engine_database_initialisation_creates_assembly_tables(tmp_path) -> Non
     assert "activity_history" in progress
     assert "devices" in progress
     assert "job_scheduler_work_items" in progress
+    assert "cluster_operations" in progress
+
+
+def test_engine_database_initialisation_creates_cluster_control_tables(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+
+    database.initialise_engine_database(db_url)
+
+    assert _table_columns(db_url, "cluster_state") >= {
+        "cluster_id",
+        "enabled",
+        "active_size",
+        "desired_size",
+        "control_plane_vip",
+        "edge_vip",
+        "baseline_release",
+        "hmr_state",
+        "active_operation_id",
+    }
+    assert _table_columns(db_url, "cluster_nodes") >= {
+        "id",
+        "node_name",
+        "membership_state",
+        "application_state",
+        "release_tag",
+        "probe_health_json",
+    }
+    assert _table_columns(db_url, "cluster_operations") >= {
+        "id",
+        "kind",
+        "state",
+        "current_step",
+        "target_release",
+        "target_sha",
+        "payload_json",
+    }
+    assert _table_columns(db_url, "cluster_operation_events") >= {
+        "operation_id",
+        "admission_id",
+        "event_type",
+        "state",
+        "details_json",
+    }
 
 
 def test_engine_database_initialisation_creates_vpn_key_lease_table(tmp_path) -> None:

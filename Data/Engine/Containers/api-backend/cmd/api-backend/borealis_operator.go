@@ -205,6 +205,9 @@ func borealisOperatorNamespace() string {
 func (o *borealisOperator) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", o.handleHealthz)
+	mux.HandleFunc("/startup", o.handleHealthz)
+	mux.HandleFunc("/live", o.handleHealthz)
+	mux.HandleFunc("/ready", o.handleReady)
 	mux.HandleFunc("/v1/command", o.authenticated(o.handleCommand))
 	return mux
 }
@@ -212,6 +215,18 @@ func (o *borealisOperator) handler() http.Handler {
 func (o *borealisOperator) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (o *borealisOperator) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if _, err := os.Stat(envDefault("BOREALIS_DRAIN_FILE", "/tmp/borealis-draining")); err == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "reason": "draining"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -1227,11 +1242,29 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 			},
 		},
 		"spec": map[string]any{
-			"automountServiceAccountToken": false,
-			"enableServiceLinks":           false,
-			"hostNetwork":                  false,
-			"dnsPolicy":                    "ClusterFirst",
-			"restartPolicy":                "OnFailure",
+			"automountServiceAccountToken":  false,
+			"enableServiceLinks":            false,
+			"hostNetwork":                   false,
+			"dnsPolicy":                     "ClusterFirst",
+			"restartPolicy":                 "OnFailure",
+			"terminationGracePeriodSeconds": int64(60),
+			"affinity": map[string]any{
+				"nodeAffinity": map[string]any{
+					"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+						"nodeSelectorTerms": []map[string]any{
+							{
+								"matchExpressions": []map[string]any{
+									{
+										"key":      "borealis.io/application-state",
+										"operator": "In",
+										"values":   []string{"active"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 			"securityContext": map[string]any{
 				"runAsNonRoot": true,
 				"runAsUser":    runtimeUID,
@@ -1271,19 +1304,27 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 						{"name": "remote-ops", "containerPort": remoteOpsPort, "protocol": "TCP"},
 						{"name": "remote-desktop", "containerPort": remoteDesktopPort, "protocol": "TCP"},
 					},
-					"readinessProbe": map[string]any{
+					"startupProbe": map[string]any{
 						"httpGet": map[string]any{
-							"path": "/health",
+							"path": "/startup",
 							"port": "remote-ops",
 						},
-						"initialDelaySeconds": int64(2),
-						"periodSeconds":       int64(2),
-						"timeoutSeconds":      int64(1),
-						"failureThreshold":    int64(30),
+						"periodSeconds":    int64(2),
+						"timeoutSeconds":   int64(1),
+						"failureThreshold": int64(60),
+					},
+					"readinessProbe": map[string]any{
+						"httpGet": map[string]any{
+							"path": "/ready",
+							"port": "remote-ops",
+						},
+						"periodSeconds":    int64(2),
+						"timeoutSeconds":   int64(1),
+						"failureThreshold": int64(3),
 					},
 					"livenessProbe": map[string]any{
 						"httpGet": map[string]any{
-							"path": "/health",
+							"path": "/live",
 							"port": "remote-ops",
 						},
 						"initialDelaySeconds": int64(15),
@@ -1291,6 +1332,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 						"timeoutSeconds":      int64(2),
 						"failureThreshold":    int64(3),
 					},
+					"lifecycle": map[string]any{"preStop": map[string]any{"exec": map[string]any{"command": []string{"sh", "-c", "touch /tmp/borealis-draining; sleep 10"}}}},
 					"envFrom": []map[string]any{
 						{"secretRef": map[string]any{"name": runtimeSecretName}},
 					},

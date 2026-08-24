@@ -110,6 +110,11 @@ func runGoJobSchedulerManager(ctx context.Context, cfg gatewayConfig) error {
 }
 
 func runGoJobSchedulerHealthcheck(ctx context.Context, cfg gatewayConfig) error {
+	if _, err := os.Stat("/tmp/borealis-draining"); err == nil {
+		return errors.New("scheduler is draining")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect scheduler drain marker: %w", err)
+	}
 	store, closeStore, err := openOperatorStore(cfg)
 	if err != nil {
 		return err
@@ -145,12 +150,8 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		return err
 	}
 	log.Printf("Go job-scheduler manager starting")
-	if err := m.heartbeatManager(ctx); err != nil {
-		log.Printf("job-scheduler manager heartbeat failed: %v", err)
-	}
-	if err := m.reconcileSiteWorkers(ctx); err != nil {
-		log.Printf("site-worker startup reconcile failed: %v", err)
-	}
+	holder := firstText(strings.TrimSpace(os.Getenv("HOSTNAME")), newClusterUUID())
+	wasLeader := false
 
 	nextTick := int64(0)
 	nextReconcile := int64(0)
@@ -167,6 +168,22 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 		now := time.Now().Unix()
+		leader, err := m.acquireSchedulerLeadership(ctx, holder, now)
+		if err != nil {
+			log.Printf("job-scheduler leadership unavailable: %v", err)
+			continue
+		}
+		if !leader {
+			wasLeader = false
+			continue
+		}
+		if !wasLeader {
+			log.Printf("Go job-scheduler manager acquired active leadership holder=%s", holder)
+			if err := m.reconcileSiteWorkers(ctx); err != nil {
+				log.Printf("site-worker leadership reconcile failed: %v", err)
+			}
+			wasLeader = true
+		}
 		if err := m.heartbeatManager(ctx); err != nil {
 			log.Printf("job-scheduler manager heartbeat failed: %v", err)
 		}
@@ -219,6 +236,30 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 			log.Printf("failed to process agent maintenance work: %v", err)
 		}
 	}
+}
+
+func (m *goSchedulerManager) acquireSchedulerLeadership(ctx context.Context, holder string, now int64) (bool, error) {
+	if m == nil || m.store == nil || m.store.db == nil || strings.TrimSpace(holder) == "" {
+		return false, errors.New("scheduler leadership store unavailable")
+	}
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	result, err := conn.ExecContext(ctx, `
+		INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at)
+		VALUES('scheduler-leader',$1,$2,$3)
+		ON CONFLICT(name) DO UPDATE
+		SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at
+		WHERE engine.cluster_application_leases.holder=EXCLUDED.holder
+		   OR engine.cluster_application_leases.expires_at < EXCLUDED.updated_at
+	`, holder, now+10, now)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
 }
 
 func (m *goSchedulerManager) operatorClient() (*borealisOperatorClient, error) {

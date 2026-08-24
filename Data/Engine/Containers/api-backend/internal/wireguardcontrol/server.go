@@ -98,6 +98,8 @@ func HandleRequest(ctx context.Context, raw []byte, cfg Config) []byte {
 		result = Result{ReturnCode: 0, Stdout: "pong"}
 	case "status", "reconcile":
 		result = status(ctx)
+	case "withdraw":
+		result = withdraw(ctx, cfg)
 	default:
 		result = Result{ReturnCode: 2, Stderr: "unsupported command: " + command}
 	}
@@ -179,10 +181,20 @@ func validateWG(args []string, cfg Config) error {
 }
 
 func validateWGQuick(args []string, cfg Config) error {
-	if len(args) == 3 && args[1] == "up" && isPathUnder(args[2], filepath.Join(cfg.ServiceRoot, "config"), ".conf") {
+	if len(args) == 3 && (args[1] == "up" || args[1] == "down") && isPathUnder(args[2], filepath.Join(cfg.ServiceRoot, "config"), ".conf") {
 		return nil
 	}
 	return errors.New("command_shape_not_allowed:wg-quick")
+}
+
+func withdraw(ctx context.Context, cfg Config) Result {
+	configPath := filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf")
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		return Result{}
+	} else if err != nil {
+		return Result{ReturnCode: 1, Stderr: err.Error()}
+	}
+	return runCommand(ctx, []string{"wg-quick", "down", configPath}, 20, cfg)
 }
 
 func validateIP(args []string, cfg Config) error {

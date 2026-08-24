@@ -1,0 +1,6 @@
+# name|version|URL|SHA-256
+kube-vip-sbom|v1.1.0|https://github.com/kube-vip/kube-vip/releases/download/v1.1.0/kube-vip-sbom.cyclonedx.json|c573d45721ba8428bd203a1f41f66ae36fd0b96b09408736116da70069c813e8
+cloudnative-pg|v1.30.0|https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.0.yaml|f8bede43fe4ee0d478c2355b204a36876b2ae4faac60f2a9452280b293da3b88
+cert-manager|v1.21.1|https://github.com/cert-manager/cert-manager/releases/download/v1.21.1/cert-manager.yaml|5f6a499b8c1857d57f560f536e0dcc830914b45c420899fe7ad0692c8624e408
+system-upgrade-controller|v0.20.1|https://github.com/rancher/system-upgrade-controller/releases/download/v0.20.1/system-upgrade-controller.yaml|11ba712de8b887b937e521a7278bcd37ba06975c581646903fd8ae8e296f3bfc
+longhorn|v1.12.0|https://raw.githubusercontent.com/longhorn/longhorn/v1.12.0/deploy/longhorn.yaml|7923a570a6b59f8f4e3933ddac2352969d4ddb32fe180192cd2a49b02c81fa86

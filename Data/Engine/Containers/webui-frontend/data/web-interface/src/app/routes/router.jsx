@@ -644,6 +644,19 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
+                  path: "cluster-management",
+                  handle: {
+                    title: "Cluster Management",
+                    breadcrumb: "Cluster Management",
+                    navKey: "cluster-management",
+                    pageKey: "cluster-management",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/adminRoutes.jsx"),
+                    "ClusterManagementRoute"
+                  ),
+                },
+                {
                   path: "engine-status",
                   element: <Navigate to={APP_PATHS.server} replace />,
                 },
