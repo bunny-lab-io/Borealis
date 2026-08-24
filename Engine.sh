@@ -5141,6 +5141,21 @@ ensure_k3s_postgres_statefulset() {
   local mode="$1"
   local traffic_owner="${2:-}"
   traffic_owner="$(normalize_postgres_traffic_owner "${traffic_owner:-$(resolve_postgres_traffic_owner)}")"
+  local existing_cnpg_database_url=""
+  existing_cnpg_database_url="$(runtime_cnpg_database_url || true)"
+  if [[ -n "${existing_cnpg_database_url}" ]]; then
+    verify_cnpg_cutover_runtime "${existing_cnpg_database_url}"
+    local cnpg_config_hash=""
+    cnpg_config_hash="$(printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "owner=cloudnativepg" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      | sha256sum | awk '{print $1}')"
+    printf '%s  k3s-postgres-db-cnpg-owner\n' "${cnpg_config_hash}" > "${K3S_POSTGRES_CONFIG_HASH_FILE}"
+    log_status "k3s-postgres-db" "Skipped - CNPG Owner" "${C_DIM}"
+    return 0
+  fi
   validate_k3s_postgres_settings
 
   local storage_class
@@ -6976,6 +6991,58 @@ postgres_database_url_for_owner() {
   esac
 }
 
+runtime_cnpg_database_url() {
+  local database_url=""
+  database_url="$(read_env_value BOREALIS_DATABASE_URL "${RUNTIME_ENV}")"
+  [[ -n "${database_url}" ]] || return 1
+  python3 - "${database_url}" "${K3S_NAMESPACE}" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+database_url, namespace = sys.argv[1:]
+try:
+    hostname = (urlsplit(database_url).hostname or "").lower().rstrip(".")
+except ValueError:
+    raise SystemExit(1)
+allowed = {
+    "borealis-postgres-rw",
+    f"borealis-postgres-rw.{namespace}",
+    f"borealis-postgres-rw.{namespace}.svc",
+    f"borealis-postgres-rw.{namespace}.svc.cluster.local",
+}
+if hostname not in allowed:
+    raise SystemExit(1)
+print(database_url)
+PY
+}
+
+verify_cnpg_cutover_runtime() {
+  local database_url="$1"
+  local expected_database_url=""
+  expected_database_url="$(runtime_cnpg_database_url || true)"
+  [[ -n "${expected_database_url}" && "${database_url}" == "${expected_database_url}" ]] \
+    || die "CloudNativePG recovery guard received unexpected database endpoint."
+  k3s_cluster_installed && [[ -s "${K3S_KUBECONFIG}" ]] \
+    || die "Runtime points to CloudNativePG, but K3s is unavailable. Refusing to rewrite database ownership."
+
+  local phase=""
+  local ready_instances=""
+  local primary_endpoint=""
+  local standalone_replicas=""
+  phase="$(k3s_kubectl -n "${K3S_NAMESPACE}" get cluster.postgresql.cnpg.io/borealis-postgres -o jsonpath='{.status.phase}' 2>>"${BUILD_LOG}" || true)"
+  ready_instances="$(k3s_kubectl -n "${K3S_NAMESPACE}" get cluster.postgresql.cnpg.io/borealis-postgres -o jsonpath='{.status.readyInstances}' 2>>"${BUILD_LOG}" || true)"
+  primary_endpoint="$(k3s_kubectl -n "${K3S_NAMESPACE}" get endpointslice \
+    -l kubernetes.io/service-name=borealis-postgres-rw \
+    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' 2>>"${BUILD_LOG}" \
+    | awk 'NF {print; exit}' || true)"
+  standalone_replicas="$(k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset/postgres-db -o jsonpath='{.spec.replicas}' 2>>"${BUILD_LOG}" || true)"
+
+  [[ "${phase}" == "Cluster in healthy state" && "${ready_instances}" =~ ^[1-9][0-9]*$ && -n "${primary_endpoint}" ]] \
+    || die "Runtime points to CloudNativePG, but database cluster is not healthy. Refusing to rewrite database ownership."
+  [[ "${standalone_replicas}" == "0" ]] \
+    || die "Runtime points to CloudNativePG, but retained standalone PostgreSQL is not scaled to zero. Refusing unsafe deploy."
+}
+
 k3s_service_dns_name() {
   local service_name="$1"
   printf '%s.%s.svc.cluster.local\n' "${service_name}" "${K3S_NAMESPACE}"
@@ -8616,7 +8683,14 @@ write_compose_env() {
   api_backend_upstream_port="$(resolve_api_backend_upstream_port "${api_backend_traffic_owner}")"
   postgres_traffic_owner="$(resolve_postgres_traffic_owner)"
   postgres_storage_class="$(resolve_k3s_postgres_storage_class)"
-  postgres_database_url="$(postgres_database_url_for_owner "${postgres_traffic_owner}" "${db_user}" "${postgres_password}" "${db_name}")"
+  local existing_cnpg_database_url=""
+  existing_cnpg_database_url="$(runtime_cnpg_database_url || true)"
+  if [[ -n "${existing_cnpg_database_url}" ]]; then
+    verify_cnpg_cutover_runtime "${existing_cnpg_database_url}"
+    postgres_database_url="${existing_cnpg_database_url}"
+  else
+    postgres_database_url="$(postgres_database_url_for_owner "${postgres_traffic_owner}" "${db_user}" "${postgres_password}" "${db_name}")"
+  fi
   internal_api_base_url="http://${api_backend_upstream_host}:${api_backend_upstream_port}"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
     log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
@@ -10690,8 +10764,20 @@ cluster_wait_for_operation() {
   local attempt=""
   local snapshot=""
   local state=""
+  local transient_failures=0
   for attempt in {1..1800}; do
-    snapshot="$(cluster_api_request GET /api/server/cluster)" || return 1
+    if ! snapshot="$(cluster_api_request GET /api/server/cluster)"; then
+      transient_failures=$((transient_failures + 1))
+      if [[ "${transient_failures}" -eq 1 ]]; then
+        printf 'Cluster API temporarily unavailable while operation %s continues; reconnecting.\n' "${operation_id}" >&2
+      fi
+      if [[ "${transient_failures}" -ge 30 ]]; then
+        die "Lost Cluster API for 60 seconds while operation ${operation_id} continues server-side. Inspect Cluster Management before retrying anything."
+      fi
+      sleep 2
+      continue
+    fi
+    transient_failures=0
     state="$(python3 -c 'import json,sys
 operation_id=sys.argv[1]
 payload=json.load(sys.stdin)

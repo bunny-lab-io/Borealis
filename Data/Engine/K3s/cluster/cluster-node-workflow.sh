@@ -229,6 +229,16 @@ PY
     fi
   done
   for worker in "${original_site_workers[@]}"; do
+    # Operator recreates bare named Pods asynchronously. kubectl wait returns
+    # NotFound when issued before replacement Pod exists, so bound discovery
+    # separately before applying normal Ready deadline.
+    for attempt in {1..150}; do
+      if k3s kubectl -n "${namespace}" get "${worker}" >/dev/null 2>&1; then
+        break
+      fi
+      [[ "${attempt}" -lt 150 ]] || { printf 'Site worker %s was not recreated after database cutover.\n' "${worker}" >&2; exit 1; }
+      sleep 2
+    done
     k3s kubectl -n "${namespace}" wait --for=condition=Ready "${worker}" --timeout=5m
   done
 fi
