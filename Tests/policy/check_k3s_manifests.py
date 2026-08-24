@@ -85,6 +85,16 @@ def validate_cluster_controller_contract() -> None:
     resources = containers[0].get("resources") or {}
     if not resources.get("requests") or not resources.get("limits"):
         fail("cluster controller must declare resource requests and limits")
+    probes = {
+        "startupProbe": "/startup",
+        "readinessProbe": "/ready",
+        "livenessProbe": "/live",
+    }
+    for probe_name, expected_path in probes.items():
+        probe = containers[0].get(probe_name) or {}
+        actual_path = ((probe.get("httpGet") or {}).get("path"))
+        if actual_path != expected_path:
+            fail(f"cluster controller {probe_name} must use distinct {expected_path} contract")
 
 
 def validate_node_manager_service_contract() -> None:

@@ -29,6 +29,18 @@ func TestClusterControllerStepTimeoutCoversLongNodeActions(t *testing.T) {
 	}
 }
 
+func TestClusterControllerStartupAndLivenessStayLocal(t *testing.T) {
+	controller := &clusterController{}
+	handler := controller.healthServer().Handler
+	for _, path := range []string{"/startup", "/live"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status=%d want %d", path, recorder.Code, http.StatusOK)
+		}
+	}
+}
+
 func TestWaitJobToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +252,20 @@ func TestClusterActionJobUsesPinnedNodeAndRestrictedContainer(t *testing.T) {
 	security := nestedMap(containers[0].(map[string]any), "securityContext")
 	if security["allowPrivilegeEscalation"] != false || security["readOnlyRootFilesystem"] != true {
 		t.Fatalf("unsafe action security context: %#v", security)
+	}
+}
+
+func TestClusterActionJobNormalizesStepLabel(t *testing.T) {
+	step := "admit:692f3ce6-038e-43c7-a7f8-9d0d425ce8bf:redeploy:" + strings.Repeat("x", 64)
+	manifest := clusterActionJobManifest("cluster-action", "borealis", "engine-2", "registry.example/borealis@sha256:"+strings.Repeat("a", 64), []string{"client", "--verb", "InspectHealth"}, "operation", step)
+	template := nestedMap(nestedMap(manifest, "spec"), "template")
+	labels := nestedMap(template, "metadata")["labels"].(map[string]string)
+	label := labels["borealis.io/operation-step"]
+	if len(label) > 63 || !clusterControllerLabelValueRegex.MatchString(label) || strings.Contains(label, ":") {
+		t.Fatalf("invalid operation-step label %q", label)
+	}
+	if label != clusterActionStepLabel(step) {
+		t.Fatalf("operation-step label is not stable: %q", label)
 	}
 }
 

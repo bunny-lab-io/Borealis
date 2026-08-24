@@ -63,7 +63,7 @@ REVIEWED_ROUTE_TESTS.update(
 REVIEWED_ROUTE_TESTS.update(
     {
         (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go"): CONTROLLER_TEST
-        for pattern in ("GET /ready", "GET /live")
+        for pattern in ("GET /startup", "GET /ready", "GET /live")
     }
 )
 

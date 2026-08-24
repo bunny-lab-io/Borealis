@@ -28,8 +28,9 @@ const (
 )
 
 var (
-	clusterControllerSHARegex  = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	clusterControllerNodeRegex = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
+	clusterControllerSHARegex        = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	clusterControllerNodeRegex       = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
+	clusterControllerLabelValueRegex = regexp.MustCompile(`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`)
 )
 
 type clusterControllerOperation struct {
@@ -67,7 +68,6 @@ type clusterController struct {
 	runner    clusterControllerStepRunner
 	holder    string
 	now       func() time.Time
-	heartbeat atomic.Int64
 	lastPrune atomic.Int64
 }
 
@@ -128,7 +128,6 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	defer ticker.Stop()
 	log.Printf("borealis-cluster-controller started holder=%s", holder)
 	for {
-		controller.heartbeat.Store(time.Now().UTC().Unix())
 		if err := controller.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("cluster controller reconcile failed: %v", err)
 		}
@@ -144,11 +143,10 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 
 func (c *clusterController) healthServer() *http.Server {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /startup", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
 	mux.HandleFunc("GET /live", func(w http.ResponseWriter, _ *http.Request) {
-		if heartbeat := c.heartbeat.Load(); heartbeat == 0 || time.Now().UTC().Unix()-heartbeat > 60 {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "reason": "controller_loop_stalled"})
-			return
-		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, request *http.Request) {
@@ -1600,12 +1598,37 @@ func clusterActionJobName(operationID, step string) string {
 	return fmt.Sprintf("cluster-%s-%08x", prefix, hash.Sum32())
 }
 
+func clusterActionStepLabel(step string) string {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(step))
+	value := strings.Map(func(char rune) rune {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9', char == '-', char == '_', char == '.':
+			return char
+		default:
+			return '-'
+		}
+	}, step)
+	value = strings.Trim(value, "-_.")
+	if value == "" {
+		value = "step"
+	}
+	if len(value) <= 63 {
+		return value
+	}
+	prefix := strings.TrimRight(value[:54], "-_.")
+	if prefix == "" {
+		prefix = "step"
+	}
+	return fmt.Sprintf("%s-%08x", prefix, hash.Sum32())
+}
+
 func clusterActionJobManifest(name, namespace, nodeName, imageRef string, args []string, operationID, step string) map[string]any {
 	return map[string]any{
 		"apiVersion": "batch/v1", "kind": "Job",
 		"metadata": map[string]any{"name": name, "namespace": namespace, "labels": map[string]string{"app.kubernetes.io/name": "borealis-node-action", "borealis.io/operation-id": operationID}},
 		"spec": map[string]any{"backoffLimit": 0, "ttlSecondsAfterFinished": 86400, "template": map[string]any{
-			"metadata": map[string]any{"labels": map[string]string{"app.kubernetes.io/name": "borealis-node-action", "borealis.io/operation-step": step}},
+			"metadata": map[string]any{"labels": map[string]string{"app.kubernetes.io/name": "borealis-node-action", "borealis.io/operation-step": clusterActionStepLabel(step)}},
 			"spec": map[string]any{
 				"restartPolicy": "Never", "nodeName": nodeName, "serviceAccountName": "borealis-cluster-controller", "automountServiceAccountToken": false,
 				"containers": []any{map[string]any{

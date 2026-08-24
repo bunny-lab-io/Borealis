@@ -108,7 +108,7 @@ spec:
           ports:
             - {name: health, containerPort: 8090}
           startupProbe:
-            httpGet: {path: /live, port: health}
+            httpGet: {path: /startup, port: health}
             periodSeconds: 2
             failureThreshold: 30
           readinessProbe:
