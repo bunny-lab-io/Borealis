@@ -229,12 +229,20 @@ def validate_node_manager_service_contract() -> None:
         "registry.k8s.io:": "Kubernetes dependency registry mirror",
         "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",
         "if ! cluster_mode_enabled; then": "cluster role-label ownership guard",
+        "BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-v1": "site-worker probe-contract recycle trigger",
+        "ensure_cluster_dependency_probe_guards": "cluster dependency probe-guard reconciliation",
+        'cluster.postgresql.cnpg.io/borealis-postgres --type=merge': "CloudNativePG instance guard reconciliation",
     }
     for marker, description in required_engine_cluster_markers.items():
         if marker not in engine_source:
             fail(f"Engine cluster baseline lost {description}")
     if "k3s_ctr images import" in engine_source:
         fail("Engine must use K3s pre-import so Spegel receives distribution-source labels")
+    controller_reconcile = engine_source.find("  ensure_cluster_controller_baseline")
+    guard_reconcile = engine_source.find("  ensure_cluster_dependency_probe_guards", controller_reconcile)
+    edge_reconcile = engine_source.find("  ensure_k3s_traefik_edge", controller_reconcile)
+    if min(controller_reconcile, guard_reconcile, edge_reconcile) < 0 or not controller_reconcile < guard_reconcile < edge_reconcile:
+        fail("full deploy must reconcile cluster dependency probe guards before edge workload")
     candidate_start = engine_source.find("agent_redeploy_render_candidate()")
     candidate_end = engine_source.find("agent_redeploy_scheduler_desired_image()", candidate_start)
     if min(candidate_start, candidate_end) < 0 or '"initialDelaySeconds": 130' not in engine_source[candidate_start:candidate_end]:

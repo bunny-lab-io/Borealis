@@ -3579,10 +3579,13 @@ borealis_site_worker_runtime_secret_data() {
 
 borealis_site_worker_runtime_secret_hash() {
   local key
-  while IFS= read -r key; do
-    [[ -n "${key}" ]] || continue
-    printf '%s=%s\n' "${key}" "$(read_env_value "${key}")"
-  done < <(borealis_site_worker_runtime_secret_keys) | sha256sum | awk '{print $1}'
+  {
+    while IFS= read -r key; do
+      [[ -n "${key}" ]] || continue
+      printf '%s=%s\n' "${key}" "$(read_env_value "${key}")"
+    done < <(borealis_site_worker_runtime_secret_keys)
+    printf 'BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-v1\n'
+  } | sha256sum | awk '{print $1}'
 }
 
 generic_k3s_workload_replicas() {
@@ -9884,6 +9887,7 @@ deploy_engine() {
   ensure_k3s_engine_database_schema "${mode}"
   ensure_k3s_api_backend_bridge "${mode}"
   ensure_cluster_controller_baseline
+  ensure_cluster_dependency_probe_guards
   ensure_k3s_traefik_edge "${mode}"
   retire_compose_job_scheduler_container
   ensure_k3s_job_scheduler "${mode}"
@@ -10866,6 +10870,59 @@ ensure_cluster_controller_baseline() {
   fi
   k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/borealis-cluster-controller --timeout=180s >> "${BUILD_LOG}" 2>&1 \
     || die "Cluster controller did not become ready. See ${BUILD_LOG}."
+}
+
+ensure_cluster_dependency_probe_guards() {
+  cluster_mode_enabled || return 0
+  local cnpg_patch='{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"40"}},"spec":{"containers":[{"name":"manager","livenessProbe":{"initialDelaySeconds":40}}]}}}}'
+  local snapshot_patch='{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"70"}},"spec":{"containers":[{"name":"snapshot-controller","livenessProbe":{"initialDelaySeconds":70}}]}}}}'
+  local vip_patch='{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"40"}},"spec":{"containers":[{"name":"kube-vip","livenessProbe":{"initialDelaySeconds":40}}]}}}}'
+  local postgres_patch='{"spec":{"probes":{"liveness":{"initialDelaySeconds":330,"isolationCheck":{"enabled":true}}}}}'
+  local resource=""
+
+  k3s_kubectl -n cnpg-system patch deployment/cnpg-controller-manager --type=strategic -p "${cnpg_patch}" >> "${BUILD_LOG}" 2>&1 \
+    || die "CloudNativePG operator liveness startup guard could not be applied. See ${BUILD_LOG}."
+  k3s_kubectl -n kube-system patch deployment/snapshot-controller --type=strategic -p "${snapshot_patch}" >> "${BUILD_LOG}" 2>&1 \
+    || die "Snapshot controller liveness startup guard could not be applied. See ${BUILD_LOG}."
+  for resource in kube-vip-borealis-control kube-vip-borealis-edge; do
+    k3s_kubectl -n kube-system patch "daemonset/${resource}" --type=strategic -p "${vip_patch}" >> "${BUILD_LOG}" 2>&1 \
+      || die "${resource} liveness startup guard could not be applied. See ${BUILD_LOG}."
+  done
+  k3s_kubectl -n "${K3S_NAMESPACE}" patch cluster.postgresql.cnpg.io/borealis-postgres --type=merge -p "${postgres_patch}" >> "${BUILD_LOG}" 2>&1 \
+    || die "CloudNativePG instance liveness startup guard could not be applied. See ${BUILD_LOG}."
+
+  k3s_kubectl -n cnpg-system rollout status deployment/cnpg-controller-manager --timeout=5m >> "${BUILD_LOG}" 2>&1 \
+    || die "CloudNativePG operator probe-guard rollout failed. See ${BUILD_LOG}."
+  k3s_kubectl -n kube-system rollout status deployment/snapshot-controller --timeout=5m >> "${BUILD_LOG}" 2>&1 \
+    || die "Snapshot controller probe-guard rollout failed. See ${BUILD_LOG}."
+  for resource in kube-vip-borealis-control kube-vip-borealis-edge; do
+    k3s_kubectl -n kube-system rollout status "daemonset/${resource}" --timeout=5m >> "${BUILD_LOG}" 2>&1 \
+      || die "${resource} probe-guard rollout failed. See ${BUILD_LOG}."
+  done
+
+  local desired_instances=""
+  local deadline=$((SECONDS + 900))
+  desired_instances="$(k3s_kubectl -n "${K3S_NAMESPACE}" get cluster.postgresql.cnpg.io/borealis-postgres -o jsonpath='{.spec.instances}')"
+  while ((SECONDS < deadline)); do
+    if k3s_kubectl -n "${K3S_NAMESPACE}" get pods -l cnpg.io/cluster=borealis-postgres -o json 2>>"${BUILD_LOG}" \
+      | python3 -c '
+import json, sys
+expected = int(sys.argv[1])
+pods = json.load(sys.stdin).get("items") or []
+valid = 0
+for pod in pods:
+    containers = (pod.get("spec") or {}).get("containers") or []
+    postgres = next((item for item in containers if item.get("name") == "postgres"), {})
+    delay = ((postgres.get("livenessProbe") or {}).get("initialDelaySeconds"))
+    ready = any(item.get("type") == "Ready" and item.get("status") == "True" for item in ((pod.get("status") or {}).get("conditions") or []))
+    valid += int(delay == 330 and ready)
+raise SystemExit(0 if len(pods) == expected and valid == expected else 1)
+' "${desired_instances}"; then
+      return 0
+    fi
+    sleep 3
+  done
+  die "CloudNativePG instance probe-guard rollout did not become ready within 15 minutes. See ${BUILD_LOG}."
 }
 
 cluster_mode_enabled() {
