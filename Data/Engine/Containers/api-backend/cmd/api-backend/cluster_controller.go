@@ -1665,7 +1665,7 @@ func transientKubernetesAPIError(err error) bool {
 		}
 	}
 	var networkError net.Error
-	if errors.As(err, &networkError) {
+	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
 		return true
 	}
 	for _, fragment := range []string{

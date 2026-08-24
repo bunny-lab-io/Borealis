@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +72,10 @@ func TestWaitJobRejectsPermanentKubernetesAPIError(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("permanent API error retried %d times", requests)
+	}
+	certificateError := &url.Error{Op: http.MethodGet, URL: server.URL, Err: errors.New("x509: certificate signed by unknown authority")}
+	if transientKubernetesAPIError(certificateError) {
+		t.Fatal("permanent TLS trust error classified as transient")
 	}
 }
 
