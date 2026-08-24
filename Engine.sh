@@ -2377,6 +2377,7 @@ ensure_systemctl_for_k3s() {
 
 ensure_k3s_install_dependencies() {
   local needs_install=0
+  command_exists python3 || needs_install=1
   command_exists curl || needs_install=1
   command_exists iptables || needs_install=1
   [[ "${needs_install}" -eq 1 ]] || return 0
@@ -2385,23 +2386,23 @@ ensure_k3s_install_dependencies() {
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
       run_privileged apt-get update -qq
-      run_privileged apt-get install -y ca-certificates curl iptables
+      run_privileged apt-get install -y ca-certificates curl iptables python3
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
-        run_privileged dnf install -y ca-certificates curl iptables
+        run_privileged dnf install -y ca-certificates curl iptables python3
       else
-        run_privileged yum install -y ca-certificates curl iptables
+        run_privileged yum install -y ca-certificates curl iptables python3
       fi
       ;;
     arch)
-      run_privileged pacman -Sy --noconfirm ca-certificates curl iptables
+      run_privileged pacman -Sy --noconfirm ca-certificates curl iptables python
       ;;
     opensuse*|sles)
-      run_privileged zypper --non-interactive install ca-certificates curl iptables
+      run_privileged zypper --non-interactive install ca-certificates curl iptables python3
       ;;
     *)
-      die "Unsupported distro '${DISTRO_ID}'. Install curl, ca-certificates, and iptables before K3s baseline reconcile."
+      die "Unsupported distro '${DISTRO_ID}'. Install Python 3, curl, ca-certificates, and iptables before K3s baseline reconcile."
       ;;
   esac
 }
@@ -10806,6 +10807,19 @@ PY
   ensure_cluster_controller_baseline
 }
 
+cluster_prepare_node() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Cluster node preparation requires root."
+  [[ -n "${K3S_PEER_CIDRS}" ]] || die "Cluster node preparation requires BOREALIS_K3S_PEER_CIDRS covering every current and planned Engine node."
+  mkdir -p "${DEPLOY_DIR}"
+  touch "${BUILD_LOG}"
+  validate_k3s_baseline_settings
+  ensure_systemctl_for_k3s
+  ensure_k3s_install_dependencies
+  ensure_longhorn_node_dependencies
+  ensure_k3s_api_firewall
+  printf 'Cluster node host preparation complete. K3s has not been installed or joined.\n'
+}
+
 reconcile_cluster_node_workloads() {
   local service="${1:-}"
   cluster_mode_enabled || return 0
@@ -10879,6 +10893,7 @@ Usage:
   Engine.sh --network-mode <public|local> --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
   Engine.sh --redeploy-agent-binaries
+  Engine.sh --cluster-prepare-node
   Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4
   Engine.sh --cluster-node-redeploy --revision COMMIT_SHA
 EOF
@@ -10911,6 +10926,10 @@ main() {
     --redeploy-agent-binaries)
       [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --redeploy-agent-binaries"
       redeploy_agent_binaries
+      ;;
+    --cluster-prepare-node)
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-prepare-node"
+      cluster_prepare_node
       ;;
     --cluster-enable)
       [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4"

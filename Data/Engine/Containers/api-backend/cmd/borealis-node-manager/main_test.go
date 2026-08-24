@@ -110,6 +110,28 @@ func TestSupportedUbuntuReleaseRequiresUbuntu2404OrNewer(t *testing.T) {
 	}
 }
 
+func TestNormalizePeerCIDRsRequiresBoundedPrivateIPv4Networks(t *testing.T) {
+	got, err := normalizePeerCIDRs("192.168.10.2/24, 10.0.0.8/32,192.168.10.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "192.168.10.0/24,10.0.0.8/32" {
+		t.Fatalf("normalized peer CIDRs=%q", got)
+	}
+	for _, value := range []string{"", "192.168.10.2", "8.8.8.8/32", "10.0.0.0/7", "2001:db8::/64", strings.Repeat("10.0.0.1/32,", 17)} {
+		if normalized, err := normalizePeerCIDRs(value); err == nil {
+			t.Fatalf("unsafe peer CIDRs accepted as %q from %q", normalized, value)
+		}
+	}
+}
+
+func TestEnvironmentWithValueReplacesInheritedPeerAllowlist(t *testing.T) {
+	got := environmentWithValue([]string{"PATH=/usr/bin", "BOREALIS_K3S_PEER_CIDRS=10.0.0.1/32"}, "BOREALIS_K3S_PEER_CIDRS", "192.168.10.1/32")
+	if strings.Join(got, "\n") != "PATH=/usr/bin\nBOREALIS_K3S_PEER_CIDRS=192.168.10.1/32" {
+		t.Fatalf("unexpected prepared environment: %#v", got)
+	}
+}
+
 func TestMemberRemovalFenceUsesPersistentNarrowMarkerPath(t *testing.T) {
 	if memberFencePath != "/etc/borealis/k3s-member-removal-fence.json" {
 		t.Fatalf("unexpected member fence path %q", memberFencePath)

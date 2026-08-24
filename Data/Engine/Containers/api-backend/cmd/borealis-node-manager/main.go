@@ -1024,6 +1024,7 @@ func join(args []string) {
 	k3sServer := flags.String("k3s-server", "", "Existing K3s control-plane HTTPS URL")
 	k3sTokenFile := flags.String("k3s-token-file", "", "Root-readable K3s server token file")
 	k3sVersion := flags.String("k3s-version", defaultK3sVersion, "Pinned K3s version")
+	peerCIDRs := flags.String("peer-cidrs", "", "Comma-separated private Engine node IPv4 CIDRs")
 	caFile := flags.String("ca-file", "", "Optional Borealis API CA certificate")
 	_ = flags.Parse(args)
 	if os.Geteuid() != 0 {
@@ -1040,6 +1041,10 @@ func join(args []string) {
 	if !k3sPattern.MatchString(strings.TrimSpace(*k3sVersion)) {
 		fatalf("join requires pinned K3s version")
 	}
+	normalizedPeers, err := normalizePeerCIDRs(*peerCIDRs)
+	if err != nil {
+		fatalf("join requires --peer-cidrs covering current and planned Engine nodes: %v", err)
+	}
 	tokenPath := filepath.Clean(strings.TrimSpace(*k3sTokenFile))
 	if !filepath.IsAbs(tokenPath) || tokenPath == "/" {
 		fatalf("join requires absolute --k3s-token-file")
@@ -1047,6 +1052,10 @@ func join(args []string) {
 	tokenInfo, err := os.Stat(tokenPath)
 	if err != nil || !tokenInfo.Mode().IsRegular() || tokenInfo.Mode().Perm()&0o077 != 0 {
 		fatalf("K3s token file must be regular and inaccessible to group/other")
+	}
+	repoRoot := envDefault("BOREALIS_PROJECT_ROOT", defaultRepoRoot)
+	if err := prepareJoinedNode(repoRoot, normalizedPeers); err != nil {
+		fatalf("prepare cluster node host: %v", err)
 	}
 	hostname, _ := os.Hostname()
 	payload := map[string]any{"invite_bundle": strings.TrimSpace(*bundle), "node_name": strings.ToLower(strings.TrimSpace(*nodeName)), "hostname": hostname, "management_ip": strings.TrimSpace(*managementIP), "architecture": runtime.GOARCH, "os_version": strings.TrimSpace(*osVersion)}
@@ -1083,10 +1092,79 @@ func join(args []string) {
 	if err := installJoinedK3sServer(strings.ToLower(strings.TrimSpace(*nodeName)), strings.TrimSpace(*managementIP), serverURL.String(), tokenPath, strings.TrimSpace(*k3sVersion)); err != nil {
 		fatalf("install joined K3s server: %v", err)
 	}
-	if err := installLocalNodeManagerService(envDefault("BOREALIS_PROJECT_ROOT", defaultRepoRoot)); err != nil {
+	if err := installLocalNodeManagerService(repoRoot); err != nil {
 		fatalf("install local node-manager service: %v", err)
 	}
 	fmt.Printf("{\"admission_id\":%q,\"state\":\"joined\",\"node_name\":%q}\n", admissionID, strings.ToLower(strings.TrimSpace(*nodeName)))
+}
+
+func normalizePeerCIDRs(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 1024 {
+		return "", errors.New("value must contain no more than 1024 characters")
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 16 {
+		return "", errors.New("value must contain no more than 16 CIDRs")
+	}
+	normalized := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		ip, network, err := net.ParseCIDR(strings.TrimSpace(part))
+		if err != nil || ip.To4() == nil || !privateIPv4Network(network) {
+			return "", fmt.Errorf("%q is not a private IPv4 CIDR", strings.TrimSpace(part))
+		}
+		canonical := network.String()
+		if !seen[canonical] {
+			normalized = append(normalized, canonical)
+			seen[canonical] = true
+		}
+	}
+	return strings.Join(normalized, ","), nil
+}
+
+func privateIPv4Network(network *net.IPNet) bool {
+	if network == nil || network.IP.To4() == nil || len(network.Mask) != net.IPv4len {
+		return false
+	}
+	first := network.IP.To4()
+	last := make(net.IP, net.IPv4len)
+	for index := range first {
+		last[index] = first[index] | ^network.Mask[index]
+	}
+	return first.IsPrivate() && last.IsPrivate()
+}
+
+func prepareJoinedNode(repoRoot, peerCIDRs string) error {
+	if err := validateRepositoryRoot(repoRoot); err != nil {
+		return err
+	}
+	enginePath := filepath.Join(repoRoot, "Engine.sh")
+	info, err := os.Stat(enginePath)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("repository lacks regular Engine.sh")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "/usr/bin/bash", enginePath, "--cluster-prepare-node")
+	command.Dir = repoRoot
+	command.Env = environmentWithValue(os.Environ(), "BOREALIS_K3S_PEER_CIDRS", peerCIDRs)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Engine node preparation failed: %w: %s", err, truncateDiagnostic(strings.TrimSpace(string(output)), 2048))
+	}
+	return nil
+}
+
+func environmentWithValue(environment []string, key, value string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(environment)+1)
+	for _, item := range environment {
+		if !strings.HasPrefix(item, prefix) {
+			result = append(result, item)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func clusterJoinHTTPClient(caFile string) (*http.Client, error) {

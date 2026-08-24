@@ -359,6 +359,9 @@ def validate_k3s_peer_allowlist_contract() -> None:
         'K3S_PEER_CIDRS="$(awk -F= \'$1 == "BOREALIS_K3S_PEER_CIDRS"': "cluster node runtime hydration",
         'Cluster runtime environment is missing BOREALIS_K3S_PEER_CIDRS.': "fail-closed cluster node redeploy",
         'networks.append(str(network))': "canonical private CIDR normalization",
+        'cluster_prepare_node()': "fixed blank-node preparation entrypoint",
+        '  ensure_longhorn_node_dependencies\n  ensure_k3s_api_firewall\n  printf \'Cluster node host preparation complete.': "blank-node Longhorn and firewall preparation",
+        'Engine.sh --cluster-prepare-node': "documented fixed node preparation command",
     }
     for marker, description in required.items():
         if marker not in engine_source:

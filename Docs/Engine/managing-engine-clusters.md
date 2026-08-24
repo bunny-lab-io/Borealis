@@ -44,7 +44,20 @@ Enablement creates cluster CRDs, controller RBAC, node manager, fixed VIP resour
 
 ## Add Nodes in Pairs
 
-Create invitation in Cluster Management, then run displayed node-manager join command on each new host. New members remain `Pending Quorum`, application-drained, and role-ineligible. Admin approves only complete pair. Controller admits `1 -> 3` or `3 -> 5`, expands CloudNativePG, deploys pinned cluster revision on both nodes, then probes and soaks each node before activating it.
+Create invitation in Cluster Management, copy K3s server token to root-only file on each new host through trusted management channel, then run node-manager join command. Include same private peer allowlist used on first node:
+
+```sh
+sudo borealis-node-manager join \
+  --endpoint https://engine.example.com \
+  --invite-bundle '<one-use-invitation>' \
+  --node-name engine-02 \
+  --management-ip 192.0.2.22 \
+  --peer-cidrs 192.0.2.21/32,192.0.2.22/32,192.0.2.23/32 \
+  --k3s-server https://192.0.2.10:6443 \
+  --k3s-token-file /root/borealis-k3s-server.token
+```
+
+Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members join application-drained and role-ineligible. Controller admits `1 -> 3` or `3 -> 5`, expands CloudNativePG, deploys pinned cluster revision on both nodes, then probes and soaks each node before activating it.
 
 Temporary even K3s membership during pair admission does not disable healthy existing nodes. Architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work.
 
@@ -156,6 +169,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - `BorealisCluster`, `BorealisNodeAdmission`, `BorealisNodeRuntime`, and `BorealisClusterOperation` hold desired/runtime Kubernetes state.
     - PostgreSQL tables `borealis_cluster_state`, `borealis_cluster_nodes`, `borealis_cluster_admissions`, `borealis_cluster_operations`, `borealis_cluster_operation_events`, `borealis_cluster_events`, `borealis_cluster_invitations`, `borealis_cluster_realtime_outbox`, and `borealis_cluster_leases` hold audit, events, invitations, outbox, and singleton leases.
     - Node manager accepts fixed verbs only, including persistent K3s membership fence and exact-version probe conformance. It never exposes arbitrary command or remote-shell execution. Manager stays active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control plane recovery without losing operation process.
+    - Blank-node join requires `--peer-cidrs`. Node manager validates and canonicalizes bounded private IPv4 CIDRs, then invokes fixed `Engine.sh --cluster-prepare-node` workflow before consuming invitation. Preparation installs K3s installation/firewall and Longhorn iSCSI/NFS prerequisites, but does not install or join K3s until paired admission approval arrives.
     - Control and edge VIPs use separate kube-vip leader leases, `/32` ARP advertisements, health listeners, metrics listeners, and disruption budgets. Bootstrap does not accept a running pod as proof: it waits for both DaemonSets, non-empty lease holders, local VIP addresses, and K3s `/readyz` through control VIP.
     - First-node conversion and later candidate promotion use explicit stop-start handoff for host-network Traefik and WireGuard pods because old and new pods cannot bind same host ports. Failed first-node handoff restores prior standalone host workload replica count.
     - First-node SQLite-to-etcd conversion temporarily restarts K3s. Cluster controller Job polling treats bounded Kubernetes API `429`, `5xx`, timeout, and connection failures as transient until step deadline, while authorization and other permanent API errors still fail immediately.
