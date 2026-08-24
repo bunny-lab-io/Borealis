@@ -130,7 +130,7 @@ func client(args []string) {
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, "unix", socketPath)
 	}}
-	httpClient := &http.Client{Transport: transport, Timeout: 31 * time.Minute}
+	httpClient := &http.Client{Transport: transport, Timeout: nodeManagerActionTimeout(strings.TrimSpace(*verb)) + time.Minute}
 	request, err := http.NewRequest(http.MethodPost, "http://node-manager/v1/action", bytes.NewReader(raw))
 	if err != nil {
 		fatalf("create node-manager request: %v", err)
@@ -251,7 +251,7 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": err.Error()})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
 	if err != nil {
@@ -259,6 +259,17 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "verb": request.Verb, "result": result})
+}
+
+func nodeManagerActionTimeout(verb string) time.Duration {
+	switch strings.TrimSpace(verb) {
+	case "EnrollCluster":
+		return 90 * time.Minute
+	case "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
+		return 60 * time.Minute
+	default:
+		return 30 * time.Minute
+	}
 }
 
 func (m *manager) execute(ctx context.Context, request actionRequest) (map[string]any, error) {

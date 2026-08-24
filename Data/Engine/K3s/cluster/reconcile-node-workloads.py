@@ -234,6 +234,11 @@ def promote_one(base: str, node: str) -> str:
     template_labels[CANDIDATE_LABEL] = "false"
     template_labels[TRAFFIC_LABEL] = "active"
     template["metadata"]["labels"] = template_labels
+    if base in HOST_PORT_DEPLOYMENTS:
+        # Candidate and active host-network Pods cannot bind same ports. Stop
+        # candidate only after its health/soak checks, then start active copy.
+        kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")
+        kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{candidate_name}", "--timeout=5m")
     kubectl("apply", "--server-side", "--force-conflicts", "--field-manager=borealis-node-workloads", "-f", "-", stdin=json.dumps(manifest))
     if replicas > 0:
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{active_name}", "--timeout=10m")
@@ -261,12 +266,34 @@ def main() -> int:
     reconciled = []
     selected = {value for value in (args.service or DEPLOYMENT_SERVICES.values())}
     selected_bases = [base for base, service in DEPLOYMENT_SERVICES.items() if service in selected]
-    for base in selected_bases:
-        service = DEPLOYMENT_SERVICES[base]
-        if args.promote_candidate:
-            reconciled.append(promote_one(base, node))
-        else:
-            reconciled.append(reconcile_one(base, service, node, revision, images, args.candidate))
+    stopped_generic_host_workloads: list[tuple[str, int]] = []
+    try:
+        for base in selected_bases:
+            service = DEPLOYMENT_SERVICES[base]
+            if args.initialize and not args.candidate and not args.promote_candidate and base in HOST_PORT_DEPLOYMENTS:
+                generic = load_json(f"deployment/{base}") or {}
+                replicas = int(((generic.get("spec") or {}).get("replicas")) or 0)
+                if replicas > 0:
+                    kubectl("-n", NAMESPACE, "scale", f"deployment/{base}", "--replicas=0")
+                    kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{base}", "--timeout=5m")
+                    stopped_generic_host_workloads.append((base, replicas))
+            if args.promote_candidate:
+                reconciled.append(promote_one(base, node))
+            else:
+                reconciled.append(reconcile_one(base, service, node, revision, images, args.candidate))
+    except Exception:
+        for base, replicas in reversed(stopped_generic_host_workloads):
+            active_name = deployment_name(base, node)
+            if load_json(f"deployment/{active_name}"):
+                try:
+                    kubectl("-n", NAMESPACE, "scale", f"deployment/{active_name}", "--replicas=0")
+                except RuntimeError:
+                    pass
+            try:
+                kubectl("-n", NAMESPACE, "scale", f"deployment/{base}", f"--replicas={replicas}")
+            except RuntimeError:
+                pass
+        raise
     if args.initialize and not args.candidate and not args.promote_candidate:
         for base in selected_bases:
             kubectl("-n", NAMESPACE, "scale", f"deployment/{base}", "--replicas=0")

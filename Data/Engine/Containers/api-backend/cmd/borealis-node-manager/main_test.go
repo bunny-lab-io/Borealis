@@ -7,7 +7,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNodeManagerActionTimeoutAllowsBoundedBootstrapAndRedeploy(t *testing.T) {
+	tests := []struct {
+		verb string
+		want time.Duration
+	}{
+		{verb: "EnrollCluster", want: 90 * time.Minute},
+		{verb: "RedeployRevision", want: 60 * time.Minute},
+		{verb: "RedeployStagedRevision", want: 60 * time.Minute},
+		{verb: "PromoteCandidate", want: 60 * time.Minute},
+		{verb: "Status", want: 30 * time.Minute},
+	}
+	for _, test := range tests {
+		if got := nodeManagerActionTimeout(test.verb); got != test.want {
+			t.Fatalf("nodeManagerActionTimeout(%q)=%s want %s", test.verb, got, test.want)
+		}
+	}
+}
 
 func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	if !nodeReady([]byte(`{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)) {

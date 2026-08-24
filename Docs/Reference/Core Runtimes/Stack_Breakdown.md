@@ -56,7 +56,7 @@ Borealis uses `BOREALIS_K3S_PVC_STORAGE_CLASS` for workload manifests. Fresh ins
 
 Existing PostgreSQL PVCs keep their current StorageClass during redeploy because StatefulSet volume claim templates and StorageClass parameters are effectively immutable for safe in-place operation. The upstream Longhorn manifest marks `longhorn` as a default StorageClass, so `Engine.sh` clears that default annotation after every Longhorn reconcile and keeps `borealis-longhorn` explicit-use only. K3s `local-path` remains default for non-Borealis or ad hoc PVCs until an explicit policy change.
 
-Longhorn requires host iSCSI support. `Engine.sh deploy` installs or verifies `open-iscsi` on Debian-style systems, `iscsi-initiator-utils` on RHEL-style systems, or equivalent distro packages, loads `iscsi_tcp`, and verifies `iscsid` is running before applying Longhorn. Normal deploy does not delete Longhorn objects, volumes, PVCs, or existing PostgreSQL state.
+Longhorn requires host iSCSI support for block volumes and NFSv4 client support for RWX volumes. `Engine.sh deploy` installs or verifies `open-iscsi` plus `nfs-common` on Debian-style systems, `iscsi-initiator-utils` plus `nfs-utils` on RHEL-style systems, or equivalent distro packages. It loads `iscsi_tcp`, verifies `iscsid`, and verifies `mount.nfs` before applying Longhorn. Normal deploy does not delete Longhorn objects, volumes, PVCs, or existing PostgreSQL state.
 
 After Stage 9, K3s PostgreSQL is the only supported traffic owner. `BOREALIS_K3S_POSTGRES_ENABLED=0` is not valid for normal deploy, and Engine fails fast instead of silently skipping required database reconciliation. PVC cleanup remains intentionally manual.
 

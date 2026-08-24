@@ -315,8 +315,12 @@ func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *ku
 
 func clusterControllerStepTimeout(step string) time.Duration {
 	switch {
-	case strings.HasSuffix(step, ":fetch_release"), strings.HasSuffix(step, ":redeploy_revision"), strings.HasSuffix(step, ":promote_candidate"), strings.HasSuffix(step, ":apply_k3s_upgrade"):
+	case strings.HasSuffix(step, ":redeploy_revision"), strings.HasSuffix(step, ":promote_candidate"):
+		return 65 * time.Minute
+	case strings.HasSuffix(step, ":fetch_release"), strings.HasSuffix(step, ":apply_k3s_upgrade"):
 		return 35 * time.Minute
+	case step == "apply_cluster_foundation":
+		return 95 * time.Minute
 	case step == "apply_membership":
 		return 45 * time.Minute
 	case step == "pre_change_snapshot", step == "migrate_postgres", step == "finalize_schema", step == "prepare_postgres_removal", step == "scale_postgres_membership":

@@ -170,6 +170,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Kubernetes CSI external-snapshotter `v8.5.0` snapshot CRDs and common snapshot controller (required for CloudNativePG Longhorn snapshots; controller image pinned by manifest-list digest) | [Apache-2.0](https://github.com/kubernetes-csi/external-snapshotter/blob/master/LICENSE) |
 | shared-engine | Kubernetes e2e BusyBox `1.36.1-1` (`registry.k8s.io/e2e-test-images/busybox`, digest-pinned probe conformance helper) | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Open-iSCSI / `iscsi-initiator-utils` host dependency for Longhorn volumes (installed by `Engine.sh` when missing) | [GPL-2.0-only](https://github.com/open-iscsi/open-iscsi/blob/master/COPYING) |
+| shared-engine | NFS client utilities (`nfs-common`, `nfs-utils`, or `nfs-client`) host dependency for Longhorn RWX volumes (installed by `Engine.sh` when missing) | [GPL-2.0-or-later with BSD components](https://github.com/linux-nfs/nfs-utils/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
 | shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |

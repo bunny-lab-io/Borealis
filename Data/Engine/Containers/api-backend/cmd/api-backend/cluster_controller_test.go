@@ -7,7 +7,25 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestClusterControllerStepTimeoutCoversLongNodeActions(t *testing.T) {
+	tests := []struct {
+		step string
+		want time.Duration
+	}{
+		{step: "apply_cluster_foundation", want: 95 * time.Minute},
+		{step: "node:id:redeploy_revision", want: 65 * time.Minute},
+		{step: "node:id:promote_candidate", want: 65 * time.Minute},
+		{step: "node:id:fetch_release", want: 35 * time.Minute},
+	}
+	for _, test := range tests {
+		if got := clusterControllerStepTimeout(test.step); got != test.want {
+			t.Fatalf("clusterControllerStepTimeout(%q)=%s want %s", test.step, got, test.want)
+		}
+	}
+}
 
 func TestClusterUpdateOrdersNonLeadersBeforeLeaders(t *testing.T) {
 	nodes := []clusterControllerNode{

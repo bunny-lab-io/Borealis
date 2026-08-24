@@ -784,7 +784,7 @@ dashboard_subtask_specs_for_row() {
       ;;
     "k3s-longhorn-storage")
       printf '%s\n' \
-        "Install storage dependencies|open-iscsi|Installing iSCSI Dependency;iSCSI*" \
+        "Install storage dependencies|open-iscsi/nfs-utils|Installing iSCSI Dependency;iSCSI*;Installing NFS Dependency;NFS*" \
         "Apply Longhorn manifests|longhorn-system|Applying Manifests;Apply Failed" \
         "Wait for CSI controllers|longhorn-system|Waiting For csi-*;Waiting For longhorn-*;Rollout Failed" \
         "Reconcile StorageClass policy|storageclass|Reconciling StorageClass Policy;StorageClass*" \
@@ -2895,6 +2895,50 @@ ensure_longhorn_iscsi_package() {
   command_exists iscsiadm || die "Longhorn iSCSI dependency install completed, but iscsiadm is still missing."
 }
 
+ensure_longhorn_nfs_package() {
+  command_exists mount.nfs && return 0
+
+  log_status "k3s-longhorn-storage" "Installing NFS Dependency" "${C_YELLOW}"
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      if ! run_privileged apt-get update -qq >> "${BUILD_LOG}" 2>&1 \
+        || ! run_privileged apt-get install -y nfs-common >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "NFS Install Failed" "${C_RED}"
+        die "Failed to install nfs-common for Longhorn RWX volumes. See ${BUILD_LOG}."
+      fi
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        if ! run_privileged dnf install -y nfs-utils >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-longhorn-storage" "NFS Install Failed" "${C_RED}"
+          die "Failed to install nfs-utils for Longhorn RWX volumes. See ${BUILD_LOG}."
+        fi
+      elif ! run_privileged yum install -y nfs-utils >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "NFS Install Failed" "${C_RED}"
+        die "Failed to install nfs-utils for Longhorn RWX volumes. See ${BUILD_LOG}."
+      fi
+      ;;
+    arch)
+      if ! run_privileged pacman -Sy --noconfirm nfs-utils >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "NFS Install Failed" "${C_RED}"
+        die "Failed to install nfs-utils for Longhorn RWX volumes. See ${BUILD_LOG}."
+      fi
+      ;;
+    opensuse*|sles)
+      if ! run_privileged zypper --non-interactive install nfs-client >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "NFS Install Failed" "${C_RED}"
+        die "Failed to install nfs-client for Longhorn RWX volumes. See ${BUILD_LOG}."
+      fi
+      ;;
+    *)
+      die "Unsupported distro '${DISTRO_ID}'. Install NFSv4 client utilities before Longhorn reconcile."
+      ;;
+  esac
+
+  command_exists mount.nfs || die "Longhorn NFS dependency install completed, but mount.nfs is still missing."
+}
+
 ensure_longhorn_iscsi_kernel_module() {
   if [[ -d /sys/module/iscsi_tcp ]]; then
     return 0
@@ -2942,6 +2986,7 @@ ensure_longhorn_iscsid_running() {
 ensure_longhorn_node_dependencies() {
   log_status "k3s-longhorn-storage" "Reconciling Dependencies" "${C_YELLOW}"
   ensure_longhorn_iscsi_package
+  ensure_longhorn_nfs_package
   ensure_longhorn_iscsi_kernel_module
   ensure_longhorn_iscsid_running
 }

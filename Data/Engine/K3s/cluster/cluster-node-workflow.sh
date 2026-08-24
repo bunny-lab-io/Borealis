@@ -42,7 +42,7 @@ PY
 
 if [[ "${operation}" == "redeploy" ]]; then
   [[ -n "${api_image}" ]] || { printf 'BOREALIS_CLUSTER_API_IMAGE required for node redeploy.\n' >&2; exit 64; }
-  k3s ctr images list -q | grep -Fxq "${api_image}" || { printf 'Pinned API image missing from local K3s image store.\n' >&2; exit 1; }
+  k3s crictl inspecti "${api_image}" >/dev/null 2>&1 || { printf 'Pinned API image missing from local K3s image store.\n' >&2; exit 1; }
   exit 0
 fi
 
@@ -156,13 +156,21 @@ engine_secret="${repo_root}/Engine/Services/api-backend/secrets/engine_secret.tx
 
 if k3s kubectl -n "${namespace}" get statefulset/postgres-db >/dev/null 2>&1 && [[ "$(k3s kubectl -n "${namespace}" get statefulset/postgres-db -o jsonpath='{.spec.replicas}')" != "0" ]]; then
   declare -A original_replicas=()
-  for deployment in api-backend job-scheduler borealis-cluster-controller; do
+  mapfile -t original_site_workers < <(k3s kubectl -n "${namespace}" get pod \
+    -l "app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator" \
+    -o name)
+  for deployment in api-backend borealis-operator job-scheduler borealis-cluster-controller; do
     if k3s kubectl -n "${namespace}" get "deployment/${deployment}" >/dev/null 2>&1; then
       original_replicas["${deployment}"]="$(k3s kubectl -n "${namespace}" get "deployment/${deployment}" -o jsonpath='{.spec.replicas}')"
       k3s kubectl -n "${namespace}" scale "deployment/${deployment}" --replicas=0
       k3s kubectl -n "${namespace}" wait --for=delete pod -l "app.kubernetes.io/name=${deployment}" --timeout=3m
     fi
   done
+  # Site workers are intentionally bare, operator-owned Pods. Stop operator first,
+  # then let each worker's preStop/readiness contract drain it before database dump.
+  k3s kubectl -n "${namespace}" delete pod \
+    -l "app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator" \
+    --ignore-not-found=true --wait=true --timeout=5m
   restore_cluster_services() {
     local deployment=""
     for deployment in "${!original_replicas[@]}"; do
@@ -172,12 +180,17 @@ if k3s kubectl -n "${namespace}" get statefulset/postgres-db >/dev/null 2>&1 && 
   trap restore_cluster_services EXIT
   k3s kubectl -n "${namespace}" exec postgres-db-0 -- env PGPASSWORD="${postgres_password}" pg_dump -Fc -U "${postgres_user}" -d "${postgres_database}" \
     | openssl enc -aes-256-cbc -pbkdf2 -salt -pass file:"${engine_secret}" -out "${migration_dump}"
-  primary_pod="$(k3s kubectl -n "${namespace}" get endpoints borealis-postgres-rw -o jsonpath='{.subsets[0].addresses[0].targetRef.name}')"
+  primary_pod="$(k3s kubectl -n "${namespace}" get endpointslice \
+    -l kubernetes.io/service-name=borealis-postgres-rw \
+    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' \
+    | awk 'NF {print; exit}')"
   [[ -n "${primary_pod}" ]] || { printf 'CloudNativePG primary pod unavailable.\n' >&2; exit 1; }
   openssl enc -d -aes-256-cbc -pbkdf2 -pass file:"${engine_secret}" -in "${migration_dump}" \
-    | k3s kubectl -n "${namespace}" exec -i "${primary_pod}" -- pg_restore --clean --if-exists --no-owner -U "${postgres_user}" -d "${postgres_database}"
+    | k3s kubectl -n "${namespace}" exec -i "${primary_pod}" -- env PGPASSWORD="${postgres_password}" \
+      pg_restore --clean --if-exists --no-owner -h 127.0.0.1 -U "${postgres_user}" -d "${postgres_database}"
   source_counts="$(k3s kubectl -n "${namespace}" exec postgres-db-0 -- env PGPASSWORD="${postgres_password}" psql -At -U "${postgres_user}" -d "${postgres_database}" -c "ANALYZE; SELECT schemaname||'.'||relname||'='||n_live_tup FROM pg_stat_user_tables ORDER BY 1")"
-  target_counts="$(k3s kubectl -n "${namespace}" exec "${primary_pod}" -- psql -At -U "${postgres_user}" -d "${postgres_database}" -c "ANALYZE; SELECT schemaname||'.'||relname||'='||n_live_tup FROM pg_stat_user_tables ORDER BY 1")"
+  target_counts="$(k3s kubectl -n "${namespace}" exec "${primary_pod}" -- env PGPASSWORD="${postgres_password}" \
+    psql -h 127.0.0.1 -At -U "${postgres_user}" -d "${postgres_database}" -c "ANALYZE; SELECT schemaname||'.'||relname||'='||n_live_tup FROM pg_stat_user_tables ORDER BY 1")"
   [[ "${source_counts}" == "${target_counts}" ]] || { printf 'CloudNativePG migrated table counts differ; standalone database remains active.\n' >&2; exit 1; }
 
   current_database_url="$(awk -F= '$1 == "BOREALIS_DATABASE_URL" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
@@ -206,10 +219,13 @@ PY
   k3s kubectl -n "${namespace}" scale statefulset/postgres-db --replicas=0
   restore_cluster_services
   trap - EXIT
-  for deployment in api-backend job-scheduler borealis-cluster-controller; do
+  for deployment in api-backend borealis-operator job-scheduler borealis-cluster-controller; do
     if [[ -n "${original_replicas[${deployment}]:-}" && "${original_replicas[${deployment}]}" != "0" ]]; then
       k3s kubectl -n "${namespace}" rollout status "deployment/${deployment}" --timeout=5m
     fi
+  done
+  for worker in "${original_site_workers[@]}"; do
+    k3s kubectl -n "${namespace}" wait --for=condition=Ready "${worker}" --timeout=5m
   done
 fi
 
@@ -227,12 +243,43 @@ spec:
   restartPolicy: Never
   nodeName: $(hostname -s | tr '[:upper:]' '[:lower:]')
   automountServiceAccountToken: false
+  enableServiceLinks: false
+  terminationGracePeriodSeconds: 30
+  securityContext: {seccompProfile: {type: RuntimeDefault}}
   containers:
     - name: seed
       image: ${api_image}
       imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c", "cp -a /source/. /target/"]
-      securityContext: {allowPrivilegeEscalation: false, runAsUser: 0, runAsGroup: 0}
+      command:
+        - /bin/sh
+        - -eu
+        - -c
+        - |
+          find /source -type d -exec sh -eu -c '
+            for source do
+              relative=\${source#/source/}
+              mkdir -p "/target/\${relative}"
+            done
+          ' sh {} +
+          find /source -type f -exec sh -eu -c '
+            for source do
+              relative=\${source#/source/}
+              target=/target/\${relative}
+              if [ ! -f "\${target}" ] || ! cmp -s "\${source}" "\${target}"; then
+                cp -a "\${source}" "\${target}"
+              fi
+              cmp "\${source}" "\${target}"
+            done
+          ' sh {} +
+      resources:
+        requests: {cpu: 25m, memory: 32Mi}
+        limits: {cpu: 500m, memory: 256Mi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 0
+        runAsGroup: 0
+        capabilities: {add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"], drop: ["ALL"]}
       volumeMounts:
         - {name: source, mountPath: /source, readOnly: true}
         - {name: target, mountPath: /target}
@@ -242,7 +289,7 @@ spec:
     - name: target
       persistentVolumeClaim: {claimName: borealis-agent-artifacts}
 EOF
-k3s kubectl -n "${namespace}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/borealis-agent-artifact-seed --timeout=5m
+k3s kubectl -n "${namespace}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/borealis-agent-artifact-seed --timeout=25m
 k3s kubectl -n "${namespace}" delete pod/borealis-agent-artifact-seed --wait=true
 
 k3s kubectl -n "${namespace}" apply -f - <<EOF

@@ -12,7 +12,7 @@ Borealis Engine clustering runs application workloads, K3s control-plane service
 - Separate unused IPv4 addresses for K3s control-plane VIP and Borealis edge VIP.
 - Explicit `BOREALIS_K3S_PEER_CIDRS` allowlist covering cluster management addresses.
 - Clean Git worktrees using configured repository origin and same stable Borealis release.
-- Working Longhorn prerequisites and enough capacity to run node-local candidates during drain.
+- Working Longhorn iSCSI and NFSv4 client prerequisites plus enough capacity to run node-local candidates during drain. Normal Engine deployment installs missing host packages.
 - Odd active membership: one, three, or five nodes.
 - Content-addressed `rancher/k3s-upgrade` image in `BOREALIS_K3S_UPGRADE_IMAGE` before requesting K3s control-plane update.
 
@@ -35,7 +35,7 @@ sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREAL
 
 Production redeploy after conformance publishes exact-version pass state to API workload. Cluster Management **Enable Cluster** performs same authenticated operation without CLI environment variables.
 
-Enablement creates cluster CRDs, controller RBAC, node manager, fixed VIP resources, per-node workloads, application availability policies, and CloudNativePG migration workflow. Existing standalone PostgreSQL remains authoritative until logical import validates and traffic cuts over. Old PVC plus encrypted dump remain retained after old StatefulSet scales down.
+Enablement creates cluster CRDs, controller RBAC, node manager, fixed VIP resources, per-node workloads, application availability policies, and CloudNativePG migration workflow. Existing standalone PostgreSQL remains authoritative until logical import validates and traffic cuts over. Cutover stops scheduler and operator assignments, gracefully drains site workers, then pauses remaining database clients before dump. Old PVC plus encrypted dump remain retained after old StatefulSet scales down.
 
 !!! warning "One-way database cutover"
     Cluster enablement does not automatically move database traffic back into standalone StatefulSet. Restore from retained old PVC or encrypted dump is explicit recovery work.
@@ -155,6 +155,8 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - PostgreSQL tables `borealis_cluster_state`, `borealis_cluster_nodes`, `borealis_cluster_admissions`, `borealis_cluster_operations`, `borealis_cluster_operation_events`, `borealis_cluster_events`, `borealis_cluster_invitations`, `borealis_cluster_realtime_outbox`, and `borealis_cluster_leases` hold audit, events, invitations, outbox, and singleton leases.
     - Node manager accepts fixed verbs only, including persistent K3s membership fence and exact-version probe conformance. It never exposes arbitrary command or remote-shell execution. Manager stays active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control plane recovery without losing operation process.
     - Control and edge VIPs use separate kube-vip leader leases, `/32` ARP advertisements, health listeners, metrics listeners, and disruption budgets. Bootstrap does not accept a running pod as proof: it waits for both DaemonSets, non-empty lease holders, local VIP addresses, and K3s `/readyz` through control VIP.
+    - First-node conversion and later candidate promotion use explicit stop-start handoff for host-network Traefik and WireGuard pods because old and new pods cannot bind same host ports. Failed first-node handoff restores prior standalone host workload replica count.
+    - Shared Agent artifacts use Longhorn RWX storage, which requires host NFSv4 mount utilities in addition to iSCSI. Seed copies only missing or changed files, byte-compares every source file, and allows bounded time for large existing artifact caches.
     - K3s does not bundle CSI VolumeSnapshot API resources. Cluster bootstrap checksum-pins external-snapshotter `v8.5.0` CRDs, deploys digest-pinned common snapshot controller with leader election and probes, then restarts CloudNativePG so daily Longhorn snapshot support is discovered before database migration.
     - Cluster API replicas expose separate TLS 1.3 mTLS-only Aegis key receiver from `aegis_cluster_fanout.go`; cert-manager assets and headless Service live in `Data/Engine/K3s/cluster/aegis-mtls.yaml`.
 

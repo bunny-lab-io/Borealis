@@ -115,6 +115,30 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
 
 
+def validate_longhorn_host_dependency_contract() -> None:
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Longhorn host dependency contract: {exc}")
+    required = {
+        "ensure_longhorn_nfs_package": "Longhorn RWX NFS prerequisite function",
+        "apt-get install -y nfs-common": "Debian NFS client package",
+        "dnf install -y nfs-utils": "RHEL NFS client package",
+        "pacman -Sy --noconfirm nfs-utils": "Arch NFS client package",
+        "zypper --non-interactive install nfs-client": "SUSE NFS client package",
+        'command_exists mount.nfs || die': "post-install NFS mount helper check",
+    }
+    for marker, description in required.items():
+        if marker not in engine_source:
+            fail(f"Engine Longhorn baseline lost {description}")
+    dependency_function = engine_source.find("ensure_longhorn_node_dependencies()")
+    iscsi_call = engine_source.find("  ensure_longhorn_iscsi_package", dependency_function)
+    nfs_call = engine_source.find("  ensure_longhorn_nfs_package", dependency_function)
+    module_call = engine_source.find("  ensure_longhorn_iscsi_kernel_module", dependency_function)
+    if min(dependency_function, iscsi_call, nfs_call, module_call) < 0 or not iscsi_call < nfs_call < module_call:
+        fail("Longhorn baseline must reconcile iSCSI and NFS packages before kernel/service checks")
+
+
 def validate_pinned_dependency_adoption_contract() -> None:
     path = ROOT / "Data/Engine/K3s/cluster/apply-pinned-dependencies.sh"
     try:
@@ -138,6 +162,32 @@ def validate_pinned_dependency_adoption_contract() -> None:
             fail(f"cluster dependency lock lost {dependency.rstrip('|')}")
     if "rollout restart deployment/cnpg-controller-manager" not in workflow:
         fail("cluster bootstrap must restart CNPG after installing snapshot CRDs")
+    if 'k3s crictl inspecti "${api_image}"' not in workflow or "k3s ctr images list -q" in workflow:
+        fail("cluster redeploy must resolve normalized image references through CRI")
+    operator_stop = workflow.find("for deployment in api-backend borealis-operator job-scheduler borealis-cluster-controller")
+    worker_stop = workflow.find("# Site workers are intentionally bare")
+    database_dump = workflow.find("pg_dump -Fc")
+    if min(operator_stop, worker_stop, database_dump) < 0 or not operator_stop < worker_stop < database_dump:
+        fail("cluster database migration must stop operator and drain site workers before dump")
+    if 'wait --for=condition=Ready "${worker}"' not in workflow:
+        fail("cluster database migration must wait for drained site workers to return after cutover")
+    if "get endpointslice" not in workflow or "get endpoints borealis-postgres-rw" in workflow:
+        fail("cluster database migration must resolve ready PostgreSQL primary through EndpointSlice")
+    if 'pg_restore --clean --if-exists --no-owner -h 127.0.0.1' not in workflow:
+        fail("cluster database restore must use password-authenticated CloudNativePG loopback connection")
+    if 'psql -h 127.0.0.1 -At -U "${postgres_user}"' not in workflow:
+        fail("cluster database validation must use password-authenticated CloudNativePG loopback connection")
+    for marker in (
+        "automountServiceAccountToken: false",
+        "securityContext: {seccompProfile: {type: RuntimeDefault}}",
+        "readOnlyRootFilesystem: true",
+        'capabilities: {add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"], drop: ["ALL"]}',
+        'if [ ! -f "\\${target}" ] || ! cmp -s "\\${source}" "\\${target}"',
+        'cmp "\\${source}" "\\${target}"',
+        "pod/borealis-agent-artifact-seed --timeout=25m",
+    ):
+        if marker not in workflow:
+            fail(f"cluster Agent artifact seed lost security marker {marker!r}")
 
 
 def validate_snapshot_controller_contract() -> None:
@@ -269,6 +319,23 @@ def validate_kube_vip_contract() -> None:
     ):
         if marker not in workflow:
             fail(f"cluster workflow lost kube-vip verification marker {marker!r}")
+
+
+def validate_cluster_workload_handoff_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/reconcile-node-workloads.py"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read cluster workload reconciler: {exc}")
+    required = {
+        "stopped_generic_host_workloads": "standalone host-port handoff tracking",
+        'kubectl("-n", NAMESPACE, "scale", f"deployment/{base}", "--replicas=0")': "standalone host-port withdrawal",
+        "for base, replicas in reversed(stopped_generic_host_workloads)": "failed initialization restoration",
+        'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")': "candidate host-port withdrawal before promotion",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"cluster workload reconciler lost {description}")
 
 
 def validate_api_release_identity_contract() -> None:
@@ -501,9 +568,11 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_probe_conformance_contract()
     validate_cluster_controller_contract()
     validate_node_manager_service_contract()
+    validate_longhorn_host_dependency_contract()
     validate_pinned_dependency_adoption_contract()
     validate_snapshot_controller_contract()
     validate_kube_vip_contract()
+    validate_cluster_workload_handoff_contract()
     validate_api_release_identity_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
