@@ -125,6 +125,36 @@ func TestClusterInitJobRejectsPersistentAuthorizationFailure(t *testing.T) {
 	}
 }
 
+func TestNodeActionJobDoesNotCreateAfterAuthorizationFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet {
+			t.Fatalf("unexpected mutating request after authorization failure: %s", r.Method)
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:        &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:   "borealis",
+		actionImage: "registry.example/borealis@sha256:" + strings.Repeat("a", 64),
+	}
+	err := runner.nodeActionJob(
+		context.Background(),
+		clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Attempt: 1},
+		clusterControllerStep{Name: "inspect", NodeID: "22222222-2222-4222-8222-222222222222"},
+		clusterControllerNode{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2"},
+		"InspectHealth",
+	)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Fatalf("expected authorization error, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("authorization failure produced %d Kubernetes requests", requests)
+	}
+}
+
 func TestClusterUpdateOrdersNonLeadersBeforeLeaders(t *testing.T) {
 	nodes := []clusterControllerNode{
 		{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{"postgres_primary": true, "edge_vip_owner": true}},

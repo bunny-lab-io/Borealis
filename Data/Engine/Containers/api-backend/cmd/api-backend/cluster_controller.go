@@ -1393,6 +1393,9 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, jobName)
 	var existing map[string]any
 	if err := r.kube.getJSON(ctx, path, &existing); err != nil {
+		if !strings.Contains(err.Error(), "returned HTTP 404") {
+			return err
+		}
 		args := []string{"client", "--verb", verb}
 		if verb == "PreflightRelease" || verb == "FetchRelease" || verb == "StagePinnedRelease" {
 			args = append(args, "--release-tag", operation.TargetRelease, "--target-sha", operation.TargetSHA)
