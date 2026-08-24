@@ -2,7 +2,6 @@
 Description=Borealis Engine Node Manager
 After=network-online.target k3s.service
 Wants=network-online.target
-Requires=k3s.service
 
 [Service]
 Type=simple
