@@ -47,6 +47,46 @@ def validate_probe_conformance_contract() -> None:
         fail("probe conformance must trigger restart through liveness failure, not direct PID 1 signal")
 
 
+def validate_cluster_controller_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/controller.yaml"
+    try:
+        objects = [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot parse cluster controller manifest: {exc}")
+    deployments = [
+        item
+        for item in objects
+        if item.get("kind") == "Deployment"
+        and (item.get("metadata") or {}).get("name") == "borealis-cluster-controller"
+    ]
+    if len(deployments) != 1:
+        fail("cluster controller manifest must contain one controller Deployment")
+    pod = (((deployments[0].get("spec") or {}).get("template") or {}).get("spec") or {})
+    if pod.get("serviceAccountName") != "borealis-cluster-controller" or pod.get("automountServiceAccountToken") is not True:
+        fail("cluster controller must explicitly mount its dedicated ServiceAccount token")
+    if (((pod.get("securityContext") or {}).get("seccompProfile") or {}).get("type")) != "RuntimeDefault":
+        fail("cluster controller lacks RuntimeDefault seccomp")
+    containers = pod.get("containers") or []
+    if len(containers) != 1:
+        fail("cluster controller must contain one controller container")
+    security = containers[0].get("securityContext") or {}
+    expected_security = {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": True,
+        "runAsUser": 64646,
+        "runAsGroup": 64646,
+    }
+    for field, expected in expected_security.items():
+        if security.get(field) != expected:
+            fail(f"cluster controller securityContext {field} must be {expected!r}")
+    if set(((security.get("capabilities") or {}).get("drop") or [])) != {"ALL"}:
+        fail("cluster controller must drop ALL capabilities")
+    resources = containers[0].get("resources") or {}
+    if not resources.get("requests") or not resources.get("limits"):
+        fail("cluster controller must declare resource requests and limits")
+
+
 def fail(message: str) -> None:
     print(f"K3S POLICY FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -265,6 +305,7 @@ def main() -> int:
 
 def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_probe_conformance_contract()
+    validate_cluster_controller_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)

@@ -74,7 +74,10 @@ spec:
         app.kubernetes.io/part-of: borealis
     spec:
       serviceAccountName: borealis-cluster-controller
+      automountServiceAccountToken: true
       terminationGracePeriodSeconds: 45
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -123,7 +126,12 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+            runAsUser: 64646
+            runAsGroup: 64646
             capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
