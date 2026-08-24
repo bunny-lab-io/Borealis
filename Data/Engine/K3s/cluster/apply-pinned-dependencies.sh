@@ -38,6 +38,33 @@ apply_manifest() {
   esac
 }
 
+wait_for_workload() {
+  namespace="$1"
+  resource="$2"
+  for attempt in {1..150}; do
+    if ${kubectl_bin} -n "${namespace}" get "${resource}" >/dev/null 2>&1; then
+      return 0
+    fi
+    [[ "${attempt}" -lt 150 ]] || {
+      printf 'Pinned dependency workload %s/%s was not created.\n' "${namespace}" "${resource}" >&2
+      exit 1
+    }
+    sleep 2
+  done
+}
+
+apply_dependency_probe_guards() {
+  # Kubernetes issue 141155 can run liveness before startup after a container
+  # restart. Delay stays longer than each dependency startup-probe budget.
+  wait_for_workload cnpg-system deployment/cnpg-controller-manager
+  ${kubectl_bin} -n cnpg-system patch deployment/cnpg-controller-manager --type=strategic -p \
+    '{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"40"}},"spec":{"containers":[{"name":"manager","livenessProbe":{"initialDelaySeconds":40}}]}}}}'
+
+  wait_for_workload longhorn-system daemonset/longhorn-csi-plugin
+  ${kubectl_bin} -n longhorn-system patch daemonset/longhorn-csi-plugin --type=strategic -p \
+    '{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"200"}},"spec":{"containers":[{"name":"longhorn-csi-plugin","livenessProbe":{"initialDelaySeconds":200}}]}}}}'
+}
+
 while IFS='|' read -r name version url expected_sha; do
   [[ -n "${name}" && "${name:0:1}" != "#" ]] || continue
   [[ "${expected_sha}" =~ ^[0-9a-f]{64}$ ]] || {
@@ -46,3 +73,5 @@ while IFS='|' read -r name version url expected_sha; do
   }
   apply_manifest "${name}" "${version}" "${url}" "${expected_sha}"
 done < "${lock_file}"
+
+apply_dependency_probe_guards

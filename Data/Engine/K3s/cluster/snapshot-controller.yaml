@@ -149,6 +149,7 @@ spec:
             failureThreshold: 2
           livenessProbe:
             tcpSocket: {port: health}
+            initialDelaySeconds: 70
             periodSeconds: 10
             failureThreshold: 3
           securityContext:

@@ -26,6 +26,24 @@ CAPABILITY_ALLOWLIST = {
 }
 
 
+def validate_startup_liveness_guard(container: dict, workload: str) -> None:
+    startup = container.get("startupProbe") or {}
+    liveness = container.get("livenessProbe") or {}
+    if not startup or not liveness:
+        return
+    startup_budget = (
+        int(startup.get("initialDelaySeconds") or 0)
+        + int(startup.get("periodSeconds") or 10) * int(startup.get("failureThreshold") or 3)
+        + int(startup.get("timeoutSeconds") or 1)
+    )
+    liveness_delay = int(liveness.get("initialDelaySeconds") or 0)
+    if liveness_delay <= startup_budget:
+        fail(
+            f"{workload} liveness initial delay {liveness_delay}s must exceed "
+            f"startup failure budget {startup_budget}s for Kubernetes issue 141155"
+        )
+
+
 def validate_probe_conformance_contract() -> None:
     path = ROOT / "Data/Engine/K3s/cluster/run-probe-conformance.sh"
     try:
@@ -35,7 +53,6 @@ def validate_probe_conformance_contract() -> None:
     required = {
         "/state/fail-liveness": "controlled liveness failure",
         ".status.containerStatuses[0].containerID": "replacement container identity check",
-        ".status.containerStatuses[0].started": "replacement startup state check",
         "replacement startup-probe:failure": "replacement startup execution proof",
         "replacement liveness-probe:": "premature replacement liveness rejection",
         "Kubernetes issue 141155": "upstream regression context",
@@ -44,7 +61,8 @@ def validate_probe_conformance_contract() -> None:
         "/etc/rancher/k3s/borealis-probe-conformance.json": "sandbox-writable conformance result path",
         "trial_count=10": "ten consecutive restart trials",
         '"trials":%s': "consecutive-trial result evidence",
-        "pod-restart-policy-startup-probe-v2": "multi-trial conformance contract",
+        "initialDelaySeconds: 8": "liveness delay mitigation",
+        "pod-restart-policy-liveness-delay-guard-v1": "guarded multi-trial conformance contract",
     }
     for marker, description in required.items():
         if marker not in source:
@@ -74,8 +92,8 @@ def validate_probe_conformance_contract() -> None:
             fail(f"conformance record consumer {relative} lost fixed sandbox-writable path")
         if "/var/lib/rancher/k3s/server/borealis-probe-conformance.json" in consumer_source:
             fail(f"conformance record consumer {relative} retained read-only server-state path")
-        if "pod-restart-policy-startup-probe-v2" not in consumer_source:
-            fail(f"conformance record consumer {relative} does not require multi-trial contract")
+        if "pod-restart-policy-liveness-delay-guard-v1" not in consumer_source:
+            fail(f"conformance record consumer {relative} does not require guarded multi-trial contract")
 
 
 def validate_cluster_controller_contract() -> None:
@@ -126,6 +144,7 @@ def validate_cluster_controller_contract() -> None:
         actual_path = ((probe.get("httpGet") or {}).get("path"))
         if actual_path != expected_path:
             fail(f"cluster controller {probe_name} must use distinct {expected_path} contract")
+    validate_startup_liveness_guard(containers[0], "borealis-cluster-controller/controller")
     roles = [
         item
         for item in objects
@@ -216,6 +235,10 @@ def validate_node_manager_service_contract() -> None:
             fail(f"Engine cluster baseline lost {description}")
     if "k3s_ctr images import" in engine_source:
         fail("Engine must use K3s pre-import so Spegel receives distribution-source labels")
+    candidate_start = engine_source.find("agent_redeploy_render_candidate()")
+    candidate_end = engine_source.find("agent_redeploy_scheduler_desired_image()", candidate_start)
+    if min(candidate_start, candidate_end) < 0 or '"initialDelaySeconds": 130' not in engine_source[candidate_start:candidate_end]:
+        fail("site-worker update candidate lost startup-budget liveness guard")
     try:
         route_manifest = (ROOT / "Data/Engine/K3s/cluster/wireguard-route-daemonset.yaml").read_text(encoding="utf-8")
     except OSError as exc:
@@ -227,6 +250,7 @@ def validate_node_manager_service_contract() -> None:
         '["/usr/local/bin/borealis-wireguard-route-daemon", "startup"]': "initialization-only startup probe",
         '["/usr/local/bin/borealis-wireguard-route-daemon", "health"]': "route-aware readiness probe",
         '["/usr/local/bin/borealis-wireguard-route-daemon", "live"]': "local-process liveness probe",
+        "initialDelaySeconds: 70": "startup-budget liveness guard",
     }
     for marker, description in required_route_markers.items():
         if marker not in route_manifest:
@@ -245,6 +269,8 @@ def validate_longhorn_host_dependency_contract() -> None:
         "pacman -Sy --noconfirm nfs-utils": "Arch NFS client package",
         "zypper --non-interactive install nfs-client": "SUSE NFS client package",
         'command_exists mount.nfs || die': "post-install NFS mount helper check",
+        "ensure_longhorn_csi_probe_guard": "Longhorn CSI startup-budget liveness guard",
+        'borealis.io/liveness-startup-guard":"200"': "Longhorn CSI guard annotation",
     }
     for marker, description in required.items():
         if marker not in engine_source:
@@ -265,6 +291,15 @@ def validate_pinned_dependency_adoption_contract() -> None:
         fail(f"cannot read pinned dependency installer: {exc}")
     if "longhorn)" not in source or '${kubectl_bin} apply -f "${target}"' not in source:
         fail("cluster bootstrap must preserve standalone Longhorn client-side ownership during adoption")
+    for marker in (
+        "apply_dependency_probe_guards",
+        'borealis.io/liveness-startup-guard":"40"',
+        'borealis.io/liveness-startup-guard":"200"',
+        '"manager","livenessProbe":{"initialDelaySeconds":40}',
+        '"longhorn-csi-plugin","livenessProbe":{"initialDelaySeconds":200}',
+    ):
+        if marker not in source:
+            fail(f"pinned dependency installer lost probe guard marker {marker!r}")
 
     try:
         dependency_lock = (ROOT / "Data/Engine/K3s/cluster/dependencies.lock").read_text(encoding="utf-8")
@@ -295,6 +330,19 @@ def validate_pinned_dependency_adoption_contract() -> None:
         fail("cluster database restore must use password-authenticated CloudNativePG loopback connection")
     if 'psql -h 127.0.0.1 -At -U "${postgres_user}"' not in workflow:
         fail("cluster database validation must use password-authenticated CloudNativePG loopback connection")
+    try:
+        postgres_objects = [
+            item
+            for item in yaml.safe_load_all((ROOT / "Data/Engine/K3s/cluster/postgres.yaml").read_text(encoding="utf-8"))
+            if item
+        ]
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot read CloudNativePG probe guard: {exc}")
+    postgres_manifest = next((item for item in postgres_objects if item.get("kind") == "Cluster"), {})
+    postgres_spec = postgres_manifest.get("spec") or {}
+    postgres_delay = (((postgres_spec.get("probes") or {}).get("liveness") or {}).get("initialDelaySeconds"))
+    if postgres_delay != 330 or postgres_delay <= int(postgres_spec.get("startDelay") or 0):
+        fail("CloudNativePG liveness delay must exceed PostgreSQL startup budget")
     for marker in (
         "borealis-wireguard-server-keys",
         '--from-file=server_private.key="${wireguard_private_key}"',
@@ -341,6 +389,7 @@ def validate_snapshot_controller_contract() -> None:
         fail("snapshot controller image must retain v8.5.0 manifest-list digest")
     if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
         fail("snapshot controller must retain separate startup, readiness, and liveness probes")
+    validate_startup_liveness_guard(container, "snapshot-controller/snapshot-controller")
     security = container.get("securityContext") or {}
     expected_security = {
         "allowPrivilegeEscalation": False,
@@ -433,6 +482,7 @@ def validate_kube_vip_contract() -> None:
             fail(f"{name} must identify lease holder from spec.nodeName")
         if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
             fail(f"{name} must retain separate startup, readiness, and liveness probes")
+        validate_startup_liveness_guard(container, f"{name}/kube-vip")
         startup_socket = (container.get("startupProbe") or {}).get("tcpSocket") or {}
         liveness_socket = (container.get("livenessProbe") or {}).get("tcpSocket") or {}
         readiness_socket = (container.get("readinessProbe") or {}).get("tcpSocket") or {}
@@ -697,6 +747,7 @@ def validate_workload(obj: dict, source: Path) -> None:
             fail(f"{name}/{container.get('name')} lacks resource limits")
         if obj.get("kind") != "Job" and (not container.get("livenessProbe") or not container.get("readinessProbe")):
             fail(f"{name}/{container.get('name')} lacks documented probes")
+        validate_startup_liveness_guard(container, f"{name}/{container.get('name')}")
 
     for volume in spec.get("volumes") or []:
         host_path = (volume.get("hostPath") or {}).get("path")

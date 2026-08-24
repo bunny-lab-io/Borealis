@@ -37,6 +37,7 @@ spec:
             failureThreshold: 2
           livenessProbe:
             exec: {command: ["/usr/local/bin/borealis-wireguard-route-daemon", "live"]}
+            initialDelaySeconds: 70
             periodSeconds: 10
             failureThreshold: 3
           lifecycle:

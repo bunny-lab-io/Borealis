@@ -1327,7 +1327,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 							"path": "/live",
 							"port": "remote-ops",
 						},
-						"initialDelaySeconds": int64(15),
+						"initialDelaySeconds": int64(130),
 						"periodSeconds":       int64(10),
 						"timeoutSeconds":      int64(2),
 						"failureThreshold":    int64(3),

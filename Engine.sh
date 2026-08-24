@@ -3069,6 +3069,18 @@ wait_for_longhorn_rollouts() {
   done
 }
 
+ensure_longhorn_csi_probe_guard() {
+  local patch='{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"200"}},"spec":{"containers":[{"name":"longhorn-csi-plugin","livenessProbe":{"initialDelaySeconds":200}}]}}}}'
+  if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" patch daemonset/longhorn-csi-plugin --type=strategic -p "${patch}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "Probe Guard Failed" "${C_RED}"
+    die "Longhorn CSI liveness startup guard could not be applied. See ${BUILD_LOG}."
+  fi
+  if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" rollout status daemonset/longhorn-csi-plugin --timeout="${K3S_LONGHORN_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "Probe Guard Rollout Failed" "${C_RED}"
+    die "Longhorn CSI liveness startup guard did not become ready. See ${BUILD_LOG}."
+  fi
+}
+
 wait_for_k3s_storage_class() {
   local storage_class="$1"
   local status_key="$2"
@@ -3201,6 +3213,7 @@ ensure_longhorn_storage_baseline() {
     && k3s_kubectl get storageclass "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
     if [[ "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" == "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" ]] \
       || k3s_kubectl get storageclass "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+      ensure_longhorn_csi_probe_guard
       log_k3s_manifest_unchanged "k3s-longhorn-storage" "${config_hash}"
       return 0
     fi
@@ -3232,6 +3245,7 @@ ensure_longhorn_storage_baseline() {
     --overwrite >> "${BUILD_LOG}" 2>&1
 
   wait_for_longhorn_rollouts
+  ensure_longhorn_csi_probe_guard
   wait_for_k3s_storage_class "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" "k3s-longhorn-storage"
   ensure_k3s_storage_class_explicit_only "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}"
   ensure_borealis_longhorn_storage_class
@@ -3800,7 +3814,7 @@ $(k3s_timezone_env_entries)
             httpGet:
               path: /live
               port: http
-            initialDelaySeconds: 5
+            initialDelaySeconds: 130
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
@@ -4199,6 +4213,7 @@ $(k3s_timezone_env_entries)
             httpGet:
               path: /live
               port: http
+            initialDelaySeconds: 130
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
@@ -4747,6 +4762,7 @@ $(k3s_timezone_env_entries)
                 - /bin/sh
                 - -c
                 - "kill -0 1"
+            initialDelaySeconds: 190
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
@@ -5875,6 +5891,7 @@ $(k3s_timezone_env_entries)
               command:
                 - borealis-webui-healthcheck
                 - live
+            initialDelaySeconds: 190
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -6125,6 +6142,7 @@ $(k3s_timezone_env_entries)
               command:
                 - borealis-guacd-healthcheck
                 - live
+            initialDelaySeconds: 130
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -6495,6 +6513,7 @@ $(k3s_timezone_env_entries)
           livenessProbe:
             exec:
               command: ["sh", "-c", "kill -0 1"]
+            initialDelaySeconds: 190
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
@@ -6778,6 +6797,7 @@ spec:
                 - sh
                 - -c
                 - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            initialDelaySeconds: 130
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -10451,7 +10471,7 @@ for container in spec.get("containers") or []:
     }
     container["livenessProbe"] = {
         "httpGet": {"path": "/live", "port": "remote-ops"},
-        "initialDelaySeconds": 15,
+        "initialDelaySeconds": 130,
         "periodSeconds": 10,
         "timeoutSeconds": 2,
         "failureThreshold": 3,
@@ -10756,7 +10776,7 @@ try:
     value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 except Exception:
     raise SystemExit(1)
-if value.get("id") == "pod-restart-policy-startup-probe-v2" and value.get("status") == "passed" and value.get("k3s_version") == sys.argv[2] and value.get("trials") == 10:
+if value.get("id") == "pod-restart-policy-liveness-delay-guard-v1" and value.get("status") == "passed" and value.get("k3s_version") == sys.argv[2] and value.get("trials") == 10:
     print("passed")
 else:
     print("failed")

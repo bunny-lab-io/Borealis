@@ -185,7 +185,7 @@ func TestClusterEnableRemainsProbeConformanceGated(t *testing.T) {
 func TestClusterProbeConformancePayloadRequiresMultiTrialContract(t *testing.T) {
 	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
 	payload := clusterProbeConformancePayload()
-	if payload["id"] != "pod-restart-policy-startup-probe-v2" || payload["required_consecutive_trials"] != 10 || payload["cluster_activation_allowed"] != true {
+	if payload["id"] != "pod-restart-policy-liveness-delay-guard-v1" || payload["required_consecutive_trials"] != 10 || payload["cluster_activation_allowed"] != true {
 		t.Fatalf("unexpected probe conformance contract: %#v", payload)
 	}
 }
@@ -204,7 +204,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
 		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
-			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.08.7", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-startup-probe-v2"})
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.08.7", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
 		default:
 			http.NotFound(w, r)
 		}

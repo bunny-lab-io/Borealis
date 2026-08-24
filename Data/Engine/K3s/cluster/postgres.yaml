@@ -37,6 +37,11 @@ spec:
   smartShutdownTimeout: 180
   stopDelay: 180
   startDelay: 300
+  probes:
+    liveness:
+      initialDelaySeconds: 330
+      isolationCheck:
+        enabled: true
   enableSuperuserAccess: false
   storage:
     size: 20Gi

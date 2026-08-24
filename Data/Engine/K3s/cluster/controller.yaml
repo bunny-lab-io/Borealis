@@ -124,6 +124,7 @@ spec:
             failureThreshold: 2
           livenessProbe:
             httpGet: {path: /live, port: health}
+            initialDelaySeconds: 70
             periodSeconds: 10
             failureThreshold: 3
           lifecycle:

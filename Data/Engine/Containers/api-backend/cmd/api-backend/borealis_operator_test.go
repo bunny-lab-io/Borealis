@@ -478,6 +478,9 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	if cleanText(livenessHTTP["path"]) != "/live" || cleanText(livenessHTTP["port"]) != "remote-ops" {
 		t.Fatalf("site-worker liveness probe must validate remote ops health: %#v", livenessProbe)
 	}
+	if coerceInt64(livenessProbe["initialDelaySeconds"]) != 130 {
+		t.Fatalf("site-worker liveness delay must exceed startup failure budget: %#v", livenessProbe)
+	}
 	envList, _ := container["env"].([]any)
 	envByName := map[string]string{}
 	for _, rawEnv := range envList {

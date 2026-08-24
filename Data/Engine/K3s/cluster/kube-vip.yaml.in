@@ -78,6 +78,7 @@ spec:
             failureThreshold: 2
           livenessProbe:
             tcpSocket: {port: 2112}
+            initialDelaySeconds: 40
             periodSeconds: 10
             failureThreshold: 3
           resources:
@@ -139,6 +140,7 @@ spec:
             failureThreshold: 2
           livenessProbe:
             tcpSocket: {port: 2113}
+            initialDelaySeconds: 40
             periodSeconds: 10
             failureThreshold: 3
           resources:
