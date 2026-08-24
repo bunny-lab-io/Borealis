@@ -277,17 +277,22 @@ func TestMembershipAdmissionRunsNodeConformanceBeforeRedeploy(t *testing.T) {
 		t.Fatalf("membership admission conformance action=%#v", conformance)
 	}
 	actions := clusterAdmissionWorkloadActions(nodeID)
-	if len(actions) != 2 {
-		t.Fatalf("membership admission workload actions=%d want 2", len(actions))
+	if len(actions) != 4 {
+		t.Fatalf("membership admission workload actions=%d want 4", len(actions))
 	}
-	wantVerbs := []string{"RedeployRevision", "InspectHealth"}
+	wantVerbs := []string{"RedeployRevision", "InspectCandidateHealth", "PromoteCandidate", "InspectHealth"}
 	for index, want := range wantVerbs {
 		if actions[index].verb != want {
 			t.Fatalf("membership admission action %d=%s want %s", index, actions[index].verb, want)
 		}
 	}
-	if actions[0].targetRelease != "" || actions[1].targetRelease != "" {
-		t.Fatalf("membership admission K3s target leaked into workloads: %#v", actions)
+	if !actions[1].soakAfter || actions[0].soakAfter || actions[2].soakAfter || actions[3].soakAfter {
+		t.Fatalf("membership admission candidate soak is not isolated: %#v", actions)
+	}
+	for _, action := range actions {
+		if action.targetRelease != "" {
+			t.Fatalf("membership admission K3s target leaked into workloads: %#v", actions)
+		}
 	}
 }
 

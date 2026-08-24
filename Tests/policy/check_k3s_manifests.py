@@ -391,6 +391,7 @@ def validate_cluster_workload_handoff_contract() -> None:
         'kubectl("-n", NAMESPACE, "scale", f"deployment/{base}", "--replicas=0")': "standalone host-port withdrawal",
         "for base, replicas in reversed(stopped_generic_host_workloads)": "failed initialization restoration",
         'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")': "candidate host-port withdrawal before promotion",
+        "existing_selector = promotion_selector(base, node, candidate, active)": "first member candidate promotion without prior active workload",
     }
     for marker, description in required.items():
         if marker not in source:

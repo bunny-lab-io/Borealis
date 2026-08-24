@@ -63,6 +63,7 @@ type clusterAdmissionNodeAction struct {
 	stepName      string
 	verb          string
 	targetRelease string
+	soakAfter     bool
 }
 
 func clusterAdmissionConformanceAction(nodeID, k3sVersion string) clusterAdmissionNodeAction {
@@ -72,6 +73,8 @@ func clusterAdmissionConformanceAction(nodeID, k3sVersion string) clusterAdmissi
 func clusterAdmissionWorkloadActions(nodeID string) []clusterAdmissionNodeAction {
 	return []clusterAdmissionNodeAction{
 		{stepName: "admit:" + nodeID + ":redeploy", verb: "RedeployRevision"},
+		{stepName: "admit:" + nodeID + ":candidate_health", verb: "InspectCandidateHealth", soakAfter: true},
+		{stepName: "admit:" + nodeID + ":promote", verb: "PromoteCandidate"},
 		{stepName: "admit:" + nodeID + ":health", verb: "InspectHealth"},
 	}
 }
@@ -1125,6 +1128,18 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 			}
 			if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName, NodeID: node.ID}, node, action.verb); err != nil {
 				return err
+			}
+			if action.soakAfter {
+				timer := time.NewTimer(r.soak)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+				if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName + ":soak", NodeID: node.ID}, node, action.verb); err != nil {
+					return err
+				}
 			}
 		}
 		if err := r.minimumReadySoak(ctx, node.Name); err != nil {

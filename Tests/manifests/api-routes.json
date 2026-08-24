@@ -983,7 +983,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 166,
+    "line": 169,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -992,7 +992,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 169,
+    "line": 172,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1001,7 +1001,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 163,
+    "line": 166,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",

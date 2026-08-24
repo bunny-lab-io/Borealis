@@ -60,7 +60,7 @@ sudo borealis-node-manager join \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members join application-drained and role-ineligible. Controller admits `1 -> 3` or `3 -> 5` only after probe conformance passes while pinned to each joining node. It then expands CloudNativePG, deploys pinned cluster revision on both nodes, and probes and soaks each node before activating it.
+Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members join application-drained and role-ineligible. Controller admits `1 -> 3` or `3 -> 5` only after probe conformance passes while pinned to each joining node. It then expands CloudNativePG, deploys isolated pinned candidates, probes and soaks them, promotes them into active workloads, and performs active-node soak before recording membership.
 
 Temporary even K3s membership during pair admission does not disable healthy existing nodes. Architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work.
 

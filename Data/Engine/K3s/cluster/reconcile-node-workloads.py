@@ -202,13 +202,28 @@ def reconcile_one(
     return name
 
 
+def promotion_selector(
+    base: str, node: str, candidate: dict[str, Any], active: dict[str, Any] | None
+) -> dict[str, str]:
+    selector_source = active if active else candidate
+    selector = copy.deepcopy(((selector_source.get("spec") or {}).get("selector") or {}).get("matchLabels") or {})
+    if not selector:
+        raise RuntimeError(f"promotion source for {deployment_name(base, node)} lacks immutable selector")
+    selector["app.kubernetes.io/name"] = base
+    selector["borealis.io/engine-node"] = node
+    selector["borealis.io/node-workload"] = "true"
+    selector[CANDIDATE_LABEL] = "false"
+    selector[TRAFFIC_LABEL] = "active"
+    return selector
+
+
 def promote_one(base: str, node: str) -> str:
     active_name = deployment_name(base, node)
     candidate_name = candidate_deployment_name(base, node)
     candidate = load_json(f"deployment/{candidate_name}")
     active = load_json(f"deployment/{active_name}")
-    if not candidate or not active:
-        raise RuntimeError(f"candidate or active deployment missing for {base} on {node}")
+    if not candidate:
+        raise RuntimeError(f"candidate deployment missing for {base} on {node}")
     revision = str(((candidate.get("metadata") or {}).get("annotations") or {}).get("borealis.io/revision") or "")
     if not SHA_RE.fullmatch(revision):
         raise RuntimeError(f"candidate deployment {candidate_name} lacks pinned revision")
@@ -219,9 +234,7 @@ def promote_one(base: str, node: str) -> str:
         "spec": copy.deepcopy(candidate.get("spec") or {}),
     }
     spec = manifest["spec"]
-    existing_selector = copy.deepcopy(((active.get("spec") or {}).get("selector") or {}).get("matchLabels") or {})
-    if not existing_selector:
-        raise RuntimeError(f"active deployment {active_name} lacks immutable selector")
+    existing_selector = promotion_selector(base, node, candidate, active)
     spec["selector"] = {"matchLabels": existing_selector}
     replicas = 0 if base == "wireguard-tunnel" and not node_label_true(node, "borealis.io/edge-eligible") else 1
     spec["replicas"] = replicas
