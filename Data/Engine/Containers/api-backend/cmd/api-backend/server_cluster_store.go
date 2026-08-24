@@ -680,8 +680,10 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 	if locked != 1 {
 		return nil, fmt.Errorf("%w: another cluster operation is active", errClusterConflict)
 	}
-	if err := insertClusterEvent(ctx, tx, operationID, admissionID, clusterID, "admission_pair_approved", "queued", "Pending node pair approved for admission.", payload, now); err != nil {
-		return nil, err
+	for _, approvedAdmissionID := range ids {
+		if err := insertClusterEvent(ctx, tx, operationID, approvedAdmissionID, clusterID, "admission_pair_approved", "queued", "Pending node pair approved for admission.", payload, now); err != nil {
+			return nil, err
+		}
 	}
 	if err := insertClusterAudit(ctx, tx, actor, "membership_admit", admissionID, "queued", payload, now); err != nil {
 		return nil, err

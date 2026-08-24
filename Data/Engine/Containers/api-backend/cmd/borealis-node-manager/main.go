@@ -1309,7 +1309,7 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if _, err := run(context.Background(), "", "groupadd", "--force", "--gid", fmt.Sprint(actionRuntimeID), "borealis-engine"); err != nil {
 		return err
 	}
-	if err := os.WriteFile("/usr/local/sbin/borealis-node-manager", binary, 0o750); err != nil {
+	if err := replaceExecutable("/usr/local/sbin/borealis-node-manager", binary); err != nil {
 		return err
 	}
 	if err := ensureSecureDirectory(filepath.Dir(defaultSecretPath)); err != nil {
@@ -1348,6 +1348,32 @@ func installLocalNodeManagerService(repoRoot string) error {
 	}
 	_, err = run(context.Background(), "", "systemctl", "restart", "borealis-node-manager.service")
 	return err
+}
+
+func replaceExecutable(destination string, content []byte) error {
+	directory := filepath.Dir(destination)
+	temporary, err := os.CreateTemp(directory, ".borealis-node-manager-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o750); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, destination)
 }
 
 func ensureSecureDirectory(path string) error {

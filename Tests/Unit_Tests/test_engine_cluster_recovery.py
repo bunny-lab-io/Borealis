@@ -186,6 +186,17 @@ verify_cnpg_cutover_runtime "$cnpg_url"
         )
         self.assertIn('"BOREALIS_CLUSTER_BASELINE_SHA="+baselineSHA', manager)
 
+    def test_pair_approval_notifies_every_joiner(self):
+        store = (
+            REPO_ROOT
+            / "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_store.go"
+        ).read_text(encoding="utf-8")
+        self.assertIn("for _, approvedAdmissionID := range ids", store)
+        self.assertIn(
+            "insertClusterEvent(ctx, tx, operationID, approvedAdmissionID",
+            store,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

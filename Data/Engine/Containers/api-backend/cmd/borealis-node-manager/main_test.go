@@ -202,3 +202,33 @@ func TestEnsureSecureDirectoryCorrectsExistingPermissions(t *testing.T) {
 		t.Fatalf("directory mode=%#o, want 0750", got)
 	}
 }
+
+func TestReplaceExecutableUsesAtomicInodeReplacement(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "borealis-node-manager")
+	if err := os.WriteFile(destination, []byte("old"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	openOld, err := os.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer openOld.Close()
+	oldInfo, err := openOld.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceExecutable(destination, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(destination)
+	if err != nil || string(content) != "new" {
+		t.Fatalf("replacement content=%q err=%v", string(content), err)
+	}
+	newInfo, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(oldInfo, newInfo) || newInfo.Mode().Perm() != 0o750 {
+		t.Fatalf("executable was not atomically replaced with mode 0750: %#o", newInfo.Mode().Perm())
+	}
+}
