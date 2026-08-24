@@ -87,6 +87,23 @@ def validate_cluster_controller_contract() -> None:
         fail("cluster controller must declare resource requests and limits")
 
 
+def validate_node_manager_service_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/node-manager.service"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read node-manager systemd unit: {exc}")
+    required = {
+        "RuntimeDirectory=borealis": "managed runtime directory",
+        "ConfigurationDirectory=borealis": "managed configuration directory",
+        "ProtectSystem=strict": "strict filesystem protection",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6": "Unix socket, K3s API, and release-fetch network contract",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"node-manager systemd unit lost {description}")
+
+
 def fail(message: str) -> None:
     print(f"K3S POLICY FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -306,6 +323,7 @@ def main() -> int:
 def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_probe_conformance_contract()
     validate_cluster_controller_contract()
+    validate_node_manager_service_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)

@@ -10545,6 +10545,11 @@ ensure_borealis_node_manager() {
   run_privileged install -m 0644 -o root -g root "${service_source}" "/etc/systemd/system/${BOREALIS_NODE_MANAGER_SERVICE}"
   run_privileged systemctl daemon-reload
   run_privileged systemctl enable --now "${BOREALIS_NODE_MANAGER_SERVICE}"
+  sleep 2
+  if ! run_privileged systemctl is-active --quiet "${BOREALIS_NODE_MANAGER_SERVICE}"; then
+    run_privileged systemctl status "${BOREALIS_NODE_MANAGER_SERVICE}" --no-pager >> "${BUILD_LOG}" 2>&1 || true
+    die "Node-manager service did not remain active. See ${BUILD_LOG}."
+  fi
 }
 
 ensure_cluster_controller_baseline() {

@@ -17,8 +17,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+RuntimeDirectory=borealis
+RuntimeDirectoryMode=0750
+ConfigurationDirectory=borealis
+ConfigurationDirectoryMode=0750
 ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 MemoryDenyWriteExecute=true
 

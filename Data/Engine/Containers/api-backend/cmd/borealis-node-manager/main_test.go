@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	if !nodeReady([]byte(`{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)) {
@@ -101,5 +108,25 @@ func TestK3sConformanceVerbRequiresStableVersion(t *testing.T) {
 		if got := requiredK3sVersion(map[string]any{"k3s_version": value}); got != "" {
 			t.Fatalf("unsafe K3s version accepted: %q", got)
 		}
+	}
+}
+
+func TestRunGitScopesSafeDirectoryToSelectedWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is unavailable")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGit(context.Background(), root, "init"); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runGit(context.Background(), root, "config", "--get", "safe.directory")
+	if err != nil || strings.TrimSpace(output) != root {
+		t.Fatalf("safe.directory=%q err=%v, want %q", strings.TrimSpace(output), err, root)
+	}
+	if _, err := runGit(context.Background(), "", "status"); err == nil {
+		t.Fatal("empty Git worktree path accepted")
 	}
 }

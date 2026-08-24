@@ -395,14 +395,14 @@ func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA strin
 		return err
 	}
 	expectedOrigin := normalizeRemote(envDefault("BOREALIS_ENGINE_REPOSITORY_URL", "https://github.com/bunny-lab-io/Borealis.git"))
-	origin, err := run(ctx, m.repoRoot, "git", "remote", "get-url", "origin")
+	origin, err := runGit(ctx, m.repoRoot, "remote", "get-url", "origin")
 	if err != nil || normalizeRemote(origin) != expectedOrigin {
 		return errors.New("origin does not match configured Borealis repository")
 	}
-	if _, err := run(ctx, m.repoRoot, "git", "fetch", "--no-tags", "origin", "refs/tags/"+release+":refs/tags/"+release); err != nil {
+	if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "origin", "refs/tags/"+release+":refs/tags/"+release); err != nil {
 		return err
 	}
-	resolved, err := run(ctx, m.repoRoot, "git", "rev-parse", "refs/tags/"+release+"^{commit}")
+	resolved, err := runGit(ctx, m.repoRoot, "rev-parse", "refs/tags/"+release+"^{commit}")
 	if err != nil || strings.ToLower(strings.TrimSpace(resolved)) != targetSHA {
 		return errors.New("release tag does not resolve to pinned target SHA")
 	}
@@ -415,7 +415,7 @@ func (m *manager) stagePinnedRelease(ctx context.Context, release, targetSHA str
 	}
 	stageRoot := filepath.Join(m.repoRoot, "Engine", "Releases", targetSHA)
 	if info, err := os.Stat(stageRoot); err == nil && info.IsDir() {
-		resolved, resolveErr := run(ctx, stageRoot, "git", "rev-parse", "HEAD")
+		resolved, resolveErr := runGit(ctx, stageRoot, "rev-parse", "HEAD")
 		if resolveErr != nil || strings.TrimSpace(resolved) != targetSHA {
 			return nil, errors.New("existing staged release does not match pinned SHA")
 		}
@@ -425,7 +425,7 @@ func (m *manager) stagePinnedRelease(ctx context.Context, release, targetSHA str
 		if err := os.MkdirAll(filepath.Dir(stageRoot), 0o750); err != nil {
 			return nil, err
 		}
-		if _, err := run(ctx, m.repoRoot, "git", "worktree", "add", "--detach", stageRoot, targetSHA); err != nil {
+		if _, err := runGit(ctx, m.repoRoot, "worktree", "add", "--detach", stageRoot, targetSHA); err != nil {
 			return nil, err
 		}
 	}
@@ -447,7 +447,7 @@ func (m *manager) redeployStagedRevision(ctx context.Context, targetSHA string) 
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
 	stageRoot := filepath.Join(m.repoRoot, "Engine", "Releases", targetSHA)
-	resolved, err := run(ctx, stageRoot, "git", "rev-parse", "HEAD")
+	resolved, err := runGit(ctx, stageRoot, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(resolved) != targetSHA {
 		return nil, errors.New("pinned staged worktree is unavailable")
 	}
@@ -479,9 +479,9 @@ func (m *manager) enrollCluster(ctx context.Context, params map[string]any) (map
 }
 
 func (m *manager) status(ctx context.Context) (map[string]any, error) {
-	revision, revisionErr := run(ctx, m.repoRoot, "git", "rev-parse", "HEAD")
-	branch, _ := run(ctx, m.repoRoot, "git", "branch", "--show-current")
-	dirty, dirtyErr := run(ctx, m.repoRoot, "git", "status", "--porcelain", "--untracked-files=normal")
+	revision, revisionErr := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+	branch, _ := runGit(ctx, m.repoRoot, "branch", "--show-current")
+	dirty, dirtyErr := runGit(ctx, m.repoRoot, "status", "--porcelain", "--untracked-files=normal")
 	nodeJSON, nodeErr := run(ctx, "", "k3s", "kubectl", "get", "node", m.nodeName, "-o", "json")
 	return map[string]any{
 		"node_name":          m.nodeName,
@@ -601,7 +601,7 @@ func (m *manager) fetchRelease(ctx context.Context, release, targetSHA string) (
 	if err != nil {
 		return nil, err
 	}
-	if _, err := run(ctx, m.repoRoot, "git", "merge", "--ff-only", targetSHA); err != nil {
+	if _, err := runGit(ctx, m.repoRoot, "merge", "--ff-only", targetSHA); err != nil {
 		return nil, err
 	}
 	result["fast_forwarded"] = true
@@ -612,14 +612,14 @@ func (m *manager) preflightRelease(ctx context.Context, release, targetSHA strin
 	if err := m.verifyReleaseRef(ctx, release, targetSHA); err != nil {
 		return nil, err
 	}
-	dirty, err := run(ctx, m.repoRoot, "git", "status", "--porcelain", "--untracked-files=normal")
+	dirty, err := runGit(ctx, m.repoRoot, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(dirty) != "" {
 		return nil, errors.New("worktree is not clean; refusing stash, reset, or checkout")
 	}
-	if _, err := run(ctx, m.repoRoot, "git", "merge-base", "--is-ancestor", "HEAD", targetSHA); err != nil {
+	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", "HEAD", targetSHA); err != nil {
 		return nil, errors.New("target is not a fast-forward descendant")
 	}
 	return map[string]any{"release_tag": release, "revision": targetSHA, "worktree_clean": true, "fast_forward": true}, nil
@@ -629,7 +629,7 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
-	current, err := run(ctx, m.repoRoot, "git", "rev-parse", "HEAD")
+	current, err := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
 	if err != nil || strings.ToLower(strings.TrimSpace(current)) != targetSHA {
 		return nil, errors.New("worktree HEAD does not match requested revision")
 	}
@@ -1315,6 +1315,15 @@ func run(ctx context.Context, workdir, binary string, args ...string) (string, e
 		return string(output), fmt.Errorf("%s failed: %w: %s", filepath.Base(binary), err, truncate(strings.TrimSpace(string(output)), 2048))
 	}
 	return string(output), nil
+}
+
+func runGit(ctx context.Context, workdir string, args ...string) (string, error) {
+	abs, err := filepath.Abs(workdir)
+	if err != nil || abs == "/" || strings.TrimSpace(workdir) == "" {
+		return "", errors.New("unsafe Git worktree path")
+	}
+	gitArgs := append([]string{"-c", "safe.directory=" + abs}, args...)
+	return run(ctx, abs, "git", gitArgs...)
 }
 
 func truncate(value string, maximum int) string {
