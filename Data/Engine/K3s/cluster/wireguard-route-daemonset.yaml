@@ -19,10 +19,16 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/borealis-wireguard-route-daemon"]
           args: ["serve"]
+          env:
+            - {name: BOREALIS_WIREGUARD_INTERFACE, value: "borealis-wg"}
+            - {name: BOREALIS_CLUSTER_EDGE_VIP, value: "192.0.2.2"}
+            - name: BOREALIS_WIREGUARD_ROUTE_CIDRS
+              valueFrom:
+                secretKeyRef: {name: borealis-wireguard-tunnel-runtime-env, key: BOREALIS_WIREGUARD_PEER_NETWORK}
           envFrom:
             - secretRef: {name: borealis-wireguard-tunnel-runtime-env}
           startupProbe:
-            exec: {command: ["/usr/local/bin/borealis-wireguard-route-daemon", "health"]}
+            exec: {command: ["/usr/local/bin/borealis-wireguard-route-daemon", "startup"]}
             periodSeconds: 2
             failureThreshold: 30
           readinessProbe:

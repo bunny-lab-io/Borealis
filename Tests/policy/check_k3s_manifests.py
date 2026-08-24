@@ -107,7 +107,7 @@ def validate_node_manager_service_contract() -> None:
         "RuntimeDirectory=borealis": "managed runtime directory",
         "ConfigurationDirectory=borealis": "managed configuration directory",
         "ProtectSystem=strict": "strict filesystem protection",
-        "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s": "fixed-operation Borealis and K3s write paths",
+        "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s /var/lib/rancher/k3s/agent/images": "fixed-operation Borealis and K3s image pre-import write paths",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK": "Unix socket, K3s API, release-fetch, and host network-inspection contract",
     }
     for marker, description in required.items():
@@ -125,6 +125,9 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
     required_engine_cluster_markers = {
         "render_k3s_registries_config": "managed Spegel registry source configuration",
+        "K3S_IMAGE_IMPORT_DIR": "K3s-supported image pre-import directory",
+        "k3s_containerd_image_distribution_ready": "Spegel distribution-label verification",
+        "pinned and Spegel-ready": "pinned distributed image completion contract",
         "docker.io:": "Borealis local-image registry mirror",
         "registry.k8s.io:": "Kubernetes dependency registry mirror",
         "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",
@@ -133,6 +136,23 @@ def validate_node_manager_service_contract() -> None:
     for marker, description in required_engine_cluster_markers.items():
         if marker not in engine_source:
             fail(f"Engine cluster baseline lost {description}")
+    if "k3s_ctr images import" in engine_source:
+        fail("Engine must use K3s pre-import so Spegel receives distribution-source labels")
+    try:
+        route_manifest = (ROOT / "Data/Engine/K3s/cluster/wireguard-route-daemonset.yaml").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read WireGuard route DaemonSet: {exc}")
+    required_route_markers = {
+        'name: BOREALIS_WIREGUARD_INTERFACE, value: "borealis-wg"': "fixed WireGuard interface",
+        "name: BOREALIS_CLUSTER_EDGE_VIP": "stable edge-VIP route gateway",
+        "key: BOREALIS_WIREGUARD_PEER_NETWORK": "bounded Agent network route source",
+        '["/usr/local/bin/borealis-wireguard-route-daemon", "startup"]': "initialization-only startup probe",
+        '["/usr/local/bin/borealis-wireguard-route-daemon", "health"]': "route-aware readiness probe",
+        '["/usr/local/bin/borealis-wireguard-route-daemon", "live"]': "local-process liveness probe",
+    }
+    for marker, description in required_route_markers.items():
+        if marker not in route_manifest:
+            fail(f"WireGuard route DaemonSet lost {description}")
 
 
 def validate_longhorn_host_dependency_contract() -> None:

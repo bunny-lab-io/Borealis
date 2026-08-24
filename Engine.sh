@@ -36,6 +36,7 @@ K3S_CONFIG_DIR="${BOREALIS_K3S_CONFIG_DIR:-/etc/rancher/k3s/config.yaml.d}"
 K3S_BOREALIS_CONFIG="${BOREALIS_K3S_CONFIG_PATH:-${K3S_CONFIG_DIR}/10-borealis.yaml}"
 K3S_REGISTRIES_CONFIG="${BOREALIS_K3S_REGISTRIES_PATH:-/etc/rancher/k3s/registries.yaml}"
 K3S_KUBECONFIG="${BOREALIS_K3S_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+K3S_IMAGE_IMPORT_DIR="${BOREALIS_K3S_IMAGE_IMPORT_DIR:-/var/lib/rancher/k3s/agent/images}"
 K3S_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-baseline.sha256"
 K3S_CLUSTER_ASSET_DIR="${SCRIPT_DIR}/Data/Engine/K3s/cluster"
 K3S_PROBE_CONFORMANCE_FILE="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/var/lib/rancher/k3s/server/borealis-probe-conformance.json}"
@@ -3250,12 +3251,37 @@ k3s_containerd_image_present() {
     | awk -v exact="${image}" -v normalized="${normalized_image}" '$0 == exact || $0 == normalized {found=1} END {exit found ? 0 : 1}'
 }
 
+k3s_containerd_image_distribution_ready() {
+  local image="$1"
+  local normalized_image="${image}"
+  if [[ "${image}" != */*/* && "${image}" != localhost/* ]]; then
+    normalized_image="docker.io/${image}"
+  fi
+  local registry="${normalized_image%%/*}"
+  local repository="${normalized_image#*/}"
+  repository="${repository%%@*}"
+  repository="${repository%:*}"
+  local digest=""
+  digest="$(k3s_ctr images ls 2>/dev/null | awk -v exact="${image}" -v normalized="${normalized_image}" '$1 == exact || $1 == normalized {print $3; exit}')"
+  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  k3s_ctr content ls 2>/dev/null \
+    | awk -v exact="${digest}" -v source="containerd.io/distribution.source.${registry}=${repository}" \
+      '$1 == exact && index($0, source) {found=1} END {exit found ? 0 : 1}'
+}
+
 import_k3s_local_image_into_k3s() {
   local service="$1"
   local image="$2"
   local status_row="${3:-}"
-  if k3s_containerd_image_present "${image}"; then
-    printf '[%s] %s image already available in K3s containerd: %s\n' "$(date +%FT%T)" "${service}" "${image}" >> "${BUILD_LOG}"
+  local service_slug="${service//[^[:alnum:]_.-]/-}"
+  local archive_id=""
+  archive_id="$(printf '%s' "${image}" | sha256sum | awk '{print substr($1, 1, 16)}')"
+  local image_archive=""
+  local pinned_archive="${K3S_IMAGE_IMPORT_DIR}/borealis-${service_slug}-${archive_id}.tar"
+  if k3s_containerd_image_present "${image}" \
+    && k3s_containerd_image_distribution_ready "${image}" \
+    && run_privileged test -s "${pinned_archive}"; then
+    printf '[%s] %s image already pinned and Spegel-ready in K3s containerd: %s\n' "$(date +%FT%T)" "${service}" "${image}" >> "${BUILD_LOG}"
     return 0
   fi
   if ! docker image inspect "${image}" >/dev/null 2>&1; then
@@ -3267,23 +3293,37 @@ import_k3s_local_image_into_k3s() {
   if [[ -n "${status_row}" ]]; then
     log_status "${status_row}" "Importing Image" "${C_YELLOW}"
   fi
-  local image_archive
-  image_archive="$(mktemp "${DEPLOY_DIR}/${service}-image.XXXXXX.tar")"
+  image_archive="$(mktemp "${DEPLOY_DIR}/${service_slug}-image.XXXXXX.tar")"
   if ! docker image save "${image}" -o "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
-    rm -f "${image_archive}"
+    find "${DEPLOY_DIR}" -maxdepth 1 -type f -name "$(basename -- "${image_archive}")" -delete
     if [[ -n "${status_row}" ]]; then
       log_status "${status_row}" "Image Export Failed" "${C_RED}"
     fi
     die "Failed to export ${image} before K3s import. See ${BUILD_LOG}."
   fi
-  if ! k3s_ctr images import "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
-    rm -f "${image_archive}"
+  local pending_archive="${pinned_archive}.pending.$$"
+  run_privileged install -d -m 0755 "${K3S_IMAGE_IMPORT_DIR}"
+  if ! run_privileged install -m 0644 "${image_archive}" "${pending_archive}" >> "${BUILD_LOG}" 2>&1 \
+    || ! run_privileged mv "${pending_archive}" "${pinned_archive}" >> "${BUILD_LOG}" 2>&1; then
+    find "${DEPLOY_DIR}" -maxdepth 1 -type f -name "$(basename -- "${image_archive}")" -delete
     if [[ -n "${status_row}" ]]; then
       log_status "${status_row}" "Image Import Failed" "${C_RED}"
     fi
-    die "Failed to import ${image} into K3s containerd. See ${BUILD_LOG}."
+    die "Failed to stage ${image} for K3s pre-import. See ${BUILD_LOG}."
   fi
-  rm -f "${image_archive}"
+  find "${DEPLOY_DIR}" -maxdepth 1 -type f -name "$(basename -- "${image_archive}")" -delete
+  local attempt=""
+  for attempt in $(seq 1 60); do
+    if k3s_containerd_image_present "${image}" && k3s_containerd_image_distribution_ready "${image}"; then
+      printf '[%s] %s image pinned and Spegel-ready in K3s containerd: %s\n' "$(date +%FT%T)" "${service}" "${image}" >> "${BUILD_LOG}"
+      return 0
+    fi
+    sleep 2
+  done
+  if [[ -n "${status_row}" ]]; then
+    log_status "${status_row}" "Image Import Failed" "${C_RED}"
+  fi
+  die "K3s did not pre-import and label ${image} for Spegel within 120 seconds. See ${BUILD_LOG}."
 }
 
 import_borealis_operator_image_into_k3s() {
@@ -10768,9 +10808,16 @@ ensure_cluster_controller_baseline() {
   if cluster_mode_enabled; then
     local route_image=""
     route_image="$(service_image_tag_or_previous wireguard-tunnel borealis-engine/wireguard-tunnel:local)"
+    local edge_vip=""
+    edge_vip="$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.edgeVIP}')"
+    [[ "${edge_vip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+      || die "Enabled cluster has invalid edge VIP for WireGuard route reconciliation."
     local route_manifest=""
     route_manifest="$(mktemp "${DEPLOY_DIR}/wireguard-route-daemon.XXXXXX.yaml")"
-    sed "s|borealis-engine/wireguard-tunnel:sha-000000000000|${route_image}|g" "${K3S_CLUSTER_ASSET_DIR}/wireguard-route-daemonset.yaml" > "${route_manifest}"
+    sed \
+      -e "s|borealis-engine/wireguard-tunnel:sha-000000000000|${route_image}|g" \
+      -e "s|192.0.2.2|${edge_vip}|g" \
+      "${K3S_CLUSTER_ASSET_DIR}/wireguard-route-daemonset.yaml" > "${route_manifest}"
     k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${route_manifest}" >> "${BUILD_LOG}" 2>&1
     find "$(dirname -- "${route_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${route_manifest}")" -delete
     k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/borealis-cluster-controller --replicas=0 >> "${BUILD_LOG}" 2>&1

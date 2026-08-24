@@ -18,6 +18,7 @@ var interfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
 
 type routeConfig struct {
 	Interface string
+	EdgeVIP   string
 	CIDRs     []string
 }
 
@@ -37,6 +38,8 @@ func main() {
 		if err := serve(ctx, config); err != nil {
 			fatal(err)
 		}
+	case "startup":
+		return
 	case "health":
 		if err := verify(config); err != nil {
 			fatal(err)
@@ -55,9 +58,15 @@ func main() {
 }
 
 func configFromEnv() (routeConfig, error) {
-	config := routeConfig{Interface: strings.TrimSpace(os.Getenv("BOREALIS_WIREGUARD_INTERFACE"))}
+	config := routeConfig{
+		Interface: strings.TrimSpace(os.Getenv("BOREALIS_WIREGUARD_INTERFACE")),
+		EdgeVIP:   strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_EDGE_VIP")),
+	}
 	if !interfacePattern.MatchString(config.Interface) {
 		return routeConfig{}, errors.New("BOREALIS_WIREGUARD_INTERFACE is invalid")
+	}
+	if address := net.ParseIP(config.EdgeVIP); address == nil || address.To4() == nil || !address.IsPrivate() {
+		return routeConfig{}, errors.New("BOREALIS_CLUSTER_EDGE_VIP must be a private IPv4 address")
 	}
 	seen := map[string]bool{}
 	for _, raw := range strings.Split(os.Getenv("BOREALIS_WIREGUARD_ROUTE_CIDRS"), ",") {
@@ -84,7 +93,7 @@ func serve(ctx context.Context, config routeConfig) error {
 	defer ticker.Stop()
 	for {
 		if err := reconcile(config); err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "route reconciliation pending: %v\n", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -97,8 +106,16 @@ func serve(ctx context.Context, config routeConfig) error {
 }
 
 func reconcile(config routeConfig) error {
+	interfaceAvailable := wireGuardInterfaceAvailable(config.Interface)
 	for _, cidr := range config.CIDRs {
-		if output, err := exec.Command("ip", "route", "replace", cidr, "dev", config.Interface, "proto", "static").CombinedOutput(); err != nil {
+		args := []string{"route", "replace", cidr}
+		if interfaceAvailable {
+			args = append(args, "dev", config.Interface)
+		} else {
+			args = append(args, "via", config.EdgeVIP)
+		}
+		args = append(args, "proto", "static")
+		if output, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
 			return fmt.Errorf("replace route %s: %w: %s", cidr, err, strings.TrimSpace(string(output)))
 		}
 	}
@@ -106,13 +123,23 @@ func reconcile(config routeConfig) error {
 }
 
 func verify(config routeConfig) error {
+	interfaceAvailable := wireGuardInterfaceAvailable(config.Interface)
 	for _, cidr := range config.CIDRs {
-		output, err := exec.Command("ip", "route", "show", cidr, "dev", config.Interface).CombinedOutput()
-		if err != nil || strings.TrimSpace(string(output)) == "" {
-			return fmt.Errorf("route %s through %s is unavailable", cidr, config.Interface)
+		output, err := exec.Command("ip", "route", "show", cidr).CombinedOutput()
+		route := strings.TrimSpace(string(output))
+		expected := "via " + config.EdgeVIP
+		if interfaceAvailable {
+			expected = "dev " + config.Interface
+		}
+		if err != nil || route == "" || !strings.Contains(route, expected) {
+			return fmt.Errorf("route %s through %s is unavailable", cidr, expected)
 		}
 	}
 	return nil
+}
+
+func wireGuardInterfaceAvailable(name string) bool {
+	return exec.Command("ip", "link", "show", "dev", name).Run() == nil
 }
 
 func withdraw(config routeConfig) error {
@@ -124,7 +151,7 @@ func withdraw(config routeConfig) error {
 func withdrawContext(ctx context.Context, config routeConfig) error {
 	var result error
 	for _, cidr := range config.CIDRs {
-		output, err := exec.CommandContext(ctx, "ip", "route", "del", cidr, "dev", config.Interface, "proto", "static").CombinedOutput()
+		output, err := exec.CommandContext(ctx, "ip", "route", "del", cidr, "proto", "static").CombinedOutput()
 		if err != nil && !strings.Contains(strings.ToLower(string(output)), "no such process") {
 			result = errors.Join(result, fmt.Errorf("withdraw route %s: %w", cidr, err))
 		}
