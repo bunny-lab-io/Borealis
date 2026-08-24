@@ -110,7 +110,7 @@ def validate_cluster_controller_contract() -> None:
         (
             rule
             for rule in rules
-            if "coordination.k8s.io" in (rule.get("apiGroups") or [])
+            if set(rule.get("apiGroups") or []) == {"coordination.k8s.io"}
             and "leases" in (rule.get("resources") or [])
         ),
         {},
@@ -121,7 +121,7 @@ def validate_cluster_controller_contract() -> None:
         (
             rule
             for rule in rules
-            if "apps" in (rule.get("apiGroups") or [])
+            if set(rule.get("apiGroups") or []) == {"apps"}
             and "deployments" in (rule.get("resources") or [])
         ),
         {},
