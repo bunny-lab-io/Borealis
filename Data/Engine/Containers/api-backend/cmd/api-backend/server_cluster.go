@@ -38,7 +38,7 @@ var (
 	clusterUUIDRE    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	clusterReleaseRE = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
 	clusterRepoRE    = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-	clusterK3sRE     = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`)
+	clusterK3sRE     = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)\+k3s([0-9]+)$`)
 	clusterUbuntuRE  = regexp.MustCompile(`^Ubuntu[[:space:]]+([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[[:space:]].*)?$`)
 
 	errClusterConflict    = errors.New("cluster operation conflict")
@@ -94,6 +94,14 @@ type clusterReleaseCache struct {
 var serverClusterReleaseCache clusterReleaseCache
 
 type clusterGitHubTokenContextKey struct{}
+
+func clusterRemovalNodeIDs(targetNodeID string, payload map[string]any) []string {
+	ids := []string{strings.ToLower(strings.TrimSpace(targetNodeID))}
+	if paired := strings.ToLower(cleanText(payload["paired_node_id"])); paired != "" {
+		ids = append(ids, paired)
+	}
+	return ids
+}
 
 func registerServerClusterRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/server/cluster", clusterSnapshotHandler(auth))
@@ -167,6 +175,7 @@ func clusterSnapshotHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		payload["probe_conformance"] = clusterProbeConformancePayload()
+		payload["k3s_version"] = firstText(cleanText(mapStringAny(payload["config"])["k3s_version"]), strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION")))
 		writeJSON(w, http.StatusOK, payload)
 	}
 }
@@ -247,12 +256,16 @@ func clusterEnableHandler(auth *authService) http.HandlerFunc {
 		if !clusterProbeConformancePassed() {
 			errs = append(errs, publicValidationError{Field: "probe_conformance", Message: "stable K3s probe conformance has not passed"})
 		}
+		k3sVersion := strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION"))
+		if !clusterK3sRE.MatchString(k3sVersion) {
+			errs = append(errs, publicValidationError{Field: "k3s_version", Message: "cluster enable requires stable K3s version"})
+		}
 		baselineRelease := strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_RELEASE_VERSION"))
 		baselineSHA := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_SOURCE_SHA")))
 		if !clusterReleaseRE.MatchString(baselineRelease) || !clusterControllerSHARegex.MatchString(baselineSHA) {
 			errs = append(errs, publicValidationError{Field: "release", Message: "cluster enable requires a published dotted-numeric Engine release pinned to a commit SHA"})
 		}
-		return clusterMutation{Kind: "cluster_enable", Payload: map[string]any{"control_plane_vip": controlVIP, "edge_vip": edgeVIP, "node_name": nodeName, "management_ip": managementIP, "architecture": architecture, "baseline_release": baselineRelease, "baseline_sha": baselineSHA}}, errs
+		return clusterMutation{Kind: "cluster_enable", Payload: map[string]any{"control_plane_vip": controlVIP, "edge_vip": edgeVIP, "node_name": nodeName, "management_ip": managementIP, "architecture": architecture, "baseline_release": baselineRelease, "baseline_sha": baselineSHA, "k3s_version": k3sVersion}}, errs
 	})
 }
 
@@ -284,19 +297,32 @@ func clusterNodeMaintenanceHandler(auth *authService) http.HandlerFunc {
 
 func clusterNodeRemoveHandler(auth *authService) http.HandlerFunc {
 	return clusterNodeMutationHandler(auth, "node_remove", func(body map[string]any) (map[string]any, []publicValidationError) {
-		errs := rejectUnknownClusterFields(body, map[string]bool{"emergency": true, "confirmation": true, "reason": true})
+		errs := rejectUnknownClusterFields(body, map[string]bool{"emergency": true, "confirmation": true, "fencing_confirmation": true, "paired_node_id": true, "reason": true})
 		emergency, _ := body["emergency"].(bool)
 		confirmation := cleanText(body["confirmation"])
-		required := "REMOVE NODE"
+		pairedNodeID := strings.ToLower(cleanText(body["paired_node_id"]))
+		fencingConfirmation := cleanText(body["fencing_confirmation"])
+		required := "REMOVE NODE PAIR"
 		if emergency {
 			required = "EMERGENCY REMOVE NODE"
+			if pairedNodeID != "" {
+				errs = append(errs, publicValidationError{Field: "paired_node_id", Message: "must be empty for emergency removal"})
+			}
+			if fencingConfirmation != "TARGET IS POWERED OFF" {
+				errs = append(errs, publicValidationError{Field: "fencing_confirmation", Message: "must equal TARGET IS POWERED OFF"})
+			}
+		} else {
+			errs = append(errs, validateClusterUUID("paired_node_id", pairedNodeID)...)
+			if fencingConfirmation != "" {
+				errs = append(errs, publicValidationError{Field: "fencing_confirmation", Message: "must be empty for safe paired removal"})
+			}
 		}
 		if confirmation != required {
 			errs = append(errs, publicValidationError{Field: "confirmation", Message: "must equal " + required})
 		}
 		reason := cleanText(body["reason"])
 		errs = append(errs, validateClusterReason(reason)...)
-		return map[string]any{"emergency": emergency, "reason": reason}, errs
+		return map[string]any{"emergency": emergency, "fencing_confirmation": fencingConfirmation, "paired_node_id": nilIfEmpty(pairedNodeID), "reason": reason}, errs
 	})
 }
 
@@ -348,13 +374,30 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			invalidJSONOrValidation(w, err)
 			return
 		}
-		errs := rejectUnknownClusterFields(body, map[string]bool{"scope": true, "node_ids": true, "release_tag": true, "confirmation": true, "maintenance_outage_acknowledgement": true})
+		errs := rejectUnknownClusterFields(body, map[string]bool{"update_type": true, "scope": true, "node_ids": true, "release_tag": true, "k3s_version": true, "confirmation": true, "maintenance_outage_acknowledgement": true})
+		updateType := strings.ToLower(firstText(cleanText(body["update_type"]), "engine"))
+		if updateType != "engine" && updateType != "k3s" {
+			errs = append(errs, publicValidationError{Field: "update_type", Message: "must be engine or k3s"})
+		}
 		scope := strings.ToLower(cleanText(body["scope"]))
 		if scope != "node" && scope != "all" {
 			errs = append(errs, publicValidationError{Field: "scope", Message: "must be node or all"})
 		}
 		releaseTag := cleanText(body["release_tag"])
-		errs = append(errs, validateClusterRelease(releaseTag)...)
+		k3sVersion := cleanText(body["k3s_version"])
+		if updateType == "engine" {
+			errs = append(errs, validateClusterRelease(releaseTag)...)
+			if k3sVersion != "" {
+				errs = append(errs, publicValidationError{Field: "k3s_version", Message: "must be empty for Engine updates"})
+			}
+		} else {
+			if releaseTag != "" {
+				errs = append(errs, publicValidationError{Field: "release_tag", Message: "must be empty for K3s updates"})
+			}
+			if !clusterK3sRE.MatchString(k3sVersion) || len(k3sVersion) > clusterReleaseMaxLength {
+				errs = append(errs, publicValidationError{Field: "k3s_version", Message: "must be stable vX.Y.Z+k3sN form no longer than 32 characters"})
+			}
+		}
 		nodeIDs, nodeErrs := clusterStringList(body["node_ids"], "node_ids", 5, validateClusterUUID)
 		errs = append(errs, nodeErrs...)
 		if scope == "node" && len(nodeIDs) != 1 {
@@ -363,8 +406,15 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 		if scope == "all" && len(nodeIDs) != 0 {
 			errs = append(errs, publicValidationError{Field: "node_ids", Message: "all scope must not provide node_ids"})
 		}
-		if cleanText(body["confirmation"]) != "UPDATE CLUSTER" {
-			errs = append(errs, publicValidationError{Field: "confirmation", Message: "must equal UPDATE CLUSTER"})
+		requiredConfirmation := "UPDATE CLUSTER"
+		if updateType == "k3s" {
+			requiredConfirmation = "UPDATE K3S"
+			if scope != "all" || len(nodeIDs) != 0 {
+				errs = append(errs, publicValidationError{Field: "scope", Message: "K3s updates must target all servers through ordered all scope"})
+			}
+		}
+		if cleanText(body["confirmation"]) != requiredConfirmation {
+			errs = append(errs, publicValidationError{Field: "confirmation", Message: "must equal " + requiredConfirmation})
 		}
 		if len(errs) > 0 {
 			writePublicValidationErrors(w, errs)
@@ -391,6 +441,30 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			writePublicValidationErrors(w, []publicValidationError{{Field: "maintenance_outage_acknowledgement", Message: "must equal ACCEPT OUTAGE when supplied"}})
 			return
 		}
+		if updateType == "k3s" {
+			sourceVersion := firstText(cleanText(mapStringAny(snapshot["config"])["k3s_version"]), strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION")))
+			if !clusterProbeConformancePassed() {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "k3s_source_not_qualified", "message": "Current stable K3s source has not passed Borealis probe conformance."})
+				return
+			}
+			if err := validateK3sUpgradePath(sourceVersion, k3sVersion); err != nil {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "k3s_version_not_selectable", "message": err.Error()})
+				return
+			}
+			upgradeImage := strings.TrimSpace(os.Getenv("BOREALIS_K3S_UPGRADE_IMAGE"))
+			if !borealisOperatorImmutableImageRefPattern.MatchString(upgradeImage) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "k3s_upgrade_image_unavailable", "message": "BOREALIS_K3S_UPGRADE_IMAGE must pin rancher/k3s-upgrade by sha256 digest."})
+				return
+			}
+			payload := map[string]any{"scope": "all", "update_type": "k3s", "source_k3s_version": sourceVersion, "upgrade_image": upgradeImage, "maintenance_outage_acknowledgement": outageAcknowledgement}
+			result, err := store.createClusterOperation(ctx, identity.Username, clusterMutation{Kind: "k3s_update", TargetRelease: k3sVersion, Payload: payload})
+			if err != nil {
+				writeClusterError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, result)
+			return
+		}
 		ctx = clusterContextWithGitHubToken(ctx, auth)
 		current := clusterCurrentRelease(auth, ctx)
 		release, err := resolveClusterRelease(ctx, releaseTag, current)
@@ -410,6 +484,41 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	}
+}
+
+func validateK3sUpgradePath(source, target string) error {
+	parse := func(value string) ([4]int, error) {
+		matches := clusterK3sRE.FindStringSubmatch(strings.TrimSpace(value))
+		if len(matches) != 5 {
+			return [4]int{}, errors.New("source and target must be stable K3s releases")
+		}
+		var parts [4]int
+		for index := range parts {
+			parsed, err := strconv.Atoi(matches[index+1])
+			if err != nil {
+				return [4]int{}, errors.New("K3s release component is invalid")
+			}
+			parts[index] = parsed
+		}
+		return parts, nil
+	}
+	sourceParts, err := parse(source)
+	if err != nil {
+		return err
+	}
+	targetParts, err := parse(target)
+	if err != nil {
+		return err
+	}
+	if targetParts[0] != sourceParts[0] || targetParts[1] < sourceParts[1] || targetParts[1] > sourceParts[1]+1 {
+		return errors.New("K3s update must stay on current minor or advance exactly one minor")
+	}
+	if targetParts[1] == sourceParts[1] {
+		if targetParts[2] < sourceParts[2] || (targetParts[2] == sourceParts[2] && targetParts[3] <= sourceParts[3]) {
+			return errors.New("K3s downgrade or same-version update is not allowed")
+		}
+	}
+	return nil
 }
 
 func clusterMutationHandler(auth *authService, kind string, parse func(map[string]any) (clusterMutation, []publicValidationError)) http.HandlerFunc {
@@ -464,6 +573,9 @@ func clusterNodeMutationHandler(auth *authService, kind string, parse func(map[s
 			return
 		}
 		payload, errs := parse(body)
+		if kind == "node_remove" && cleanText(payload["paired_node_id"]) == nodeID {
+			errs = append(errs, publicValidationError{Field: "paired_node_id", Message: "must identify a different active node"})
+		}
 		if len(errs) > 0 {
 			writePublicValidationErrors(w, errs)
 			return

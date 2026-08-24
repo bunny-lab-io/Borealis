@@ -295,6 +295,99 @@ func TestClusterOneNodeUpdateRequiresOutageAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestClusterSafeRemovalRequiresDistinctPair(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	path := "/api/server/cluster/nodes/11111111-1111-4111-8111-111111111111/remove"
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, path, `{"emergency":false,"confirmation":"REMOVE NODE PAIR","reason":"retire pair"}`, token))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "paired_node_id") {
+		t.Fatalf("expected paired target validation, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, path, `{"emergency":false,"paired_node_id":"22222222-2222-4222-8222-222222222222","confirmation":"REMOVE NODE PAIR","reason":"retire pair"}`, token))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected paired removal acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.Kind != "node_remove" || cleanText(store.mutation.Payload["paired_node_id"]) != "22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("paired removal mutation missing target: %+v", store.mutation)
+	}
+}
+
+func TestClusterEmergencyRemovalRequiresExternalFenceConfirmation(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	path := "/api/server/cluster/nodes/11111111-1111-4111-8111-111111111111/remove"
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, path, `{"emergency":true,"confirmation":"EMERGENCY REMOVE NODE","reason":"lost host"}`, token))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "TARGET IS POWERED OFF") {
+		t.Fatalf("expected external fence acknowledgement, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, path, `{"emergency":true,"confirmation":"EMERGENCY REMOVE NODE","fencing_confirmation":"TARGET IS POWERED OFF","reason":"lost host"}`, token))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected fenced emergency removal acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestClusterK3sUpdateUsesDistinctQualifiedContract(t *testing.T) {
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
+	t.Setenv("BOREALIS_K3S_UPGRADE_IMAGE", "docker.io/rancher/k3s-upgrade@sha256:"+strings.Repeat("a", 64))
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"active_size": int64(3)}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/updates", `{"update_type":"k3s","scope":"all","node_ids":[],"k3s_version":"v1.36.4+k3s1","confirmation":"UPDATE K3S"}`, token))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected K3s update acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.Kind != "k3s_update" || store.mutation.TargetRelease != "v1.36.4+k3s1" || cleanText(store.mutation.Payload["source_k3s_version"]) != "v1.36.3+k3s1" {
+		t.Fatalf("K3s operation lost pinned contract: %+v", store.mutation)
+	}
+}
+
+func TestClusterK3sUpdateUsesPersistedBaselineAfterPriorRollingUpdate(t *testing.T) {
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
+	t.Setenv("BOREALIS_K3S_UPGRADE_IMAGE", "docker.io/rancher/k3s-upgrade@sha256:"+strings.Repeat("a", 64))
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{
+		"active_size": int64(3),
+		"config":      map[string]any{"k3s_version": "v1.36.4+k3s1"},
+	}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/updates", `{"update_type":"k3s","scope":"all","node_ids":[],"k3s_version":"v1.36.5+k3s1","confirmation":"UPDATE K3S"}`, token))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected K3s update acceptance from persisted baseline, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if source := cleanText(store.mutation.Payload["source_k3s_version"]); source != "v1.36.4+k3s1" {
+		t.Fatalf("expected persisted K3s source, got %q", source)
+	}
+}
+
+func TestK3sUpgradePathRejectsDowngradeSameVersionAndMinorSkip(t *testing.T) {
+	for _, target := range []string{"v1.36.2+k3s1", "v1.36.3+k3s1", "v1.38.0+k3s1", "v1.36.4-rc1+k3s1"} {
+		if err := validateK3sUpgradePath("v1.36.3+k3s1", target); err == nil {
+			t.Fatalf("unsafe K3s target accepted: %s", target)
+		}
+	}
+	for _, target := range []string{"v1.36.3+k3s2", "v1.36.4+k3s1", "v1.37.0+k3s1"} {
+		if err := validateK3sUpgradePath("v1.36.3+k3s1", target); err != nil {
+			t.Fatalf("safe K3s target %s rejected: %v", target, err)
+		}
+	}
+}
+
 func TestClusterInputClassesEnforceIPv4UbuntuAndOperationalLimits(t *testing.T) {
 	if len(validateClusterIP("management_ip", "2001:db8::1")) == 0 || len(validateClusterIP("management_ip", "10.20.30.40")) != 0 {
 		t.Fatal("cluster management addresses must be IPv4")

@@ -163,6 +163,23 @@ func TestEngineAgentBinaryRedeployHasPrecommitRollback(t *testing.T) {
 	}
 }
 
+func TestClusterCandidateReceivesAegisKeyWithoutEnteringPublicService(t *testing.T) {
+	reconciler := readRepositoryContractFile(t, "Data/Engine/K3s/cluster/reconcile-node-workloads.py")
+	for _, expected := range []string{
+		`labels["borealis.io/aegis-peer"] = "true"`,
+		`template_labels["borealis.io/aegis-peer"] = "true"`,
+		`f"{base}-candidate" if candidate else base`,
+	} {
+		if !strings.Contains(reconciler, expected) {
+			t.Fatalf("candidate Aegis isolation contract lost %q", expected)
+		}
+	}
+	aegisService := readRepositoryContractFile(t, "Data/Engine/K3s/cluster/aegis-mtls.yaml")
+	if !strings.Contains(aegisService, `borealis.io/aegis-peer: "true"`) || strings.Contains(aegisService, "selector:\n    app.kubernetes.io/name: api-backend") {
+		t.Fatal("Aegis peer Service no longer selects active and isolated candidate API replicas")
+	}
+}
+
 func TestEngineIPFallbackIsResolvedForEveryNetworkMode(t *testing.T) {
 	source := readRepositoryContractFile(t, "Engine.sh")
 	resolver := engineShellFunctionForContractTest(t, source, "resolve_engine_ip_fallback() {", "\nvalidate_engine_fqdn() {")

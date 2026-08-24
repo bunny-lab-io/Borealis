@@ -307,9 +307,9 @@ finally:
     ### Cluster control tables
 
     - `engine.cluster_state` stores singleton topology, VIPs, baseline release/SHA, HMR state, and active operation.
-    - `engine.cluster_nodes` stores membership/application state, management identity, release, roles, drain reason, and probe health.
+    - `engine.cluster_nodes` stores membership/application state, management identity, Engine release, role/K3s-version state, drain reason, and probe health.
     - `engine.cluster_invitations` and `engine.cluster_admissions` store bounded one-use invite metadata and paired approvals.
-    - `engine.cluster_operations` plus `engine.cluster_operation_events` store restart-safe state machine and ordered events.
+    - `engine.cluster_operations` plus `engine.cluster_operation_events` store restart-safe Engine update, K3s update, HMR, membership, and maintenance state machines plus ordered events.
     - `engine.cluster_audit_events` stores actor/action/result audit history.
     - `engine.realtime_outbox` stores cluster UI notifications pending publish.
     - `engine.cluster_application_leases` provides singleton controller, scheduler, HMR, update, membership, and maintenance ownership.

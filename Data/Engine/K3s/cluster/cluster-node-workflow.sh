@@ -76,6 +76,9 @@ for attempt in {1..120}; do
 done
 
 "${script_dir}/apply-pinned-dependencies.sh"
+k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${script_dir}/aegis-mtls.yaml"
+k3s kubectl -n "${namespace}" wait --for=condition=Ready certificate/borealis-cluster-ca --timeout=5m
+k3s kubectl -n "${namespace}" wait --for=condition=Ready certificate/borealis-api-aegis-mtls --timeout=5m
 k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${script_dir}/crds.yaml"
 
 vip_manifest="$(mktemp)"

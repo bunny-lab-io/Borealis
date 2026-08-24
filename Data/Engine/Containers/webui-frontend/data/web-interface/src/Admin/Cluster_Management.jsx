@@ -47,6 +47,7 @@ const CARD_SX = {
   color: "#e2e8f0",
 };
 const NODE_NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
+const K3S_VERSION_PATTERN = /^v\d+\.\d+\.\d+\+k3s\d+$/;
 
 function validIPv4(value) {
   const parts = String(value || "").split(".");
@@ -102,7 +103,7 @@ function KeyValueGrid({ entries }) {
   );
 }
 
-function NodeCard({ node, onMaintenance, onUpdate, onRemove }) {
+function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove }) {
   const roles = node?.roles || {};
   const roleLabels = Object.entries(roles).filter(([, active]) => active).map(([role]) => role.replaceAll("_", " "));
   return (
@@ -126,7 +127,8 @@ function NodeCard({ node, onMaintenance, onUpdate, onRemove }) {
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
         <Button size="small" variant="outlined" onClick={() => onMaintenance(node)}>{node?.application_state === "drained" ? "Exit Maintenance" : "Enter Maintenance"}</Button>
         <Button size="small" variant="outlined" onClick={() => onUpdate(node)}>Update Node</Button>
-        <Button size="small" color="error" variant="outlined" onClick={() => onRemove(node)}>Remove</Button>
+        <Button size="small" color="warning" variant="outlined" onClick={() => onRemove(node)}>Remove Pair</Button>
+        <Button size="small" color="error" variant="outlined" onClick={() => onEmergencyRemove(node)}>Emergency Remove</Button>
       </Stack>
     </Paper>
   );
@@ -152,10 +154,14 @@ export default function ClusterManagement() {
   const [architecture, setArchitecture] = useState("amd64");
   const [desiredSize, setDesiredSize] = useState(3);
   const [inviteBundle, setInviteBundle] = useState("");
+  const [pairedNode, setPairedNode] = useState("");
+  const [fencingConfirmation, setFencingConfirmation] = useState("");
+  const [k3sTargetVersion, setK3sTargetVersion] = useState("");
 
   const nodes = useMemo(() => Array.isArray(cluster?.nodes) ? cluster.nodes : [], [cluster]);
   const operations = useMemo(() => Array.isArray(cluster?.operations) ? cluster.operations : [], [cluster]);
   const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
+  const expansionSizes = useMemo(() => [3, 5].filter((size) => size === Number(cluster?.active_size || 1) + 2), [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -199,6 +205,8 @@ export default function ClusterManagement() {
       setDialog(null);
       setConfirmation("");
       setReason("");
+      setPairedNode("");
+      setFencingConfirmation("");
       await refresh({ quiet: true });
       void notify(`Cluster operation ${payload?.operation_id || "request"} queued.`, { variant: "success" });
       return payload;
@@ -213,14 +221,16 @@ export default function ClusterManagement() {
     setDialog({ kind, node });
     setConfirmation("");
     setReason("");
+    setFencingConfirmation("");
     if (node?.id) setSelectedNode(node.id);
-  }, []);
+    if (kind === "remove" && node?.id) setPairedNode(nodes.find((candidate) => candidate.id !== node.id && candidate.membership_state === "Active")?.id || "");
+  }, [nodes]);
 
   const submitDialog = useCallback(() => {
     const kind = dialog?.kind;
     const node = dialog?.node;
     const sanitizedReason = sanitizeSingleLineInput(reason).slice(0, 256);
-    if (["maintenance", "scale", "remove", "switchover", "emergency_failover"].includes(kind)) {
+    if (["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(kind)) {
       const validation = validateInputValue("reason", sanitizedReason, FIELD_CLASS.PLAIN_SINGLE_LINE);
       if (validation) return setError(validation);
     }
@@ -232,6 +242,18 @@ export default function ClusterManagement() {
         scope: kind === "update_all" ? "all" : "node",
         node_ids: kind === "update_all" ? [] : [selectedNode],
         release_tag: selectedRelease,
+        confirmation,
+        maintenance_outage_acknowledgement: oneNode ? "ACCEPT OUTAGE" : "",
+      });
+    }
+    if (kind === "k3s_update") {
+      if (!K3S_VERSION_PATTERN.test(k3sTargetVersion) || k3sTargetVersion.length > 32) return setError("K3s target must use stable vX.Y.Z+k3sN form and be no longer than 32 characters.");
+      const oneNode = Number(cluster?.active_size || 1) === 1;
+      return mutate("/api/server/cluster/updates", {
+        update_type: "k3s",
+        scope: "all",
+        node_ids: [],
+        k3s_version: k3sTargetVersion,
         confirmation,
         maintenance_outage_acknowledgement: oneNode ? "ACCEPT OUTAGE" : "",
       });
@@ -250,11 +272,12 @@ export default function ClusterManagement() {
       return mutate("/api/server/cluster/invitations", { node_name: nodeName }).then((payload) => setInviteBundle(payload?.invite_bundle || ""));
     }
     if (kind === "scale") return mutate("/api/server/cluster/membership/scale", { desired_size: Number(desiredSize), reason: sanitizedReason });
-    if (kind === "remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: false, confirmation, reason: sanitizedReason });
+    if (kind === "remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: false, paired_node_id: pairedNode, confirmation, reason: sanitizedReason });
+    if (kind === "emergency_remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: true, confirmation, fencing_confirmation: fencingConfirmation, reason: sanitizedReason });
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
     return undefined;
-  }, [architecture, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, managementIP, mutate, nodeName, reason, selectedNode, selectedRelease]);
+  }, [architecture, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
@@ -276,15 +299,15 @@ export default function ClusterManagement() {
         </Tabs>
 
         {tab === 0 ? <KeyValueGrid entries={[
-          ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Baseline release", cluster?.baseline_release],
+          ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Baseline release", cluster?.baseline_release], ["K3s version", cluster?.k3s_version],
           ["etcd leader", leaders?.etcd_leader], ["Control VIP owner", leaders?.control_vip_owner], ["Edge VIP owner", leaders?.edge_vip_owner],
           ["PostgreSQL primary", leaders?.postgres_primary], ["Scheduler leader", leaders?.scheduler_leader], ["WireGuard owner", leaders?.wireguard_owner],
         ]} /> : null}
 
-        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} />)}</Stack> : null}
+        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} onEmergencyRemove={(value) => openAction("emergency_remove", value)} />)}</Stack> : null}
 
         {tab === 2 ? <Stack spacing={2}>
-          <KeyValueGrid entries={[["Primary", leaders?.postgres_primary], ["Instances", cluster?.active_size], ["Durability", Number(cluster?.active_size) === 5 ? "2 synchronous acknowledgements" : Number(cluster?.active_size) === 3 ? "1 synchronous acknowledgement" : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", Number(cluster?.active_size) > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
+          <KeyValueGrid entries={[["Primary", leaders?.postgres_primary], ["Instances", cluster?.active_size], ["Durability", Number(cluster?.active_size) >= 4 ? "2 synchronous acknowledgements" : Number(cluster?.active_size) > 1 ? "1 synchronous acknowledgement" : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", Number(cluster?.active_size) > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
           <Alert severity="info">Snapshots provide in-cluster recovery. They do not replace off-cluster disaster recovery.</Alert>
           <Paper sx={CARD_SX}><Typography variant="h6">PostgreSQL role control</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="postgres-node-label">Target node</InputLabel><Select labelId="postgres-node-label" label="Target node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!selectedNode} onClick={() => openAction("switchover")}>Switchover</Button><Button color="error" variant="outlined" disabled={!selectedNode} onClick={() => openAction("emergency_failover")}>Emergency Failover</Button></Stack></Paper>
         </Stack> : null}
@@ -313,9 +336,10 @@ export default function ClusterManagement() {
 
         {tab === 5 ? <Stack spacing={2}>
           <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>Approve Pair</Button></Stack>)}</Stack></Paper>
           {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
-          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" onClick={() => openAction("invite")}>Create Node Invitation</Button><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={desiredSize} onChange={(event) => setDesiredSize(event.target.value)}>{[1, 3, 5].map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Scale</Button></Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
+          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" onClick={() => openAction("invite")}>Create Node Invitation</Button><FormControl sx={{ minWidth: 140 }} disabled={!expansionSizes.length}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!expansionSizes.length} onClick={() => openAction("scale")}>Request Pair Expansion</Button></Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
 
@@ -323,6 +347,9 @@ export default function ClusterManagement() {
         <DialogTitle>Confirm cluster operation</DialogTitle>
         <DialogContent>
           {dialog?.kind === "hmr_start" ? <Alert severity="warning" sx={{ mb: 2 }}>{HMR_WARNING}</Alert> : null}
+          {dialog?.kind === "remove" ? <Alert severity="warning" sx={{ mb: 2 }}>Safe downscale removes two nodes sequentially. PostgreSQL replicas must vacate both targets before Borealis self-fences K3s and deletes membership.</Alert> : null}
+          {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
+          {dialog?.kind === "k3s_update" ? <Alert severity="warning" sx={{ mb: 2 }}>K3s control-plane update stays separate from Engine release update. Failure halts sequence and leaves affected node drained.</Alert> : null}
           {dialog?.kind === "update_node" || dialog?.kind === "update_all" ? (
             <FormControl fullWidth sx={{ mb: 2 }}>
               <InputLabel id="dialog-release-label">Release</InputLabel>
@@ -333,11 +360,14 @@ export default function ClusterManagement() {
           ) : null}
           {dialog?.kind === "cluster_enable" ? <Stack spacing={1.5} sx={{ mb: 2 }}><TextField label="Control-plane VIP" value={controlVIP} onChange={(event) => setControlVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /><TextField label="Borealis edge VIP" value={edgeVIP} onChange={(event) => setEdgeVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /><TextField label="Current node management IPv4" value={managementIP} onChange={(event) => setManagementIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /><TextField label="Current node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /><FormControl><InputLabel id="cluster-architecture-label">Architecture</InputLabel><Select labelId="cluster-architecture-label" label="Architecture" value={architecture} onChange={(event) => setArchitecture(event.target.value)}><MenuItem value="amd64">amd64</MenuItem><MenuItem value="arm64">arm64</MenuItem></Select></FormControl></Stack> : null}
           {dialog?.kind === "invite" ? <TextField fullWidth label="New node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /> : null}
-          {["maintenance", "scale", "remove", "switchover", "emergency_failover"].includes(dialog?.kind) ? <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {!['maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={dialog?.kind === "hmr_start" ? "Type ENABLE HMR" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR" : dialog?.kind === "cluster_enable" ? "Type ENABLE CLUSTER" : dialog?.kind === "remove" ? "Type REMOVE NODE" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
+          {dialog?.kind === "k3s_update" ? <TextField fullWidth sx={{ mb: 2 }} label="Stable K3s target" value={k3sTargetVersion} onChange={(event) => setK3sTargetVersion(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 32 }} helperText="vX.Y.Z+k3sN; immutable upgrade image and source conformance required" /> : null}
+          {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
+          {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
+          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) ? <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
+          {!['maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={dialog?.kind === "hmr_start" ? "Type ENABLE HMR" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR" : dialog?.kind === "cluster_enable" ? "Type ENABLE CLUSTER" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
           <Typography variant="body2" sx={{ mt: 2, color: "text.secondary" }}>Recent Admin authentication required. Server rejects stale sessions with step-up-required status.</Typography>
         </DialogContent>
-        <DialogActions><Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button variant="contained" color={dialog?.kind === "hmr_start" ? "warning" : "primary"} onClick={() => void submitDialog()} disabled={busy}>Submit</Button></DialogActions>
+        <DialogActions><Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button variant="contained" color={dialog?.kind === "emergency_remove" ? "error" : dialog?.kind === "hmr_start" ? "warning" : "primary"} onClick={() => void submitDialog()} disabled={busy}>Submit</Button></DialogActions>
       </Dialog>
     </PageBodyFrame>
   );

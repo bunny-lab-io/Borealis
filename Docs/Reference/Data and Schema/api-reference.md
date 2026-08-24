@@ -262,9 +262,9 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
     - `GET /api/server/cluster` and `GET /api/server/cluster/events` (Admin) - cluster roles, node/probe/release state, quorum, HMR, operations, and event history.
     - `POST /api/server/cluster/enable`, `/invitations`, `/admissions/{id}/approve`, and `/membership/scale` (Admin plus recent step-up for mutations) - gated enablement and paired membership workflow.
-    - `POST /api/server/cluster/nodes/{id}/maintenance`, `/nodes/{id}/remove`, `/postgres/switchover`, and `/postgres/emergency-failover` (Admin plus recent step-up) - node/database maintenance operations.
+    - `POST /api/server/cluster/nodes/{id}/maintenance`, `/nodes/{id}/remove`, `/postgres/switchover`, and `/postgres/emergency-failover` (Admin plus recent step-up) - node/database maintenance operations. Normal remove requires distinct canonical paired node and exact `REMOVE NODE PAIR`; emergency remove requires exact external-power-fence and removal acknowledgements.
     - `GET /api/server/cluster/releases` (Admin) - published stable GitHub release catalog with immutable SHA and compatibility results.
-    - `POST /api/server/cluster/hmr/start`, `/hmr/exit`, and `/updates` (Admin plus recent step-up) - exclusive cluster-wide HMR or rolling release workflow.
+    - `POST /api/server/cluster/hmr/start`, `/hmr/exit`, and `/updates` (Admin plus recent step-up) - exclusive cluster-wide HMR, rolling Engine release, or distinct ordered K3s workflow. K3s update accepts stable `vX.Y.Z+k3sN`, all scope only, exact `UPDATE K3S`, and one-node outage acknowledgement.
     - `POST /api/server/cluster/operations/{id}/retry` and `/cancel` (Admin plus recent step-up) - explicit recovery for halted operations.
     - `POST /api/bootstrap/cluster/join` and `GET /api/bootstrap/cluster/join/{id}/events` (Invitation Authenticated) - bounded one-use node enrollment and approval event polling.
     - `/api/server/logs*` (Admin) - retired log access surface. Authenticated administrators receive `410 Gone`; log inspection is CLI-only through [Engine Log Access](../../Using%20the%20Platform/engine-log-management.md).

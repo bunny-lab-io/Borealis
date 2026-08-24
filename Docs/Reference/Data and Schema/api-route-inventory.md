@@ -6,7 +6,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 
 | Route pattern | Class | Authentication | Source |
 | --- | --- | --- | --- |
-| `/` | `fallback` | `shared-public-gate` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:170` |
+| `/` | `fallback` | `shared-public-gate` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:175` |
 | `/api/admin/device-approvals` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:50` |
 | `/api/admin/enrollment-codes` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:48` |
 | `/api/agent/hash` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go:53` |
@@ -59,21 +59,21 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/sites` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:43` |
 | `/api/sites/device_map` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:44` |
 | `/api/software/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:35` |
-| `/api/system/go-backend/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:120` |
+| `/api/system/go-backend/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:125` |
 | `/api/user_site_assignments/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/user_site_assignments.go:43` |
 | `/api/users` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/users.go:54` |
 | `/api/users/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/users.go:55` |
 | `/api/watchdogs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:168` |
 | `/api/watchdogs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:169` |
 | `/api/workflows/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/workflows.go:105` |
-| `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:116` |
+| `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:121` |
 | `/healthz` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:207` |
 | `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:209` |
-| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:118` |
+| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:123` |
 | `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:210` |
-| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:119` |
+| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:124` |
 | `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:208` |
-| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:117` |
+| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:122` |
 | `/v1/command` | `operator` | `operator-hmac` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:211` |
 | `DELETE /api/admin/enrollment-codes/{code_id}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:49` |
 | `GET /api/aegis/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:19` |
@@ -85,7 +85,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `GET /api/agent/update/download/{artifact_id}` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go:54` |
 | `GET /api/agent/update/manifest` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go:53` |
 | `GET /api/agents` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go:83` |
-| `GET /api/bootstrap/cluster/join/{id}/events` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:117` |
+| `GET /api/bootstrap/cluster/join/{id}/events` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:125` |
 | `GET /api/bootstrap/state` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:297` |
 | `GET /api/device/details/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go:92` |
 | `GET /api/device/patches/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/patches.go:63` |
@@ -105,18 +105,18 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `GET /api/realtime/events` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go:38` |
 | `GET /api/repo/current_hash` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/repo_hash.go:38` |
 | `GET /api/server/backup/export` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:114` |
-| `GET /api/server/cluster` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:99` |
-| `GET /api/server/cluster/banner` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:100` |
-| `GET /api/server/cluster/events` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:101` |
-| `GET /api/server/cluster/releases` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:102` |
+| `GET /api/server/cluster` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:107` |
+| `GET /api/server/cluster/banner` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:108` |
+| `GET /api/server/cluster/events` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:109` |
+| `GET /api/server/cluster/releases` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:110` |
 | `GET /api/software/audit` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:32` |
 | `GET /api/tunnel/active` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:217` |
 | `GET /api/tunnel/connect/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:216` |
 | `GET /api/tunnel/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:215` |
 | `GET /api/vnc/sessions` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:117` |
 | `GET /api/vnc/viewers` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:112` |
-| `GET /live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:143` |
-| `GET /ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:150` |
+| `GET /live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:145` |
+| `GET /ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:152` |
 | `POST /api/admin/device-approvals/{approval_id}/approve` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:51` |
 | `POST /api/admin/device-approvals/{approval_id}/deny` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:52` |
 | `POST /api/aegis/force_reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:23` |
@@ -151,7 +151,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /api/bootstrap/aegis/unlock` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:299` |
 | `POST /api/bootstrap/backup/analyze` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:117` |
 | `POST /api/bootstrap/backup/restore` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:118` |
-| `POST /api/bootstrap/cluster/join` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:116` |
+| `POST /api/bootstrap/cluster/join` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:124` |
 | `POST /api/device/description/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go:93` |
 | `POST /api/device/patches/{hostname}/refresh` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/patches.go:64` |
 | `POST /api/device/processes/{hostname}/terminate` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go:37` |
@@ -177,19 +177,19 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /api/scripts/quick_run` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/quick_run.go:34` |
 | `POST /api/server/backup/analyze` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:115` |
 | `POST /api/server/backup/restore` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:116` |
-| `POST /api/server/cluster/admissions/{id}/approve` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:105` |
-| `POST /api/server/cluster/enable` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:103` |
-| `POST /api/server/cluster/hmr/exit` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:112` |
-| `POST /api/server/cluster/hmr/start` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:111` |
-| `POST /api/server/cluster/invitations` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:104` |
-| `POST /api/server/cluster/membership/scale` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:106` |
-| `POST /api/server/cluster/nodes/{id}/maintenance` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:107` |
-| `POST /api/server/cluster/nodes/{id}/remove` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:108` |
-| `POST /api/server/cluster/operations/{id}/cancel` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:115` |
-| `POST /api/server/cluster/operations/{id}/retry` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:114` |
-| `POST /api/server/cluster/postgres/emergency-failover` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:110` |
-| `POST /api/server/cluster/postgres/switchover` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:109` |
-| `POST /api/server/cluster/updates` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:113` |
+| `POST /api/server/cluster/admissions/{id}/approve` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:113` |
+| `POST /api/server/cluster/enable` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:111` |
+| `POST /api/server/cluster/hmr/exit` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:120` |
+| `POST /api/server/cluster/hmr/start` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:119` |
+| `POST /api/server/cluster/invitations` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:112` |
+| `POST /api/server/cluster/membership/scale` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:114` |
+| `POST /api/server/cluster/nodes/{id}/maintenance` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:115` |
+| `POST /api/server/cluster/nodes/{id}/remove` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:116` |
+| `POST /api/server/cluster/operations/{id}/cancel` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:123` |
+| `POST /api/server/cluster/operations/{id}/retry` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:122` |
+| `POST /api/server/cluster/postgres/emergency-failover` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:118` |
+| `POST /api/server/cluster/postgres/switchover` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:117` |
+| `POST /api/server/cluster/updates` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:121` |
 | `POST /api/shell/disconnect` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go:46` |
 | `POST /api/shell/establish` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go:45` |
 | `POST /api/sites/assign` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:46` |
@@ -205,6 +205,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /api/vnc/establish` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:113` |
 | `POST /api/vnc/handoff` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:116` |
 | `POST /api/vnc/session` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:114` |
+| `POST /internal/cluster/aegis-key` | `internal-cluster` | `mutual-tls` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout.go:50` |
 | `PUT /api/devices/{device_id}/metadata_fields/{field_number}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go:87` |
 | `PUT /api/metadata_fields/{field_number}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go:85` |
 

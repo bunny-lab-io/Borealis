@@ -165,6 +165,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | CloudNativePG `v1.30.0` (cluster PostgreSQL operator and synchronous replication) | [Apache-2.0](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/LICENSE) |
 | shared-engine | cert-manager `v1.21.1` (cluster workload mTLS certificate lifecycle) | [Apache-2.0](https://github.com/cert-manager/cert-manager/blob/master/LICENSE) |
 | shared-engine | system-upgrade-controller `v0.20.1` (gated one-server-at-time K3s upgrade controller) | [Apache-2.0](https://github.com/rancher/system-upgrade-controller/blob/master/LICENSE) |
+| shared-engine | rancher/k3s-upgrade (exact K3s target version, runtime image must be pinned by sha256 digest) | [Apache-2.0](https://github.com/k3s-io/k3s-upgrade/blob/master/LICENSE) |
 | shared-engine | Longhorn `v1.12.0` default K3s storage baseline manifest (installed by `Engine.sh` unless `BOREALIS_K3S_LONGHORN_ENABLED=0`) | [Apache-2.0](https://github.com/longhorn/longhorn/blob/master/LICENSE) |
 | shared-engine | Kubernetes e2e BusyBox `1.36.1-1` (`registry.k8s.io/e2e-test-images/busybox`, digest-pinned probe conformance helper) | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Open-iSCSI / `iscsi-initiator-utils` host dependency for Longhorn volumes (installed by `Engine.sh` when missing) | [GPL-2.0-only](https://github.com/open-iscsi/open-iscsi/blob/master/COPYING) |

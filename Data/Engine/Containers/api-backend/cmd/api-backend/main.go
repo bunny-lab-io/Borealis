@@ -106,6 +106,11 @@ func main() {
 		log.Fatalf("failed to initialise Go auth service: %v", err)
 	}
 	defer closeAuth()
+	aegisClusterServer, aegisClusterExited, err := startAegisClusterKeyServer(auth)
+	if err != nil {
+		log.Fatalf("failed to initialise Aegis cluster key listener: %v", err)
+	}
+	startAegisClusterKeyFanoutLoop(rootCtx, auth)
 
 	fallback := http.NotFoundHandler()
 	operatorRealtime := newOperatorRealtimeHub()
@@ -196,6 +201,7 @@ func main() {
 
 	exitCode := 0
 	serverAlreadyExited := false
+	aegisClusterAlreadyExited := false
 	select {
 	case <-rootCtx.Done():
 		apiDraining.Store(true)
@@ -206,6 +212,12 @@ func main() {
 			log.Printf("Go api-backend gateway exited: %v", err)
 			exitCode = 1
 		}
+	case err := <-aegisClusterExited:
+		aegisClusterAlreadyExited = true
+		if err != nil {
+			log.Printf("Aegis cluster key listener exited: %v", err)
+			exitCode = 1
+		}
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -214,11 +226,27 @@ func main() {
 		log.Printf("gateway shutdown error: %v", err)
 		_ = server.Close()
 	}
+	if aegisClusterServer != nil {
+		if err := aegisClusterServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Aegis cluster key listener shutdown error: %v", err)
+			_ = aegisClusterServer.Close()
+		}
+	}
 	if !serverAlreadyExited {
 		select {
 		case err := <-serverExited:
 			if err != nil {
 				log.Printf("Go api-backend gateway exited during shutdown: %v", err)
+				exitCode = 1
+			}
+		default:
+		}
+	}
+	if aegisClusterServer != nil && !aegisClusterAlreadyExited {
+		select {
+		case err := <-aegisClusterExited:
+			if err != nil {
+				log.Printf("Aegis cluster key listener exited during shutdown: %v", err)
 				exitCode = 1
 			}
 		default:

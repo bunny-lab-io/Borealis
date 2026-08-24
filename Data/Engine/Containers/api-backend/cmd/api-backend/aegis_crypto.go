@@ -145,6 +145,25 @@ func (s *goAegisService) activeKey() ([]byte, error) {
 	return append([]byte(nil), s.key...), nil
 }
 
+func (s *goAegisService) installClusterKey(ctx context.Context, key []byte) error {
+	if len(key) != aegisKeyLength {
+		return errors.New("Aegis cluster key length is invalid")
+	}
+	state, err := s.state(ctx)
+	if err != nil {
+		return err
+	}
+	if !state.Configured {
+		return errAegisNotConfigured
+	}
+	plain, err := aegisDecryptText(state.VerificationToken, key)
+	if err != nil || plain != aegisVerificationPlaintext {
+		return errAegisInvalidCipher
+	}
+	s.setActiveKey(key)
+	return nil
+}
+
 func (s *goAegisService) deriveAndVerify(ctx context.Context, cipherText string) ([]byte, error) {
 	if strings.TrimSpace(cipherText) == "" {
 		return nil, fmt.Errorf("%w: Aegis Cipher is required", errAegisInvalidRequest)

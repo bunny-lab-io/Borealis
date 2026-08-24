@@ -44,6 +44,25 @@ func TestNodeHealthParsersRequireReadyPostgresAndValidService(t *testing.T) {
 	}
 }
 
+func TestCandidateHealthParsersRequireReadyAndServiceIsolation(t *testing.T) {
+	workloads, allReady, err := readyCandidateWorkloads([]byte(`{"items":[{"metadata":{"labels":{"app.kubernetes.io/name":"api-backend-candidate","borealis.io/update-candidate":"true"}},"spec":{"replicas":1},"status":{"availableReplicas":1,"readyReplicas":1,"updatedReplicas":1}},{"metadata":{"labels":{"app.kubernetes.io/name":"job-scheduler-candidate","borealis.io/update-candidate":"true"}},"spec":{"replicas":1},"status":{"availableReplicas":1,"readyReplicas":1,"updatedReplicas":1}}]}`))
+	if err != nil || !allReady || !workloads["api-backend-candidate"] || !workloads["job-scheduler-candidate"] {
+		t.Fatalf("unexpected candidate readiness workloads=%#v allReady=%v err=%v", workloads, allReady, err)
+	}
+	address, port, err := readyCandidateAPIEndpoint([]byte(`{"items":[{"metadata":{"labels":{"app.kubernetes.io/name":"api-backend-candidate","borealis.io/update-candidate":"true"}},"spec":{"containers":[{"ports":[{"name":"http","containerPort":5001}]}]},"status":{"podIP":"10.42.3.7","conditions":[{"type":"Ready","status":"True"}]}}]}`))
+	if err != nil || address != "10.42.3.7" || port != 5001 {
+		t.Fatalf("unexpected candidate endpoint address=%q port=%d err=%v", address, port, err)
+	}
+	isolatedSlices := []byte(`{"items":[{"endpoints":[{"addresses":["10.42.1.8"]}]}]}`)
+	if endpointSliceContainsAddress(isolatedSlices, address) {
+		t.Fatal("candidate should remain absent from shared Service")
+	}
+	leakedSlices := []byte(`{"items":[{"endpoints":[{"addresses":["10.42.3.7"]}]}]}`)
+	if !endpointSliceContainsAddress(leakedSlices, address) {
+		t.Fatal("candidate Service leak was not detected")
+	}
+}
+
 func TestSupportedUbuntuReleaseRequiresUbuntu2404OrNewer(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -62,5 +81,25 @@ func TestSupportedUbuntuReleaseRequiresUbuntu2404OrNewer(t *testing.T) {
 				t.Fatalf("supportedUbuntuRelease()=%v want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestMemberRemovalFenceUsesPersistentNarrowMarkerPath(t *testing.T) {
+	if memberFencePath != "/etc/borealis/k3s-member-removal-fence.json" {
+		t.Fatalf("unexpected member fence path %q", memberFencePath)
+	}
+	if got := requiredReason(map[string]any{"reason": "line one\nline two"}); got != "" {
+		t.Fatalf("multiline removal reason accepted: %q", got)
+	}
+}
+
+func TestK3sConformanceVerbRequiresStableVersion(t *testing.T) {
+	if got := requiredK3sVersion(map[string]any{"k3s_version": "v1.36.3+k3s1"}); got != "v1.36.3+k3s1" {
+		t.Fatalf("stable K3s version rejected: %q", got)
+	}
+	for _, value := range []string{"", "v1.36.3-rc1+k3s1", "latest", "v1.36.3+k3s1\nnext"} {
+		if got := requiredK3sVersion(map[string]any{"k3s_version": value}); got != "" {
+			t.Fatalf("unsafe K3s version accepted: %q", got)
+		}
 	}
 }

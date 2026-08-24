@@ -36,6 +36,7 @@ const (
 	maxRequestBytes    = 64 << 10
 	actionRuntimeID    = 64646
 	defaultK3sVersion  = "v1.36.3+k3s1"
+	memberFencePath    = "/etc/borealis/k3s-member-removal-fence.json"
 )
 
 var (
@@ -82,6 +83,7 @@ func client(args []string) {
 	verb := flags.String("verb", "", "Fixed node-manager action")
 	release := flags.String("release-tag", "", "Dotted numeric release tag")
 	targetSHA := flags.String("target-sha", "", "Pinned lowercase commit SHA")
+	k3sVersion := flags.String("k3s-version", "", "Stable K3s version")
 	reason := flags.String("reason", "", "Single-line drain reason")
 	controlVIP := flags.String("control-plane-vip", "", "K3s control-plane VIP")
 	edgeVIP := flags.String("edge-vip", "", "Borealis edge VIP")
@@ -90,7 +92,10 @@ func client(args []string) {
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
 		"FenceEdge": true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
-		"InspectHealth": true, "EnrollCluster": true,
+		"InspectHealth": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"PrepareMemberRemoval":   true,
+		"RunK3sProbeConformance": true,
+		"CreateEtcdSnapshot":     true,
 	}
 	if !allowed[strings.TrimSpace(*verb)] {
 		fatalf("unsupported fixed verb %q", *verb)
@@ -101,6 +106,9 @@ func client(args []string) {
 	}
 	if strings.TrimSpace(*targetSHA) != "" {
 		params["target_sha"] = strings.ToLower(strings.TrimSpace(*targetSHA))
+	}
+	if strings.TrimSpace(*k3sVersion) != "" {
+		params["k3s_version"] = strings.TrimSpace(*k3sVersion)
 	}
 	if strings.TrimSpace(*reason) != "" {
 		params["reason"] = strings.TrimSpace(*reason)
@@ -280,11 +288,103 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
 		return m.inspectHealth(ctx)
+	case "InspectCandidateHealth":
+		return m.inspectCandidateHealth(ctx)
+	case "PromoteCandidate":
+		return m.promoteCandidate(ctx, requiredSHA(request.Params))
+	case "PrepareMemberRemoval":
+		return m.prepareMemberRemoval(ctx, requiredReason(request.Params))
+	case "RunK3sProbeConformance":
+		return m.runK3sProbeConformance(ctx, requiredK3sVersion(request.Params))
+	case "CreateEtcdSnapshot":
+		return m.createEtcdSnapshot(ctx)
 	case "EnrollCluster":
 		return m.enrollCluster(ctx, request.Params)
 	default:
 		return nil, fmt.Errorf("unsupported fixed verb %q", request.Verb)
 	}
+}
+
+func (m *manager) createEtcdSnapshot(ctx context.Context) (map[string]any, error) {
+	name := "borealis-pre-k3s-" + time.Now().UTC().Format("20060102t150405z")
+	output, err := run(ctx, "", "k3s", "etcd-snapshot", "save", "--name", name)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"node_name": m.nodeName, "snapshot_name": name, "output": truncate(output, 8192)}, nil
+}
+
+func (m *manager) runK3sProbeConformance(ctx context.Context, expectedVersion string) (map[string]any, error) {
+	if !k3sPattern.MatchString(expectedVersion) {
+		return nil, errors.New("stable k3s_version is required")
+	}
+	versionOutput, err := run(ctx, "", "k3s", "--version")
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Fields(versionOutput)
+	if len(fields) < 3 || fields[2] != expectedVersion {
+		return nil, fmt.Errorf("running K3s version does not match target %s", expectedVersion)
+	}
+	scriptPath := filepath.Join(m.repoRoot, "Data", "Engine", "K3s", "cluster", "run-probe-conformance.sh")
+	if info, err := os.Stat(scriptPath); err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("K3s probe conformance script is unavailable")
+	}
+	output, err := run(ctx, m.repoRoot, "/usr/bin/bash", scriptPath)
+	if err != nil {
+		return nil, err
+	}
+	resultPath := envDefault("BOREALIS_K3S_PROBE_CONFORMANCE_FILE", "/var/lib/rancher/k3s/server/borealis-probe-conformance.json")
+	raw, err := os.ReadFile(resultPath)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		ID         string `json:"id"`
+		Status     string `json:"status"`
+		K3sVersion string `json:"k3s_version"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.ID != "pod-restart-policy-startup-probe-v1" || result.Status != "passed" || result.K3sVersion != expectedVersion {
+		return nil, errors.New("K3s probe conformance result does not match upgraded version")
+	}
+	return map[string]any{"node_name": m.nodeName, "k3s_version": expectedVersion, "probe_conformance": "passed", "output": truncate(output, 8192)}, nil
+}
+
+func (m *manager) prepareMemberRemoval(ctx context.Context, reason string) (map[string]any, error) {
+	if reason == "" {
+		reason = "cluster membership removal"
+	}
+	loadState, err := run(ctx, "", "systemctl", "show", "--property=LoadState", "--value", "k3s.service")
+	if err != nil || strings.TrimSpace(loadState) != "loaded" {
+		return nil, errors.New("k3s.service is unavailable for controlled membership fence")
+	}
+	if err := os.MkdirAll(filepath.Dir(memberFencePath), 0o750); err != nil {
+		return nil, err
+	}
+	scheduledAt := time.Now().UTC()
+	marker, err := json.Marshal(map[string]any{
+		"node_name":    m.nodeName,
+		"reason":       reason,
+		"scheduled_at": scheduledAt.Format(time.RFC3339Nano),
+		"recovery":     "Remove this file and explicitly enable k3s.service only after cluster membership recovery approval.",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(memberFencePath, append(marker, '\n'), 0o600); err != nil {
+		return nil, err
+	}
+	unitName := fmt.Sprintf("borealis-k3s-member-removal-fence-%d", scheduledAt.Unix())
+	if _, err := run(ctx, "", "systemd-run", "--unit", unitName, "--on-active=15s", "--property=Type=oneshot", "--collect", "/usr/bin/systemctl", "disable", "--now", "k3s.service"); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"node_name":     m.nodeName,
+		"fence_marker":  memberFencePath,
+		"fence_unit":    unitName,
+		"scheduled_at":  scheduledAt.Format(time.RFC3339Nano),
+		"delay_seconds": 15,
+	}, nil
 }
 
 func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA string) error {
@@ -537,11 +637,62 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	if info, err := os.Stat(enginePath); err != nil || info.Mode().IsRegular() == false {
 		return nil, errors.New("Engine.sh missing from repository root")
 	}
-	output, err := run(ctx, m.repoRoot, "/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA)
+	output, err := run(ctx, m.repoRoot, "/usr/bin/env", "BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate", "/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"revision": targetSHA, "redeployed": true, "output": truncate(output, 8192)}, nil
+}
+
+func (m *manager) promoteCandidate(ctx context.Context, targetSHA string) (map[string]any, error) {
+	if !shaPattern.MatchString(targetSHA) {
+		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
+	}
+	reconciler := filepath.Join(m.repoRoot, "Data", "Engine", "K3s", "cluster", "reconcile-node-workloads.py")
+	imageManifest := filepath.Join(m.repoRoot, "Engine", "Deploy", "image-manifest.json")
+	if info, err := os.Stat(reconciler); err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("cluster workload reconciler is unavailable")
+	}
+	output, err := run(ctx, m.repoRoot, "/usr/bin/python3", reconciler,
+		"--node", m.nodeName,
+		"--revision", targetSHA,
+		"--image-manifest", imageManifest,
+		"--promote-candidate",
+	)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"revision": targetSHA, "promoted": true, "output": truncate(output, 8192)}, nil
+}
+
+func (m *manager) inspectCandidateHealth(ctx context.Context) (map[string]any, error) {
+	selector := "borealis.io/engine-node=" + m.nodeName + "," + "borealis.io/update-candidate=true"
+	deployments, deploymentErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "deployments", "-l", selector, "-o", "json")
+	pods, podErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "pods", "-l", selector, "-o", "json")
+	endpoints, endpointErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "endpointslices", "-l", "kubernetes.io/service-name=api-backend", "-o", "json")
+	if deploymentErr != nil || podErr != nil || endpointErr != nil {
+		return nil, errors.New("candidate workload or endpoint health inspection failed")
+	}
+	workloads, allReady, err := readyCandidateWorkloads([]byte(deployments))
+	if err != nil {
+		return nil, err
+	}
+	if !allReady || !workloads["api-backend-candidate"] || !workloads["job-scheduler-candidate"] {
+		return nil, errors.New("required candidate workloads are not ready")
+	}
+	address, port, err := readyCandidateAPIEndpoint([]byte(pods))
+	if err != nil {
+		return nil, err
+	}
+	if endpointSliceContainsAddress([]byte(endpoints), address) {
+		return nil, errors.New("candidate API endpoint entered shared Service before promotion")
+	}
+	for _, path := range []string{"/startup", "/ready", "/live"} {
+		if err := probeHTTP(ctx, address, port, path); err != nil {
+			return nil, fmt.Errorf("candidate API probe %s failed: %w", path, err)
+		}
+	}
+	return map[string]any{"node_name": m.nodeName, "candidate_isolated": true, "candidate_address": address, "workloads": workloads}, nil
 }
 
 func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
@@ -651,6 +802,117 @@ func readyNodeWorkloads(raw []byte) (map[string]bool, error) {
 		ready[name] = item.Status.Available >= item.Spec.Replicas && item.Status.Ready >= item.Spec.Replicas && item.Status.Updated >= item.Spec.Replicas
 	}
 	return ready, nil
+}
+
+func readyCandidateWorkloads(raw []byte) (map[string]bool, bool, error) {
+	var payload struct {
+		Items []struct {
+			Metadata struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Spec struct {
+				Replicas int64 `json:"replicas"`
+			} `json:"spec"`
+			Status struct {
+				Available int64 `json:"availableReplicas"`
+				Ready     int64 `json:"readyReplicas"`
+				Updated   int64 `json:"updatedReplicas"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false, fmt.Errorf("decode candidate workloads: %w", err)
+	}
+	ready := map[string]bool{}
+	runnable := 0
+	allReady := true
+	for _, item := range payload.Items {
+		if !strings.EqualFold(item.Metadata.Labels["borealis.io/update-candidate"], "true") || item.Spec.Replicas < 1 {
+			continue
+		}
+		runnable++
+		name := item.Metadata.Labels["app.kubernetes.io/name"]
+		isReady := name != "" && item.Status.Available >= item.Spec.Replicas && item.Status.Ready >= item.Spec.Replicas && item.Status.Updated >= item.Spec.Replicas
+		ready[name] = isReady
+		allReady = allReady && isReady
+	}
+	return ready, runnable > 0 && allReady, nil
+}
+
+func readyCandidateAPIEndpoint(raw []byte) (string, int, error) {
+	var payload struct {
+		Items []struct {
+			Metadata struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Spec struct {
+				Containers []struct {
+					Ports []struct {
+						Name          string `json:"name"`
+						ContainerPort int    `json:"containerPort"`
+					} `json:"ports"`
+				} `json:"containers"`
+			} `json:"spec"`
+			Status struct {
+				PodIP      string `json:"podIP"`
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", 0, fmt.Errorf("decode candidate pods: %w", err)
+	}
+	for _, pod := range payload.Items {
+		if pod.Metadata.Labels["app.kubernetes.io/name"] != "api-backend-candidate" || !strings.EqualFold(pod.Metadata.Labels["borealis.io/update-candidate"], "true") || net.ParseIP(pod.Status.PodIP) == nil {
+			continue
+		}
+		ready := false
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == "Ready" && condition.Status == "True" {
+				ready = true
+			}
+		}
+		if !ready {
+			continue
+		}
+		for _, container := range pod.Spec.Containers {
+			for _, port := range container.Ports {
+				if port.Name == "http" && port.ContainerPort > 0 {
+					return pod.Status.PodIP, port.ContainerPort, nil
+				}
+			}
+		}
+	}
+	return "", 0, errors.New("ready isolated candidate API pod is unavailable")
+}
+
+func endpointSliceContainsAddress(raw []byte, expected string) bool {
+	if net.ParseIP(expected) == nil {
+		return true
+	}
+	var payload struct {
+		Items []struct {
+			Endpoints []struct {
+				Addresses []string `json:"addresses"`
+			} `json:"endpoints"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return true
+	}
+	for _, item := range payload.Items {
+		for _, endpoint := range item.Endpoints {
+			for _, address := range endpoint.Addresses {
+				if address == expected {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func readyAPIEndpoint(raw []byte, nodeName string) (string, int, error) {
@@ -1004,6 +1266,14 @@ func requiredSHA(params map[string]any) string {
 		return ""
 	}
 	if _, err := hex.DecodeString(value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func requiredK3sVersion(params map[string]any) string {
+	value := strings.TrimSpace(fmt.Sprint(params["k3s_version"]))
+	if !k3sPattern.MatchString(value) {
 		return ""
 	}
 	return value

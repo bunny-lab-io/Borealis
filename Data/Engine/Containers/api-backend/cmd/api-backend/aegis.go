@@ -68,7 +68,18 @@ func aegisSetupHandler(auth *authService) http.HandlerFunc {
 		if auth == nil || auth.aegis == nil {
 			return nil, errors.New("aegis store unavailable")
 		}
-		return auth.aegis.setupWithCipher(ctx, cleanText(body["cipher"]))
+		payload, err := auth.aegis.setupWithCipher(ctx, cleanText(body["cipher"]))
+		if err != nil {
+			return nil, err
+		}
+		unlocked, err := fanoutAegisClusterKey(ctx, auth)
+		if err != nil {
+			return nil, err
+		}
+		if unlocked > 0 {
+			payload["cluster_replicas_unlocked"] = unlocked
+		}
+		return payload, nil
 	})
 }
 
@@ -80,6 +91,13 @@ func aegisUnlockHandler(auth *authService) http.HandlerFunc {
 		payload, err := auth.aegis.unlockWithCipher(ctx, cleanText(body["cipher"]))
 		if err != nil {
 			return nil, err
+		}
+		unlocked, err := fanoutAegisClusterKey(ctx, auth)
+		if err != nil {
+			return nil, err
+		}
+		if unlocked > 0 {
+			payload["cluster_replicas_unlocked"] = unlocked
 		}
 		return payload, nil
 	})
@@ -94,6 +112,13 @@ func aegisRotateHandler(auth *authService) http.HandlerFunc {
 		payload, err := auth.aegis.rotateWithCipher(ctx, cleanText(body["current_cipher"]), newCipher)
 		if err != nil {
 			return nil, err
+		}
+		unlocked, err := fanoutAegisClusterKey(ctx, auth)
+		if err != nil {
+			return nil, err
+		}
+		if unlocked > 0 {
+			payload["cluster_replicas_unlocked"] = unlocked
 		}
 		return payload, nil
 	})

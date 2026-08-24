@@ -2,7 +2,7 @@
   {
     "pattern": "/",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 170,
+    "line": 175,
     "class": "fallback",
     "authentication": "shared-public-gate",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -479,7 +479,7 @@
   {
     "pattern": "/api/system/go-backend/status",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 120,
+    "line": 125,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -542,7 +542,7 @@
   {
     "pattern": "/health",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 116,
+    "line": 121,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -569,7 +569,7 @@
   {
     "pattern": "/live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 118,
+    "line": 123,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go",
@@ -587,7 +587,7 @@
   {
     "pattern": "/ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 119,
+    "line": 124,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go",
@@ -605,7 +605,7 @@
   {
     "pattern": "/startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 117,
+    "line": 122,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go",
@@ -713,7 +713,7 @@
   {
     "pattern": "GET /api/bootstrap/cluster/join/{id}/events",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 117,
+    "line": 125,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -893,7 +893,7 @@
   {
     "pattern": "GET /api/server/cluster",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 99,
+    "line": 107,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -902,7 +902,7 @@
   {
     "pattern": "GET /api/server/cluster/banner",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 100,
+    "line": 108,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -911,7 +911,7 @@
   {
     "pattern": "GET /api/server/cluster/events",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 101,
+    "line": 109,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -920,7 +920,7 @@
   {
     "pattern": "GET /api/server/cluster/releases",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 102,
+    "line": 110,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -983,7 +983,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 143,
+    "line": 145,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -992,7 +992,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 150,
+    "line": 152,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1307,7 +1307,7 @@
   {
     "pattern": "POST /api/bootstrap/cluster/join",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 116,
+    "line": 124,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1541,7 +1541,7 @@
   {
     "pattern": "POST /api/server/cluster/admissions/{id}/approve",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 105,
+    "line": 113,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1550,7 +1550,7 @@
   {
     "pattern": "POST /api/server/cluster/enable",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 103,
+    "line": 111,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1559,7 +1559,7 @@
   {
     "pattern": "POST /api/server/cluster/hmr/exit",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 112,
+    "line": 120,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1568,7 +1568,7 @@
   {
     "pattern": "POST /api/server/cluster/hmr/start",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 111,
+    "line": 119,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1577,7 +1577,7 @@
   {
     "pattern": "POST /api/server/cluster/invitations",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 104,
+    "line": 112,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1586,7 +1586,7 @@
   {
     "pattern": "POST /api/server/cluster/membership/scale",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 106,
+    "line": 114,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1595,7 +1595,7 @@
   {
     "pattern": "POST /api/server/cluster/nodes/{id}/maintenance",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 107,
+    "line": 115,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1604,7 +1604,7 @@
   {
     "pattern": "POST /api/server/cluster/nodes/{id}/remove",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 108,
+    "line": 116,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1613,7 +1613,7 @@
   {
     "pattern": "POST /api/server/cluster/operations/{id}/cancel",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 115,
+    "line": 123,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1622,7 +1622,7 @@
   {
     "pattern": "POST /api/server/cluster/operations/{id}/retry",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 114,
+    "line": 122,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1631,7 +1631,7 @@
   {
     "pattern": "POST /api/server/cluster/postgres/emergency-failover",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 110,
+    "line": 118,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1640,7 +1640,7 @@
   {
     "pattern": "POST /api/server/cluster/postgres/switchover",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 109,
+    "line": 117,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1649,7 +1649,7 @@
   {
     "pattern": "POST /api/server/cluster/updates",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
-    "line": 113,
+    "line": 121,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go",
@@ -1788,6 +1788,15 @@
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /internal/cluster/aegis-key",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout.go",
+    "line": 50,
+    "class": "internal-cluster",
+    "authentication": "mutual-tls",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout_test.go",
     "test_exemption": null
   },
   {

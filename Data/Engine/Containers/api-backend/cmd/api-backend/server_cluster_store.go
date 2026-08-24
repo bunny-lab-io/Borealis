@@ -344,6 +344,91 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		mutation.Payload["baseline_release"] = baselineRelease
 		mutation.Payload["baseline_sha"] = baselineSHA
 	}
+	if mutation.Kind == "membership_scale" {
+		desiredSize := coerceInt64(mutation.Payload["desired_size"])
+		if activeSize != 1 && activeSize != 3 {
+			return nil, fmt.Errorf("%w: cluster cannot expand beyond five active nodes", errClusterConflict)
+		}
+		if desiredSize != activeSize+2 {
+			return nil, fmt.Errorf("%w: expansion must request exactly one pending quorum pair; downscale uses paired node removal", errClusterConflict)
+		}
+		if clusterStatus != "Healthy" && clusterStatus != "Pending Quorum" {
+			return nil, fmt.Errorf("%w: membership expansion requires healthy quorum", errClusterConflict)
+		}
+	}
+	if mutation.Kind == "node_remove" {
+		emergency, _ := mutation.Payload["emergency"].(bool)
+		ids := clusterRemovalNodeIDs(mutation.TargetNodeID, mutation.Payload)
+		if emergency {
+			if len(ids) != 1 || cleanText(mutation.Payload["fencing_confirmation"]) != "TARGET IS POWERED OFF" {
+				return nil, fmt.Errorf("%w: emergency removal requires one externally fenced node", errClusterConflict)
+			}
+			if activeSize != 3 && activeSize != 5 {
+				return nil, fmt.Errorf("%w: emergency removal requires three or five recorded active nodes", errClusterConflict)
+			}
+		} else {
+			if len(ids) != 2 || ids[0] == ids[1] || (activeSize != 3 && activeSize != 5) {
+				return nil, fmt.Errorf("%w: safe removal requires distinct pair from three- or five-node cluster", errClusterConflict)
+			}
+			if clusterStatus != "Healthy" {
+				return nil, fmt.Errorf("%w: safe paired removal requires Healthy cluster", errClusterConflict)
+			}
+		}
+		var recordedActive int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active'`).Scan(&recordedActive); err != nil {
+			return nil, err
+		}
+		if recordedActive != activeSize {
+			return nil, fmt.Errorf("%w: recorded active membership does not match cluster state", errClusterConflict)
+		}
+		for _, id := range ids {
+			var count int64
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE id=$1 AND membership_state='Active'`, id).Scan(&count); err != nil {
+				return nil, err
+			}
+			if count != 1 {
+				return nil, fmt.Errorf("%w: removal target %s is not active", errClusterNotFound, id)
+			}
+		}
+		mutation.Payload["removal_node_ids"] = ids
+		mutation.Payload["target_size"] = activeSize - int64(len(ids))
+	}
+	if mutation.Kind == "k3s_update" {
+		if clusterStatus != "Healthy" || (activeSize != 1 && activeSize != 3 && activeSize != 5) {
+			return nil, fmt.Errorf("%w: K3s update requires healthy supported membership", errClusterConflict)
+		}
+		if err := validateK3sUpgradePath(cleanText(mutation.Payload["source_k3s_version"]), mutation.TargetRelease); err != nil {
+			return nil, fmt.Errorf("%w: %v", errClusterConflict, err)
+		}
+		if !borealisOperatorImmutableImageRefPattern.MatchString(cleanText(mutation.Payload["upgrade_image"])) {
+			return nil, fmt.Errorf("%w: K3s upgrade image is not content-addressed", errClusterConflict)
+		}
+		var healthyCount int64
+		rows, queryErr := tx.QueryContext(ctx, `SELECT probe_health_json FROM engine.cluster_nodes WHERE membership_state='Active'`)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		for rows.Next() {
+			var probesJSON string
+			if err := rows.Scan(&probesJSON); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if clusterProbeSetHealthy(parseClusterJSON(probesJSON)) {
+				healthyCount++
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if healthyCount != activeSize {
+			return nil, fmt.Errorf("%w: every K3s server must pass Engine probes before upgrade", errClusterConflict)
+		}
+	}
 	if mutation.Kind == "engine_update" {
 		compatibility := clusterCompatibilityMap(mutation.Payload["compatibility"])
 		if activeSize > 1 && (!textInSet(cleanText(compatibility["database_migration"]), "none", "expand-contract") || coerceInt64(compatibility["maximum_version_skew_releases"]) < 1) {
@@ -572,11 +657,11 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 			return nil, err
 		}
 	}
-	var clusterID, baselineRelease, baselineSHA string
-	if err := tx.QueryRowContext(ctx, `SELECT cluster_id,COALESCE(baseline_release,''),COALESCE(baseline_sha,'') FROM engine.cluster_state WHERE id=1`).Scan(&clusterID, &baselineRelease, &baselineSHA); err != nil {
+	var clusterID, baselineRelease, baselineSHA, configJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT cluster_id,COALESCE(baseline_release,''),COALESCE(baseline_sha,''),config_json FROM engine.cluster_state WHERE id=1`).Scan(&clusterID, &baselineRelease, &baselineSHA, &configJSON); err != nil {
 		return nil, err
 	}
-	payload := map[string]any{"admission_ids": ids, "node_names": nodeNames, "baseline_release": baselineRelease, "baseline_sha": baselineSHA}
+	payload := map[string]any{"admission_ids": ids, "node_names": nodeNames, "baseline_release": baselineRelease, "baseline_sha": baselineSHA, "k3s_version": cleanText(parseClusterJSON(configJSON)["k3s_version"])}
 	operationID := newClusterUUID()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO engine.cluster_operations(id, kind, state, current_step, requested_by, payload_json, created_at, updated_at)

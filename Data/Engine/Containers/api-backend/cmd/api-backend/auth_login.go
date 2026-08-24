@@ -117,6 +117,11 @@ func bootstrapAegisLifecycleHandler(
 			writeJSON(w, status, payload)
 			return
 		}
+		unlocked, err := fanoutAegisClusterKey(ctx, auth)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "aegis_cluster_fanout_failed", "message": err.Error()})
+			return
+		}
 		nextState, err := currentBootstrapState(ctx, auth)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{
@@ -128,6 +133,9 @@ func bootstrapAegisLifecycleHandler(
 		clearAuthCookies(w)
 		payload := publicBootstrapState(nextState)
 		payload["status"] = "ok"
+		if unlocked > 0 {
+			payload["cluster_replicas_unlocked"] = unlocked
+		}
 		writeJSON(w, http.StatusOK, payload)
 	}
 }

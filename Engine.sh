@@ -53,6 +53,11 @@ K3S_CONTAINER_LOG_MAX_FILES="${BOREALIS_K3S_CONTAINER_LOG_MAX_FILES:-}"
 K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
 K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
 K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
+K3S_UPGRADE_IMAGE="${BOREALIS_K3S_UPGRADE_IMAGE:-}"
+if [[ -n "${K3S_UPGRADE_IMAGE}" && ! "${K3S_UPGRADE_IMAGE}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'BOREALIS_K3S_UPGRADE_IMAGE must use immutable registry/repository@sha256:digest form.\n' >&2
+  exit 64
+fi
 K3S_BASELINE_VERSION="1"
 K3S_LONGHORN_ENABLED="${BOREALIS_K3S_LONGHORN_ENABLED:-1}"
 K3S_LONGHORN_NAMESPACE="${BOREALIS_K3S_LONGHORN_NAMESPACE:-longhorn-system}"
@@ -4020,6 +4025,8 @@ $(k3s_timezone_env_entries)
               value: "$(k3s_probe_conformance_status)"
             - name: BOREALIS_K3S_VERSION
               value: "$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}' || true)"
+            - name: BOREALIS_K3S_UPGRADE_IMAGE
+              value: "${K3S_UPGRADE_IMAGE}"
             - name: BOREALIS_ENGINE_RELEASE_VERSION
               value: "$(engine_release_version)"
             - name: BOREALIS_ENGINE_SOURCE_SHA
@@ -10776,10 +10783,17 @@ for key,value in sorted((payload.get("data") or {}).items()):
   done
   BOREALIS_CLUSTER_API_IMAGE="${IMAGE_TAGS[api-backend]}" "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" redeploy
   local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
-  python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" \
-    --node "${node_name}" \
-    --revision "${CLUSTER_TARGET_REVISION}" \
+  local reconcile_args=(
+    --node "${node_name}"
+    --revision "${CLUSTER_TARGET_REVISION}"
     --image-manifest "${IMAGE_MANIFEST}"
+  )
+  case "${BOREALIS_CLUSTER_DEPLOYMENT_MODE:-active}" in
+    active) ;;
+    candidate) reconcile_args+=(--candidate) ;;
+    *) die "BOREALIS_CLUSTER_DEPLOYMENT_MODE must be active or candidate." ;;
+  esac
+  python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" "${reconcile_args[@]}"
 }
 
 usage() {

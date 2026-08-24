@@ -24,6 +24,7 @@ const (
 	clusterControllerLeaseTTL  = 20 * time.Second
 	clusterNodeManagerSocket   = "/run/borealis/node-manager.sock"
 	clusterNodeManagerToken    = "/etc/borealis/node-manager.token"
+	clusterUpgradeNamespace    = "system-upgrade"
 )
 
 var (
@@ -40,6 +41,7 @@ type clusterControllerOperation struct {
 	TargetRelease string
 	TargetSHA     string
 	Payload       map[string]any
+	Attempt       int64
 }
 
 type clusterControllerNode struct {
@@ -313,11 +315,11 @@ func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *ku
 
 func clusterControllerStepTimeout(step string) time.Duration {
 	switch {
-	case strings.HasSuffix(step, ":fetch_release"), strings.HasSuffix(step, ":redeploy_revision"):
+	case strings.HasSuffix(step, ":fetch_release"), strings.HasSuffix(step, ":redeploy_revision"), strings.HasSuffix(step, ":promote_candidate"), strings.HasSuffix(step, ":apply_k3s_upgrade"):
 		return 35 * time.Minute
 	case step == "apply_membership":
 		return 45 * time.Minute
-	case step == "pre_change_snapshot", step == "migrate_postgres", step == "finalize_schema":
+	case step == "pre_change_snapshot", step == "migrate_postgres", step == "finalize_schema", step == "prepare_postgres_removal", step == "scale_postgres_membership":
 		return 20 * time.Minute
 	default:
 		return 5 * time.Minute
@@ -334,11 +336,23 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		}
 		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"}, clusterControllerStep{Name: "expand_schema"})
 		for _, node := range ordered {
-			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "fetch_release", "redeploy_revision", "inspect_health", "minimum_ready_soak", "exit_drain"} {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "fetch_release", "redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "exit_drain"} {
 				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
 			}
 		}
 		return append(base, clusterControllerStep{Name: "finalize_schema"}, clusterControllerStep{Name: "verify_cluster"}), nil
+	case "k3s_update":
+		ordered, err := clusterUpdateNodes(operation, nodes)
+		if err != nil {
+			return nil, err
+		}
+		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"})
+		for _, node := range ordered {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "apply_k3s_upgrade", "wait_k3s_ready", "post_k3s_conformance", "inspect_health", "minimum_ready_soak", "exit_drain"} {
+				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
+			}
+		}
+		return append(base, clusterControllerStep{Name: "verify_cluster"}), nil
 	case "hmr_start":
 		if clusterNodeByID(nodes, operation.TargetNodeID).ID == "" {
 			return nil, errors.New("HMR target is not an active cluster node")
@@ -374,7 +388,26 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		}
 		return append(base, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":inspect_health", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":exit_drain", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":minimum_ready_soak", NodeID: operation.TargetNodeID}), nil
 	case "node_remove":
-		return append(base, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":transfer_roles", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":enter_drain", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":wait_endpoint_withdrawal", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "remove_member", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "verify_quorum"}), nil
+		ordered, err := clusterRemovalNodes(operation, nodes)
+		if err != nil {
+			return nil, err
+		}
+		if emergency, _ := operation.Payload["emergency"].(bool); emergency {
+			for _, node := range ordered {
+				base = append(base,
+					clusterControllerStep{Name: "node:" + node.ID + ":delete_member_node", NodeID: node.ID},
+					clusterControllerStep{Name: "node:" + node.ID + ":verify_member_removed", NodeID: node.ID},
+				)
+			}
+			return append(base, clusterControllerStep{Name: "scale_postgres_membership"}, clusterControllerStep{Name: "verify_quorum"}), nil
+		}
+		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"}, clusterControllerStep{Name: "prepare_postgres_removal"})
+		for _, node := range ordered {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "prepare_member_removal", "wait_member_fenced", "delete_member_node", "verify_member_removed"} {
+				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
+			}
+		}
+		return append(base, clusterControllerStep{Name: "verify_quorum"}), nil
 	case "membership_admit", "membership_scale":
 		return append(base, clusterControllerStep{Name: "apply_membership"}, clusterControllerStep{Name: "verify_quorum"}), nil
 	case "postgres_switchover", "postgres_emergency_failover":
@@ -400,6 +433,46 @@ func clusterUpdateNodes(operation clusterControllerOperation, nodes []clusterCon
 	}
 	if len(selected) == 0 {
 		return nil, errors.New("update has no active target nodes")
+	}
+	sort.SliceStable(selected, func(i, j int) bool {
+		left := clusterNodeLeadershipWeight(selected[i])
+		right := clusterNodeLeadershipWeight(selected[j])
+		if left == right {
+			return selected[i].Name < selected[j].Name
+		}
+		return left < right
+	})
+	return selected, nil
+}
+
+func clusterRemovalNodes(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerNode, error) {
+	ids := anySlice(operation.Payload["removal_node_ids"])
+	if len(ids) == 0 {
+		for _, id := range clusterRemovalNodeIDs(operation.TargetNodeID, operation.Payload) {
+			ids = append(ids, id)
+		}
+	}
+	emergency, _ := operation.Payload["emergency"].(bool)
+	expected := 2
+	if emergency {
+		expected = 1
+	}
+	if len(ids) != expected {
+		return nil, fmt.Errorf("node removal requires %d target(s)", expected)
+	}
+	selected := make([]clusterControllerNode, 0, expected)
+	seen := map[string]bool{}
+	for _, rawID := range ids {
+		id := cleanText(rawID)
+		if seen[id] {
+			return nil, errors.New("node removal targets must be distinct")
+		}
+		seen[id] = true
+		node := clusterNodeByID(nodes, id)
+		if node.ID == "" {
+			return nil, fmt.Errorf("removal target %s is not active", id)
+		}
+		selected = append(selected, node)
 	}
 	sort.SliceStable(selected, func(i, j int) bool {
 		left := clusterNodeLeadershipWeight(selected[i])
@@ -469,12 +542,12 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 	var targetNodeID, targetRelease, targetSHA, payloadJSON string
 	err = tx.QueryRowContext(ctx, `
 		SELECT o.id, o.kind, o.state, o.current_step,
-		       COALESCE(o.target_node_id,''), COALESCE(o.target_release,''), COALESCE(o.target_sha,''), o.payload_json
+		       COALESCE(o.target_node_id,''), COALESCE(o.target_release,''), COALESCE(o.target_sha,''), o.payload_json, o.attempt
 		  FROM engine.cluster_operations o
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
 		 FOR UPDATE OF o SKIP LOCKED
-	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON)
+	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return clusterControllerOperation{}, false, nil
 	}
@@ -547,9 +620,15 @@ func (c *clusterController) advanceOperation(ctx context.Context, operation clus
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET current_step=$1, updated_at=$2 WHERE id=$3 AND state='running'`, nextStep, now, operation.ID); err != nil {
 		return err
 	}
-	if strings.HasSuffix(operation.CurrentStep, ":inspect_health") && operation.TargetRelease != "" {
+	if operation.Kind == "engine_update" && strings.HasSuffix(operation.CurrentStep, ":inspect_health") && operation.TargetRelease != "" {
 		nodeID := clusterStepNodeID(operation.CurrentStep)
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET release_tag=$1, release_sha=$2, probe_health_json=$3, last_seen_at=$4, updated_at=$4 WHERE id=$5`, operation.TargetRelease, operation.TargetSHA, `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`, now, nodeID); err != nil {
+			return err
+		}
+	}
+	if operation.Kind == "k3s_update" && strings.HasSuffix(operation.CurrentStep, ":post_k3s_conformance") {
+		nodeID := clusterStepNodeID(operation.CurrentStep)
+		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET roles_json=jsonb_set(COALESCE(NULLIF(roles_json,''),'{}')::jsonb,'{k3s_version}',to_jsonb($1::text),true)::text,last_seen_at=$2,updated_at=$2 WHERE id=$3`, operation.TargetRelease, now, nodeID); err != nil {
 			return err
 		}
 	}
@@ -606,13 +685,14 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		managementIP := cleanText(operation.Payload["management_ip"])
 		architecture := cleanText(operation.Payload["architecture"])
 		nodeID := newClusterUUID()
+		rolesJSON := marshalClusterJSON(map[string]any{"etcd_leader": true, "control_vip_owner": true, "edge_vip_owner": true, "postgres_primary": true, "scheduler_leader": true, "wireguard_owner": true, "k3s_version": cleanText(operation.Payload["k3s_version"])})
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,roles_json,probe_health_json,last_seen_at,created_at,updated_at)
 			VALUES($1,$2,$2,$3,$4,'Ubuntu 24.04','Active','active',$5,$6,$7,$8,$9,$9,$9)
 			ON CONFLICT(node_name) DO UPDATE SET membership_state='Active', application_state='active',management_ip=EXCLUDED.management_ip,architecture=EXCLUDED.architecture,release_tag=EXCLUDED.release_tag,release_sha=EXCLUDED.release_sha,roles_json=EXCLUDED.roles_json,probe_health_json=EXCLUDED.probe_health_json,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at
-		`, nodeID, nodeName, managementIP, architecture, cleanText(operation.Payload["baseline_release"]), cleanText(operation.Payload["baseline_sha"]), `{"etcd_leader":true,"control_vip_owner":true,"edge_vip_owner":true,"postgres_primary":true,"scheduler_leader":true,"wireguard_owner":true}`, `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`, now)
+		`, nodeID, nodeName, managementIP, architecture, cleanText(operation.Payload["baseline_release"]), cleanText(operation.Payload["baseline_sha"]), rolesJSON, `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`, now)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET enabled=1,status='Healthy',active_size=1,desired_size=1,baseline_release=$1,baseline_sha=$2,hmr_state='inactive',updated_at=$3 WHERE id=1`, cleanText(operation.Payload["baseline_release"]), cleanText(operation.Payload["baseline_sha"]), now)
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET enabled=1,status='Healthy',active_size=1,desired_size=1,baseline_release=$1,baseline_sha=$2,hmr_state='inactive',config_json=jsonb_set(COALESCE(NULLIF(config_json,''),'{}')::jsonb,'{k3s_version}',to_jsonb($3::text),true)::text,updated_at=$4 WHERE id=1`, cleanText(operation.Payload["baseline_release"]), cleanText(operation.Payload["baseline_sha"]), cleanText(operation.Payload["k3s_version"]), now)
 		}
 	case "hmr_start":
 		if _, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='active',hmr_node_id=$1,status='HMR Non-HA',updated_at=$2 WHERE id=1`, operation.TargetNodeID, now); err == nil {
@@ -628,6 +708,8 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		} else {
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Mixed Version',updated_at=$1 WHERE id=1`, now)
 		}
+	case "k3s_update":
+		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Healthy',config_json=jsonb_set(COALESCE(NULLIF(config_json,''),'{}')::jsonb,'{k3s_version}',to_jsonb($1::text),true)::text,updated_at=$2 WHERE id=1`, operation.TargetRelease, now)
 	case "node_maintenance":
 		state := "active"
 		reason := ""
@@ -637,12 +719,25 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state=$1,drain_reason=$2,updated_at=$3 WHERE id=$4`, state, nullClusterString(reason), now, operation.TargetNodeID)
 	case "node_remove":
-		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, operation.TargetNodeID)
+		for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, cleanText(rawID))
+			if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			status := "Healthy"
+			if emergency, _ := operation.Payload["emergency"].(bool); emergency {
+				status = "Degraded Quorum"
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET active_size=$1,desired_size=$1,status=$2,updated_at=$3 WHERE id=1`, coerceInt64(operation.Payload["target_size"]), status, now)
+		}
 	case "membership_scale":
-		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET desired_size=$1,status='Healthy',updated_at=$2 WHERE id=1`, coerceInt64(operation.Payload["desired_size"]), now)
+		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET desired_size=$1,status='Pending Quorum',updated_at=$2 WHERE id=1`, coerceInt64(operation.Payload["desired_size"]), now)
 	case "membership_admit":
 		baselineRelease := cleanText(operation.Payload["baseline_release"])
 		baselineSHA := cleanText(operation.Payload["baseline_sha"])
+		rolesJSON := marshalClusterJSON(map[string]any{"k3s_version": cleanText(operation.Payload["k3s_version"])})
 		probeHealth := `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`
 		for _, rawID := range anySlice(operation.Payload["admission_ids"]) {
 			var id, nodeName, hostname, managementIP, architecture, osVersion string
@@ -651,7 +746,7 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 				err = scanErr
 				break
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,roles_json,probe_health_json,last_seen_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'Active','active',$7,$8,'{}',$9,$10,$10,$10) ON CONFLICT(id) DO UPDATE SET membership_state='Active',application_state='active',release_tag=EXCLUDED.release_tag,release_sha=EXCLUDED.release_sha,probe_health_json=EXCLUDED.probe_health_json,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`, id, nodeName, hostname, managementIP, architecture, osVersion, baselineRelease, baselineSHA, probeHealth, now)
+			_, err = tx.ExecContext(ctx, `INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,roles_json,probe_health_json,last_seen_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'Active','active',$7,$8,$9,$10,$11,$11,$11) ON CONFLICT(id) DO UPDATE SET membership_state='Active',application_state='active',release_tag=EXCLUDED.release_tag,release_sha=EXCLUDED.release_sha,roles_json=EXCLUDED.roles_json,probe_health_json=EXCLUDED.probe_health_json,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`, id, nodeName, hostname, managementIP, architecture, osVersion, baselineRelease, baselineSHA, rolesJSON, probeHealth, now)
 			if err != nil {
 				break
 			}
@@ -704,7 +799,15 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if operation.Kind == "engine_update" && (!clusterReleaseRE.MatchString(operation.TargetRelease) || !clusterControllerSHARegex.MatchString(operation.TargetSHA)) {
 			return errors.New("update release tag or pinned SHA is invalid")
 		}
-		if operation.Kind == "engine_update" && len(nodes) == 1 && cleanText(operation.Payload["maintenance_outage_acknowledgement"]) != "ACCEPT OUTAGE" {
+		if operation.Kind == "k3s_update" {
+			if err := validateK3sUpgradePath(cleanText(operation.Payload["source_k3s_version"]), operation.TargetRelease); err != nil {
+				return err
+			}
+			if !borealisOperatorImmutableImageRefPattern.MatchString(cleanText(operation.Payload["upgrade_image"])) {
+				return errors.New("K3s upgrade image must be content-addressed")
+			}
+		}
+		if (operation.Kind == "engine_update" || operation.Kind == "k3s_update") && len(nodes) == 1 && cleanText(operation.Payload["maintenance_outage_acknowledgement"]) != "ACCEPT OUTAGE" {
 			return errors.New("one-node update requires ACCEPT OUTAGE acknowledgement")
 		}
 		if operation.Kind != "cluster_enable" && len(nodes) != 1 && len(nodes) != 3 && len(nodes) != 5 {
@@ -724,7 +827,25 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return nil
 	}
 	if step.Name == "pre_change_snapshot" {
+		if operation.Kind == "k3s_update" {
+			ordered, err := clusterUpdateNodes(operation, nodes)
+			if err != nil {
+				return err
+			}
+			if len(ordered) == 0 {
+				return errors.New("K3s snapshot has no healthy target server")
+			}
+			if err := r.nodeActionJob(ctx, operation, clusterControllerStep{Name: "pre_change_snapshot:etcd", NodeID: ordered[0].ID}, ordered[0], "CreateEtcdSnapshot"); err != nil {
+				return err
+			}
+		}
 		return r.createCNPGBackup(ctx, operation)
+	}
+	if step.Name == "prepare_postgres_removal" {
+		return r.preparePostgresRemoval(ctx, operation, nodes)
+	}
+	if step.Name == "scale_postgres_membership" {
+		return r.scaleCNPG(ctx, int(coerceInt64(operation.Payload["target_size"])))
 	}
 	if step.Name == "expand_schema" || step.Name == "finalize_schema" {
 		// Migration phases are target-owned jobs. Manifest declares expand/contract safety;
@@ -752,7 +873,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 	if step.Name == "apply_membership" && operation.Kind == "membership_admit" {
 		return r.admitPendingMembers(ctx, operation, nodes)
 	}
-	if step.Name == "apply_membership" || step.Name == "remove_member" {
+	if step.Name == "apply_membership" {
 		return r.recordClusterIntent(ctx, operation, step)
 	}
 	if step.Name == "hmr_move_roles" {
@@ -845,17 +966,65 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return errors.New("operation target is not an active node")
 		}
 		action := strings.TrimPrefix(step.Name, "node:"+step.NodeID+":")
+		if operation.Kind == "node_remove" && textInSet(action, "transfer_roles", "enter_drain", "prepare_member_removal") {
+			exists, err := r.kubernetesNodeExists(ctx, node.Name)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return nil
+			}
+		}
 		switch action {
 		case "transfer_roles":
+			if operation.Kind == "node_remove" {
+				return r.transferRemovalRolesAway(ctx, operation, node, nodes)
+			}
 			return r.transferRolesAway(ctx, node, nodes)
 		case "enter_drain":
 			return r.nodeActionJob(ctx, operation, step, node, "EnterApplicationDrain")
 		case "wait_endpoint_withdrawal":
 			return r.waitNodeEndpointsWithdrawn(ctx, node.Name)
+		case "prepare_member_removal":
+			if err := r.recordClusterIntent(ctx, operation, step); err != nil {
+				return err
+			}
+			return r.nodeActionJob(ctx, operation, step, node, "PrepareMemberRemoval")
+		case "wait_member_fenced":
+			return r.waitNodeNotReady(ctx, node.Name)
+		case "delete_member_node":
+			return r.deleteNodeResource(ctx, node.Name)
+		case "verify_member_removed":
+			return r.verifyMemberRemoved(ctx, operation, node.Name, nodes)
 		case "fetch_release":
 			return r.nodeActionJob(ctx, operation, step, node, "FetchRelease")
 		case "redeploy_revision":
 			return r.nodeActionJob(ctx, operation, step, node, "RedeployRevision")
+		case "apply_k3s_upgrade":
+			return r.applyK3sUpgrade(ctx, operation, node)
+		case "wait_k3s_ready":
+			return r.verifyK3sNodeVersion(ctx, node.Name, operation.TargetRelease)
+		case "post_k3s_conformance":
+			if err := r.nodeActionJob(ctx, operation, step, node, "RunK3sProbeConformance"); err != nil {
+				return err
+			}
+			return r.cleanupK3sUpgrade(ctx, operation, node.Name)
+		case "inspect_candidate_health":
+			return r.nodeActionJob(ctx, operation, step, node, "InspectCandidateHealth")
+		case "minimum_candidate_soak":
+			if err := r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":start", NodeID: node.ID}, node, "InspectCandidateHealth"); err != nil {
+				return err
+			}
+			timer := time.NewTimer(r.soak)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+			}
+			return r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
+		case "promote_candidate":
+			return r.nodeActionJob(ctx, operation, step, node, "PromoteCandidate")
 		case "inspect_health":
 			return r.nodeActionJob(ctx, operation, step, node, "InspectHealth")
 		case "minimum_ready_soak":
@@ -949,12 +1118,19 @@ func (r *kubernetesClusterStepRunner) waitNodeReady(ctx context.Context, nodeNam
 }
 
 func (r *kubernetesClusterStepRunner) scaleCNPG(ctx context.Context, size int) error {
-	acknowledgements := int64(1)
-	if size == 5 {
-		acknowledgements = 2
+	if size < 1 || size > 5 {
+		return fmt.Errorf("unsupported CloudNativePG membership size %d", size)
 	}
 	path := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
-	patch := map[string]any{"spec": map[string]any{"instances": size, "postgresql": map[string]any{"synchronous": map[string]any{"method": "any", "number": acknowledgements, "dataDurability": "required"}}}}
+	var synchronous any
+	if size > 1 {
+		acknowledgements := int64(1)
+		if size >= 4 {
+			acknowledgements = 2
+		}
+		synchronous = map[string]any{"method": "any", "number": acknowledgements, "dataDurability": "required"}
+	}
+	patch := map[string]any{"spec": map[string]any{"instances": size, "postgresql": map[string]any{"synchronous": synchronous}}}
 	var result map[string]any
 	if err := r.kube.doJSON(ctx, http.MethodPatch, path, patch, "application/merge-patch+json", &result, 30*time.Second); err != nil {
 		return err
@@ -978,6 +1154,57 @@ func (r *kubernetesClusterStepRunner) scaleCNPG(ctx context.Context, size int) e
 	}
 }
 
+func (r *kubernetesClusterStepRunner) preparePostgresRemoval(ctx context.Context, operation clusterControllerOperation, nodes []clusterControllerNode) error {
+	selected, err := clusterRemovalNodes(operation, nodes)
+	if err != nil {
+		return err
+	}
+	targetSize := int(coerceInt64(operation.Payload["target_size"]))
+	if targetSize != len(nodes)-len(selected) || (targetSize != 1 && targetSize != 3) {
+		return errors.New("safe paired removal has invalid PostgreSQL target size")
+	}
+	if err := r.scaleCNPG(ctx, targetSize); err != nil {
+		return err
+	}
+	targetNames := map[string]bool{}
+	for _, node := range selected {
+		targetNames[node.Name] = true
+	}
+	occupied, err := r.cnpgPodsOnNodes(ctx, targetNames)
+	if err != nil {
+		return err
+	}
+	if len(occupied) == 0 {
+		return nil
+	}
+	restoreErr := r.scaleCNPG(ctx, len(nodes))
+	message := fmt.Errorf("CloudNativePG retained instances on removal targets %s; select nodes hosting scale-down instances", strings.Join(occupied, ", "))
+	if restoreErr != nil {
+		return errors.Join(message, fmt.Errorf("restore PostgreSQL membership: %w", restoreErr))
+	}
+	return message
+}
+
+func (r *kubernetesClusterStepRunner) cnpgPodsOnNodes(ctx context.Context, nodeNames map[string]bool) ([]string, error) {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods?labelSelector=cnpg.io%%2Fcluster%%3Dborealis-postgres", r.namespace)
+	var payload map[string]any
+	if err := r.kube.getJSON(ctx, path, &payload); err != nil {
+		return nil, err
+	}
+	occupied := make([]string, 0, len(nodeNames))
+	seen := map[string]bool{}
+	for _, raw := range anySlice(payload["items"]) {
+		pod, _ := raw.(map[string]any)
+		nodeName := cleanText(nestedMap(pod, "spec")["nodeName"])
+		if nodeNames[nodeName] && !seen[nodeName] {
+			seen[nodeName] = true
+			occupied = append(occupied, nodeName)
+		}
+	}
+	sort.Strings(occupied)
+	return occupied, nil
+}
+
 func (r *kubernetesClusterStepRunner) transferRolesAway(ctx context.Context, target clusterControllerNode, nodes []clusterControllerNode) error {
 	var replacement clusterControllerNode
 	for _, node := range nodes {
@@ -989,6 +1216,30 @@ func (r *kubernetesClusterStepRunner) transferRolesAway(ctx context.Context, tar
 	if replacement.ID == "" {
 		// One-node maintenance/update has an acknowledged outage and no transfer target.
 		return r.setNodeRoleEligibility(ctx, target.Name, false)
+	}
+	if err := r.ensurePostgresPrimaryOnNode(ctx, replacement.Name); err != nil {
+		return err
+	}
+	if err := r.setNodeRoleEligibility(ctx, replacement.Name, true); err != nil {
+		return err
+	}
+	return r.setNodeRoleEligibility(ctx, target.Name, false)
+}
+
+func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Context, operation clusterControllerOperation, target clusterControllerNode, nodes []clusterControllerNode) error {
+	removing := map[string]bool{}
+	for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
+		removing[cleanText(rawID)] = true
+	}
+	var replacement clusterControllerNode
+	for _, node := range nodes {
+		if !removing[node.ID] && node.ApplicationState == "active" {
+			replacement = node
+			break
+		}
+	}
+	if replacement.ID == "" {
+		return errors.New("paired removal has no active surviving role target")
 	}
 	if err := r.ensurePostgresPrimaryOnNode(ctx, replacement.Name); err != nil {
 		return err
@@ -1110,6 +1361,14 @@ func podReady(pod map[string]any) bool {
 }
 
 func (r *kubernetesClusterStepRunner) patchNodeLabels(ctx context.Context, nodeName string, labels map[string]string) error {
+	values := make(map[string]any, len(labels))
+	for key, value := range labels {
+		values[key] = value
+	}
+	return r.patchNodeLabelValues(ctx, nodeName, values)
+}
+
+func (r *kubernetesClusterStepRunner) patchNodeLabelValues(ctx context.Context, nodeName string, labels map[string]any) error {
 	if !clusterControllerNodeRegex.MatchString(nodeName) {
 		return errors.New("invalid Kubernetes node name")
 	}
@@ -1124,7 +1383,7 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	if node.ID == "" || !clusterControllerNodeRegex.MatchString(node.Name) {
 		return errors.New("node action target is invalid")
 	}
-	jobName := clusterActionJobName(operation.ID, step.Name)
+	jobName := clusterActionJobName(operation.ID, fmt.Sprintf("attempt:%d:%s", operation.Attempt, step.Name))
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, jobName)
 	var existing map[string]any
 	if err := r.kube.getJSON(ctx, path, &existing); err != nil {
@@ -1132,10 +1391,13 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		if verb == "PreflightRelease" || verb == "FetchRelease" || verb == "StagePinnedRelease" {
 			args = append(args, "--release-tag", operation.TargetRelease, "--target-sha", operation.TargetSHA)
 		}
-		if verb == "RedeployRevision" || verb == "RedeployStagedRevision" {
+		if verb == "RedeployRevision" || verb == "RedeployStagedRevision" || verb == "PromoteCandidate" {
 			args = append(args, "--target-sha", operation.TargetSHA)
 		}
-		if verb == "EnterApplicationDrain" {
+		if verb == "RunK3sProbeConformance" {
+			args = append(args, "--k3s-version", operation.TargetRelease)
+		}
+		if verb == "EnterApplicationDrain" || verb == "PrepareMemberRemoval" {
 			args = append(args, "--reason", firstText(cleanText(operation.Payload["reason"]), operation.Kind))
 		}
 		if verb == "EnrollCluster" {
@@ -1147,6 +1409,149 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		}
 	}
 	return r.waitJob(ctx, jobName)
+}
+
+func (r *kubernetesClusterStepRunner) applyK3sUpgrade(ctx context.Context, operation clusterControllerOperation, node clusterControllerNode) error {
+	version := operation.TargetRelease
+	imageRef := cleanText(operation.Payload["upgrade_image"])
+	if !clusterK3sRE.MatchString(version) || !borealisOperatorImmutableImageRefPattern.MatchString(imageRef) {
+		return errors.New("K3s Plan requires stable version and immutable upgrade image")
+	}
+	attemptKey := clusterOperationAttemptKey(operation)
+	planName := clusterK3sPlanName(attemptKey, node.Name)
+	planPath := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, planName)
+	manifest := map[string]any{
+		"apiVersion": "upgrade.cattle.io/v1",
+		"kind":       "Plan",
+		"metadata": map[string]any{
+			"name":      planName,
+			"namespace": clusterUpgradeNamespace,
+			"labels": map[string]string{
+				"app.kubernetes.io/name":   "borealis-k3s-upgrade",
+				"borealis.io/operation-id": operation.ID,
+			},
+		},
+		"spec": map[string]any{
+			"concurrency":           1,
+			"exclusive":             true,
+			"cordon":                true,
+			"jobActiveDeadlineSecs": 1800,
+			"version":               version,
+			"serviceAccountName":    "system-upgrade",
+			"nodeSelector": map[string]any{"matchExpressions": []any{map[string]any{
+				"key": "borealis.io/k3s-upgrade-operation", "operator": "In", "values": []string{attemptKey},
+			}}},
+			"postCompleteLabels": map[string]string{"borealis.io/k3s-version": version},
+			"upgrade":            map[string]any{"image": imageRef},
+		},
+	}
+	var existing map[string]any
+	if err := r.kube.getJSON(ctx, planPath, &existing); err != nil {
+		if !strings.Contains(err.Error(), "returned HTTP 404") {
+			return err
+		}
+		if err := r.kube.doJSON(ctx, http.MethodPost, fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans", clusterUpgradeNamespace), manifest, "application/json", &existing, 30*time.Second); err != nil {
+			return err
+		}
+	} else if cleanText(nestedMap(nestedMap(existing, "metadata"), "labels")["borealis.io/operation-id"]) != operation.ID {
+		return errors.New("K3s upgrade Plan name collision")
+	}
+	if err := r.patchNodeLabelValues(ctx, node.Name, map[string]any{"borealis.io/k3s-upgrade-operation": attemptKey}); err != nil {
+		return err
+	}
+	return r.waitK3sUpgradePlan(ctx, planName, node.Name, version)
+}
+
+func clusterK3sPlanName(operationID, nodeName string) string {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(operationID + ":" + nodeName))
+	prefix := strings.ReplaceAll(operationID, "-", "")
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+	return fmt.Sprintf("borealis-k3s-%s-%08x", prefix, hash.Sum32())
+}
+
+func clusterOperationAttemptKey(operation clusterControllerOperation) string {
+	attempt := operation.Attempt
+	if attempt < 1 {
+		attempt = 1
+	}
+	return fmt.Sprintf("%s-attempt-%d", operation.ID, attempt)
+}
+
+func (r *kubernetesClusterStepRunner) waitK3sUpgradePlan(ctx context.Context, planName, nodeName, version string) error {
+	planPath := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, planName)
+	jobsPath := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs?labelSelector=%s", clusterUpgradeNamespace, url.QueryEscape("upgrade.cattle.io/plan="+planName))
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		var plan map[string]any
+		if err := r.kube.getJSON(ctx, planPath, &plan); err != nil {
+			return err
+		}
+		status := nestedMap(plan, "status")
+		if cleanText(status["latestVersion"]) == version {
+			for _, raw := range anySlice(status["conditions"]) {
+				condition, _ := raw.(map[string]any)
+				conditionType := cleanText(condition["type"])
+				conditionStatus := cleanText(condition["status"])
+				if conditionType == "Validated" && conditionStatus == "False" {
+					return fmt.Errorf("K3s upgrade Plan validation failed: %s", firstText(cleanText(condition["message"]), cleanText(condition["reason"])))
+				}
+				if conditionType == "Complete" && conditionStatus == "True" {
+					return r.verifyK3sNodeVersion(ctx, nodeName, version)
+				}
+			}
+		}
+		var jobs map[string]any
+		if err := r.kube.getJSON(ctx, jobsPath, &jobs); err != nil {
+			return err
+		}
+		for _, raw := range anySlice(jobs["items"]) {
+			job, _ := raw.(map[string]any)
+			if coerceInt64(nestedMap(job, "status")["failed"]) > 0 {
+				return fmt.Errorf("K3s upgrade Plan %s has failed Job", planName)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("K3s upgrade Plan %s did not complete: %w", planName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) verifyK3sNodeVersion(ctx context.Context, nodeName, version string) error {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		var node map[string]any
+		if err := r.kube.getJSON(ctx, "/api/v1/nodes/"+nodeName, &node); err == nil {
+			nodeInfo := nestedMap(nestedMap(node, "status"), "nodeInfo")
+			if nodeConditionTrue(node, "Ready") && nodeConditionTrue(node, "EtcdIsVoter") && cleanText(nodeInfo["kubeletVersion"]) == version && nestedMap(node, "spec")["unschedulable"] != true {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("node %s did not return Ready as K3s %s: %w", nodeName, version, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) cleanupK3sUpgrade(ctx context.Context, operation clusterControllerOperation, nodeName string) error {
+	planName := clusterK3sPlanName(clusterOperationAttemptKey(operation), nodeName)
+	if err := r.patchNodeLabelValues(ctx, nodeName, map[string]any{"borealis.io/k3s-upgrade-operation": nil}); err != nil {
+		return err
+	}
+	var output map[string]any
+	path := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, planName)
+	if err := r.kube.doJSON(ctx, http.MethodDelete, path, map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"}, "application/json", &output, 30*time.Second); err != nil && !strings.Contains(err.Error(), "returned HTTP 404") {
+		return err
+	}
+	return nil
 }
 
 func (r *kubernetesClusterStepRunner) verifyCNPGMigration(ctx context.Context) error {
@@ -1279,6 +1684,135 @@ func (r *kubernetesClusterStepRunner) nodeReady(ctx context.Context, nodeName st
 	return false, nil
 }
 
+func (r *kubernetesClusterStepRunner) kubernetesNodeExists(ctx context.Context, nodeName string) (bool, error) {
+	if !clusterControllerNodeRegex.MatchString(nodeName) {
+		return false, errors.New("invalid cluster node name")
+	}
+	var node map[string]any
+	if err := r.kube.getJSON(ctx, "/api/v1/nodes/"+nodeName, &node); err != nil {
+		if strings.Contains(err.Error(), "returned HTTP 404") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *kubernetesClusterStepRunner) waitNodeNotReady(ctx context.Context, nodeName string) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		ready, err := r.nodeReady(ctx, nodeName)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("node %s did not become NotReady after K3s fence: %w", nodeName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) deleteNodeResource(ctx context.Context, nodeName string) error {
+	if !clusterControllerNodeRegex.MatchString(nodeName) {
+		return errors.New("invalid Kubernetes member node name")
+	}
+	path := "/api/v1/nodes/" + nodeName
+	var node map[string]any
+	if err := r.kube.getJSON(ctx, path, &node); err != nil {
+		if strings.Contains(err.Error(), "returned HTTP 404") {
+			return nil
+		}
+		return err
+	}
+	uid := cleanText(nestedMap(node, "metadata")["uid"])
+	if uid == "" || len(uid) > 128 {
+		return errors.New("Kubernetes member node UID is unavailable")
+	}
+	deleteOptions := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": map[string]any{"uid": uid}}
+	var output map[string]any
+	return r.kube.doJSON(ctx, http.MethodDelete, path, deleteOptions, "application/json", &output, 30*time.Second)
+}
+
+func (r *kubernetesClusterStepRunner) verifyMemberRemoved(ctx context.Context, operation clusterControllerOperation, targetName string, nodes []clusterControllerNode) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		healthy, err := r.memberRemovalStateHealthy(ctx, operation, targetName, nodes)
+		if err != nil {
+			return err
+		}
+		if healthy {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("K3s membership did not converge after removing %s: %w", targetName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	timer := time.NewTimer(r.soak)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	healthy, err := r.memberRemovalStateHealthy(ctx, operation, targetName, nodes)
+	if err != nil {
+		return err
+	}
+	if !healthy {
+		return errors.New("K3s membership lost voter health during removal soak")
+	}
+	return nil
+}
+
+func (r *kubernetesClusterStepRunner) memberRemovalStateHealthy(ctx context.Context, operation clusterControllerOperation, targetName string, nodes []clusterControllerNode) (bool, error) {
+	removedIDs := map[string]bool{}
+	for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
+		removedIDs[cleanText(rawID)] = true
+	}
+	for _, node := range nodes {
+		var payload map[string]any
+		err := r.kube.getJSON(ctx, "/api/v1/nodes/"+node.Name, &payload)
+		missing := err != nil && strings.Contains(err.Error(), "returned HTTP 404")
+		if node.Name == targetName {
+			if missing {
+				continue
+			}
+			if err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		if missing && removedIDs[node.ID] {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if !nodeConditionTrue(payload, "Ready") || !nodeConditionTrue(payload, "EtcdIsVoter") {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func nodeConditionTrue(node map[string]any, conditionType string) bool {
+	for _, raw := range anySlice(nestedMap(node, "status")["conditions"]) {
+		condition, _ := raw.(map[string]any)
+		if cleanText(condition["type"]) == conditionType {
+			return cleanText(condition["status"]) == "True"
+		}
+	}
+	return false
+}
+
 func (r *kubernetesClusterStepRunner) minimumReadySoak(ctx context.Context, nodeName string) error {
 	if err := r.verifyReadyEndpointsForNode(ctx, nodeName); err != nil {
 		return err
@@ -1324,7 +1858,7 @@ func (r *kubernetesClusterStepRunner) verifyReadyEndpointsForNode(ctx context.Co
 }
 
 func (r *kubernetesClusterStepRunner) createCNPGBackup(ctx context.Context, operation clusterControllerOperation) error {
-	name := clusterActionJobName(operation.ID, "snapshot")
+	name := clusterActionJobName(operation.ID, fmt.Sprintf("attempt:%d:snapshot", operation.Attempt))
 	path := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/backups", r.namespace)
 	manifest := map[string]any{
 		"apiVersion": "postgresql.cnpg.io/v1", "kind": "Backup",

@@ -16,6 +16,7 @@ DOC = ROOT / "Docs/Reference/Data and Schema/api-route-inventory.md"
 PROBE_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go"
 CONTROLLER_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go"
 CLUSTER_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go"
+AEGIS_CLUSTER_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout_test.go"
 
 REVIEWED_ROUTE_TESTS = {
     (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go"): CLUSTER_TEST
@@ -47,6 +48,10 @@ REVIEWED_ROUTE_TESTS.update(
         for pattern in ("/startup", "/ready", "/live")
     }
 )
+REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/aegis-key",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout.go",
+)] = AEGIS_CLUSTER_TEST
 REVIEWED_ROUTE_TESTS.update(
     {
         (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go"): (
@@ -71,6 +76,8 @@ def classify(pattern: str) -> tuple[str, str]:
         return "operator", "operator-hmac"
     if route_path.startswith("/api/internal/"):
         return "internal-scheduler", "internal-hmac"
+    if route_path.startswith("/internal/cluster/"):
+        return "internal-cluster", "mutual-tls"
     if route_path.startswith("/api/agent/"):
         if route_path.startswith("/api/agent/enroll/"):
             return "agent-enrollment", "public-enrollment-contract"
