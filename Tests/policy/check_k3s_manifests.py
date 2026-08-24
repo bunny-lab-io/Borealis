@@ -97,7 +97,7 @@ def validate_node_manager_service_contract() -> None:
         "RuntimeDirectory=borealis": "managed runtime directory",
         "ConfigurationDirectory=borealis": "managed configuration directory",
         "ProtectSystem=strict": "strict filesystem protection",
-        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6": "Unix socket, K3s API, and release-fetch network contract",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK": "Unix socket, K3s API, release-fetch, and host network-inspection contract",
     }
     for marker, description in required.items():
         if marker not in source:

@@ -22,7 +22,7 @@ RuntimeDirectoryMode=0750
 ConfigurationDirectory=borealis
 ConfigurationDirectoryMode=0750
 ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=true
 MemoryDenyWriteExecute=true
 
