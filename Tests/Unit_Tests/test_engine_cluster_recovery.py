@@ -159,15 +159,32 @@ verify_cnpg_cutover_runtime "$cnpg_url"
         self.assertLess(discovery, readiness)
         self.assertIn("Site worker %s was not recreated after database cutover", workflow)
 
-    def test_root_cluster_workflow_uses_scoped_git_safe_directory(self):
+    def test_root_cluster_workflow_uses_scoped_pinned_git_revision(self):
         workflow = (
             REPO_ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            'git -c "safe.directory=${repo_root}" -C "${repo_root}" rev-parse HEAD',
+            'git -c "safe.directory=${repo_root}" -C "${repo_root}" rev-parse "${baseline_revision}^{commit}"',
             workflow,
         )
+        self.assertIn("Pinned cluster baseline SHA required.", workflow)
+        self.assertIn('[[ "${revision}" == "${baseline_revision}" ]]', workflow)
         self.assertNotIn("git config --global", workflow)
+
+    def test_cluster_controller_passes_recorded_baseline_to_enrollment(self):
+        controller = (
+            REPO_ROOT
+            / "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go"
+        ).read_text(encoding="utf-8")
+        manager = (
+            REPO_ROOT
+            / "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/main.go"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '"--target-sha", cleanText(operation.Payload["baseline_sha"])',
+            controller,
+        )
+        self.assertIn('"BOREALIS_CLUSTER_BASELINE_SHA="+baselineSHA', manager)
 
 
 if __name__ == "__main__":

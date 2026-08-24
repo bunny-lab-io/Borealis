@@ -310,7 +310,7 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	case "CreateEtcdSnapshot":
 		return m.createEtcdSnapshot(ctx)
 	case "EnrollCluster":
-		return m.enrollCluster(ctx, request.Params)
+		return m.enrollCluster(ctx, request.Params, requiredSHA(request.Params))
 	default:
 		return nil, fmt.Errorf("unsupported fixed verb %q", request.Verb)
 	}
@@ -470,7 +470,7 @@ func (m *manager) redeployStagedRevision(ctx context.Context, targetSHA string) 
 	return map[string]any{"revision": targetSHA, "redeployed": true, "staged_path": stageRoot, "output": truncate(output, 8192)}, nil
 }
 
-func (m *manager) enrollCluster(ctx context.Context, params map[string]any) (map[string]any, error) {
+func (m *manager) enrollCluster(ctx context.Context, params map[string]any, baselineSHA string) (map[string]any, error) {
 	controlVIP := strings.TrimSpace(fmt.Sprint(params["control_plane_vip"]))
 	edgeVIP := strings.TrimSpace(fmt.Sprint(params["edge_vip"]))
 	controlIP := net.ParseIP(controlVIP)
@@ -478,11 +478,14 @@ func (m *manager) enrollCluster(ctx context.Context, params map[string]any) (map
 	if controlIP == nil || controlIP.To4() == nil || edgeIP == nil || edgeIP.To4() == nil || controlVIP == edgeVIP {
 		return nil, errors.New("distinct control_plane_vip and edge_vip IPv4 values are required")
 	}
+	if !shaPattern.MatchString(baselineSHA) {
+		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
+	}
 	if err := validateRepositoryRoot(m.repoRoot); err != nil {
 		return nil, err
 	}
 	enginePath := filepath.Join(m.repoRoot, "Engine.sh")
-	output, err := run(ctx, m.repoRoot, "/usr/bin/env", "BOREALIS_CLUSTER_ENROLL_OPERATION=1", "/usr/bin/bash", enginePath, "--cluster-enable", "--control-plane-vip", controlVIP, "--edge-vip", edgeVIP)
+	output, err := run(ctx, m.repoRoot, "/usr/bin/env", "BOREALIS_CLUSTER_ENROLL_OPERATION=1", "BOREALIS_CLUSTER_BASELINE_SHA="+baselineSHA, "/usr/bin/bash", enginePath, "--cluster-enable", "--control-plane-vip", controlVIP, "--edge-vip", edgeVIP)
 	if err != nil {
 		return nil, err
 	}

@@ -320,10 +320,12 @@ spec:
 EOF
 
 node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
-# Node manager runs this workflow as root while operator checkout normally belongs
-# to non-root account. Trust only already-resolved repository path for this call;
-# never mutate global Git safe.directory configuration on Engine host.
-revision="$(git -c "safe.directory=${repo_root}" -C "${repo_root}" rev-parse HEAD)"
+baseline_revision="${BOREALIS_CLUSTER_BASELINE_SHA:-}"
+[[ "${baseline_revision}" =~ ^[0-9a-f]{40}$ ]] || { printf 'Pinned cluster baseline SHA required.\n' >&2; exit 64; }
+# Retry may run after operator checkout advances. Resolve recorded immutable
+# baseline without changing worktree or global Git safe.directory configuration.
+revision="$(git -c "safe.directory=${repo_root}" -C "${repo_root}" rev-parse "${baseline_revision}^{commit}")"
+[[ "${revision}" == "${baseline_revision}" ]] || { printf 'Pinned cluster baseline commit unavailable.\n' >&2; exit 1; }
 python3 "${script_dir}/reconcile-node-workloads.py" \
   --node "${node_name}" \
   --revision "${revision}" \

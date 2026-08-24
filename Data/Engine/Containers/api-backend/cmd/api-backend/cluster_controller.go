@@ -1410,7 +1410,11 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 			args = append(args, "--reason", firstText(cleanText(operation.Payload["reason"]), operation.Kind))
 		}
 		if verb == "EnrollCluster" {
-			args = append(args, "--control-plane-vip", cleanText(operation.Payload["control_plane_vip"]), "--edge-vip", cleanText(operation.Payload["edge_vip"]))
+			args = append(args,
+				"--control-plane-vip", cleanText(operation.Payload["control_plane_vip"]),
+				"--edge-vip", cleanText(operation.Payload["edge_vip"]),
+				"--target-sha", cleanText(operation.Payload["baseline_sha"]),
+			)
 		}
 		manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, r.actionImage, args, operation.ID, step.Name)
 		if err := r.kube.doJSON(ctx, http.MethodPost, fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs", r.namespace), manifest, "application/json", &existing, 30*time.Second); err != nil {
