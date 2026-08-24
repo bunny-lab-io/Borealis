@@ -94,6 +94,8 @@ Borealis follows three distinct probe contracts:
 
 Drain sequence stops assignments, withdraws readiness, waits for node EndpointSlices to converge, forwards termination signals, and bounds in-flight drain inside `terminationGracePeriodSeconds`. Workloads use `preStop`, `minReadySeconds`, topology constraints, and disruption budgets.
 
+Returning from maintenance uses reverse safety order. Borealis starts node workloads while node remains application-drained, waits for ready endpoints and minimum-ready soak, restores role eligibility, verifies WireGuard and role-aware health through another soak, then clears drain. Failed restore leaves node drained instead of sending work to partial service.
+
 [ngrok probe guidance](https://ngrok.com/blog/probes) is sound: readiness must describe traffic eligibility while liveness should remain narrow. One caveat matters: Kubernetes starts endpoint removal and pod termination concurrently; Service withdrawal is not guaranteed to finish before `SIGTERM`. Borealis therefore combines readiness withdrawal, EndpointSlice verification, `preStop`, signal handling, and connection draining. See [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) and [pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
 
 ## Cluster-Wide HMR
@@ -106,7 +108,7 @@ Controller first checks quorum, capacity, target production health, and exclusiv
 
 Cluster banner remains visible on every page until exit completes. Updates, membership, and normal maintenance remain blocked during HMR.
 
-Exit restores saved pinned production release, not local working tree. Local edits remain available for later commit/release. Controller validates production candidate through direct, Service, VIP, database, scheduler, Agent-path, and WireGuard checks, then restores standby nodes one at time. Lost HMR node gets fenced before pinned production workloads recover on standby members.
+Exit restores saved pinned production release, not local working tree. Local edits remain available for later commit/release. Controller first returns standby production nodes one at time; each stays drained until workload and role-aware health complete two minimum-ready soaks. It then moves roles away from HMR node, drains its development workloads, builds saved production revision as isolated candidate, probes and soaks candidate, promotes it, and repeats active plus role-aware health checks before clearing final drain. This ordering keeps production available while HMR node changes back. One-node cluster uses same candidate gates with expected maintenance interruption. Lost HMR node gets fenced before pinned production workloads recover on standby members through same sequence.
 
 ## Cluster-Aware Updates
 
@@ -124,7 +126,7 @@ Selected tag resolves once to immutable commit SHA. Controller records title, ta
 6. Build/import immutable images and create node-pinned candidates.
 7. Keep candidate outside shared Services through separate labels and selectors. Require startup, readiness, liveness, direct endpoint, database, scheduler, Agent-path, and candidate soak checks.
 8. Promote candidate into active Deployment, then require shared Service, VIP, database, scheduler, Agent-path, WireGuard, and ready-soak checks.
-9. Restore assignments, then clear application drain.
+9. Restore role eligibility, repeat health and ready-soak checks, restore assignments, then clear application drain.
 
 Update All orders non-leaders first, transfers roles, and updates one application node at time. Failure halts operation and leaves failed node drained; healthy old/new nodes keep serving. Retry resumes explicit operation. No automatic code rollback or skip-and-continue occurs. Cluster release baseline advances only after all active nodes reach target.
 
@@ -132,7 +134,7 @@ One-node updates require maintenance-outage acknowledgement. Three/five-node con
 
 Engine release update and K3s upgrade stay separate operations. Maintenance view accepts stable `vX.Y.Z+k3sN` target only. Target must be newer than current version and stay on current minor or advance exactly one minor. Source version must already pass Borealis probe conformance, and upgrade image must use `registry/repository@sha256:digest` form.
 
-K3s controller takes pre-change snapshot, orders non-leaders before leaders, drains one application node, and creates exclusive system-upgrade-controller Plan selecting only that server. Plan concurrency stays one and cordons host while immutable `k3s-upgrade` image applies exact version. Borealis then requires Node Ready, etcd voter health, exact kubelet version, local probe conformance, Engine health, and minimum-ready soak before clearing drain and moving to next server. Failed Plan or probe halts update and leaves node drained. One-node clusters require `ACCEPT OUTAGE`.
+K3s controller takes pre-change snapshot, orders non-leaders before leaders, drains one application node, and creates exclusive system-upgrade-controller Plan selecting only that server. Plan concurrency stays one and cordons host while immutable `k3s-upgrade` image applies exact version. Borealis then requires Node Ready, etcd voter health, exact kubelet version, and local probe conformance. Application workloads start while node stays drained; Engine health, ready soak, restored-role health, and second soak must pass before drain clears and next server begins. Failed Plan or probe halts update and leaves node drained. One-node clusters require `ACCEPT OUTAGE`.
 
 ## Aegis Unlock Across Replicas
 
@@ -171,7 +173,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
 
     - `BorealisCluster`, `BorealisNodeAdmission`, `BorealisNodeRuntime`, and `BorealisClusterOperation` hold desired/runtime Kubernetes state.
     - PostgreSQL tables `borealis_cluster_state`, `borealis_cluster_nodes`, `borealis_cluster_admissions`, `borealis_cluster_operations`, `borealis_cluster_operation_events`, `borealis_cluster_events`, `borealis_cluster_invitations`, `borealis_cluster_realtime_outbox`, and `borealis_cluster_leases` hold audit, events, invitations, outbox, and singleton leases.
-    - Node manager accepts fixed verbs only, including persistent K3s membership fence and exact-version probe conformance. It never exposes arbitrary command or remote-shell execution. Manager stays active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control plane recovery without losing operation process.
+    - Node manager accepts fixed verbs only, including persistent K3s membership fence, exact-version probe conformance, and drained application preparation. Preparation scales named node workloads and waits for rollouts without changing `borealis.io/application-state`; only final activation clears drain after controller health gates. Manager never exposes arbitrary command or remote-shell execution and stays active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control plane recovery without losing operation process.
     - Blank-node join requires `--peer-cidrs`. Node manager validates and canonicalizes bounded private IPv4 CIDRs, then invokes fixed `Engine.sh --cluster-prepare-node` workflow before consuming invitation. Preparation installs K3s installation/firewall and Longhorn iSCSI/NFS prerequisites, but does not install or join K3s until paired admission approval arrives.
     - Pair approval records same authenticated approval event for both admission IDs so both waiting joiners proceed. Join installation replaces running node-manager executable through atomic rename before enabling service, avoiding in-place executable overwrite failures.
     - Cluster controller exposes distinct `/startup`, `/ready`, and `/live` contracts. Startup proves local initialization completed, readiness depends on PostgreSQL operation-store access, and liveness proves only local HTTP process responsiveness. Long database bootstrap, node redeploy, or Kubernetes reconciliation never makes liveness depend on controller-loop progress or external dependencies.

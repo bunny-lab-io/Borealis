@@ -21,6 +21,7 @@ func TestClusterControllerStepTimeoutCoversLongNodeActions(t *testing.T) {
 		{step: "node:id:redeploy_revision", want: 65 * time.Minute},
 		{step: "node:id:promote_candidate", want: 65 * time.Minute},
 		{step: "node:id:fetch_release", want: 35 * time.Minute},
+		{step: "node:id:prepare_restore", want: 15 * time.Minute},
 	}
 	for _, test := range tests {
 		if got := clusterControllerStepTimeout(test.step); got != test.want {
@@ -233,7 +234,7 @@ func TestClusterUpdateVerifiesIsolatedCandidateBeforePromotion(t *testing.T) {
 	for index, step := range steps {
 		positions[strings.TrimPrefix(step.Name, "node:"+node.ID+":")] = index
 	}
-	ordered := []string{"redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "exit_drain"}
+	ordered := []string{"redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"}
 	for index := 1; index < len(ordered); index++ {
 		if positions[ordered[index-1]] >= positions[ordered[index]] {
 			t.Fatalf("unsafe candidate order: %#v", positions)
@@ -388,6 +389,8 @@ func TestK3sUpdateOrdersOneServerThroughConformanceBeforeNext(t *testing.T) {
 	if !strings.Contains(joined, "post_k3s_conformance") || !strings.Contains(joined, "pre_change_snapshot") {
 		t.Fatalf("K3s safety gates missing: %s", joined)
 	}
+	positions := nodeStepPositions(steps, nodes[1].ID)
+	assertStepOrder(t, positions, []string{"post_k3s_conformance", "prepare_restore", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
 }
 
 func TestK3sPlanNameIsStableDNSLabel(t *testing.T) {
@@ -443,6 +446,103 @@ func TestHMRRequiresActiveTarget(t *testing.T) {
 	_, err := clusterOperationSteps(clusterControllerOperation{Kind: "hmr_start", TargetNodeID: "11111111-1111-4111-8111-111111111111"}, nil)
 	if err == nil {
 		t.Fatal("expected inactive HMR target rejection")
+	}
+}
+
+func TestHMRExitRestoresStandbyBeforeClearingDrain(t *testing.T) {
+	targetID := "11111111-1111-4111-8111-111111111111"
+	standbyID := "22222222-2222-4222-8222-222222222222"
+	nodes := []clusterControllerNode{{ID: targetID, Name: "engine-1"}, {ID: standbyID, Name: "engine-2"}}
+	steps, err := clusterOperationSteps(clusterControllerOperation{Kind: "hmr_exit", TargetNodeID: targetID}, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := nodeStepPositions(steps, standbyID)
+	assertStepOrder(t, positions, []string{"prepare_restore", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
+	allPositions := map[string]int{}
+	for index, step := range steps {
+		allPositions[step.Name] = index
+	}
+	targetPositions := nodeStepPositions(steps, targetID)
+	assertStepOrder(t, targetPositions, []string{"enter_drain", "wait_endpoint_withdrawal", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
+	if positions["exit_drain"] >= allPositions["hmr_move_roles_to_standby"] ||
+		allPositions["hmr_move_roles_to_standby"] >= targetPositions["enter_drain"] ||
+		targetPositions["wait_endpoint_withdrawal"] >= allPositions["hmr_restore_pinned_release"] ||
+		allPositions["hmr_restore_pinned_release"] >= allPositions["hmr_inspect_candidate"] ||
+		allPositions["hmr_inspect_candidate"] >= allPositions["hmr_candidate_soak"] ||
+		allPositions["hmr_candidate_soak"] >= allPositions["hmr_promote_candidate"] ||
+		allPositions["hmr_promote_candidate"] >= allPositions["hmr_verify_production"] ||
+		allPositions["hmr_verify_production"] >= targetPositions["restore_roles"] {
+		t.Fatalf("unsafe HMR production restore order: %#v", allPositions)
+	}
+}
+
+func TestHMRPinnedRestoreUsesSavedImmutableRelease(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	operation := clusterControllerOperation{Payload: map[string]any{"baseline_release": "2026.08.24", "baseline_sha": sha}}
+	restore, err := hmrPinnedRestoreOperation(operation, clusterControllerNode{})
+	if err != nil || restore.TargetRelease != "2026.08.24" || restore.TargetSHA != sha {
+		t.Fatalf("saved release not restored: %#v err=%v", restore, err)
+	}
+	if _, err := hmrPinnedRestoreOperation(clusterControllerOperation{}, clusterControllerNode{}); err == nil {
+		t.Fatal("missing pinned production release accepted")
+	}
+}
+
+func TestSingleNodeHMRExitFencesHostPortsBeforeCandidate(t *testing.T) {
+	targetID := "11111111-1111-4111-8111-111111111111"
+	steps, err := clusterOperationSteps(clusterControllerOperation{Kind: "hmr_exit", TargetNodeID: targetID}, []clusterControllerNode{{ID: targetID, Name: "engine-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := map[string]int{}
+	for index, step := range steps {
+		positions[step.Name] = index
+	}
+	for _, required := range []string{"hmr_fence_target_roles", "node:" + targetID + ":enter_drain", "node:" + targetID + ":wait_endpoint_withdrawal", "hmr_restore_pinned_release"} {
+		if _, exists := positions[required]; !exists {
+			t.Fatalf("single-node HMR restore step %q missing: %#v", required, positions)
+		}
+	}
+	if positions["hmr_fence_target_roles"] >= positions["node:"+targetID+":enter_drain"] ||
+		positions["node:"+targetID+":wait_endpoint_withdrawal"] >= positions["hmr_restore_pinned_release"] {
+		t.Fatalf("single-node HMR restore did not fence active host ports: %#v", positions)
+	}
+}
+
+func TestMaintenanceExitProvesHealthBeforeClearingDrain(t *testing.T) {
+	nodeID := "11111111-1111-4111-8111-111111111111"
+	nodes := []clusterControllerNode{{ID: nodeID, Name: "engine-1"}}
+	operation := clusterControllerOperation{Kind: "node_maintenance", TargetNodeID: nodeID, Payload: map[string]any{"action": "exit"}}
+	steps, err := clusterOperationSteps(operation, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := nodeStepPositions(steps, nodeID)
+	assertStepOrder(t, positions, []string{"prepare_restore", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
+}
+
+func nodeStepPositions(steps []clusterControllerStep, nodeID string) map[string]int {
+	positions := map[string]int{}
+	prefix := "node:" + nodeID + ":"
+	for index, step := range steps {
+		if strings.HasPrefix(step.Name, prefix) {
+			positions[strings.TrimPrefix(step.Name, prefix)] = index
+		}
+	}
+	return positions
+}
+
+func assertStepOrder(t *testing.T, positions map[string]int, ordered []string) {
+	t.Helper()
+	for index, name := range ordered {
+		position, exists := positions[name]
+		if !exists {
+			t.Fatalf("restore step %q missing: %#v", name, positions)
+		}
+		if index > 0 && positions[ordered[index-1]] >= position {
+			t.Fatalf("unsafe restore order: %#v", positions)
+		}
 	}
 }
 

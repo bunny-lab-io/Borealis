@@ -289,25 +289,33 @@ func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *ku
 		return true, err
 	}
 	recovery := clusterControllerOperation{ID: newClusterUUID(), Kind: "hmr_recover", TargetNodeID: roleNode.ID}
-	for index, node := range standby {
-		roleOwner := index == 0
+	for _, node := range standby {
 		if err := runner.patchNodeLabels(ctx, node.Name, map[string]string{
-			"borealis.io/application-state": "active",
+			"borealis.io/application-state": "drained",
 			"borealis.io/hmr-target":        "false",
 		}); err != nil {
 			return true, err
 		}
-		if err := runner.setNodeRoleEligibility(ctx, node.Name, roleOwner); err != nil {
-			return true, err
-		}
 		step := clusterControllerStep{Name: "hmr-recovery:" + node.ID, NodeID: node.ID}
-		if err := runner.nodeActionJob(ctx, recovery, step, node, "ExitApplicationDrain"); err != nil {
+		if err := runner.nodeActionJob(ctx, recovery, clusterControllerStep{Name: step.Name + ":prepare", NodeID: node.ID}, node, "PrepareApplicationRestore"); err != nil {
 			return true, err
 		}
 		if err := runner.nodeActionJob(ctx, recovery, clusterControllerStep{Name: step.Name + ":health", NodeID: node.ID}, node, "InspectHealth"); err != nil {
 			return true, err
 		}
 		if err := runner.minimumReadySoak(ctx, node.Name); err != nil {
+			return true, err
+		}
+		if err := runner.setNodeRoleEligibility(ctx, node.Name, true); err != nil {
+			return true, err
+		}
+		if err := runner.nodeActionJob(ctx, recovery, clusterControllerStep{Name: step.Name + ":role-health", NodeID: node.ID}, node, "InspectHealth"); err != nil {
+			return true, err
+		}
+		if err := runner.minimumReadySoak(ctx, node.Name); err != nil {
+			return true, err
+		}
+		if err := runner.nodeActionJob(ctx, recovery, clusterControllerStep{Name: step.Name + ":activate", NodeID: node.ID}, node, "ExitApplicationDrain"); err != nil {
 			return true, err
 		}
 	}
@@ -336,6 +344,10 @@ func clusterControllerStepTimeout(step string) time.Duration {
 	switch {
 	case strings.HasSuffix(step, ":redeploy_revision"), strings.HasSuffix(step, ":promote_candidate"):
 		return 65 * time.Minute
+	case strings.HasSuffix(step, ":prepare_restore"):
+		return 15 * time.Minute
+	case step == "hmr_restore_pinned_release", step == "hmr_promote_candidate":
+		return 65 * time.Minute
 	case strings.HasSuffix(step, ":fetch_release"), strings.HasSuffix(step, ":apply_k3s_upgrade"):
 		return 35 * time.Minute
 	case step == "apply_cluster_foundation":
@@ -359,7 +371,7 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		}
 		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"}, clusterControllerStep{Name: "expand_schema"})
 		for _, node := range ordered {
-			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "fetch_release", "redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "exit_drain"} {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "fetch_release", "redeploy_revision", "inspect_candidate_health", "minimum_candidate_soak", "promote_candidate", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"} {
 				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
 			}
 		}
@@ -371,7 +383,7 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		}
 		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"})
 		for _, node := range ordered {
-			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "apply_k3s_upgrade", "wait_k3s_ready", "post_k3s_conformance", "inspect_health", "minimum_ready_soak", "exit_drain"} {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "apply_k3s_upgrade", "wait_k3s_ready", "post_k3s_conformance", "prepare_restore", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"} {
 				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
 			}
 		}
@@ -393,23 +405,62 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		if targetID == "" {
 			targetID = cleanText(operation.Payload["hmr_node_id"])
 		}
-		steps := append(base, clusterControllerStep{Name: "hmr_restore_pinned_release", NodeID: targetID}, clusterControllerStep{Name: "hmr_verify_production", NodeID: targetID})
+		if clusterNodeByID(nodes, targetID).ID == "" {
+			return nil, errors.New("saved HMR target is not an active cluster node")
+		}
+		steps := append([]clusterControllerStep{}, base...)
+		standbyID := ""
 		for _, node := range nodes {
 			if node.ID != targetID {
+				if standbyID == "" {
+					standbyID = node.ID
+				}
 				steps = append(steps,
-					clusterControllerStep{Name: "node:" + node.ID + ":exit_drain", NodeID: node.ID},
+					clusterControllerStep{Name: "node:" + node.ID + ":prepare_restore", NodeID: node.ID},
 					clusterControllerStep{Name: "node:" + node.ID + ":inspect_health", NodeID: node.ID},
 					clusterControllerStep{Name: "node:" + node.ID + ":minimum_ready_soak", NodeID: node.ID},
+					clusterControllerStep{Name: "node:" + node.ID + ":restore_roles", NodeID: node.ID},
+					clusterControllerStep{Name: "node:" + node.ID + ":inspect_role_health", NodeID: node.ID},
+					clusterControllerStep{Name: "node:" + node.ID + ":minimum_role_soak", NodeID: node.ID},
+					clusterControllerStep{Name: "node:" + node.ID + ":exit_drain", NodeID: node.ID},
 				)
 			}
 		}
-		return append(steps, clusterControllerStep{Name: "verify_cluster"}), nil
+		if standbyID != "" {
+			steps = append(steps, clusterControllerStep{Name: "hmr_move_roles_to_standby", NodeID: standbyID})
+		} else {
+			steps = append(steps, clusterControllerStep{Name: "hmr_fence_target_roles", NodeID: targetID})
+		}
+		for _, action := range []string{"enter_drain", "wait_endpoint_withdrawal"} {
+			steps = append(steps, clusterControllerStep{Name: "node:" + targetID + ":" + action, NodeID: targetID})
+		}
+		steps = append(steps,
+			clusterControllerStep{Name: "hmr_restore_pinned_release", NodeID: targetID},
+			clusterControllerStep{Name: "hmr_inspect_candidate", NodeID: targetID},
+			clusterControllerStep{Name: "hmr_candidate_soak", NodeID: targetID},
+			clusterControllerStep{Name: "hmr_promote_candidate", NodeID: targetID},
+			clusterControllerStep{Name: "hmr_verify_production", NodeID: targetID},
+			clusterControllerStep{Name: "node:" + targetID + ":restore_roles", NodeID: targetID},
+			clusterControllerStep{Name: "node:" + targetID + ":inspect_role_health", NodeID: targetID},
+			clusterControllerStep{Name: "node:" + targetID + ":minimum_role_soak", NodeID: targetID},
+			clusterControllerStep{Name: "node:" + targetID + ":exit_drain", NodeID: targetID},
+			clusterControllerStep{Name: "verify_cluster"},
+		)
+		return steps, nil
 	case "node_maintenance":
 		action := cleanText(operation.Payload["action"])
 		if action == "enter" {
 			return append(base, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":transfer_roles", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":enter_drain", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":wait_endpoint_withdrawal", NodeID: operation.TargetNodeID}), nil
 		}
-		return append(base, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":inspect_health", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":exit_drain", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":minimum_ready_soak", NodeID: operation.TargetNodeID}), nil
+		return append(base,
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":prepare_restore", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":inspect_health", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":minimum_ready_soak", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":restore_roles", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":inspect_role_health", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":minimum_role_soak", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":exit_drain", NodeID: operation.TargetNodeID},
+		), nil
 	case "node_remove":
 		ordered, err := clusterRemovalNodes(operation, nodes)
 		if err != nil {
@@ -912,6 +963,28 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		}
 		return nil
 	}
+	if step.Name == "hmr_move_roles_to_standby" {
+		targetID := firstText(operation.TargetNodeID, cleanText(operation.Payload["hmr_node_id"]))
+		target := clusterNodeByID(nodes, targetID)
+		standby := clusterNodeByID(nodes, step.NodeID)
+		if target.ID == "" || standby.ID == "" || target.ID == standby.ID {
+			return errors.New("HMR production restore lacks distinct active role targets")
+		}
+		if err := r.ensurePostgresPrimaryOnNode(ctx, standby.Name); err != nil {
+			return err
+		}
+		if err := r.setNodeRoleEligibility(ctx, standby.Name, true); err != nil {
+			return err
+		}
+		return r.setNodeRoleEligibility(ctx, target.Name, false)
+	}
+	if step.Name == "hmr_fence_target_roles" {
+		target := clusterNodeByID(nodes, step.NodeID)
+		if target.ID == "" {
+			return errors.New("saved HMR target unavailable")
+		}
+		return r.setNodeRoleEligibility(ctx, target.Name, false)
+	}
 	if step.Name == "hmr_drain_standby" {
 		for _, node := range nodes {
 			state := "drained"
@@ -963,18 +1036,42 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if node.ID == "" {
 			return errors.New("saved HMR target unavailable")
 		}
-		sha := firstText(operation.TargetSHA, cleanText(operation.Payload["baseline_sha"]), node.ReleaseSHA)
-		release := firstText(operation.TargetRelease, cleanText(operation.Payload["baseline_release"]), node.ReleaseTag)
-		if !clusterControllerSHARegex.MatchString(sha) || !clusterReleaseRE.MatchString(release) {
-			return errors.New("saved pinned production release is unavailable")
+		restore, err := hmrPinnedRestoreOperation(operation, node)
+		if err != nil {
+			return err
 		}
-		restore := operation
-		restore.TargetSHA = sha
-		restore.TargetRelease = release
 		if err := r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":stage", NodeID: node.ID}, node, "StagePinnedRelease"); err != nil {
 			return err
 		}
 		return r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":deploy", NodeID: node.ID}, node, "RedeployStagedRevision")
+	}
+	if step.Name == "hmr_inspect_candidate" || step.Name == "hmr_candidate_soak" || step.Name == "hmr_promote_candidate" {
+		node := clusterNodeByID(nodes, step.NodeID)
+		if node.ID == "" {
+			return errors.New("saved HMR target unavailable")
+		}
+		restore, err := hmrPinnedRestoreOperation(operation, node)
+		if err != nil {
+			return err
+		}
+		switch step.Name {
+		case "hmr_inspect_candidate":
+			return r.nodeActionJob(ctx, restore, step, node, "InspectCandidateHealth")
+		case "hmr_promote_candidate":
+			return r.nodeActionJob(ctx, restore, step, node, "PromoteCandidate")
+		default:
+			if err := r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":start", NodeID: node.ID}, node, "InspectCandidateHealth"); err != nil {
+				return err
+			}
+			timer := time.NewTimer(r.soak)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+			}
+			return r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
+		}
 	}
 	if step.Name == "hmr_verify_production" {
 		node := clusterNodeByID(nodes, step.NodeID)
@@ -1048,21 +1145,38 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
 		case "promote_candidate":
 			return r.nodeActionJob(ctx, operation, step, node, "PromoteCandidate")
+		case "prepare_restore":
+			return r.nodeActionJob(ctx, operation, step, node, "PrepareApplicationRestore")
 		case "inspect_health":
 			return r.nodeActionJob(ctx, operation, step, node, "InspectHealth")
 		case "minimum_ready_soak":
+			return r.minimumReadySoak(ctx, node.Name)
+		case "restore_roles":
+			return r.setNodeRoleEligibility(ctx, node.Name, true)
+		case "inspect_role_health":
+			return r.nodeActionJob(ctx, operation, step, node, "InspectHealth")
+		case "minimum_role_soak":
 			return r.minimumReadySoak(ctx, node.Name)
 		case "exit_drain":
 			if err := r.nodeActionJob(ctx, operation, step, node, "ExitApplicationDrain"); err != nil {
 				return err
 			}
-			if len(nodes) == 1 {
-				return r.setNodeRoleEligibility(ctx, node.Name, true)
-			}
 			return r.patchNodeLabels(ctx, node.Name, map[string]string{"borealis.io/hmr-target": "false"})
 		}
 	}
 	return fmt.Errorf("unsupported cluster controller step %q", step.Name)
+}
+
+func hmrPinnedRestoreOperation(operation clusterControllerOperation, node clusterControllerNode) (clusterControllerOperation, error) {
+	sha := firstText(operation.TargetSHA, cleanText(operation.Payload["baseline_sha"]), node.ReleaseSHA)
+	release := firstText(operation.TargetRelease, cleanText(operation.Payload["baseline_release"]), node.ReleaseTag)
+	if !clusterControllerSHARegex.MatchString(sha) || !clusterReleaseRE.MatchString(release) {
+		return clusterControllerOperation{}, errors.New("saved pinned production release is unavailable")
+	}
+	restore := operation
+	restore.TargetSHA = sha
+	restore.TargetRelease = release
+	return restore, nil
 }
 
 func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, operation clusterControllerOperation, activeNodes []clusterControllerNode) error {
@@ -1350,14 +1464,28 @@ func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Conte
 
 func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context, nodeName string, eligible bool) error {
 	value := strconv.FormatBool(eligible)
-	if err := r.patchNodeLabels(ctx, nodeName, map[string]string{
+	labels := map[string]string{
 		"borealis.io/edge-eligible":             value,
 		"borealis.io/scheduler-eligible":        value,
 		"borealis.io/postgres-primary-eligible": value,
-	}); err != nil {
+	}
+	if err := r.patchNodeLabels(ctx, nodeName, labels); err != nil {
 		return err
 	}
-	return r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", eligible)
+	if err := r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", eligible); err != nil {
+		if !eligible {
+			return err
+		}
+		rollbackLabels := map[string]string{
+			"borealis.io/edge-eligible":             "false",
+			"borealis.io/scheduler-eligible":        "false",
+			"borealis.io/postgres-primary-eligible": "false",
+		}
+		labelErr := r.patchNodeLabels(ctx, nodeName, rollbackLabels)
+		scaleErr := r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", false)
+		return errors.Join(err, labelErr, scaleErr)
+	}
+	return nil
 }
 
 func (r *kubernetesClusterStepRunner) scaleNodeWorkload(ctx context.Context, nodeName, appName string, active bool) error {

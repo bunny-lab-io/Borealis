@@ -91,7 +91,8 @@ func client(args []string) {
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
-		"FenceEdge": true, "RestoreEdgeEligibility": true, "FetchRelease": true,
+		"PrepareApplicationRestore": true,
+		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"InspectHealth": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
 		"PrepareMemberRemoval":   true,
@@ -284,6 +285,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.setApplicationState(ctx, "drained", requiredReason(request.Params))
 	case "ExitApplicationDrain":
 		return m.setApplicationState(ctx, "active", "")
+	case "PrepareApplicationRestore":
+		return m.prepareApplicationRestore(ctx)
 	case "FenceEdge":
 		return m.setNodeLabel(ctx, "borealis.io/edge-eligible", "false")
 	case "RestoreEdgeEligibility":
@@ -468,9 +471,7 @@ func (m *manager) redeployStagedRevision(ctx context.Context, targetSHA string) 
 	if err != nil {
 		return nil, err
 	}
-	engineEnv = append(engineEnv,
-		"BOREALIS_ENGINE_HOST_ROOT="+m.repoRoot,
-		"BOREALIS_ENGINE_RUNTIME_ROOT="+filepath.Join(m.repoRoot, "Engine"),
+	engineEnv = append(stagedRedeployEnvironment(engineEnv, m.repoRoot),
 		"/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA,
 	)
 	output, err := run(ctx, stageRoot, "/usr/bin/env", engineEnv...)
@@ -478,6 +479,14 @@ func (m *manager) redeployStagedRevision(ctx context.Context, targetSHA string) 
 		return nil, err
 	}
 	return map[string]any{"revision": targetSHA, "redeployed": true, "staged_path": stageRoot, "output": truncate(output, 8192)}, nil
+}
+
+func stagedRedeployEnvironment(base []string, repoRoot string) []string {
+	return append(base,
+		"BOREALIS_ENGINE_HOST_ROOT="+repoRoot,
+		"BOREALIS_ENGINE_RUNTIME_ROOT="+filepath.Join(repoRoot, "Engine"),
+		"BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate",
+	)
 }
 
 func (m *manager) enrollCluster(ctx context.Context, params map[string]any, baselineSHA string) (map[string]any, error) {
@@ -522,11 +531,18 @@ func (m *manager) setApplicationState(ctx context.Context, state, reason string)
 	if state != "active" && state != "drained" {
 		return nil, errors.New("invalid application state")
 	}
-	if _, err := m.setNodeLabel(ctx, "borealis.io/application-state", state); err != nil {
-		return nil, err
+	if state == "drained" {
+		if _, err := m.setNodeLabel(ctx, "borealis.io/application-state", state); err != nil {
+			return nil, err
+		}
 	}
 	if err := m.scaleNodeApplications(ctx, state); err != nil {
 		return nil, err
+	}
+	if state == "active" {
+		if _, err := m.setNodeLabel(ctx, "borealis.io/application-state", state); err != nil {
+			return nil, err
+		}
 	}
 	annotation := "borealis.io/drain-reason-"
 	if reason != "" {
@@ -536,6 +552,20 @@ func (m *manager) setApplicationState(ctx context.Context, state, reason string)
 		return nil, err
 	}
 	return map[string]any{"node_name": m.nodeName, "application_state": state, "reason": reason}, nil
+}
+
+func (m *manager) prepareApplicationRestore(ctx context.Context) (map[string]any, error) {
+	node, err := run(ctx, "", "k3s", "kubectl", "get", "node", m.nodeName, "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	if nodeLabelValue([]byte(node), "borealis.io/application-state") != "drained" {
+		return nil, errors.New("application restore requires node to remain drained")
+	}
+	if err := m.scaleNodeApplications(ctx, "active"); err != nil {
+		return nil, err
+	}
+	return map[string]any{"node_name": m.nodeName, "application_state": "drained", "workloads_prepared": true}, nil
 }
 
 func (m *manager) scaleNodeApplications(ctx context.Context, state string) error {
@@ -562,6 +592,7 @@ func (m *manager) scaleNodeApplications(ctx context.Context, state string) error
 		"api-backend": true, "job-scheduler": true, "remote-desktop-guacd": true,
 		"traefik-edge": true, "webui-frontend": true,
 	}
+	scaled := make([]string, 0, len(deployments.Items))
 	for _, deployment := range deployments.Items {
 		if !scalable[deployment.Metadata.Labels["app.kubernetes.io/name"]] {
 			continue
@@ -571,6 +602,14 @@ func (m *manager) scaleNodeApplications(ctx context.Context, state string) error
 		}
 		if _, err := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "scale", "deployment/"+deployment.Metadata.Name, "--replicas="+replicas); err != nil {
 			return err
+		}
+		scaled = append(scaled, deployment.Metadata.Name)
+	}
+	if state == "active" {
+		for _, name := range scaled {
+			if _, err := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "rollout", "status", "deployment/"+name, "--timeout=10m"); err != nil {
+				return err
+			}
 		}
 	}
 	if state == "drained" {
@@ -817,12 +856,19 @@ func nodeReady(raw []byte) bool {
 }
 
 func nodeLabelTrue(raw []byte, name string) bool {
+	return strings.EqualFold(nodeLabelValue(raw, name), "true")
+}
+
+func nodeLabelValue(raw []byte, name string) string {
 	var node struct {
 		Metadata struct {
 			Labels map[string]string `json:"labels"`
 		} `json:"metadata"`
 	}
-	return json.Unmarshal(raw, &node) == nil && strings.EqualFold(node.Metadata.Labels[name], "true")
+	if json.Unmarshal(raw, &node) != nil {
+		return ""
+	}
+	return strings.TrimSpace(node.Metadata.Labels[name])
 }
 
 func readyNodeWorkloads(raw []byte) (map[string]bool, error) {

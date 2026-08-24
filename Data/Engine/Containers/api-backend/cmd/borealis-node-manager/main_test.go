@@ -38,6 +38,9 @@ func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	if !nodeLabelTrue([]byte(`{"metadata":{"labels":{"borealis.io/edge-eligible":"true"}}}`), "borealis.io/edge-eligible") {
 		t.Fatal("expected edge eligibility label")
 	}
+	if got := nodeLabelValue([]byte(`{"metadata":{"labels":{"borealis.io/application-state":"drained"}}}`), "borealis.io/application-state"); got != "drained" {
+		t.Fatalf("application state=%q want drained", got)
+	}
 	workloads, err := readyNodeWorkloads([]byte(`{"items":[{"metadata":{"labels":{"app.kubernetes.io/name":"api-backend"}},"spec":{"replicas":1},"status":{"availableReplicas":1,"readyReplicas":1,"updatedReplicas":1}},{"metadata":{"labels":{"app.kubernetes.io/name":"job-scheduler"}},"spec":{"replicas":1},"status":{"availableReplicas":0,"readyReplicas":0,"updatedReplicas":1}}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +227,20 @@ func TestEngineChildUsesManagerOwnedWritableHome(t *testing.T) {
 	joined := strings.Join(got, "\n")
 	if !strings.Contains(joined, "HOME="+home) || !strings.Contains(joined, "XDG_CACHE_HOME="+filepath.Join(home, ".cache")) {
 		t.Fatalf("unexpected Engine child environment: %#v", got)
+	}
+}
+
+func TestStagedProductionRestoreBuildsIsolatedCandidate(t *testing.T) {
+	root := "/opt/Borealis"
+	got := strings.Join(stagedRedeployEnvironment([]string{"HOME=/tmp/test"}, root), "\n")
+	for _, required := range []string{
+		"BOREALIS_ENGINE_HOST_ROOT=" + root,
+		"BOREALIS_ENGINE_RUNTIME_ROOT=" + filepath.Join(root, "Engine"),
+		"BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate",
+	} {
+		if !strings.Contains(got, required) {
+			t.Fatalf("staged restore environment missing %q: %s", required, got)
+		}
 	}
 }
 
