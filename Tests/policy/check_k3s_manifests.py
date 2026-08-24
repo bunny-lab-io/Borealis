@@ -128,6 +128,8 @@ def validate_node_manager_service_contract() -> None:
         "K3S_IMAGE_IMPORT_DIR": "K3s-supported image pre-import directory",
         "k3s_containerd_image_distribution_ready": "Spegel distribution-label verification",
         "pinned and Spegel-ready": "pinned distributed image completion contract",
+        "ensure_cluster_wireguard_routes": "shared full and scoped route DaemonSet reconciliation",
+        "rollout status daemonset/borealis-wireguard-routes": "route DaemonSet readiness wait",
         "docker.io:": "Borealis local-image registry mirror",
         "registry.k8s.io:": "Kubernetes dependency registry mirror",
         "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",

@@ -6594,6 +6594,7 @@ ensure_k3s_wireguard_tunnel() {
     "secret/${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}" \
     "deployment/wireguard-tunnel"; then
     log_k3s_manifest_unchanged "k3s-wireguard-tunnel" "${config_hash}"
+    ensure_cluster_wireguard_routes
     return 0
   fi
 
@@ -6630,6 +6631,7 @@ ensure_k3s_wireguard_tunnel() {
 
   printf '%s  k3s-wireguard-tunnel\n' "${config_hash}" > "${K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE}"
   log_status "k3s-wireguard-tunnel" "Ready" "${C_GREEN}"
+  ensure_cluster_wireguard_routes
 }
 
 k3s_traefik_edge_healthcheck() {
@@ -10793,6 +10795,28 @@ ensure_borealis_node_manager() {
   fi
 }
 
+ensure_cluster_wireguard_routes() {
+  cluster_mode_enabled || return 0
+  local route_image=""
+  route_image="$(service_image_tag_or_previous wireguard-tunnel borealis-engine/wireguard-tunnel:local)"
+  [[ "${route_image}" =~ :sha-[0-9a-f]{12,64}$ || "${route_image}" =~ @sha256:[0-9a-f]{64}$ ]] \
+    || die "Cluster WireGuard route DaemonSet requires immutable image; saw ${route_image}."
+  local edge_vip=""
+  edge_vip="$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.edgeVIP}')"
+  [[ "${edge_vip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+    || die "Enabled cluster has invalid edge VIP for WireGuard route reconciliation."
+  local route_manifest=""
+  route_manifest="$(mktemp "${DEPLOY_DIR}/wireguard-route-daemon.XXXXXX.yaml")"
+  sed \
+    -e "s|borealis-engine/wireguard-tunnel:sha-000000000000|${route_image}|g" \
+    -e "s|192.0.2.2|${edge_vip}|g" \
+    "${K3S_CLUSTER_ASSET_DIR}/wireguard-route-daemonset.yaml" > "${route_manifest}"
+  k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${route_manifest}" >> "${BUILD_LOG}" 2>&1
+  find "$(dirname -- "${route_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${route_manifest}")" -delete
+  k3s_kubectl -n "${K3S_NAMESPACE}" rollout status daemonset/borealis-wireguard-routes --timeout=180s >> "${BUILD_LOG}" 2>&1 \
+    || die "Cluster WireGuard route DaemonSet did not become ready. See ${BUILD_LOG}."
+}
+
 ensure_cluster_controller_baseline() {
   local api_image=""
   api_image="$(service_image_tag_or_previous api-backend borealis-engine/api-backend:local)"
@@ -10806,20 +10830,7 @@ ensure_cluster_controller_baseline() {
   find "$(dirname -- "${manifest_file}")" -maxdepth 1 -type f -name "$(basename -- "${manifest_file}")" -delete
   k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${K3S_CLUSTER_ASSET_DIR}/application-availability.yaml" >> "${BUILD_LOG}" 2>&1
   if cluster_mode_enabled; then
-    local route_image=""
-    route_image="$(service_image_tag_or_previous wireguard-tunnel borealis-engine/wireguard-tunnel:local)"
-    local edge_vip=""
-    edge_vip="$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.edgeVIP}')"
-    [[ "${edge_vip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
-      || die "Enabled cluster has invalid edge VIP for WireGuard route reconciliation."
-    local route_manifest=""
-    route_manifest="$(mktemp "${DEPLOY_DIR}/wireguard-route-daemon.XXXXXX.yaml")"
-    sed \
-      -e "s|borealis-engine/wireguard-tunnel:sha-000000000000|${route_image}|g" \
-      -e "s|192.0.2.2|${edge_vip}|g" \
-      "${K3S_CLUSTER_ASSET_DIR}/wireguard-route-daemonset.yaml" > "${route_manifest}"
-    k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${route_manifest}" >> "${BUILD_LOG}" 2>&1
-    find "$(dirname -- "${route_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${route_manifest}")" -delete
+    ensure_cluster_wireguard_routes
     k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/borealis-cluster-controller --replicas=0 >> "${BUILD_LOG}" 2>&1
     local controller_clones=""
     controller_clones="$(k3s_kubectl -n "${K3S_NAMESPACE}" get deployment \
