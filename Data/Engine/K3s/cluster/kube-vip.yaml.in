@@ -68,17 +68,16 @@ spec:
             - {name: cp_enable, value: "true"}
             - {name: svc_enable, value: "false"}
             - {name: prometheus_server, value: ":2112"}
-            - {name: health_check_port, value: "2114"}
           startupProbe:
-            tcpSocket: {port: 2114}
+            tcpSocket: {port: 2112}
             periodSeconds: 1
             failureThreshold: 30
           readinessProbe:
-            tcpSocket: {port: 2114}
+            tcpSocket: {host: "${BOREALIS_CONTROL_PLANE_VIP}", port: 6443}
             periodSeconds: 2
             failureThreshold: 2
           livenessProbe:
-            tcpSocket: {port: 2114}
+            tcpSocket: {port: 2112}
             periodSeconds: 10
             failureThreshold: 3
           resources:
@@ -130,17 +129,16 @@ spec:
             - {name: cp_enable, value: "true"}
             - {name: svc_enable, value: "false"}
             - {name: prometheus_server, value: ":2113"}
-            - {name: health_check_port, value: "2115"}
           startupProbe:
-            tcpSocket: {port: 2115}
+            tcpSocket: {port: 2113}
             periodSeconds: 1
             failureThreshold: 30
           readinessProbe:
-            tcpSocket: {port: 2115}
+            tcpSocket: {host: "${BOREALIS_EDGE_VIP}", port: 443}
             periodSeconds: 2
             failureThreshold: 2
           livenessProbe:
-            tcpSocket: {port: 2115}
+            tcpSocket: {port: 2113}
             periodSeconds: 10
             failureThreshold: 3
           resources:

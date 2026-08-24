@@ -309,18 +309,22 @@ def validate_kube_vip_contract() -> None:
             "address": "${BOREALIS_CONTROL_PLANE_VIP}",
             "port": "6443",
             "prometheus_server": ":2112",
-            "health_check_port": "2114",
+            "probe_port": 2112,
+            "readiness_host": "${BOREALIS_CONTROL_PLANE_VIP}",
+            "readiness_port": 6443,
         },
         "kube-vip-borealis-edge": {
             "address": "${BOREALIS_EDGE_VIP}",
             "port": "443",
             "prometheus_server": ":2113",
-            "health_check_port": "2115",
+            "probe_port": 2113,
+            "readiness_host": "${BOREALIS_EDGE_VIP}",
+            "readiness_port": 443,
         },
     }
     if set(daemonsets) != set(expected):
         fail("kube-vip manifest must contain separate control and edge DaemonSets")
-    for name, required_env in expected.items():
+    for name, contract in expected.items():
         daemonset = daemonsets[name]
         spec = daemonset.get("spec") or {}
         if spec.get("minReadySeconds") != 5:
@@ -335,7 +339,10 @@ def validate_kube_vip_contract() -> None:
         env = {entry.get("name"): entry.get("value") for entry in container.get("env") or []}
         if "vip_address" in env:
             fail(f"{name} uses deprecated vip_address instead of kube-vip v1.1 address")
-        for key, value in required_env.items():
+        if "health_check_port" in env:
+            fail(f"{name} must not enable kube-vip health server because it blocks process exit after leadership loss")
+        for key in ("address", "port", "prometheus_server"):
+            value = contract[key]
             if env.get(key) != value:
                 fail(f"{name} {key} must be {value!r}")
         for key, value in {"vip_subnet": "32", "cp_namespace": "kube-system", "vip_leaderelection": "true"}.items():
@@ -346,6 +353,13 @@ def validate_kube_vip_contract() -> None:
             fail(f"{name} must identify lease holder from spec.nodeName")
         if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
             fail(f"{name} must retain separate startup, readiness, and liveness probes")
+        startup_socket = (container.get("startupProbe") or {}).get("tcpSocket") or {}
+        liveness_socket = (container.get("livenessProbe") or {}).get("tcpSocket") or {}
+        readiness_socket = (container.get("readinessProbe") or {}).get("tcpSocket") or {}
+        if startup_socket.get("port") != contract["probe_port"] or liveness_socket.get("port") != contract["probe_port"]:
+            fail(f"{name} startup/liveness must use local metrics listener")
+        if readiness_socket.get("host") != contract["readiness_host"] or readiness_socket.get("port") != contract["readiness_port"]:
+            fail(f"{name} readiness must verify advertised VIP service")
         resources = container.get("resources") or {}
         if not resources.get("requests") or not resources.get("limits"):
             fail(f"{name} must declare resource requests and limits")
