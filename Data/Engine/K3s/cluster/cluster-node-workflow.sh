@@ -97,6 +97,25 @@ sed -e "s|\${BOREALIS_CLUSTER_INTERFACE}|${interface}|g" \
     "${script_dir}/kube-vip.yaml.in" > "${vip_manifest}"
 k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${vip_manifest}"
 find "$(dirname -- "${vip_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${vip_manifest}")" -delete
+for daemonset in kube-vip-borealis-control kube-vip-borealis-edge; do
+  k3s kubectl -n kube-system rollout status "daemonset/${daemonset}" --timeout=3m
+done
+for lease in borealis-control-vip borealis-edge-vip; do
+  for attempt in {1..60}; do
+    lease_holder="$(k3s kubectl -n kube-system get "lease/${lease}" -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)"
+    [[ -n "${lease_holder}" ]] && break
+    [[ "${attempt}" -lt 60 ]] || { printf 'kube-vip lease %s has no holder.\n' "${lease}" >&2; exit 1; }
+    sleep 2
+  done
+done
+for vip in "${control_vip}" "${edge_vip}"; do
+  for attempt in {1..60}; do
+    ip -o -4 address show dev "${interface}" | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "${vip}" && break
+    [[ "${attempt}" -lt 60 ]] || { printf 'kube-vip address %s not advertised on %s.\n' "${vip}" "${interface}" >&2; exit 1; }
+    sleep 2
+  done
+done
+k3s kubectl --server="https://${control_vip}:6443" get --raw=/readyz >/dev/null
 
 postgres_user="$(awk -F= '$1 == "POSTGRES_USER" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
 postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"

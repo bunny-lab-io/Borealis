@@ -197,6 +197,80 @@ def validate_snapshot_controller_contract() -> None:
                     fail("snapshot controller RBAC contains wildcard")
 
 
+def validate_kube_vip_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/kube-vip.yaml.in"
+    try:
+        objects = [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+        workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot read kube-vip contract: {exc}")
+    daemonsets = {
+        (item.get("metadata") or {}).get("name"): item
+        for item in objects
+        if item.get("kind") == "DaemonSet"
+    }
+    expected = {
+        "kube-vip-borealis-control": {
+            "address": "${BOREALIS_CONTROL_PLANE_VIP}",
+            "port": "6443",
+            "prometheus_server": ":2112",
+            "health_check_port": "2114",
+        },
+        "kube-vip-borealis-edge": {
+            "address": "${BOREALIS_EDGE_VIP}",
+            "port": "443",
+            "prometheus_server": ":2113",
+            "health_check_port": "2115",
+        },
+    }
+    if set(daemonsets) != set(expected):
+        fail("kube-vip manifest must contain separate control and edge DaemonSets")
+    for name, required_env in expected.items():
+        daemonset = daemonsets[name]
+        spec = daemonset.get("spec") or {}
+        if spec.get("minReadySeconds") != 5:
+            fail(f"{name} must retain five-second minimum readiness")
+        pod = (((spec.get("template") or {}).get("spec")) or {})
+        if pod.get("serviceAccountName") != "kube-vip-borealis" or pod.get("automountServiceAccountToken") is not True:
+            fail(f"{name} must use dedicated kube-vip ServiceAccount")
+        containers = pod.get("containers") or []
+        if len(containers) != 1:
+            fail(f"{name} must contain one kube-vip container")
+        container = containers[0]
+        env = {entry.get("name"): entry.get("value") for entry in container.get("env") or []}
+        if "vip_address" in env:
+            fail(f"{name} uses deprecated vip_address instead of kube-vip v1.1 address")
+        for key, value in required_env.items():
+            if env.get(key) != value:
+                fail(f"{name} {key} must be {value!r}")
+        for key, value in {"vip_subnet": "32", "cp_namespace": "kube-system", "vip_leaderelection": "true"}.items():
+            if env.get(key) != value:
+                fail(f"{name} {key} must be {value!r}")
+        node_name = next((entry for entry in container.get("env") or [] if entry.get("name") == "vip_nodename"), {})
+        if (((node_name.get("valueFrom") or {}).get("fieldRef") or {}).get("fieldPath")) != "spec.nodeName":
+            fail(f"{name} must identify lease holder from spec.nodeName")
+        if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
+            fail(f"{name} must retain separate startup, readiness, and liveness probes")
+        resources = container.get("resources") or {}
+        if not resources.get("requests") or not resources.get("limits"):
+            fail(f"{name} must declare resource requests and limits")
+    pdb_names = {
+        (item.get("metadata") or {}).get("name")
+        for item in objects
+        if item.get("kind") == "PodDisruptionBudget" and ((item.get("spec") or {}).get("minAvailable")) == 1
+    }
+    if pdb_names != set(expected):
+        fail("control and edge kube-vip workloads must retain minAvailable=1 disruption budgets")
+    for marker in (
+        'rollout status "daemonset/${daemonset}"',
+        'get "lease/${lease}"',
+        'kube-vip address %s not advertised',
+        'get --raw=/readyz',
+    ):
+        if marker not in workflow:
+            fail(f"cluster workflow lost kube-vip verification marker {marker!r}")
+
+
 def validate_api_release_identity_contract() -> None:
     try:
         engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
@@ -429,6 +503,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_node_manager_service_contract()
     validate_pinned_dependency_adoption_contract()
     validate_snapshot_controller_contract()
+    validate_kube_vip_contract()
     validate_api_release_identity_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
