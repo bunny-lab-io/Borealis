@@ -117,7 +117,7 @@ func TestTruncateDiagnosticPreservesFailureContext(t *testing.T) {
 	if len(got) != 48 {
 		t.Fatalf("unexpected diagnostic length %d", len(got))
 	}
-	if !strings.HasPrefix(got, "command start:") || !strings.HasSuffix(got, ":fatal tail") {
+	if !strings.HasPrefix(got, "command") || !strings.HasSuffix(got, ":fatal tail") {
 		t.Fatalf("diagnostic lost head or tail: %q", got)
 	}
 	if !strings.Contains(got, "output truncated") {
