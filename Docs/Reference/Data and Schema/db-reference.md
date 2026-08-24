@@ -24,6 +24,7 @@ devices (guid) ----------------< device_keys (guid)
 devices (guid) ----------------< device_approvals (guid, optional)
 devices.agent_id -------------< device_vpn_ip_leases (agent_id)
 devices.agent_id -------------< device_vpn_key_leases (agent_id)
+devices.agent_id -------------< device_vpn_sessions (agent_id)
 agent enrollment fingerprint ---< enrollment_code_failures (logical identity)
 
 scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
@@ -622,6 +623,22 @@ finally:
     - Backup/Restore durable device trust state.
     - Notes:
     - Created by normal Engine schema initialization before Backup/Restore runs. The Go VPN runtime also keeps a compatibility `CREATE TABLE IF NOT EXISTS` guard for older deployments.
+
+    #### `device_vpn_sessions`
+    - Status: Active.
+    - Purpose: Shared active WireGuard session and readiness state for clustered API replicas.
+    - Columns: `agent_id`, `tunnel_id`, `virtual_ip`, `endpoint_host`, `allowed_ports_json`, `operators_json`, `state`, `created_at`, `expires_at`, `last_activity_at`, `last_transport_probe_at`, `last_transport_confirmed_at`, `last_agent_ready_at`, `last_agent_ready_tunnel_id`, `last_agent_ready_allowed_ports_json`, `last_agent_ready_reason`, `last_agent_ready_service_state`, `generation`, `updated_at`.
+    - Constraints and indexes:
+    - `agent_id` primary key.
+    - `tunnel_id` unique constraint.
+    - `idx_device_vpn_sessions_state_expires` on `(state, expires_at)`.
+    - Used by:
+    - Go VPN tunnel APIs, Agent readiness callbacks, scheduler dispatch admission, transport confirmation, edge-owner peer reconciliation, Backup/Restore, and device purge.
+    - Notes:
+    - `generation` provides optimistic compare-and-swap updates so callbacks handled by different API replicas cannot silently overwrite newer state.
+    - `endpoint_host` is host-class text capped at 253 characters. Engine accepts only validated hostname or IP syntax before persistence; CIDR, control characters, whitespace, and URL/path syntax are rejected.
+    - Signed short-lived tunnel tokens are regenerated from shared signing material and are never stored in this table. WireGuard private/public keys remain in `device_vpn_key_leases`.
+    - Session rows are additive rolling schema. Older replicas ignore them; cluster-capable replicas treat PostgreSQL as source of truth and use process memory only as cache.
 
     ### Operations and UI State
     #### `activity_history`

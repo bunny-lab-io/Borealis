@@ -10,6 +10,7 @@ source "${SCRIPT_DIR}/lib.sh"
 
 TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-1200}"
 RESULT_DIR="$(result_dir_for database-postgres)"
+GO_BIN="$(resolve_go 1.25.12)"
 CONTAINER_NAME="borealis-ci-postgres-${$}"
 POSTGRES_PASSWORD="borealis-ci-password"
 DOCKER=(docker)
@@ -82,6 +83,16 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   >"${RESULT_DIR}/postgres-integration.log" 2>&1; then
   "${DOCKER[@]}" logs "${CONTAINER_NAME}" >"${RESULT_DIR}/postgres-container.log" 2>&1 || true
   tail -n 160 "${RESULT_DIR}/postgres-integration.log" >&2 || true
+  exit 1
+fi
+
+if ! run_timed "${TIMEOUT_SECONDS}" env \
+  BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
+  GOWORK=off \
+  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test ./cmd/api-backend \
+  -run '^TestVPNSessionStorePostgresReplicaConvergence$' -count=1 \
+  >"${RESULT_DIR}/vpn-session-store.log" 2>&1; then
+  tail -n 160 "${RESULT_DIR}/vpn-session-store.log" >&2 || true
   exit 1
 fi
 

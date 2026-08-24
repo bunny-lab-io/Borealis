@@ -119,6 +119,38 @@ def test_engine_database_initialisation_creates_vpn_key_lease_table(tmp_path) ->
     }
 
 
+def test_engine_database_initialisation_creates_durable_vpn_session_table(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    progress: list[str] = []
+
+    database.initialise_engine_database(db_url, progress_callback=progress.append)
+
+    columns = _table_columns(db_url, "device_vpn_sessions")
+
+    assert "device_vpn_sessions" in progress
+    assert columns == {
+        "agent_id",
+        "tunnel_id",
+        "virtual_ip",
+        "endpoint_host",
+        "allowed_ports_json",
+        "operators_json",
+        "state",
+        "created_at",
+        "expires_at",
+        "last_activity_at",
+        "last_transport_probe_at",
+        "last_transport_confirmed_at",
+        "last_agent_ready_at",
+        "last_agent_ready_tunnel_id",
+        "last_agent_ready_allowed_ports_json",
+        "last_agent_ready_reason",
+        "last_agent_ready_service_state",
+        "generation",
+        "updated_at",
+    }
+
+
 def test_engine_database_migrations_repair_partial_vpn_key_lease_table(tmp_path) -> None:
     db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
     conn = dbapi.connect(db_url)

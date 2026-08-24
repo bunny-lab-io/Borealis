@@ -200,6 +200,7 @@ Safe K3s removal writes root-only persistent fence marker and schedules local `k
 
 - Borealis moved remote transport from a bespoke reverse tunnel stack to WireGuard for encrypted UDP transport and resilient reconnect behavior.
 - Agents ensure the tunnel at boot, keep it outbound-only, and reuse one live VPN tunnel per agent across operators.
+- Clustered API replicas persist active tunnel identity, endpoint, allowed ports, operator association, readiness, and transport timestamps in PostgreSQL with optimistic generation checks. Session rows contain no signed tunnel token; tokens remain short-lived derived values. Existing WireGuard private key lease protection and Backup encryption requirements still apply.
 - Engine issues short-lived, Ed25519-signed tunnel material that the agent verifies before bringing the tunnel up.
 - Each agent gets one host-only `/32`. Engine peer mutation rejects duplicate `/32` assignments, broad prefixes, Engine-address reuse, and duplicate peer public keys.
 - Agent runtime also rejects broad tunnel routes in received session material.

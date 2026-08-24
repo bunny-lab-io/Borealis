@@ -4,8 +4,10 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testWireGuardRuntime(t *testing.T) *wireGuardRuntime {
@@ -22,6 +24,26 @@ func testWireGuardRuntime(t *testing.T) *wireGuardRuntime {
 		configRoot:     t.TempDir(),
 		interfaceName:  defaultWireGuardInterface,
 		managedPeers:   map[string]map[string]any{},
+	}
+}
+
+func TestWireGuardPeerHealthRejectsStaleHandshake(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	publicKey := "peer-public-key"
+	handshakeAt := time.Now().Add(-2 * defaultVPNHandshakeMaxAge).Unix()
+	runtime.commandRunner = func(args []string) (int, string, string) {
+		if len(args) == 4 && args[1] == "show" && args[3] == "peers" {
+			return 0, publicKey, ""
+		}
+		if len(args) == 4 && args[1] == "show" && args[3] == "latest-handshakes" {
+			return 0, publicKey + " " + strconv.FormatInt(handshakeAt, 10), ""
+		}
+		return 0, "", ""
+	}
+
+	health := runtime.checkPeerHealth(publicKey)
+	if boolFromAny(health["healthy"]) || cleanText(health["reason"]) != "handshake_stale" {
+		t.Fatalf("stale handshake accepted: %#v", health)
 	}
 }
 
@@ -94,6 +116,17 @@ func TestVPNSessionPayloadIncludesEngineWireGuardFallback(t *testing.T) {
 	}
 	if got := cleanText(payload["fallback_endpoint"]); got != "192.168.3.252:30000" {
 		t.Fatalf("unexpected fallback endpoint: %s", got)
+	}
+}
+
+func TestNormalizeVPNEndpointHostBoundsPersistedHeaderValue(t *testing.T) {
+	if got := normalizeVPNEndpointHost(" [fd00::10] "); got != "fd00::10" {
+		t.Fatalf("IPv6 endpoint not normalized: %q", got)
+	}
+	for _, invalid := range []string{"engine.example/evil", strings.Repeat("x", 254), "engine example"} {
+		if got := normalizeVPNEndpointHost(invalid); got != "" {
+			t.Fatalf("invalid endpoint accepted: %q", got)
+		}
 	}
 }
 

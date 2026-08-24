@@ -245,7 +245,7 @@ func (c *goRemoteShellTunnelConnector) connectTunnel(ctx context.Context, source
 			}
 		}
 	}
-	_ = c.service.confirmTransportSuccess(agentID)
+	_ = c.service.confirmTransportSuccess(ctx, agentID)
 	return payload, http.StatusOK, nil
 }
 

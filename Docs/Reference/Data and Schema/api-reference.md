@@ -236,6 +236,7 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an in-scope agent.
     - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by in-scope agent.
     - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels visible in the current operator's site scope.
+    - Clustered API replicas use shared PostgreSQL session rows for connect/status, Agent-ready callback, scheduler admission, activity, and transport confirmation. One replica restart or edge-owner change therefore keeps active tunnel identity and readiness. Signed tunnel tokens are regenerated and never persisted.
 
     ### Remote Desktop
     - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state and return listener/session metadata for the agent without caching or echoing the VNC password.

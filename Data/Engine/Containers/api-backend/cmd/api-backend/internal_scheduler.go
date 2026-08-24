@@ -420,7 +420,7 @@ func internalSchedulerVPNSessionsHandler(auth *authService, vpnRuntime *vpnTunne
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": vpnSessionMap(vpnRuntime)})
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": vpnSessionMap(r.Context(), vpnRuntime)})
 	}
 }
 
@@ -451,7 +451,7 @@ func internalSchedulerVPNPrepareHandler(auth *authService, vpnRuntime *vpnTunnel
 		}
 		requestedStart := false
 		for _, agentID := range agentIDs {
-			if vpnRuntime.sessionPayload(agentID, false) != nil {
+			if vpnRuntime.sessionPayload(r.Context(), agentID, false) != nil {
 				vpnRuntime.requestAgentStart(r.Context(), agentID, false, firstText(cleanText(body["reason"]), "job_scheduler_prepare"), requiredPorts)
 				requestedStart = true
 				continue
@@ -465,9 +465,10 @@ func internalSchedulerVPNPrepareHandler(auth *authService, vpnRuntime *vpnTunnel
 				requestedStart = true
 			}
 		}
-		sessions := vpnSessionMap(vpnRuntime)
+		sessions := vpnSessionMap(r.Context(), vpnRuntime)
 		if requestedStart && len(agentIDs) > 0 {
 			sessions = vpnRuntime.waitForSessionsReady(
+				r.Context(),
 				agentIDs,
 				requiredPorts,
 				coercePositiveFloat(firstNonEmpty(body["timeout_seconds"], body["wait_seconds"]), float64(scheduledConnectionProbeTimeoutSeconds)),
@@ -483,12 +484,12 @@ func internalSchedulerVPNPrepareHandler(auth *authService, vpnRuntime *vpnTunnel
 	}
 }
 
-func vpnSessionMap(vpnRuntime *vpnTunnelService) map[string]map[string]any {
+func vpnSessionMap(ctx context.Context, vpnRuntime *vpnTunnelService) map[string]map[string]any {
 	out := map[string]map[string]any{}
 	if vpnRuntime == nil {
 		return out
 	}
-	for _, session := range vpnRuntime.listSessions() {
+	for _, session := range vpnRuntime.listSessions(ctx) {
 		agentID := cleanText(session["agent_id"])
 		if agentID != "" {
 			out[agentID] = session

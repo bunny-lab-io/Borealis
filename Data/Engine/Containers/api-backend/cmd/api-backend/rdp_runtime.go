@@ -59,7 +59,7 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 	defer cancel()
 	agentID := result.Device.AgentID
 	rdpPort := parseIntDefault(os.Getenv("BOREALIS_RDP_PORT"), defaultRDPBackendPort)
-	tunnelPayload := r.vpn.sessionPayload(agentID, false)
+	tunnelPayload := r.vpn.sessionPayload(ctx, agentID, false)
 	if tunnelPayload == nil {
 		var err error
 		tunnelPayload, err = r.vpn.connect(ctx, vpnConnectRequest{
@@ -145,7 +145,7 @@ func (r *rdpRuntime) issueSession(ctx context.Context, request *http.Request, pr
 	if guacToken == "" {
 		return map[string]any{"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, http.StatusServiceUnavailable
 	}
-	_ = r.vpn.confirmTransportSuccess(agentID)
+	_ = r.vpn.confirmTransportSuccess(ctx, agentID)
 	wsPath := joinURL(result.Route.RoutePathPrefix, "/remote-desktop/vnc/guacamole")
 	urls := remoteOpsWorkerURLs(request, result.Route)
 	return map[string]any{

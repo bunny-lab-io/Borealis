@@ -444,6 +444,12 @@ func purgeDeviceRows(ctx context.Context, tx *sql.Tx, record devicePurgeRecord) 
 	if err != nil {
 		return nil, err
 	}
+	deleted["device_vpn_sessions"], err = purgeDeleteWhere(ctx, tx, "engine.device_vpn_sessions", []devicePurgeCondition{
+		{Clause: "agent_id = ?", Args: nonEmptyArgs(record.AgentID)},
+	})
+	if err != nil {
+		return nil, err
+	}
 	deleted["device_vpn_ip_leases"], err = purgeDeleteWhere(ctx, tx, "engine.device_vpn_ip_leases", []devicePurgeCondition{
 		{Clause: "agent_id = ?", Args: nonEmptyArgs(record.AgentID)},
 	})

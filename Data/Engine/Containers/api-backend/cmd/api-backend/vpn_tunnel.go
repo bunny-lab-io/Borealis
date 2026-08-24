@@ -28,16 +28,18 @@ import (
 )
 
 const (
-	defaultWireGuardPort       = 30000
-	defaultWireGuardEngineIP   = "10.255.0.1/32"
-	defaultWireGuardPeerCIDR   = "10.255.0.0/16"
-	defaultWireGuardInterface  = "borealis-wg"
-	defaultWireGuardConfigName = "borealis-wg"
-	wireGuardInputChain        = "BOREALIS-WG-INPUT"
-	wireGuardForwardChain      = "BOREALIS-WG-FWD"
-	defaultVPNTokenTTL         = 300 * time.Second
-	defaultVPNIdleSeconds      = 900
-	defaultVNCBackendPort      = 5900
+	defaultWireGuardPort        = 30000
+	defaultWireGuardEngineIP    = "10.255.0.1/32"
+	defaultWireGuardPeerCIDR    = "10.255.0.0/16"
+	defaultWireGuardInterface   = "borealis-wg"
+	defaultWireGuardConfigName  = "borealis-wg"
+	wireGuardInputChain         = "BOREALIS-WG-INPUT"
+	wireGuardForwardChain       = "BOREALIS-WG-FWD"
+	defaultVPNTokenTTL          = 300 * time.Second
+	defaultVPNIdleSeconds       = 900
+	defaultVNCBackendPort       = 5900
+	defaultVPNHandshakeMaxAge   = 90 * time.Second
+	sharedVPNConfirmationMaxAge = 45 * time.Second
 )
 
 type vpnWireGuardBackend interface {
@@ -62,13 +64,14 @@ type vpnTunnelService struct {
 	persistent   bool
 	idleSeconds  int
 
-	mu              sync.Mutex
-	ready           *sync.Cond
-	leasesLoaded    bool
-	ipLeases        map[string]string
-	keyLeases       map[string]vpnClientKeys
-	sessionsByAgent map[string]*vpnSession
-	sessionsByID    map[string]*vpnSession
+	mu                sync.Mutex
+	ready             *sync.Cond
+	leasesLoaded      bool
+	sessionStoreReady bool
+	ipLeases          map[string]string
+	keyLeases         map[string]vpnClientKeys
+	sessionsByAgent   map[string]*vpnSession
+	sessionsByID      map[string]*vpnSession
 }
 
 type vpnClientKeys struct {
@@ -97,6 +100,8 @@ type vpnSession struct {
 	Operators                  map[string]struct{}
 	Hostname                   string
 	EndpointHost               string
+	State                      string
+	Generation                 int64
 }
 
 func newVPNTunnelService(auth *authService) *vpnTunnelService {
@@ -184,10 +189,11 @@ func (s *vpnTunnelService) reconcilePersistentPeers(ctx context.Context) error {
 		return err
 	}
 	rows, err := conn.QueryContext(ctx, `
-		SELECT i.agent_id,i.virtual_ip,k.client_public_key
-		  FROM engine.device_vpn_ip_leases i
-		  JOIN engine.device_vpn_key_leases k ON k.agent_id=i.agent_id
-		 ORDER BY i.agent_id
+		SELECT s.agent_id,s.virtual_ip,k.client_public_key
+		  FROM engine.device_vpn_sessions s
+		  JOIN engine.device_vpn_key_leases k ON k.agent_id=s.agent_id
+		 WHERE s.state='active'
+		 ORDER BY s.agent_id
 	`)
 	if err != nil {
 		conn.Close()
@@ -218,7 +224,20 @@ func (s *vpnTunnelService) reconcilePersistentPeers(ctx context.Context) error {
 		peer["public_key"] = cleanText(record.publicKey)
 		peers = append(peers, peer)
 	}
-	return s.wg.reconcilePeers(peers)
+	if err := s.wg.reconcilePeers(peers); err != nil {
+		return err
+	}
+	listenerHealth := s.wg.checkListenerHealth(len(peers))
+	if !boolFromAny(listenerHealth["healthy"]) {
+		return nil
+	}
+	confirmedAgents := make([]string, 0, len(records))
+	for _, record := range records {
+		if boolFromAny(s.wg.checkPeerHealth(record.publicKey)["healthy"]) {
+			confirmedAgents = append(confirmedAgents, record.agentID)
+		}
+	}
+	return s.confirmPersistentPeerHealth(ctx, confirmedAgents)
 }
 
 func parsePrefixEnv(name string, fallback string) netip.Prefix {
@@ -366,7 +385,7 @@ func tunnelStatusHandler(auth *authService, service *vpnTunnelService) http.Hand
 			writeJSON(w, status, payloadErr)
 			return
 		}
-		payload := service.status(result.Device.AgentID)
+		payload := service.status(r.Context(), result.Device.AgentID)
 		agentSocket := false
 		if result.Route != nil {
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -387,7 +406,7 @@ func tunnelStatusHandler(auth *authService, service *vpnTunnelService) http.Hand
 		}
 		payload["agent_socket"] = agentSocket
 		if cleanText(r.URL.Query().Get("bump")) != "" {
-			service.bumpActivity(result.Device.AgentID)
+			service.bumpActivity(r.Context(), result.Device.AgentID)
 		}
 		writeJSON(w, http.StatusOK, payload)
 	}
@@ -404,7 +423,7 @@ func tunnelActiveHandler(auth *authService, service *vpnTunnelService) http.Hand
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
 			return
 		}
-		sessions := service.listSessions()
+		sessions := service.listSessions(r.Context())
 		visible := []map[string]any{}
 		for _, session := range sessions {
 			agentID := cleanText(session["agent_id"])
@@ -441,7 +460,11 @@ func (s *vpnTunnelService) connect(ctx context.Context, request vpnConnectReques
 	if agentID == "" {
 		return nil, errors.New("agent_id_required")
 	}
+	request.EndpointHost = normalizeVPNEndpointHost(request.EndpointHost)
 	s.loadLeases(ctx)
+	if s.persistent && vpnDB(s.auth) != nil {
+		return s.connectPersistent(ctx, request)
+	}
 	now := time.Now().UTC()
 	requiredPorts := uniquePorts(request.RequiredPorts)
 	if len(requiredPorts) == 0 {
@@ -535,10 +558,8 @@ func (s *vpnTunnelService) connect(ctx context.Context, request vpnConnectReques
 	return payload, nil
 }
 
-func (s *vpnTunnelService) status(agentID string) map[string]any {
-	s.mu.Lock()
-	session := s.sessionsByAgent[cleanText(agentID)]
-	s.mu.Unlock()
+func (s *vpnTunnelService) status(ctx context.Context, agentID string) map[string]any {
+	session := s.sharedSession(ctx, agentID)
 	if session == nil {
 		return nil
 	}
@@ -547,13 +568,8 @@ func (s *vpnTunnelService) status(agentID string) map[string]any {
 	return payload
 }
 
-func (s *vpnTunnelService) listSessions() []map[string]any {
-	s.mu.Lock()
-	sessions := make([]*vpnSession, 0, len(s.sessionsByAgent))
-	for _, session := range s.sessionsByAgent {
-		sessions = append(sessions, session)
-	}
-	s.mu.Unlock()
+func (s *vpnTunnelService) listSessions(ctx context.Context) []map[string]any {
+	sessions := s.sharedSessions(ctx)
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].AgentID < sessions[j].AgentID })
 	out := make([]map[string]any, 0, len(sessions))
 	for _, session := range sessions {
@@ -564,7 +580,26 @@ func (s *vpnTunnelService) listSessions() []map[string]any {
 	return out
 }
 
-func (s *vpnTunnelService) sessionPayload(agentID string, includeToken bool) map[string]any {
+func (s *vpnTunnelService) sessionPayload(ctx context.Context, agentID string, includeToken bool) map[string]any {
+	if s.persistent && vpnDB(s.auth) != nil {
+		session, err := s.mutatePersistentSession(ctx, cleanText(agentID), func(session *vpnSession) bool {
+			if session.State != "active" {
+				return false
+			}
+			if includeToken && session.ExpiresAt.Before(time.Now().UTC().Add(30*time.Second)) {
+				session.ExpiresAt = time.Now().UTC().Add(defaultVPNTokenTTL)
+				return true
+			}
+			return false
+		})
+		if err != nil || session == nil || session.State != "active" {
+			return nil
+		}
+		if includeToken {
+			session.Token = s.issueToken(session.AgentID, session.TunnelID, session.ExpiresAt)
+		}
+		return session.payload(includeToken)
+	}
 	s.mu.Lock()
 	session := s.sessionsByAgent[cleanText(agentID)]
 	if session == nil {
@@ -581,6 +616,35 @@ func (s *vpnTunnelService) sessionPayload(agentID string, includeToken bool) map
 }
 
 func (s *vpnTunnelService) requestAgentStart(ctx context.Context, agentID string, forceRestart bool, reason string, requiredPorts []int) map[string]any {
+	if s.persistent && vpnDB(s.auth) != nil {
+		session, err := s.mutatePersistentSession(ctx, cleanText(agentID), func(session *vpnSession) bool {
+			if session.State != "active" {
+				return false
+			}
+			before := append([]int(nil), session.AllowedPorts...)
+			session.AllowedPorts = mergePorts(s.allowPorts, session.AllowedPorts, requiredPorts)
+			changed := len(before) != len(session.AllowedPorts)
+			if session.ExpiresAt.Before(time.Now().UTC().Add(30 * time.Second)) {
+				session.ExpiresAt = time.Now().UTC().Add(defaultVPNTokenTTL)
+				changed = true
+			}
+			return changed
+		})
+		if err != nil || session == nil || session.State != "active" {
+			return nil
+		}
+		session.Token = s.issueToken(session.AgentID, session.TunnelID, session.ExpiresAt)
+		payload := session.payload(true)
+		if forceRestart {
+			payload["force_restart"] = true
+		}
+		if cleanText(reason) != "" {
+			payload["restart_reason"] = cleanText(reason)
+		}
+		_ = s.upsertListenerPeer(session)
+		s.emitStart(ctx, payload, true)
+		return payload
+	}
 	s.mu.Lock()
 	session := s.sessionsByAgent[cleanText(agentID)]
 	if session == nil {
@@ -631,11 +695,31 @@ func remoteShellRestartEventBody(device remoteOpsSessionDevice, agentID string, 
 	}
 }
 
-func (s *vpnTunnelService) recordAgentReady(agentID string, tunnelID string, allowedPorts []int, reason string, serviceState string, virtualIP string) map[string]any {
+func (s *vpnTunnelService) recordAgentReady(ctx context.Context, agentID string, tunnelID string, allowedPorts []int, reason string, serviceState string, virtualIP string) map[string]any {
 	agentID = cleanText(agentID)
 	tunnelID = cleanText(tunnelID)
 	if agentID == "" || tunnelID == "" {
 		return nil
+	}
+	if s.persistent && vpnDB(s.auth) != nil {
+		session, err := s.mutatePersistentSession(ctx, agentID, func(session *vpnSession) bool {
+			if session.State != "active" || session.TunnelID != tunnelID {
+				return false
+			}
+			now := time.Now().UTC()
+			session.LastAgentReadyAt = now
+			session.LastAgentReadyTunnelID = tunnelID
+			session.LastAgentReadyAllowedPorts = uniquePorts(firstPorts(allowedPorts, session.AllowedPorts))
+			session.LastAgentReadyReason = cleanText(reason)
+			session.LastAgentReadyServiceState = cleanText(serviceState)
+			session.LastActivity = now
+			return true
+		})
+		if err != nil || session == nil || session.State != "active" || session.TunnelID != tunnelID {
+			return nil
+		}
+		_ = virtualIP
+		return s.dispatchReadyPayloadLocked(session, session.LastAgentReadyAllowedPorts)
 	}
 	s.mu.Lock()
 	session := s.sessionsByAgent[agentID]
@@ -657,7 +741,7 @@ func (s *vpnTunnelService) recordAgentReady(agentID string, tunnelID string, all
 	return payload
 }
 
-func (s *vpnTunnelService) waitForSessionsReady(agentIDs []string, requiredPorts []int, timeoutSeconds float64, pollIntervalSeconds float64) map[string]map[string]any {
+func (s *vpnTunnelService) waitForSessionsReady(ctx context.Context, agentIDs []string, requiredPorts []int, timeoutSeconds float64, pollIntervalSeconds float64) map[string]map[string]any {
 	requested := []string{}
 	seen := map[string]struct{}{}
 	for _, agentID := range agentIDs {
@@ -680,11 +764,15 @@ func (s *vpnTunnelService) waitForSessionsReady(agentIDs []string, requiredPorts
 	deadline := time.Now().Add(time.Duration(timeoutSeconds * float64(time.Second)))
 	out := map[string]map[string]any{}
 	for {
-		s.mu.Lock()
+		shared := s.sharedSessions(ctx)
+		byAgent := map[string]*vpnSession{}
+		for _, session := range shared {
+			byAgent[session.AgentID] = session
+		}
 		out = map[string]map[string]any{}
 		allReady := len(requested) > 0
 		for _, agentID := range requested {
-			session := s.sessionsByAgent[agentID]
+			session := byAgent[agentID]
 			if session == nil {
 				allReady = false
 				continue
@@ -696,7 +784,6 @@ func (s *vpnTunnelService) waitForSessionsReady(agentIDs []string, requiredPorts
 			}
 		}
 		if allReady || time.Now().After(deadline) {
-			s.mu.Unlock()
 			return out
 		}
 		wait := time.Duration(pollIntervalSeconds * float64(time.Second))
@@ -704,12 +791,28 @@ func (s *vpnTunnelService) waitForSessionsReady(agentIDs []string, requiredPorts
 			wait = remaining
 		}
 		timer := time.NewTimer(wait)
-		s.mu.Unlock()
-		<-timer.C
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return out
+		case <-timer.C:
+		}
 	}
 }
 
-func (s *vpnTunnelService) markTransportRequired(agentID string) bool {
+func (s *vpnTunnelService) markTransportRequired(ctx context.Context, agentID string) bool {
+	if s.persistent && vpnDB(s.auth) != nil {
+		session, err := s.mutatePersistentSession(ctx, cleanText(agentID), func(session *vpnSession) bool {
+			if session.State != "active" {
+				return false
+			}
+			now := time.Now().UTC()
+			session.LastActivity = now
+			session.LastTransportProbeAt = now
+			return true
+		})
+		return err == nil && session != nil && session.State == "active"
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session := s.sessionsByAgent[cleanText(agentID)]
@@ -722,7 +825,19 @@ func (s *vpnTunnelService) markTransportRequired(agentID string) bool {
 	return true
 }
 
-func (s *vpnTunnelService) confirmTransportSuccess(agentID string) bool {
+func (s *vpnTunnelService) confirmTransportSuccess(ctx context.Context, agentID string) bool {
+	if s.persistent && vpnDB(s.auth) != nil {
+		session, err := s.mutatePersistentSession(ctx, cleanText(agentID), func(session *vpnSession) bool {
+			if session.State != "active" {
+				return false
+			}
+			now := time.Now().UTC()
+			session.LastActivity = now
+			session.LastTransportConfirmedAt = now
+			return true
+		})
+		return err == nil && session != nil && session.State == "active"
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session := s.sessionsByAgent[cleanText(agentID)]
@@ -735,7 +850,19 @@ func (s *vpnTunnelService) confirmTransportSuccess(agentID string) bool {
 	return true
 }
 
-func (s *vpnTunnelService) bumpActivity(agentID string) {
+func (s *vpnTunnelService) bumpActivity(ctx context.Context, agentID string) {
+	if s.persistent && vpnDB(s.auth) != nil {
+		_, _ = s.mutatePersistentSession(ctx, cleanText(agentID), func(session *vpnSession) bool {
+			if session.State != "active" {
+				return false
+			}
+			now := time.Now().UTC()
+			session.LastActivity = now
+			session.LastTransportProbeAt = now
+			return true
+		})
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session := s.sessionsByAgent[cleanText(agentID)]
@@ -748,6 +875,29 @@ func (s *vpnTunnelService) bumpActivity(agentID string) {
 }
 
 func (s *vpnTunnelService) disconnect(ctx context.Context, agentID string, reason string, force bool) bool {
+	if s.persistent && vpnDB(s.auth) != nil {
+		session, err := s.mutatePersistentSession(ctx, cleanText(agentID), func(session *vpnSession) bool {
+			if session.State != "active" {
+				return false
+			}
+			if !force {
+				session.LastActivity = time.Now().UTC()
+				return true
+			}
+			session.State = "disconnected"
+			session.LastActivity = time.Now().UTC()
+			return true
+		})
+		if err != nil || session == nil || session.State == "disconnected" && !force {
+			return err == nil && session != nil
+		}
+		if !force {
+			return true
+		}
+		_ = s.wg.removePeer(session.AgentID, session.ClientPublicKey)
+		s.emitStop(ctx, session, reason)
+		return true
+	}
 	s.mu.Lock()
 	session := s.sessionsByAgent[cleanText(agentID)]
 	if session == nil {
@@ -773,6 +923,14 @@ func (s *vpnTunnelService) sessionRuntimePayload(session *vpnSession, refresh bo
 	listenerHealthy := boolFromAny(health["healthy"])
 	peerPresent := boolFromAny(peerHealth["peer_present"])
 	transportReady := listenerHealthy && boolFromAny(peerHealth["healthy"])
+	sharedOwnerConfirmed := s.sharedOwnerTransportConfirmed(session, time.Now().UTC())
+	if !transportReady && sharedOwnerConfirmed {
+		transportReady = true
+		listenerHealthy = true
+		peerPresent = true
+		peerHealth["healthy"] = true
+		peerHealth["reason"] = "edge_owner_confirmed"
+	}
 	status := "up"
 	if !transportReady {
 		status = "recovering"
@@ -1131,6 +1289,8 @@ func (s *vpnTunnelService) loadLeases(ctx context.Context) {
 	_, _ = conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS engine.device_vpn_ip_leases (agent_id TEXT PRIMARY KEY, virtual_ip TEXT NOT NULL, updated_at TEXT NOT NULL)`)
 	_, _ = conn.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS uq_device_vpn_ip_leases_virtual_ip ON engine.device_vpn_ip_leases(virtual_ip)`)
 	_, _ = conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS engine.device_vpn_key_leases (agent_id TEXT PRIMARY KEY, client_private_key TEXT NOT NULL, client_public_key TEXT NOT NULL, updated_at TEXT NOT NULL)`)
+	_, _ = conn.ExecContext(ctx, ensureVPNSessionStoreSQL)
+	_, _ = conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_device_vpn_sessions_state_expires ON engine.device_vpn_sessions(state, expires_at)`)
 	rows, err := conn.QueryContext(ctx, `SELECT agent_id, virtual_ip FROM engine.device_vpn_ip_leases`)
 	if err == nil {
 		defer rows.Close()
@@ -1246,6 +1406,14 @@ func inferWireGuardEndpointHost(r *http.Request) string {
 		}
 	}
 	return strings.Trim(host, "[]")
+}
+
+func normalizeVPNEndpointHost(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), "[]")
+	if value == "" || strings.Contains(value, "/") || validateHostInput("wireguard_endpoint_host", value) != nil {
+		return ""
+	}
+	return value
 }
 
 func urlParseHost(raw string) (string, error) {
@@ -1617,6 +1785,13 @@ func (w *wireGuardRuntime) checkPeerHealth(publicKey string) map[string]any {
 		return map[string]any{"healthy": false, "reason": "no_handshake", "peer_present": true, "last_handshake_at": nil, "last_handshake_at_iso": "", "handshake_age_seconds": nil}
 	}
 	age := int(time.Now().Unix()) - last
+	maxAge := parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_HANDSHAKE_MAX_AGE_SECONDS"), int(defaultVPNHandshakeMaxAge/time.Second))
+	if maxAge < 30 {
+		maxAge = 30
+	}
+	if age < 0 || age > maxAge {
+		return map[string]any{"healthy": false, "reason": "handshake_stale", "peer_present": true, "last_handshake_at": last, "last_handshake_at_iso": time.Unix(int64(last), 0).UTC().Format(time.RFC3339), "handshake_age_seconds": age}
+	}
 	return map[string]any{"healthy": true, "reason": "peer_ready", "peer_present": true, "last_handshake_at": last, "last_handshake_at_iso": time.Unix(int64(last), 0).UTC().Format(time.RFC3339), "handshake_age_seconds": age}
 }
 

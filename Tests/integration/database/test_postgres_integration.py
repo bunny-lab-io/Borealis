@@ -41,6 +41,7 @@ def assert_schema_contract() -> None:
         "scheduled_jobs",
         "job_scheduler_work_items",
         "workflow_runs",
+        "device_vpn_sessions",
     }
     actual_tables = {
         item[0]
@@ -68,6 +69,18 @@ def assert_schema_contract() -> None:
     indexes = {item[0] for item in rows("SELECT indexname FROM pg_indexes WHERE schemaname = ?", ("engine",))}
     assert "uq_devices_hostname" in indexes
     assert "idx_job_scheduler_work_claim" in indexes
+    assert "idx_device_vpn_sessions_state_expires" in indexes
+
+    vpn_session_columns = {item[1] for item in rows("PRAGMA table_info(device_vpn_sessions)")}
+    assert {
+        "agent_id",
+        "tunnel_id",
+        "virtual_ip",
+        "allowed_ports_json",
+        "state",
+        "generation",
+        "last_agent_ready_at",
+    }.issubset(vpn_session_columns)
 
 
 def assert_translation_and_transactions() -> None:
