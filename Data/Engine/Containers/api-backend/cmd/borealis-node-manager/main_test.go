@@ -73,6 +73,18 @@ func TestNodeHealthParsersRequireReadyPostgresAndValidService(t *testing.T) {
 	}
 }
 
+func TestClusterEdgeVIPRequiresPrivateIPv4(t *testing.T) {
+	got, err := clusterEdgeVIP([]byte(`{"spec":{"edgeVIP":"192.168.3.248"}}`))
+	if err != nil || got != "192.168.3.248" {
+		t.Fatalf("private edge VIP rejected got=%q err=%v", got, err)
+	}
+	for _, payload := range []string{`{"spec":{"edgeVIP":"8.8.8.8"}}`, `{"spec":{"edgeVIP":"2001:db8::1"}}`, `{}`} {
+		if _, err := clusterEdgeVIP([]byte(payload)); err == nil {
+			t.Fatalf("unsafe edge VIP accepted: %s", payload)
+		}
+	}
+}
+
 func TestCandidateHealthParsersRequireReadyAndServiceIsolation(t *testing.T) {
 	workloads, allReady, err := readyCandidateWorkloads([]byte(`{"items":[{"metadata":{"labels":{"app.kubernetes.io/name":"api-backend-candidate","borealis.io/update-candidate":"true"}},"spec":{"replicas":1},"status":{"availableReplicas":1,"readyReplicas":1,"updatedReplicas":1}},{"metadata":{"labels":{"app.kubernetes.io/name":"job-scheduler-candidate","borealis.io/update-candidate":"true"}},"spec":{"replicas":1},"status":{"availableReplicas":1,"readyReplicas":1,"updatedReplicas":1}}]}`))
 	if err != nil || !allReady || !workloads["api-backend-candidate"] || !workloads["job-scheduler-candidate"] {
@@ -164,6 +176,20 @@ func TestK3sConformanceVerbRequiresStableVersion(t *testing.T) {
 		if got := requiredK3sVersion(map[string]any{"k3s_version": value}); got != "" {
 			t.Fatalf("unsafe K3s version accepted: %q", got)
 		}
+	}
+}
+
+func TestEtcdLeadershipMetricsRequireExactBooleanGauge(t *testing.T) {
+	leader, observed := parseEtcdLeadership([]byte("# HELP etcd_server_is_leader Whether local member is leader.\netcd_server_is_leader 1\n"))
+	if !observed || !leader {
+		t.Fatal("etcd leader gauge was not recognized")
+	}
+	leader, observed = parseEtcdLeadership([]byte("etcd_server_is_leader 0\n"))
+	if !observed || leader {
+		t.Fatal("etcd follower gauge was not recognized")
+	}
+	if _, observed := parseEtcdLeadership([]byte("etcd_server_is_leader NaN\n")); observed {
+		t.Fatal("invalid etcd leadership gauge accepted")
 	}
 }
 

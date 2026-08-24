@@ -174,6 +174,7 @@ func main() {
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
 	if apiBackgroundLoopsEnabled() {
+		vpnRuntime.startClusterPeerReconciler(rootCtx)
 		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
 		startServerLogRetentionRuntime(rootCtx)
 	} else {

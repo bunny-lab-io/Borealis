@@ -42,6 +42,17 @@ func TestClusterControllerStartupAndLivenessStayLocal(t *testing.T) {
 	}
 }
 
+func TestClusterControllerCandidateCannotAcquireOperationLease(t *testing.T) {
+	t.Setenv("BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false")
+	if clusterControllerEligible() {
+		t.Fatal("isolated cluster-controller candidate remained eligible")
+	}
+	t.Setenv("BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "true")
+	if !clusterControllerEligible() {
+		t.Fatal("promoted cluster controller did not regain eligibility")
+	}
+}
+
 func TestWaitJobToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -568,5 +579,66 @@ func TestHMRNodeHealthRequiresReadyNodeScopedEndpoint(t *testing.T) {
 	}
 	if err := runner.verifyReadyEndpointsForNode(context.Background(), "engine-2"); err == nil {
 		t.Fatal("expected node-scoped endpoint rejection for lost HMR node")
+	}
+}
+
+func TestEdgeRoleTransferWaitsForLeaseAndWireGuardReadiness(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip":
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-2"}})
+		case "/apis/apps/v1/namespaces/borealis/deployments":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "wireguard-tunnel-engine-2"}}}})
+		case "/apis/apps/v1/namespaces/borealis/deployments/wireguard-tunnel-engine-2":
+			if r.Method == http.MethodPatch {
+				_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "wireguard-tunnel-engine-2"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"metadata": map[string]any{"generation": int64(2)},
+				"spec":     map[string]any{"replicas": int64(1)},
+				"status": map[string]any{
+					"observedGeneration": int64(2), "availableReplicas": int64(1),
+					"readyReplicas": int64(1), "updatedReplicas": int64(1),
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runner.waitEdgeAndWireGuardOwner(ctx, "engine-2"); err != nil {
+		t.Fatalf("edge/WireGuard ownership did not converge: %v", err)
+	}
+}
+
+func TestEtcdLeaderOwnerRequiresExactlyOneReportedNode(t *testing.T) {
+	ready := []any{map[string]any{"type": "Ready", "status": "True"}}
+	notReady := []any{map[string]any{"type": "Ready", "status": "False"}}
+	items := []any{map[string]any{"metadata": map[string]any{"name": "engine-2"}, "status": map[string]any{"conditions": ready}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/nodes" || r.URL.Query().Get("labelSelector") != "borealis.io/etcd-leader=true" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}}
+	owner, err := runner.etcdLeaderOwner(context.Background())
+	if err != nil || owner != "engine-2" {
+		t.Fatalf("etcd leader owner=%q err=%v", owner, err)
+	}
+	items = append(items, map[string]any{"metadata": map[string]any{"name": "engine-3"}, "status": map[string]any{"conditions": notReady}})
+	owner, err = runner.etcdLeaderOwner(context.Background())
+	if err != nil || owner != "engine-2" {
+		t.Fatalf("stale NotReady etcd leader label was not ignored owner=%q err=%v", owner, err)
+	}
+	items[1] = map[string]any{"metadata": map[string]any{"name": "engine-3"}, "status": map[string]any{"conditions": ready}}
+	if _, err := runner.etcdLeaderOwner(context.Background()); err == nil {
+		t.Fatal("multiple ready etcd leader reports accepted")
 	}
 }

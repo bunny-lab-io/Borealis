@@ -83,11 +83,12 @@ type clusterControllerStepRunner interface {
 }
 
 type clusterController struct {
-	store     *postgresOperatorStore
-	runner    clusterControllerStepRunner
-	holder    string
-	now       func() time.Time
-	lastPrune atomic.Int64
+	store                      *postgresOperatorStore
+	runner                     clusterControllerStepRunner
+	holder                     string
+	now                        func() time.Time
+	lastPrune                  atomic.Int64
+	lastRuntimeRoleObservation string
 }
 
 type kubernetesClusterStepRunner struct {
@@ -143,6 +144,15 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		defer cancel()
 		_ = healthServer.Shutdown(shutdownCtx)
 	}()
+	if !clusterControllerEligible() {
+		log.Printf("borealis-cluster-controller running as isolated update candidate")
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-healthExited:
+			return err
+		}
+	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	log.Printf("borealis-cluster-controller started holder=%s", holder)
@@ -158,6 +168,10 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func clusterControllerEligible() bool {
+	return parseBoolEnvDefault("BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", true)
 }
 
 func (c *clusterController) healthServer() *http.Server {
@@ -195,6 +209,7 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		}
 	}
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
+		c.observeRuntimeRoles(ctx, runner)
 		if recovered, recoveryErr := c.reconcileLostHMRNode(ctx, runner); recoveryErr != nil || recovered {
 			return recoveryErr
 		}
@@ -229,6 +244,68 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		return c.completeOperation(ctx, operation, nodes)
 	}
 	return c.advanceOperation(ctx, operation, steps[stepIndex+1].Name)
+}
+
+func (c *clusterController) observeRuntimeRoles(ctx context.Context, runner *kubernetesClusterStepRunner) {
+	err := c.reconcileRuntimeRoles(ctx, runner)
+	if err == nil {
+		if c.lastRuntimeRoleObservation != "" {
+			log.Printf("cluster runtime role observation recovered")
+			c.lastRuntimeRoleObservation = ""
+		}
+		return
+	}
+	message := err.Error()
+	if message != c.lastRuntimeRoleObservation {
+		log.Printf("cluster runtime role observation pending: %v", err)
+		c.lastRuntimeRoleObservation = message
+	}
+}
+
+func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *kubernetesClusterStepRunner) error {
+	conn, err := c.store.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	var enabled int
+	if err := conn.QueryRowContext(ctx, `SELECT enabled FROM engine.cluster_state WHERE id=1`).Scan(&enabled); err != nil {
+		conn.Close()
+		return err
+	}
+	conn.Close()
+	if enabled != 1 {
+		return nil
+	}
+	owners, err := runner.runtimeRoleOwners(ctx, c.store.db, c.now().UTC().Unix())
+	if err != nil {
+		return err
+	}
+	nodes, err := c.activeNodes(ctx)
+	if err != nil {
+		return err
+	}
+	conn, err = c.store.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	for _, node := range nodes {
+		if node.Roles == nil {
+			node.Roles = map[string]any{}
+		}
+		before := marshalClusterJSON(node.Roles)
+		for role, owner := range owners {
+			node.Roles[role] = owner != "" && owner == node.Name
+		}
+		after := marshalClusterJSON(node.Roles)
+		if before == after {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE engine.cluster_nodes SET roles_json=$1,updated_at=$2 WHERE id=$3`, after, c.now().UTC().Unix(), node.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *kubernetesClusterStepRunner) (bool, error) {
@@ -961,7 +1038,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 				return err
 			}
 		}
-		return nil
+		return r.waitEdgeAndWireGuardOwner(ctx, node.Name)
 	}
 	if step.Name == "hmr_move_roles_to_standby" {
 		targetID := firstText(operation.TargetNodeID, cleanText(operation.Payload["hmr_node_id"]))
@@ -976,7 +1053,10 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if err := r.setNodeRoleEligibility(ctx, standby.Name, true); err != nil {
 			return err
 		}
-		return r.setNodeRoleEligibility(ctx, target.Name, false)
+		if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
+			return err
+		}
+		return r.waitEdgeAndWireGuardOwner(ctx, standby.Name)
 	}
 	if step.Name == "hmr_fence_target_roles" {
 		target := clusterNodeByID(nodes, step.NodeID)
@@ -1152,7 +1232,13 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		case "minimum_ready_soak":
 			return r.minimumReadySoak(ctx, node.Name)
 		case "restore_roles":
-			return r.setNodeRoleEligibility(ctx, node.Name, true)
+			if err := r.setNodeRoleEligibility(ctx, node.Name, true); err != nil {
+				return err
+			}
+			if len(nodes) == 1 {
+				return r.waitEdgeAndWireGuardOwner(ctx, node.Name)
+			}
+			return nil
 		case "inspect_role_health":
 			return r.nodeActionJob(ctx, operation, step, node, "InspectHealth")
 		case "minimum_role_soak":
@@ -1435,7 +1521,10 @@ func (r *kubernetesClusterStepRunner) transferRolesAway(ctx context.Context, tar
 	if err := r.setNodeRoleEligibility(ctx, replacement.Name, true); err != nil {
 		return err
 	}
-	return r.setNodeRoleEligibility(ctx, target.Name, false)
+	if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
+		return err
+	}
+	return r.waitEdgeAndWireGuardOwner(ctx, replacement.Name)
 }
 
 func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Context, operation clusterControllerOperation, target clusterControllerNode, nodes []clusterControllerNode) error {
@@ -1459,7 +1548,10 @@ func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Conte
 	if err := r.setNodeRoleEligibility(ctx, replacement.Name, true); err != nil {
 		return err
 	}
-	return r.setNodeRoleEligibility(ctx, target.Name, false)
+	if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
+		return err
+	}
+	return r.waitEdgeAndWireGuardOwner(ctx, replacement.Name)
 }
 
 func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context, nodeName string, eligible bool) error {
@@ -1472,7 +1564,9 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 	if err := r.patchNodeLabels(ctx, nodeName, labels); err != nil {
 		return err
 	}
-	if err := r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", eligible); err != nil {
+	// Controller remains available on every active node. Its owner-aware
+	// readiness and interface gate follow actual edge VIP lease ownership.
+	if err := r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", true); err != nil {
 		if !eligible {
 			return err
 		}
@@ -1482,10 +1576,179 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 			"borealis.io/postgres-primary-eligible": "false",
 		}
 		labelErr := r.patchNodeLabels(ctx, nodeName, rollbackLabels)
-		scaleErr := r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", false)
-		return errors.Join(err, labelErr, scaleErr)
+		return errors.Join(err, labelErr)
 	}
 	return nil
+}
+
+func (r *kubernetesClusterStepRunner) waitEdgeAndWireGuardOwner(ctx context.Context, nodeName string) error {
+	if !clusterControllerNodeRegex.MatchString(nodeName) {
+		return errors.New("invalid edge owner node")
+	}
+	path := "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip"
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		var lease map[string]any
+		if err := r.kube.getJSON(ctx, path, &lease); err == nil && cleanText(nestedMap(lease, "spec")["holderIdentity"]) == nodeName {
+			return r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", true)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("edge VIP and WireGuard ownership did not move to %s: %w", nodeName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) runtimeRoleOwners(ctx context.Context, db *sql.DB, now int64) (map[string]string, error) {
+	etcdOwner, err := r.etcdLeaderOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	controlOwner, err := r.kubernetesLeaseOwner(ctx, "borealis-control-vip")
+	if err != nil {
+		return nil, err
+	}
+	edgeOwner, err := r.kubernetesLeaseOwner(ctx, "borealis-edge-vip")
+	if err != nil {
+		return nil, err
+	}
+	clusterPath := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
+	var cluster map[string]any
+	if err := r.kube.getJSON(ctx, clusterPath, &cluster); err != nil {
+		return nil, err
+	}
+	primaryPod := cleanText(nestedMap(cluster, "status")["currentPrimary"])
+	postgresOwner, err := r.kubernetesPodNode(ctx, r.namespace, primaryPod)
+	if err != nil {
+		return nil, err
+	}
+	schedulerOwner := ""
+	if db != nil {
+		conn, connErr := db.Conn(ctx)
+		if connErr != nil {
+			return nil, connErr
+		}
+		var holder string
+		queryErr := conn.QueryRowContext(ctx, `SELECT holder FROM engine.cluster_application_leases WHERE name='scheduler-leader' AND expires_at >= $1`, now).Scan(&holder)
+		conn.Close()
+		if queryErr != nil && !errors.Is(queryErr, sql.ErrNoRows) {
+			return nil, queryErr
+		}
+		if queryErr == nil {
+			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, holder)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	wireGuardOwner := ""
+	if ready, readyErr := r.nodeWorkloadReady(ctx, edgeOwner, "wireguard-tunnel"); readyErr != nil {
+		return nil, readyErr
+	} else if ready {
+		wireGuardOwner = edgeOwner
+	}
+	return map[string]string{
+		"etcd_leader":       etcdOwner,
+		"control_vip_owner": controlOwner,
+		"edge_vip_owner":    edgeOwner,
+		"postgres_primary":  postgresOwner,
+		"scheduler_leader":  schedulerOwner,
+		"wireguard_owner":   wireGuardOwner,
+	}, nil
+}
+
+func (r *kubernetesClusterStepRunner) etcdLeaderOwner(ctx context.Context) (string, error) {
+	var payload map[string]any
+	path := "/api/v1/nodes?labelSelector=borealis.io%2Fetcd-leader%3Dtrue"
+	if err := r.kube.getJSON(ctx, path, &payload); err != nil {
+		return "", err
+	}
+	readyLeaders := make([]map[string]any, 0, 1)
+	for _, raw := range anySlice(payload["items"]) {
+		node, _ := raw.(map[string]any)
+		if kubernetesNodeReady(node) {
+			readyLeaders = append(readyLeaders, node)
+		}
+	}
+	if len(readyLeaders) != 1 {
+		return "", fmt.Errorf("expected one ready observed etcd leader, found %d", len(readyLeaders))
+	}
+	node := readyLeaders[0]
+	name := cleanText(nestedMap(node, "metadata")["name"])
+	if !clusterControllerNodeRegex.MatchString(name) {
+		return "", errors.New("observed etcd leader has invalid node name")
+	}
+	return name, nil
+}
+
+func kubernetesNodeReady(node map[string]any) bool {
+	for _, raw := range anySlice(nestedMap(node, "status")["conditions"]) {
+		condition, _ := raw.(map[string]any)
+		if cleanText(condition["type"]) == "Ready" {
+			return cleanText(condition["status"]) == "True"
+		}
+	}
+	return false
+}
+
+func (r *kubernetesClusterStepRunner) kubernetesLeaseOwner(ctx context.Context, name string) (string, error) {
+	if name != "borealis-control-vip" && name != "borealis-edge-vip" {
+		return "", errors.New("unsupported cluster lease")
+	}
+	var lease map[string]any
+	path := "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/" + name
+	if err := r.kube.getJSON(ctx, path, &lease); err != nil {
+		return "", err
+	}
+	owner := cleanText(nestedMap(lease, "spec")["holderIdentity"])
+	if !clusterControllerNodeRegex.MatchString(owner) {
+		return "", fmt.Errorf("%s has no valid holder", name)
+	}
+	return owner, nil
+}
+
+func (r *kubernetesClusterStepRunner) kubernetesPodNode(ctx context.Context, namespace, podName string) (string, error) {
+	if !clusterControllerNodeRegex.MatchString(podName) || !clusterControllerNodeRegex.MatchString(namespace) {
+		return "", errors.New("runtime role pod identity is invalid")
+	}
+	var pod map[string]any
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s", namespace, podName)
+	if err := r.kube.getJSON(ctx, path, &pod); err != nil {
+		return "", err
+	}
+	nodeName := cleanText(nestedMap(pod, "spec")["nodeName"])
+	if !clusterControllerNodeRegex.MatchString(nodeName) {
+		return "", errors.New("runtime role pod has no valid node")
+	}
+	return nodeName, nil
+}
+
+func (r *kubernetesClusterStepRunner) nodeWorkloadReady(ctx context.Context, nodeName, appName string) (bool, error) {
+	if !clusterControllerNodeRegex.MatchString(nodeName) || !clusterControllerNodeRegex.MatchString(appName) {
+		return false, errors.New("node workload identity is invalid")
+	}
+	selector := "borealis.io/engine-node=" + nodeName + ",borealis.io/node-workload=true,app.kubernetes.io/name=" + appName
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments?labelSelector=%s", r.namespace, url.QueryEscape(selector))
+	var deployments map[string]any
+	if err := r.kube.getJSON(ctx, path, &deployments); err != nil {
+		return false, err
+	}
+	items := anySlice(deployments["items"])
+	if len(items) != 1 {
+		return false, nil
+	}
+	deployment, _ := items[0].(map[string]any)
+	metadata := nestedMap(deployment, "metadata")
+	spec := nestedMap(deployment, "spec")
+	status := nestedMap(deployment, "status")
+	replicas := coerceInt64(spec["replicas"])
+	return replicas == 1 &&
+		coerceInt64(status["observedGeneration"]) >= coerceInt64(metadata["generation"]) &&
+		coerceInt64(status["availableReplicas"]) >= replicas &&
+		coerceInt64(status["readyReplicas"]) >= replicas &&
+		coerceInt64(status["updatedReplicas"]) >= replicas, nil
 }
 
 func (r *kubernetesClusterStepRunner) scaleNodeWorkload(ctx context.Context, nodeName, appName string, active bool) error {

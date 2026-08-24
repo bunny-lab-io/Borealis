@@ -137,6 +137,35 @@ func TestHandleRequestSupportsPingAndRejectsUnsupportedCommands(t *testing.T) {
 	}
 }
 
+func TestStandbyAcceptsValidatedDesiredStateWithoutActivatingInterface(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EdgeVIP = "10.10.10.10"
+	cfg.OwnsEdgeVIP = func(string) bool { return false }
+	result := runCommand(context.Background(), []string{"wg", "set", "borealis-wg", "peer", testWireGuardKey, "allowed-ips", "10.255.0.2/32"}, 5, cfg)
+	if result.ReturnCode != 0 || !strings.Contains(result.Stdout, "standby") {
+		t.Fatalf("standby desired state rejected: %#v", result)
+	}
+	if !suppressStandbyMutation([]string{"wg-quick", "up", filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf")}, cfg) {
+		t.Fatal("standby interface activation was not suppressed")
+	}
+	if suppressStandbyMutation([]string{"wg", "show", "borealis-wg"}, cfg) || suppressStandbyMutation([]string{"wg-quick", "down", filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf")}, cfg) {
+		t.Fatal("standby read or withdrawal command was suppressed")
+	}
+}
+
+func TestEdgeOwnershipUsesInjectedHostAddressCheck(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EdgeVIP = "10.10.10.10"
+	cfg.OwnsEdgeVIP = func(value string) bool { return value == cfg.EdgeVIP }
+	if !edgeVIPOwned(cfg) {
+		t.Fatal("local edge VIP was not recognized")
+	}
+	cfg.OwnsEdgeVIP = func(string) bool { return false }
+	if edgeVIPOwned(cfg) {
+		t.Fatal("standby node reported edge ownership")
+	}
+}
+
 func TestServeCreatesPrivateSocketAndAnswersPing(t *testing.T) {
 	cfg := testConfig(t)
 	ctx, cancel := context.WithCancel(context.Background())

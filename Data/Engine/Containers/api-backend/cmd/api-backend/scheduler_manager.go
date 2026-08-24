@@ -149,6 +149,11 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 	if err := m.ensureTables(ctx); err != nil {
 		return err
 	}
+	if !schedulerLeadershipEligible() {
+		log.Printf("Go job-scheduler manager running as isolated update candidate")
+		<-ctx.Done()
+		return nil
+	}
 	log.Printf("Go job-scheduler manager starting")
 	holder := firstText(strings.TrimSpace(os.Getenv("HOSTNAME")), newClusterUUID())
 	wasLeader := false
@@ -236,6 +241,10 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 			log.Printf("failed to process agent maintenance work: %v", err)
 		}
 	}
+}
+
+func schedulerLeadershipEligible() bool {
+	return parseBoolEnvDefault("BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", true)
 }
 
 func (m *goSchedulerManager) acquireSchedulerLeadership(ctx context.Context, holder string, now int64) (bool, error) {

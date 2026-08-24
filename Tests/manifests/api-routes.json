@@ -938,7 +938,7 @@
   {
     "pattern": "GET /api/tunnel/active",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
-    "line": 217,
+    "line": 305,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
@@ -947,7 +947,7 @@
   {
     "pattern": "GET /api/tunnel/connect/status",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
-    "line": 216,
+    "line": 304,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
@@ -956,7 +956,7 @@
   {
     "pattern": "GET /api/tunnel/status",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
-    "line": 215,
+    "line": 303,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",
@@ -983,7 +983,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 168,
+    "line": 182,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -992,7 +992,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 171,
+    "line": 185,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1001,7 +1001,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 165,
+    "line": 179,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1748,7 +1748,7 @@
   {
     "pattern": "POST /api/tunnel/connect",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go",
-    "line": 214,
+    "line": 302,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel_test.go",

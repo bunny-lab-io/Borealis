@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import ipaddress
 import json
 import pathlib
 import re
@@ -30,6 +31,7 @@ NODE_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CANDIDATE_LABEL = "borealis.io/update-candidate"
 TRAFFIC_LABEL = "borealis.io/traffic-state"
+WIREGUARD_KEYS_SECRET = "borealis-wireguard-server-keys"
 
 
 def kubectl(*args: str, stdin: str | None = None) -> str:
@@ -70,10 +72,43 @@ def load_json(resource: str) -> dict[str, Any] | None:
     return json.loads(result.stdout)
 
 
-def node_label_true(node: str, label: str) -> bool:
-    payload = load_json(f"node/{node}") or {}
-    labels = ((payload.get("metadata") or {}).get("labels") or {})
-    return str(labels.get(label) or "").lower() == "true"
+def cluster_edge_vip() -> str:
+    payload = load_json("borealiscluster.engine.borealis.io/borealis") or {}
+    value = str(((payload.get("spec") or {}).get("edgeVIP") or "")).strip()
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise RuntimeError("Borealis cluster edge VIP is unavailable") from exc
+    if address.version != 4 or not address.is_private:
+        raise RuntimeError("Borealis cluster edge VIP must be private IPv4")
+    return value
+
+
+def set_container_environment(container: dict[str, Any], name: str, value: str) -> None:
+    environment = container.setdefault("env", [])
+    environment[:] = [item for item in environment if item.get("name") != name]
+    environment.append({"name": name, "value": value})
+
+
+def mount_shared_wireguard_keys(base: str, pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
+    volumes = pod_spec.setdefault("volumes", [])
+    mounts = container.setdefault("volumeMounts", [])
+    if base == "api-backend":
+        volume_name = "wireguard-secrets"
+    elif base == "wireguard-tunnel":
+        volume_name = "wireguard-server-keys"
+    else:
+        return
+    volumes[:] = [volume for volume in volumes if volume.get("name") != volume_name]
+    volumes.append({"name": volume_name, "secret": {"secretName": WIREGUARD_KEYS_SECRET, "defaultMode": 0o440}})
+    mounts[:] = [mount for mount in mounts if mount.get("name") != volume_name]
+    mounts.append(
+        {
+            "name": volume_name,
+            "mountPath": "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets",
+            "readOnly": True,
+        }
+    )
 
 
 def load_images(path: pathlib.Path) -> dict[str, str]:
@@ -133,7 +168,7 @@ def reconcile_one(
         "spec": copy.deepcopy(source.get("spec") or {}),
     }
     spec = manifest["spec"]
-    spec["replicas"] = 0 if base == "wireguard-tunnel" and not node_label_true(node, "borealis.io/edge-eligible") else 1
+    spec["replicas"] = 0 if base == "wireguard-tunnel" and candidate else 1
     spec["revisionHistoryLimit"] = 2
     selector = copy.deepcopy((spec.get("selector") or {}).get("matchLabels") or {})
     selector["borealis.io/engine-node"] = node
@@ -167,6 +202,16 @@ def reconcile_one(
     for container in containers:
         container["image"] = image
         container["imagePullPolicy"] = "IfNotPresent"
+    if base == "job-scheduler":
+        set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")
+    if base == "borealis-cluster-controller":
+        set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")
+    if base == "api-backend":
+        set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")
+    if base in {"api-backend", "wireguard-tunnel"}:
+        edge_vip = cluster_edge_vip()
+        set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", edge_vip)
+        mount_shared_wireguard_keys(base, pod_spec, containers[0])
     if base == "api-backend":
         volumes = pod_spec.setdefault("volumes", [])
         volumes[:] = [volume for volume in volumes if volume.get("name") not in {"agent-artifacts", "aegis-mtls"}]
@@ -236,7 +281,7 @@ def promote_one(base: str, node: str) -> str:
     spec = manifest["spec"]
     existing_selector = promotion_selector(base, node, candidate, active)
     spec["selector"] = {"matchLabels": existing_selector}
-    replicas = 0 if base == "wireguard-tunnel" and not node_label_true(node, "borealis.io/edge-eligible") else 1
+    replicas = 1
     spec["replicas"] = replicas
     template = spec.setdefault("template", {})
     template_labels = copy.deepcopy((template.setdefault("metadata", {})).get("labels") or {})
@@ -247,6 +292,22 @@ def promote_one(base: str, node: str) -> str:
     template_labels[CANDIDATE_LABEL] = "false"
     template_labels[TRAFFIC_LABEL] = "active"
     template["metadata"]["labels"] = template_labels
+    if base == "api-backend":
+        template["metadata"]["labels"]["borealis.io/aegis-peer"] = "true"
+        containers = ((template.get("spec") or {}).get("containers") or [])
+        if not containers:
+            raise RuntimeError(f"candidate deployment {candidate_name} has no API container")
+        set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "1")
+    if base == "job-scheduler":
+        containers = ((template.get("spec") or {}).get("containers") or [])
+        if not containers:
+            raise RuntimeError(f"candidate deployment {candidate_name} has no scheduler container")
+        set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "true")
+    if base == "borealis-cluster-controller":
+        containers = ((template.get("spec") or {}).get("containers") or [])
+        if not containers:
+            raise RuntimeError(f"candidate deployment {candidate_name} has no cluster controller container")
+        set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "true")
     if base in HOST_PORT_DEPLOYMENTS:
         # Candidate and active host-network Pods cannot bind same ports. Stop
         # candidate only after its health/soak checks, then start active copy.

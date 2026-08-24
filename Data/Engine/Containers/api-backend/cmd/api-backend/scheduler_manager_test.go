@@ -23,6 +23,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestSchedulerCandidateCannotAcquireLeadership(t *testing.T) {
+	t.Setenv("BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false")
+	if schedulerLeadershipEligible() {
+		t.Fatal("isolated scheduler candidate remained leadership eligible")
+	}
+	t.Setenv("BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "true")
+	if !schedulerLeadershipEligible() {
+		t.Fatal("promoted scheduler did not regain leadership eligibility")
+	}
+}
+
 func TestSchedulerManagerComputeNextRunMatchesPythonIntervals(t *testing.T) {
 	start := int64(1700000042)
 	last := int64(1700000105)

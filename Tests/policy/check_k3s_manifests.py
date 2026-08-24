@@ -97,6 +97,37 @@ def validate_cluster_controller_contract() -> None:
         actual_path = ((probe.get("httpGet") or {}).get("path"))
         if actual_path != expected_path:
             fail(f"cluster controller {probe_name} must use distinct {expected_path} contract")
+    roles = [
+        item
+        for item in objects
+        if item.get("kind") == "ClusterRole"
+        and (item.get("metadata") or {}).get("name") == "borealis-cluster-controller"
+    ]
+    if len(roles) != 1:
+        fail("cluster controller manifest must contain one dedicated ClusterRole")
+    rules = (roles[0].get("rules") or [])
+    lease_rule = next(
+        (
+            rule
+            for rule in rules
+            if "coordination.k8s.io" in (rule.get("apiGroups") or [])
+            and "leases" in (rule.get("resources") or [])
+        ),
+        {},
+    )
+    if set(lease_rule.get("resourceNames") or []) != {"borealis-control-vip", "borealis-edge-vip"} or set(lease_rule.get("verbs") or []) != {"get"}:
+        fail("cluster controller lease RBAC must stay read-only and limited to fixed Borealis VIP leases")
+    deployment_rule = next(
+        (
+            rule
+            for rule in rules
+            if "apps" in (rule.get("apiGroups") or [])
+            and "deployments" in (rule.get("resources") or [])
+        ),
+        {},
+    )
+    if not {"get", "list", "watch", "patch"}.issubset(set(deployment_rule.get("verbs") or [])):
+        fail("cluster controller lacks node-workload Deployment reconciliation RBAC")
 
 
 def validate_node_manager_service_contract() -> None:
@@ -125,6 +156,19 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must correct configuration-directory ownership and mode")
     if 'systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"' not in engine_source:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
+    try:
+        manager_source = (
+            ROOT / "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/main.go"
+        ).read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read node-manager source: {exc}")
+    for marker in (
+        "http://127.0.0.1:2381/metrics",
+        '"borealis.io/etcd-leader="+value',
+        "parseEtcdLeadership",
+    ):
+        if marker not in manager_source:
+            fail(f"node-manager lost local etcd leadership report marker {marker!r}")
     required_engine_cluster_markers = {
         "render_k3s_registries_config": "managed Spegel registry source configuration",
         "K3S_IMAGE_IMPORT_DIR": "K3s-supported image pre-import directory",
@@ -222,6 +266,13 @@ def validate_pinned_dependency_adoption_contract() -> None:
         fail("cluster database restore must use password-authenticated CloudNativePG loopback connection")
     if 'psql -h 127.0.0.1 -At -U "${postgres_user}"' not in workflow:
         fail("cluster database validation must use password-authenticated CloudNativePG loopback connection")
+    for marker in (
+        "borealis-wireguard-server-keys",
+        '--from-file=server_private.key="${wireguard_private_key}"',
+        '--from-file=server_public.key="${wireguard_public_key}"',
+    ):
+        if marker not in workflow:
+            fail(f"cluster bootstrap lost shared WireGuard key migration marker {marker!r}")
     for marker in (
         "automountServiceAccountToken: false",
         "securityContext: {seccompProfile: {type: RuntimeDefault}}",
@@ -392,6 +443,15 @@ def validate_cluster_workload_handoff_contract() -> None:
         "for base, replicas in reversed(stopped_generic_host_workloads)": "failed initialization restoration",
         'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")': "candidate host-port withdrawal before promotion",
         "existing_selector = promotion_selector(base, node, candidate, active)": "first member candidate promotion without prior active workload",
+        'spec["replicas"] = 0 if base == "wireguard-tunnel" and candidate else 1': "standby WireGuard controllers with isolated update candidate",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", edge_vip)': "edge VIP ownership environment",
+        "WIREGUARD_KEYS_SECRET": "shared WireGuard server identity Secret",
+        '"mountPath": "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets"': "shared WireGuard key mount",
+        'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")': "candidate scheduler leadership fence",
+        'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "true")': "promoted scheduler leadership restore",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")': "candidate cluster-controller lease fence",
+        'set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")': "candidate API background-loop fence",
+        'template["metadata"]["labels"]["borealis.io/aegis-peer"] = "true"': "promoted Aegis peer registration",
     }
     for marker, description in required.items():
         if marker not in source:

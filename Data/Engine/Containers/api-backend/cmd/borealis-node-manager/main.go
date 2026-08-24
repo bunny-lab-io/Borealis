@@ -189,6 +189,7 @@ func serve() {
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go m.reportEtcdLeadership(rootCtx)
 	exited := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -209,6 +210,48 @@ func serve() {
 	defer cancel()
 	_ = server.Shutdown(ctx)
 	_ = os.Remove(socketPath)
+}
+
+func (m *manager) reportEtcdLeadership(ctx context.Context) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	lastReported := ""
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:2381/metrics", nil)
+		if err == nil {
+			response, requestErr := client.Do(request)
+			if requestErr == nil {
+				raw, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+				response.Body.Close()
+				leader, observed := parseEtcdLeadership(raw)
+				value := strconv.FormatBool(leader)
+				if readErr == nil && response.StatusCode == http.StatusOK && observed && value != lastReported {
+					reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					_, labelErr := run(reportCtx, "", "k3s", "kubectl", "label", "node", m.nodeName, "borealis.io/etcd-leader="+value, "--overwrite")
+					cancel()
+					if labelErr == nil {
+						lastReported = value
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func parseEtcdLeadership(raw []byte) (bool, bool) {
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 2 && fields[0] == "etcd_server_is_leader" {
+			return fields[1] == "1", fields[1] == "0" || fields[1] == "1"
+		}
+	}
+	return false, false
 }
 
 func loadManager(requireSecret bool) *manager {
@@ -626,11 +669,9 @@ func (m *manager) setNodeLabel(ctx context.Context, key, value string) (map[stri
 		return nil, err
 	}
 	if key == "borealis.io/edge-eligible" {
-		replicas := "0"
-		if value == "true" {
-			replicas = "1"
-		}
-		if err := m.scaleNamedNodeWorkload(ctx, "wireguard-tunnel", replicas); err != nil {
+		// WireGuard control stays present on every active node. Edge VIP
+		// ownership gates shared interface activation inside controller.
+		if err := m.scaleNamedNodeWorkload(ctx, "wireguard-tunnel", "1"); err != nil {
 			return nil, err
 		}
 	}
@@ -791,7 +832,8 @@ func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
 	endpoints, endpointErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "endpointslices", "-l", "kubernetes.io/service-name=api-backend", "-o", "json")
 	postgres, postgresErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "pods", "-l", "cnpg.io/cluster=borealis-postgres", "-o", "json")
 	service, serviceErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "service", "api-backend", "-o", "json")
-	if nodeErr != nil || deploymentErr != nil || endpointErr != nil || postgresErr != nil || serviceErr != nil {
+	cluster, clusterErr := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "borealiscluster.engine.borealis.io/borealis", "-o", "json")
+	if nodeErr != nil || deploymentErr != nil || endpointErr != nil || postgresErr != nil || serviceErr != nil || clusterErr != nil {
 		return nil, errors.New("K3s node, workload, endpoint, PostgreSQL, or Service health inspection failed")
 	}
 	if !nodeReady([]byte(node)) {
@@ -818,6 +860,15 @@ func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
 	if err := probeHTTP(ctx, serviceAddress, servicePort, "/ready"); err != nil {
 		return nil, fmt.Errorf("API Service readiness probe failed: %w", err)
 	}
+	if nodeLabelTrue([]byte(node), "borealis.io/edge-eligible") {
+		edgeVIP, err := clusterEdgeVIP([]byte(cluster))
+		if err != nil {
+			return nil, err
+		}
+		if err := probeTCP(ctx, edgeVIP, 443); err != nil {
+			return nil, fmt.Errorf("edge VIP probe failed: %w", err)
+		}
+	}
 	requiredWorkloads := []string{"api-backend", "job-scheduler"}
 	if nodeLabelTrue([]byte(node), "borealis.io/edge-eligible") {
 		requiredWorkloads = append(requiredWorkloads, "wireguard-tunnel")
@@ -833,6 +884,31 @@ func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
 		"scheduler": "passed", "agent_path": "passed", "wireguard": "passed",
 	}
 	return map[string]any{"node_name": m.nodeName, "probes": probes, "workloads": workloads}, nil
+}
+
+func clusterEdgeVIP(raw []byte) (string, error) {
+	var cluster struct {
+		Spec struct {
+			EdgeVIP string `json:"edgeVIP"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &cluster); err != nil {
+		return "", fmt.Errorf("decode Borealis cluster: %w", err)
+	}
+	address := net.ParseIP(strings.TrimSpace(cluster.Spec.EdgeVIP))
+	if address == nil || address.To4() == nil || !address.IsPrivate() {
+		return "", errors.New("Borealis cluster edge VIP is invalid")
+	}
+	return address.String(), nil
+}
+
+func probeTCP(ctx context.Context, host string, port int) error {
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return err
+	}
+	return connection.Close()
 }
 
 func nodeReady(raw []byte) bool {

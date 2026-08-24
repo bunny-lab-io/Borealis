@@ -15,6 +15,29 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_cluster_workloads_mount_shared_wireguard_keys(self) -> None:
+        for base in ("api-backend", "wireguard-tunnel"):
+            pod_spec = {"volumes": [{"name": "wireguard-secrets", "hostPath": {"path": "/host"}}]}
+            container = {"volumeMounts": [{"name": "wireguard-secrets", "mountPath": "/old"}]}
+            MODULE.mount_shared_wireguard_keys(base, pod_spec, container)
+            volume_name = "wireguard-secrets" if base == "api-backend" else "wireguard-server-keys"
+            volume = next(item for item in pod_spec["volumes"] if item["name"] == volume_name)
+            mount = next(item for item in container["volumeMounts"] if item["name"] == volume_name)
+            self.assertEqual(volume["secret"]["secretName"], "borealis-wireguard-server-keys")
+            self.assertEqual(mount["mountPath"], "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets")
+            self.assertTrue(mount["readOnly"])
+
+    def test_cluster_edge_environment_replaces_stale_value(self) -> None:
+        container = {"env": [{"name": "BOREALIS_CLUSTER_EDGE_VIP", "value": "192.0.2.2"}]}
+        MODULE.set_container_environment(container, "BOREALIS_CLUSTER_EDGE_VIP", "192.168.3.248")
+        self.assertEqual(container["env"], [{"name": "BOREALIS_CLUSTER_EDGE_VIP", "value": "192.168.3.248"}])
+
+    def test_api_candidate_joins_only_aegis_peer_routing(self) -> None:
+        metadata = MODULE.clean_metadata({}, "api-backend-candidate-engine-2", "engine-2", "a" * 40, "api-backend", True)
+        self.assertEqual(metadata["labels"]["borealis.io/aegis-peer"], "true")
+        self.assertEqual(metadata["labels"]["borealis.io/traffic-state"], "candidate")
+        self.assertEqual(metadata["labels"]["app.kubernetes.io/name"], "api-backend-candidate")
+
     def test_first_candidate_promotion_derives_active_selector(self) -> None:
         candidate = {
             "spec": {

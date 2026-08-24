@@ -90,6 +90,16 @@ k3s kubectl -n "${namespace}" wait --for=condition=Ready certificate/borealis-cl
 k3s kubectl -n "${namespace}" wait --for=condition=Ready certificate/borealis-api-aegis-mtls --timeout=5m
 k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${script_dir}/crds.yaml"
 
+wireguard_key_root="${repo_root}/Engine/Services/wireguard-tunnel/secrets"
+wireguard_private_key="${wireguard_key_root}/server_private.key"
+wireguard_public_key="${wireguard_key_root}/server_public.key"
+[[ -s "${wireguard_private_key}" && -s "${wireguard_public_key}" ]] \
+  || { printf 'Existing WireGuard server keypair unavailable for cluster migration.\n' >&2; exit 1; }
+k3s kubectl -n "${namespace}" create secret generic borealis-wireguard-server-keys \
+  --from-file=server_private.key="${wireguard_private_key}" \
+  --from-file=server_public.key="${wireguard_public_key}" \
+  --dry-run=client -o yaml | k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f -
+
 vip_manifest="$(mktemp)"
 sed -e "s|\${BOREALIS_CLUSTER_INTERFACE}|${interface}|g" \
     -e "s|\${BOREALIS_CONTROL_PLANE_VIP}|${control_vip}|g" \

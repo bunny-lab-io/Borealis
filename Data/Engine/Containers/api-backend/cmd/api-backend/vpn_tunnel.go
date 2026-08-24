@@ -133,6 +133,94 @@ func newVPNTunnelService(auth *authService) *vpnTunnelService {
 	return service
 }
 
+func (s *vpnTunnelService) startClusterPeerReconciler(ctx context.Context) {
+	edgeVIP := net.ParseIP(cleanText(os.Getenv("BOREALIS_CLUSTER_EDGE_VIP")))
+	if s == nil || !s.persistent || vpnDB(s.auth) == nil || edgeVIP == nil || edgeVIP.To4() == nil || !edgeVIP.IsPrivate() {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		lastFailure := ""
+		for {
+			reconcileCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := s.reconcilePersistentPeers(reconcileCtx)
+			cancel()
+			if err != nil {
+				message := err.Error()
+				if message != lastFailure {
+					log.Printf("cluster WireGuard peer reconciliation pending: %v", err)
+					lastFailure = message
+				}
+			} else if lastFailure != "" {
+				log.Printf("cluster WireGuard peer reconciliation recovered")
+				lastFailure = ""
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (s *vpnTunnelService) reconcilePersistentPeers(ctx context.Context) error {
+	if s == nil || s.wg == nil {
+		return errors.New("wireguard_unavailable")
+	}
+	s.loadLeases(ctx)
+	db := vpnDB(s.auth)
+	if db == nil {
+		return errors.New("wireguard peer store unavailable")
+	}
+	type peerLease struct {
+		agentID   string
+		virtualIP string
+		publicKey string
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := conn.QueryContext(ctx, `
+		SELECT i.agent_id,i.virtual_ip,k.client_public_key
+		  FROM engine.device_vpn_ip_leases i
+		  JOIN engine.device_vpn_key_leases k ON k.agent_id=i.agent_id
+		 ORDER BY i.agent_id
+	`)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	records := make([]peerLease, 0)
+	for rows.Next() {
+		var record peerLease
+		if err := rows.Scan(&record.agentID, &record.virtualIP, &record.publicKey); err != nil {
+			rows.Close()
+			conn.Close()
+			return err
+		}
+		records = append(records, record)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	conn.Close()
+	if rowsErr != nil {
+		return rowsErr
+	}
+	peers := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		if !s.usablePeerVirtualIP(record.virtualIP) || cleanText(record.agentID) == "" || cleanText(record.publicKey) == "" {
+			continue
+		}
+		peer := s.wg.buildPeerProfile(record.agentID, record.virtualIP, s.allowPorts)
+		peer["public_key"] = cleanText(record.publicKey)
+		peers = append(peers, peer)
+	}
+	return s.wg.reconcilePeers(peers)
+}
+
 func parsePrefixEnv(name string, fallback string) netip.Prefix {
 	value := cleanText(os.Getenv(name))
 	if value == "" {
