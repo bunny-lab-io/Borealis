@@ -44,7 +44,13 @@ BOREALIS_NODE_MANAGER_SERVICE="${BOREALIS_NODE_MANAGER_SERVICE:-borealis-node-ma
 K3S_FIREWALL_SCRIPT="${BOREALIS_K3S_FIREWALL_SCRIPT:-/usr/local/lib/borealis/k3s-api-firewall.sh}"
 K3S_FIREWALL_SERVICE="${BOREALIS_K3S_FIREWALL_SERVICE:-borealis-k3s-api-firewall.service}"
 K3S_API_PORT="${BOREALIS_K3S_API_PORT:-6443}"
-K3S_PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS:-}"
+if [[ -n "${BOREALIS_K3S_PEER_CIDRS+x}" ]]; then
+  K3S_PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS}"
+elif [[ -r "${RUNTIME_ENV}" ]]; then
+  K3S_PEER_CIDRS="$(awk -F= '$1 == "BOREALIS_K3S_PEER_CIDRS" {print substr($0, index($0, "=") + 1); exit}' "${RUNTIME_ENV}")"
+else
+  K3S_PEER_CIDRS=""
+fi
 K3S_CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 K3S_SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
 K3S_KUBECONFIG_MODE="${BOREALIS_K3S_KUBECONFIG_MODE:-0600}"
@@ -2244,13 +2250,17 @@ validate_k3s_baseline_settings() {
   [[ "${K3S_SERVICE_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
     || die "BOREALIS_K3S_SERVICE_CIDR must be an IPv4 CIDR, for example 10.43.0.0/16."
   if [[ -n "${K3S_PEER_CIDRS}" ]]; then
-    python3 - "${K3S_PEER_CIDRS}" <<'PY' || die "BOREALIS_K3S_PEER_CIDRS must be comma-separated private IPv4 CIDRs."
+    K3S_PEER_CIDRS="$(python3 - "${K3S_PEER_CIDRS}" <<'PY'
 import ipaddress, sys
+networks = []
 for raw in sys.argv[1].split(","):
     network = ipaddress.ip_network(raw.strip(), strict=False)
     if network.version != 4 or not network.is_private:
         raise SystemExit(1)
+    networks.append(str(network))
+print(",".join(networks))
 PY
+    )" || die "BOREALIS_K3S_PEER_CIDRS must be comma-separated private IPv4 CIDRs."
   fi
   if [[ -n "${K3S_CONTAINER_LOG_MAX_SIZE}" ]]; then
     [[ "${K3S_CONTAINER_LOG_MAX_SIZE}" =~ ^[1-9][0-9]*([EPTGMK]i?|m)?$ ]] \
@@ -8659,6 +8669,7 @@ BOREALIS_K3S_PVC_STORAGE_CLASS=${postgres_storage_class}
 BOREALIS_K3S_POSTGRES_ENABLED=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")
 BOREALIS_K3S_POSTGRES_STORAGE_SIZE=${K3S_POSTGRES_STORAGE_SIZE}
 BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT=${K3S_POSTGRES_ROLLOUT_TIMEOUT}
+BOREALIS_K3S_PEER_CIDRS=${K3S_PEER_CIDRS}
 BOREALIS_K3S_CONTAINER_LOG_MAX_SIZE=${K3S_CONTAINER_LOG_MAX_SIZE}
 BOREALIS_K3S_CONTAINER_LOG_MAX_FILES=${K3S_CONTAINER_LOG_MAX_FILES}
 BOREALIS_ACME_EMAIL=${acme_email}
@@ -10830,6 +10841,9 @@ for key,value in sorted((payload.get("data") or {}).items()):
   [[ -s "${cluster_runtime_env}" ]] || die "Cluster runtime Secret could not hydrate node deployment environment."
   local network_mode=""
   network_mode="$(awk -F= '$1 == "BOREALIS_ENGINE_NETWORK_MODE" {print substr($0, index($0, "=") + 1); exit}' "${cluster_runtime_env}")"
+  K3S_PEER_CIDRS="$(awk -F= '$1 == "BOREALIS_K3S_PEER_CIDRS" {print substr($0, index($0, "=") + 1); exit}' "${cluster_runtime_env}")"
+  [[ -n "${K3S_PEER_CIDRS}" ]] || die "Cluster runtime environment is missing BOREALIS_K3S_PEER_CIDRS."
+  validate_k3s_baseline_settings
   ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "${network_mode}")"
   export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
   prepare_runtime prod

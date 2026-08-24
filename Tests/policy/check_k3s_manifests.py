@@ -348,6 +348,23 @@ def validate_api_release_identity_contract() -> None:
             fail("API manifest cache must include immutable Engine release identity")
 
 
+def validate_k3s_peer_allowlist_contract() -> None:
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Engine K3s peer allowlist contract: {exc}")
+    required = {
+        'elif [[ -r "${RUNTIME_ENV}" ]]': "existing readable runtime allowlist fallback",
+        'BOREALIS_K3S_PEER_CIDRS=${K3S_PEER_CIDRS}': "runtime Secret persistence",
+        'K3S_PEER_CIDRS="$(awk -F= \'$1 == "BOREALIS_K3S_PEER_CIDRS"': "cluster node runtime hydration",
+        'Cluster runtime environment is missing BOREALIS_K3S_PEER_CIDRS.': "fail-closed cluster node redeploy",
+        'networks.append(str(network))': "canonical private CIDR normalization",
+    }
+    for marker, description in required.items():
+        if marker not in engine_source:
+            fail(f"Engine K3s peer allowlist lost {description}")
+
+
 def fail(message: str) -> None:
     print(f"K3S POLICY FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -574,6 +591,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_kube_vip_contract()
     validate_cluster_workload_handoff_contract()
     validate_api_release_identity_contract()
+    validate_k3s_peer_allowlist_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)

@@ -10,7 +10,7 @@ Borealis Engine clustering runs application workloads, K3s control-plane service
 - Same CPU architecture and Borealis sizing profile.
 - Static private IPv4 addresses on same Layer 2 network.
 - Separate unused IPv4 addresses for K3s control-plane VIP and Borealis edge VIP.
-- Explicit `BOREALIS_K3S_PEER_CIDRS` allowlist covering cluster management addresses.
+- Explicit `BOREALIS_K3S_PEER_CIDRS` allowlist covering every current and planned cluster management address. Prefer one `/32` entry per Engine node.
 - Clean Git worktrees using configured repository origin and same stable Borealis release.
 - Working Longhorn iSCSI and NFSv4 client prerequisites plus enough capacity to run node-local candidates during drain. Normal Engine deployment installs missing host packages.
 - Odd active membership: one, three, or five nodes.
@@ -21,8 +21,10 @@ Borealis Engine clustering runs application workloads, K3s control-plane service
 Run probe conformance against installed stable K3s before requesting conversion:
 
 ```sh
+export BOREALIS_K3S_PEER_CIDRS=192.0.2.21/32,192.0.2.22/32,192.0.2.23/32
 sudo bash Data/Engine/K3s/cluster/run-probe-conformance.sh
-sudo bash Engine.sh --network-mode <public-or-local> deploy prod
+sudo --preserve-env=BOREALIS_K3S_PEER_CIDRS \
+  bash Engine.sh --network-mode <public-or-local> deploy prod
 
 # Supply current Engine API URL and recently issued Admin token.
 export BOREALIS_CLUSTER_API_URL=https://engine.example.com
@@ -157,6 +159,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - Control and edge VIPs use separate kube-vip leader leases, `/32` ARP advertisements, health listeners, metrics listeners, and disruption budgets. Bootstrap does not accept a running pod as proof: it waits for both DaemonSets, non-empty lease holders, local VIP addresses, and K3s `/readyz` through control VIP.
     - First-node conversion and later candidate promotion use explicit stop-start handoff for host-network Traefik and WireGuard pods because old and new pods cannot bind same host ports. Failed first-node handoff restores prior standalone host workload replica count.
     - First-node SQLite-to-etcd conversion temporarily restarts K3s. Cluster controller Job polling treats bounded Kubernetes API `429`, `5xx`, timeout, and connection failures as transient until step deadline, while authorization and other permanent API errors still fail immediately.
+    - Engine persists canonical private `BOREALIS_K3S_PEER_CIDRS` values into runtime Secret. Node-scoped release deploy hydrates same allowlist and fails closed when missing, preventing rolling updates from silently replacing cluster firewall policy with empty peer access.
     - Shared Agent artifacts use Longhorn RWX storage, which requires host NFSv4 mount utilities in addition to iSCSI. Seed copies only missing or changed files, byte-compares every source file, and allows bounded time for large existing artifact caches.
     - K3s does not bundle CSI VolumeSnapshot API resources. Cluster bootstrap checksum-pins external-snapshotter `v8.5.0` CRDs, deploys digest-pinned common snapshot controller with leader election and probes, then restarts CloudNativePG so daily Longhorn snapshot support is discovered before database migration.
     - Cluster API replicas expose separate TLS 1.3 mTLS-only Aegis key receiver from `aegis_cluster_fanout.go`; cert-manager assets and headless Service live in `Data/Engine/K3s/cluster/aegis-mtls.yaml`.
