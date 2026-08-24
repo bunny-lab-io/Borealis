@@ -210,6 +210,23 @@ func TestEngineChildScopesGitSafeDirectoryWithoutGlobalMutation(t *testing.T) {
 	}
 }
 
+func TestEngineChildUsesManagerOwnedWritableHome(t *testing.T) {
+	root := t.TempDir()
+	manager := &manager{repoRoot: root}
+	got, err := manager.engineChildEnvironment(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "Engine", "Deploy", "node-manager-home")
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("Engine child home missing: %v", err)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "HOME="+home) || !strings.Contains(joined, "XDG_CACHE_HOME="+filepath.Join(home, ".cache")) {
+		t.Fatalf("unexpected Engine child environment: %#v", got)
+	}
+}
+
 func TestEnsureSecureDirectoryCorrectsExistingPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "borealis")
 	if err := os.Mkdir(path, 0o755); err != nil {
