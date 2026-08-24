@@ -123,6 +123,16 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must correct configuration-directory ownership and mode")
     if 'systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"' not in engine_source:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
+    required_engine_cluster_markers = {
+        "render_k3s_registries_config": "managed Spegel registry source configuration",
+        "docker.io:": "Borealis local-image registry mirror",
+        "registry.k8s.io:": "Kubernetes dependency registry mirror",
+        "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",
+        "if ! cluster_mode_enabled; then": "cluster role-label ownership guard",
+    }
+    for marker, description in required_engine_cluster_markers.items():
+        if marker not in engine_source:
+            fail(f"Engine cluster baseline lost {description}")
 
 
 def validate_longhorn_host_dependency_contract() -> None:
@@ -370,7 +380,7 @@ def validate_k3s_peer_allowlist_contract() -> None:
         'Cluster runtime environment is missing BOREALIS_K3S_PEER_CIDRS.': "fail-closed cluster node redeploy",
         'networks.append(str(network))': "canonical private CIDR normalization",
         'cluster_prepare_node()': "fixed blank-node preparation entrypoint",
-        '  ensure_longhorn_node_dependencies\n  ensure_k3s_api_firewall\n  printf \'Cluster node host preparation complete.': "blank-node Longhorn and firewall preparation",
+        '  ensure_longhorn_node_dependencies\n  write_k3s_borealis_config >/dev/null || true\n  write_k3s_registries_config >/dev/null || true\n  ensure_k3s_api_firewall\n  printf \'Cluster node host preparation complete.': "blank-node Longhorn, Spegel, and firewall preparation",
         'Engine.sh --cluster-prepare-node': "documented fixed node preparation command",
     }
     for marker, description in required.items():

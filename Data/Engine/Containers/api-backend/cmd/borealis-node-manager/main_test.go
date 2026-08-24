@@ -110,6 +110,18 @@ func TestSupportedUbuntuReleaseRequiresUbuntu2404OrNewer(t *testing.T) {
 	}
 }
 
+func TestK3sRegistryMirrorsCoverBorealisAndPinnedDependencies(t *testing.T) {
+	config := string(k3sRegistryMirrorsConfig())
+	for _, registry := range []string{"docker.io:", "ghcr.io:", "quay.io:", "registry.k8s.io:"} {
+		if !strings.Contains(config, "  "+registry) {
+			t.Fatalf("K3s registry mirror config missing %s", registry)
+		}
+	}
+	if strings.Contains(config, `"*":`) {
+		t.Fatal("K3s registry mirror config must use explicit source registries")
+	}
+}
+
 func TestNormalizePeerCIDRsRequiresBoundedPrivateIPv4Networks(t *testing.T) {
 	got, err := normalizePeerCIDRs("192.168.10.2/24, 10.0.0.8/32,192.168.10.0/24")
 	if err != nil {

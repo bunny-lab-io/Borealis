@@ -34,6 +34,7 @@ K3S_NAMESPACE="${BOREALIS_K3S_NAMESPACE:-borealis}"
 K3S_SERVICE_NAME="${BOREALIS_K3S_SERVICE_NAME:-k3s}"
 K3S_CONFIG_DIR="${BOREALIS_K3S_CONFIG_DIR:-/etc/rancher/k3s/config.yaml.d}"
 K3S_BOREALIS_CONFIG="${BOREALIS_K3S_CONFIG_PATH:-${K3S_CONFIG_DIR}/10-borealis.yaml}"
+K3S_REGISTRIES_CONFIG="${BOREALIS_K3S_REGISTRIES_PATH:-/etc/rancher/k3s/registries.yaml}"
 K3S_KUBECONFIG="${BOREALIS_K3S_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 K3S_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-baseline.sha256"
 K3S_CLUSTER_ASSET_DIR="${SCRIPT_DIR}/Data/Engine/K3s/cluster"
@@ -2516,6 +2517,17 @@ EOF
   fi
 }
 
+render_k3s_registries_config() {
+  cat <<'EOF'
+# Borealis-managed Spegel registry sources. Engine.sh owns this file.
+mirrors:
+  docker.io:
+  ghcr.io:
+  quay.io:
+  registry.k8s.io:
+EOF
+}
+
 render_k3s_api_firewall_script() {
   cat <<'EOF'
 #!/usr/bin/env sh
@@ -2620,6 +2632,20 @@ write_k3s_borealis_config() {
     return 0
   fi
   printf '[%s] K3s Borealis config unchanged as %s\n' "$(date +%FT%T)" "${K3S_BOREALIS_CONFIG}" >> "${BUILD_LOG}"
+  return 1
+}
+
+write_k3s_registries_config() {
+  local temp_file
+  temp_file="$(mktemp)"
+  render_k3s_registries_config > "${temp_file}"
+  if install_temp_file_if_changed "${temp_file}" "${K3S_REGISTRIES_CONFIG}" 0644; then
+    find "$(dirname -- "${temp_file}")" -maxdepth 1 -type f -name "$(basename -- "${temp_file}")" -delete
+    printf '[%s] K3s registry mirror config reconciled as %s\n' "$(date +%FT%T)" "${K3S_REGISTRIES_CONFIG}" >> "${BUILD_LOG}"
+    return 0
+  fi
+  find "$(dirname -- "${temp_file}")" -maxdepth 1 -type f -name "$(basename -- "${temp_file}")" -delete
+  printf '[%s] K3s registry mirror config unchanged as %s\n' "$(date +%FT%T)" "${K3S_REGISTRIES_CONFIG}" >> "${BUILD_LOG}"
   return 1
 }
 
@@ -2804,11 +2830,15 @@ label_k3s_nodes() {
     k3s_kubectl label "${node_ref}" \
       app.kubernetes.io/part-of=borealis \
       borealis.io/engine-node=true \
-      borealis.io/application-state=active \
-      borealis.io/edge-eligible=true \
-      borealis.io/scheduler-eligible=true \
-      borealis.io/postgres-primary-eligible=true \
       --overwrite >> "${BUILD_LOG}" 2>&1
+    if ! cluster_mode_enabled; then
+      k3s_kubectl label "${node_ref}" \
+        borealis.io/application-state=active \
+        borealis.io/edge-eligible=true \
+        borealis.io/scheduler-eligible=true \
+        borealis.io/postgres-primary-eligible=true \
+        --overwrite >> "${BUILD_LOG}" 2>&1
+    fi
     k3s_kubectl annotate "${node_ref}" \
       borealis.io/k3s-baseline-version="${K3S_BASELINE_VERSION}" \
       borealis.io/k3s-config-hash="${config_hash}" \
@@ -2828,6 +2858,10 @@ ensure_k3s_cluster_baseline() {
     log_status "Ensuring Cluster Exists" "Config Updated" "${C_YELLOW}"
   else
     log_status "Ensuring Cluster Exists" "Config Up-to-Date" "${C_GREEN}"
+  fi
+  if write_k3s_registries_config; then
+    config_changed=1
+    log_status "Ensuring Cluster Exists" "Registry Mirrors Updated" "${C_YELLOW}"
   fi
 
   ensure_k3s_api_firewall
@@ -3493,6 +3527,14 @@ borealis_site_worker_runtime_secret_hash() {
   done < <(borealis_site_worker_runtime_secret_keys) | sha256sum | awk '{print $1}'
 }
 
+generic_k3s_workload_replicas() {
+  if cluster_mode_enabled; then
+    printf '0\n'
+    return 0
+  fi
+  printf '1\n'
+}
+
 render_borealis_operator_manifest() {
   local image="$1"
   local secret="$2"
@@ -3503,9 +3545,11 @@ render_borealis_operator_manifest() {
   local secret_b64
   local runtime_uid
   local runtime_gid
+  local replicas
   secret_b64="$(base64_inline "${secret}")"
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -3626,7 +3670,7 @@ metadata:
   annotations:
     borealis.io/operator-config-hash: "${config_hash}"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   minReadySeconds: 15
   selector:
@@ -3926,7 +3970,9 @@ render_k3s_api_backend_bridge_manifest() {
   local release_version="$9"
   local source_sha="${10}"
   local service_host
+  local replicas
   service_host="$(api_backend_service_dns_name)"
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -3988,7 +4034,7 @@ metadata:
     borealis.io/network-mode: "cluster-ip"
     borealis.io/traffic-owner: "${traffic_owner}"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -4526,7 +4572,8 @@ render_k3s_job_scheduler_manifest() {
   local memory_limit="$6"
   local cpu_limit="$7"
   local internal_api_base="$8"
-  local replicas="${BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE:-1}"
+  local replicas="${BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE:-}"
+  [[ -n "${replicas}" ]] || replicas="$(generic_k3s_workload_replicas)"
   [[ "${replicas}" =~ ^[01]$ ]] || die "BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE must be 0 or 1."
   cat <<EOF
 apiVersion: v1
@@ -4769,7 +4816,8 @@ ensure_k3s_job_scheduler() {
   api_bridge_port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
   internal_api_base="http://$(api_backend_service_dns_name):${api_bridge_port}"
   pids_limit="$(read_env_value BOREALIS_JOB_SCHEDULER_PIDS_LIMIT)"
-  replicas="${BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE:-1}"
+  replicas="${BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE:-}"
+  [[ -n "${replicas}" ]] || replicas="$(generic_k3s_workload_replicas)"
   [[ "${replicas}" =~ ^[01]$ ]] || die "BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE must be 0 or 1."
 
   local config_hash
@@ -4850,6 +4898,8 @@ render_k3s_postgres_statefulset_manifest() {
   local runtime_owner
   runtime_owner="$(postgres_runtime_owner_label "${traffic_owner}")"
   local postgres_pgdata="/var/lib/postgresql/data/pgdata"
+  local replicas
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -4936,7 +4986,7 @@ metadata:
     borealis.io/traffic-owner: "${traffic_owner}"
 spec:
   serviceName: postgres-db-headless
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -5665,9 +5715,11 @@ render_k3s_webui_frontend_bridge_manifest() {
   local cpu_limit="$8"
   local traffic_owner="$9"
   local workload_stage="workload-bridge"
+  local replicas
   if [[ "${traffic_owner}" == "k3s" ]]; then
     workload_stage="workload-cutover"
   fi
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -5685,7 +5737,7 @@ metadata:
     borealis.io/bridge-config-hash: "${config_hash}"
     borealis.io/traffic-owner: "${traffic_owner}"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   minReadySeconds: 15
   selector:
@@ -5918,6 +5970,8 @@ render_k3s_remote_desktop_guacd_bridge_manifest() {
   local port="$5"
   local memory_limit="$6"
   local cpu_limit="$7"
+  local replicas
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -5935,7 +5989,7 @@ metadata:
     borealis.io/bridge-config-hash: "${config_hash}"
     borealis.io/traffic-owner: "docker-compose"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   minReadySeconds: 15
   selector:
@@ -6292,6 +6346,8 @@ render_k3s_wireguard_tunnel_manifest() {
   local port="$4"
   local memory_limit="$5"
   local cpu_limit="$6"
+  local replicas
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -6326,7 +6382,7 @@ metadata:
     borealis.io/network-mode: "host-network"
     borealis.io/runtime-owner: "k3s"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -6550,6 +6606,8 @@ render_k3s_traefik_edge_manifest() {
   local health_port="$4"
   local memory_limit="$5"
   local cpu_limit="$6"
+  local replicas
+  replicas="$(generic_k3s_workload_replicas)"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -6584,7 +6642,7 @@ metadata:
     borealis.io/network-mode: "host-network"
     borealis.io/traffic-owner: "k3s"
 spec:
-  replicas: 1
+  replicas: ${replicas}
   revisionHistoryLimit: 2
   minReadySeconds: 15
   selector:
@@ -10902,6 +10960,8 @@ cluster_prepare_node() {
   ensure_systemctl_for_k3s
   ensure_k3s_install_dependencies
   ensure_longhorn_node_dependencies
+  write_k3s_borealis_config >/dev/null || true
+  write_k3s_registries_config >/dev/null || true
   ensure_k3s_api_firewall
   printf 'Cluster node host preparation complete. K3s has not been installed or joined.\n'
 }

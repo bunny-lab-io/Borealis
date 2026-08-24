@@ -37,6 +37,7 @@ const (
 	actionRuntimeID    = 64646
 	defaultK3sVersion  = "v1.36.3+k3s1"
 	memberFencePath    = "/etc/borealis/k3s-member-removal-fence.json"
+	k3sRegistriesPath  = "/etc/rancher/k3s/registries.yaml"
 )
 
 var (
@@ -1235,6 +1236,9 @@ func installJoinedK3sServer(nodeName, managementIP, serverURL, tokenFile, versio
 	if err := os.WriteFile(filepath.Join(configDirectory, "20-borealis-cluster-join.yaml"), []byte(config), 0o600); err != nil {
 		return err
 	}
+	if err := os.WriteFile(k3sRegistriesPath, k3sRegistryMirrorsConfig(), 0o644); err != nil {
+		return err
+	}
 	request, err := http.NewRequest(http.MethodGet, "https://get.k3s.io", nil)
 	if err != nil {
 		return err
@@ -1264,6 +1268,10 @@ func installJoinedK3sServer(nodeName, managementIP, serverURL, tokenFile, versio
 		time.Sleep(2 * time.Second)
 	}
 	return errors.New("joined k3s.service did not become active")
+}
+
+func k3sRegistryMirrorsConfig() []byte {
+	return []byte("# Borealis-managed Spegel registry sources. Engine.sh owns this file.\nmirrors:\n  docker.io:\n  ghcr.io:\n  quay.io:\n  registry.k8s.io:\n")
 }
 
 func supportedUbuntuRelease(osRelease []byte) bool {
