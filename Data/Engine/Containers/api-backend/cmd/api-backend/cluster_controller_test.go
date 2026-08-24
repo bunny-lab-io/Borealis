@@ -269,6 +269,28 @@ func TestClusterActionJobNormalizesStepLabel(t *testing.T) {
 	}
 }
 
+func TestMembershipAdmissionRunsNodeConformanceBeforeRedeploy(t *testing.T) {
+	nodeID := "22222222-2222-4222-8222-222222222222"
+	k3sVersion := "v1.36.3+k3s1"
+	conformance := clusterAdmissionConformanceAction(nodeID, k3sVersion)
+	if conformance.verb != "RunK3sProbeConformance" || conformance.targetRelease != k3sVersion {
+		t.Fatalf("membership admission conformance action=%#v", conformance)
+	}
+	actions := clusterAdmissionWorkloadActions(nodeID)
+	if len(actions) != 2 {
+		t.Fatalf("membership admission workload actions=%d want 2", len(actions))
+	}
+	wantVerbs := []string{"RedeployRevision", "InspectHealth"}
+	for index, want := range wantVerbs {
+		if actions[index].verb != want {
+			t.Fatalf("membership admission action %d=%s want %s", index, actions[index].verb, want)
+		}
+	}
+	if actions[0].targetRelease != "" || actions[1].targetRelease != "" {
+		t.Fatalf("membership admission K3s target leaked into workloads: %#v", actions)
+	}
+}
+
 func TestSafeRemovalFencesAndDeletesPairSequentially(t *testing.T) {
 	nodes := []clusterControllerNode{
 		{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", ApplicationState: "active", Roles: map[string]any{}},

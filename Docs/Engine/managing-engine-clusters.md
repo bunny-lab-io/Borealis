@@ -60,7 +60,7 @@ sudo borealis-node-manager join \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members join application-drained and role-ineligible. Controller admits `1 -> 3` or `3 -> 5`, expands CloudNativePG, deploys pinned cluster revision on both nodes, then probes and soaks each node before activating it.
+Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members join application-drained and role-ineligible. Controller admits `1 -> 3` or `3 -> 5` only after probe conformance passes while pinned to each joining node. It then expands CloudNativePG, deploys pinned cluster revision on both nodes, and probes and soaks each node before activating it.
 
 Temporary even K3s membership during pair admission does not disable healthy existing nodes. Architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work.
 
@@ -194,6 +194,6 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
 
     ### Qualification
 
-    - Stable K3s must pass `Data/Engine/K3s/cluster/run-probe-conformance.sh`. Test forces liveness failure, waits for replacement container, then proves replacement remains `started=false`, runs startup probe, and does not run liveness early. This directly covers [Kubernetes issue 141155](https://github.com/kubernetes/kubernetes/issues/141155); direct process-kill restart alone is not sufficient conformance evidence.
+    - Stable K3s must pass `Data/Engine/K3s/cluster/run-probe-conformance.sh` on every Engine node. Test pins workload to local node, forces liveness failure, waits for replacement container, then proves replacement remains `started=false`, runs startup probe, and does not run liveness early. Pair admission runs this gate before deploying application workloads. This directly covers [Kubernetes issue 141155](https://github.com/kubernetes/kubernetes/issues/141155); direct process-kill restart alone is not sufficient conformance evidence.
     - K3s membership removal qualification must prove Kubernetes Node deletion removes embedded-etcd membership while fenced host stays disabled. Keep qualification gate until current K3s behavior also excludes regressions tracked by [k3s issue 13623](https://github.com/k3s-io/k3s/issues/13623) and [k3s issue 13498](https://github.com/k3s-io/k3s/issues/13498).
     - Merge/release needs disposable same-L2 Ubuntu qualification for `1 -> 3 -> 5`, `5 -> 3 -> 1`, replacement, partition, leader death, rolling Engine/K3s update failure, CNPG failover, snapshot restore, and continuous API/UI/Agent traffic.

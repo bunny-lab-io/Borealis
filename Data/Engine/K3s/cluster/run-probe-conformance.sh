@@ -13,6 +13,8 @@ version="$(k3s --version | awk 'NR == 1 {print $3}')"
   printf 'Cluster mode requires stable K3s release; saw %s.\n' "${version}" >&2
   exit 1
 }
+node_name="$(hostname -s | tr '[:upper:]' '[:lower:]')"
+"${kubectl[@]}" get "node/${node_name}" >/dev/null
 
 install -d -m 0700 "$(dirname -- "${result_file}")"
 find "$(dirname -- "${result_file}")" -maxdepth 1 -type f -name "$(basename -- "${result_file}")" -delete
@@ -23,12 +25,13 @@ cleanup() {
 trap cleanup EXIT
 
 "${kubectl[@]}" create namespace "${namespace}" >/dev/null
-"${kubectl[@]}" -n "${namespace}" apply -f - >/dev/null <<'EOF'
+sed "s|__BOREALIS_CONFORMANCE_NODE__|${node_name}|g" <<'EOF' | "${kubectl[@]}" -n "${namespace}" apply -f - >/dev/null
 apiVersion: v1
 kind: Pod
 metadata:
   name: startup-restart-conformance
 spec:
+  nodeName: __BOREALIS_CONFORMANCE_NODE__
   restartPolicy: Always
   terminationGracePeriodSeconds: 2
   volumes:

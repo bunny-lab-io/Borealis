@@ -59,6 +59,23 @@ type clusterControllerStep struct {
 	NodeID string
 }
 
+type clusterAdmissionNodeAction struct {
+	stepName      string
+	verb          string
+	targetRelease string
+}
+
+func clusterAdmissionConformanceAction(nodeID, k3sVersion string) clusterAdmissionNodeAction {
+	return clusterAdmissionNodeAction{stepName: "admit:" + nodeID + ":probe_conformance", verb: "RunK3sProbeConformance", targetRelease: k3sVersion}
+}
+
+func clusterAdmissionWorkloadActions(nodeID string) []clusterAdmissionNodeAction {
+	return []clusterAdmissionNodeAction{
+		{stepName: "admit:" + nodeID + ":redeploy", verb: "RedeployRevision"},
+		{stepName: "admit:" + nodeID + ":health", verb: "InspectHealth"},
+	}
+}
+
 type clusterControllerStepRunner interface {
 	Run(context.Context, clusterControllerOperation, clusterControllerStep, []clusterControllerNode) error
 }
@@ -1080,6 +1097,19 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 	if newSize != 3 && newSize != 5 {
 		return fmt.Errorf("paired admission would produce unsupported active size %d", newSize)
 	}
+	k3sVersion := cleanText(operation.Payload["k3s_version"])
+	if !clusterK3sRE.MatchString(k3sVersion) {
+		return errors.New("paired admission lacks stable K3s version")
+	}
+	for _, node := range pending {
+		action := clusterAdmissionConformanceAction(node.ID, k3sVersion)
+		conformance := operation
+		conformance.TargetNodeID = node.ID
+		conformance.TargetRelease = action.targetRelease
+		if err := r.nodeActionJob(ctx, conformance, clusterControllerStep{Name: action.stepName, NodeID: node.ID}, node, action.verb); err != nil {
+			return err
+		}
+	}
 	if err := r.scaleCNPG(ctx, newSize); err != nil {
 		return err
 	}
@@ -1088,12 +1118,14 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		redeploy.TargetNodeID = node.ID
 		redeploy.TargetRelease = baselineRelease
 		redeploy.TargetSHA = baselineSHA
-		step := clusterControllerStep{Name: "admit:" + node.ID + ":redeploy", NodeID: node.ID}
-		if err := r.nodeActionJob(ctx, redeploy, step, node, "RedeployRevision"); err != nil {
-			return err
-		}
-		if err := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":health", NodeID: node.ID}, node, "InspectHealth"); err != nil {
-			return err
+		for _, action := range clusterAdmissionWorkloadActions(node.ID) {
+			actionOperation := redeploy
+			if action.targetRelease != "" {
+				actionOperation.TargetRelease = action.targetRelease
+			}
+			if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName, NodeID: node.ID}, node, action.verb); err != nil {
+				return err
+			}
 		}
 		if err := r.minimumReadySoak(ctx, node.Name); err != nil {
 			return err

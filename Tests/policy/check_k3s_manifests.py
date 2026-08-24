@@ -39,6 +39,8 @@ def validate_probe_conformance_contract() -> None:
         "replacement startup-probe:failure": "replacement startup execution proof",
         "replacement liveness-probe:": "premature replacement liveness rejection",
         "Kubernetes issue 141155": "upstream regression context",
+        "nodeName: __BOREALIS_CONFORMANCE_NODE__": "local K3s node pin",
+        'node_name="$(hostname -s': "local K3s node identity",
     }
     for marker, description in required.items():
         if marker not in source:
