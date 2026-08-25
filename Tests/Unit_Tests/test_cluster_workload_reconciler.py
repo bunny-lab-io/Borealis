@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +66,94 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         selector = MODULE.promotion_selector("job-scheduler", "engine-03", candidate, active)
         self.assertEqual(selector["stable-selector"], "kept")
         self.assertNotIn("candidate-only", selector)
+
+    def test_host_port_candidate_stages_at_zero_replicas(self) -> None:
+        source = {
+            "metadata": {"labels": {"app.kubernetes.io/name": "traefik-edge"}},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": {"app.kubernetes.io/name": "traefik-edge"}},
+                "template": {
+                    "metadata": {"labels": {"app.kubernetes.io/name": "traefik-edge"}},
+                    "spec": {"containers": [{"name": "traefik-edge"}]},
+                },
+            },
+        }
+        calls: list[tuple[tuple[str, ...], str | None]] = []
+
+        def fake_kubectl(*args: str, stdin: str | None = None) -> str:
+            calls.append((args, stdin))
+            return ""
+
+        with mock.patch.object(
+            MODULE,
+            "load_json",
+            side_effect=lambda resource: source if resource.endswith("traefik-edge") else None,
+        ), mock.patch.object(MODULE, "kubectl", side_effect=fake_kubectl):
+            MODULE.reconcile_one(
+                "traefik-edge",
+                "traefik-edge",
+                "engine-01",
+                "a" * 40,
+                {"traefik-edge": "borealis-engine/traefik-edge:sha-" + "b" * 12},
+                True,
+            )
+
+        manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+        self.assertEqual(manifest["spec"]["replicas"], 0)
+        self.assertGreaterEqual(manifest["spec"]["minReadySeconds"], 15)
+        self.assertFalse(any(args[:3] == ("-n", "borealis", "rollout") for args, _ in calls))
+
+    def test_traefik_promotion_uses_bounded_host_port_handoff(self) -> None:
+        selector = {
+            "app.kubernetes.io/name": "traefik-edge-candidate",
+            "borealis.io/engine-node": "engine-01",
+            "borealis.io/node-workload": "true",
+            "borealis.io/update-candidate": "true",
+            "borealis.io/traffic-state": "candidate",
+        }
+        candidate = {
+            "metadata": {"annotations": {"borealis.io/revision": "a" * 40}},
+            "spec": {
+                "replicas": 0,
+                "selector": {"matchLabels": selector},
+                "template": {
+                    "metadata": {"labels": selector},
+                    "spec": {"containers": [{"name": "traefik-edge"}]},
+                },
+            },
+        }
+        active = {
+            "metadata": {},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": {**selector, "app.kubernetes.io/name": "traefik-edge"}},
+            },
+        }
+        commands: list[tuple[str, ...]] = []
+
+        def fake_load(resource: str) -> dict | None:
+            return candidate if resource.endswith("-candidate") else active
+
+        def fake_kubectl(*args: str, stdin: str | None = None) -> str:
+            commands.append(args)
+            return ""
+
+        with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
+            MODULE, "kubectl", side_effect=fake_kubectl
+        ):
+            MODULE.promote_one("traefik-edge", "engine-01")
+
+        active_name = "deployment/traefik-edge-engine-01"
+        candidate_name = "deployment/traefik-edge-engine-01-candidate"
+        self.assertLess(
+            commands.index(("-n", "borealis", "scale", active_name, "--replicas=0")),
+            commands.index(("-n", "borealis", "scale", candidate_name, "--replicas=1")),
+        )
+        self.assertLess(
+            commands.index(("-n", "borealis", "rollout", "status", candidate_name, "--timeout=10m")),
+            commands.index(("-n", "borealis", "scale", candidate_name, "--replicas=0")),
+        )
 
 
 if __name__ == "__main__":

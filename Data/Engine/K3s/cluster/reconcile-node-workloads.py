@@ -168,7 +168,11 @@ def reconcile_one(
         "spec": copy.deepcopy(source.get("spec") or {}),
     }
     spec = manifest["spec"]
-    spec["replicas"] = 0 if base == "wireguard-tunnel" and candidate else 1
+    # Host-port candidates cannot run beside active workload on same node.
+    # Keep both stopped during normal candidate staging. Traefik receives bounded
+    # stop/start health handoff during promotion; WireGuard remains stopped until
+    # active owner-aware workload is replaced.
+    spec["replicas"] = 0 if base in HOST_PORT_DEPLOYMENTS and candidate else 1
     spec["revisionHistoryLimit"] = 2
     selector = copy.deepcopy((spec.get("selector") or {}).get("matchLabels") or {})
     selector["borealis.io/engine-node"] = node
@@ -237,6 +241,7 @@ def reconcile_one(
         ports[:] = [port for port in ports if port.get("name") != "aegis-mtls"]
         ports.append({"name": "aegis-mtls", "containerPort": 9444, "protocol": "TCP"})
     if base in HOST_PORT_DEPLOYMENTS:
+        spec["minReadySeconds"] = max(15, int(spec.get("minReadySeconds") or 0))
         spec["strategy"] = {"type": "Recreate"}
     else:
         spec["minReadySeconds"] = max(15, int(spec.get("minReadySeconds") or 0))
@@ -308,9 +313,32 @@ def promote_one(base: str, node: str) -> str:
         if not containers:
             raise RuntimeError(f"candidate deployment {candidate_name} has no cluster controller container")
         set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "true")
-    if base in HOST_PORT_DEPLOYMENTS:
-        # Candidate and active host-network Pods cannot bind same ports. Stop
-        # candidate only after its health/soak checks, then start active copy.
+    if base == "traefik-edge":
+        # Candidate and active Traefik cannot bind same host ports. Stop active,
+        # run isolated candidate through readiness/min-ready soak, then stop it
+        # before applying active target. Restore old active workload when
+        # candidate fails before target manifest is committed.
+        active_replicas = int(((active or {}).get("spec") or {}).get("replicas") or 0)
+        if active_replicas > 0:
+            kubectl("-n", NAMESPACE, "scale", f"deployment/{active_name}", "--replicas=0")
+            kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{active_name}", "--timeout=5m")
+        try:
+            kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=1")
+            kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{candidate_name}", "--timeout=10m")
+        except RuntimeError:
+            try:
+                kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")
+            except RuntimeError:
+                pass
+            if active_replicas > 0:
+                kubectl("-n", NAMESPACE, "scale", f"deployment/{active_name}", f"--replicas={active_replicas}")
+                kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{active_name}", "--timeout=5m")
+            raise
+        kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")
+        kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{candidate_name}", "--timeout=5m")
+    elif base == "wireguard-tunnel":
+        # WireGuard candidate stays stopped. Active controller validates edge
+        # lease ownership and usable tunnel state after replacement.
         kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{candidate_name}", "--timeout=5m")
     kubectl("apply", "--server-side", "--force-conflicts", "--field-manager=borealis-node-workloads", "-f", "-", stdin=json.dumps(manifest))
