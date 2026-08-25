@@ -45,6 +45,24 @@ If API restarts while CLI watches enablement, CLI reconnects for one minute with
 !!! warning "One-way database cutover"
     Cluster enablement does not automatically move database traffic back into standalone StatefulSet. Restore from retained old PVC or encrypted dump is explicit recovery work.
 
+## Cut Over Outer Reverse Proxy
+
+Cluster conversion changes public application ingress from standalone Engine node address to fixed edge VIP. Any outer or nested reverse proxy still pinned to standalone node address loses Borealis WebUI, API, WebSocket, and remote-desktop access when that node enters maintenance, updates, or fails. Healthy cluster does not make node-address upstream highly available.
+
+After edge VIP becomes reachable, change outer proxy upstream to `https://<edge-vip>:443`. Preserve Engine FQDN as HTTP `Host` header and backend TLS SNI, trust Borealis certificate chain, and keep WebSocket upgrades enabled. Do not send application traffic to control-plane VIP or K3s API port `6443`.
+
+!!! warning "Plan ingress cutover before conversion"
+    Pre-stage edge-VIP upstream as disabled backend when proxy supports it. Enable or switch backend immediately after cluster enablement advertises edge VIP and before draining first Engine node. Missing this cutover causes operator-facing outage even while cluster remains healthy.
+
+Verify from outer proxy host using actual Engine FQDN and edge VIP:
+
+```sh
+curl --resolve engine.example.com:443:192.0.2.11 \
+  https://engine.example.com/health
+```
+
+Expected response is HTTP `200`. Then verify normal FQDN login, live updates, and remote desktop through outer proxy. Port `80` is HTTP entrypoint only; use HTTPS port `443` for nested upstream to avoid redirect loops and retain end-to-end TLS.
+
 ## Add or Replace Nodes
 
 Create invitation in Cluster Management, copy K3s server token to root-only file on each new host through trusted management channel, then run node-manager join command. Include same private peer allowlist used on first node:
