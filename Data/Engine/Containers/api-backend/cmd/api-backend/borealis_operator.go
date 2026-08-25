@@ -78,6 +78,21 @@ type kubernetesAPIClient struct {
 	httpClient *http.Client
 }
 
+type kubernetesAPIError struct {
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *kubernetesAPIError) Error() string {
+	return fmt.Sprintf("Kubernetes API %s returned HTTP %d: %s", e.Path, e.StatusCode, e.Body)
+}
+
+func kubernetesAPIErrorHasStatus(err error, status int) bool {
+	var apiErr *kubernetesAPIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == status
+}
+
 type borealisOperatorKnownWorkload struct {
 	ServiceKey    string
 	Kind          string
@@ -2001,7 +2016,7 @@ func (c *kubernetesAPIClient) doJSON(ctx context.Context, method string, path st
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("Kubernetes API %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return &kubernetesAPIError{Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 	if out == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))

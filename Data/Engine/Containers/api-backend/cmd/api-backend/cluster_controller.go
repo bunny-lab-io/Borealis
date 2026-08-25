@@ -15,19 +15,22 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const (
-	clusterControllerLeaseName = "cluster-operation-controller"
-	clusterControllerLeaseTTL  = 20 * time.Second
-	clusterNodeManagerSocket   = "/run/borealis/node-manager.sock"
-	clusterNodeManagerToken    = "/etc/borealis/node-manager.token"
-	clusterUpgradeNamespace    = "system-upgrade"
+	clusterControllerLeaseName          = "cluster-operation-controller"
+	clusterControllerLeaseTTL           = 20 * time.Second
+	clusterControllerLeaseRenewInterval = 5 * time.Second
+	clusterNodeManagerSocket            = "/run/borealis/node-manager.sock"
+	clusterNodeManagerToken             = "/etc/borealis/node-manager.token"
+	clusterUpgradeNamespace             = "system-upgrade"
 )
 
 var (
+	errClusterControllerLeaseLost    = errors.New("cluster controller operation lease lost")
 	clusterControllerSHARegex        = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	clusterControllerNodeRegex       = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
 	clusterControllerLabelValueRegex = regexp.MustCompile(`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`)
@@ -122,10 +125,84 @@ type clusterController struct {
 	runner                     clusterControllerStepRunner
 	holder                     string
 	now                        func() time.Time
+	leaseRenewInterval         time.Duration
 	lastPrune                  atomic.Int64
 	lastCustomResourceSync     atomic.Int64
 	lastRuntimeRoleObservation string
 	lastCustomResourceError    string
+}
+
+type clusterControllerLeaseGuard struct {
+	ctx             context.Context
+	cancel          context.CancelCauseFunc
+	heartbeatCancel context.CancelFunc
+	done            chan struct{}
+	mu              sync.Mutex
+	err             error
+}
+
+func startClusterControllerLeaseGuard(parent context.Context, interval time.Duration, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
+	if interval <= 0 {
+		interval = clusterControllerLeaseRenewInterval
+	}
+	guardCtx, cancel := context.WithCancelCause(parent)
+	heartbeatCtx, heartbeatCancel := context.WithCancel(parent)
+	guard := &clusterControllerLeaseGuard{
+		ctx:             guardCtx,
+		cancel:          cancel,
+		heartbeatCancel: heartbeatCancel,
+		done:            make(chan struct{}),
+	}
+	go func() {
+		defer close(guard.done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				owned, err := renew(heartbeatCtx)
+				if heartbeatCtx.Err() != nil {
+					return
+				}
+				if err != nil {
+					guard.fail(fmt.Errorf("%w: renewal failed: %v", errClusterControllerLeaseLost, err))
+					return
+				}
+				if !owned {
+					guard.fail(errClusterControllerLeaseLost)
+					return
+				}
+			}
+		}
+	}()
+	return guard
+}
+
+func (g *clusterControllerLeaseGuard) fail(err error) {
+	g.mu.Lock()
+	if g.err == nil {
+		g.err = err
+	}
+	g.mu.Unlock()
+	g.cancel(err)
+}
+
+func (g *clusterControllerLeaseGuard) Context() context.Context {
+	return g.ctx
+}
+
+func (g *clusterControllerLeaseGuard) Err() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.err
+}
+
+func (g *clusterControllerLeaseGuard) Close() {
+	g.heartbeatCancel()
+	<-g.done
+	g.cancel(context.Canceled)
 }
 
 type kubernetesClusterStepRunner struct {
@@ -236,9 +313,12 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if err != nil || !owned {
 		return err
 	}
+	leaseGuard := startClusterControllerLeaseGuard(ctx, c.leaseRenewInterval, c.acquireLease)
+	defer leaseGuard.Close()
+	runCtx := leaseGuard.Context()
 	if now := c.now().UTC().Unix(); now-c.lastPrune.Load() >= int64(time.Hour/time.Second) {
 		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
-			if pruneErr := runner.pruneDailyCNPGBackups(ctx, 14); pruneErr != nil {
+			if pruneErr := runner.pruneDailyCNPGBackups(runCtx, 14); pruneErr != nil {
 				log.Printf("cluster snapshot retention reconcile failed: %v", pruneErr)
 			} else {
 				c.lastPrune.Store(now)
@@ -246,18 +326,18 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		}
 	}
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
-		c.observeRuntimeRoles(ctx, runner)
-		c.observeCustomResources(ctx, runner)
-		if recovered, recoveryErr := c.reconcileLostHMRNode(ctx, runner); recoveryErr != nil || recovered {
+		c.observeRuntimeRoles(runCtx, runner)
+		c.observeCustomResources(runCtx, runner)
+		if recovered, recoveryErr := c.reconcileLostHMRNode(runCtx, runner); recoveryErr != nil || recovered {
 			return recoveryErr
 		}
 	}
-	operation, ok, err := c.claimOperation(ctx)
+	operation, ok, err := c.claimOperation(runCtx)
 	if err != nil || !ok {
 		return err
 	}
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
-		if err := runner.recordClusterIntent(ctx, operation, clusterControllerStep{Name: operation.CurrentStep, NodeID: operation.TargetNodeID}); err != nil {
+		if err := runner.recordClusterIntent(runCtx, operation, clusterControllerStep{Name: operation.CurrentStep, NodeID: operation.TargetNodeID}); err != nil {
 			// Cluster enablement installs CRDs during foundation step. Until then,
 			// PostgreSQL remains authoritative and later reconciliation creates CR.
 			if operation.Kind != "cluster_enable" {
@@ -265,13 +345,16 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 			}
 		}
 	}
-	nodes, err := c.activeNodes(ctx)
+	nodes, err := c.activeNodes(runCtx)
 	if err != nil {
-		return c.failOperation(ctx, operation, err)
+		if cause := context.Cause(runCtx); cause != nil {
+			return cause
+		}
+		return c.failOperation(runCtx, operation, err)
 	}
 	steps, err := clusterOperationSteps(operation, nodes)
 	if err != nil {
-		return c.failOperation(ctx, operation, err)
+		return c.failOperation(runCtx, operation, err)
 	}
 	stepIndex := -1
 	for i := range steps {
@@ -281,19 +364,25 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		}
 	}
 	if stepIndex < 0 {
-		return c.failOperation(ctx, operation, fmt.Errorf("recorded operation step %q is not valid for current operation state", operation.CurrentStep))
+		return c.failOperation(runCtx, operation, fmt.Errorf("recorded operation step %q is not valid for current operation state", operation.CurrentStep))
 	}
 	step := steps[stepIndex]
-	stepCtx, cancel := context.WithTimeout(ctx, clusterControllerStepTimeout(step.Name))
+	stepCtx, cancel := context.WithTimeout(runCtx, clusterControllerStepTimeout(step.Name))
 	err = c.runner.Run(stepCtx, operation, step, nodes)
 	cancel()
+	if leaseErr := leaseGuard.Err(); leaseErr != nil {
+		return leaseErr
+	}
+	if cause := context.Cause(runCtx); cause != nil {
+		return cause
+	}
 	if err != nil {
-		return c.failOperation(ctx, operation, fmt.Errorf("%s: %w", step.Name, err))
+		return c.failOperation(runCtx, operation, fmt.Errorf("%s: %w", step.Name, err))
 	}
 	if stepIndex+1 == len(steps) {
-		return c.completeOperation(ctx, operation, nodes)
+		return c.completeOperation(runCtx, operation, nodes)
 	}
-	return c.advanceOperation(ctx, operation, steps[stepIndex+1].Name)
+	return c.advanceOperation(runCtx, operation, steps[stepIndex+1].Name)
 }
 
 func (c *clusterController) observeRuntimeRoles(ctx context.Context, runner *kubernetesClusterStepRunner) {
@@ -659,7 +748,9 @@ func clusterControllerStepTimeout(step string) time.Duration {
 	case step == "apply_cluster_foundation":
 		return 95 * time.Minute
 	case step == "apply_membership":
-		return 45 * time.Minute
+		// Pair admission runs conformance, cold image builds, candidate probes,
+		// promotion, and two ready soaks on each joining node in sequence.
+		return 3 * time.Hour
 	case step == "pre_change_snapshot", step == "migrate_postgres", step == "expand_schema", step == "finalize_schema", step == "prepare_postgres_removal", step == "scale_postgres_membership":
 		return 20 * time.Minute
 	default:
@@ -953,6 +1044,28 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 	return rows == 1, err
 }
 
+func (c *clusterController) requireLeaseOwnership(ctx context.Context, tx *sql.Tx) error {
+	var holder string
+	var expiresAt int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT holder, expires_at
+		  FROM engine.cluster_application_leases
+		 WHERE name=$1
+		 FOR UPDATE
+	`, clusterControllerLeaseName).Scan(&holder, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errClusterControllerLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	now := c.now().UTC().Unix()
+	if holder != c.holder || expiresAt < now {
+		return fmt.Errorf("%w: holder=%q expires_at=%d", errClusterControllerLeaseLost, holder, expiresAt)
+	}
+	return nil
+}
+
 func (c *clusterController) claimOperation(ctx context.Context) (clusterControllerOperation, bool, error) {
 	conn, err := c.store.db.Conn(ctx)
 	if err != nil {
@@ -964,6 +1077,9 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		return clusterControllerOperation{}, false, err
 	}
 	defer tx.Rollback()
+	if err := c.requireLeaseOwnership(ctx, tx); err != nil {
+		return clusterControllerOperation{}, false, err
+	}
 	var operation clusterControllerOperation
 	var targetNodeID, targetRelease, targetSHA, payloadJSON string
 	err = tx.QueryRowContext(ctx, `
@@ -1044,6 +1160,9 @@ func (c *clusterController) advanceOperation(ctx context.Context, operation clus
 		return err
 	}
 	defer tx.Rollback()
+	if err := c.requireLeaseOwnership(ctx, tx); err != nil {
+		return err
+	}
 	now := c.now().UTC().Unix()
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET current_step=$1, updated_at=$2 WHERE id=$3 AND state='running'`, nextStep, now, operation.ID); err != nil {
 		return err
@@ -1077,6 +1196,9 @@ func (c *clusterController) failOperation(ctx context.Context, operation cluster
 		return errors.Join(cause, err)
 	}
 	defer tx.Rollback()
+	if err := c.requireLeaseOwnership(ctx, tx); err != nil {
+		return errors.Join(cause, err)
+	}
 	now := c.now().UTC().Unix()
 	message := truncateClusterError(cause.Error(), 2048)
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state='failed', error_text=$1, finished_at=$2, updated_at=$2 WHERE id=$3`, message, now, operation.ID); err != nil {
@@ -1106,6 +1228,9 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		return err
 	}
 	defer tx.Rollback()
+	if err := c.requireLeaseOwnership(ctx, tx); err != nil {
+		return err
+	}
 	now := c.now().UTC().Unix()
 	switch operation.Kind {
 	case "cluster_enable":
@@ -2511,16 +2636,24 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	}
 	jobName := clusterActionJobName(operation.ID, fmt.Sprintf("attempt:%d:%s", operation.Attempt, step.Name))
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, jobName)
+	args := clusterNodeActionArgs(operation, verb)
+	manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, r.actionImage, args, operation.ID, step.Name)
 	var existing map[string]any
 	if err := r.kube.getJSON(ctx, path, &existing); err != nil {
-		if !strings.Contains(err.Error(), "returned HTTP 404") {
+		if !kubernetesAPIErrorHasStatus(err, http.StatusNotFound) {
 			return err
 		}
-		args := clusterNodeActionArgs(operation, verb)
-		manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, r.actionImage, args, operation.ID, step.Name)
 		if err := r.kube.doJSON(ctx, http.MethodPost, fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs", r.namespace), manifest, "application/json", &existing, 30*time.Second); err != nil {
-			return err
+			if !kubernetesAPIErrorHasStatus(err, http.StatusConflict) {
+				return err
+			}
+			if err := r.kube.getJSON(ctx, path, &existing); err != nil {
+				return fmt.Errorf("node action Job %s collision could not be inspected: %w", jobName, err)
+			}
 		}
+	}
+	if err := validateClusterActionJobIdentity(existing, manifest); err != nil {
+		return fmt.Errorf("node action Job %s does not match requested immutable action: %w", jobName, err)
 	}
 	if verb == "EnrollCluster" {
 		return r.waitClusterInitJob(ctx, jobName)
@@ -2756,7 +2889,11 @@ func clusterActionStepLabel(step string) string {
 func clusterActionJobManifest(name, namespace, nodeName, imageRef string, args []string, operationID, step string) map[string]any {
 	return map[string]any{
 		"apiVersion": "batch/v1", "kind": "Job",
-		"metadata": map[string]any{"name": name, "namespace": namespace, "labels": map[string]string{"app.kubernetes.io/name": "borealis-node-action", "borealis.io/operation-id": operationID}},
+		"metadata": map[string]any{
+			"name": name, "namespace": namespace,
+			"labels":      map[string]string{"app.kubernetes.io/name": "borealis-node-action", "borealis.io/operation-id": operationID},
+			"annotations": map[string]string{"borealis.io/operation-step": step},
+		},
 		"spec": map[string]any{"backoffLimit": 0, "ttlSecondsAfterFinished": 86400, "template": map[string]any{
 			"metadata": map[string]any{"labels": map[string]string{"app.kubernetes.io/name": "borealis-node-action", "borealis.io/operation-step": clusterActionStepLabel(step)}},
 			"spec": map[string]any{
@@ -2776,6 +2913,104 @@ func clusterActionJobManifest(name, namespace, nodeName, imageRef string, args [
 			},
 		}},
 	}
+}
+
+func validateClusterActionJobIdentity(actual, expected map[string]any) error {
+	actualMetadata := nestedMap(actual, "metadata")
+	expectedMetadata := nestedMap(expected, "metadata")
+	for _, key := range []string{"name", "namespace"} {
+		if cleanText(actualMetadata[key]) != cleanText(expectedMetadata[key]) {
+			return fmt.Errorf("metadata %s mismatch", key)
+		}
+	}
+	actualLabels := clusterStringMap(actualMetadata["labels"])
+	expectedLabels := clusterStringMap(expectedMetadata["labels"])
+	if actualLabels["borealis.io/operation-id"] != expectedLabels["borealis.io/operation-id"] {
+		return errors.New("operation label mismatch")
+	}
+	actualAnnotations := clusterStringMap(actualMetadata["annotations"])
+	expectedAnnotations := clusterStringMap(expectedMetadata["annotations"])
+	if actualAnnotations["borealis.io/operation-step"] != expectedAnnotations["borealis.io/operation-step"] {
+		return errors.New("operation step annotation mismatch")
+	}
+
+	actualTemplate := nestedMap(nestedMap(actual, "spec"), "template")
+	expectedTemplate := nestedMap(nestedMap(expected, "spec"), "template")
+	actualStepLabels := clusterStringMap(nestedMap(actualTemplate, "metadata")["labels"])
+	expectedStepLabels := clusterStringMap(nestedMap(expectedTemplate, "metadata")["labels"])
+	if actualStepLabels["borealis.io/operation-step"] != expectedStepLabels["borealis.io/operation-step"] {
+		return errors.New("operation step label mismatch")
+	}
+	actualPod := nestedMap(actualTemplate, "spec")
+	expectedPod := nestedMap(expectedTemplate, "spec")
+	if cleanText(actualPod["nodeName"]) != cleanText(expectedPod["nodeName"]) {
+		return errors.New("target node mismatch")
+	}
+	if cleanText(actualPod["serviceAccountName"]) != cleanText(expectedPod["serviceAccountName"]) || actualPod["automountServiceAccountToken"] != expectedPod["automountServiceAccountToken"] {
+		return errors.New("pod identity boundary mismatch")
+	}
+	actualContainers := anySlice(actualPod["containers"])
+	expectedContainers := anySlice(expectedPod["containers"])
+	if len(actualContainers) != 1 || len(expectedContainers) != 1 {
+		return errors.New("action container count mismatch")
+	}
+	actualContainer, actualOK := actualContainers[0].(map[string]any)
+	expectedContainer, expectedOK := expectedContainers[0].(map[string]any)
+	if !actualOK || !expectedOK || cleanText(actualContainer["name"]) != cleanText(expectedContainer["name"]) {
+		return errors.New("action container identity mismatch")
+	}
+	if cleanText(actualContainer["image"]) != cleanText(expectedContainer["image"]) {
+		return errors.New("action image mismatch")
+	}
+	if !clusterStringSlicesEqual(clusterStringSlice(actualContainer["command"]), clusterStringSlice(expectedContainer["command"])) {
+		return errors.New("action command mismatch")
+	}
+	if !clusterStringSlicesEqual(clusterStringSlice(actualContainer["args"]), clusterStringSlice(expectedContainer["args"])) {
+		return errors.New("action arguments mismatch")
+	}
+	return nil
+}
+
+func clusterStringMap(value any) map[string]string {
+	result := map[string]string{}
+	switch typed := value.(type) {
+	case map[string]string:
+		for key, item := range typed {
+			result[key] = item
+		}
+	case map[string]any:
+		for key, item := range typed {
+			result[key] = cleanText(item)
+		}
+	}
+	return result
+}
+
+func clusterStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, cleanText(item))
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func clusterStringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) error {

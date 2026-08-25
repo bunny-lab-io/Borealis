@@ -46,7 +46,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/scheduled_jobs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:134` |
 | `/api/scheduled_jobs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:135` |
 | `/api/server/ansible-runner-settings` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_settings.go:21` |
-| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2138` |
+| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2153` |
 | `/api/server/logs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:24` |
 | `/api/server/logs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:25` |
 | `/api/server/overview` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go:53` |
@@ -67,14 +67,14 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/watchdogs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:169` |
 | `/api/workflows/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/workflows.go:105` |
 | `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:121` |
-| `/healthz` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:207` |
-| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:209` |
+| `/healthz` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:222` |
+| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:224` |
 | `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:123` |
-| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:210` |
+| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:225` |
 | `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:124` |
-| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:208` |
+| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:223` |
 | `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:122` |
-| `/v1/command` | `operator` | `operator-hmac` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:211` |
+| `/v1/command` | `operator` | `operator-hmac` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:226` |
 | `DELETE /api/admin/enrollment-codes/{code_id}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:49` |
 | `GET /api/aegis/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:19` |
 | `GET /api/agent/hash_list` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go:54` |
@@ -115,9 +115,9 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `GET /api/tunnel/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:322` |
 | `GET /api/vnc/sessions` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:117` |
 | `GET /api/vnc/viewers` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:112` |
-| `GET /live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:219` |
-| `GET /ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:222` |
-| `GET /startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:216` |
+| `GET /live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:296` |
+| `GET /ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:299` |
+| `GET /startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:293` |
 | `POST /api/admin/device-approvals/{approval_id}/approve` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:51` |
 | `POST /api/admin/device-approvals/{approval_id}/deny` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:52` |
 | `POST /api/aegis/force_reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:23` |

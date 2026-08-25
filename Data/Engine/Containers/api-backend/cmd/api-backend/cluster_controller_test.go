@@ -2,15 +2,37 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type blockingClusterControllerRunner struct {
+	calls   atomic.Int64
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingClusterControllerRunner) Run(ctx context.Context, _ clusterControllerOperation, _ clusterControllerStep, _ []clusterControllerNode) error {
+	r.calls.Add(1)
+	r.once.Do(func() { close(r.started) })
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func TestClusterControllerStepTimeoutCoversLongNodeActions(t *testing.T) {
 	tests := []struct {
@@ -18,6 +40,7 @@ func TestClusterControllerStepTimeoutCoversLongNodeActions(t *testing.T) {
 		want time.Duration
 	}{
 		{step: "apply_cluster_foundation", want: 95 * time.Minute},
+		{step: "apply_membership", want: 3 * time.Hour},
 		{step: "node:id:stage_revision_images", want: 65 * time.Minute},
 		{step: "node:id:redeploy_revision", want: 65 * time.Minute},
 		{step: "node:id:promote_candidate", want: 65 * time.Minute},
@@ -51,6 +74,133 @@ func TestClusterControllerCandidateCannotAcquireOperationLease(t *testing.T) {
 	t.Setenv("BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "true")
 	if !clusterControllerEligible() {
 		t.Fatal("promoted cluster controller did not regain eligibility")
+	}
+}
+
+func TestClusterControllerLeaseGuardRenewsDuringLongStep(t *testing.T) {
+	var renewals atomic.Int64
+	guard := startClusterControllerLeaseGuard(context.Background(), 2*time.Millisecond, func(context.Context) (bool, error) {
+		renewals.Add(1)
+		return true, nil
+	})
+	defer guard.Close()
+	deadline := time.After(time.Second)
+	for renewals.Load() < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("lease heartbeat stopped after %d renewals", renewals.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := guard.Err(); err != nil || guard.Context().Err() != nil {
+		t.Fatalf("healthy lease heartbeat canceled long step: err=%v context=%v", err, guard.Context().Err())
+	}
+}
+
+func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
+	guard := startClusterControllerLeaseGuard(context.Background(), time.Millisecond, func(context.Context) (bool, error) {
+		return false, nil
+	})
+	defer guard.Close()
+	select {
+	case <-guard.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("lease ownership loss did not cancel step context")
+	}
+	if !errors.Is(guard.Err(), errClusterControllerLeaseLost) || !errors.Is(context.Cause(guard.Context()), errClusterControllerLeaseLost) {
+		t.Fatalf("unexpected lease loss cause: err=%v cause=%v", guard.Err(), context.Cause(guard.Context()))
+	}
+}
+
+func TestClusterControllerPostgresLeaseSerializesLongStep(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operationID := "8ad68810-bced-453f-a1cb-6585ec4cb383"
+	clusterID := "5bcc1c7b-81d8-43c4-8faf-2f7b628f1f0d"
+	base := time.Now().UTC().Unix()
+	cleanup := func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET active_operation_id=NULL WHERE id=1 AND active_operation_id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_application_leases WHERE name=$1`, clusterControllerLeaseName)
+	}
+	cleanup()
+	defer cleanup()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Healthy',1,1,'inactive',$2,'{}',$3,$3)
+		ON CONFLICT(id) DO UPDATE SET status='Healthy',active_operation_id=EXCLUDED.active_operation_id,updated_at=EXCLUDED.updated_at
+	`, clusterID, operationID, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_operations(id,kind,state,current_step,requested_by,payload_json,attempt,created_at,updated_at)
+		VALUES($1,'membership_admit','queued','preflight','lease-test','{}',1,$2,$2)
+	`, operationID, base); err != nil {
+		t.Fatal(err)
+	}
+
+	firstRunner := &blockingClusterControllerRunner{started: make(chan struct{}), release: make(chan struct{})}
+	secondRunner := &blockingClusterControllerRunner{started: make(chan struct{}), release: make(chan struct{})}
+	var logicalClock atomic.Int64
+	first := &clusterController{
+		store: store, runner: firstRunner, holder: "controller-one", leaseRenewInterval: 5 * time.Millisecond,
+		now: func() time.Time { return time.Unix(base+logicalClock.Add(1), 0).UTC() },
+	}
+	second := &clusterController{
+		store: store, runner: secondRunner, holder: "controller-two", leaseRenewInterval: 5 * time.Millisecond,
+		now: func() time.Time { return time.Unix(base+logicalClock.Load(), 0).UTC() },
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.runOnce(ctx) }()
+	select {
+	case <-firstRunner.started:
+	case <-ctx.Done():
+		t.Fatal("first controller did not start operation step")
+	}
+	for {
+		var updatedAt int64
+		if err := db.QueryRowContext(ctx, `SELECT updated_at FROM engine.cluster_application_leases WHERE name=$1`, clusterControllerLeaseName).Scan(&updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if updatedAt > base+1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("controller lease was not renewed during blocked step")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := second.runOnce(ctx); err != nil {
+		t.Fatalf("standby controller lease check failed: %v", err)
+	}
+	if secondRunner.calls.Load() != 0 {
+		t.Fatalf("standby controller executed owned operation %d time(s)", secondRunner.calls.Load())
+	}
+	close(firstRunner.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("lease-owning controller failed long step: %v", err)
+	}
+	var state, step string
+	if err := db.QueryRowContext(ctx, `SELECT state,current_step FROM engine.cluster_operations WHERE id=$1`, operationID).Scan(&state, &step); err != nil {
+		t.Fatal(err)
+	}
+	if state != "running" || step != "apply_membership" || firstRunner.calls.Load() != 1 {
+		t.Fatalf("unexpected operation state=%s step=%s first_calls=%d", state, step, firstRunner.calls.Load())
 	}
 }
 
@@ -555,6 +705,130 @@ func TestClusterActionJobNormalizesStepLabel(t *testing.T) {
 	}
 	if label != clusterActionStepLabel(step) {
 		t.Fatalf("operation-step label is not stable: %q", label)
+	}
+}
+
+func TestClusterActionJobIdentityRejectsImmutableMismatch(t *testing.T) {
+	expected := clusterActionJobManifest(
+		"cluster-action", "borealis", "engine-2",
+		"registry.example/borealis@sha256:"+strings.Repeat("a", 64),
+		[]string{"client", "--verb", "InspectHealth"}, "operation", "inspect",
+	)
+	clone := func(t *testing.T) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(expected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output map[string]any
+		if err := json.Unmarshal(raw, &output); err != nil {
+			t.Fatal(err)
+		}
+		return output
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "operation label", mutate: func(job map[string]any) {
+			nestedMap(job, "metadata")["labels"].(map[string]any)["borealis.io/operation-id"] = "different-operation"
+		}},
+		{name: "step annotation", mutate: func(job map[string]any) {
+			nestedMap(job, "metadata")["annotations"].(map[string]any)["borealis.io/operation-step"] = "different-step"
+		}},
+		{name: "step label", mutate: func(job map[string]any) {
+			template := nestedMap(nestedMap(job, "spec"), "template")
+			nestedMap(template, "metadata")["labels"].(map[string]any)["borealis.io/operation-step"] = "different-step"
+		}},
+		{name: "target node", mutate: func(job map[string]any) {
+			spec := job["spec"].(map[string]any)
+			template := spec["template"].(map[string]any)
+			template["spec"].(map[string]any)["nodeName"] = "engine-3"
+		}},
+		{name: "image", mutate: func(job map[string]any) {
+			template := nestedMap(nestedMap(job, "spec"), "template")
+			container := anySlice(nestedMap(template, "spec")["containers"])[0].(map[string]any)
+			container["image"] = "registry.example/borealis@sha256:" + strings.Repeat("b", 64)
+		}},
+		{name: "arguments", mutate: func(job map[string]any) {
+			template := nestedMap(nestedMap(job, "spec"), "template")
+			container := anySlice(nestedMap(template, "spec")["containers"])[0].(map[string]any)
+			container["args"] = []any{"client", "--verb", "EnterApplicationDrain"}
+		}},
+	}
+	matching := clone(t)
+	if err := validateClusterActionJobIdentity(matching, expected); err != nil {
+		t.Fatalf("matching Kubernetes Job rejected: %v", err)
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := clone(t)
+			test.mutate(actual)
+			if err := validateClusterActionJobIdentity(actual, expected); err == nil {
+				t.Fatal("mismatched Kubernetes Job accepted")
+			}
+		})
+	}
+}
+
+func TestNodeActionJobResumesMatchingAlreadyExistsCollision(t *testing.T) {
+	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Attempt: 2}
+	step := clusterControllerStep{Name: "admit:22222222-2222-4222-8222-222222222222:candidate_health", NodeID: "22222222-2222-4222-8222-222222222222"}
+	node := clusterControllerNode{ID: step.NodeID, Name: "engine-2"}
+	image := "registry.example/borealis@sha256:" + strings.Repeat("a", 64)
+	jobName := clusterActionJobName(operation.ID, "attempt:2:"+step.Name)
+	job := clusterActionJobManifest(jobName, "borealis", node.Name, image, clusterNodeActionArgs(operation, "InspectCandidateHealth"), operation.ID, step.Name)
+	job["status"] = map[string]any{"succeeded": 1}
+	gets := 0
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/jobs/"+jobName):
+			gets++
+			if gets == 1 {
+				http.NotFound(w, request)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(job)
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/jobs"):
+			posts++
+			http.Error(w, "already exists", http.StatusConflict)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace: "borealis", actionImage: image, jobPollInterval: time.Millisecond,
+	}
+	if err := runner.nodeActionJob(context.Background(), operation, step, node, "InspectCandidateHealth"); err != nil {
+		t.Fatalf("matching AlreadyExists Job did not resume: %v", err)
+	}
+	if posts != 1 || gets != 3 {
+		t.Fatalf("unexpected collision flow posts=%d gets=%d", posts, gets)
+	}
+}
+
+func TestNodeActionJobRejectsMismatchedExistingJob(t *testing.T) {
+	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Attempt: 2}
+	step := clusterControllerStep{Name: "inspect", NodeID: "22222222-2222-4222-8222-222222222222"}
+	node := clusterControllerNode{ID: step.NodeID, Name: "engine-2"}
+	image := "registry.example/borealis@sha256:" + strings.Repeat("a", 64)
+	jobName := clusterActionJobName(operation.ID, "attempt:2:"+step.Name)
+	job := clusterActionJobManifest(jobName, "borealis", node.Name, "registry.example/borealis@sha256:"+strings.Repeat("b", 64), clusterNodeActionArgs(operation, "InspectHealth"), operation.ID, step.Name)
+	job["status"] = map[string]any{"succeeded": 1}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		_ = json.NewEncoder(w).Encode(job)
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace: "borealis", actionImage: image, jobPollInterval: time.Millisecond,
+	}
+	err := runner.nodeActionJob(context.Background(), operation, step, node, "InspectHealth")
+	if err == nil || !strings.Contains(err.Error(), "action image mismatch") {
+		t.Fatalf("mismatched existing Job did not fail closed: %v", err)
 	}
 }
 
