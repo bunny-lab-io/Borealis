@@ -133,14 +133,14 @@ func TestEngineAgentBinaryRedeployKeepsOldWorkersUntilHealthCutover(t *testing.T
 	source := readRepositoryContractFile(t, "Engine.sh")
 	function := engineShellFunctionForContractTest(t, source, "redeploy_agent_binaries() {", "\nusage() {")
 	assertContractOrder(t, function,
-		`agent_redeploy_probe_pod "${candidate}"`,
+		`agent_redeploy_wait_for_pod_health "${candidate}"`,
 		`agent_redeploy_patch_service_revision "${service}" "${candidate_revision}"`,
 		`agent_redeploy_probe_service "${candidate}"`,
 		"AGENT_REDEPLOY_COMMIT_STARTED=1",
 		`delete "pod/${pod}" --wait=true`,
 		`agent_redeploy_wait_for_worker_registration "${worker_guid}"`,
 	)
-	for _, expected := range []string{"Traefik route file unchanged", `scale deployment/job-scheduler --replicas=0`} {
+	for _, expected := range []string{"Traefik route file unchanged", "agent_redeploy_pause_schedulers", "agent_redeploy_restore_schedulers"} {
 		if !strings.Contains(function, expected) {
 			t.Fatalf("redeploy cutover lost %q", expected)
 		}
@@ -155,7 +155,8 @@ func TestEngineAgentBinaryRedeployHasPrecommitRollback(t *testing.T) {
 		`agent_redeploy_patch_service_revision "${service}" "${old_revision}"`,
 		`delete "pod/${candidate}"`,
 		"--ignore-not-found=true --wait=true --timeout=90s",
-		`scale deployment/job-scheduler --replicas=1`,
+		"agent_redeploy_set_scheduler_worker_image",
+		"agent_redeploy_restore_schedulers",
 	} {
 		if !strings.Contains(recovery, expected) {
 			t.Fatalf("redeploy rollback lost %q", expected)

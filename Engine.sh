@@ -259,7 +259,9 @@ declare -A AGENT_REDEPLOY_OLD_REVISION_BY_SERVICE
 declare -A AGENT_REDEPLOY_ORIGINAL_REVISION_BY_SERVICE
 declare -A AGENT_REDEPLOY_CUTOVER_BY_SERVICE
 declare -A AGENT_REDEPLOY_OLD_LABEL_ADDED_BY_SERVICE
+declare -A AGENT_REDEPLOY_SCHEDULER_REPLICAS
 AGENT_REDEPLOY_SERVICES=()
+AGENT_REDEPLOY_SCHEDULERS=()
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
@@ -10201,17 +10203,19 @@ agent_redeploy_verify_api_cache_mount() {
     _ "${config_path}" "${artifact_path}" "${build_id}" >>"${BUILD_LOG}" 2>&1
 }
 
+agent_redeploy_cnpg_primary_pod() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get endpointslice \
+    -l kubernetes.io/service-name=borealis-postgres-rw \
+    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' \
+    2>>"${BUILD_LOG}" | awk 'NF {print; exit}'
+}
+
 agent_redeploy_active_work_count() {
   local count=""
   if cluster_mode_enabled; then
     local primary_pod=""
     local database=""
-    primary_pod="$(
-      k3s_kubectl -n "${K3S_NAMESPACE}" get endpointslice \
-        -l kubernetes.io/service-name=borealis-postgres-rw \
-        -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' \
-        2>>"${BUILD_LOG}" | awk 'NF {print; exit}'
-    )"
+    primary_pod="$(agent_redeploy_cnpg_primary_pod)"
     database="$(read_env_value POSTGRES_DB "${RUNTIME_ENV}")"
     [[ -n "${primary_pod}" && -n "${database}" ]] || return 1
     count="$(
@@ -10388,6 +10392,24 @@ if payload.get("status") != "ok" or str(payload.get("worker_guid") or "") != wor
 ' "${worker_guid}" "${site_id}"
 }
 
+agent_redeploy_wait_for_pod_health() {
+  local pod="$1"
+  local remote_ops_port="$2"
+  local worker_guid="$3"
+  local site_id="$4"
+  local timeout="${5:-30}"
+  local attempt=0
+  [[ "${timeout}" =~ ^[0-9]+$ && "${timeout}" -ge 1 ]] || return 1
+  while ((attempt < timeout)); do
+    if agent_redeploy_probe_pod "${pod}" "${remote_ops_port}" "${worker_guid}" "${site_id}"; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    ((attempt < timeout)) && sleep 1
+  done
+  return 1
+}
+
 agent_redeploy_probe_service() {
   local pod="$1"
   local service="$2"
@@ -10421,12 +10443,27 @@ WHERE workers.worker_guid = :'"'"'worker_guid'"'"'
   AND workers.status IN ('"'"'starting'"'"', '"'"'running'"'"', '"'"'idle'"'"')
   AND routes.container_name = :'"'"'container_name'"'"'
   AND routes.status = '"'"'active'"'"';'
+  local primary_pod=""
+  local database=""
+  if cluster_mode_enabled; then
+    primary_pod="$(agent_redeploy_cnpg_primary_pod)"
+    database="$(read_env_value POSTGRES_DB "${RUNTIME_ENV}")"
+    [[ -n "${primary_pod}" && -n "${database}" ]] || return 1
+  fi
   while ((SECONDS < deadline)); do
-    count="$(
-      printf '%s\n' "${query}" | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -c \
-        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v "worker_guid=$1" -v "container_name=$2" -Atq' \
-        _ "${worker_guid}" "${container_name}" 2>>"${BUILD_LOG}" | tr -d '[:space:]'
-    )" || true
+    if [[ -n "${primary_pod}" ]]; then
+      count="$(
+        printf '%s\n' "${query}" | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i "${primary_pod}" -c postgres -- \
+          psql "--dbname=${database}" -v "worker_guid=${worker_guid}" -v "container_name=${container_name}" -Atq \
+          2>>"${BUILD_LOG}" | tr -d '[:space:]'
+      )" || true
+    else
+      count="$(
+        printf '%s\n' "${query}" | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -c \
+          'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v "worker_guid=$1" -v "container_name=$2" -Atq' \
+          _ "${worker_guid}" "${container_name}" 2>>"${BUILD_LOG}" | tr -d '[:space:]'
+      )" || true
+    fi
     [[ "${count}" == "1" ]] && return 0
     sleep 1
   done
@@ -10523,10 +10560,114 @@ PY
   return "${status}"
 }
 
+agent_redeploy_scheduler_deployments() {
+  if cluster_mode_enabled; then
+    local names=""
+    names="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" get deployments \
+        -l 'app.kubernetes.io/name=job-scheduler,borealis.io/node-workload=true,borealis.io/update-candidate=false' \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>>"${BUILD_LOG}"
+    )" || return 1
+    [[ -n "${names}" ]] || return 1
+    printf '%s\n' "${names}" | awk 'NF && !seen[$0]++'
+    return 0
+  fi
+  printf '%s\n' job-scheduler
+}
+
 agent_redeploy_scheduler_desired_image() {
-  k3s_kubectl -n "${K3S_NAMESPACE}" get deployment/job-scheduler \
-    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="BOREALIS_SITE_WORKER_IMAGE")].value}' \
-    2>>"${BUILD_LOG}"
+  local deployments=()
+  local deployment_output=""
+  deployment_output="$(agent_redeploy_scheduler_deployments)" || return 1
+  mapfile -t deployments <<<"${deployment_output}"
+  ((${#deployments[@]} > 0)) || return 1
+  local deployment=""
+  local image=""
+  local expected=""
+  for deployment in "${deployments[@]}"; do
+    image="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" get "deployment/${deployment}" \
+        -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="BOREALIS_SITE_WORKER_IMAGE")].value}' \
+        2>>"${BUILD_LOG}"
+    )" || return 1
+    [[ -n "${image}" ]] || return 1
+    if [[ -n "${expected}" && "${image}" != "${expected}" ]]; then
+      printf '[%s] Scheduler worker-image mismatch: %s has %s; expected %s.\n' \
+        "$(date +%FT%T)" "${deployment}" "${image}" "${expected}" >>"${BUILD_LOG}"
+      return 1
+    fi
+    expected="${image}"
+  done
+  printf '%s\n' "${expected}"
+}
+
+agent_redeploy_pause_schedulers() {
+  AGENT_REDEPLOY_SCHEDULERS=()
+  AGENT_REDEPLOY_SCHEDULER_REPLICAS=()
+  local deployment_output=""
+  deployment_output="$(agent_redeploy_scheduler_deployments)" || return 1
+  mapfile -t AGENT_REDEPLOY_SCHEDULERS <<<"${deployment_output}"
+  ((${#AGENT_REDEPLOY_SCHEDULERS[@]} > 0)) || return 1
+  local deployment=""
+  local replicas=""
+  for deployment in "${AGENT_REDEPLOY_SCHEDULERS[@]}"; do
+    replicas="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" get "deployment/${deployment}" -o jsonpath='{.spec.replicas}' \
+        2>>"${BUILD_LOG}"
+    )" || return 1
+    [[ "${replicas}" =~ ^[0-9]+$ ]] || return 1
+    AGENT_REDEPLOY_SCHEDULER_REPLICAS["${deployment}"]="${replicas}"
+  done
+  AGENT_REDEPLOY_SCHEDULER_PAUSED=1
+  for deployment in "${AGENT_REDEPLOY_SCHEDULERS[@]}"; do
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale "deployment/${deployment}" --replicas=0 >>"${BUILD_LOG}" 2>&1 \
+      || return 1
+    k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${deployment}" --timeout=120s >>"${BUILD_LOG}" 2>&1 \
+      || return 1
+  done
+}
+
+agent_redeploy_set_scheduler_worker_image() {
+  local image="$1"
+  local deployments=("${AGENT_REDEPLOY_SCHEDULERS[@]}")
+  if ((${#deployments[@]} == 0)); then
+    local deployment_output=""
+    deployment_output="$(agent_redeploy_scheduler_deployments)" || return 1
+    mapfile -t deployments <<<"${deployment_output}"
+  fi
+  ((${#deployments[@]} > 0)) || return 1
+  local deployment=""
+  local replicas=""
+  for deployment in "${deployments[@]}"; do
+    k3s_kubectl -n "${K3S_NAMESPACE}" set env "deployment/${deployment}" \
+      "BOREALIS_SITE_WORKER_IMAGE=${image}" >>"${BUILD_LOG}" 2>&1 || return 1
+    replicas="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" get "deployment/${deployment}" -o jsonpath='{.spec.replicas}' \
+        2>>"${BUILD_LOG}"
+    )" || return 1
+    [[ "${replicas}" =~ ^[0-9]+$ ]] || return 1
+    if ((replicas > 0)); then
+      k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${deployment}" --timeout=120s >>"${BUILD_LOG}" 2>&1 \
+        || return 1
+    fi
+  done
+}
+
+agent_redeploy_restore_schedulers() {
+  ((${#AGENT_REDEPLOY_SCHEDULERS[@]} > 0)) || return 1
+  local deployment=""
+  local replicas=""
+  for deployment in "${AGENT_REDEPLOY_SCHEDULERS[@]}"; do
+    replicas="${AGENT_REDEPLOY_SCHEDULER_REPLICAS[${deployment}]:-}"
+    [[ "${replicas}" =~ ^[0-9]+$ ]] || return 1
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale "deployment/${deployment}" "--replicas=${replicas}" >>"${BUILD_LOG}" 2>&1 \
+      || return 1
+    if ((replicas > 0)); then
+      k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${deployment}" --timeout=120s >>"${BUILD_LOG}" 2>&1 \
+        || return 1
+    fi
+  done
+  AGENT_REDEPLOY_SCHEDULER_PAUSED=0
 }
 
 agent_redeploy_exit_trap() {
@@ -10574,16 +10715,18 @@ agent_redeploy_exit_trap() {
       BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
       ensure_borealis_operator_bridge || true
       if [[ "${AGENT_REDEPLOY_SCHEDULER_PAUSED}" -eq 1 ]]; then
-        k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=1 >>"${BUILD_LOG}" 2>&1 || true
-        k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/job-scheduler --timeout=120s >>"${BUILD_LOG}" 2>&1 || true
+        BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE=0
+        ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}" || true
+        unset BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE
+        agent_redeploy_set_scheduler_worker_image "${AGENT_REDEPLOY_PREVIOUS_IMAGE}" || true
+        agent_redeploy_restore_schedulers || true
       fi
       log_status "site-worker" "Rolled Back - Old Workers Retained" "${C_YELLOW}"
     else
       local desired_image=""
       desired_image="$(agent_redeploy_scheduler_desired_image || true)"
       if [[ "${desired_image}" == "${AGENT_REDEPLOY_TARGET_IMAGE}" ]]; then
-        k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=1 >>"${BUILD_LOG}" 2>&1 || true
-        k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/job-scheduler --timeout=120s >>"${BUILD_LOG}" 2>&1 || true
+        agent_redeploy_restore_schedulers || true
       else
         printf '[%s] Scheduler remains paused because desired worker image is %s, expected %s.\n' \
           "$(date +%FT%T)" "${desired_image:-unknown}" "${AGENT_REDEPLOY_TARGET_IMAGE}" >>"${BUILD_LOG}"
@@ -10645,6 +10788,8 @@ redeploy_agent_binaries() {
     BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA="${AGENT_REDEPLOY_PREVIOUS_IMAGE}"
     ensure_borealis_operator_bridge
     ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}"
+    agent_redeploy_set_scheduler_worker_image "${AGENT_REDEPLOY_TARGET_IMAGE}" \
+      || die "Job scheduler worker image did not update cleanly."
     export_image_manifest_env
     write_image_manifest "${AGENT_REDEPLOY_MODE}"
     BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
@@ -10660,11 +10805,8 @@ redeploy_agent_binaries() {
   log_section "Safe Worker Rotation"
   agent_redeploy_wait_for_work_drain
   log_status "k3s-job-scheduler" "Pausing Reconciliation" "${C_YELLOW}"
-  k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=0 >>"${BUILD_LOG}" 2>&1 \
-    || die "Failed to pause job scheduler before worker preparation."
-  k3s_kubectl -n "${K3S_NAMESPACE}" rollout status deployment/job-scheduler --timeout=120s >>"${BUILD_LOG}" 2>&1 \
-    || die "Job scheduler did not pause cleanly."
-  AGENT_REDEPLOY_SCHEDULER_PAUSED=1
+  agent_redeploy_pause_schedulers \
+    || die "Job scheduler Deployments did not pause cleanly before worker preparation."
   log_status "k3s-job-scheduler" "Paused - Workers Remain Live" "${C_GREEN}"
 
   BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA="${AGENT_REDEPLOY_PREVIOUS_IMAGE}"
@@ -10733,7 +10875,7 @@ redeploy_agent_binaries() {
       || die "Failed to create replacement worker ${candidate}."
     k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=Ready "pod/${candidate}" --timeout=120s >>"${BUILD_LOG}" 2>&1 \
       || die "Replacement worker ${candidate} did not become Ready. Old worker remains live."
-    agent_redeploy_probe_pod "${candidate}" "${remote_ops_port}" "${worker_guid}" "${site_id}" \
+    agent_redeploy_wait_for_pod_health "${candidate}" "${remote_ops_port}" "${worker_guid}" "${site_id}" 30 \
       || die "Replacement worker ${candidate} failed direct health check. Old worker remains live."
     log_status "${service}" "Candidate Ready - Old Worker Live" "${C_GREEN}"
   done
@@ -10758,6 +10900,8 @@ redeploy_agent_binaries() {
   BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE=0
   ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}"
   unset BOREALIS_JOB_SCHEDULER_REPLICAS_OVERRIDE
+  agent_redeploy_set_scheduler_worker_image "${AGENT_REDEPLOY_TARGET_IMAGE}" \
+    || die "Paused job scheduler Deployments did not accept new worker image."
 
   for record in "${records[@]}"; do
     IFS=$'\t' read -r pod service worker_guid site_id remote_ops_port remote_desktop_port configured_image pod_uid pod_revision <<<"${record}"
@@ -10777,7 +10921,10 @@ redeploy_agent_binaries() {
   BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST_EXTRA=""
   ensure_borealis_operator_bridge
   ensure_k3s_job_scheduler "${AGENT_REDEPLOY_MODE}"
-  AGENT_REDEPLOY_SCHEDULER_PAUSED=0
+  agent_redeploy_set_scheduler_worker_image "${AGENT_REDEPLOY_TARGET_IMAGE}" \
+    || die "Job scheduler worker image did not remain pinned to new release."
+  agent_redeploy_restore_schedulers \
+    || die "Job scheduler Deployments did not restore previous replica counts."
   log_status "k3s-job-scheduler" "Ready - New Worker Image Active" "${C_GREEN}"
   log_status "Agent Installer Cache" "Published - ${AGENT_REDEPLOY_ARTIFACT_ID}" "${C_GREEN}"
   log_status "site-worker" "Ready - ${#records[@]} Worker(s) Replaced" "${C_GREEN}"
