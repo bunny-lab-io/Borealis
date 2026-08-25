@@ -144,16 +144,19 @@ func clusterBannerHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		hmr := mapStringAny(snapshot["hmr"])
-		var activeOperation any
-		for _, raw := range anySlice(snapshot["operations"]) {
-			operation, _ := raw.(map[string]any)
-			if textInSet(cleanText(operation["state"]), "queued", "running", "waiting", "failed") {
-				activeOperation = map[string]any{"kind": operation["kind"], "state": operation["state"], "current_step": operation["current_step"]}
-				break
-			}
-		}
+		activeOperation := clusterBannerActiveOperation(snapshot["operations"])
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": snapshot["enabled"], "status": snapshot["status"], "hmr_state": hmr["state"], "active_operation": activeOperation})
 	}
+}
+
+func clusterBannerActiveOperation(value any) any {
+	for _, raw := range anySlice(value) {
+		operation, _ := raw.(map[string]any)
+		if textInSet(cleanText(operation["state"]), "queued", "running", "waiting") {
+			return map[string]any{"kind": operation["kind"], "state": operation["state"], "current_step": operation["current_step"]}
+		}
+	}
+	return nil
 }
 
 func clusterSnapshotHandler(auth *authService) http.HandlerFunc {
@@ -631,8 +634,8 @@ func clusterInvitationHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "cluster_not_enabled"})
 			return
 		}
-		if coerceInt64(snapshot["active_size"]) != 1 {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "five_plus_not_qualified", "message": "Current release creates node invitations only for one-to-three expansion."})
+		if _, err := currentReleaseAdmissionBatchSize(coerceInt64(snapshot["active_size"]), coerceInt64(snapshot["desired_size"]), cleanText(snapshot["status"])); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "membership_not_qualified", "message": "Current release creates invitations only for one-to-three expansion or one-for-one degraded-quorum replacement."})
 			return
 		}
 		invitationID := newClusterUUID()

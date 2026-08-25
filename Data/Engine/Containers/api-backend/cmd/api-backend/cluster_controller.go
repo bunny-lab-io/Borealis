@@ -428,7 +428,8 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 		return err
 	}
 	var enabled int
-	if err := conn.QueryRowContext(ctx, `SELECT enabled FROM engine.cluster_state WHERE id=1`).Scan(&enabled); err != nil {
+	var clusterStatus, configJSON string
+	if err := conn.QueryRowContext(ctx, `SELECT enabled,status,config_json FROM engine.cluster_state WHERE id=1`).Scan(&enabled, &clusterStatus, &configJSON); err != nil {
 		conn.Close()
 		return err
 	}
@@ -452,6 +453,10 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 		}
 		kubernetesNodes[node.Name] = payload
 	}
+	databaseRuntime, err := runner.runtimeDatabaseState(ctx, int64(len(nodes)))
+	if err != nil {
+		return err
+	}
 	conn, err = c.store.db.Conn(ctx)
 	if err != nil {
 		return err
@@ -473,6 +478,15 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 		}
 		nodes[index] = node
 	}
+	config := parseClusterJSON(configJSON)
+	beforeDatabaseRuntime := marshalClusterJSON(mapStringAny(config["database_runtime"]))
+	nextStatus := clusterRuntimeDatabaseStatus(clusterStatus, databaseRuntime)
+	if beforeDatabaseRuntime != marshalClusterJSON(databaseRuntime) || nextStatus != clusterStatus {
+		if _, err := conn.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,config_json=jsonb_set(COALESCE(NULLIF(config_json,''),'{}')::jsonb,'{database_runtime}',$2::jsonb,true)::text,updated_at=$3 WHERE id=1`, nextStatus, marshalClusterJSON(databaseRuntime), c.now().UTC().Unix()); err != nil {
+			conn.Close()
+			return err
+		}
+	}
 	if err := conn.Close(); err != nil {
 		return err
 	}
@@ -482,6 +496,56 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 		}
 	}
 	return nil
+}
+
+func (r *kubernetesClusterStepRunner) runtimeDatabaseState(ctx context.Context, activeSize int64) (map[string]any, error) {
+	path := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
+	var cluster map[string]any
+	if err := r.kube.getJSON(ctx, path, &cluster); err != nil {
+		return nil, err
+	}
+	return clusterDatabaseRuntimeState(cluster, activeSize), nil
+}
+
+func clusterDatabaseRuntimeState(cluster map[string]any, activeSize int64) map[string]any {
+	spec := nestedMap(cluster, "spec")
+	status := nestedMap(cluster, "status")
+	configured := coerceInt64(spec["instances"])
+	if configured == 0 {
+		configured = coerceInt64(status["instances"])
+	}
+	if configured == 0 {
+		configured = activeSize
+	}
+	ready := coerceInt64(status["readyInstances"])
+	requiredReady := int64(1)
+	acknowledgements := int64(0)
+	if configured > 1 {
+		requiredReady = 2
+		acknowledgements = 1
+	}
+	return map[string]any{
+		"configured_instances":          configured,
+		"ready_instances":               ready,
+		"required_ready_for_durability": requiredReady,
+		"synchronous_acknowledgements":  acknowledgements,
+		"durability_quorum":             ready >= requiredReady,
+		"fully_ready":                   configured > 0 && ready == configured,
+		"phase":                         cleanText(status["phase"]),
+		"primary_pod":                   cleanText(status["currentPrimary"]),
+	}
+}
+
+func clusterRuntimeDatabaseStatus(current string, database map[string]any) string {
+	if current != "Healthy" && current != "Degraded Database" {
+		return current
+	}
+	fullyReady, _ := database["fully_ready"].(bool)
+	durabilityQuorum, _ := database["durability_quorum"].(bool)
+	if !fullyReady || !durabilityQuorum {
+		return "Degraded Database"
+	}
+	return "Healthy"
 }
 
 func (c *clusterController) reconcileCustomResources(ctx context.Context, runner *kubernetesClusterStepRunner, observedAt int64) error {
@@ -1282,11 +1346,10 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 			}
 		}
 		if err == nil {
-			status := "Healthy"
-			if emergency, _ := operation.Payload["emergency"].(bool); emergency {
-				status = "Degraded Quorum"
-			}
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET active_size=$1,desired_size=$1,status=$2,updated_at=$3 WHERE id=1`, coerceInt64(operation.Payload["target_size"]), status, now)
+			targetSize := coerceInt64(operation.Payload["target_size"])
+			emergency, _ := operation.Payload["emergency"].(bool)
+			desiredSize, status := completedRemovalClusterState(targetSize, emergency)
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET active_size=$1,desired_size=$2,status=$3,updated_at=$4 WHERE id=1`, targetSize, desiredSize, status, now)
 		}
 	case "membership_scale":
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET desired_size=$1,status='Pending Quorum',updated_at=$2 WHERE id=1`, coerceInt64(operation.Payload["desired_size"]), now)
@@ -1673,6 +1736,13 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 	return fmt.Errorf("unsupported cluster controller step %q", step.Name)
 }
 
+func completedRemovalClusterState(targetSize int64, emergency bool) (int64, string) {
+	if emergency {
+		return 3, "Degraded Quorum"
+	}
+	return targetSize, "Healthy"
+}
+
 func hmrPinnedRestoreOperation(operation clusterControllerOperation, node clusterControllerNode) (clusterControllerOperation, error) {
 	sha := firstText(operation.TargetSHA, cleanText(operation.Payload["baseline_sha"]), node.ReleaseSHA)
 	release := firstText(operation.TargetRelease, cleanText(operation.Payload["baseline_release"]), node.ReleaseTag)
@@ -1685,26 +1755,33 @@ func hmrPinnedRestoreOperation(operation clusterControllerOperation, node cluste
 	return restore, nil
 }
 
+func validateCurrentReleaseAdmission(activeNodes, pendingAdmissions int) error {
+	if (activeNodes == 1 && pendingAdmissions == 2) || (activeNodes == 2 && pendingAdmissions == 1) {
+		return nil
+	}
+	return fmt.Errorf("membership admission from %d active node(s) with %d pending node(s) is unsupported; current release restores exactly three active nodes and odd membership changes beyond three nodes are future roadmap work", activeNodes, pendingAdmissions)
+}
+
 func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, operation clusterControllerOperation, activeNodes []clusterControllerNode) error {
 	ids := anySlice(operation.Payload["admission_ids"])
 	names := anySlice(operation.Payload["node_names"])
 	baselineRelease := cleanText(operation.Payload["baseline_release"])
 	baselineSHA := cleanText(operation.Payload["baseline_sha"])
-	if len(ids) != 2 || len(names) != 2 || !clusterReleaseRE.MatchString(baselineRelease) || !clusterControllerSHARegex.MatchString(baselineSHA) {
-		return errors.New("paired admission lacks pinned cluster baseline")
+	if err := validateCurrentReleaseAdmission(len(activeNodes), len(ids)); err != nil {
+		return err
 	}
-	pending := make([]clusterControllerNode, 0, 2)
+	if len(names) != len(ids) || !clusterReleaseRE.MatchString(baselineRelease) || !clusterControllerSHARegex.MatchString(baselineSHA) {
+		return errors.New("membership admission lacks pinned cluster baseline")
+	}
+	pending := make([]clusterControllerNode, 0, len(ids))
 	for index := range ids {
 		node := clusterControllerNode{ID: cleanText(ids[index]), Name: cleanText(names[index]), ReleaseTag: baselineRelease, ReleaseSHA: baselineSHA}
 		if !clusterUUIDRE.MatchString(node.ID) || !clusterControllerNodeRegex.MatchString(node.Name) {
-			return errors.New("paired admission contains invalid node identity")
+			return errors.New("membership admission contains invalid node identity")
 		}
 		pending = append(pending, node)
 	}
 	newSize := len(activeNodes) + len(pending)
-	if newSize != 3 {
-		return fmt.Errorf("paired admission would produce unsupported active size %d; odd membership changes beyond three nodes are future roadmap work", newSize)
-	}
 	for _, node := range pending {
 		if err := r.waitNodeReady(ctx, node.Name); err != nil {
 			return err
@@ -1721,7 +1798,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 	}
 	k3sVersion := cleanText(operation.Payload["k3s_version"])
 	if !clusterK3sRE.MatchString(k3sVersion) {
-		return errors.New("paired admission lacks stable K3s version")
+		return errors.New("membership admission lacks stable K3s version")
 	}
 	for _, node := range pending {
 		action := clusterAdmissionConformanceAction(node.ID, k3sVersion)
@@ -1835,9 +1912,16 @@ func (r *kubernetesClusterStepRunner) waitNodeReady(ctx context.Context, nodeNam
 	}
 }
 
-func (r *kubernetesClusterStepRunner) scaleCNPG(ctx context.Context, size int) error {
-	if size != 1 && size != 3 {
+func validateCNPGMembershipSize(size int) error {
+	if size < 1 || size > 3 {
 		return fmt.Errorf("unsupported CloudNativePG membership size %d", size)
+	}
+	return nil
+}
+
+func (r *kubernetesClusterStepRunner) scaleCNPG(ctx context.Context, size int) error {
+	if err := validateCNPGMembershipSize(size); err != nil {
+		return err
 	}
 	path := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
 	var synchronous any
@@ -2200,7 +2284,9 @@ func clusterResourceState(state clusterControllerState) (map[string]any, map[str
 	if !clusterUUIDRE.MatchString(state.ClusterID) || !state.Enabled {
 		return nil, nil, errors.New("cluster custom-resource identity is invalid")
 	}
-	if !textInSet(fmt.Sprint(state.ActiveSize), "1", "3") || !textInSet(fmt.Sprint(state.DesiredSize), "1", "3") {
+	supportedMembership := (state.ActiveSize == 1 && (state.DesiredSize == 1 || state.DesiredSize == 3)) || (state.ActiveSize == 3 && state.DesiredSize == 3)
+	replacementRecovery := state.ActiveSize == 2 && state.DesiredSize == 3 && state.Status == "Degraded Quorum"
+	if !supportedMembership && !replacementRecovery {
 		return nil, nil, errors.New("cluster custom-resource size is invalid")
 	}
 	controlVIP := net.ParseIP(state.ControlPlaneVIP)

@@ -60,12 +60,14 @@ export async function loadClusterManagementPageData(request) {
     await requireAdminRequest(request, progress);
     const cluster = await progress.fetchJson("/api/server/cluster");
     let releases = { releases: [] };
+    let releaseError = "";
     try {
       releases = await progress.fetchJson("/api/server/cluster/releases");
-    } catch {
+    } catch (error) {
       // Cluster state remains usable during GitHub outage.
+      releaseError = getRouteErrorMessage(error, "Stable release catalog could not be loaded.");
     }
-    return { cluster, releases, initialError: "" };
+    return { cluster, releases, releaseError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return { cluster: null, releases: { releases: [] }, initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
@@ -79,7 +81,7 @@ function valueLabel(value, fallback = "—") {
   return text || fallback;
 }
 
-function StatusChip({ value }) {
+function StatusChip({ value, prefix = "" }) {
   const label = valueLabel(value, "Unknown");
   const normalized = label.toLowerCase();
   const color = normalized.includes("healthy") || normalized.includes("active") || normalized.includes("passed")
@@ -87,7 +89,24 @@ function StatusChip({ value }) {
     : normalized.includes("degraded") || normalized.includes("failed")
       ? "error"
       : "warning";
-  return <Chip size="small" color={color} variant="outlined" label={label} />;
+  return <Chip size="small" color={color} variant="outlined" label={prefix ? `${prefix}: ${label}` : label} />;
+}
+
+function operatorNodeLabel(value, nodes) {
+  const id = String(value || "").trim();
+  return nodes.find((node) => node?.id === id)?.node_name || value;
+}
+
+function readableIdentifier(value) {
+  return String(value || "unknown").replaceAll("_", " ");
+}
+
+function operationErrorSummary(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const httpMatch = text.match(/^(.*?returned HTTP \d+)/);
+  const summary = httpMatch?.[1] || text.split("\n", 1)[0];
+  return summary.length > 220 ? `${summary.slice(0, 217)}...` : summary;
 }
 
 function KeyValueGrid({ entries }) {
@@ -103,19 +122,19 @@ function KeyValueGrid({ entries }) {
   );
 }
 
-function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove, removalEnabled }) {
+function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove, emergencyRemovalEnabled, normalOperationsEnabled, removalEnabled }) {
   const roles = node?.roles || {};
-  const roleLabels = Object.entries(roles).filter(([, active]) => active).map(([role]) => role.replaceAll("_", " "));
+  const roleLabels = Object.entries(roles).filter(([, active]) => active === true).map(([role]) => readableIdentifier(role));
   return (
     <Paper sx={CARD_SX}>
       <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={2}>
         <Box>
           <Typography variant="h6">{valueLabel(node?.node_name)}</Typography>
-          <Typography variant="body2" sx={{ color: "#94a3b8" }}>{valueLabel(node?.management_ip)} · {valueLabel(node?.release_tag, "No release")}</Typography>
+          <Typography variant="body2" sx={{ color: "#94a3b8" }}>{valueLabel(node?.management_ip)} · {valueLabel(node?.release_tag, "No release")} · K3s {valueLabel(roles?.k3s_version, "not observed")}</Typography>
         </Box>
         <Stack direction="row" spacing={1} flexWrap="wrap">
-          <StatusChip value={node?.membership_state} />
-          <StatusChip value={node?.application_state} />
+          <StatusChip prefix="Membership" value={node?.membership_state} />
+          <StatusChip prefix="Application" value={node?.application_state} />
         </Stack>
       </Stack>
       <Typography variant="body2" sx={{ mt: 1.5, color: "#cbd5e1" }}>
@@ -125,10 +144,39 @@ function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove, 
         Probes: {Object.entries(node?.probe_health || {}).map(([name, status]) => `${name}=${status}`).join(", ") || "not reported"}
       </Typography>
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-        <Button size="small" variant="outlined" onClick={() => onMaintenance(node)}>{node?.application_state === "drained" ? "Exit Maintenance" : "Enter Maintenance"}</Button>
-        <Button size="small" variant="outlined" onClick={() => onUpdate(node)}>Update Node</Button>
+        <Button size="small" variant="outlined" disabled={!normalOperationsEnabled && node?.application_state !== "drained"} onClick={() => onMaintenance(node)}>{node?.application_state === "drained" ? "Exit Maintenance" : "Enter Maintenance"}</Button>
+        <Button size="small" variant="outlined" disabled={!normalOperationsEnabled} onClick={() => onUpdate(node)}>Update Node</Button>
         <Button size="small" color="warning" variant="outlined" disabled={!removalEnabled} onClick={() => onRemove(node)}>Remove Pair</Button>
-        <Button size="small" color="error" variant="outlined" disabled={!removalEnabled} onClick={() => onEmergencyRemove(node)}>Emergency Remove</Button>
+        <Button size="small" color="error" variant="outlined" disabled={!emergencyRemovalEnabled} onClick={() => onEmergencyRemove(node)}>Emergency Remove</Button>
+      </Stack>
+    </Paper>
+  );
+}
+
+function OperationCard({ operation, busy, mutate }) {
+  const supersededBy = String(operation?.superseded_by || "").trim();
+  const displayState = supersededBy ? "superseded" : operation?.state;
+  const errorSummary = operationErrorSummary(operation?.error);
+  return (
+    <Paper sx={CARD_SX}>
+      <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={1}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 650 }}>{readableIdentifier(operation?.kind)} · {readableIdentifier(operation?.current_step)}</Typography>
+          <Typography variant="body2" sx={{ color: "#94a3b8" }}>{operation?.id} · attempt {operation?.attempt}</Typography>
+          {supersededBy ? <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Superseded by successful operation {supersededBy}. Historical failure retained for audit.</Typography> : null}
+          {!supersededBy && errorSummary ? <Typography variant="body2" color="error.light" sx={{ mt: 1 }}>{errorSummary}</Typography> : null}
+          {operation?.error ? (
+            <Box component="details" sx={{ mt: 1, color: "#94a3b8" }}>
+              <Typography component="summary" variant="body2" sx={{ cursor: "pointer", color: "#7dd3fc" }}>Technical details</Typography>
+              <Box component="pre" sx={{ m: 0, mt: 1, p: 1.25, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: 12 }}>{operation.error}</Box>
+            </Box>
+          ) : null}
+        </Box>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <StatusChip value={displayState} />
+          {operation?.state === "failed" && !supersededBy ? <Button size="small" disabled={busy} onClick={() => void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" })}>Retry</Button> : null}
+          {["queued", "waiting"].includes(operation?.state) ? <Button size="small" color="warning" disabled={busy} onClick={() => void mutate(`/api/server/cluster/operations/${operation.id}/cancel`, { confirmation: "CANCEL OPERATION" })}>Cancel</Button> : null}
+        </Stack>
       </Stack>
     </Paper>
   );
@@ -139,6 +187,7 @@ export default function ClusterManagement() {
   const notify = useAppNotifications({ title: "Cluster Management", icon: "cluster" });
   const [cluster, setCluster] = useState(loaderData?.cluster || null);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
+  const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [tab, setTab] = useState(0);
   const [error, setError] = useState(loaderData?.initialError || "");
   const [busy, setBusy] = useState(false);
@@ -162,6 +211,11 @@ export default function ClusterManagement() {
   const operations = useMemo(() => Array.isArray(cluster?.operations) ? cluster.operations : [], [cluster]);
   const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
   const activeSize = Number(cluster?.active_size || 1);
+  const desiredMembershipSize = Number(cluster?.desired_size || activeSize);
+  const normalOperationsEnabled = cluster?.status === "Healthy";
+  const rollingUpdateEnabled = normalOperationsEnabled || cluster?.status === "Mixed Version";
+  const replacementRecovery = activeSize === 2 && desiredMembershipSize === 3 && cluster?.status === "Degraded Quorum";
+  const canPrepareMembership = activeSize === 1 || replacementRecovery;
   const canExpandToThree = activeSize === 1;
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
@@ -175,7 +229,12 @@ export default function ClusterManagement() {
       const releasePayload = await releaseResponse.json().catch(() => ({}));
       if (!clusterResponse.ok) throw new Error(clusterPayload?.message || "Cluster state request failed.");
       setCluster(clusterPayload);
-      if (releaseResponse.ok) setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
+      if (releaseResponse.ok) {
+        setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
+        setReleaseError("");
+      } else {
+        setReleaseError(releasePayload?.message || "Stable release catalog could not be loaded.");
+      }
       setError("");
       if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
     } catch (requestError) {
@@ -270,7 +329,7 @@ export default function ClusterManagement() {
       return mutate("/api/server/cluster/enable", { control_plane_vip: controlVIP, edge_vip: edgeVIP, node_name: nodeName, management_ip: managementIP, architecture, confirmation });
     }
     if (kind === "invite") {
-      if (!canExpandToThree) return setError("Current release supports node invitations only for one-to-three expansion.");
+      if (!canPrepareMembership) return setError("Current release supports node invitations only for one-to-three expansion or degraded-quorum replacement.");
       if (!NODE_NAME_PATTERN.test(nodeName)) return setError("Node name must be DNS-label syntax and no longer than 63 characters.");
       return mutate("/api/server/cluster/invitations", { node_name: nodeName }).then((payload) => setInviteBundle(payload?.invite_bundle || ""));
     }
@@ -283,7 +342,7 @@ export default function ClusterManagement() {
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
     return undefined;
-  }, [architecture, canExpandToThree, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
+  }, [architecture, canExpandToThree, canPrepareMembership, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
@@ -294,33 +353,45 @@ export default function ClusterManagement() {
   });
 
   const leaders = cluster?.leaders || {};
+  const database = cluster?.database || {};
+  const configuredDatabaseInstances = Number(database?.configured_instances || activeSize);
+  const databaseReadyObserved = database?.ready_instances !== undefined && database?.ready_instances !== null;
+  const readyDatabaseInstances = databaseReadyObserved ? Number(database.ready_instances) : null;
+  const databaseFullyReady = database?.fully_ready !== false;
+  const databaseDurabilityReady = database?.durability_quorum !== false;
+  const owner = (value) => operatorNodeLabel(value, nodes);
   return (
     <PageBodyFrame>
       <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 } }}>
         {error ? <Alert severity="error" onClose={() => setError("")}>{error}</Alert> : null}
         {cluster?.hmr?.state && cluster.hmr.state !== "inactive" ? <Alert severity="warning"><strong>Cluster-wide non-HA HMR active.</strong> {HMR_WARNING}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}
+        {cluster?.status === "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL is not fully ready: {readyDatabaseInstances ?? "unknown"} of {configuredDatabaseInstances} instances Ready. Normal cluster-changing operations stay blocked until redundancy recovers; recovery controls remain available.</Alert> : null}
         <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto">
           {TABS.map((label) => <Tab key={label} label={label} />)}
         </Tabs>
 
         {tab === 0 ? <KeyValueGrid entries={[
           ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Baseline release", cluster?.baseline_release], ["K3s version", cluster?.k3s_version],
-          ["etcd leader", leaders?.etcd_leader], ["Control VIP owner", leaders?.control_vip_owner], ["Edge VIP owner", leaders?.edge_vip_owner],
-          ["PostgreSQL primary", leaders?.postgres_primary], ["Scheduler leader", leaders?.scheduler_leader], ["WireGuard owner", leaders?.wireguard_owner],
+          ["etcd leader", owner(leaders?.etcd_leader)], ["Control VIP owner", owner(leaders?.control_vip_owner)], ["Edge VIP owner", owner(leaders?.edge_vip_owner)],
+          ["PostgreSQL primary", owner(leaders?.postgres_primary)], ["Scheduler leader", owner(leaders?.scheduler_leader)], ["WireGuard owner", owner(leaders?.wireguard_owner)],
         ]} /> : null}
 
-        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} removalEnabled={activeSize === 3 && node?.membership_state === "Active"} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} onEmergencyRemove={(value) => openAction("emergency_remove", value)} />)}</Stack> : null}
+        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} normalOperationsEnabled={normalOperationsEnabled} removalEnabled={normalOperationsEnabled && activeSize === 3 && node?.membership_state === "Active"} emergencyRemovalEnabled={activeSize === 3 && node?.membership_state === "Active"} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} onEmergencyRemove={(value) => openAction("emergency_remove", value)} />)}</Stack> : null}
 
         {tab === 2 ? <Stack spacing={2}>
-          <KeyValueGrid entries={[["Primary", leaders?.postgres_primary], ["Instances", cluster?.active_size], ["Durability", activeSize > 3 ? "Unsupported topology; five-plus qualification pending" : activeSize > 1 ? "1 synchronous acknowledgement" : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", activeSize > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
+          <KeyValueGrid entries={[["Primary", owner(leaders?.postgres_primary)], ["Configured / ready", `${configuredDatabaseInstances} / ${readyDatabaseInstances ?? "not observed"}`], ["Durability", activeSize > 1 ? `${Number(database?.synchronous_acknowledgements ?? 1)} synchronous acknowledgement` : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", activeSize > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
+          {databaseReadyObserved && !databaseFullyReady ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>{readyDatabaseInstances} of {configuredDatabaseInstances} PostgreSQL instances are Ready. {databaseDurabilityReady ? "Writes retain required synchronous durability, but node redundancy is reduced." : "Required durability quorum is unavailable; writes may be blocked."} {database?.phase ? `CloudNativePG: ${database.phase}.` : ""}</Alert> : null}
           <Alert severity="info">Snapshots provide in-cluster recovery. They do not replace off-cluster disaster recovery.</Alert>
-          <Paper sx={CARD_SX}><Typography variant="h6">PostgreSQL role control</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="postgres-node-label">Target node</InputLabel><Select labelId="postgres-node-label" label="Target node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!selectedNode} onClick={() => openAction("switchover")}>Switchover</Button><Button color="error" variant="outlined" disabled={!selectedNode} onClick={() => openAction("emergency_failover")}>Emergency Failover</Button></Stack></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">PostgreSQL role control</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="postgres-node-label">Target node</InputLabel><Select labelId="postgres-node-label" label="Target node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!selectedNode || !normalOperationsEnabled} onClick={() => openAction("switchover")}>Switchover</Button><Button color="error" variant="outlined" disabled={!selectedNode} onClick={() => openAction("emergency_failover")}>Emergency Failover</Button></Stack></Paper>
         </Stack> : null}
 
         {tab === 3 ? <Stack spacing={2}>
           <Paper sx={CARD_SX}>
             <Typography variant="h6">Stable Engine Release</Typography>
+            {releaseError ? <Alert severity="error" sx={{ mt: 2 }}>{releaseError}</Alert> : null}
+            {!releaseError && releases.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No published stable cluster-compatible release exists at or above baseline {valueLabel(cluster?.baseline_release)}. Current release remains pinned.</Alert> : null}
+            {!releaseError && releases.length > 0 && selectableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Stable releases were found, but none match current rolling-update and K3s compatibility requirements. Open release list for per-release reason.</Alert> : null}
             <FormControl fullWidth sx={{ mt: 2 }}>
               <InputLabel id="cluster-release-label">Release</InputLabel>
               <Select labelId="cluster-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
@@ -328,24 +399,24 @@ export default function ClusterManagement() {
               </Select>
             </FormControl>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}>
-              <Button variant="contained" disabled={!selectedRelease || !selectableReleases.length} onClick={() => openAction("update_all")}>Update All One at a Time</Button>
+              <Button variant="contained" disabled={!rollingUpdateEnabled || !selectedRelease || !selectableReleases.length} onClick={() => openAction("update_all")}>Update All One at a Time</Button>
               <FormControl sx={{ minWidth: 220 }}>
                 <InputLabel id="update-node-label">Node</InputLabel>
                 <Select labelId="update-node-label" label="Node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select>
               </FormControl>
-              <Button variant="outlined" disabled={!selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
+              <Button variant="outlined" disabled={!rollingUpdateEnabled || !selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
             </Stack>
           </Paper>
         </Stack> : null}
 
-        {tab === 4 ? <Stack spacing={1.25}>{operations.map((operation) => <Paper key={operation.id} sx={CARD_SX}><Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={1}><Box><Typography sx={{ fontWeight: 650 }}>{operation.kind} · {operation.current_step}</Typography><Typography variant="body2" sx={{ color: "#94a3b8" }}>{operation.id} · attempt {operation.attempt}</Typography>{operation.error ? <Typography variant="body2" color="error.light" sx={{ mt: 1 }}>{operation.error}</Typography> : null}</Box><Stack direction="row" spacing={1} alignItems="center"><StatusChip value={operation.state} />{operation.state === "failed" ? <Button size="small" disabled={busy} onClick={() => void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" })}>Retry</Button> : null}{["queued", "waiting"].includes(operation.state) ? <Button size="small" color="warning" disabled={busy} onClick={() => void mutate(`/api/server/cluster/operations/${operation.id}/cancel`, { confirmation: "CANCEL OPERATION" })}>Cancel</Button> : null}</Stack></Stack></Paper>)}</Stack> : null}
+        {tab === 4 ? <Stack spacing={1.25}>{operations.length ? operations.map((operation) => <OperationCard key={operation.id} operation={operation} busy={busy} mutate={mutate} />) : <Alert severity="info">No cluster operations recorded.</Alert>}</Stack> : null}
 
         {tab === 5 ? <Stack spacing={2}>
-          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
-          <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
-          <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canExpandToThree || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>Approve Pair</Button></Stack>)}</Stack></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
           {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
-          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{!canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canExpandToThree} onClick={() => openAction("invite")}>Create Node Invitation</Button><FormControl sx={{ minWidth: 140 }} disabled={!canExpandToThree}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!canExpandToThree} onClick={() => openAction("scale")}>Request Pair Expansion</Button></Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
+          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
 

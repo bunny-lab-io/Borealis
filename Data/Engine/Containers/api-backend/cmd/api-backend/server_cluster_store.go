@@ -185,6 +185,7 @@ func (s *postgresOperatorStore) clusterSnapshot(ctx context.Context) (map[string
 		return nil, err
 	}
 	if err == nil {
+		config := parseClusterJSON(configJSON)
 		payload["cluster_id"] = clusterID
 		payload["enabled"] = enabled != 0
 		payload["status"] = status
@@ -196,7 +197,8 @@ func (s *postgresOperatorStore) clusterSnapshot(ctx context.Context) (map[string
 		payload["baseline_sha"] = nilIfEmpty(baselineSHA)
 		payload["active_operation_id"] = nilIfEmpty(activeOperationID)
 		payload["hmr"] = map[string]any{"state": hmrState, "node_id": nilIfEmpty(hmrNodeID)}
-		payload["config"] = parseClusterJSON(configJSON)
+		payload["config"] = config
+		payload["database"] = mapStringAny(config["database_runtime"])
 		payload["created_at"] = createdAt
 		payload["updated_at"] = updatedAt
 	}
@@ -247,9 +249,57 @@ func (s *postgresOperatorStore) clusterSnapshot(ctx context.Context) (map[string
 	if err != nil {
 		return nil, err
 	}
-	payload["operations"] = operations
+	payload["operations"] = annotateSupersededClusterOperations(operations)
 	payload["leaders"] = collectClusterLeaders(nodes)
 	return payload, nil
+}
+
+func annotateSupersededClusterOperations(operations []map[string]any) []map[string]any {
+	for _, operation := range operations {
+		kind := cleanText(operation["kind"])
+		if !clusterOperationKindSupportsSupersession(kind) || cleanText(operation["state"]) != "failed" {
+			continue
+		}
+		failedAt := coerceInt64(operation["finished_at"])
+		var supersedingID string
+		var supersedingAt int64
+		for _, candidate := range operations {
+			candidateAt := coerceInt64(candidate["finished_at"])
+			if cleanText(candidate["kind"]) == kind && cleanText(candidate["state"]) == "succeeded" && candidateAt > failedAt && candidateAt > supersedingAt {
+				supersedingID = cleanText(candidate["id"])
+				supersedingAt = candidateAt
+			}
+		}
+		if supersedingID != "" {
+			operation["superseded_by"] = supersedingID
+		}
+	}
+	return operations
+}
+
+func clusterOperationKindSupportsSupersession(kind string) bool {
+	return textInSet(kind, "cluster_enable", "membership_admit", "membership_scale")
+}
+
+func clusterMutationSupportsDatabaseRecovery(mutation clusterMutation) bool {
+	switch mutation.Kind {
+	case "hmr_exit", "postgres_emergency_failover":
+		return true
+	case "node_maintenance":
+		return cleanText(mutation.Payload["action"]) == "exit"
+	case "node_remove":
+		emergency, _ := mutation.Payload["emergency"].(bool)
+		return emergency
+	default:
+		return false
+	}
+}
+
+func clusterMutationSupportsQuorumRecovery(mutation clusterMutation) bool {
+	if mutation.Kind == "postgres_emergency_failover" {
+		return true
+	}
+	return mutation.Kind == "node_maintenance" && cleanText(mutation.Payload["action"]) == "exit"
 }
 
 func (s *postgresOperatorStore) clusterEvents(ctx context.Context, afterID int64) ([]map[string]any, error) {
@@ -318,6 +368,12 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 	}
 	if mutation.Kind != "hmr_exit" && mutation.Kind != "cluster_enable" && hmrState != "inactive" {
 		return nil, fmt.Errorf("%w: %s is blocked while HMR state is %s", errClusterConflict, mutation.Kind, hmrState)
+	}
+	if clusterStatus == "Degraded Database" && !clusterMutationSupportsDatabaseRecovery(mutation) {
+		return nil, fmt.Errorf("%w: %s is blocked until PostgreSQL instances recover", errClusterConflict, mutation.Kind)
+	}
+	if clusterStatus == "Degraded Quorum" && !clusterMutationSupportsQuorumRecovery(mutation) {
+		return nil, fmt.Errorf("%w: %s is blocked until three-node membership is restored", errClusterConflict, mutation.Kind)
 	}
 	if mutation.Kind == "hmr_start" {
 		if hmrState != "inactive" {
@@ -562,6 +618,17 @@ func currentReleaseClusterRemovalSupported(activeSize int64) bool {
 	return activeSize == 3
 }
 
+func currentReleaseAdmissionBatchSize(activeSize, desiredSize int64, status string) (int, error) {
+	switch {
+	case activeSize == 1 && (desiredSize == 1 || desiredSize == 3):
+		return 2, nil
+	case activeSize == 2 && desiredSize == 3 && status == "Degraded Quorum":
+		return 1, nil
+	default:
+		return 0, errors.New("current release admits either a pair for one-to-three expansion or one replacement into a degraded two-of-three cluster")
+	}
+}
+
 func clusterProbeSetHealthy(probes map[string]any) bool {
 	for _, key := range []string{"startup", "readiness", "liveness", "direct_endpoint", "service", "database", "scheduler", "agent_path", "wireguard"} {
 		if !textInSet(strings.ToLower(cleanText(probes[key])), "passed", "healthy") {
@@ -597,15 +664,18 @@ func (s *postgresOperatorStore) createClusterInvitation(ctx context.Context, act
 		return err
 	}
 	defer tx.Rollback()
-	var enabled, activeSize int64
-	var clusterID string
-	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,cluster_id FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &clusterID); errors.Is(err, sql.ErrNoRows) {
+	var enabled, activeSize, desiredSize int64
+	var clusterID, clusterStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,desired_size,cluster_id,status FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &desiredSize, &clusterID, &clusterStatus); errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: cluster is not enabled", errClusterConflict)
 	} else if err != nil {
 		return err
 	}
-	if enabled != 1 || activeSize != 1 || clusterID != cleanText(invitation["cluster_id"]) {
-		return fmt.Errorf("%w: node invitations are available only for current one-to-three expansion", errClusterConflict)
+	if enabled != 1 || clusterID != cleanText(invitation["cluster_id"]) {
+		return fmt.Errorf("%w: node invitation does not match enabled cluster", errClusterConflict)
+	}
+	if _, err := currentReleaseAdmissionBatchSize(activeSize, desiredSize, clusterStatus); err != nil {
+		return fmt.Errorf("%w: %v", errClusterConflict, err)
 	}
 	now := time.Now().UTC().Unix()
 	if _, err := tx.ExecContext(ctx, `
@@ -629,12 +699,24 @@ func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, ad
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Unix()
-	var enabled, activeSize int64
-	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize); err != nil {
+	var enabled, activeSize, desiredSize int64
+	var clusterStatus, activeOperationID string
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,desired_size,status,COALESCE(active_operation_id,'') FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &desiredSize, &clusterStatus, &activeOperationID); err != nil {
 		return nil, err
 	}
-	if enabled != 1 || activeSize != 1 {
-		return nil, fmt.Errorf("%w: node invitations can be consumed only during one-to-three expansion in current release", errClusterConflict)
+	admissionBatchSize, admissionModeErr := currentReleaseAdmissionBatchSize(activeSize, desiredSize, clusterStatus)
+	if enabled != 1 || admissionModeErr != nil {
+		return nil, fmt.Errorf("%w: node invitation cannot be consumed for current membership state", errClusterConflict)
+	}
+	if activeOperationID != "" {
+		return nil, fmt.Errorf("%w: cluster operation %s is active", errClusterConflict, activeOperationID)
+	}
+	var pendingAdmissions int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_admissions WHERE state IN ('Pending Quorum','Approved')`).Scan(&pendingAdmissions); err != nil {
+		return nil, err
+	}
+	if pendingAdmissions >= admissionBatchSize {
+		return nil, fmt.Errorf("%w: current membership recovery already has required pending admissions", errClusterConflict)
 	}
 	var invitationNodeName, invitationClusterID string
 	var expiresAt int64
@@ -670,13 +752,19 @@ func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, ad
 	`, cleanText(admission["id"]), cleanText(admission["invitation_id"]), invitationClusterID, cleanText(admission["node_name"]), cleanText(admission["hostname"]), cleanText(admission["management_ip"]), cleanText(admission["architecture"]), cleanText(admission["os_version"]), now); err != nil {
 		return nil, err
 	}
-	if err := insertClusterEvent(ctx, tx, "", cleanText(admission["id"]), invitationClusterID, "admission_pending", "Pending Quorum", "Node is waiting for paired quorum admission.", map[string]any{"node_name": admission["node_name"]}, now); err != nil {
+	message := "Node is waiting for paired quorum admission."
+	responseMessage := "Node recorded. Add second node, then approve pair from Cluster Management."
+	if admissionBatchSize == 1 {
+		message = "Replacement node is waiting for degraded-quorum admission."
+		responseMessage = "Replacement node recorded. Approve replacement from Cluster Management."
+	}
+	if err := insertClusterEvent(ctx, tx, "", cleanText(admission["id"]), invitationClusterID, "admission_pending", "Pending Quorum", message, map[string]any{"node_name": admission["node_name"]}, now); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return map[string]any{"admission_id": admission["id"], "state": "Pending Quorum", "message": "Node recorded. Add second node, then approve pair from Cluster Management."}, nil
+	return map[string]any{"admission_id": admission["id"], "state": "Pending Quorum", "message": responseMessage}, nil
 }
 
 func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error) {
@@ -690,13 +778,14 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 		return nil, err
 	}
 	defer tx.Rollback()
-	var enabled, activeSize int64
-	var clusterID, baselineRelease, baselineSHA, configJSON string
-	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,cluster_id,COALESCE(baseline_release,''),COALESCE(baseline_sha,''),config_json FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &clusterID, &baselineRelease, &baselineSHA, &configJSON); err != nil {
+	var enabled, activeSize, desiredSize int64
+	var clusterID, clusterStatus, baselineRelease, baselineSHA, configJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,desired_size,cluster_id,status,COALESCE(baseline_release,''),COALESCE(baseline_sha,''),config_json FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &desiredSize, &clusterID, &clusterStatus, &baselineRelease, &baselineSHA, &configJSON); err != nil {
 		return nil, err
 	}
-	if enabled != 1 || activeSize != 1 {
-		return nil, fmt.Errorf("%w: pending admissions can be approved only during one-to-three expansion in current release", errClusterConflict)
+	admissionBatchSize, admissionModeErr := currentReleaseAdmissionBatchSize(activeSize, desiredSize, clusterStatus)
+	if enabled != 1 || admissionModeErr != nil {
+		return nil, fmt.Errorf("%w: pending admissions cannot be approved for current membership state", errClusterConflict)
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id,node_name FROM engine.cluster_admissions WHERE state='Pending Quorum' ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END, created_at FOR UPDATE`, admissionID)
 	if err != nil {
@@ -714,11 +803,11 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 		nodeNames = append(nodeNames, nodeName)
 	}
 	rows.Close()
-	if len(ids) < 2 || ids[0] != admissionID {
-		return nil, fmt.Errorf("%w: admission requires selected node plus second Pending Quorum node", errClusterConflict)
+	if len(ids) < admissionBatchSize || ids[0] != admissionID {
+		return nil, fmt.Errorf("%w: admission requires %d Pending Quorum node(s), including selected node", errClusterConflict, admissionBatchSize)
 	}
-	ids = ids[:2]
-	nodeNames = nodeNames[:2]
+	ids = ids[:admissionBatchSize]
+	nodeNames = nodeNames[:admissionBatchSize]
 	now := time.Now().UTC().Unix()
 	for _, id := range ids {
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_admissions SET state='Approved', approved_by=$1, approved_at=$2, updated_at=$2 WHERE id=$3`, actor, now, id); err != nil {
@@ -744,8 +833,12 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 	if locked != 1 {
 		return nil, fmt.Errorf("%w: another cluster operation is active", errClusterConflict)
 	}
+	approvalMessage := "Pending node pair approved for admission."
+	if admissionBatchSize == 1 {
+		approvalMessage = "Replacement node approved for degraded-quorum recovery."
+	}
 	for _, approvedAdmissionID := range ids {
-		if err := insertClusterEvent(ctx, tx, operationID, approvedAdmissionID, clusterID, "admission_pair_approved", "queued", "Pending node pair approved for admission.", payload, now); err != nil {
+		if err := insertClusterEvent(ctx, tx, operationID, approvedAdmissionID, clusterID, "admission_pair_approved", "queued", approvalMessage, payload, now); err != nil {
 			return nil, err
 		}
 	}
@@ -789,6 +882,26 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	if action == "retry" {
 		if state != "failed" {
 			return nil, fmt.Errorf("%w: only failed operation can be retried", errClusterConflict)
+		}
+		if clusterOperationKindSupportsSupersession(kind) {
+			var supersedingID string
+			err := tx.QueryRowContext(ctx, `
+				SELECT newer.id
+				  FROM engine.cluster_operations current
+				  JOIN engine.cluster_operations newer
+				    ON newer.kind=current.kind
+				   AND newer.state='succeeded'
+				   AND COALESCE(newer.finished_at,newer.updated_at) > COALESCE(current.finished_at,current.updated_at)
+				 WHERE current.id=$1
+				 ORDER BY COALESCE(newer.finished_at,newer.updated_at) DESC
+				 LIMIT 1
+			`, operationID).Scan(&supersedingID)
+			if err == nil {
+				return nil, fmt.Errorf("%w: operation was superseded by successful operation %s", errClusterConflict, supersedingID)
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
 		}
 		nextState, step, message = "queued", "preflight", "Cluster operation queued for retry."
 		attempt++

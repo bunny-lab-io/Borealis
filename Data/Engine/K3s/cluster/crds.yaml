@@ -24,7 +24,7 @@ spec:
               type: object
               required: [activeSize, controlPlaneVIP, edgeVIP]
               properties:
-                activeSize: {type: integer, enum: [1, 3]}
+                activeSize: {type: integer, enum: [1, 2, 3]}
                 desiredSize: {type: integer, enum: [1, 3]}
                 controlPlaneVIP: {type: string, format: ipv4}
                 edgeVIP: {type: string, format: ipv4}

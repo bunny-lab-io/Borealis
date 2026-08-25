@@ -77,6 +77,34 @@ func TestClusterControllerCandidateCannotAcquireOperationLease(t *testing.T) {
 	}
 }
 
+func TestClusterDatabaseRuntimeStateTracksConfiguredAndReadyInstances(t *testing.T) {
+	state := clusterDatabaseRuntimeState(map[string]any{
+		"spec": map[string]any{"instances": int64(3)},
+		"status": map[string]any{
+			"readyInstances": int64(2),
+			"phase":          "Waiting for the instances to become active",
+			"currentPrimary": "borealis-postgres-3",
+		},
+	}, 3)
+	if state["configured_instances"] != int64(3) || state["ready_instances"] != int64(2) {
+		t.Fatalf("unexpected database counts: %+v", state)
+	}
+	if state["fully_ready"] != false || state["durability_quorum"] != true {
+		t.Fatalf("reduced redundancy semantics incorrect: %+v", state)
+	}
+	if got := clusterRuntimeDatabaseStatus("Healthy", state); got != "Degraded Database" {
+		t.Fatalf("database degradation status=%q", got)
+	}
+	state["ready_instances"] = int64(3)
+	state["fully_ready"] = true
+	if got := clusterRuntimeDatabaseStatus("Degraded Database", state); got != "Healthy" {
+		t.Fatalf("database recovery status=%q", got)
+	}
+	if got := clusterRuntimeDatabaseStatus("HMR Non-HA", state); got != "HMR Non-HA" {
+		t.Fatalf("database observation overwrote HMR status=%q", got)
+	}
+}
+
 func TestClusterControllerRejectsFiveNodeAdmissionBeforeMutation(t *testing.T) {
 	operation := clusterControllerOperation{Payload: map[string]any{
 		"admission_ids":    []any{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"},
@@ -88,6 +116,33 @@ func TestClusterControllerRejectsFiveNodeAdmissionBeforeMutation(t *testing.T) {
 	err := runner.admitPendingMembers(context.Background(), operation, make([]clusterControllerNode, 3))
 	if err == nil || !strings.Contains(err.Error(), "future roadmap") {
 		t.Fatalf("expected five-node controller admission fence, got %v", err)
+	}
+}
+
+func TestClusterControllerAcceptsSingleDegradedReplacement(t *testing.T) {
+	if err := validateCurrentReleaseAdmission(2, 1); err != nil {
+		t.Fatalf("single degraded replacement rejected: %v", err)
+	}
+	if err := validateCurrentReleaseAdmission(1, 2); err != nil {
+		t.Fatalf("one-to-three pair rejected: %v", err)
+	}
+	for _, counts := range [][2]int{{2, 2}, {3, 1}, {3, 2}} {
+		if err := validateCurrentReleaseAdmission(counts[0], counts[1]); err == nil {
+			t.Fatalf("unsupported admission accepted: active=%d pending=%d", counts[0], counts[1])
+		}
+	}
+}
+
+func TestCloudNativePGMembershipAllowsTransientReplacementSize(t *testing.T) {
+	for _, size := range []int{1, 2, 3} {
+		if err := validateCNPGMembershipSize(size); err != nil {
+			t.Fatalf("supported CloudNativePG size %d rejected: %v", size, err)
+		}
+	}
+	for _, size := range []int{0, 4, 5} {
+		if err := validateCNPGMembershipSize(size); err == nil {
+			t.Fatalf("unsupported CloudNativePG size %d accepted", size)
+		}
 	}
 }
 
@@ -242,8 +297,13 @@ func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
 		firstPending  = "cb9f2c44-fc43-472c-ad6b-c39b162614b5"
 		secondPending = "2cd2de2e-a79d-4282-bf0f-68b37b544044"
 	)
+	replacementOperationID := ""
 	cleanup := func() {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE admission_id IN ($1,$2)`, firstPending, secondPending)
+		if replacementOperationID != "" {
+			_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id=$1`, replacementOperationID)
+			_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id=$1`, replacementOperationID)
+		}
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_admissions WHERE id IN ($1,$2)`, firstPending, secondPending)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_invitations WHERE id IN ($1,$2,$3)`, invitationID, secondInvite, thirdInvite)
 		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET active_size=1,desired_size=1,active_operation_id=NULL WHERE id=1`)
@@ -298,6 +358,28 @@ func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_admissions WHERE id IN ($1,$2) AND state='Pending Quorum'`, firstPending, secondPending).Scan(&pendingCount); err != nil || pendingCount != 2 {
 		t.Fatalf("rejected admissions changed state: pending=%d err=%v", pendingCount, err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Degraded Quorum',active_size=2,desired_size=3,active_operation_id=NULL WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.approveClusterAdmission(ctx, "operator", firstPending)
+	if err != nil {
+		t.Fatalf("degraded-quorum replacement approval failed: %v", err)
+	}
+	replacementOperationID = cleanText(result["operation_id"])
+	approvedIDs, ok := result["admission_ids"].([]string)
+	if !ok || len(approvedIDs) != 1 || approvedIDs[0] != firstPending {
+		t.Fatalf("replacement approval did not select exactly one node: %+v", result)
+	}
+	var firstState, secondState string
+	if err := db.QueryRowContext(ctx, `SELECT state FROM engine.cluster_admissions WHERE id=$1`, firstPending).Scan(&firstState); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT state FROM engine.cluster_admissions WHERE id=$1`, secondPending).Scan(&secondState); err != nil {
+		t.Fatal(err)
+	}
+	if firstState != "Approved" || secondState != "Pending Quorum" {
+		t.Fatalf("replacement approval touched wrong admission set: first=%s second=%s", firstState, secondState)
+	}
 }
 
 func TestClusterNodeRuntimeStateSeparatesDesiredAndObservedState(t *testing.T) {
@@ -350,6 +432,27 @@ func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testi
 	}
 	if coerceInt64(spec["activeSize"]) != 1 || coerceInt64(spec["desiredSize"]) != 3 {
 		t.Fatalf("cluster desired sizes missing: %#v", spec)
+	}
+	replacement := state
+	replacement.Status = "Degraded Quorum"
+	replacement.ActiveSize = 2
+	replacement.DesiredSize = 3
+	if replacementSpec, _, err := clusterResourceState(replacement); err != nil || coerceInt64(replacementSpec["activeSize"]) != 2 {
+		t.Fatalf("degraded two-of-three replacement state rejected: spec=%#v err=%v", replacementSpec, err)
+	}
+	replacement.Status = "Healthy"
+	if _, _, err := clusterResourceState(replacement); err == nil {
+		t.Fatal("healthy two-of-three custom-resource state accepted")
+	}
+	replacement.Status = "Degraded Quorum"
+	replacement.DesiredSize = 2
+	if _, _, err := clusterResourceState(replacement); err == nil {
+		t.Fatal("steady two-node custom-resource state accepted")
+	}
+	replacement.ActiveSize = 3
+	replacement.DesiredSize = 1
+	if _, _, err := clusterResourceState(replacement); err == nil {
+		t.Fatal("unsupported three-to-one transitional custom-resource state accepted")
 	}
 	state.ActiveSize = 3
 	state.DesiredSize = 5
@@ -1011,6 +1114,12 @@ func TestEmergencyRemovalNeverContactsUnreachableTarget(t *testing.T) {
 	}
 	if strings.Contains(joined, "enter_drain") || strings.Contains(joined, "prepare_member_removal") || !strings.Contains(joined, "delete_member_node") || !strings.Contains(joined, "scale_postgres_membership") {
 		t.Fatalf("unsafe emergency sequence: %s", joined)
+	}
+	if desired, status := completedRemovalClusterState(2, true); desired != 3 || status != "Degraded Quorum" {
+		t.Fatalf("emergency removal did not retain three-node desired state: desired=%d status=%s", desired, status)
+	}
+	if desired, status := completedRemovalClusterState(1, false); desired != 1 || status != "Healthy" {
+		t.Fatalf("safe removal completion changed: desired=%d status=%s", desired, status)
 	}
 }
 

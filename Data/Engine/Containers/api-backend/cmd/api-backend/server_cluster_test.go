@@ -346,11 +346,36 @@ func TestClusterInvitationRejectsExpansionAfterThreeNodes(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/invitations", `{"node_name":"engine-4"}`, token))
 
-	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "five_plus_not_qualified") {
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "membership_not_qualified") {
 		t.Fatalf("expected invitation membership fence, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 	if store.invitation != nil {
 		t.Fatalf("rejected invitation reached store: %+v", store.invitation)
+	}
+}
+
+func TestClusterInvitationAllowsDegradedQuorumReplacement(t *testing.T) {
+	store := &clusterTestStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: map[string]any{
+			"enabled":      true,
+			"active_size":  int64(2),
+			"desired_size": int64(3),
+			"status":       "Degraded Quorum",
+			"cluster_id":   "11111111-1111-4111-8111-111111111111",
+		},
+	}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/invitations", `{"node_name":"engine-replacement"}`, token))
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected degraded replacement invitation, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if cleanText(store.invitation["node_name"]) != "engine-replacement" {
+		t.Fatalf("replacement invitation did not reach store: %+v", store.invitation)
 	}
 }
 
@@ -365,6 +390,128 @@ func TestCurrentReleaseClusterMembershipRules(t *testing.T) {
 	}
 	if !currentReleaseClusterRemovalSupported(3) || currentReleaseClusterRemovalSupported(1) || currentReleaseClusterRemovalSupported(5) {
 		t.Fatal("current release removal fence must allow only three-to-one membership change")
+	}
+}
+
+func TestCurrentReleaseAdmissionBatchSize(t *testing.T) {
+	for _, test := range []struct {
+		active  int64
+		desired int64
+		status  string
+		want    int
+	}{
+		{active: 1, desired: 1, status: "Healthy", want: 2},
+		{active: 1, desired: 3, status: "Pending Quorum", want: 2},
+		{active: 2, desired: 3, status: "Degraded Quorum", want: 1},
+	} {
+		got, err := currentReleaseAdmissionBatchSize(test.active, test.desired, test.status)
+		if err != nil || got != test.want {
+			t.Fatalf("admission state %d/%d %s: got=%d err=%v", test.active, test.desired, test.status, got, err)
+		}
+	}
+	for _, test := range []struct {
+		active  int64
+		desired int64
+		status  string
+	}{
+		{active: 2, desired: 2, status: "Degraded Quorum"},
+		{active: 2, desired: 3, status: "Healthy"},
+		{active: 3, desired: 3, status: "Healthy"},
+		{active: 3, desired: 5, status: "Healthy"},
+	} {
+		if _, err := currentReleaseAdmissionBatchSize(test.active, test.desired, test.status); err == nil {
+			t.Fatalf("unsupported admission state accepted: %d/%d %s", test.active, test.desired, test.status)
+		}
+	}
+}
+
+func TestClusterBannerIgnoresHistoricalFailures(t *testing.T) {
+	store := &clusterTestStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: map[string]any{
+			"enabled": true,
+			"status":  "Healthy",
+			"hmr":     map[string]any{"state": "inactive"},
+			"operations": []map[string]any{
+				{"kind": "membership_admit", "state": "succeeded", "current_step": "complete"},
+				{"kind": "membership_admit", "state": "failed", "current_step": "apply_membership"},
+			},
+		},
+	}
+	auth, token := clusterTestAuth(t, store)
+	recorder := httptest.NewRecorder()
+	clusterBannerHandler(auth).ServeHTTP(recorder, clusterTestRequest(t, http.MethodGet, "/api/server/cluster/banner", "", token))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"active_operation":null`) {
+		t.Fatalf("historical failure remained active banner: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	store.snapshot["operations"] = []map[string]any{{"kind": "engine_update", "state": "running", "current_step": "pre_change_snapshot"}}
+	recorder = httptest.NewRecorder()
+	clusterBannerHandler(auth).ServeHTTP(recorder, clusterTestRequest(t, http.MethodGet, "/api/server/cluster/banner", "", token))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"state":"running"`) {
+		t.Fatalf("running operation missing from banner: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestClusterOperationHistoryMarksGlobalFailuresSuperseded(t *testing.T) {
+	operations := []map[string]any{
+		{"id": "new-success", "kind": "membership_admit", "state": "succeeded", "finished_at": int64(20)},
+		{"id": "old-failure", "kind": "membership_admit", "state": "failed", "finished_at": int64(10)},
+		{"id": "node-success", "kind": "node_maintenance", "state": "succeeded", "finished_at": int64(20)},
+		{"id": "node-failure", "kind": "node_maintenance", "state": "failed", "finished_at": int64(10)},
+	}
+	annotateSupersededClusterOperations(operations)
+	if operations[1]["superseded_by"] != "new-success" {
+		t.Fatalf("membership failure not superseded: %+v", operations[1])
+	}
+	if operations[3]["superseded_by"] != nil {
+		t.Fatalf("target-specific operation incorrectly superseded: %+v", operations[3])
+	}
+}
+
+func TestClusterDatabaseDegradationAllowsOnlyRecoveryMutations(t *testing.T) {
+	allowed := []clusterMutation{
+		{Kind: "hmr_exit"},
+		{Kind: "postgres_emergency_failover"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "exit"}},
+		{Kind: "node_remove", Payload: map[string]any{"emergency": true}},
+	}
+	for _, mutation := range allowed {
+		if !clusterMutationSupportsDatabaseRecovery(mutation) {
+			t.Fatalf("recovery mutation blocked: %+v", mutation)
+		}
+	}
+	blocked := []clusterMutation{
+		{Kind: "engine_update"},
+		{Kind: "postgres_switchover"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "enter"}},
+		{Kind: "node_remove", Payload: map[string]any{"emergency": false}},
+	}
+	for _, mutation := range blocked {
+		if clusterMutationSupportsDatabaseRecovery(mutation) {
+			t.Fatalf("normal mutation allowed during database degradation: %+v", mutation)
+		}
+	}
+}
+
+func TestClusterQuorumDegradationAllowsOnlyRecoveryMutations(t *testing.T) {
+	for _, mutation := range []clusterMutation{
+		{Kind: "postgres_emergency_failover"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "exit"}},
+	} {
+		if !clusterMutationSupportsQuorumRecovery(mutation) {
+			t.Fatalf("quorum recovery mutation blocked: %+v", mutation)
+		}
+	}
+	for _, mutation := range []clusterMutation{
+		{Kind: "engine_update"},
+		{Kind: "k3s_update"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "enter"}},
+		{Kind: "node_remove", Payload: map[string]any{"emergency": true}},
+	} {
+		if clusterMutationSupportsQuorumRecovery(mutation) {
+			t.Fatalf("normal mutation allowed during quorum recovery: %+v", mutation)
+		}
 	}
 }
 

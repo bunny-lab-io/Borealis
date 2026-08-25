@@ -763,6 +763,10 @@ export default function AppShell() {
               <Alert severity="error" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
                 Cluster degraded. Failed node remains drained; Admin retry or recovery required.
               </Alert>
+            ) : clusterBanner?.status === "Degraded Database" ? (
+              <Alert severity="warning" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
+                Cluster PostgreSQL is not fully ready. Normal cluster-changing operations remain blocked until database redundancy recovers.
+              </Alert>
             ) : clusterBanner?.active_operation ? (
               <Alert severity="info" sx={{ borderRadius: 0, flexShrink: 0 }}>
                 Cluster operation {clusterBanner.active_operation.kind} · {clusterBanner.active_operation.current_step} · {clusterBanner.active_operation.state}
