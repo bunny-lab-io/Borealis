@@ -3348,6 +3348,10 @@ func (r *kubernetesClusterStepRunner) waitNodeEndpointsWithdrawn(ctx context.Con
 		foundReady := false
 		for _, item := range anySlice(payload["items"]) {
 			slice, _ := item.(map[string]any)
+			serviceName := cleanText(nestedMap(nestedMap(slice, "metadata"), "labels")["kubernetes.io/service-name"])
+			if !clusterDrainedTrafficService(serviceName) {
+				continue
+			}
 			for _, endpointRaw := range anySlice(slice["endpoints"]) {
 				endpoint, _ := endpointRaw.(map[string]any)
 				conditions := mapStringAny(endpoint["conditions"])
@@ -3365,6 +3369,17 @@ func (r *kubernetesClusterStepRunner) waitNodeEndpointsWithdrawn(ctx context.Con
 		case <-ticker.C:
 		}
 	}
+}
+
+func clusterDrainedTrafficService(name string) bool {
+	return textInSet(name,
+		"api-backend",
+		"api-backend-aegis",
+		"job-scheduler",
+		"remote-desktop-guacd",
+		"traefik-edge",
+		"webui-frontend",
+	) || strings.HasPrefix(name, "site-worker-")
 }
 
 func (r *kubernetesClusterStepRunner) nodeReady(ctx context.Context, nodeName string) (bool, error) {

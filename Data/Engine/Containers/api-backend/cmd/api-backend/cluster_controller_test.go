@@ -1610,6 +1610,43 @@ func TestHMRNodeHealthRequiresReadyNodeScopedEndpoint(t *testing.T) {
 	}
 }
 
+func TestWaitNodeEndpointsWithdrawnIgnoresResidentInfrastructureEndpoints(t *testing.T) {
+	trafficReady := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items := []any{
+			map[string]any{
+				"metadata":  map[string]any{"labels": map[string]any{"kubernetes.io/service-name": "borealis-operator"}},
+				"endpoints": []any{map[string]any{"nodeName": "engine-1", "conditions": map[string]any{"ready": true}}},
+			},
+			map[string]any{
+				"metadata":  map[string]any{"labels": map[string]any{"kubernetes.io/service-name": "borealis-postgres-r"}},
+				"endpoints": []any{map[string]any{"nodeName": "engine-1", "conditions": map[string]any{"ready": true}}},
+			},
+			map[string]any{
+				"metadata":  map[string]any{"labels": map[string]any{"kubernetes.io/service-name": "api-backend"}},
+				"endpoints": []any{map[string]any{"nodeName": "engine-2", "conditions": map[string]any{"ready": true}}},
+			},
+		}
+		if trafficReady {
+			items[2].(map[string]any)["endpoints"] = append(items[2].(map[string]any)["endpoints"].([]any), map[string]any{"nodeName": "engine-1", "conditions": map[string]any{"ready": true}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.waitNodeEndpointsWithdrawn(ctx, "engine-1"); err != nil {
+		t.Fatalf("resident infrastructure endpoint blocked application drain: %v", err)
+	}
+	trafficReady = true
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer readyCancel()
+	if err := runner.waitNodeEndpointsWithdrawn(readyCtx, "engine-1"); err == nil {
+		t.Fatal("ready drained-traffic endpoint was accepted")
+	}
+}
+
 func TestEdgeRoleTransferWaitsForLeaseAndWireGuardReadiness(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
