@@ -299,7 +299,21 @@ func clusterMutationSupportsQuorumRecovery(mutation clusterMutation) bool {
 	if mutation.Kind == "postgres_emergency_failover" {
 		return true
 	}
+	if mutation.Kind == "node_remove" {
+		emergency, _ := mutation.Payload["emergency"].(bool)
+		return emergency
+	}
 	return mutation.Kind == "node_maintenance" && cleanText(mutation.Payload["action"]) == "exit"
+}
+
+func clusterDatabaseRuntimeRequiresRecovery(configJSON string) bool {
+	database := mapStringAny(parseClusterJSON(configJSON)["database_runtime"])
+	if len(database) == 0 {
+		return false
+	}
+	fullyReady, fullyReadyObserved := database["fully_ready"].(bool)
+	durabilityQuorum, durabilityObserved := database["durability_quorum"].(bool)
+	return (fullyReadyObserved && !fullyReady) || (durabilityObserved && !durabilityQuorum)
 }
 
 func (s *postgresOperatorStore) clusterEvents(ctx context.Context, afterID int64) ([]map[string]any, error) {
@@ -336,8 +350,8 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 	var activeSize int64
 	var activeOperationID string
 	var clusterID string
-	var clusterStatus, hmrState, hmrNodeID, baselineRelease, baselineSHA string
-	err = tx.QueryRowContext(ctx, `SELECT enabled, active_size, COALESCE(active_operation_id,''), cluster_id, status, hmr_state, COALESCE(hmr_node_id,''), COALESCE(baseline_release,''), COALESCE(baseline_sha,'') FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &activeOperationID, &clusterID, &clusterStatus, &hmrState, &hmrNodeID, &baselineRelease, &baselineSHA)
+	var clusterStatus, hmrState, hmrNodeID, baselineRelease, baselineSHA, configJSON string
+	err = tx.QueryRowContext(ctx, `SELECT enabled, active_size, COALESCE(active_operation_id,''), cluster_id, status, hmr_state, COALESCE(hmr_node_id,''), COALESCE(baseline_release,''), COALESCE(baseline_sha,''), config_json FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &activeOperationID, &clusterID, &clusterStatus, &hmrState, &hmrNodeID, &baselineRelease, &baselineSHA, &configJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		if mutation.Kind != "cluster_enable" {
 			return nil, fmt.Errorf("%w: cluster is not enabled", errClusterConflict)
@@ -366,10 +380,19 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 			return nil, fmt.Errorf("%w: operation %s is %s", errClusterConflict, activeOperationID, activeState)
 		}
 	}
+	if mutation.Kind != "cluster_enable" {
+		var drainedApplications int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active' AND application_state<>'active'`).Scan(&drainedApplications); err != nil {
+			return nil, err
+		}
+		if drainedApplications != 0 && !clusterMutationSupportsDatabaseRecovery(mutation) {
+			return nil, fmt.Errorf("%w: %s is blocked until drained application node recovers", errClusterConflict, mutation.Kind)
+		}
+	}
 	if mutation.Kind != "hmr_exit" && mutation.Kind != "cluster_enable" && hmrState != "inactive" {
 		return nil, fmt.Errorf("%w: %s is blocked while HMR state is %s", errClusterConflict, mutation.Kind, hmrState)
 	}
-	if clusterStatus == "Degraded Database" && !clusterMutationSupportsDatabaseRecovery(mutation) {
+	if (clusterStatus == "Degraded Database" || clusterDatabaseRuntimeRequiresRecovery(configJSON)) && !clusterMutationSupportsDatabaseRecovery(mutation) {
 		return nil, fmt.Errorf("%w: %s is blocked until PostgreSQL instances recover", errClusterConflict, mutation.Kind)
 	}
 	if clusterStatus == "Degraded Quorum" && !clusterMutationSupportsQuorumRecovery(mutation) {
@@ -405,6 +428,32 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		mutation.TargetSHA = baselineSHA
 		mutation.Payload["baseline_release"] = baselineRelease
 		mutation.Payload["baseline_sha"] = baselineSHA
+	}
+	if mutation.Kind == "node_maintenance" {
+		action := cleanText(mutation.Payload["action"])
+		var membershipState, applicationState string
+		if err := tx.QueryRowContext(ctx, `SELECT membership_state,application_state FROM engine.cluster_nodes WHERE id=$1`, mutation.TargetNodeID).Scan(&membershipState, &applicationState); errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: maintenance target node does not exist", errClusterNotFound)
+		} else if err != nil {
+			return nil, err
+		}
+		if membershipState != "Active" {
+			return nil, fmt.Errorf("%w: maintenance target node is not active", errClusterConflict)
+		}
+		if action == "enter" {
+			if applicationState != "active" {
+				return nil, fmt.Errorf("%w: maintenance target is already drained", errClusterConflict)
+			}
+			var otherDrained int64
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active' AND id<>$1 AND application_state<>'active'`, mutation.TargetNodeID).Scan(&otherDrained); err != nil {
+				return nil, err
+			}
+			if otherDrained != 0 {
+				return nil, fmt.Errorf("%w: restore existing drained node before entering maintenance on another node", errClusterConflict)
+			}
+		} else if applicationState != "drained" {
+			return nil, fmt.Errorf("%w: maintenance exit requires drained target", errClusterConflict)
+		}
 	}
 	if mutation.Kind == "membership_scale" {
 		desiredSize := coerceInt64(mutation.Payload["desired_size"])

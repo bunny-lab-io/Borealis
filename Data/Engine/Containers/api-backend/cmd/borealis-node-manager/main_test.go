@@ -173,6 +173,64 @@ func TestK3sRegistryMirrorsCoverBorealisAndPinnedDependencies(t *testing.T) {
 	}
 }
 
+func TestJoinedK3sRuntimeLabelsSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "20-borealis-cluster-join.yaml")
+	initial := "server: \"https://192.168.3.249:6443\"\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n"
+	if err := os.WriteFile(path, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistJoinedK3sRuntimeLabels(path, "active"); err != nil {
+		t.Fatal(err)
+	}
+	active, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{
+		"borealis.io/application-state=active",
+		"borealis.io/edge-eligible=true",
+		"borealis.io/scheduler-eligible=true",
+		"borealis.io/postgres-primary-eligible=true",
+	} {
+		if !strings.Contains(string(active), label) {
+			t.Fatalf("active joined config missing %q: %s", label, string(active))
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("joined config mode=%v, want 0600", info.Mode().Perm())
+	}
+	if err := persistJoinedK3sRuntimeLabels(path, "drained"); err != nil {
+		t.Fatal(err)
+	}
+	drained, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(drained), "borealis.io/application-state=drained") || strings.Count(string(drained), "-eligible=false") != 3 {
+		t.Fatalf("drained joined config is unsafe: %s", string(drained))
+	}
+}
+
+func TestJoinedK3sRuntimeLabelsRejectMalformedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "20-borealis-cluster-join.yaml")
+	if err := os.WriteFile(path, []byte("node-label:\n  - borealis.io/application-state=drained\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistJoinedK3sRuntimeLabels(path, "active"); err == nil {
+		t.Fatal("joined config missing eligibility labels was accepted")
+	}
+	if err := persistJoinedK3sRuntimeLabels(filepath.Join(t.TempDir(), "missing.yaml"), "active"); err != nil {
+		t.Fatalf("foundational node missing joined config should be accepted: %v", err)
+	}
+	if err := persistJoinedK3sRuntimeLabels(path, "unknown"); err == nil {
+		t.Fatal("invalid application state was accepted")
+	}
+}
+
 func TestNormalizePeerCIDRsRequiresBoundedPrivateIPv4Networks(t *testing.T) {
 	got, err := normalizePeerCIDRs("192.168.10.2/24, 10.0.0.8/32,192.168.10.0/24")
 	if err != nil {

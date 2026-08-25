@@ -212,10 +212,13 @@ export default function ClusterManagement() {
   const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
   const activeSize = Number(cluster?.active_size || 1);
   const desiredMembershipSize = Number(cluster?.desired_size || activeSize);
-  const normalOperationsEnabled = cluster?.status === "Healthy";
-  const rollingUpdateEnabled = normalOperationsEnabled || cluster?.status === "Mixed Version";
+  const database = cluster?.database || {};
+  const databaseRecoveryReady = database?.fully_ready !== false && database?.durability_quorum !== false;
+  const applicationCapacityReady = nodes.filter((node) => node?.membership_state === "Active").every((node) => node?.application_state === "active");
+  const normalOperationsEnabled = cluster?.status === "Healthy" && databaseRecoveryReady && applicationCapacityReady;
+  const rollingUpdateEnabled = (normalOperationsEnabled || cluster?.status === "Mixed Version") && databaseRecoveryReady && applicationCapacityReady;
   const replacementRecovery = activeSize === 2 && desiredMembershipSize === 3 && cluster?.status === "Degraded Quorum";
-  const canPrepareMembership = activeSize === 1 || replacementRecovery;
+  const canPrepareMembership = (activeSize === 1 || replacementRecovery) && applicationCapacityReady;
   const canExpandToThree = activeSize === 1;
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
@@ -353,7 +356,6 @@ export default function ClusterManagement() {
   });
 
   const leaders = cluster?.leaders || {};
-  const database = cluster?.database || {};
   const configuredDatabaseInstances = Number(database?.configured_instances || activeSize);
   const databaseReadyObserved = database?.ready_instances !== undefined && database?.ready_instances !== null;
   const readyDatabaseInstances = databaseReadyObserved ? Number(database.ready_instances) : null;
@@ -367,6 +369,8 @@ export default function ClusterManagement() {
         {cluster?.hmr?.state && cluster.hmr.state !== "inactive" ? <Alert severity="warning"><strong>Cluster-wide non-HA HMR active.</strong> {HMR_WARNING}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}
         {cluster?.status === "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL is not fully ready: {readyDatabaseInstances ?? "unknown"} of {configuredDatabaseInstances} instances Ready. Normal cluster-changing operations stay blocked until redundancy recovers; recovery controls remain available.</Alert> : null}
+        {!databaseRecoveryReady && cluster?.status !== "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL recovery remains required even while cluster lifecycle status is {valueLabel(cluster?.status)}. Normal cluster-changing operations stay blocked.</Alert> : null}
+        {!applicationCapacityReady ? <Alert severity="warning">One or more active cluster members remain application-drained. Restore drained node or finish explicit recovery before starting normal cluster operations.</Alert> : null}
         <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto">
           {TABS.map((label) => <Tab key={label} label={label} />)}
         </Tabs>

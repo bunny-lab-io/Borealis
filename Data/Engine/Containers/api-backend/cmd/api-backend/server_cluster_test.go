@@ -494,10 +494,43 @@ func TestClusterDatabaseDegradationAllowsOnlyRecoveryMutations(t *testing.T) {
 	}
 }
 
+func TestClusterDatabaseRuntimeBlocksNormalMutationsAcrossOtherStatuses(t *testing.T) {
+	degraded := `{"database_runtime":{"fully_ready":false,"durability_quorum":true}}`
+	if !clusterDatabaseRuntimeRequiresRecovery(degraded) {
+		t.Fatal("observed database degradation was ignored")
+	}
+	if clusterDatabaseRuntimeRequiresRecovery(`{"database_runtime":{"fully_ready":true,"durability_quorum":true}}`) {
+		t.Fatal("healthy database runtime was marked degraded")
+	}
+	if clusterDatabaseRuntimeRequiresRecovery(`{}`) {
+		t.Fatal("missing legacy database observation was marked degraded")
+	}
+}
+
+func TestClusterDrainedNodeAllowsOnlyRecoveryMutations(t *testing.T) {
+	allowed := []clusterMutation{
+		{Kind: "hmr_exit"},
+		{Kind: "postgres_emergency_failover"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "exit"}},
+		{Kind: "node_remove", Payload: map[string]any{"emergency": true}},
+	}
+	for _, mutation := range allowed {
+		if !clusterMutationSupportsDatabaseRecovery(mutation) {
+			t.Fatalf("drained-node recovery mutation blocked: %+v", mutation)
+		}
+	}
+	for _, mutation := range []clusterMutation{{Kind: "engine_update"}, {Kind: "hmr_start"}, {Kind: "membership_scale"}, {Kind: "node_maintenance", Payload: map[string]any{"action": "enter"}}} {
+		if clusterMutationSupportsDatabaseRecovery(mutation) {
+			t.Fatalf("normal mutation allowed while application node drained: %+v", mutation)
+		}
+	}
+}
+
 func TestClusterQuorumDegradationAllowsOnlyRecoveryMutations(t *testing.T) {
 	for _, mutation := range []clusterMutation{
 		{Kind: "postgres_emergency_failover"},
 		{Kind: "node_maintenance", Payload: map[string]any{"action": "exit"}},
+		{Kind: "node_remove", Payload: map[string]any{"emergency": true}},
 	} {
 		if !clusterMutationSupportsQuorumRecovery(mutation) {
 			t.Fatalf("quorum recovery mutation blocked: %+v", mutation)
@@ -507,7 +540,7 @@ func TestClusterQuorumDegradationAllowsOnlyRecoveryMutations(t *testing.T) {
 		{Kind: "engine_update"},
 		{Kind: "k3s_update"},
 		{Kind: "node_maintenance", Payload: map[string]any{"action": "enter"}},
-		{Kind: "node_remove", Payload: map[string]any{"emergency": true}},
+		{Kind: "node_remove", Payload: map[string]any{"emergency": false}},
 	} {
 		if clusterMutationSupportsQuorumRecovery(mutation) {
 			t.Fatalf("normal mutation allowed during quorum recovery: %+v", mutation)

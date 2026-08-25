@@ -428,8 +428,8 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 		return err
 	}
 	var enabled int
-	var clusterStatus, configJSON string
-	if err := conn.QueryRowContext(ctx, `SELECT enabled,status,config_json FROM engine.cluster_state WHERE id=1`).Scan(&enabled, &clusterStatus, &configJSON); err != nil {
+	var clusterStatus, configJSON, activeOperationID, hmrState string
+	if err := conn.QueryRowContext(ctx, `SELECT enabled,status,config_json,COALESCE(active_operation_id,''),hmr_state FROM engine.cluster_state WHERE id=1`).Scan(&enabled, &clusterStatus, &configJSON, &activeOperationID, &hmrState); err != nil {
 		conn.Close()
 		return err
 	}
@@ -461,7 +461,19 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 	if err != nil {
 		return err
 	}
+	runtimeDrainObserved := false
 	for index, node := range nodes {
+		if node.ApplicationState == "drained" && node.DrainReason == "k3s_restart_label_drift" {
+			runtimeDrainObserved = true
+		}
+		if updated, changed := clusterObservedDrainTransition(node, kubernetesNodes[node.Name], activeOperationID == "" && hmrState == "inactive"); changed {
+			if _, err := conn.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state='drained',drain_reason=$1,updated_at=$2 WHERE id=$3 AND membership_state='Active' AND application_state='active'`, updated.DrainReason, c.now().UTC().Unix(), node.ID); err != nil {
+				conn.Close()
+				return err
+			}
+			node = updated
+			runtimeDrainObserved = true
+		}
 		if node.Roles == nil {
 			node.Roles = map[string]any{}
 		}
@@ -481,6 +493,9 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 	config := parseClusterJSON(configJSON)
 	beforeDatabaseRuntime := marshalClusterJSON(mapStringAny(config["database_runtime"]))
 	nextStatus := clusterRuntimeDatabaseStatus(clusterStatus, databaseRuntime)
+	if runtimeDrainObserved {
+		nextStatus = "Degraded Quorum"
+	}
 	if beforeDatabaseRuntime != marshalClusterJSON(databaseRuntime) || nextStatus != clusterStatus {
 		if _, err := conn.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,config_json=jsonb_set(COALESCE(NULLIF(config_json,''),'{}')::jsonb,'{database_runtime}',$2::jsonb,true)::text,updated_at=$3 WHERE id=1`, nextStatus, marshalClusterJSON(databaseRuntime), c.now().UTC().Unix()); err != nil {
 			conn.Close()
@@ -496,6 +511,16 @@ func (c *clusterController) reconcileRuntimeRoles(ctx context.Context, runner *k
 		}
 	}
 	return nil
+}
+
+func clusterObservedDrainTransition(node clusterControllerNode, kubernetesNode map[string]any, steadyState bool) (clusterControllerNode, bool) {
+	observed := cleanText(nestedMap(nestedMap(kubernetesNode, "metadata"), "labels")["borealis.io/application-state"])
+	if !steadyState || node.ApplicationState != "active" || observed != "drained" {
+		return node, false
+	}
+	node.ApplicationState = "drained"
+	node.DrainReason = "k3s_restart_label_drift"
+	return node, true
 }
 
 func (r *kubernetesClusterStepRunner) runtimeDatabaseState(ctx context.Context, activeSize int64) (map[string]any, error) {
@@ -955,8 +980,13 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		return append(base, clusterControllerStep{Name: "verify_quorum"}), nil
 	case "membership_admit", "membership_scale":
 		return append(base, clusterControllerStep{Name: "apply_membership"}, clusterControllerStep{Name: "verify_quorum"}), nil
-	case "postgres_switchover", "postgres_emergency_failover":
+	case "postgres_switchover":
 		return append(base, clusterControllerStep{Name: "pre_change_snapshot"}, clusterControllerStep{Name: "postgres_role_change", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "verify_postgres"}), nil
+	case "postgres_emergency_failover":
+		// Emergency failover must remain usable when failed primary cannot
+		// complete new backup. Existing scheduled/pre-change backups remain
+		// recovery source; promotion starts after normal preflight checks.
+		return append(base, clusterControllerStep{Name: "postgres_role_change", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "verify_postgres"}), nil
 	case "cluster_enable":
 		return append(base, clusterControllerStep{Name: "apply_cluster_foundation"}, clusterControllerStep{Name: "migrate_postgres"}, clusterControllerStep{Name: "verify_cluster"}), nil
 	default:
@@ -1231,6 +1261,11 @@ func (c *clusterController) advanceOperation(ctx context.Context, operation clus
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET current_step=$1, updated_at=$2 WHERE id=$3 AND state='running'`, nextStep, now, operation.ID); err != nil {
 		return err
 	}
+	if nodeID, state, reason, ok := clusterOperationNodeStateTransition(operation); ok {
+		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state=$1,drain_reason=$2,updated_at=$3 WHERE id=$4 AND membership_state='Active'`, state, nullClusterString(reason), now, nodeID); err != nil {
+			return err
+		}
+	}
 	if operation.Kind == "engine_update" && strings.HasSuffix(operation.CurrentStep, ":inspect_health") && operation.TargetRelease != "" {
 		nodeID := clusterStepNodeID(operation.CurrentStep)
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET release_tag=$1, release_sha=$2, probe_health_json=$3, last_seen_at=$4, updated_at=$4 WHERE id=$5`, operation.TargetRelease, operation.TargetSHA, `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`, now, nodeID); err != nil {
@@ -1268,6 +1303,13 @@ func (c *clusterController) failOperation(ctx context.Context, operation cluster
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state='failed', error_text=$1, finished_at=$2, updated_at=$2 WHERE id=$3`, message, now, operation.ID); err != nil {
 		return errors.Join(cause, err)
 	}
+	// EnterApplicationDrain labels node before scaling workloads down. Persist
+	// conservative drained state even when action fails after label change.
+	if nodeID, state, reason, ok := clusterOperationNodeStateTransition(operation); ok && state == "drained" {
+		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state=$1,drain_reason=$2,updated_at=$3 WHERE id=$4 AND membership_state='Active'`, state, nullClusterString(reason), now, nodeID); err != nil {
+			return errors.Join(cause, err)
+		}
+	}
 	isHMR := operation.Kind == "hmr_start" || operation.Kind == "hmr_exit"
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Degraded Quorum',hmr_state=CASE WHEN $3 THEN 'restore_failed' ELSE hmr_state END,active_operation_id=NULL,updated_at=$1 WHERE id=1 AND active_operation_id=$2`, now, operation.ID, isHMR); err != nil {
 		return errors.Join(cause, err)
@@ -1296,6 +1338,11 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		return err
 	}
 	now := c.now().UTC().Unix()
+	var clusterStatus, configJSON string
+	var activeSize, desiredSize int64
+	if err := tx.QueryRowContext(ctx, `SELECT status,active_size,desired_size,config_json FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&clusterStatus, &activeSize, &desiredSize, &configJSON); err != nil {
+		return err
+	}
 	switch operation.Kind {
 	case "cluster_enable":
 		nodeName := cleanText(operation.Payload["node_name"])
@@ -1316,7 +1363,8 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state=CASE WHEN id=$1 THEN 'active' ELSE 'drained' END,drain_reason=CASE WHEN id=$1 THEN NULL ELSE 'cluster_hmr' END,updated_at=$2 WHERE membership_state='Active'`, operation.TargetNodeID, now)
 		}
 	case "hmr_exit":
-		if _, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='inactive',hmr_node_id=NULL,status='Healthy',updated_at=$1 WHERE id=1`, now); err == nil {
+		status := completedClusterRecoveryStatus(operation, clusterStatus, activeSize, desiredSize, true, parseClusterJSON(configJSON))
+		if _, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='inactive',hmr_node_id=NULL,status=$1,updated_at=$2 WHERE id=1`, status, now); err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state='active',drain_reason=NULL,updated_at=$1 WHERE membership_state='Active'`, now)
 		}
 	case "engine_update":
@@ -1338,6 +1386,16 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 			reason = cleanText(operation.Payload["reason"])
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state=$1,drain_reason=$2,updated_at=$3 WHERE id=$4`, state, nullClusterString(reason), now, operation.TargetNodeID)
+		if err == nil && state == "active" {
+			var drained int64
+			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active' AND application_state<>'active'`).Scan(&drained); err == nil {
+				status := completedClusterRecoveryStatus(operation, clusterStatus, activeSize, desiredSize, drained == 0, parseClusterJSON(configJSON))
+				_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,updated_at=$2 WHERE id=1`, status, now)
+			}
+		}
+	case "postgres_switchover", "postgres_emergency_failover":
+		status := completedClusterRecoveryStatus(operation, clusterStatus, activeSize, desiredSize, true, parseClusterJSON(configJSON))
+		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,updated_at=$2 WHERE id=1`, status, now)
 	case "node_remove":
 		for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, cleanText(rawID))
@@ -1403,6 +1461,41 @@ func clusterStepNodeID(step string) string {
 	return ""
 }
 
+func clusterOperationNodeStateTransition(operation clusterControllerOperation) (string, string, string, bool) {
+	nodeID := clusterStepNodeID(operation.CurrentStep)
+	if nodeID == "" {
+		return "", "", "", false
+	}
+	switch strings.TrimPrefix(operation.CurrentStep, "node:"+nodeID+":") {
+	case "enter_drain":
+		return nodeID, "drained", firstText(cleanText(operation.Payload["reason"]), operation.Kind), true
+	case "exit_drain":
+		return nodeID, "active", "", true
+	default:
+		return "", "", "", false
+	}
+}
+
+func completedClusterRecoveryStatus(operation clusterControllerOperation, current string, activeSize, desiredSize int64, allApplicationsActive bool, config map[string]any) string {
+	if activeSize == 2 && desiredSize == 3 {
+		return "Degraded Quorum"
+	}
+	if operation.Kind == "postgres_emergency_failover" && current == "Degraded Quorum" {
+		return current
+	}
+	if operation.Kind == "node_maintenance" && cleanText(operation.Payload["action"]) == "exit" && (!allApplicationsActive || activeSize != desiredSize) {
+		return current
+	}
+	database := mapStringAny(config["database_runtime"])
+	if len(database) == 0 {
+		if current == "Degraded Database" {
+			return current
+		}
+		return "Healthy"
+	}
+	return clusterRuntimeDatabaseStatus("Healthy", database)
+}
+
 func truncateClusterError(value string, maximum int) string {
 	if len(value) <= maximum {
 		return value
@@ -1429,7 +1522,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if (operation.Kind == "engine_update" || operation.Kind == "k3s_update") && len(nodes) == 1 && cleanText(operation.Payload["maintenance_outage_acknowledgement"]) != "ACCEPT OUTAGE" {
 			return errors.New("one-node update requires ACCEPT OUTAGE acknowledgement")
 		}
-		if operation.Kind != "cluster_enable" && len(nodes) != 1 && len(nodes) != 3 {
+		if operation.Kind != "cluster_enable" && len(nodes) != 1 && len(nodes) != 3 && !clusterOperationSupportsTwoNodeRecovery(operation, len(nodes)) {
 			return fmt.Errorf("active node count %d is not supported", len(nodes))
 		}
 		if operation.Kind == "engine_update" {
@@ -1734,6 +1827,20 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		}
 	}
 	return fmt.Errorf("unsupported cluster controller step %q", step.Name)
+}
+
+func clusterOperationSupportsTwoNodeRecovery(operation clusterControllerOperation, activeNodes int) bool {
+	if activeNodes != 2 {
+		return false
+	}
+	switch operation.Kind {
+	case "membership_admit", "postgres_emergency_failover":
+		return true
+	case "node_maintenance":
+		return cleanText(operation.Payload["action"]) == "exit"
+	default:
+		return false
+	}
 }
 
 func completedRemovalClusterState(targetSize int64, emergency bool) (int64, string) {

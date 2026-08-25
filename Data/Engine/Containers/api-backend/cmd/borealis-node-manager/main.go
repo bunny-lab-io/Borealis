@@ -38,6 +38,7 @@ const (
 	defaultK3sVersion  = "v1.36.3+k3s1"
 	memberFencePath    = "/etc/borealis/k3s-member-removal-fence.json"
 	k3sRegistriesPath  = "/etc/rancher/k3s/registries.yaml"
+	k3sJoinConfigPath  = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
 	k3sImageImportPath = "/var/lib/rancher/k3s/agent/images"
 )
 
@@ -592,12 +593,18 @@ func (m *manager) setApplicationState(ctx context.Context, state, reason string)
 		if _, err := m.setNodeLabel(ctx, "borealis.io/application-state", state); err != nil {
 			return nil, err
 		}
+		if err := persistJoinedK3sRuntimeLabels(k3sJoinConfigPath, state); err != nil {
+			return nil, err
+		}
 	}
 	if err := m.scaleNodeApplications(ctx, state); err != nil {
 		return nil, err
 	}
 	if state == "active" {
 		if _, err := m.setNodeLabel(ctx, "borealis.io/application-state", state); err != nil {
+			return nil, err
+		}
+		if err := persistJoinedK3sRuntimeLabels(k3sJoinConfigPath, state); err != nil {
 			return nil, err
 		}
 	}
@@ -609,6 +616,72 @@ func (m *manager) setApplicationState(ctx context.Context, state, reason string)
 		return nil, err
 	}
 	return map[string]any{"node_name": m.nodeName, "application_state": state, "reason": reason}, nil
+}
+
+func persistJoinedK3sRuntimeLabels(path, applicationState string) error {
+	if applicationState != "active" && applicationState != "drained" {
+		return errors.New("invalid persistent application state")
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// Foundational node does not use joined-server configuration.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	eligible := strconv.FormatBool(applicationState == "active")
+	updates := map[string]string{
+		"borealis.io/application-state":         applicationState,
+		"borealis.io/edge-eligible":             eligible,
+		"borealis.io/scheduler-eligible":        eligible,
+		"borealis.io/postgres-primary-eligible": eligible,
+	}
+	lines := strings.Split(string(raw), "\n")
+	seen := make(map[string]int, len(updates))
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		for key, value := range updates {
+			prefix := "- " + key + "="
+			if !strings.HasPrefix(trimmed, prefix) {
+				continue
+			}
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[index] = indent + prefix + value
+			seen[key]++
+		}
+	}
+	for key := range updates {
+		if seen[key] != 1 {
+			return fmt.Errorf("joined K3s config must contain exactly one %s label", key)
+		}
+	}
+	return replaceSecureConfig(path, []byte(strings.Join(lines, "\n")))
+}
+
+func replaceSecureConfig(destination string, content []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".borealis-k3s-config-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, destination)
 }
 
 func (m *manager) prepareApplicationRestore(ctx context.Context) (map[string]any, error) {
@@ -1473,7 +1546,7 @@ func installJoinedK3sServer(nodeName, managementIP, serverURL, tokenFile, versio
 		return errors.New("K3s server URL does not contain control-plane IPv4")
 	}
 	config := fmt.Sprintf("server: %q\ntoken-file: %q\nnode-name: %q\nnode-ip: %q\ntls-san:\n  - %q\ndisable:\n  - traefik\n  - servicelb\nsecrets-encryption: true\nembedded-registry: true\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n", serverURL, tokenFile, nodeName, managementIP, controlVIP)
-	if err := os.WriteFile(filepath.Join(configDirectory, "20-borealis-cluster-join.yaml"), []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(k3sJoinConfigPath, []byte(config), 0o600); err != nil {
 		return err
 	}
 	if err := os.WriteFile(k3sRegistriesPath, k3sRegistryMirrorsConfig(), 0o644); err != nil {

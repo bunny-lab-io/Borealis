@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   releaseError: "",
   operations: [],
   database: {},
+  drainedNodeID: "",
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -38,9 +39,9 @@ vi.mock("react-router-dom", async (importOriginal) => {
         },
         database: state.database,
         nodes: [
-          { id: "11111111-1111-4111-8111-111111111111", node_name: "engine-1", membership_state: "Active", application_state: "active", roles: { control_vip_owner: true, k3s_version: "v1.36.3+k3s1" }, probe_health: {} },
-          { id: "22222222-2222-4222-8222-222222222222", node_name: "engine-2", membership_state: "Active", application_state: "active", roles: {}, probe_health: {} },
-          { id: "33333333-3333-4333-8333-333333333333", node_name: "engine-3", membership_state: "Active", application_state: "active", roles: {}, probe_health: {} },
+          { id: "11111111-1111-4111-8111-111111111111", node_name: "engine-1", membership_state: "Active", application_state: state.drainedNodeID === "11111111-1111-4111-8111-111111111111" ? "drained" : "active", roles: { control_vip_owner: true, k3s_version: "v1.36.3+k3s1" }, probe_health: {} },
+          { id: "22222222-2222-4222-8222-222222222222", node_name: "engine-2", membership_state: "Active", application_state: state.drainedNodeID === "22222222-2222-4222-8222-222222222222" ? "drained" : "active", roles: {}, probe_health: {} },
+          { id: "33333333-3333-4333-8333-333333333333", node_name: "engine-3", membership_state: "Active", application_state: state.drainedNodeID === "33333333-3333-4333-8333-333333333333" ? "drained" : "active", roles: {}, probe_health: {} },
         ],
         operations: state.operations,
         admissions: [{ id: "44444444-4444-4444-8444-444444444444", node_name: "engine-4", state: "Pending Quorum" }],
@@ -71,6 +72,7 @@ describe("Cluster Management", () => {
     state.releaseError = "";
     state.operations = [];
     state.database = {};
+    state.drainedNodeID = "";
     vi.unstubAllGlobals();
   });
 
@@ -126,6 +128,30 @@ describe("Cluster Management", () => {
     expect(screen.getAllByRole("button", { name: "Update Node" })[0]).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "Remove Pair" })[0]).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "Emergency Remove" })[0]).toBeEnabled();
+  });
+
+  it("keeps normal controls fenced when mixed-version status masks database recovery", () => {
+    state.hmrState = "inactive";
+    state.clusterStatus = "Mixed Version";
+    state.database = { configured_instances: 3, ready_instances: 2, fully_ready: false, durability_quorum: true };
+    render(<ClusterManagement />);
+
+    expect(screen.getByText(/PostgreSQL recovery remains required even while cluster lifecycle status is Mixed Version/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
+    expect(screen.getByRole("button", { name: "Update All One at a Time" })).toBeDisabled();
+  });
+
+  it("allows drained-node recovery while fencing additional application drains", () => {
+    state.hmrState = "inactive";
+    state.drainedNodeID = "11111111-1111-4111-8111-111111111111";
+    render(<ClusterManagement />);
+
+    expect(screen.getByText(/active cluster members remain application-drained/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
+    expect(screen.getByRole("button", { name: "Exit Maintenance" })).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "Enter Maintenance" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Enter Maintenance" })[0]).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Update Node" })[0]).toBeDisabled();
   });
 
   it("marks superseded failures as audit history and removes retry action", () => {

@@ -382,6 +382,162 @@ func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
 	}
 }
 
+func TestClusterMaintenanceStorePostgresRecoveryGates(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		clusterID   = "8f19197a-320f-466e-9ff8-1bebdf1315e7"
+		nodeOneID   = "a7b4ef2d-3c70-4e47-a258-e5fa961e2405"
+		nodeTwoID   = "ce1cd384-bcb9-47e3-b33a-d7a4d3df641c"
+		nodeThreeID = "edfb0f66-a7e4-44a0-8250-90b38d49b97f"
+		actor       = "cluster-maintenance-gate-test"
+	)
+	operationID := ""
+	cleanup := func() {
+		if operationID != "" {
+			_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id=$1`, operationID)
+			_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id=$1`, operationID)
+		}
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_audit_events WHERE actor=$1`, actor)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_nodes WHERE id IN ($1,$2,$3)`, nodeOneID, nodeTwoID, nodeThreeID)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET status='Healthy',active_size=1,desired_size=1,active_operation_id=NULL,config_json='{}' WHERE id=1`)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Unix()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Healthy',3,3,'inactive',NULL,'{"database_runtime":{"fully_ready":true,"durability_quorum":true}}',$2,$2)
+		ON CONFLICT(id) DO UPDATE SET cluster_id=EXCLUDED.cluster_id,enabled=1,status='Healthy',active_size=3,desired_size=3,hmr_state='inactive',hmr_node_id=NULL,active_operation_id=NULL,config_json=EXCLUDED.config_json,updated_at=EXCLUDED.updated_at
+	`, clusterID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,roles_json,probe_health_json,created_at,updated_at)
+		VALUES
+			($1,'maintenance-engine-1','maintenance-engine-1','192.0.2.31','amd64','Ubuntu 24.04','Active','active','{}','{}',$4,$4),
+			($2,'maintenance-engine-2','maintenance-engine-2','192.0.2.32','amd64','Ubuntu 24.04','Active','drained','{}','{}',$4,$4),
+			($3,'maintenance-engine-3','maintenance-engine-3','192.0.2.33','amd64','Ubuntu 24.04','Active','active','{}','{}',$4,$4)
+	`, nodeOneID, nodeTwoID, nodeThreeID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.createClusterOperation(ctx, actor, clusterMutation{Kind: "node_maintenance", TargetNodeID: nodeOneID, Payload: map[string]any{"action": "enter"}}); !errors.Is(err, errClusterConflict) {
+		t.Fatalf("second application drain was accepted: %v", err)
+	}
+	result, err := store.createClusterOperation(ctx, actor, clusterMutation{Kind: "node_maintenance", TargetNodeID: nodeTwoID, Payload: map[string]any{"action": "exit"}})
+	if err != nil {
+		t.Fatalf("drained-node recovery was rejected: %v", err)
+	}
+	operationID = cleanText(result["operation_id"])
+	if operationID == "" {
+		t.Fatalf("maintenance recovery operation missing: %+v", result)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET active_operation_id=NULL,status='Mixed Version',config_json='{"database_runtime":{"fully_ready":false,"durability_quorum":true}}' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_nodes SET application_state='active' WHERE id=$1`, nodeTwoID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.createClusterOperation(ctx, actor, clusterMutation{Kind: "node_maintenance", TargetNodeID: nodeOneID, Payload: map[string]any{"action": "enter"}}); !errors.Is(err, errClusterConflict) {
+		t.Fatalf("mixed-version status masked database degradation: %v", err)
+	}
+}
+
+func TestClusterCompletionPostgresPreservesAndClearsRecoveryState(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		clusterID       = "650ab7f3-bdf8-4b5e-aecc-cd1feab1b9c9"
+		failoverID      = "13e4fa3a-cfd1-4141-aef0-769a7832c124"
+		maintenanceID   = "9bf355ab-9665-4052-aa39-e9f46def5d14"
+		maintenanceNode = "59ab117e-8e56-4088-b127-cef9ca41191c"
+		holder          = "cluster-completion-recovery-test"
+	)
+	cleanup := func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id IN ($1,$2)`, failoverID, maintenanceID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id IN ($1,$2)`, failoverID, maintenanceID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_nodes WHERE id=$1`, maintenanceNode)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_application_leases WHERE name=$1 AND holder=$2`, clusterControllerLeaseName, holder)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET status='Healthy',active_size=1,desired_size=1,active_operation_id=NULL,config_json='{}' WHERE id=1`)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Unix()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Degraded Quorum',2,3,'inactive',$2,'{"database_runtime":{"fully_ready":true,"durability_quorum":true}}',$3,$3)
+		ON CONFLICT(id) DO UPDATE SET cluster_id=EXCLUDED.cluster_id,enabled=1,status='Degraded Quorum',active_size=2,desired_size=3,hmr_state='inactive',hmr_node_id=NULL,active_operation_id=$2,config_json=EXCLUDED.config_json,updated_at=EXCLUDED.updated_at
+	`, clusterID, failoverID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO engine.cluster_operations(id,kind,state,current_step,requested_by,payload_json,created_at,updated_at) VALUES($1,'postgres_emergency_failover','running','verify_postgres',$2,'{}',$3,$3)`, failoverID, holder, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(name) DO UPDATE SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at`, clusterControllerLeaseName, holder, now+60, now); err != nil {
+		t.Fatal(err)
+	}
+	controller := &clusterController{store: store, holder: holder, now: func() time.Time { return time.Unix(now+1, 0).UTC() }}
+	if err := controller.completeOperation(ctx, clusterControllerOperation{ID: failoverID, Kind: "postgres_emergency_failover"}, nil); err != nil {
+		t.Fatalf("complete degraded failover: %v", err)
+	}
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM engine.cluster_state WHERE id=1`).Scan(&status); err != nil || status != "Degraded Quorum" {
+		t.Fatalf("two-of-three failover completion status=%q err=%v", status, err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,roles_json,probe_health_json,created_at,updated_at)
+		VALUES($1,'completion-engine-1','completion-engine-1','192.0.2.41','amd64','Ubuntu 24.04','Active','drained','{}','{}',$2,$2)
+	`, maintenanceNode, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Degraded Quorum',active_size=3,desired_size=3,active_operation_id=$1 WHERE id=1`, maintenanceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO engine.cluster_operations(id,kind,state,current_step,target_node_id,requested_by,payload_json,created_at,updated_at) VALUES($1,'node_maintenance','running',$2,$3,$4,'{"action":"exit"}',$5,$5)`, maintenanceID, "node:"+maintenanceNode+":exit_drain", maintenanceNode, holder, now); err != nil {
+		t.Fatal(err)
+	}
+	maintenance := clusterControllerOperation{ID: maintenanceID, Kind: "node_maintenance", TargetNodeID: maintenanceNode, Payload: map[string]any{"action": "exit"}}
+	if err := controller.completeOperation(ctx, maintenance, nil); err != nil {
+		t.Fatalf("complete maintenance recovery: %v", err)
+	}
+	var applicationState string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM engine.cluster_state WHERE id=1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT application_state FROM engine.cluster_nodes WHERE id=$1`, maintenanceNode).Scan(&applicationState); err != nil {
+		t.Fatal(err)
+	}
+	if status != "Healthy" || applicationState != "active" {
+		t.Fatalf("maintenance recovery did not restore durable state: status=%q application=%q", status, applicationState)
+	}
+}
+
 func TestClusterNodeRuntimeStateSeparatesDesiredAndObservedState(t *testing.T) {
 	node := clusterControllerNode{
 		ID:               "11111111-1111-4111-8111-111111111111",
@@ -406,6 +562,24 @@ func TestClusterNodeRuntimeStateSeparatesDesiredAndObservedState(t *testing.T) {
 	}
 	if cleanText(spec["desiredSHA"]) != node.ReleaseSHA || cleanText(nestedMap(status, "roles")["edge_vip_owner"]) != "true" {
 		t.Fatalf("node runtime release/roles missing: spec=%#v status=%#v", spec, status)
+	}
+}
+
+func TestUnexpectedK3sDrainFailsClosedOnlyAtSteadyState(t *testing.T) {
+	node := clusterControllerNode{ID: "5feda1fc-c15a-4640-b0fb-6670944d3fc6", Name: "borealis-engine-02", ApplicationState: "active"}
+	kubernetesNode := map[string]any{"metadata": map[string]any{"labels": map[string]any{"borealis.io/application-state": "drained"}}}
+	updated, changed := clusterObservedDrainTransition(node, kubernetesNode, true)
+	if !changed || updated.ApplicationState != "drained" || updated.DrainReason != "k3s_restart_label_drift" {
+		t.Fatalf("unexpected steady-state drain transition: %#v changed=%v", updated, changed)
+	}
+	if _, changed := clusterObservedDrainTransition(node, kubernetesNode, false); changed {
+		t.Fatal("active operation drain observation changed durable state")
+	}
+	alreadyDrained := node
+	alreadyDrained.ApplicationState = "drained"
+	activeKubernetesNode := map[string]any{"metadata": map[string]any{"labels": map[string]any{"borealis.io/application-state": "active"}}}
+	if _, changed := clusterObservedDrainTransition(alreadyDrained, activeKubernetesNode, true); changed {
+		t.Fatal("observed active label bypassed explicit recovery")
 	}
 }
 
@@ -1218,6 +1392,99 @@ func TestHMRRequiresActiveTarget(t *testing.T) {
 	_, err := clusterOperationSteps(clusterControllerOperation{Kind: "hmr_start", TargetNodeID: "11111111-1111-4111-8111-111111111111"}, nil)
 	if err == nil {
 		t.Fatal("expected inactive HMR target rejection")
+	}
+}
+
+func TestPostgresEmergencyFailoverDoesNotDependOnNewBackup(t *testing.T) {
+	targetID := "11111111-1111-4111-8111-111111111111"
+	nodes := []clusterControllerNode{{ID: targetID, Name: "engine-1"}}
+	steps, err := clusterOperationSteps(clusterControllerOperation{Kind: "postgres_emergency_failover", TargetNodeID: targetID}, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 3 || steps[0].Name != "preflight" || steps[1].Name != "postgres_role_change" || steps[2].Name != "verify_postgres" {
+		t.Fatalf("emergency failover retained blocking snapshot dependency: %#v", steps)
+	}
+	switchover, err := clusterOperationSteps(clusterControllerOperation{Kind: "postgres_switchover", TargetNodeID: targetID}, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(switchover) != 4 || switchover[1].Name != "pre_change_snapshot" {
+		t.Fatalf("planned switchover lost pre-change snapshot: %#v", switchover)
+	}
+}
+
+func TestTwoNodePreflightAllowsOnlyDegradedRecoveryOperations(t *testing.T) {
+	nodes := []clusterControllerNode{
+		{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1"},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2"},
+	}
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{}}
+	step := clusterControllerStep{Name: "preflight"}
+	allowed := []clusterControllerOperation{
+		{Kind: "membership_admit"},
+		{Kind: "postgres_emergency_failover"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "exit"}},
+	}
+	for _, operation := range allowed {
+		if err := runner.Run(context.Background(), operation, step, nodes); err != nil {
+			t.Fatalf("two-node recovery %s rejected: %v", operation.Kind, err)
+		}
+	}
+	blocked := []clusterControllerOperation{
+		{Kind: "membership_scale"},
+		{Kind: "postgres_switchover"},
+		{Kind: "node_maintenance", Payload: map[string]any{"action": "enter"}},
+	}
+	for _, operation := range blocked {
+		if err := runner.Run(context.Background(), operation, step, nodes); err == nil {
+			t.Fatalf("unsupported two-node operation %s accepted", operation.Kind)
+		}
+	}
+}
+
+func TestOperationDrainStepsPersistDurableNodeState(t *testing.T) {
+	nodeID := "11111111-1111-4111-8111-111111111111"
+	operation := clusterControllerOperation{
+		Kind:        "engine_update",
+		CurrentStep: "node:" + nodeID + ":enter_drain",
+		Payload:     map[string]any{"reason": "rolling release"},
+	}
+	gotID, state, reason, ok := clusterOperationNodeStateTransition(operation)
+	if !ok || gotID != nodeID || state != "drained" || reason != "rolling release" {
+		t.Fatalf("enter-drain state transition missing: id=%q state=%q reason=%q ok=%v", gotID, state, reason, ok)
+	}
+	operation.CurrentStep = "node:" + nodeID + ":exit_drain"
+	gotID, state, reason, ok = clusterOperationNodeStateTransition(operation)
+	if !ok || gotID != nodeID || state != "active" || reason != "" {
+		t.Fatalf("exit-drain state transition missing: id=%q state=%q reason=%q ok=%v", gotID, state, reason, ok)
+	}
+	operation.CurrentStep = "node:" + nodeID + ":inspect_health"
+	if _, _, _, ok := clusterOperationNodeStateTransition(operation); ok {
+		t.Fatal("non-drain step changed durable node state")
+	}
+}
+
+func TestRecoveryCompletionPreservesTopologyAndDatabaseDegradation(t *testing.T) {
+	healthyDatabase := map[string]any{"database_runtime": map[string]any{"fully_ready": true, "durability_quorum": true}}
+	degradedDatabase := map[string]any{"database_runtime": map[string]any{"fully_ready": false, "durability_quorum": true}}
+	emergency := clusterControllerOperation{Kind: "postgres_emergency_failover"}
+	if got := completedClusterRecoveryStatus(emergency, "Degraded Quorum", 2, 3, true, healthyDatabase); got != "Degraded Quorum" {
+		t.Fatalf("two-of-three failover cleared quorum degradation: %q", got)
+	}
+	if got := completedClusterRecoveryStatus(emergency, "Degraded Database", 3, 3, true, degradedDatabase); got != "Degraded Database" {
+		t.Fatalf("failover hid remaining database degradation: %q", got)
+	}
+	exit := clusterControllerOperation{Kind: "node_maintenance", Payload: map[string]any{"action": "exit"}}
+	if got := completedClusterRecoveryStatus(exit, "Degraded Quorum", 3, 3, true, healthyDatabase); got != "Healthy" {
+		t.Fatalf("verified maintenance recovery did not clear degraded state: %q", got)
+	}
+	if got := completedClusterRecoveryStatus(exit, "Degraded Quorum", 3, 3, false, healthyDatabase); got != "Degraded Quorum" {
+		t.Fatalf("maintenance exit cleared state with another drained node: %q", got)
+	}
+	hmrExit := clusterControllerOperation{Kind: "hmr_exit"}
+	if got := completedClusterRecoveryStatus(hmrExit, "HMR Transition", 3, 3, true, degradedDatabase); got != "Degraded Database" {
+		t.Fatalf("HMR exit hid database degradation: %q", got)
 	}
 }
 
