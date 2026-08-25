@@ -38,6 +38,7 @@ const (
 	defaultK3sVersion  = "v1.36.3+k3s1"
 	memberFencePath    = "/etc/borealis/k3s-member-removal-fence.json"
 	k3sRegistriesPath  = "/etc/rancher/k3s/registries.yaml"
+	k3sImageImportPath = "/var/lib/rancher/k3s/agent/images"
 )
 
 var (
@@ -1577,6 +1578,14 @@ func installLocalNodeManagerService(repoRoot string) error {
 		return err
 	}
 	if err := os.Chown(defaultSecretPath, 0, actionRuntimeID); err != nil {
+		return err
+	}
+	// systemd requires every ReadWritePaths target to exist before ExecStart.
+	// K3s creates this leaf lazily, so joining nodes must create it explicitly.
+	if err := os.MkdirAll(k3sImageImportPath, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(k3sImageImportPath, 0o755); err != nil {
 		return err
 	}
 	unitSource := filepath.Join(repoRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")

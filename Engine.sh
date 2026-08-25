@@ -10967,6 +10967,9 @@ ensure_borealis_node_manager() {
   [[ -x "${staged_binary}" ]] || die "Node-manager binary missing after API backend build: ${staged_binary}"
   [[ -f "${service_source}" ]] || die "Node-manager systemd unit missing: ${service_source}"
   run_privileged install -d -m 0750 -o root -g root "$(dirname -- "${BOREALIS_NODE_MANAGER_TOKEN_FILE}")"
+  # systemd rejects a missing ReadWritePaths target before node-manager starts.
+  # Joined K3s servers do not create the image pre-import leaf until first use.
+  run_privileged install -d -m 0755 -o root -g root "${K3S_IMAGE_IMPORT_DIR}"
   run_privileged install -m 0750 -o root -g root "${staged_binary}" "${BOREALIS_NODE_MANAGER_BINARY}"
   if ! run_privileged test -s "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"; then
     local token_file=""

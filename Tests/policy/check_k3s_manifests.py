@@ -202,6 +202,8 @@ def validate_node_manager_service_contract() -> None:
         fail(f"cannot read Engine node-manager installer: {exc}")
     if 'install -d -m 0750 -o root -g root "$(dirname -- "${BOREALIS_NODE_MANAGER_TOKEN_FILE}")"' not in engine_source:
         fail("Engine node-manager installer must correct configuration-directory ownership and mode")
+    if 'install -d -m 0755 -o root -g root "${K3S_IMAGE_IMPORT_DIR}"' not in engine_source:
+        fail("Engine node-manager installer must create its K3s image-import sandbox path")
     if 'systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"' not in engine_source:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
     try:
@@ -214,6 +216,7 @@ def validate_node_manager_service_contract() -> None:
         "http://127.0.0.1:2381/metrics",
         '"borealis.io/etcd-leader="+value',
         "parseEtcdLeadership",
+        "os.MkdirAll(k3sImageImportPath, 0o755)",
     ):
         if marker not in manager_source:
             fail(f"node-manager lost local etcd leadership report marker {marker!r}")
