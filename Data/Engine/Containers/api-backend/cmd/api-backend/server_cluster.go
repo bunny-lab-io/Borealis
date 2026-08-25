@@ -273,8 +273,8 @@ func clusterScaleHandler(auth *authService) http.HandlerFunc {
 	return clusterMutationHandler(auth, "membership_scale", func(body map[string]any) (clusterMutation, []publicValidationError) {
 		errs := rejectUnknownClusterFields(body, map[string]bool{"desired_size": true, "reason": true})
 		desired := int(coerceInt64(body["desired_size"]))
-		if desired != 1 && desired != 3 && desired != 5 {
-			errs = append(errs, publicValidationError{Field: "desired_size", Message: "must be 1, 3, or 5"})
+		if desired != 3 {
+			errs = append(errs, publicValidationError{Field: "desired_size", Message: "must equal 3; odd membership changes beyond three nodes are future roadmap work"})
 		}
 		reason := cleanText(body["reason"])
 		errs = append(errs, validateClusterReason(reason)...)
@@ -398,7 +398,7 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 				errs = append(errs, publicValidationError{Field: "k3s_version", Message: "must be stable vX.Y.Z+k3sN form no longer than 32 characters"})
 			}
 		}
-		nodeIDs, nodeErrs := clusterStringList(body["node_ids"], "node_ids", 5, validateClusterUUID)
+		nodeIDs, nodeErrs := clusterStringList(body["node_ids"], "node_ids", 3, validateClusterUUID)
 		errs = append(errs, nodeErrs...)
 		if scope == "node" && len(nodeIDs) != 1 {
 			errs = append(errs, publicValidationError{Field: "node_ids", Message: "node scope requires exactly one node"})
@@ -629,6 +629,10 @@ func clusterInvitationHandler(auth *authService) http.HandlerFunc {
 		}
 		if !coerceClusterBool(snapshot["enabled"]) {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "cluster_not_enabled"})
+			return
+		}
+		if coerceInt64(snapshot["active_size"]) != 1 {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "five_plus_not_qualified", "message": "Current release creates node invitations only for one-to-three expansion."})
 			return
 		}
 		invitationID := newClusterUUID()

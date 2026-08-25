@@ -303,6 +303,71 @@ func TestClusterOneNodeUpdateRequiresOutageAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestClusterMembershipScaleRejectsFiveNodeExpansion(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/membership/scale", `{"desired_size":5,"reason":"expand pair"}`, token))
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "future roadmap") {
+		t.Fatalf("expected five-node expansion fence, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.Kind != "" {
+		t.Fatalf("rejected five-node request reached store: %+v", store.mutation)
+	}
+}
+
+func TestClusterMembershipScaleAcceptsThreeNodeTarget(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/membership/scale", `{"desired_size":3,"reason":"form quorum"}`, token))
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected three-node expansion acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.Kind != "membership_scale" || coerceInt64(store.mutation.Payload["desired_size"]) != 3 {
+		t.Fatalf("unexpected membership mutation: %+v", store.mutation)
+	}
+}
+
+func TestClusterInvitationRejectsExpansionAfterThreeNodes(t *testing.T) {
+	store := &clusterTestStore{
+		profile:  operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: map[string]any{"enabled": true, "active_size": int64(3), "cluster_id": "11111111-1111-4111-8111-111111111111"},
+	}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/invitations", `{"node_name":"engine-4"}`, token))
+
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "five_plus_not_qualified") {
+		t.Fatalf("expected invitation membership fence, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.invitation != nil {
+		t.Fatalf("rejected invitation reached store: %+v", store.invitation)
+	}
+}
+
+func TestCurrentReleaseClusterMembershipRules(t *testing.T) {
+	if err := validateCurrentReleaseClusterExpansion(1, 3); err != nil {
+		t.Fatalf("one-to-three expansion rejected: %v", err)
+	}
+	for _, sizes := range [][2]int64{{3, 5}, {1, 5}, {5, 3}} {
+		if err := validateCurrentReleaseClusterExpansion(sizes[0], sizes[1]); err == nil {
+			t.Fatalf("unsupported expansion accepted: %d to %d", sizes[0], sizes[1])
+		}
+	}
+	if !currentReleaseClusterRemovalSupported(3) || currentReleaseClusterRemovalSupported(1) || currentReleaseClusterRemovalSupported(5) {
+		t.Fatal("current release removal fence must allow only three-to-one membership change")
+	}
+}
+
 func TestClusterSafeRemovalRequiresDistinctPair(t *testing.T) {
 	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth, token := clusterTestAuth(t, store)

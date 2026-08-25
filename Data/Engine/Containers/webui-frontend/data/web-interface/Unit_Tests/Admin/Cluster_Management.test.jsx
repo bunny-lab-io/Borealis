@@ -6,6 +6,7 @@ import ClusterManagement from "@/Admin/Cluster_Management.jsx";
 
 const state = vi.hoisted(() => ({
   hmrState: "active",
+  activeSize: 3,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -16,8 +17,8 @@ vi.mock("react-router-dom", async (importOriginal) => {
       cluster: {
         enabled: true,
         status: "Healthy",
-        active_size: 3,
-        desired_size: 3,
+        active_size: state.activeSize,
+        desired_size: state.activeSize,
         baseline_release: "2026.08.1",
         k3s_version: "v1.36.3+k3s1",
         hmr: { state: state.hmrState, node_id: state.hmrState === "active" ? "11111111-1111-4111-8111-111111111111" : "" },
@@ -35,7 +36,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
           { id: "33333333-3333-4333-8333-333333333333", node_name: "engine-3", membership_state: "Active", application_state: "active", roles: {}, probe_health: {} },
         ],
         operations: [],
-        admissions: [],
+        admissions: [{ id: "44444444-4444-4444-8444-444444444444", node_name: "engine-4", state: "Pending Quorum" }],
       },
       releases: { releases: [] },
       initialError: "",
@@ -55,6 +56,7 @@ describe("Cluster Management", () => {
   afterEach(() => {
     cleanup();
     state.hmrState = "active";
+    state.activeSize = 3;
     vi.unstubAllGlobals();
   });
 
@@ -84,6 +86,37 @@ describe("Cluster Management", () => {
     expect(screen.getByText(/Target must be powered off and unable to rejoin/)).toBeInTheDocument();
     expect(screen.getByLabelText("External fencing confirmation")).toBeInTheDocument();
     expect(screen.getByText("Type EMERGENCY REMOVE NODE")).toBeInTheDocument();
+  });
+
+  it("fences expansion after supported three-node membership", () => {
+    render(<ClusterManagement />);
+    fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
+
+    expect(screen.getByText(/Three-node release limit reached/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Node Invitation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Request Pair Expansion" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Approve Pair" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
+    expect(screen.getAllByRole("button", { name: "Remove Pair" })[0]).toBeEnabled();
+  });
+
+  it("fences removal from unsupported five-plus membership", () => {
+    state.activeSize = 5;
+    render(<ClusterManagement />);
+    fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
+
+    expect(screen.getAllByRole("button", { name: "Remove Pair" })[0]).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Emergency Remove" })[0]).toBeDisabled();
+  });
+
+  it("keeps one-to-three membership controls available", () => {
+    state.activeSize = 1;
+    render(<ClusterManagement />);
+    fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
+
+    expect(screen.getByRole("button", { name: "Create Node Invitation" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Request Pair Expansion" })).toBeEnabled();
   });
 
   it("submits K3s upgrade through distinct ordered all-server contract", async () => {

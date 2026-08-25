@@ -15,7 +15,7 @@ api_image="${BOREALIS_CLUSTER_API_IMAGE:-}"
 
 [[ "${EUID}" -eq 0 ]] || { printf 'Cluster node workflow requires root.\n' >&2; exit 1; }
 [[ "${operation}" == "enable" || "${operation}" == "redeploy" ]] || { printf 'Usage: cluster-node-workflow.sh <enable|redeploy> [control-vip] [edge-vip]\n' >&2; exit 64; }
-[[ "${active_size}" == "1" || "${active_size}" == "3" || "${active_size}" == "5" ]] || { printf 'Active cluster size must be 1, 3, or 5.\n' >&2; exit 64; }
+[[ "${active_size}" == "1" || "${active_size}" == "3" ]] || { printf 'Active cluster size must be 1 or 3 in current release.\n' >&2; exit 64; }
 
 . /etc/os-release
 [[ "${ID:-}" == "ubuntu" && "${VERSION_ID%%.*}" -ge 24 ]] || { printf 'Cluster nodes require Ubuntu 24.04 or newer.\n' >&2; exit 1; }
@@ -146,12 +146,11 @@ source, target, size = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int
 text = source.read_text(encoding="utf-8").replace("instances: 3", f"instances: {size}", 1)
 marker = "    # BOREALIS_SYNCHRONOUS_CONFIGURATION"
 sync = ""
-if size in (3, 5):
-    acknowledgements = 1 if size == 3 else 2
+if size == 3:
     sync = "\n".join((
         "    synchronous:",
         "      method: any",
-        f"      number: {acknowledgements}",
+        "      number: 1",
         "      dataDurability: required",
     ))
 if marker not in text:

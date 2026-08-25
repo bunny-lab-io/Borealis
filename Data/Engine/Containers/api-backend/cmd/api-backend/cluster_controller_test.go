@@ -77,6 +77,20 @@ func TestClusterControllerCandidateCannotAcquireOperationLease(t *testing.T) {
 	}
 }
 
+func TestClusterControllerRejectsFiveNodeAdmissionBeforeMutation(t *testing.T) {
+	operation := clusterControllerOperation{Payload: map[string]any{
+		"admission_ids":    []any{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"},
+		"node_names":       []any{"engine-4", "engine-5"},
+		"baseline_release": "2026.08.24",
+		"baseline_sha":     strings.Repeat("a", 40),
+	}}
+	runner := &kubernetesClusterStepRunner{}
+	err := runner.admitPendingMembers(context.Background(), operation, make([]clusterControllerNode, 3))
+	if err == nil || !strings.Contains(err.Error(), "future roadmap") {
+		t.Fatalf("expected five-node controller admission fence, got %v", err)
+	}
+}
+
 func TestClusterControllerLeaseGuardRenewsDuringLongStep(t *testing.T) {
 	var renewals atomic.Int64
 	guard := startClusterControllerLeaseGuard(context.Background(), 2*time.Millisecond, func(context.Context) (bool, error) {
@@ -204,6 +218,88 @@ func TestClusterControllerPostgresLeaseSerializesLongStep(t *testing.T) {
 	}
 }
 
+func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		clusterID     = "7d8cfa65-2897-4516-92de-9be63ae7815a"
+		invitationID  = "52e26bea-39c6-4ff5-91da-d5d457141d79"
+		secondInvite  = "fe148f04-44bc-4964-b0f6-a4a3a7ccc958"
+		thirdInvite   = "ab3e5345-61fe-434a-9451-e6a2071140c1"
+		firstPending  = "cb9f2c44-fc43-472c-ad6b-c39b162614b5"
+		secondPending = "2cd2de2e-a79d-4282-bf0f-68b37b544044"
+	)
+	cleanup := func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE admission_id IN ($1,$2)`, firstPending, secondPending)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_admissions WHERE id IN ($1,$2)`, firstPending, secondPending)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_invitations WHERE id IN ($1,$2,$3)`, invitationID, secondInvite, thirdInvite)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET active_size=1,desired_size=1,active_operation_id=NULL WHERE id=1`)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Unix()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,baseline_release,baseline_sha,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Healthy',3,3,'inactive',NULL,'2026.08.24',$2,'{"k3s_version":"v1.36.3+k3s1"}',$3,$3)
+		ON CONFLICT(id) DO UPDATE SET cluster_id=EXCLUDED.cluster_id,enabled=1,status='Healthy',active_size=3,desired_size=3,hmr_state='inactive',active_operation_id=NULL,baseline_release=EXCLUDED.baseline_release,baseline_sha=EXCLUDED.baseline_sha,config_json=EXCLUDED.config_json,updated_at=EXCLUDED.updated_at
+	`, clusterID, strings.Repeat("a", 40), now); err != nil {
+		t.Fatal(err)
+	}
+	invitation := map[string]any{"id": invitationID, "cluster_id": clusterID, "node_name": "engine-2", "token_hash": "membership-fence-token-one", "expires_at": now + 600}
+	if err := store.createClusterInvitation(ctx, "operator", invitation); !errors.Is(err, errClusterConflict) {
+		t.Fatalf("three-node store accepted new invitation: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET active_size=1,desired_size=3 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.createClusterInvitation(ctx, "operator", invitation); err != nil {
+		t.Fatalf("one-to-three store rejected invitation: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET active_size=3,desired_size=3 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	admission := map[string]any{"id": firstPending, "invitation_id": invitationID, "cluster_id": clusterID, "token_hash": invitation["token_hash"], "node_name": "engine-2", "hostname": "engine-2", "management_ip": "192.0.2.22", "architecture": "amd64", "os_version": "Ubuntu 24.04"}
+	if _, err := store.consumeClusterInvitation(ctx, admission); !errors.Is(err, errClusterConflict) {
+		t.Fatalf("stale invitation bypassed three-node fence: %v", err)
+	}
+	var consumedAt sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT consumed_at FROM engine.cluster_invitations WHERE id=$1`, invitationID).Scan(&consumedAt); err != nil || consumedAt.Valid {
+		t.Fatalf("rejected invitation was consumed: consumed=%v err=%v", consumedAt.Valid, err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_invitations(id,cluster_id,node_name,token_hash,created_by,expires_at,created_at)
+		VALUES($1,$3,'engine-3','membership-fence-token-two','operator',$4,$5),($2,$3,'engine-4','membership-fence-token-three','operator',$4,$5)
+	`, secondInvite, thirdInvite, clusterID, now+600, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_admissions(id,invitation_id,cluster_id,node_name,hostname,management_ip,architecture,os_version,state,created_at,updated_at)
+		VALUES($1,$2,$5,'engine-3','engine-3','192.0.2.23','amd64','Ubuntu 24.04','Pending Quorum',$6,$6),($3,$4,$5,'engine-4','engine-4','192.0.2.24','amd64','Ubuntu 24.04','Pending Quorum',$6,$6)
+	`, firstPending, secondInvite, secondPending, thirdInvite, clusterID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.approveClusterAdmission(ctx, "operator", firstPending); !errors.Is(err, errClusterConflict) {
+		t.Fatalf("stale admissions bypassed three-node fence: %v", err)
+	}
+	var pendingCount int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_admissions WHERE id IN ($1,$2) AND state='Pending Quorum'`, firstPending, secondPending).Scan(&pendingCount); err != nil || pendingCount != 2 {
+		t.Fatalf("rejected admissions changed state: pending=%d err=%v", pendingCount, err)
+	}
+}
+
 func TestClusterNodeRuntimeStateSeparatesDesiredAndObservedState(t *testing.T) {
 	node := clusterControllerNode{
 		ID:               "11111111-1111-4111-8111-111111111111",
@@ -238,8 +334,8 @@ func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testi
 		ClusterID:       clusterID,
 		Enabled:         true,
 		Status:          "Mixed Version",
-		ActiveSize:      3,
-		DesiredSize:     5,
+		ActiveSize:      1,
+		DesiredSize:     3,
 		ControlPlaneVIP: "192.0.2.10",
 		EdgeVIP:         "192.0.2.11",
 		BaselineRelease: "2026.08.24",
@@ -252,8 +348,13 @@ func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coerceInt64(spec["activeSize"]) != 3 || coerceInt64(spec["desiredSize"]) != 5 {
+	if coerceInt64(spec["activeSize"]) != 1 || coerceInt64(spec["desiredSize"]) != 3 {
 		t.Fatalf("cluster desired sizes missing: %#v", spec)
+	}
+	state.ActiveSize = 3
+	state.DesiredSize = 5
+	if _, _, err := clusterResourceState(state); err == nil {
+		t.Fatal("five-node custom-resource membership remained valid")
 	}
 	if cleanText(status["phase"]) != "Mixed Version" || cleanText(status["activeOperationID"]) != operationID {
 		t.Fatalf("cluster runtime status missing: %#v", status)

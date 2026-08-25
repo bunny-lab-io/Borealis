@@ -557,7 +557,7 @@ func (c *clusterController) customResourceSnapshot(ctx context.Context) (cluster
 		conn.Close()
 		return clusterControllerState{}, nil, nil, err
 	}
-	admissions := make([]clusterControllerAdmission, 0, 5)
+	admissions := make([]clusterControllerAdmission, 0, 3)
 	for admissionRows.Next() {
 		var admission clusterControllerAdmission
 		if err := admissionRows.Scan(
@@ -1134,7 +1134,7 @@ func (c *clusterController) activeNodes(ctx context.Context) ([]clusterControlle
 		return nil, err
 	}
 	defer rows.Close()
-	nodes := make([]clusterControllerNode, 0, 5)
+	nodes := make([]clusterControllerNode, 0, 3)
 	for rows.Next() {
 		var node clusterControllerNode
 		var rolesJSON string
@@ -1366,7 +1366,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if (operation.Kind == "engine_update" || operation.Kind == "k3s_update") && len(nodes) == 1 && cleanText(operation.Payload["maintenance_outage_acknowledgement"]) != "ACCEPT OUTAGE" {
 			return errors.New("one-node update requires ACCEPT OUTAGE acknowledgement")
 		}
-		if operation.Kind != "cluster_enable" && len(nodes) != 1 && len(nodes) != 3 && len(nodes) != 5 {
+		if operation.Kind != "cluster_enable" && len(nodes) != 1 && len(nodes) != 3 {
 			return fmt.Errorf("active node count %d is not supported", len(nodes))
 		}
 		if operation.Kind == "engine_update" {
@@ -1701,6 +1701,10 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 		pending = append(pending, node)
 	}
+	newSize := len(activeNodes) + len(pending)
+	if newSize != 3 {
+		return fmt.Errorf("paired admission would produce unsupported active size %d; odd membership changes beyond three nodes are future roadmap work", newSize)
+	}
 	for _, node := range pending {
 		if err := r.waitNodeReady(ctx, node.Name); err != nil {
 			return err
@@ -1714,10 +1718,6 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}); err != nil {
 			return err
 		}
-	}
-	newSize := len(activeNodes) + len(pending)
-	if newSize != 3 && newSize != 5 {
-		return fmt.Errorf("paired admission would produce unsupported active size %d", newSize)
 	}
 	k3sVersion := cleanText(operation.Payload["k3s_version"])
 	if !clusterK3sRE.MatchString(k3sVersion) {
@@ -1836,17 +1836,13 @@ func (r *kubernetesClusterStepRunner) waitNodeReady(ctx context.Context, nodeNam
 }
 
 func (r *kubernetesClusterStepRunner) scaleCNPG(ctx context.Context, size int) error {
-	if size < 1 || size > 5 {
+	if size != 1 && size != 3 {
 		return fmt.Errorf("unsupported CloudNativePG membership size %d", size)
 	}
 	path := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
 	var synchronous any
 	if size > 1 {
-		acknowledgements := int64(1)
-		if size >= 4 {
-			acknowledgements = 2
-		}
-		synchronous = map[string]any{"method": "any", "number": acknowledgements, "dataDurability": "required"}
+		synchronous = map[string]any{"method": "any", "number": int64(1), "dataDurability": "required"}
 	}
 	patch := map[string]any{"spec": map[string]any{"instances": size, "postgresql": map[string]any{"synchronous": synchronous}}}
 	var result map[string]any
@@ -2204,7 +2200,7 @@ func clusterResourceState(state clusterControllerState) (map[string]any, map[str
 	if !clusterUUIDRE.MatchString(state.ClusterID) || !state.Enabled {
 		return nil, nil, errors.New("cluster custom-resource identity is invalid")
 	}
-	if !textInSet(fmt.Sprint(state.ActiveSize), "1", "3", "5") || !textInSet(fmt.Sprint(state.DesiredSize), "1", "3", "5") {
+	if !textInSet(fmt.Sprint(state.ActiveSize), "1", "3") || !textInSet(fmt.Sprint(state.DesiredSize), "1", "3") {
 		return nil, nil, errors.New("cluster custom-resource size is invalid")
 	}
 	controlVIP := net.ParseIP(state.ControlPlaneVIP)

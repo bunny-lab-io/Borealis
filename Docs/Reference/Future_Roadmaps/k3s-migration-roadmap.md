@@ -351,6 +351,16 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Live Docker check confirms stale `borealis-engine-traefik-edge` and `borealis-engine-site-worker-orchestrator` containers are absent.
     - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 
+## Future: Odd Membership Beyond Three Nodes
+
+- [ ] Add qualified odd-numbered expansion beyond three nodes, starting with `3 -> 5`.
+- [ ] Add safe paired shrinking from five-plus topology, starting with `5 -> 3`.
+- [ ] Define and test five-plus etcd quorum, CloudNativePG synchronous durability, role movement, failure recovery, updates, replacement, snapshots, and continuous traffic behavior.
+- [ ] Restore public invitation, admission, scale, removal, and WebUI controls only after disposable qualification passes and operator documentation lands.
+- [ ] Track implementation in separate issue and pull request after current three-node clustering work closes.
+
+Current release supports `1 -> 3 -> 1`. API handlers, PostgreSQL transaction boundaries, cluster controller, and Cluster Management UI fence membership changes beyond three nodes.
+
 ## Open Risks
 
 - [x] `borealis-operator` RBAC must stay narrower than Docker socket power.

@@ -103,7 +103,7 @@ function KeyValueGrid({ entries }) {
   );
 }
 
-function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove }) {
+function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove, removalEnabled }) {
   const roles = node?.roles || {};
   const roleLabels = Object.entries(roles).filter(([, active]) => active).map(([role]) => role.replaceAll("_", " "));
   return (
@@ -127,8 +127,8 @@ function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove }
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
         <Button size="small" variant="outlined" onClick={() => onMaintenance(node)}>{node?.application_state === "drained" ? "Exit Maintenance" : "Enter Maintenance"}</Button>
         <Button size="small" variant="outlined" onClick={() => onUpdate(node)}>Update Node</Button>
-        <Button size="small" color="warning" variant="outlined" onClick={() => onRemove(node)}>Remove Pair</Button>
-        <Button size="small" color="error" variant="outlined" onClick={() => onEmergencyRemove(node)}>Emergency Remove</Button>
+        <Button size="small" color="warning" variant="outlined" disabled={!removalEnabled} onClick={() => onRemove(node)}>Remove Pair</Button>
+        <Button size="small" color="error" variant="outlined" disabled={!removalEnabled} onClick={() => onEmergencyRemove(node)}>Emergency Remove</Button>
       </Stack>
     </Paper>
   );
@@ -161,7 +161,9 @@ export default function ClusterManagement() {
   const nodes = useMemo(() => Array.isArray(cluster?.nodes) ? cluster.nodes : [], [cluster]);
   const operations = useMemo(() => Array.isArray(cluster?.operations) ? cluster.operations : [], [cluster]);
   const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
-  const expansionSizes = useMemo(() => [3, 5].filter((size) => size === Number(cluster?.active_size || 1) + 2), [cluster?.active_size]);
+  const activeSize = Number(cluster?.active_size || 1);
+  const canExpandToThree = activeSize === 1;
+  const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -268,16 +270,20 @@ export default function ClusterManagement() {
       return mutate("/api/server/cluster/enable", { control_plane_vip: controlVIP, edge_vip: edgeVIP, node_name: nodeName, management_ip: managementIP, architecture, confirmation });
     }
     if (kind === "invite") {
+      if (!canExpandToThree) return setError("Current release supports node invitations only for one-to-three expansion.");
       if (!NODE_NAME_PATTERN.test(nodeName)) return setError("Node name must be DNS-label syntax and no longer than 63 characters.");
       return mutate("/api/server/cluster/invitations", { node_name: nodeName }).then((payload) => setInviteBundle(payload?.invite_bundle || ""));
     }
-    if (kind === "scale") return mutate("/api/server/cluster/membership/scale", { desired_size: Number(desiredSize), reason: sanitizedReason });
+    if (kind === "scale") {
+      if (!canExpandToThree || Number(desiredSize) !== 3) return setError("Current release supports only one-to-three membership expansion.");
+      return mutate("/api/server/cluster/membership/scale", { desired_size: 3, reason: sanitizedReason });
+    }
     if (kind === "remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: false, paired_node_id: pairedNode, confirmation, reason: sanitizedReason });
     if (kind === "emergency_remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: true, confirmation, fencing_confirmation: fencingConfirmation, reason: sanitizedReason });
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
     return undefined;
-  }, [architecture, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
+  }, [architecture, canExpandToThree, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
@@ -304,10 +310,10 @@ export default function ClusterManagement() {
           ["PostgreSQL primary", leaders?.postgres_primary], ["Scheduler leader", leaders?.scheduler_leader], ["WireGuard owner", leaders?.wireguard_owner],
         ]} /> : null}
 
-        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} onEmergencyRemove={(value) => openAction("emergency_remove", value)} />)}</Stack> : null}
+        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} removalEnabled={activeSize === 3 && node?.membership_state === "Active"} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} onEmergencyRemove={(value) => openAction("emergency_remove", value)} />)}</Stack> : null}
 
         {tab === 2 ? <Stack spacing={2}>
-          <KeyValueGrid entries={[["Primary", leaders?.postgres_primary], ["Instances", cluster?.active_size], ["Durability", Number(cluster?.active_size) >= 4 ? "2 synchronous acknowledgements" : Number(cluster?.active_size) > 1 ? "1 synchronous acknowledgement" : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", Number(cluster?.active_size) > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
+          <KeyValueGrid entries={[["Primary", leaders?.postgres_primary], ["Instances", cluster?.active_size], ["Durability", activeSize > 3 ? "Unsupported topology; five-plus qualification pending" : activeSize > 1 ? "1 synchronous acknowledgement" : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", activeSize > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
           <Alert severity="info">Snapshots provide in-cluster recovery. They do not replace off-cluster disaster recovery.</Alert>
           <Paper sx={CARD_SX}><Typography variant="h6">PostgreSQL role control</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="postgres-node-label">Target node</InputLabel><Select labelId="postgres-node-label" label="Target node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!selectedNode} onClick={() => openAction("switchover")}>Switchover</Button><Button color="error" variant="outlined" disabled={!selectedNode} onClick={() => openAction("emergency_failover")}>Emergency Failover</Button></Stack></Paper>
         </Stack> : null}
@@ -337,9 +343,9 @@ export default function ClusterManagement() {
         {tab === 5 ? <Stack spacing={2}>
           <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
-          <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>Approve Pair</Button></Stack>)}</Stack></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canExpandToThree || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>Approve Pair</Button></Stack>)}</Stack></Paper>
           {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
-          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" onClick={() => openAction("invite")}>Create Node Invitation</Button><FormControl sx={{ minWidth: 140 }} disabled={!expansionSizes.length}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!expansionSizes.length} onClick={() => openAction("scale")}>Request Pair Expansion</Button></Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
+          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{!canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canExpandToThree} onClick={() => openAction("invite")}>Create Node Invitation</Button><FormControl sx={{ minWidth: 140 }} disabled={!canExpandToThree}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!canExpandToThree} onClick={() => openAction("scale")}>Request Pair Expansion</Button></Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
 

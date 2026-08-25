@@ -352,11 +352,8 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 	}
 	if mutation.Kind == "membership_scale" {
 		desiredSize := coerceInt64(mutation.Payload["desired_size"])
-		if activeSize != 1 && activeSize != 3 {
-			return nil, fmt.Errorf("%w: cluster cannot expand beyond five active nodes", errClusterConflict)
-		}
-		if desiredSize != activeSize+2 {
-			return nil, fmt.Errorf("%w: expansion must request exactly one pending quorum pair; downscale uses paired node removal", errClusterConflict)
+		if err := validateCurrentReleaseClusterExpansion(activeSize, desiredSize); err != nil {
+			return nil, fmt.Errorf("%w: %v", errClusterConflict, err)
 		}
 		if clusterStatus != "Healthy" && clusterStatus != "Pending Quorum" {
 			return nil, fmt.Errorf("%w: membership expansion requires healthy quorum", errClusterConflict)
@@ -369,12 +366,12 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 			if len(ids) != 1 || cleanText(mutation.Payload["fencing_confirmation"]) != "TARGET IS POWERED OFF" {
 				return nil, fmt.Errorf("%w: emergency removal requires one externally fenced node", errClusterConflict)
 			}
-			if activeSize != 3 && activeSize != 5 {
-				return nil, fmt.Errorf("%w: emergency removal requires three or five recorded active nodes", errClusterConflict)
+			if !currentReleaseClusterRemovalSupported(activeSize) {
+				return nil, fmt.Errorf("%w: emergency removal requires three recorded active nodes in current release", errClusterConflict)
 			}
 		} else {
-			if len(ids) != 2 || ids[0] == ids[1] || (activeSize != 3 && activeSize != 5) {
-				return nil, fmt.Errorf("%w: safe removal requires distinct pair from three- or five-node cluster", errClusterConflict)
+			if len(ids) != 2 || ids[0] == ids[1] || !currentReleaseClusterRemovalSupported(activeSize) {
+				return nil, fmt.Errorf("%w: safe removal requires distinct pair from three-node cluster in current release", errClusterConflict)
 			}
 			if clusterStatus != "Healthy" {
 				return nil, fmt.Errorf("%w: safe paired removal requires Healthy cluster", errClusterConflict)
@@ -400,7 +397,7 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		mutation.Payload["target_size"] = activeSize - int64(len(ids))
 	}
 	if mutation.Kind == "k3s_update" {
-		if clusterStatus != "Healthy" || (activeSize != 1 && activeSize != 3 && activeSize != 5) {
+		if clusterStatus != "Healthy" || (activeSize != 1 && activeSize != 3) {
 			return nil, fmt.Errorf("%w: K3s update requires healthy supported membership", errClusterConflict)
 		}
 		if err := validateK3sUpgradePath(cleanText(mutation.Payload["source_k3s_version"]), mutation.TargetRelease); err != nil {
@@ -485,7 +482,7 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		if queryErr != nil {
 			return nil, queryErr
 		}
-		nodes := make([]clusterControllerNode, 0, 5)
+		nodes := make([]clusterControllerNode, 0, 3)
 		for rows.Next() {
 			var node clusterControllerNode
 			var rolesJSON string
@@ -554,6 +551,17 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 	return map[string]any{"operation_id": operationID, "kind": mutation.Kind, "state": "queued", "current_step": "preflight", "target_node_id": nilIfEmpty(mutation.TargetNodeID), "target_release": nilIfEmpty(mutation.TargetRelease), "target_sha": nilIfEmpty(mutation.TargetSHA)}, nil
 }
 
+func validateCurrentReleaseClusterExpansion(activeSize, desiredSize int64) error {
+	if activeSize != 1 || desiredSize != 3 {
+		return errors.New("current release supports only one-to-three membership expansion; odd membership changes beyond three nodes are future roadmap work")
+	}
+	return nil
+}
+
+func currentReleaseClusterRemovalSupported(activeSize int64) bool {
+	return activeSize == 3
+}
+
 func clusterProbeSetHealthy(probes map[string]any) bool {
 	for _, key := range []string{"startup", "readiness", "liveness", "direct_endpoint", "service", "database", "scheduler", "agent_path", "wireguard"} {
 		if !textInSet(strings.ToLower(cleanText(probes[key])), "passed", "healthy") {
@@ -584,23 +592,29 @@ func (s *postgresOperatorStore) createClusterInvitation(ctx context.Context, act
 		return errors.Join(errClusterUnavailable, err)
 	}
 	defer conn.Close()
-	now := time.Now().UTC().Unix()
-	result, err := conn.ExecContext(ctx, `
-		INSERT INTO engine.cluster_invitations(id, cluster_id, node_name, token_hash, created_by, expires_at, created_at)
-		SELECT $1,$2,$3,$4,$5,$6,$7
-		 WHERE EXISTS (SELECT 1 FROM engine.cluster_state WHERE id=1 AND enabled=1)
-	`, cleanText(invitation["id"]), cleanText(invitation["cluster_id"]), cleanText(invitation["node_name"]), cleanText(invitation["token_hash"]), actor, coerceInt64(invitation["expires_at"]), now)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if inserted != 1 {
+	defer tx.Rollback()
+	var enabled, activeSize int64
+	var clusterID string
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,cluster_id FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &clusterID); errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: cluster is not enabled", errClusterConflict)
+	} else if err != nil {
+		return err
 	}
-	return nil
+	if enabled != 1 || activeSize != 1 || clusterID != cleanText(invitation["cluster_id"]) {
+		return fmt.Errorf("%w: node invitations are available only for current one-to-three expansion", errClusterConflict)
+	}
+	now := time.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO engine.cluster_invitations(id, cluster_id, node_name, token_hash, created_by, expires_at, created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7)
+	`, cleanText(invitation["id"]), clusterID, cleanText(invitation["node_name"]), cleanText(invitation["token_hash"]), actor, coerceInt64(invitation["expires_at"]), now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, admission map[string]any) (map[string]any, error) {
@@ -615,6 +629,13 @@ func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, ad
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Unix()
+	var enabled, activeSize int64
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize); err != nil {
+		return nil, err
+	}
+	if enabled != 1 || activeSize != 1 {
+		return nil, fmt.Errorf("%w: node invitations can be consumed only during one-to-three expansion in current release", errClusterConflict)
+	}
 	var invitationNodeName, invitationClusterID string
 	var expiresAt int64
 	var consumedAt sql.NullInt64
@@ -669,6 +690,14 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 		return nil, err
 	}
 	defer tx.Rollback()
+	var enabled, activeSize int64
+	var clusterID, baselineRelease, baselineSHA, configJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,cluster_id,COALESCE(baseline_release,''),COALESCE(baseline_sha,''),config_json FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &clusterID, &baselineRelease, &baselineSHA, &configJSON); err != nil {
+		return nil, err
+	}
+	if enabled != 1 || activeSize != 1 {
+		return nil, fmt.Errorf("%w: pending admissions can be approved only during one-to-three expansion in current release", errClusterConflict)
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id,node_name FROM engine.cluster_admissions WHERE state='Pending Quorum' ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END, created_at FOR UPDATE`, admissionID)
 	if err != nil {
 		return nil, err
@@ -695,10 +724,6 @@ func (s *postgresOperatorStore) approveClusterAdmission(ctx context.Context, act
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_admissions SET state='Approved', approved_by=$1, approved_at=$2, updated_at=$2 WHERE id=$3`, actor, now, id); err != nil {
 			return nil, err
 		}
-	}
-	var clusterID, baselineRelease, baselineSHA, configJSON string
-	if err := tx.QueryRowContext(ctx, `SELECT cluster_id,COALESCE(baseline_release,''),COALESCE(baseline_sha,''),config_json FROM engine.cluster_state WHERE id=1`).Scan(&clusterID, &baselineRelease, &baselineSHA, &configJSON); err != nil {
-		return nil, err
 	}
 	payload := map[string]any{"admission_ids": ids, "node_names": nodeNames, "baseline_release": baselineRelease, "baseline_sha": baselineSHA, "k3s_version": cleanText(parseClusterJSON(configJSON)["k3s_version"])}
 	operationID := newClusterUUID()

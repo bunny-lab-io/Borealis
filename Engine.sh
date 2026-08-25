@@ -11097,7 +11097,7 @@ raise SystemExit(0 if len(pods) == expected and valid == expected else 1)
 cluster_mode_enabled() {
   k3s_cluster_installed || return 1
   [[ -s "${K3S_KUBECONFIG}" ]] || return 1
-  [[ "$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.activeSize}' 2>/dev/null || true)" =~ ^(1|3|5)$ ]]
+  [[ "$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.activeSize}' 2>/dev/null || true)" =~ ^(1|3)$ ]]
 }
 
 cluster_api_request() {
