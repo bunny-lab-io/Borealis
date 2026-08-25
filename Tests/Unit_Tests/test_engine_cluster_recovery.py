@@ -1,5 +1,6 @@
 import os
 import pathlib
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -112,6 +113,116 @@ cluster_wait_for_operation "$BOREALIS_TEST_OPERATION_ID"
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(counter.read_text(encoding="utf-8").strip(), "3")
             self.assertIn("continues; reconnecting", result.stderr)
+
+    def test_hmr_guard_reports_cluster_api_failure_without_json_traceback(self):
+        result = self.run_engine_library(
+            r'''
+cluster_mode_enabled() { return 0; }
+cluster_api_request() { return 22; }
+cluster_hmr_guard dev
+'''
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cluster API unavailable; HMR state was not changed.", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_hmr_guard_reports_failed_mutation_without_json_traceback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            counter = pathlib.Path(temp_dir) / "counter"
+            counter.write_text("0\n", encoding="utf-8")
+            result = self.run_engine_library(
+                r'''
+cluster_mode_enabled() { return 0; }
+CLUSTER_NON_HA_ACKNOWLEDGED=1
+cluster_api_request() {
+  count="$(cat "$BOREALIS_TEST_COUNTER")"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$BOREALIS_TEST_COUNTER"
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s\n' '{"nodes":[{"id":"11111111-1111-4111-8111-111111111111","node_name":"test-node"}],"hmr":{"state":"inactive"}}'
+    return 0
+  fi
+  return 22
+}
+cluster_hmr_guard dev all
+''',
+                extra_env={
+                    "BOREALIS_TEST_COUNTER": str(counter),
+                    "BOREALIS_CLUSTER_NODE_NAME": "test-node",
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "Cluster HMR request failed; inspect Cluster Management before retrying.",
+                result.stderr,
+            )
+            self.assertNotIn("Traceback", result.stderr)
+
+    def run_wireguard_healthcheck(self, ip_script: str):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            control_client = fake_bin / "borealis-wireguard-control-client"
+            control_client.write_text(
+                "#!/bin/sh\nprintf '%s\\n' '{\"returncode\":0,\"stdout\":\"standby\",\"stderr\":\"\"}'\n",
+                encoding="utf-8",
+            )
+            control_client.chmod(0o755)
+            fake_ip = fake_bin / "ip"
+            fake_ip.write_text(ip_script, encoding="utf-8")
+            fake_ip.chmod(0o755)
+            socket_path = root / "control.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            try:
+                env = os.environ.copy()
+                env.update(
+                    {
+                        "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+                        "BOREALIS_WIREGUARD_CONTROL_SOCKET": str(socket_path),
+                        "BOREALIS_CLUSTER_EDGE_VIP": "192.168.50.20",
+                    }
+                )
+                return subprocess.run(
+                    [
+                        "sh",
+                        str(
+                            REPO_ROOT
+                            / "Data/Engine/Containers/wireguard-tunnel/healthcheck.sh"
+                        ),
+                    ],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                listener.close()
+
+    def test_wireguard_readiness_accepts_clean_cluster_standby(self):
+        result = self.run_wireguard_healthcheck(
+            """#!/bin/sh
+case "$*" in
+  "-o -4 address show") printf '%s\\n' '2: ens18 inet 192.168.50.21/24 scope global ens18' ;;
+  "link show dev borealis-wg") exit 1 ;;
+  *) exit 70 ;;
+esac
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_wireguard_readiness_rejects_stale_standby_interface(self):
+        result = self.run_wireguard_healthcheck(
+            """#!/bin/sh
+case "$*" in
+  "-o -4 address show") printf '%s\\n' '2: ens18 inet 192.168.50.21/24 scope global ens18' ;;
+  "link show dev borealis-wg") exit 0 ;;
+  *) exit 70 ;;
+esac
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
 
     def test_agent_redeploy_reads_running_work_from_cnpg_primary(self):
         with tempfile.TemporaryDirectory() as temp_dir:

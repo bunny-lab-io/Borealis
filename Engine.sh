@@ -11163,15 +11163,19 @@ cluster_hmr_guard() {
   cluster_mode_enabled || return 0
   [[ "${mode}" == "dev" || "${mode}" == "prod" ]] || return 0
   local snapshot=""
-  snapshot="$(cluster_api_request GET /api/server/cluster)"
+  if ! snapshot="$(cluster_api_request GET /api/server/cluster)"; then
+    die "Cluster API unavailable; HMR state was not changed."
+  fi
   local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
   local state_line=""
-  state_line="$(python3 -c 'import json,sys
+  if ! state_line="$(python3 -c 'import json,sys
 payload=json.load(sys.stdin)
 node_name=sys.argv[1]
 node_id=next((str(node.get("id") or "") for node in (payload.get("nodes") or []) if node.get("node_name") == node_name), "")
 hmr=payload.get("hmr") or {}
-print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_id") or ""))))' "${node_name}" <<< "${snapshot}")"
+print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_id") or ""))))' "${node_name}" <<< "${snapshot}" 2>/dev/null)"; then
+    die "Cluster API returned invalid HMR state; HMR state was not changed."
+  fi
   local node_id=""
   local hmr_state=""
   local hmr_node_id=""
@@ -11202,9 +11206,13 @@ print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_i
     body='{"confirmation":"EXIT HMR"}'
   fi
   local response=""
-  response="$(cluster_api_request POST "${endpoint}" "${body}")"
+  if ! response="$(cluster_api_request POST "${endpoint}" "${body}")"; then
+    die "Cluster HMR request failed; inspect Cluster Management before retrying."
+  fi
   local operation_id=""
-  operation_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id") or "")' <<< "${response}")"
+  if ! operation_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id") or "")' <<< "${response}" 2>/dev/null)"; then
+    die "Cluster HMR request returned invalid JSON; inspect Cluster Management before retrying."
+  fi
   [[ "${operation_id}" =~ ^[0-9a-f-]{36}$ ]] || die "Cluster HMR request did not return operation ID."
   cluster_wait_for_operation "${operation_id}"
   if [[ "${mode}" == "prod" ]]; then
