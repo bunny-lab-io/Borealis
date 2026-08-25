@@ -555,6 +555,7 @@ def validate_cluster_workload_handoff_contract() -> None:
         'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")': "candidate scheduler leadership fence",
         'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "true")': "promoted scheduler leadership restore",
         'set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")': "candidate cluster-controller lease fence",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_ACTION_IMAGE", image)': "controller action Job image pin",
         'set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")': "candidate API background-loop fence",
         'template["metadata"]["labels"]["borealis.io/aegis-peer"] = "true"': "promoted Aegis peer registration",
     }

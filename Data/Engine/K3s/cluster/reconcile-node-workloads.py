@@ -250,6 +250,7 @@ def reconcile_one(
         set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")
     if base == "borealis-cluster-controller":
         set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")
+        set_container_environment(containers[0], "BOREALIS_CLUSTER_ACTION_IMAGE", image)
     if base == "api-backend":
         set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")
     if base in {"api-backend", "wireguard-tunnel"}:
