@@ -537,6 +537,8 @@ def validate_cluster_workload_handoff_contract() -> None:
         'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=1")': "Traefik candidate activation during handoff",
         'elif base == "wireguard-tunnel"': "standby WireGuard candidate contract",
         'annotations.pop("deployment.kubernetes.io/revision", None)': "idempotent candidate metadata ownership",
+        "PROBE_GUARD_DELAYS": "per-node candidate startup-budget probe guards",
+        "enforce_startup_liveness_guard(base, template_annotations, containers)": "candidate probe guard enforcement",
         'set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", edge_vip)': "edge VIP ownership environment",
         "WIREGUARD_KEYS_SECRET": "shared WireGuard server identity Secret",
         '"mountPath": "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets"': "shared WireGuard key mount",

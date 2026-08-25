@@ -32,6 +32,16 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CANDIDATE_LABEL = "borealis.io/update-candidate"
 TRAFFIC_LABEL = "borealis.io/traffic-state"
 WIREGUARD_KEYS_SECRET = "borealis-wireguard-server-keys"
+PROBE_GUARD_DELAYS = {
+    "api-backend": 130,
+    "borealis-cluster-controller": 70,
+    "borealis-operator": 130,
+    "job-scheduler": 190,
+    "remote-desktop-guacd": 130,
+    "traefik-edge": 130,
+    "webui-frontend": 190,
+    "wireguard-tunnel": 190,
+}
 
 
 def kubectl(*args: str, stdin: str | None = None) -> str:
@@ -88,6 +98,31 @@ def set_container_environment(container: dict[str, Any], name: str, value: str) 
     environment = container.setdefault("env", [])
     environment[:] = [item for item in environment if item.get("name") != name]
     environment.append({"name": name, "value": value})
+
+
+def enforce_startup_liveness_guard(
+    base: str, template_annotations: dict[str, str], containers: list[dict[str, Any]]
+) -> None:
+    delay = PROBE_GUARD_DELAYS.get(base)
+    if delay is None:
+        raise RuntimeError(f"probe guard delay missing for {base}")
+    for container in containers:
+        startup = container.get("startupProbe") or {}
+        liveness = container.get("livenessProbe") or {}
+        if not startup or not liveness:
+            raise RuntimeError(f"deployment {base} requires separate startup and liveness probes")
+        startup_budget = (
+            int(startup.get("initialDelaySeconds") or 0)
+            + int(startup.get("periodSeconds") or 10) * int(startup.get("failureThreshold") or 3)
+            + int(startup.get("timeoutSeconds") or 1)
+        )
+        if delay <= startup_budget:
+            raise RuntimeError(
+                f"deployment {base} liveness delay {delay}s does not exceed startup budget {startup_budget}s"
+            )
+        liveness["initialDelaySeconds"] = delay
+        container["livenessProbe"] = liveness
+    template_annotations["borealis.io/liveness-startup-guard"] = str(delay)
 
 
 def mount_shared_wireguard_keys(base: str, pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
@@ -207,6 +242,7 @@ def reconcile_one(
     containers = pod_spec.get("containers") or []
     if not containers:
         raise RuntimeError(f"deployment {base} has no containers")
+    enforce_startup_liveness_guard(base, template_annotations, containers)
     for container in containers:
         container["image"] = image
         container["imagePullPolicy"] = "IfNotPresent"

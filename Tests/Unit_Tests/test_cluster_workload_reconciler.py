@@ -17,6 +17,20 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_cluster_workload_probe_guards_exceed_startup_budget(self) -> None:
+        for base, delay in MODULE.PROBE_GUARD_DELAYS.items():
+            annotations: dict[str, str] = {}
+            containers = [
+                {
+                    "startupProbe": {"periodSeconds": 2, "failureThreshold": 30, "timeoutSeconds": 1},
+                    "livenessProbe": {"initialDelaySeconds": 0},
+                }
+            ]
+            MODULE.enforce_startup_liveness_guard(base, annotations, containers)
+            self.assertEqual(containers[0]["livenessProbe"]["initialDelaySeconds"], delay)
+            self.assertEqual(annotations["borealis.io/liveness-startup-guard"], str(delay))
+            self.assertGreater(delay, 61)
+
     def test_cluster_workloads_mount_shared_wireguard_keys(self) -> None:
         for base in ("api-backend", "wireguard-tunnel"):
             pod_spec = {"volumes": [{"name": "wireguard-secrets", "hostPath": {"path": "/host"}}]}
@@ -93,7 +107,19 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
                 "selector": {"matchLabels": {"app.kubernetes.io/name": "traefik-edge"}},
                 "template": {
                     "metadata": {"labels": {"app.kubernetes.io/name": "traefik-edge"}},
-                    "spec": {"containers": [{"name": "traefik-edge"}]},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "traefik-edge",
+                                "startupProbe": {
+                                    "periodSeconds": 2,
+                                    "failureThreshold": 60,
+                                    "timeoutSeconds": 5,
+                                },
+                                "livenessProbe": {"initialDelaySeconds": 0},
+                            }
+                        ]
+                    },
                 },
             },
         }
@@ -120,6 +146,10 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
         self.assertEqual(manifest["spec"]["replicas"], 0)
         self.assertGreaterEqual(manifest["spec"]["minReadySeconds"], 15)
+        self.assertEqual(
+            manifest["spec"]["template"]["spec"]["containers"][0]["livenessProbe"]["initialDelaySeconds"],
+            130,
+        )
         self.assertFalse(any(args[:3] == ("-n", "borealis", "rollout") for args, _ in calls))
 
     def test_traefik_promotion_uses_bounded_host_port_handoff(self) -> None:
