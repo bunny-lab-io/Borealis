@@ -113,6 +113,40 @@ cluster_wait_for_operation "$BOREALIS_TEST_OPERATION_ID"
             self.assertEqual(counter.read_text(encoding="utf-8").strip(), "3")
             self.assertIn("continues; reconnecting", result.stderr)
 
+    def test_agent_redeploy_reads_running_work_from_cnpg_primary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_env = pathlib.Path(temp_dir) / "runtime.env"
+            build_log = pathlib.Path(temp_dir) / "build.log"
+            command_log = pathlib.Path(temp_dir) / "commands.log"
+            runtime_env.write_text("POSTGRES_DB=borealis\n", encoding="utf-8")
+            result = self.run_engine_library(
+                r'''
+RUNTIME_ENV="$BOREALIS_TEST_RUNTIME_ENV"
+BUILD_LOG="$BOREALIS_TEST_BUILD_LOG"
+cluster_mode_enabled() { return 0; }
+k3s_kubectl() {
+  printf '%s\n' "$*" >>"$BOREALIS_TEST_COMMAND_LOG"
+  case "$*" in
+    *'get endpointslice'*'kubernetes.io/service-name=borealis-postgres-rw'*) printf '%s\n' 'borealis-postgres-3' ;;
+    *'exec borealis-postgres-3 -c postgres -- psql --dbname=borealis'*) printf '%s\n' '0' ;;
+    *) return 1 ;;
+  esac
+}
+agent_redeploy_active_work_count
+''',
+                extra_env={
+                    "BOREALIS_TEST_RUNTIME_ENV": str(runtime_env),
+                    "BOREALIS_TEST_BUILD_LOG": str(build_log),
+                    "BOREALIS_TEST_COMMAND_LOG": str(command_log),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "0")
+            commands = command_log.read_text(encoding="utf-8")
+            self.assertIn("get endpointslice", commands)
+            self.assertIn("exec borealis-postgres-3 -c postgres", commands)
+            self.assertNotIn("postgres-db-0", commands)
+
     def test_cnpg_runtime_guard_rejects_active_standalone_database(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime_env = pathlib.Path(temp_dir) / "runtime.env"

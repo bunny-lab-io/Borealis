@@ -230,6 +230,8 @@ def validate_node_manager_service_contract() -> None:
         "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",
         "if ! cluster_mode_enabled; then": "cluster role-label ownership guard",
         "BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-v1": "site-worker probe-contract recycle trigger",
+        "agent_redeploy_active_work_count": "Agent worker drain work-count gate",
+        "kubernetes.io/service-name=borealis-postgres-rw": "CloudNativePG primary discovery for worker drain",
         "ensure_cluster_dependency_probe_guards": "cluster dependency probe-guard reconciliation",
         'cluster.postgresql.cnpg.io/borealis-postgres --type=merge': "CloudNativePG instance guard reconciliation",
     }

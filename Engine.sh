@@ -10203,11 +10203,30 @@ agent_redeploy_verify_api_cache_mount() {
 
 agent_redeploy_active_work_count() {
   local count=""
-  count="$(
-    k3s_kubectl -n "${K3S_NAMESPACE}" exec postgres-db-0 -c postgres-db -- sh -c \
-      'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT COUNT(*) FROM engine.job_scheduler_work_items WHERE status = '\''running'\'';"' \
-      2>>"${BUILD_LOG}" | tr -d '[:space:]'
-  )"
+  if cluster_mode_enabled; then
+    local primary_pod=""
+    local database=""
+    primary_pod="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" get endpointslice \
+        -l kubernetes.io/service-name=borealis-postgres-rw \
+        -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' \
+        2>>"${BUILD_LOG}" | awk 'NF {print; exit}'
+    )"
+    database="$(read_env_value POSTGRES_DB "${RUNTIME_ENV}")"
+    [[ -n "${primary_pod}" && -n "${database}" ]] || return 1
+    count="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" exec "${primary_pod}" -c postgres -- \
+        psql "--dbname=${database}" -Atqc \
+        "SELECT COUNT(*) FROM engine.job_scheduler_work_items WHERE status = 'running';" \
+        2>>"${BUILD_LOG}" | tr -d '[:space:]'
+    )"
+  else
+    count="$(
+      k3s_kubectl -n "${K3S_NAMESPACE}" exec postgres-db-0 -c postgres-db -- sh -c \
+        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT COUNT(*) FROM engine.job_scheduler_work_items WHERE status = '\''running'\'';"' \
+        2>>"${BUILD_LOG}" | tr -d '[:space:]'
+    )"
+  fi
   [[ "${count}" =~ ^[0-9]+$ ]] || return 1
   printf '%s\n' "${count}"
 }
