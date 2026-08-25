@@ -40,6 +40,25 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         self.assertEqual(metadata["labels"]["borealis.io/traffic-state"], "candidate")
         self.assertEqual(metadata["labels"]["app.kubernetes.io/name"], "api-backend-candidate")
 
+    def test_reconcile_drops_controller_owned_deployment_annotations(self) -> None:
+        metadata = MODULE.clean_metadata(
+            {
+                "annotations": {
+                    "deployment.kubernetes.io/revision": "7",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{}",
+                    "borealis.io/retained": "true",
+                }
+            },
+            "api-backend-candidate-engine-2",
+            "engine-2",
+            "a" * 40,
+            "api-backend",
+            True,
+        )
+        self.assertNotIn("deployment.kubernetes.io/revision", metadata["annotations"])
+        self.assertNotIn("kubectl.kubernetes.io/last-applied-configuration", metadata["annotations"])
+        self.assertEqual(metadata["annotations"]["borealis.io/retained"], "true")
+
     def test_first_candidate_promotion_derives_active_selector(self) -> None:
         candidate = {
             "spec": {

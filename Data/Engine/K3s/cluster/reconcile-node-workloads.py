@@ -148,6 +148,10 @@ def clean_metadata(
     if base == "api-backend":
         labels["borealis.io/aegis-peer"] = "true"
     annotations = copy.deepcopy(metadata.get("annotations") or {})
+    # Deployment controller owns rollout revision. Reapplying copied value
+    # conflicts after first candidate has created ReplicaSet history.
+    annotations.pop("deployment.kubernetes.io/revision", None)
+    annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
     annotations["borealis.io/cluster-template"] = base
     annotations["borealis.io/revision"] = revision
     return {"name": name, "namespace": NAMESPACE, "labels": labels, "annotations": annotations}
