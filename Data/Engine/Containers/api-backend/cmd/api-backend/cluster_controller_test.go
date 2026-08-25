@@ -1643,6 +1643,69 @@ func TestEdgeRoleTransferWaitsForLeaseAndWireGuardReadiness(t *testing.T) {
 	}
 }
 
+func TestEdgeRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.T) {
+	readyReplicas := int64(1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip":
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-3"}})
+		case "/apis/apps/v1/namespaces/borealis/deployments":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "wireguard-tunnel-engine-3", "generation": int64(2)},
+				"spec":     map[string]any{"replicas": int64(1)},
+				"status": map[string]any{
+					"observedGeneration": int64(2), "availableReplicas": readyReplicas,
+					"readyReplicas": readyReplicas, "updatedReplicas": int64(1),
+				},
+			}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, "engine-1"); err != nil {
+		t.Fatalf("healthy non-target edge/WireGuard owner was rejected: %v", err)
+	}
+	readyReplicas = 0
+	unreadyCtx, unreadyCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer unreadyCancel()
+	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(unreadyCtx, "engine-1"); err == nil {
+		t.Fatal("unready non-target edge/WireGuard owner was accepted")
+	}
+}
+
+func TestRoleEligibilityDoesNotWaitForLegacyStandbyWireGuardReadiness(t *testing.T) {
+	readinessGets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/nodes/engine-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-1"}})
+		case "/apis/apps/v1/namespaces/borealis/deployments":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "wireguard-tunnel-engine-1"}}}})
+		case "/apis/apps/v1/namespaces/borealis/deployments/wireguard-tunnel-engine-1":
+			if r.Method == http.MethodGet {
+				readinessGets++
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "wireguard-tunnel-engine-1"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runner.setNodeRoleEligibility(ctx, "engine-1", false); err != nil {
+		t.Fatalf("legacy standby WireGuard readiness blocked role fencing: %v", err)
+	}
+	if readinessGets != 0 {
+		t.Fatalf("role fencing performed %d readiness GETs before edge ownership moved", readinessGets)
+	}
+}
+
 func TestEtcdLeaderOwnerRequiresExactlyOneReportedNode(t *testing.T) {
 	ready := []any{map[string]any{"type": "Ready", "status": "True"}}
 	notReady := []any{map[string]any{"type": "Ready", "status": "False"}}

@@ -2131,7 +2131,7 @@ func (r *kubernetesClusterStepRunner) transferRolesAway(ctx context.Context, tar
 	if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
 		return err
 	}
-	return r.waitEdgeAndWireGuardOwner(ctx, replacement.Name)
+	return r.waitEdgeAndWireGuardOwnerAwayFrom(ctx, target.Name)
 }
 
 func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Context, operation clusterControllerOperation, target clusterControllerNode, nodes []clusterControllerNode) error {
@@ -2158,7 +2158,7 @@ func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Conte
 	if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
 		return err
 	}
-	return r.waitEdgeAndWireGuardOwner(ctx, replacement.Name)
+	return r.waitEdgeAndWireGuardOwnerAwayFrom(ctx, target.Name)
 }
 
 func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context, nodeName string, eligible bool) error {
@@ -2173,7 +2173,10 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 	}
 	// Controller remains available on every active node. Its owner-aware
 	// readiness and interface gate follow actual edge VIP lease ownership.
-	if err := r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", true); err != nil {
+	// Eligibility changes happen before edge ownership moves. Keep the
+	// controller present without requiring standby readiness from the prior
+	// release; transfer callers prove the elected owner's readiness afterward.
+	if err := r.scaleNodeWorkloadWithReadiness(ctx, nodeName, "wireguard-tunnel", true, false); err != nil {
 		if !eligible {
 			return err
 		}
@@ -2203,6 +2206,35 @@ func (r *kubernetesClusterStepRunner) waitEdgeAndWireGuardOwner(ctx context.Cont
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("edge VIP and WireGuard ownership did not move to %s: %w", nodeName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) waitEdgeAndWireGuardOwnerAwayFrom(ctx context.Context, targetNodeName string) error {
+	if !clusterControllerNodeRegex.MatchString(targetNodeName) {
+		return errors.New("invalid former edge owner node")
+	}
+	path := "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip"
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		var lease map[string]any
+		if err := r.kube.getJSON(ctx, path, &lease); err == nil {
+			owner := cleanText(nestedMap(lease, "spec")["holderIdentity"])
+			if owner != targetNodeName && clusterControllerNodeRegex.MatchString(owner) {
+				ready, readyErr := r.nodeWorkloadReady(ctx, owner, "wireguard-tunnel")
+				if readyErr != nil {
+					return readyErr
+				}
+				if ready {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("edge VIP and WireGuard ownership did not move away from %s: %w", targetNodeName, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -2676,6 +2708,10 @@ func (r *kubernetesClusterStepRunner) nodeWorkloadReady(ctx context.Context, nod
 }
 
 func (r *kubernetesClusterStepRunner) scaleNodeWorkload(ctx context.Context, nodeName, appName string, active bool) error {
+	return r.scaleNodeWorkloadWithReadiness(ctx, nodeName, appName, active, active)
+}
+
+func (r *kubernetesClusterStepRunner) scaleNodeWorkloadWithReadiness(ctx context.Context, nodeName, appName string, active, waitForReady bool) error {
 	selector := "borealis.io/engine-node=" + nodeName + ",borealis.io/node-workload=true,app.kubernetes.io/name=" + appName
 	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments?labelSelector=%s", r.namespace, url.QueryEscape(selector))
 	var deployments map[string]any
@@ -2700,7 +2736,7 @@ func (r *kubernetesClusterStepRunner) scaleNodeWorkload(ctx context.Context, nod
 	if err := r.kube.doJSON(ctx, http.MethodPatch, path, map[string]any{"spec": map[string]any{"replicas": replicas}}, "application/merge-patch+json", &result, 30*time.Second); err != nil {
 		return err
 	}
-	if !active {
+	if !active || !waitForReady {
 		return nil
 	}
 	ticker := time.NewTicker(2 * time.Second)
