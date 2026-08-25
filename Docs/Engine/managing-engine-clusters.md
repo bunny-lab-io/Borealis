@@ -47,9 +47,15 @@ If API restarts while CLI watches enablement, CLI reconnects for one minute with
 
 ## Cut Over Outer Reverse Proxy
 
-Cluster conversion changes public application ingress from standalone Engine node address to fixed edge VIP. Any outer or nested reverse proxy still pinned to standalone node address loses Borealis WebUI, API, WebSocket, and remote-desktop access when that node enters maintenance, updates, or fails. Healthy cluster does not make node-address upstream highly available.
+Cluster conversion changes public application ingress and WireGuard ownership from standalone Engine node address to fixed edge VIP. Any outer or nested proxy still pinned to standalone node address loses Borealis WebUI, API, WebSocket, remote-desktop, or Agent tunnel access when that node enters maintenance, updates, or fails. Healthy cluster does not make node-address upstream highly available.
 
-After edge VIP becomes reachable, change outer proxy upstream to `https://<edge-vip>:443`. Preserve Engine FQDN as HTTP `Host` header and backend TLS SNI, trust Borealis certificate chain, and keep WebSocket upgrades enabled. Do not send application traffic to control-plane VIP or K3s API port `6443`.
+After edge VIP becomes reachable, replace standalone node address with edge VIP in every Borealis outer-proxy service:
+
+- HTTP router: `<edge-vip>:80`, preserving Engine FQDN as `Host` header.
+- HTTPS TCP passthrough router: `<edge-vip>:443`, preserving TLS SNI and any configured PROXY protocol version.
+- WireGuard UDP router: `<edge-vip>:30000`.
+
+Keep WebSocket upgrades enabled. When outer proxy sends forwarded headers or PROXY protocol, include its source IP or CIDR in `BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS`. Do not send application or WireGuard traffic to control-plane VIP or K3s API port `6443`.
 
 !!! warning "Plan ingress cutover before conversion"
     Pre-stage edge-VIP upstream as disabled backend when proxy supports it. Enable or switch backend immediately after cluster enablement advertises edge VIP and before draining first Engine node. Missing this cutover causes operator-facing outage even while cluster remains healthy.
@@ -61,7 +67,7 @@ curl --resolve engine.example.com:443:192.0.2.11 \
   https://engine.example.com/health
 ```
 
-Expected response is HTTP `200`. Then verify normal FQDN login, live updates, and remote desktop through outer proxy. Port `80` is HTTP entrypoint only; use HTTPS port `443` for nested upstream to avoid redirect loops and retain end-to-end TLS.
+Expected response is HTTP `200`. Then verify normal FQDN login, live updates, remote desktop, and fresh Agent WireGuard handshake through outer proxy. Port `80` remains HTTP/ACME and redirect entrypoint; HTTPS router must continue using TCP `443`.
 
 ## Add or Replace Nodes
 
