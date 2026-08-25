@@ -5,7 +5,7 @@ Explain how Borealis is structured and how the core components interact end to e
 ## Platform Shape
 Borealis has two main runtime sides: the Engine server and the Agent clients. The Engine gives operators one web interface for inventory, remote operations, automation, reporting, credentials, and security controls. Agents run on managed endpoints and connect outbound to the Engine.
 
-- **Engine (Server)**: Linux-hosted K3s control plane with Go public API, retained Python worker services, PostgreSQL, Traefik, realtime transport, scheduling, automation, and web UI. Standalone uses one node; gated cluster mode uses one, three, or five full K3s server/etcd/workload nodes.
+- **Engine (Server)**: Linux-hosted K3s control plane with Go public API, retained Python worker services, PostgreSQL, Traefik, realtime transport, scheduling, automation, and web UI. Standalone uses one node; current cluster qualification target uses three full K3s server/etcd/workload nodes. Five-plus topology remains deferred preview work.
 - **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
 - **Transport**: Agents connect outbound to the Engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
 - **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.

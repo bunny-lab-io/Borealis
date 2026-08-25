@@ -1,8 +1,8 @@
 # Managing Engine Clusters
-Borealis Engine clustering runs application workloads, K3s control-plane services, embedded etcd, and PostgreSQL across homogeneous Engine nodes. Cluster mode supports one, three, or five active Ubuntu nodes on same Layer 2 network.
+Borealis Engine clustering runs application workloads, K3s control-plane services, embedded etcd, and PostgreSQL across homogeneous Engine nodes. Current supported qualification target covers one or three active Ubuntu nodes on same Layer 2 network. Five-plus-node paths remain deferred preview work and are not operator-supported.
 
 !!! danger "Qualification gate"
-    Cluster conversion remains disabled until exact installed stable K3s version passes Borealis guarded-probe conformance and disposable three-node plus five-node qualification. Do not copy or fabricate conformance record, use release candidate, fork Kubernetes, or bypass gate. Production conversion needs separate operator approval.
+    Cluster conversion remains disabled until exact installed stable K3s version passes Borealis guarded-probe conformance and disposable three-node qualification. Do not copy or fabricate conformance record, use release candidate, fork Kubernetes, or bypass gate. Do not scale beyond three active nodes until separate five-plus qualification is complete. Production conversion needs separate operator approval.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ Borealis Engine clustering runs application workloads, K3s control-plane service
 - Peer access on K3s/Spegel TCP ports `6443` and `5001`; Borealis firewall manages both from same allowlist.
 - Clean Git worktrees using configured repository origin and same stable Borealis release.
 - Working Longhorn iSCSI and NFSv4 client prerequisites plus enough capacity to run node-local candidates during drain. Normal Engine deployment installs missing host packages.
-- Odd active membership: one, three, or five nodes.
+- Supported odd active membership: one or three nodes. Five-plus membership remains deferred.
 - Content-addressed `rancher/k3s-upgrade` image in `BOREALIS_K3S_UPGRADE_IMAGE` before requesting K3s control-plane update.
 
 ## Enable First Node
@@ -60,7 +60,7 @@ sudo borealis-node-manager join \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members remain application-drained and role-ineligible. Controller admits `1 -> 3` or `3 -> 5` only after probe conformance passes while pinned to each joining node. It then expands CloudNativePG, deploys isolated pinned candidates, probes and soaks them, promotes them into active workloads, enables normal HA role eligibility, verifies active workload and WireGuard health through another soak, then clears application drain and records membership.
+Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin to approve complete pair. Approved members remain application-drained and role-ineligible. Current supported admission expands `1 -> 3` only after probe conformance passes while pinned to each joining node. It then expands CloudNativePG, deploys isolated pinned candidates, probes and soaks them, promotes them into active workloads, enables normal HA role eligibility, verifies active workload and WireGuard health through another soak, then clears application drain and records membership. Five-plus expansion remains deferred until separate qualification and documentation land.
 
 Temporary even K3s membership during pair admission does not disable healthy existing nodes. Architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work.
 
@@ -133,7 +133,7 @@ Selected tag resolves once to immutable commit SHA. Controller records title, ta
 
 Update All records immutable non-leader-first node order when request starts, then transfers roles and updates one application node at time. Runtime role movement cannot reorder or repeat nodes mid-operation. Failure halts operation and leaves failed node drained; healthy old/new nodes keep serving. Retry resumes explicit operation. No automatic code rollback or skip-and-continue occurs. Cluster release baseline advances only after all active nodes reach target.
 
-One-node updates require maintenance-outage acknowledgement. Three/five-node continuity covers ready HTTP/API/Agent endpoints, durable queued work, graceful drain, and reconnect after socket movement. Existing interactive shell, desktop, or WebSocket sessions cannot transfer live.
+One-node updates require maintenance-outage acknowledgement. Three-node continuity covers ready HTTP/API/Agent endpoints, durable queued work, graceful drain, and reconnect after socket movement. Existing interactive shell, desktop, or WebSocket sessions cannot transfer live.
 
 `Update Node` may intentionally leave cluster in mixed-version state. Expand phase remains complete and contract phase stays pending until last active node reaches same target through later explicit update. Borealis records both phases by immutable release SHA, so controller restart or operator retry cannot apply completed phase twice.
 
@@ -148,7 +148,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
 ## Failure and Recovery Rules
 
 - `Degraded Quorum` records lost durability or membership. Healthy nodes remain enabled.
-- PostgreSQL synchronous quorum requires one replica acknowledgement on three nodes and two on five. Writes stop when durability quorum is unavailable; stale replica promotion is rejected.
+- PostgreSQL synchronous quorum requires one replica acknowledgement on supported three-node clusters. Writes stop when durability quorum is unavailable; stale replica promotion is rejected.
 - No automatic PostgreSQL or VIP failback. Operator chooses switchover after failed owner returns.
 - Safe removal works in pairs. Emergency removal needs external power fence plus two exact confirmations and records degraded state.
 - Longhorn snapshots use daily fourteen-snapshot retention plus pre-change snapshots. They are in-cluster recovery, not disaster recovery.
@@ -213,4 +213,4 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
 
     - Stable K3s must pass `Data/Engine/K3s/cluster/run-probe-conformance.sh` on every Engine node. Test requires ten consecutive clean trials because affected K3s can alternate between correct and broken scheduling. Each trial pins workload to local node, forces liveness failure, waits for replacement container, proves replacement startup executes, and proves startup-budget liveness delay resets so no early replacement liveness runs. One failed trial deletes prior result and blocks cluster mode. Successful exact-version record lives at `/etc/rancher/k3s/borealis-probe-conformance.json`, includes ten-trial evidence, and sits inside node manager's narrow writable configuration path; manager never receives write access to K3s server-state directory. Policy tests also require every Borealis, CloudNativePG, Longhorn CSI, kube-vip, and snapshot-controller liveness delay to exceed corresponding startup failure budget. Full deployment reapplies dependency guards, waits for guarded CloudNativePG instances, and changes site-worker probe-contract hash so existing bare Pods recycle safely. Per-node candidate reconciliation also overwrites copied active probe settings with target release's guarded delay before candidate starts. Pair admission runs this gate before deploying application workloads. This safely contains [Kubernetes issue 141155](https://github.com/kubernetes/kubernetes/issues/141155) without fork, release candidate, fabricated result, or unsafe override. Remove delay shim only after supported stable K3s contains upstream fix and full qualification passes.
     - K3s membership removal qualification must prove Kubernetes Node deletion removes embedded-etcd membership while fenced host stays disabled. Keep qualification gate until current K3s behavior also excludes regressions tracked by [k3s issue 13623](https://github.com/k3s-io/k3s/issues/13623) and [k3s issue 13498](https://github.com/k3s-io/k3s/issues/13498).
-    - Merge/release needs disposable same-L2 Ubuntu qualification for `1 -> 3 -> 5`, `5 -> 3 -> 1`, replacement, partition, leader death, rolling Engine/K3s update failure, CNPG failover, snapshot restore, and continuous API/UI/Agent traffic.
+    - Current merge/release target needs disposable same-L2 Ubuntu qualification for `1 -> 3 -> 1`, replacement, partition, leader death, rolling Engine/K3s update failure, CNPG failover, snapshot restore, and continuous API/UI/Agent traffic. Five-plus qualification and support remain deferred to a future issue/PR after three-node work closes.
