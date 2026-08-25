@@ -429,6 +429,21 @@ verify_cnpg_cutover_runtime "$cnpg_url"
         )
         self.assertIn('"BOREALIS_CLUSTER_BASELINE_SHA="+baselineSHA', manager)
 
+    def test_cluster_redeploy_refreshes_host_node_manager_after_candidate_exists(self):
+        engine = (REPO_ROOT / "Engine.sh").read_text(encoding="utf-8")
+        function_start = engine.index("cluster_node_redeploy() {")
+        function_end = engine.index("\nrender_cluster_schema_phase_job_manifest()", function_start)
+        function = engine[function_start:function_end]
+        reconcile = function.index('python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py"')
+        refresh = function.index(
+            'schedule_borealis_node_manager_refresh "${CLUSTER_TARGET_REVISION}"'
+        )
+        self.assertLess(reconcile, refresh)
+        self.assertIn('"${staged_binary}" activate-update', engine)
+        self.assertIn('--source-root "${SCRIPT_DIR}"', engine)
+        self.assertIn("--on-active=5s", engine)
+        self.assertNotIn('/bin/sh -c', engine[engine.index("schedule_borealis_node_manager_refresh() {"):function_start])
+
     def test_pair_approval_notifies_every_joiner(self):
         store = (
             REPO_ROOT

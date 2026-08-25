@@ -29,17 +29,19 @@ import (
 )
 
 const (
-	defaultSocketPath  = "/run/borealis/node-manager.sock"
-	defaultSecretPath  = "/etc/borealis/node-manager.token"
-	defaultRepoRoot    = "/opt/Borealis"
-	managerTokenHeader = "X-Borealis-Node-Manager-Token"
-	maxRequestBytes    = 64 << 10
-	actionRuntimeID    = 64646
-	defaultK3sVersion  = "v1.36.3+k3s1"
-	memberFencePath    = "/etc/borealis/k3s-member-removal-fence.json"
-	k3sRegistriesPath  = "/etc/rancher/k3s/registries.yaml"
-	k3sJoinConfigPath  = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
-	k3sImageImportPath = "/var/lib/rancher/k3s/agent/images"
+	defaultSocketPath   = "/run/borealis/node-manager.sock"
+	defaultSecretPath   = "/etc/borealis/node-manager.token"
+	defaultRevisionPath = "/etc/borealis/node-manager-revision"
+	defaultRepoRoot     = "/opt/Borealis"
+	defaultServiceName  = "borealis-node-manager.service"
+	managerTokenHeader  = "X-Borealis-Node-Manager-Token"
+	maxRequestBytes     = 64 << 10
+	actionRuntimeID     = 64646
+	defaultK3sVersion   = "v1.36.3+k3s1"
+	memberFencePath     = "/etc/borealis/k3s-member-removal-fence.json"
+	k3sRegistriesPath   = "/etc/rancher/k3s/registries.yaml"
+	k3sJoinConfigPath   = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
+	k3sImageImportPath  = "/var/lib/rancher/k3s/agent/images"
 )
 
 var (
@@ -63,7 +65,7 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update>")
 	}
 	switch os.Args[1] {
 	case "serve":
@@ -76,6 +78,8 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "activate-update":
+		activateUpdate(os.Args[2:])
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}
@@ -574,8 +578,13 @@ func (m *manager) status(ctx context.Context) (map[string]any, error) {
 	branch, _ := runGit(ctx, m.repoRoot, "branch", "--show-current")
 	dirty, dirtyErr := runGit(ctx, m.repoRoot, "status", "--porcelain", "--untracked-files=normal")
 	nodeJSON, nodeErr := run(ctx, "", "k3s", "kubectl", "get", "node", m.nodeName, "-o", "json")
+	managerRevision := ""
+	if raw, err := os.ReadFile(defaultRevisionPath); err == nil && shaPattern.MatchString(strings.TrimSpace(string(raw))) {
+		managerRevision = strings.TrimSpace(string(raw))
+	}
 	return map[string]any{
 		"node_name":          m.nodeName,
+		"manager_revision":   managerRevision,
 		"architecture":       runtime.GOARCH,
 		"revision":           strings.TrimSpace(revision),
 		"branch":             strings.TrimSpace(branch),
@@ -583,6 +592,148 @@ func (m *manager) status(ctx context.Context) (map[string]any, error) {
 		"git_available":      revisionErr == nil,
 		"k3s_node_available": nodeErr == nil && strings.TrimSpace(nodeJSON) != "",
 	}, nil
+}
+
+func activateUpdate(args []string) {
+	flags := flag.NewFlagSet("activate-update", flag.ExitOnError)
+	targetSHA := flags.String("target-sha", "", "Pinned lowercase commit SHA")
+	sourceRootFlag := flags.String("source-root", "", "Pinned release worktree root")
+	_ = flags.Parse(args)
+	if os.Geteuid() != 0 {
+		fatalf("activate-update requires root")
+	}
+	revision := strings.ToLower(strings.TrimSpace(*targetSHA))
+	if !shaPattern.MatchString(revision) {
+		fatalf("activate-update requires --target-sha with lowercase 40-character commit SHA")
+	}
+	sourceRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(*sourceRootFlag)))
+	if err != nil || !filepath.IsAbs(sourceRoot) || validateRepositoryRoot(sourceRoot) != nil {
+		fatalf("activate-update requires safe --source-root worktree")
+	}
+	resolved, err := runGit(context.Background(), sourceRoot, "rev-parse", "HEAD")
+	if err != nil || strings.ToLower(strings.TrimSpace(resolved)) != revision {
+		fatalf("activate-update source worktree does not match target SHA")
+	}
+	executable, err := os.Executable()
+	stagedBinary := filepath.Join(sourceRoot, "Data", "Engine", "Containers", "api-backend", "dist", "borealis-node-manager")
+	runningInfo, runningErr := os.Stat(executable)
+	stagedInfo, stagedErr := os.Stat(stagedBinary)
+	if err != nil || runningErr != nil || stagedErr != nil || !os.SameFile(runningInfo, stagedInfo) {
+		fatalf("activate-update must run target worktree node-manager binary")
+	}
+	serviceSource := filepath.Join(sourceRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")
+	if info, statErr := os.Stat(serviceSource); statErr != nil || !info.Mode().IsRegular() {
+		fatalf("activate-update target service unit is unavailable")
+	}
+	nodeName, err := os.Hostname()
+	nodeName = strings.ToLower(strings.TrimSpace(nodeName))
+	if err != nil || !nodePattern.MatchString(nodeName) {
+		fatalf("activate-update could not resolve valid local node name")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	if err := waitForNodeActionIdle(ctx, nodeName); err != nil {
+		fatalf("wait for node action idle: %v", err)
+	}
+	binary, err := os.ReadFile(stagedBinary)
+	if err != nil {
+		fatalf("read target node-manager binary: %v", err)
+	}
+	if err := replaceExecutable("/usr/local/sbin/borealis-node-manager", binary); err != nil {
+		fatalf("install target node-manager binary: %v", err)
+	}
+	if _, err := run(ctx, "", "install", "-m", "0644", "-o", "root", "-g", "root", serviceSource, "/etc/systemd/system/"+defaultServiceName); err != nil {
+		fatalf("install target node-manager service unit: %v", err)
+	}
+	if _, err := run(ctx, "", "systemctl", "daemon-reload"); err != nil {
+		fatalf("reload target node-manager service unit: %v", err)
+	}
+	if _, err := run(ctx, "", "systemctl", "enable", defaultServiceName); err != nil {
+		fatalf("enable target node-manager service: %v", err)
+	}
+	if _, err := run(ctx, "", "systemctl", "restart", defaultServiceName); err != nil {
+		fatalf("restart node-manager service: %v", err)
+	}
+	if err := waitForActiveNodeManagerExecutable(ctx, defaultServiceName, "/usr/local/sbin/borealis-node-manager", defaultSocketPath); err != nil {
+		fatalf("verify refreshed node-manager service: %v", err)
+	}
+	if err := replaceSecureConfig(defaultRevisionPath, []byte(revision+"\n")); err != nil {
+		fatalf("record node-manager revision: %v", err)
+	}
+	fmt.Printf("{\"node_name\":%q,\"manager_revision\":%q,\"activated\":true}\n", nodeName, revision)
+}
+
+func waitForNodeActionIdle(ctx context.Context, nodeName string) error {
+	return waitForNodeActionIdleWithInterval(ctx, nodeName, time.Second)
+}
+
+func waitForNodeActionIdleWithInterval(ctx context.Context, nodeName string, interval time.Duration) error {
+	selector := "app.kubernetes.io/name=borealis-node-action"
+	idleObservations := 0
+	for {
+		raw, err := run(ctx, "", "k3s", "kubectl", "-n", "borealis", "get", "pods", "-l", selector, "--field-selector", "spec.nodeName="+nodeName, "-o", "json")
+		if err == nil {
+			active, decodeErr := nodeActionPodsActive([]byte(raw))
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if !active {
+				idleObservations++
+				if idleObservations >= 2 {
+					return nil
+				}
+			} else {
+				idleObservations = 0
+			}
+		} else {
+			idleObservations = 0
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+func nodeActionPodsActive(raw []byte) (bool, error) {
+	var payload struct {
+		Items []struct {
+			Status struct {
+				Phase string `json:"phase"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false, fmt.Errorf("decode node action pods: %w", err)
+	}
+	for _, item := range payload.Items {
+		switch strings.TrimSpace(item.Status.Phase) {
+		case "Succeeded", "Failed":
+			continue
+		default:
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func waitForActiveNodeManagerExecutable(ctx context.Context, serviceName, executablePath, socketPath string) error {
+	for {
+		pidText, err := run(ctx, "", "systemctl", "show", "--property=MainPID", "--value", serviceName)
+		pid, parseErr := strconv.Atoi(strings.TrimSpace(pidText))
+		installed, installedErr := os.Stat(executablePath)
+		running, runningErr := os.Stat(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+		socket, socketErr := os.Stat(socketPath)
+		if err == nil && parseErr == nil && pid > 0 && installedErr == nil && runningErr == nil && os.SameFile(installed, running) && socketErr == nil && socket.Mode()&os.ModeSocket != 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 func (m *manager) setApplicationState(ctx context.Context, state, reason string) (map[string]any, error) {
@@ -1675,8 +1826,14 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if _, err := run(context.Background(), "", "systemctl", "enable", "borealis-node-manager.service"); err != nil {
 		return err
 	}
-	_, err = run(context.Background(), "", "systemctl", "restart", "borealis-node-manager.service")
-	return err
+	if _, err = run(context.Background(), "", "systemctl", "restart", "borealis-node-manager.service"); err != nil {
+		return err
+	}
+	revision, err := runGit(context.Background(), repoRoot, "rev-parse", "HEAD")
+	if err != nil || !shaPattern.MatchString(strings.ToLower(strings.TrimSpace(revision))) {
+		return errors.New("joined node-manager revision is unavailable")
+	}
+	return replaceSecureConfig(defaultRevisionPath, []byte(strings.ToLower(strings.TrimSpace(revision))+"\n"))
 }
 
 func replaceExecutable(destination string, content []byte) error {

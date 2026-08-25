@@ -117,6 +117,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine.sh --network-mode public|local --service wireguard-tunnel reconcile`: query the WireGuard control socket from the K3s tunnel pod.
     - `Engine.sh --redeploy-agent-binaries`: hot-publish current Engine Agent artifact and readiness-first rotate outdated active site workers. Existing deployed mode/network state is reused; unrelated Engine images and workloads are not rebuilt.
     - `Engine.sh --cluster-stage-revision --revision COMMIT_SHA`: internal root/node-manager contract that builds/imports target images without starting candidate workloads, then records staged SHA only after every import succeeds.
+    - `Engine.sh --cluster-node-redeploy --revision COMMIT_SHA`: internal root/node-manager contract that reconciles isolated or active node workloads from exact staged revision. After candidate exists, it atomically stages target host node-manager and schedules idle-bound systemd activation so rolling release updates host recovery code without interrupting action in progress.
     - `Engine.sh --cluster-schema-phase --schema-phase expand|finalize --revision COMMIT_SHA`: internal root/node-manager contract for rolling Engine updates. It requires enabled cluster plus exact local `HEAD`, selects target `site-worker` image from local image manifest, and runs tokenless non-root Job pinned to current node. Operators use Cluster Management updates instead of calling command directly.
 
     ### One-shot legacy migration helpers

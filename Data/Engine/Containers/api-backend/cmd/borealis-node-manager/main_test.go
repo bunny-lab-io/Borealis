@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,96 @@ func TestNodeManagerActionTimeoutAllowsBoundedBootstrapAndRedeploy(t *testing.T)
 		if got := nodeManagerActionTimeout(test.verb); got != test.want {
 			t.Fatalf("nodeManagerActionTimeout(%q)=%s want %s", test.verb, got, test.want)
 		}
+	}
+}
+
+func TestNodeActionPodsActiveWaitsForRunningOrUnknownWork(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "empty", raw: `{"items":[]}`, want: false},
+		{name: "completed", raw: `{"items":[{"status":{"phase":"Succeeded"}},{"status":{"phase":"Failed"}}]}`, want: false},
+		{name: "running", raw: `{"items":[{"status":{"phase":"Running"}}]}`, want: true},
+		{name: "pending", raw: `{"items":[{"status":{"phase":"Pending"}}]}`, want: true},
+		{name: "unknown fails closed", raw: `{"items":[{"status":{"phase":"Unknown"}}]}`, want: true},
+		{name: "missing phase fails closed", raw: `{"items":[{"status":{}}]}`, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := nodeActionPodsActive([]byte(test.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("nodeActionPodsActive()=%v want %v", got, test.want)
+			}
+		})
+	}
+	if _, err := nodeActionPodsActive([]byte(`{"items":`)); err == nil {
+		t.Fatal("invalid pod JSON accepted")
+	}
+}
+
+func TestWaitForActiveNodeManagerExecutableRequiresRunningInodeAndSocket(t *testing.T) {
+	tempDir := t.TempDir()
+	systemctl := filepath.Join(tempDir, "systemctl")
+	if err := os.WriteFile(systemctl, []byte("#!/bin/sh\nprintf '%s\\n' \"$BOREALIS_TEST_MAIN_PID\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(tempDir, "node-manager.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BOREALIS_TEST_MAIN_PID", strconv.Itoa(os.Getpid()))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForActiveNodeManagerExecutable(ctx, "test.service", executable, socketPath); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForNodeActionIdleRequiresTwoIdleObservations(t *testing.T) {
+	tempDir := t.TempDir()
+	counter := filepath.Join(tempDir, "counter")
+	if err := os.WriteFile(counter, []byte("0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k3s := filepath.Join(tempDir, "k3s")
+	script := `#!/bin/sh
+count=$(cat "$BOREALIS_TEST_COUNTER")
+count=$((count + 1))
+printf '%s\n' "$count" > "$BOREALIS_TEST_COUNTER"
+if [ "$count" -eq 1 ]; then
+  printf '%s\n' '{"items":[{"status":{"phase":"Running"}}]}'
+else
+  printf '%s\n' '{"items":[]}'
+fi
+`
+	if err := os.WriteFile(k3s, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BOREALIS_TEST_COUNTER", counter)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForNodeActionIdleWithInterval(ctx, "engine-1", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != "3" {
+		t.Fatalf("node action idle observations=%q want 3", strings.TrimSpace(string(raw)))
 	}
 }
 

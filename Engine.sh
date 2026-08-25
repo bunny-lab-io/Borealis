@@ -43,6 +43,7 @@ K3S_CLUSTER_ASSET_DIR="${SCRIPT_DIR}/Data/Engine/K3s/cluster"
 K3S_PROBE_CONFORMANCE_FILE="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/etc/rancher/k3s/borealis-probe-conformance.json}"
 BOREALIS_NODE_MANAGER_BINARY="${BOREALIS_NODE_MANAGER_BINARY:-/usr/local/sbin/borealis-node-manager}"
 BOREALIS_NODE_MANAGER_TOKEN_FILE="${BOREALIS_NODE_MANAGER_TOKEN_FILE:-/etc/borealis/node-manager.token}"
+BOREALIS_NODE_MANAGER_REVISION_FILE="${BOREALIS_NODE_MANAGER_REVISION_FILE:-/etc/borealis/node-manager-revision}"
 BOREALIS_NODE_MANAGER_SERVICE="${BOREALIS_NODE_MANAGER_SERVICE:-borealis-node-manager.service}"
 K3S_FIREWALL_SCRIPT="${BOREALIS_K3S_FIREWALL_SCRIPT:-/usr/local/lib/borealis/k3s-api-firewall.sh}"
 K3S_FIREWALL_SERVICE="${BOREALIS_K3S_FIREWALL_SERVICE:-borealis-k3s-api-firewall.service}"
@@ -10961,7 +10962,7 @@ engine_release_version() {
     || true
 }
 
-ensure_borealis_node_manager() {
+install_borealis_node_manager_files() {
   local staged_binary="${CONTAINER_SOURCE_DIR}/api-backend/dist/borealis-node-manager"
   local service_source="${K3S_CLUSTER_ASSET_DIR}/node-manager.service"
   [[ -x "${staged_binary}" ]] || die "Node-manager binary missing after API backend build: ${staged_binary}"
@@ -10970,7 +10971,9 @@ ensure_borealis_node_manager() {
   # systemd rejects a missing ReadWritePaths target before node-manager starts.
   # Joined K3s servers do not create the image pre-import leaf until first use.
   run_privileged install -d -m 0755 -o root -g root "${K3S_IMAGE_IMPORT_DIR}"
-  run_privileged install -m 0750 -o root -g root "${staged_binary}" "${BOREALIS_NODE_MANAGER_BINARY}"
+  local next_binary="${BOREALIS_NODE_MANAGER_BINARY}.next"
+  run_privileged install -m 0750 -o root -g root "${staged_binary}" "${next_binary}"
+  run_privileged mv -f "${next_binary}" "${BOREALIS_NODE_MANAGER_BINARY}"
   if ! run_privileged test -s "${BOREALIS_NODE_MANAGER_TOKEN_FILE}"; then
     local token_file=""
     token_file="$(mktemp)"
@@ -10984,12 +10987,53 @@ ensure_borealis_node_manager() {
   run_privileged install -m 0644 -o root -g root "${service_source}" "/etc/systemd/system/${BOREALIS_NODE_MANAGER_SERVICE}"
   run_privileged systemctl daemon-reload
   run_privileged systemctl enable "${BOREALIS_NODE_MANAGER_SERVICE}"
+}
+
+record_borealis_node_manager_revision() {
+  local revision="$1"
+  [[ "${revision}" =~ ^[0-9a-f]{40}$ ]] || die "Node-manager revision marker requires lowercase 40-character commit SHA."
+  local marker_temp=""
+  marker_temp="$(mktemp)"
+  printf '%s\n' "${revision}" > "${marker_temp}"
+  run_privileged install -m 0600 -o root -g root -D "${marker_temp}" "${BOREALIS_NODE_MANAGER_REVISION_FILE}"
+  find "$(dirname -- "${marker_temp}")" -maxdepth 1 -type f -name "$(basename -- "${marker_temp}")" -delete
+}
+
+ensure_borealis_node_manager() {
+  install_borealis_node_manager_files
   run_privileged systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"
   sleep 2
   if ! run_privileged systemctl is-active --quiet "${BOREALIS_NODE_MANAGER_SERVICE}"; then
     run_privileged systemctl status "${BOREALIS_NODE_MANAGER_SERVICE}" --no-pager >> "${BUILD_LOG}" 2>&1 || true
     die "Node-manager service did not remain active. See ${BUILD_LOG}."
   fi
+  local revision=""
+  revision="$(git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)"
+  record_borealis_node_manager_revision "${revision}"
+}
+
+schedule_borealis_node_manager_refresh() {
+  local revision="$1"
+  [[ "${revision}" =~ ^[0-9a-f]{40}$ ]] || die "Node-manager refresh requires lowercase 40-character commit SHA."
+  local current_revision=""
+  local main_pid=""
+  current_revision="$(run_privileged cat "${BOREALIS_NODE_MANAGER_REVISION_FILE}" 2>/dev/null || true)"
+  main_pid="$(run_privileged systemctl show --property=MainPID --value "${BOREALIS_NODE_MANAGER_SERVICE}" 2>/dev/null || true)"
+  if [[ "${current_revision}" == "${revision}" && "${main_pid}" =~ ^[1-9][0-9]*$ ]] \
+    && run_privileged test "/proc/${main_pid}/exe" -ef "${BOREALIS_NODE_MANAGER_BINARY}"; then
+    return 0
+  fi
+  local staged_binary="${CONTAINER_SOURCE_DIR}/api-backend/dist/borealis-node-manager"
+  local service_source="${K3S_CLUSTER_ASSET_DIR}/node-manager.service"
+  [[ -x "${staged_binary}" ]] || die "Node-manager refresh binary unavailable: ${staged_binary}"
+  [[ -f "${service_source}" ]] || die "Node-manager refresh service unit unavailable: ${service_source}"
+  local unit_name="borealis-node-manager-refresh-${revision:0:12}-$$"
+  run_privileged systemd-run \
+    --unit "${unit_name}" \
+    --on-active=5s \
+    --property=Type=oneshot \
+    --collect \
+    "${staged_binary}" activate-update --target-sha "${revision}" --source-root "${SCRIPT_DIR}"
 }
 
 ensure_cluster_wireguard_routes() {
@@ -11373,6 +11417,7 @@ cluster_node_redeploy() {
     *) die "BOREALIS_CLUSTER_DEPLOYMENT_MODE must be active or candidate." ;;
   esac
   python3 "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" "${reconcile_args[@]}"
+  schedule_borealis_node_manager_refresh "${CLUSTER_TARGET_REVISION}"
 }
 
 render_cluster_schema_phase_job_manifest() {
