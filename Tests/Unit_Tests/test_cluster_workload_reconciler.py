@@ -83,8 +83,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         candidate = {"spec": {"selector": {"matchLabels": {"candidate-only": "true"}}}}
         active = {"spec": {"selector": {"matchLabels": {"stable-selector": "kept"}}}}
         selector = MODULE.promotion_selector("job-scheduler", "engine-03", candidate, active)
-        self.assertEqual(selector["stable-selector"], "kept")
-        self.assertNotIn("candidate-only", selector)
+        self.assertEqual(selector, {"stable-selector": "kept"})
 
     def test_host_port_candidate_stages_at_zero_replicas(self) -> None:
         source = {
@@ -161,7 +160,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
             MODULE, "kubectl", side_effect=fake_kubectl
         ):
-            MODULE.promote_one("traefik-edge", "engine-01")
+            MODULE.promote_one("traefik-edge", "engine-01", "a" * 40)
 
         active_name = "deployment/traefik-edge-engine-01"
         candidate_name = "deployment/traefik-edge-engine-01-candidate"
@@ -173,6 +172,15 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             commands.index(("-n", "borealis", "rollout", "status", candidate_name, "--timeout=10m")),
             commands.index(("-n", "borealis", "scale", candidate_name, "--replicas=0")),
         )
+
+    def test_promotion_rejects_candidate_from_different_revision(self) -> None:
+        candidate = {
+            "metadata": {"annotations": {"borealis.io/revision": "a" * 40}},
+            "spec": {"selector": {"matchLabels": {"candidate": "true"}}},
+        }
+        with mock.patch.object(MODULE, "load_json", side_effect=[candidate, None]):
+            with self.assertRaisesRegex(RuntimeError, "does not match requested revision"):
+                MODULE.promote_one("api-backend", "engine-01", "b" * 40)
 
 
 if __name__ == "__main__":

@@ -263,6 +263,10 @@ def promotion_selector(
     selector = copy.deepcopy(((selector_source.get("spec") or {}).get("selector") or {}).get("matchLabels") or {})
     if not selector:
         raise RuntimeError(f"promotion source for {deployment_name(base, node)} lacks immutable selector")
+    if active:
+        # Deployment selectors are immutable. Existing active workload keeps
+        # exact selector; promoted pod labels are made to satisfy it below.
+        return selector
     selector["app.kubernetes.io/name"] = base
     selector["borealis.io/engine-node"] = node
     selector["borealis.io/node-workload"] = "true"
@@ -271,7 +275,7 @@ def promotion_selector(
     return selector
 
 
-def promote_one(base: str, node: str) -> str:
+def promote_one(base: str, node: str, expected_revision: str) -> str:
     active_name = deployment_name(base, node)
     candidate_name = candidate_deployment_name(base, node)
     candidate = load_json(f"deployment/{candidate_name}")
@@ -281,6 +285,8 @@ def promote_one(base: str, node: str) -> str:
     revision = str(((candidate.get("metadata") or {}).get("annotations") or {}).get("borealis.io/revision") or "")
     if not SHA_RE.fullmatch(revision):
         raise RuntimeError(f"candidate deployment {candidate_name} lacks pinned revision")
+    if revision != expected_revision:
+        raise RuntimeError(f"candidate deployment {candidate_name} does not match requested revision")
     manifest = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -384,7 +390,7 @@ def main() -> int:
                     kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{base}", "--timeout=5m")
                     stopped_generic_host_workloads.append((base, replicas))
             if args.promote_candidate:
-                reconciled.append(promote_one(base, node))
+                reconciled.append(promote_one(base, node, revision))
             else:
                 reconciled.append(reconcile_one(base, service, node, revision, images, args.candidate))
     except Exception:

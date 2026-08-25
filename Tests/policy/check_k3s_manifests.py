@@ -530,6 +530,8 @@ def validate_cluster_workload_handoff_contract() -> None:
         "for base, replicas in reversed(stopped_generic_host_workloads)": "failed initialization restoration",
         'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")': "candidate host-port withdrawal before promotion",
         "existing_selector = promotion_selector(base, node, candidate, active)": "first member candidate promotion without prior active workload",
+        "if active:": "immutable existing Deployment selector preservation",
+        "if revision != expected_revision:": "immutable candidate revision promotion gate",
         'spec["replicas"] = 0 if base in HOST_PORT_DEPLOYMENTS and candidate else 1': "stopped host-port update candidates",
         'if base == "traefik-edge"': "bounded Traefik host-port candidate handoff",
         'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=1")': "Traefik candidate activation during handoff",
