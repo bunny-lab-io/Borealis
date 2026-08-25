@@ -42,6 +42,8 @@ const (
 	k3sRegistriesPath   = "/etc/rancher/k3s/registries.yaml"
 	k3sJoinConfigPath   = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
 	k3sImageImportPath  = "/var/lib/rancher/k3s/agent/images"
+	shutdownHandoffWait = 25 * time.Second
+	shutdownHandoffPoll = 250 * time.Millisecond
 )
 
 var (
@@ -65,7 +67,7 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff>")
 	}
 	switch os.Args[1] {
 	case "serve":
@@ -80,9 +82,146 @@ func main() {
 		client(os.Args[2:])
 	case "activate-update":
 		activateUpdate(os.Args[2:])
+	case "shutdown-handoff":
+		shutdownHandoff()
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}
+}
+
+func shutdownHandoff() {
+	if os.Geteuid() != 0 {
+		fatalf("shutdown-handoff requires root")
+	}
+	state, _ := run(context.Background(), "", "systemctl", "is-system-running")
+	if !systemIsStopping([]byte(state)) {
+		writeResult(map[string]any{"handed_off": false, "reason": "system_not_stopping"}, nil)
+		return
+	}
+	m := loadManager(false)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownHandoffWait)
+	defer cancel()
+	result, err := m.performShutdownHandoff(ctx, shutdownHandoffPoll)
+	writeResult(result, err)
+}
+
+func systemIsStopping(raw []byte) bool {
+	return strings.TrimSpace(string(raw)) == "stopping"
+}
+
+func (m *manager) performShutdownHandoff(ctx context.Context, interval time.Duration) (map[string]any, error) {
+	nodesJSON, err := run(ctx, "", "k3s", "kubectl", "get", "nodes", "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("read Engine peers before shutdown: %w", err)
+	}
+	peers, err := readyEnginePeers([]byte(nodesJSON), m.nodeName)
+	if err != nil {
+		return nil, err
+	}
+	if len(peers) == 0 {
+		return map[string]any{
+			"node_name":  m.nodeName,
+			"handed_off": false,
+			"reason":     "no_ready_engine_peer",
+		}, nil
+	}
+	if _, err := run(ctx, "", "k3s", "kubectl", "label", "node", m.nodeName, "borealis.io/engine-node=false", "--overwrite"); err != nil {
+		return nil, fmt.Errorf("withdraw local VIP eligibility: %w", err)
+	}
+	holders, err := m.waitForVIPLeaseHandoff(ctx, interval)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"node_name":     m.nodeName,
+		"handed_off":    true,
+		"ready_peers":   peers,
+		"lease_holders": holders,
+	}, nil
+}
+
+func (m *manager) waitForVIPLeaseHandoff(ctx context.Context, interval time.Duration) (map[string]string, error) {
+	leaseNames := []string{"borealis-control-vip", "borealis-edge-vip"}
+	lastHolders := map[string]string{}
+	var lastErr error
+	for {
+		allMoved := true
+		for _, leaseName := range leaseNames {
+			raw, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "get", "lease", leaseName, "-o", "json")
+			if err != nil {
+				lastErr = err
+				allMoved = false
+				break
+			}
+			holder, err := leaseHolder([]byte(raw))
+			if err != nil {
+				lastErr = err
+				allMoved = false
+				break
+			}
+			lastHolders[leaseName] = holder
+			if holder == "" || holder == m.nodeName {
+				allMoved = false
+			}
+		}
+		if allMoved {
+			return lastHolders, nil
+		}
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, fmt.Errorf("wait for VIP lease handoff: %w", lastErr)
+			}
+			return nil, fmt.Errorf("wait for VIP lease handoff: %w (last holders: %v)", ctx.Err(), lastHolders)
+		case <-time.After(interval):
+		}
+	}
+}
+
+func readyEnginePeers(raw []byte, localNode string) ([]string, error) {
+	var payload struct {
+		Items []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Status struct {
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("decode Engine peers: %w", err)
+	}
+	peers := make([]string, 0, len(payload.Items))
+	for _, node := range payload.Items {
+		name := strings.TrimSpace(node.Metadata.Name)
+		if name == localNode || !nodePattern.MatchString(name) || !strings.EqualFold(strings.TrimSpace(node.Metadata.Labels["borealis.io/engine-node"]), "true") {
+			continue
+		}
+		for _, condition := range node.Status.Conditions {
+			if condition.Type == "Ready" && condition.Status == "True" {
+				peers = append(peers, name)
+				break
+			}
+		}
+	}
+	return peers, nil
+}
+
+func leaseHolder(raw []byte) (string, error) {
+	var lease struct {
+		Spec struct {
+			HolderIdentity string `json:"holderIdentity"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &lease); err != nil {
+		return "", fmt.Errorf("decode VIP lease: %w", err)
+	}
+	return strings.TrimSpace(lease.Spec.HolderIdentity), nil
 }
 
 func client(args []string) {

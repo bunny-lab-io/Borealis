@@ -177,6 +177,116 @@ func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	}
 }
 
+func TestShutdownHandoffRunsOnlyWhileSystemIsStopping(t *testing.T) {
+	if !systemIsStopping([]byte("stopping\n")) {
+		t.Fatal("system stopping state was not recognized")
+	}
+	for _, state := range []string{"running", "degraded", "maintenance", "", "stopping now"} {
+		if systemIsStopping([]byte(state)) {
+			t.Fatalf("unsafe system state %q enabled shutdown handoff", state)
+		}
+	}
+}
+
+func TestShutdownHandoffParsersRequireReadyEnginePeerAndLeaseHolder(t *testing.T) {
+	raw := []byte(`{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"engine-3","labels":{"borealis.io/engine-node":"true"}},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"worker-1","labels":{}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`)
+	peers, err := readyEnginePeers(raw, "engine-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(peers, ",") != "engine-2" {
+		t.Fatalf("ready Engine peers=%v want [engine-2]", peers)
+	}
+	if _, err := readyEnginePeers([]byte(`{"items":`), "engine-1"); err == nil {
+		t.Fatal("invalid node list JSON accepted")
+	}
+	holder, err := leaseHolder([]byte(`{"spec":{"holderIdentity":"engine-2"}}`))
+	if err != nil || holder != "engine-2" {
+		t.Fatalf("lease holder=%q err=%v", holder, err)
+	}
+	if _, err := leaseHolder([]byte(`{"spec":`)); err == nil {
+		t.Fatal("invalid lease JSON accepted")
+	}
+}
+
+func TestPerformShutdownHandoffWithdrawsEngineNodeAndWaitsForBothVIPs(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "k3s.log")
+	k3s := filepath.Join(tempDir, "k3s")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$BOREALIS_TEST_K3S_LOG"
+case "$*" in
+  "kubectl get nodes -o json")
+    printf '%s\n' '{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+    ;;
+  "kubectl label node engine-1 borealis.io/engine-node=false --overwrite")
+    printf '%s\n' 'node/engine-1 labeled'
+    ;;
+  "kubectl -n kube-system get lease borealis-control-vip -o json"|"kubectl -n kube-system get lease borealis-edge-vip -o json")
+    printf '%s\n' '{"spec":{"holderIdentity":"engine-2"}}'
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+`
+	if err := os.WriteFile(k3s, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BOREALIS_TEST_K3S_LOG", logPath)
+	manager := &manager{nodeName: "engine-1"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := manager.performShutdownHandoff(ctx, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["handed_off"] != true {
+		t.Fatalf("unexpected shutdown handoff result: %#v", result)
+	}
+	rawLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(rawLog)
+	for _, command := range []string{
+		"kubectl label node engine-1 borealis.io/engine-node=false --overwrite",
+		"kubectl -n kube-system get lease borealis-control-vip -o json",
+		"kubectl -n kube-system get lease borealis-edge-vip -o json",
+	} {
+		if !strings.Contains(log, command) {
+			t.Fatalf("shutdown handoff missed %q: %s", command, log)
+		}
+	}
+}
+
+func TestPerformShutdownHandoffSkipsWithoutReadyEnginePeer(t *testing.T) {
+	tempDir := t.TempDir()
+	k3s := filepath.Join(tempDir, "k3s")
+	script := `#!/bin/sh
+if [ "$*" = "kubectl get nodes -o json" ]; then
+  printf '%s\n' '{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+  exit 0
+fi
+exit 64
+`
+	if err := os.WriteFile(k3s, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	manager := &manager{nodeName: "engine-1"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := manager.performShutdownHandoff(ctx, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["handed_off"] != false || result["reason"] != "no_ready_engine_peer" {
+		t.Fatalf("unexpected one-node shutdown result: %#v", result)
+	}
+}
+
 func TestNodeHealthParsersRequireNodeScopedReadyEndpoint(t *testing.T) {
 	host, port, err := readyAPIEndpoint([]byte(`{"items":[{"ports":[{"port":5001}],"endpoints":[{"addresses":["10.42.1.8"],"nodeName":"engine-1","conditions":{"ready":true}},{"addresses":["10.42.2.8"],"nodeName":"engine-2","conditions":{"ready":false}}]}]}`), "engine-1")
 	if err != nil || host != "10.42.1.8" || port != 5001 {

@@ -187,6 +187,7 @@ def validate_node_manager_service_contract() -> None:
     required = {
         "RuntimeDirectory=borealis": "managed runtime directory",
         "ConfigurationDirectory=borealis": "managed configuration directory",
+        "ExecStop=/usr/local/sbin/borealis-node-manager shutdown-handoff": "shutdown-only VIP lease handoff",
         "ProtectSystem=strict": "strict filesystem protection",
         "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s /var/lib/rancher/k3s/agent/images": "fixed-operation Borealis and K3s image pre-import write paths",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK": "Unix socket, K3s API, release-fetch, and host network-inspection contract",
@@ -217,6 +218,9 @@ def validate_node_manager_service_contract() -> None:
         '"borealis.io/etcd-leader="+value',
         "parseEtcdLeadership",
         "os.MkdirAll(k3sImageImportPath, 0o755)",
+        '"borealis.io/engine-node=false"',
+        '"borealis-control-vip", "borealis-edge-vip"',
+        'systemIsStopping([]byte(state))',
     ):
         if marker not in manager_source:
             fail(f"node-manager lost local etcd leadership report marker {marker!r}")
