@@ -207,6 +207,39 @@ def validate_cluster_controller_contract() -> None:
     )
     if not {"get", "list", "watch", "patch"}.issubset(set(deployment_rule.get("verbs") or [])):
         fail("cluster controller lacks node-workload Deployment reconciliation RBAC")
+    storage_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {""}
+            and set(rule.get("resources") or []) == {"persistentvolumeclaims", "persistentvolumes"}
+        ),
+        {},
+    )
+    if set(storage_rule.get("verbs") or []) != {"get", "list", "watch"}:
+        fail("cluster controller shared-storage core RBAC must stay read-only")
+    longhorn_volume_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {"longhorn.io"}
+            and set(rule.get("resources") or []) == {"volumes"}
+        ),
+        {},
+    )
+    if set(longhorn_volume_rule.get("verbs") or []) != {"get", "list", "watch", "patch"}:
+        fail("cluster controller Longhorn volume RBAC must allow bounded replica reconciliation only")
+    longhorn_replica_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {"longhorn.io"}
+            and set(rule.get("resources") or []) == {"replicas"}
+        ),
+        {},
+    )
+    if set(longhorn_replica_rule.get("verbs") or []) != {"get", "list", "watch"}:
+        fail("cluster controller Longhorn replica RBAC must stay read-only")
 
 
 def validate_node_manager_service_contract() -> None:
@@ -324,16 +357,23 @@ def validate_longhorn_host_dependency_contract() -> None:
         'command_exists mount.nfs || die': "post-install NFS mount helper check",
         "ensure_longhorn_csi_probe_guard": "Longhorn CSI startup-budget liveness guard",
         'borealis.io/liveness-startup-guard":"200"': "Longhorn CSI guard annotation",
+        "ensure_longhorn_multipath_compatibility": "Longhorn multipath safety function",
+        "classify_longhorn_multipath_maps": "Longhorn-owned map classifier",
+        "for unit in multipathd.service multipathd.socket": "bounded multipath systemd unit set",
+        'dm_uuid}" == mpath-*': "device-mapper multipath-only filter",
+        'multipath -f "${map_name}"': "exact Longhorn-owned map cleanup",
+        "Configure Longhorn device blacklist per official Longhorn multipath guidance": "genuine multipath fail-closed guidance",
     }
     for marker, description in required.items():
         if marker not in engine_source:
             fail(f"Engine Longhorn baseline lost {description}")
     dependency_function = engine_source.find("ensure_longhorn_node_dependencies()")
+    multipath_call = engine_source.find("  ensure_longhorn_multipath_compatibility", dependency_function)
     iscsi_call = engine_source.find("  ensure_longhorn_iscsi_package", dependency_function)
     nfs_call = engine_source.find("  ensure_longhorn_nfs_package", dependency_function)
     module_call = engine_source.find("  ensure_longhorn_iscsi_kernel_module", dependency_function)
-    if min(dependency_function, iscsi_call, nfs_call, module_call) < 0 or not iscsi_call < nfs_call < module_call:
-        fail("Longhorn baseline must reconcile iSCSI and NFS packages before kernel/service checks")
+    if min(dependency_function, multipath_call, iscsi_call, nfs_call, module_call) < 0 or not multipath_call < iscsi_call < nfs_call < module_call:
+        fail("Longhorn baseline must reconcile multipath safety before iSCSI/NFS and kernel/service checks")
 
 
 def validate_pinned_dependency_adoption_contract() -> None:

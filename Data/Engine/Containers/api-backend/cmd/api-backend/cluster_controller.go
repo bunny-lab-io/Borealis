@@ -27,6 +27,10 @@ const (
 	clusterNodeManagerSocket            = "/run/borealis/node-manager.sock"
 	clusterNodeManagerToken             = "/etc/borealis/node-manager.token"
 	clusterUpgradeNamespace             = "system-upgrade"
+	clusterSharedArtifactPVCName        = "borealis-agent-artifacts"
+	clusterLonghornNamespace            = "longhorn-system"
+	clusterLonghornCSIDriver            = "driver.longhorn.io"
+	clusterSharedArtifactReplicaCount   = int64(3)
 )
 
 var (
@@ -130,6 +134,7 @@ type clusterController struct {
 	lastCustomResourceSync     atomic.Int64
 	lastRuntimeRoleObservation string
 	lastCustomResourceError    string
+	lastSharedArtifactError    string
 }
 
 type clusterControllerLeaseGuard struct {
@@ -328,6 +333,7 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
 		c.observeRuntimeRoles(runCtx, runner)
 		c.observeCustomResources(runCtx, runner)
+		c.observeSharedArtifactStorage(runCtx, runner)
 		if recovered, recoveryErr := c.reconcileLostHMRNode(runCtx, runner); recoveryErr != nil || recovered {
 			return recoveryErr
 		}
@@ -419,6 +425,25 @@ func (c *clusterController) observeCustomResources(ctx context.Context, runner *
 	if message != c.lastCustomResourceError {
 		log.Printf("cluster custom-resource reconciliation pending: %v", err)
 		c.lastCustomResourceError = message
+	}
+}
+
+func (c *clusterController) observeSharedArtifactStorage(ctx context.Context, runner *kubernetesClusterStepRunner) {
+	nodes, err := c.activeNodes(ctx)
+	if err == nil && len(nodes) == int(clusterSharedArtifactReplicaCount) {
+		err = runner.reconcileSharedArtifactStorage(ctx, nodes)
+	}
+	if err == nil {
+		if c.lastSharedArtifactError != "" {
+			log.Printf("cluster shared artifact storage reconciliation recovered")
+			c.lastSharedArtifactError = ""
+		}
+		return
+	}
+	message := err.Error()
+	if message != c.lastSharedArtifactError {
+		log.Printf("cluster shared artifact storage reconciliation pending: %v", err)
+		c.lastSharedArtifactError = message
 	}
 }
 
@@ -1525,6 +1550,11 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if operation.Kind != "cluster_enable" && len(nodes) != 1 && len(nodes) != 3 && !clusterOperationSupportsTwoNodeRecovery(operation, len(nodes)) {
 			return fmt.Errorf("active node count %d is not supported", len(nodes))
 		}
+		if len(nodes) == int(clusterSharedArtifactReplicaCount) && clusterOperationRequiresSharedArtifactHA(operation) {
+			if err := r.waitForSharedArtifactStorageHA(ctx, nodes); err != nil {
+				return fmt.Errorf("shared Agent artifact storage is not failure-safe: %w", err)
+			}
+		}
 		if operation.Kind == "engine_update" {
 			selected, err := clusterUpdateNodes(operation, nodes)
 			if err != nil {
@@ -1843,6 +1873,20 @@ func clusterOperationSupportsTwoNodeRecovery(operation clusterControllerOperatio
 	}
 }
 
+func clusterOperationRequiresSharedArtifactHA(operation clusterControllerOperation) bool {
+	switch operation.Kind {
+	case "engine_update", "k3s_update", "hmr_start":
+		return true
+	case "node_maintenance":
+		return cleanText(operation.Payload["action"]) == "enter"
+	case "node_remove":
+		emergency, _ := operation.Payload["emergency"].(bool)
+		return !emergency
+	default:
+		return false
+	}
+}
+
 func completedRemovalClusterState(targetSize int64, emergency bool) (int64, string) {
 	if emergency {
 		return 3, "Degraded Quorum"
@@ -1918,6 +1962,10 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 	}
 	if err := r.scaleCNPG(ctx, newSize); err != nil {
 		return err
+	}
+	storageNodes := append(append(make([]clusterControllerNode, 0, newSize), activeNodes...), pending...)
+	if err := r.waitForSharedArtifactStorageHA(ctx, storageNodes); err != nil {
+		return fmt.Errorf("shared Agent artifact storage did not reach one healthy replica per Engine: %w", err)
 	}
 	for _, node := range pending {
 		redeploy := operation
@@ -1998,6 +2046,142 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 	}
 	return r.recordClusterIntent(ctx, operation, clusterControllerStep{Name: "apply_membership"})
+}
+
+func (r *kubernetesClusterStepRunner) waitForSharedArtifactStorageHA(ctx context.Context, nodes []clusterControllerNode) error {
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		if err := r.reconcileSharedArtifactStorage(ctx, nodes); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(lastErr, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) reconcileSharedArtifactStorage(ctx context.Context, nodes []clusterControllerNode) error {
+	if r == nil || r.kube == nil {
+		return errors.New("Kubernetes cluster runner is unavailable")
+	}
+	if len(nodes) != int(clusterSharedArtifactReplicaCount) {
+		return fmt.Errorf("shared Agent artifact storage requires exactly %d Engine nodes, got %d", clusterSharedArtifactReplicaCount, len(nodes))
+	}
+	wantedNodes := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		if !clusterControllerNodeRegex.MatchString(node.Name) || wantedNodes[node.Name] {
+			return errors.New("shared Agent artifact storage received invalid or duplicate Engine node identity")
+		}
+		wantedNodes[node.Name] = true
+	}
+
+	pvcPath := fmt.Sprintf("/api/v1/namespaces/%s/persistentvolumeclaims/%s", r.namespace, clusterSharedArtifactPVCName)
+	var pvc map[string]any
+	if err := r.kube.getJSON(ctx, pvcPath, &pvc); err != nil {
+		return fmt.Errorf("read shared Agent artifact PVC: %w", err)
+	}
+	pvcSpec := nestedMap(pvc, "spec")
+	if cleanText(nestedMap(pvc, "status")["phase"]) != "Bound" {
+		return errors.New("shared Agent artifact PVC is not Bound")
+	}
+	if !anyTextSliceContains(pvcSpec["accessModes"], "ReadWriteMany") {
+		return errors.New("shared Agent artifact PVC is not ReadWriteMany")
+	}
+	volumeName := cleanText(pvcSpec["volumeName"])
+	if !clusterControllerNodeRegex.MatchString(volumeName) {
+		return errors.New("shared Agent artifact PVC has invalid bound volume identity")
+	}
+
+	var pv map[string]any
+	if err := r.kube.getJSON(ctx, "/api/v1/persistentvolumes/"+volumeName, &pv); err != nil {
+		return fmt.Errorf("read shared Agent artifact PV: %w", err)
+	}
+	pvSpec := nestedMap(pv, "spec")
+	claimRef := nestedMap(pvSpec, "claimRef")
+	if cleanText(claimRef["namespace"]) != r.namespace || cleanText(claimRef["name"]) != clusterSharedArtifactPVCName {
+		return errors.New("shared Agent artifact PV claim ownership does not match fixed Borealis PVC")
+	}
+	if !anyTextSliceContains(pvSpec["accessModes"], "ReadWriteMany") {
+		return errors.New("shared Agent artifact PV is not ReadWriteMany")
+	}
+	csi := nestedMap(pvSpec, "csi")
+	if cleanText(csi["driver"]) != clusterLonghornCSIDriver || cleanText(csi["volumeHandle"]) != volumeName {
+		return errors.New("shared Agent artifact PV is not exact Longhorn volume")
+	}
+
+	volumePath := fmt.Sprintf("/apis/longhorn.io/v1beta2/namespaces/%s/volumes/%s", clusterLonghornNamespace, volumeName)
+	var volume map[string]any
+	if err := r.kube.getJSON(ctx, volumePath, &volume); err != nil {
+		return fmt.Errorf("read shared Agent artifact Longhorn volume: %w", err)
+	}
+	volumeSpec := nestedMap(volume, "spec")
+	volumeStatus := nestedMap(volume, "status")
+	kubernetesStatus := nestedMap(volumeStatus, "kubernetesStatus")
+	if cleanText(volumeSpec["accessMode"]) != "rwx" ||
+		cleanText(kubernetesStatus["namespace"]) != r.namespace ||
+		cleanText(kubernetesStatus["pvcName"]) != clusterSharedArtifactPVCName ||
+		cleanText(kubernetesStatus["pvName"]) != volumeName {
+		return errors.New("Longhorn volume ownership or RWX mode does not match fixed shared Agent artifact PVC")
+	}
+	if current := coerceInt64(volumeSpec["numberOfReplicas"]); current < clusterSharedArtifactReplicaCount {
+		patch := map[string]any{"spec": map[string]any{"numberOfReplicas": clusterSharedArtifactReplicaCount}}
+		var patched map[string]any
+		if err := r.kube.doJSON(ctx, http.MethodPatch, volumePath, patch, "application/merge-patch+json", &patched, 30*time.Second); err != nil {
+			return fmt.Errorf("expand shared Agent artifact Longhorn replicas: %w", err)
+		}
+		return fmt.Errorf("Longhorn replica expansion started: %d of %d configured", current, clusterSharedArtifactReplicaCount)
+	}
+	if cleanText(volumeStatus["robustness"]) != "healthy" {
+		return fmt.Errorf("Longhorn volume robustness is %q", cleanText(volumeStatus["robustness"]))
+	}
+
+	replicaPath := fmt.Sprintf("/apis/longhorn.io/v1beta2/namespaces/%s/replicas?labelSelector=%s", clusterLonghornNamespace, url.QueryEscape("longhornvolume="+volumeName))
+	var replicas map[string]any
+	if err := r.kube.getJSON(ctx, replicaPath, &replicas); err != nil {
+		return fmt.Errorf("read shared Agent artifact Longhorn replicas: %w", err)
+	}
+	healthyNodes := make(map[string]bool, len(wantedNodes))
+	for _, raw := range anySlice(replicas["items"]) {
+		replica, _ := raw.(map[string]any)
+		spec := nestedMap(replica, "spec")
+		status := nestedMap(replica, "status")
+		nodeName := cleanText(spec["nodeID"])
+		evictionRequested, _ := spec["evictionRequested"].(bool)
+		if wantedNodes[nodeName] && cleanText(spec["failedAt"]) == "" && cleanText(spec["healthyAt"]) != "" &&
+			cleanText(spec["desireState"]) == "running" && cleanText(status["currentState"]) == "running" && !evictionRequested {
+			healthyNodes[nodeName] = true
+		}
+	}
+	missing := make([]string, 0, len(wantedNodes))
+	for nodeName := range wantedNodes {
+		if !healthyNodes[nodeName] {
+			missing = append(missing, nodeName)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("Longhorn lacks healthy running replica on Engine node(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func anyTextSliceContains(value any, wanted string) bool {
+	for _, raw := range anySlice(value) {
+		if cleanText(raw) == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *kubernetesClusterStepRunner) waitNodeReady(ctx context.Context, nodeName string) error {

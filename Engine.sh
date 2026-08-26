@@ -3036,8 +3036,106 @@ ensure_longhorn_iscsid_running() {
   die "Longhorn requires iscsid to be running. See ${BUILD_LOG}."
 }
 
+classify_longhorn_multipath_maps() {
+  local classification="$1"
+  local longhorn_numbers=" "
+  local device=""
+  local device_number=""
+  local dm_path=""
+  local dm_uuid=""
+  local map_name=""
+  local slave=""
+  local slave_number=""
+  local has_slave=0
+  local longhorn_only=0
+
+  for device in /dev/longhorn/*; do
+    [[ -b "${device}" ]] || continue
+    device_number="$(stat -Lc '%t:%T' "${device}" 2>/dev/null || true)"
+    [[ -n "${device_number}" ]] || continue
+    longhorn_numbers+="${device_number} "
+  done
+
+  for dm_path in /sys/class/block/dm-*; do
+    [[ -r "${dm_path}/dm/uuid" && -r "${dm_path}/dm/name" ]] || continue
+    dm_uuid="$(<"${dm_path}/dm/uuid")"
+    [[ "${dm_uuid}" == mpath-* ]] || continue
+    map_name="$(<"${dm_path}/dm/name")"
+    [[ -n "${map_name}" ]] || continue
+    has_slave=0
+    longhorn_only=1
+    for slave in "${dm_path}"/slaves/*; do
+      [[ -e "${slave}" ]] || continue
+      has_slave=1
+      slave_number="$(stat -Lc '%t:%T' "/dev/$(basename "${slave}")" 2>/dev/null || true)"
+      if [[ -z "${slave_number}" || "${longhorn_numbers}" != *" ${slave_number} "* ]]; then
+        longhorn_only=0
+      fi
+    done
+    if [[ "${has_slave}" -eq 1 && "${longhorn_only}" -eq 1 && "${classification}" == "longhorn" ]]; then
+      printf '%s\n' "${map_name}"
+    elif [[ ("${has_slave}" -eq 0 || "${longhorn_only}" -eq 0) && "${classification}" == "other" ]]; then
+      printf '%s\n' "${map_name}"
+    fi
+  done
+}
+
+ensure_longhorn_multipath_compatibility() {
+  local -a multipath_units=()
+  local unit=""
+  for unit in multipathd.service multipathd.socket; do
+    if systemd_unit_file_exists "${unit}"; then
+      multipath_units+=("${unit}")
+    fi
+  done
+  ((${#multipath_units[@]} > 0)) || return 0
+
+  local enabled_or_active=0
+  for unit in "${multipath_units[@]}"; do
+    if run_privileged systemctl is-active --quiet "${unit}" 2>/dev/null \
+      || run_privileged systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
+      enabled_or_active=1
+    fi
+  done
+  [[ "${enabled_or_active}" -eq 1 ]] || return 0
+
+  local -a other_maps=()
+  local -a longhorn_maps=()
+  mapfile -t other_maps < <(classify_longhorn_multipath_maps "other")
+  if ((${#other_maps[@]} > 0)); then
+    log_status "k3s-longhorn-storage" "Multipath Configuration Required" "${C_RED}"
+    die "multipathd manages non-Longhorn map(s): ${other_maps[*]}. Configure Longhorn device blacklist per official Longhorn multipath guidance before redeploying."
+  fi
+  mapfile -t longhorn_maps < <(classify_longhorn_multipath_maps "longhorn")
+  if ((${#longhorn_maps[@]} > 0)) && ! command_exists multipath; then
+    die "multipathd claimed Longhorn device(s), but multipath command is unavailable for safe map cleanup."
+  fi
+
+  log_status "k3s-longhorn-storage" "Disabling Incompatible Multipath" "${C_YELLOW}"
+  if ! run_privileged systemctl disable --now "${multipath_units[@]}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "Multipath Disable Failed" "${C_RED}"
+    die "Failed to disable multipathd before Longhorn reconcile. See ${BUILD_LOG}."
+  fi
+  local map_name=""
+  for map_name in "${longhorn_maps[@]}"; do
+    [[ -n "${map_name}" ]] || continue
+    if ! run_privileged multipath -f "${map_name}" >> "${BUILD_LOG}" 2>&1; then
+      die "Failed to flush Longhorn-owned multipath map ${map_name}. See ${BUILD_LOG}."
+    fi
+  done
+  for unit in "${multipath_units[@]}"; do
+    if run_privileged systemctl is-active --quiet "${unit}" 2>/dev/null \
+      || run_privileged systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
+      die "${unit} remained active or enabled after Longhorn multipath safety reconcile."
+    fi
+  done
+  mapfile -t longhorn_maps < <(classify_longhorn_multipath_maps "longhorn")
+  ((${#longhorn_maps[@]} == 0)) || die "Longhorn-owned multipath map(s) remained after cleanup: ${longhorn_maps[*]}."
+}
+
 ensure_longhorn_node_dependencies() {
   log_status "k3s-longhorn-storage" "Reconciling Dependencies" "${C_YELLOW}"
+  ensure_longhorn_multipath_compatibility
   ensure_longhorn_iscsi_package
   ensure_longhorn_nfs_package
   ensure_longhorn_iscsi_kernel_module

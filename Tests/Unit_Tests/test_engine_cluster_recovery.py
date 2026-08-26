@@ -29,6 +29,57 @@ class EngineClusterRecoveryTests(unittest.TestCase):
             check=False,
         )
 
+    def test_longhorn_multipath_guard_fails_closed_for_genuine_map(self):
+        result = self.run_engine_library(
+            r'''
+systemd_unit_file_exists() { return 0; }
+run_privileged() { return 0; }
+classify_longhorn_multipath_maps() {
+  [[ "$1" == "other" ]] && printf '%s\n' 'production-san'
+}
+ensure_longhorn_multipath_compatibility
+'''
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("multipathd manages non-Longhorn map(s): production-san", result.stderr)
+        self.assertIn("Configure Longhorn device blacklist", result.stderr)
+
+    def test_longhorn_multipath_guard_disables_only_fixed_units_without_maps(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state = pathlib.Path(temp_dir) / "disabled"
+            calls = pathlib.Path(temp_dir) / "calls"
+            build_log = pathlib.Path(temp_dir) / "build.log"
+            result = self.run_engine_library(
+                r'''
+BUILD_LOG="$BOREALIS_TEST_BUILD_LOG"
+systemd_unit_file_exists() { return 0; }
+classify_longhorn_multipath_maps() { return 0; }
+run_privileged() {
+  if [[ "$1" == "systemctl" && "$2" == "disable" && "$3" == "--now" ]]; then
+    printf '%s\n' "$*" >"$BOREALIS_TEST_CALLS"
+    : >"$BOREALIS_TEST_STATE"
+    return 0
+  fi
+  if [[ "$1" == "systemctl" && ("$2" == "is-active" || "$2" == "is-enabled") ]]; then
+    [[ ! -e "$BOREALIS_TEST_STATE" ]]
+    return
+  fi
+  return 70
+}
+ensure_longhorn_multipath_compatibility
+''',
+                extra_env={
+                    "BOREALIS_TEST_BUILD_LOG": str(build_log),
+                    "BOREALIS_TEST_CALLS": str(calls),
+                    "BOREALIS_TEST_STATE": str(state),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                calls.read_text(encoding="utf-8").strip(),
+                "systemctl disable --now multipathd.service multipathd.socket",
+            )
+
     def test_cnpg_runtime_url_is_preserved_only_for_cluster_service(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime_env = pathlib.Path(temp_dir) / "runtime.env"

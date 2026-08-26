@@ -133,6 +133,129 @@ func TestClusterControllerAcceptsSingleDegradedReplacement(t *testing.T) {
 	}
 }
 
+func TestSharedArtifactStorageExpandsAndVerifiesReplicaPerEngine(t *testing.T) {
+	const volumeName = "pvc-60b09c5a-dda0-4bc8-a8db-009254605ffb"
+	replicaCount := int64(1)
+	patches := 0
+	nodes := []clusterControllerNode{{Name: "borealis-engine-01"}, {Name: "borealis-engine-02"}, {Name: "borealis-engine-03"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/namespaces/borealis/persistentvolumeclaims/borealis-agent-artifacts":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec":   map[string]any{"volumeName": volumeName, "accessModes": []any{"ReadWriteMany"}},
+				"status": map[string]any{"phase": "Bound"},
+			})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/persistentvolumes/"+volumeName:
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{
+				"claimRef":    map[string]any{"namespace": "borealis", "name": "borealis-agent-artifacts"},
+				"accessModes": []any{"ReadWriteMany"},
+				"csi":         map[string]any{"driver": "driver.longhorn.io", "volumeHandle": volumeName},
+			}})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/volumes/"+volumeName):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"numberOfReplicas": replicaCount, "accessMode": "rwx"},
+				"status": map[string]any{
+					"robustness":       "healthy",
+					"kubernetesStatus": map[string]any{"namespace": "borealis", "pvcName": "borealis-agent-artifacts", "pvName": volumeName},
+				},
+			})
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/volumes/"+volumeName):
+			patches++
+			var patch map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			if got := coerceInt64(nestedMap(patch, "spec")["numberOfReplicas"]); got != clusterSharedArtifactReplicaCount {
+				t.Fatalf("replica patch=%d", got)
+			}
+			replicaCount = clusterSharedArtifactReplicaCount
+			_ = json.NewEncoder(w).Encode(patch)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/replicas"):
+			if request.URL.Query().Get("labelSelector") != "longhornvolume="+volumeName {
+				t.Fatalf("unexpected replica selector %q", request.URL.RawQuery)
+			}
+			items := make([]any, 0, len(nodes))
+			for _, node := range nodes {
+				items = append(items, map[string]any{
+					"spec":   map[string]any{"nodeID": node.Name, "failedAt": "", "healthyAt": "2026-08-26T15:00:00Z", "desireState": "running", "evictionRequested": false},
+					"status": map[string]any{"currentState": "running"},
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	if err := runner.reconcileSharedArtifactStorage(context.Background(), nodes); err == nil || !strings.Contains(err.Error(), "expansion started") {
+		t.Fatalf("expected initial expansion, got %v", err)
+	}
+	if err := runner.reconcileSharedArtifactStorage(context.Background(), nodes); err != nil {
+		t.Fatalf("expanded storage did not verify: %v", err)
+	}
+	if patches != 1 {
+		t.Fatalf("replica expansion patches=%d", patches)
+	}
+}
+
+func TestSharedArtifactStorageRejectsPVOwnershipMismatch(t *testing.T) {
+	const volumeName = "pvc-60b09c5a-dda0-4bc8-a8db-009254605ffb"
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		switch request.URL.Path {
+		case "/api/v1/namespaces/borealis/persistentvolumeclaims/borealis-agent-artifacts":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"volumeName": volumeName, "accessModes": []any{"ReadWriteMany"}}, "status": map[string]any{"phase": "Bound"},
+			})
+		case "/api/v1/persistentvolumes/" + volumeName:
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{
+				"claimRef": map[string]any{"namespace": "other", "name": "borealis-agent-artifacts"}, "accessModes": []any{"ReadWriteMany"},
+				"csi": map[string]any{"driver": "driver.longhorn.io", "volumeHandle": volumeName},
+			}})
+		default:
+			t.Fatalf("unexpected request after ownership mismatch: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	nodes := []clusterControllerNode{{Name: "engine-1"}, {Name: "engine-2"}, {Name: "engine-3"}}
+	if err := runner.reconcileSharedArtifactStorage(context.Background(), nodes); err == nil || !strings.Contains(err.Error(), "claim ownership") {
+		t.Fatalf("expected PV ownership rejection, got %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("ownership mismatch made %d Kubernetes requests", requests)
+	}
+}
+
+func TestPlannedDisruptionRequiresSharedArtifactHAWhileRecoveryBypassesGate(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"phase": "Pending"}})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:       "borealis",
+		jobPollInterval: time.Millisecond,
+	}
+	nodes := []clusterControllerNode{{Name: "engine-1"}, {Name: "engine-2"}, {Name: "engine-3"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	if err := runner.Run(ctx, clusterControllerOperation{Kind: "hmr_start"}, clusterControllerStep{Name: "preflight"}, nodes); err == nil || !strings.Contains(err.Error(), "not failure-safe") {
+		t.Fatalf("planned HMR did not enforce storage gate: %v", err)
+	}
+	requestCount := requests
+	if err := runner.Run(context.Background(), clusterControllerOperation{Kind: "hmr_exit"}, clusterControllerStep{Name: "preflight"}, nodes); err != nil {
+		t.Fatalf("HMR recovery was blocked by storage gate: %v", err)
+	}
+	if requests != requestCount {
+		t.Fatalf("HMR recovery made %d storage requests", requests-requestCount)
+	}
+}
+
 func TestCloudNativePGMembershipAllowsTransientReplacementSize(t *testing.T) {
 	for _, size := range []int{1, 2, 3} {
 		if err := validateCNPGMembershipSize(size); err != nil {
