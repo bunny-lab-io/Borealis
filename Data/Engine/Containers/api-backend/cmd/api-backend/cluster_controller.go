@@ -1795,12 +1795,21 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return errors.New("operation target is not an active node")
 		}
 		action := strings.TrimPrefix(step.Name, "node:"+step.NodeID+":")
-		if operation.Kind == "node_remove" && textInSet(action, "transfer_roles", "enter_drain", "prepare_member_removal") {
+		if operation.Kind == "node_remove" && action == "transfer_roles" {
 			exists, err := r.kubernetesNodeExists(ctx, node.Name)
 			if err != nil {
 				return err
 			}
 			if !exists {
+				return nil
+			}
+		}
+		if operation.Kind == "node_remove" && textInSet(action, "enter_drain", "prepare_member_removal") {
+			ready, err := r.nodeReady(ctx, node.Name)
+			if err != nil {
+				return err
+			}
+			if !ready {
 				return nil
 			}
 		}
@@ -3795,19 +3804,28 @@ func (r *kubernetesClusterStepRunner) kubernetesNodeExists(ctx context.Context, 
 }
 
 func (r *kubernetesClusterStepRunner) waitNodeNotReady(ctx context.Context, nodeName string) error {
-	ticker := time.NewTicker(2 * time.Second)
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		ready, err := r.nodeReady(ctx, nodeName)
-		if err != nil {
-			return err
-		}
-		if !ready {
+		if err == nil && !ready {
 			return nil
+		}
+		if err != nil {
+			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("node %s did not become NotReady after K3s fence: %w", nodeName, ctx.Err())
+			message := fmt.Errorf("node %s did not become NotReady after K3s fence: %w", nodeName, ctx.Err())
+			if lastErr != nil {
+				return errors.Join(message, lastErr)
+			}
+			return message
 		case <-ticker.C:
 		}
 	}

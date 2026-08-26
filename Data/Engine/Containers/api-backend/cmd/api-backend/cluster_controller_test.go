@@ -506,6 +506,61 @@ func TestSafeRemovalMovesPostgresPrimaryToSurvivorBeforeScaleDown(t *testing.T) 
 	}
 }
 
+func TestSafeRemovalRetrySkipsNodeJobsAfterTargetFence(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodGet || !strings.HasSuffix(request.URL.Path, "/nodes/borealis-engine-02") {
+			t.Fatalf("fenced target received Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Ready", "status": "Unknown",
+		}}}})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace: "borealis",
+	}
+	nodeID := "22222222-2222-4222-8222-222222222222"
+	nodes := []clusterControllerNode{{ID: nodeID, Name: "borealis-engine-02", ApplicationState: "drained"}}
+	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Kind: "node_remove", TargetNodeID: nodeID, Attempt: 2}
+	for _, action := range []string{"enter_drain", "prepare_member_removal"} {
+		step := clusterControllerStep{Name: "node:" + nodeID + ":" + action, NodeID: nodeID}
+		if err := runner.Run(context.Background(), operation, step, nodes); err != nil {
+			t.Fatalf("fenced retry action %s failed: %v", action, err)
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("fenced retry Kubernetes requests=%d want 2 Ready checks", requests)
+	}
+}
+
+func TestWaitNodeNotReadyRetriesTransientKubernetesFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests == 1 {
+			http.Error(w, "temporary control-plane handoff", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Ready", "status": "Unknown",
+		}}}})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		jobPollInterval: time.Millisecond,
+	}
+	if err := runner.waitNodeNotReady(context.Background(), "borealis-engine-02"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("fence wait requests=%d want 2", requests)
+	}
+}
+
 func TestPostgresClusterSynchronizationResolvesPrimaryPodFromNode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
