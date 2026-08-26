@@ -3355,7 +3355,7 @@ func (r *kubernetesClusterStepRunner) waitNodeEndpointsWithdrawn(ctx context.Con
 			for _, endpointRaw := range anySlice(slice["endpoints"]) {
 				endpoint, _ := endpointRaw.(map[string]any)
 				conditions := mapStringAny(endpoint["conditions"])
-				if cleanText(endpoint["nodeName"]) == nodeName && conditions["ready"] != false {
+				if cleanText(endpoint["nodeName"]) == nodeName && conditions["ready"] != false && !clusterCandidateEndpoint(endpoint) {
 					foundReady = true
 				}
 			}
@@ -3369,6 +3369,11 @@ func (r *kubernetesClusterStepRunner) waitNodeEndpointsWithdrawn(ctx context.Con
 		case <-ticker.C:
 		}
 	}
+}
+
+func clusterCandidateEndpoint(endpoint map[string]any) bool {
+	targetRef := mapStringAny(endpoint["targetRef"])
+	return cleanText(targetRef["kind"]) == "Pod" && strings.Contains(cleanText(targetRef["name"]), "-candidate-")
 }
 
 func clusterDrainedTrafficService(name string) bool {
