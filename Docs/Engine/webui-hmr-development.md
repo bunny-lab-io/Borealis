@@ -9,7 +9,7 @@ Use this workflow when testing Engine WebUI changes on a K3s-based Borealis Engi
 - Treat `Engine/Services/webui-frontend/data/web-interface/` as disposable runtime source for live HMR sessions.
 
 !!! danger "Cluster-wide non-HA mode"
-    On clustered Engine, every dev deploy and WebUI dev rebuild requests exclusive HMR operation. Admin must complete step-up authentication and type `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto current node, so application HA remains unavailable until production restore completes. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
+    On clustered Engine, every dev deploy and WebUI dev rebuild requests exclusive HMR operation. Admin must type `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto current node, so application HA remains unavailable until production restore completes. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
 
 ## Start Dev WebUI
 Use a scoped WebUI rebuild when the Engine stack already exists and only the frontend needs dev mode.

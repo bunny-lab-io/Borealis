@@ -127,7 +127,7 @@ func TestClusterHMRStartRequiresAdminAndExactConfirmation(t *testing.T) {
 	}
 }
 
-func TestClusterMutationsRequireRecentStepUpAuthentication(t *testing.T) {
+func TestClusterMutationsAcceptValidAdminSessionWithoutFreshStepUp(t *testing.T) {
 	now := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	verifier := &tokenVerifier{secret: []byte("cluster-test-secret"), maxAge: time.Hour, now: func() time.Time { return now }}
@@ -141,8 +141,11 @@ func TestClusterMutationsRequireRecentStepUpAuthentication(t *testing.T) {
 	registerServerClusterRoutes(mux, auth)
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token))
-	if recorder.Code != http.StatusPreconditionRequired || !strings.Contains(recorder.Body.String(), "step_up_required") {
-		t.Fatalf("expected step-up rejection, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected valid Admin session acceptance without step-up, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.Kind != "hmr_start" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("unexpected mutation: %+v", store.mutation)
 	}
 }
 

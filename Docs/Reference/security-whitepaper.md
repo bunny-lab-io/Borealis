@@ -170,6 +170,7 @@ Safe K3s removal writes root-only persistent fence marker and schedules local `k
 - Aegis protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords, reusable credentials, and GitHub API token storage.
 - Active sessions are revalidated against the operator row on authenticated requests. Deleted users, disabled directory cache entries, and deprovisioned directory users stop passing authorization checks without waiting for token expiry.
 - Only an administrator can explicitly disable MFA for an operator account.
+- Cluster mutations require an active administrator session but do not impose a separate short-lived step-up window. Destructive cluster actions retain exact typed confirmations, health and quorum gates, exclusive-operation fencing, and actor audit records.
 
 ### Enrollment and Device Identity
 

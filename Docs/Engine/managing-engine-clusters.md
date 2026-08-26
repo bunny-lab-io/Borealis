@@ -137,7 +137,7 @@ Returning from maintenance uses reverse safety order. Borealis starts node workl
 
 ## Cluster-Wide HMR
 
-Starting `deploy dev` or `webui-frontend rebuild dev` on clustered Engine requires Admin step-up and typed `ENABLE HMR`. Non-interactive CLI also requires `--acknowledge-cluster-non-ha`.
+Starting `deploy dev` or `webui-frontend rebuild dev` on clustered Engine requires Admin access and typed `ENABLE HMR`. Non-interactive CLI also requires `--acknowledge-cluster-non-ha`.
 
 > This moves all Borealis application traffic to this node and places every other Engine node in drained standby. Cluster loses application HA until production mode is restored.
 

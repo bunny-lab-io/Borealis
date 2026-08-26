@@ -99,6 +99,16 @@ describe("Cluster Management", () => {
     expect(screen.queryByText(/Roles:.*k3s version/)).not.toBeInTheDocument();
   });
 
+  it("uses active Admin session without a cluster step-up prompt", () => {
+    state.hmrState = "inactive";
+    render(<ClusterManagement />);
+    fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Enter Maintenance" })[0]);
+
+    expect(screen.getByText("Administrator access required. Destructive actions also require exact typed confirmation.")).toBeInTheDocument();
+    expect(screen.queryByText(/Sign in again/)).not.toBeInTheDocument();
+  });
+
   it("explains empty release catalog", () => {
     render(<ClusterManagement />);
     fireEvent.click(screen.getByRole("tab", { name: "Updates" }));

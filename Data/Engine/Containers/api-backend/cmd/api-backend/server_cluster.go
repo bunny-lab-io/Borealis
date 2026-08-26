@@ -29,7 +29,6 @@ const (
 	clusterReleaseMaxLength        = 32
 	clusterNodeNameMaxLength       = 63
 	clusterHostnameMaxLength       = 253
-	clusterStepUpMaxAge            = 5 * time.Minute
 	clusterInviteTTL               = 15 * time.Minute
 	clusterReleaseCacheTTL         = 15 * time.Minute
 )
@@ -367,7 +366,7 @@ func clusterHMRExitHandler(auth *authService) http.HandlerFunc {
 
 func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity, failure := requireRecentAdmin(r.Context(), auth, r)
+		identity, failure := requireAdmin(r.Context(), auth, r)
 		if failure != nil {
 			failure.write(w)
 			return
@@ -526,7 +525,7 @@ func validateK3sUpgradePath(source, target string) error {
 
 func clusterMutationHandler(auth *authService, kind string, parse func(map[string]any) (clusterMutation, []publicValidationError)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity, failure := requireRecentAdmin(r.Context(), auth, r)
+		identity, failure := requireAdmin(r.Context(), auth, r)
 		if failure != nil {
 			failure.write(w)
 			return
@@ -560,7 +559,7 @@ func clusterMutationHandler(auth *authService, kind string, parse func(map[strin
 
 func clusterNodeMutationHandler(auth *authService, kind string, parse func(map[string]any) (map[string]any, []publicValidationError)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity, failure := requireRecentAdmin(r.Context(), auth, r)
+		identity, failure := requireAdmin(r.Context(), auth, r)
 		if failure != nil {
 			failure.write(w)
 			return
@@ -601,7 +600,7 @@ func clusterNodeMutationHandler(auth *authService, kind string, parse func(map[s
 
 func clusterInvitationHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity, failure := requireRecentAdmin(r.Context(), auth, r)
+		identity, failure := requireAdmin(r.Context(), auth, r)
 		if failure != nil {
 			failure.write(w)
 			return
@@ -716,7 +715,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 
 func clusterAdmissionApproveHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity, failure := requireRecentAdmin(r.Context(), auth, r)
+		identity, failure := requireAdmin(r.Context(), auth, r)
 		if failure != nil {
 			failure.write(w)
 			return
@@ -800,7 +799,7 @@ func clusterOperationCancelHandler(auth *authService) http.HandlerFunc {
 
 func clusterOperationControlHandler(auth *authService, action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity, failure := requireRecentAdmin(r.Context(), auth, r)
+		identity, failure := requireAdmin(r.Context(), auth, r)
 		if failure != nil {
 			failure.write(w)
 			return
@@ -843,21 +842,6 @@ func clusterOperationControlHandler(auth *authService, action string) http.Handl
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	}
-}
-
-func requireRecentAdmin(ctx context.Context, auth *authService, r *http.Request) (operatorIdentity, *authFailure) {
-	identity, failure := requireAdmin(ctx, auth, r)
-	if failure != nil {
-		return operatorIdentity{}, failure
-	}
-	token, err := extractAuthToken(r)
-	if err != nil || auth == nil || auth.verifier == nil {
-		return operatorIdentity{}, unauthorizedAuthFailure()
-	}
-	if _, err := auth.verifier.signedPayload(token, clusterStepUpMaxAge); err != nil {
-		return operatorIdentity{}, &authFailure{status: http.StatusPreconditionRequired, body: map[string]any{"error": "step_up_required", "message": "Sign in again before changing cluster state."}}
-	}
-	return identity, nil
 }
 
 func clusterProbeConformancePassed() bool {

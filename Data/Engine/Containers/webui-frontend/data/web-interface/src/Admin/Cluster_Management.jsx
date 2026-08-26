@@ -262,7 +262,6 @@ export default function ClusterManagement() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (response.status === 428) throw new Error("Step-up authentication required. Sign in again, then retry this operation.");
         const validation = Array.isArray(payload?.errors) ? payload.errors.map((item) => item?.message || item).join(" ") : "";
         throw new Error(validation || payload?.message || payload?.error || `Request failed (${response.status}).`);
       }
@@ -446,7 +445,7 @@ export default function ClusterManagement() {
           {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
           {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) ? <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
           {!['maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={dialog?.kind === "hmr_start" ? "Type ENABLE HMR" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR" : dialog?.kind === "cluster_enable" ? "Type ENABLE CLUSTER" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
-          <Typography variant="body2" sx={{ mt: 2, color: "text.secondary" }}>Recent Admin authentication required. Server rejects stale sessions with step-up-required status.</Typography>
+          <Typography variant="body2" sx={{ mt: 2, color: "text.secondary" }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography>
         </DialogContent>
         <DialogActions><Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button variant="contained" color={dialog?.kind === "emergency_remove" ? "error" : dialog?.kind === "hmr_start" ? "warning" : "primary"} onClick={() => void submitDialog()} disabled={busy}>Submit</Button></DialogActions>
       </Dialog>
