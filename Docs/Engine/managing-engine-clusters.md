@@ -41,7 +41,7 @@ Production redeploy after conformance publishes exact-version pass state to API 
 
 Enablement creates cluster CRDs, controller RBAC, node manager, fixed VIP resources, per-node workloads, application availability policies, and CloudNativePG migration workflow. Existing standalone PostgreSQL remains authoritative until logical import validates and traffic cuts over. Cutover stops scheduler and operator assignments, gracefully drains site workers, then pauses remaining database clients before dump. Old PVC plus encrypted dump remain retained after old StatefulSet scales down.
 
-If API restarts while CLI watches enablement, CLI reconnects for one minute without submitting second request. If connection stays unavailable, copy displayed operation ID and inspect Operations view before trying anything again. Accepted operation keeps running server-side.
+If API restarts while CLI watches enablement, CLI reconnects for one minute without submitting second request. If connection stays unavailable, copy displayed operation ID and inspect Cluster Events before trying anything again. Accepted operation keeps running server-side.
 
 !!! warning "One-way database cutover"
     Cluster enablement does not automatically move database traffic back into standalone StatefulSet. Restore from retained old PVC or encrypted dump is explicit recovery work.
@@ -104,17 +104,16 @@ Emergency removal is single-node recovery for host already unreachable. Power ta
 Open **Admin > Cluster Management**. Views show:
 
 - Overview: quorum, active release, HMR state, operation lease.
-- Nodes: paginated node table with combined membership/application status, management IP, active roles, probe summary, and row action menu.
+- Nodes: paginated node table with combined membership/application status, management IP, active roles, passed/total probe summary, and row action menu.
 - Database: primary/replicas, synchronous durability, switchovers, snapshots.
-- Updates: compatible stable releases, per-node update, ordered update-all.
-- Operations: paginated history with friendly operation names, local timestamp, status, retry, and cancellation.
-- Maintenance: paired admission/removal, maintenance drain, emergency actions.
+- Cluster Events: paginated history with friendly operation names, local timestamp, status, retry, and cancellation.
+- Maintenance: stable Engine releases, K3s updates, paired admission/removal, maintenance drain, and emergency actions.
 
 One exclusive cluster operation may mutate placement, membership, HMR, or releases at time. Controller state survives controller restart through PostgreSQL operation records and Kubernetes desired/runtime objects.
 
 Role owners and PostgreSQL primary display operator-facing node names while APIs retain immutable node IDs. Nodes table combines membership and application state as labels such as `Active / Active`, `Active / Drained`, or `Active / Cordoned`. Its Actions menu groups maintenance, update, safe pair removal, and emergency removal by normal and danger intent. Database view reports configured and Ready CloudNativePG instances separately. `Degraded Database` blocks normal cluster-changing operations until all configured instances return Ready; emergency PostgreSQL failover, externally fenced emergency removal, maintenance exit, and HMR exit remain available for recovery. Required synchronous durability may remain available while redundancy is reduced.
 
-Operations keeps failed records for audit and translates internal kinds into operator-facing names such as `Maintenance Mode Enabled`, `Vite Dev HMR Mode Disabled`, and `Node Pair Removed`. Older cluster-enable or membership failure becomes `Superseded` after newer same-kind operation succeeds and cannot be retried. Failed active records expose retry beside status; queued or waiting records expose cancellation. Hovering operation name shows concise current-step or error context without placing raw internal identifiers in table. Updates view explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
+Cluster Events keeps failed records for audit and translates internal kinds into operator-facing names such as `Maintenance Mode Enabled`, `Vite Dev HMR Mode Disabled`, and `Node Pair Removed`. Older cluster-enable or membership failure becomes `Superseded` after newer same-kind operation succeeds and cannot be retried. Failed active records expose retry beside status; queued or waiting records expose cancellation. Hovering operation name shows concise current-step or error context without placing raw internal identifiers in table. Maintenance explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
 
 Node drain and restore boundaries update durable node state with Kubernetes action progress. Failed rolling update therefore keeps affected node visibly drained with operation reason until retry or explicit maintenance recovery proves health and reactivates it.
 
@@ -150,7 +149,7 @@ Exit restores saved pinned production release, not local working tree. Local edi
 
 ## Cluster-Aware Updates
 
-Use Updates view instead of `git pull` on clustered Engines. Catalog shows published stable GitHub releases only. Drafts, prereleases, branch heads, nonnumeric tags, downgrades, and incompatible manifests cannot be selected.
+Use Maintenance instead of `git pull` on clustered Engines. Stable Engine Release card shows published stable GitHub releases only. Drafts, prereleases, branch heads, nonnumeric tags, downgrades, and incompatible manifests cannot be selected.
 
 Selected tag resolves once to immutable commit SHA. Controller records title, tag, SHA, source URL, initiator, and compatibility result. Every cluster-capable release must include `Data/Engine/release-manifest.json` declaring rolling source range, mixed-version window, schema phase, and K3s baseline.
 
@@ -215,7 +214,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - Route daemon: `Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/`.
     - CRDs/controller/RBAC/availability: `Data/Engine/K3s/cluster/`.
     - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`.
-    - WebUI tab keys: `overview`, `nodes`, `database`, `updates`, `operations`, and `maintenance` through `?tab=` URL state. Nodes and Operations use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
+    - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
     - Release compatibility: `Data/Engine/release-manifest.json`.
 
     ### State ownership
@@ -255,7 +254,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - Cluster-enable and node-redeploy retries pass recorded immutable baseline SHA through controller Job and fixed node-manager contract. Node manager gives only Engine child process command-scoped Git safe-directory trust plus manager-owned writable build home under `Engine/Deploy/node-manager-home`; hardened service keeps host `/root` unavailable. Workload initialization resolves same pinned commit without mutating global Git configuration. Later operator checkout movement cannot change retry revision.
     - Engine updates split target image staging from candidate creation. `StageRevisionImages` builds/imports every target image and writes root-owned `Engine/Deploy/cluster-staged-revision` only after imports finish. Expand schema then runs from staged target image. `RedeployRevision` accepts matching marker/image manifest before creating candidate, preventing target process from starting against pre-expand schema.
     - Node redeploy starts target release's staged manager as separate transient activator outside old service sandbox. Activator validates pinned worktree and its own staged inode, waits until node-action Job leaves Running/Pending state, atomically installs target binary plus systemd unit, restarts node manager outside old service cgroup, verifies running process uses installed inode plus recreated Unix socket, then records target SHA in `/etc/borealis/node-manager-revision`. This lets first rolling update cross old-manager/new-manager boundary without killing action that performs update. Repeated redeploy skips refresh only when recorded SHA and running executable already match.
-    - CLI operation polling tolerates bounded transient API loss after mutation acceptance. It never resubmits POST; persistent loss reports operation ID as still running server-side and directs operator to inspect Operations view.
+    - CLI operation polling tolerates bounded transient API loss after mutation acceptance. It never resubmits POST; persistent loss reports operation ID as still running server-side and directs operator to inspect Cluster Events.
     - Engine persists canonical private `BOREALIS_K3S_PEER_CIDRS` values into runtime Secret. Node-scoped release deploy hydrates same allowlist and fails closed when missing, preventing rolling updates from silently replacing cluster firewall policy with empty peer access.
     - Shared Agent artifacts use one exact Longhorn RWX PVC. Three-node controller reconciliation raises only that bound volume to at least three replicas, verifies fixed PVC/PV/Longhorn ownership, and requires one healthy running replica on each active Engine before planned disruptive operations or pending-node workload activation. It never changes global one-replica StorageClass policy and never reduces an operator-configured higher replica count. A `3 -> 1` downscale leaves existing replica count unchanged to avoid deleting survivor copies; later expansion rebuilds missing per-node copies.
     - Longhorn RWX storage requires host NFSv4 mount utilities in addition to iSCSI. `Engine.sh` checks device-mapper maps before storage reconciliation. Dedicated hosts with no genuine multipath maps have `multipathd.service` and `multipathd.socket` disabled; Longhorn-only maps are flushed by exact mapper name. Any genuine multipath map fails closed and directs operator to configure [Longhorn device blacklist](https://longhorn.io/kb/troubleshooting-volume-with-multipath/). Seed copies only missing or changed files, byte-compares every source file, and allows bounded time for large existing artifact caches.

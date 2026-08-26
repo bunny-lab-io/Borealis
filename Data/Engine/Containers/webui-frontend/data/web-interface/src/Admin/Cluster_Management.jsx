@@ -27,11 +27,10 @@ import {
   DnsRounded as NodesIcon,
   EmergencyRounded as EmergencyIcon,
   EngineeringRounded as MaintenanceActionIcon,
-  HistoryRounded as OperationsIcon,
+  HistoryRounded as EventsIcon,
   HubRounded as ClusterIcon,
   RefreshRounded as RefreshIcon,
   StorageRounded as DatabaseIcon,
-  SystemUpdateAltRounded as UpdatesIcon,
   UpdateRounded as UpdateIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
@@ -60,8 +59,7 @@ const TABS = [
   { key: "overview", label: "Overview", Icon: OverviewIcon },
   { key: "nodes", label: "Nodes", Icon: NodesIcon },
   { key: "database", label: "Database", Icon: DatabaseIcon },
-  { key: "updates", label: "Updates", Icon: UpdatesIcon },
-  { key: "operations", label: "Operations", Icon: OperationsIcon },
+  { key: "operations", label: "Cluster Events", Icon: EventsIcon },
   { key: "maintenance", label: "Maintenance", Icon: MaintenanceIcon },
 ];
 const TAB_KEYS = TABS.map((tab) => tab.key);
@@ -210,7 +208,7 @@ const GRID_INLINE_STYLE = {
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
   "--ag-border-radius": "8px",
 };
-const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "roles"];
+const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "probes"];
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation", "timestamp"];
 
 function validIPv4(value) {
@@ -381,9 +379,8 @@ function clusterNodeProbeSummary(node) {
   const entries = Object.entries(node?.probe_health || {});
   if (!entries.length) return { label: "Not Reported", detail: "No probe results reported." };
   const passed = entries.filter(([, status]) => String(status || "").toLowerCase() === "passed").length;
-  const failed = entries.length - passed;
   return {
-    label: failed ? `${passed} Passed / ${failed} Attention` : `${passed} Passed`,
+    label: `${passed}/${entries.length} Passed`,
     detail: entries.map(([name, status]) => `${titleCase(name)}: ${titleCase(status)}`).join(" · "),
   };
 }
@@ -699,12 +696,11 @@ export default function ClusterManagement() {
     return [
       {
         id: "maintenance",
-        label: isDrained ? "Exit Maintenance" : "Enter Maintenance",
+        label: isDrained ? "Exit Maintenance Mode" : "Enter Maintenance Mode",
         icon: MaintenanceActionIcon,
         group: "primary",
         disabled: maintenanceDisabled,
-        disabledReason: maintenanceDisabled ? "Cluster health gates do not allow this maintenance change." : "",
-        description: isDrained ? "Restore node application capacity after health checks." : "Drain application workloads from this node.",
+        description: isDrained ? "Return node to production use" : "Drain active roles to other nodes",
         onClick: () => openAction("maintenance", nodeActionTarget),
       },
       {
@@ -713,8 +709,7 @@ export default function ClusterManagement() {
         icon: UpdateIcon,
         group: "organize",
         disabled: updateDisabled,
-        disabledReason: updateDisabled ? "Node updates require healthy cluster and database capacity." : "",
-        description: "Apply selected stable Engine release to this node.",
+        description: "Install selected Engine release",
         onClick: () => openAction("update_node", nodeActionTarget),
       },
       {
@@ -724,8 +719,7 @@ export default function ClusterManagement() {
         group: "danger",
         intent: "danger",
         disabled: removalDisabled,
-        disabledReason: removalDisabled ? "Safe pair removal requires healthy three-node membership." : "",
-        description: "Safely shrink three active members to one.",
+        description: "Safely remove two cluster nodes",
         onClick: () => openAction("remove", nodeActionTarget),
       },
       {
@@ -735,8 +729,7 @@ export default function ClusterManagement() {
         group: "danger",
         intent: "danger",
         disabled: emergencyDisabled,
-        disabledReason: emergencyDisabled ? "Emergency removal requires active three-node membership." : "",
-        description: "Use only after external power fencing proves node cannot rejoin.",
+        description: "Remove externally fenced node",
         onClick: () => openAction("emergency_remove", nodeActionTarget),
       },
     ];
@@ -769,6 +762,7 @@ export default function ClusterManagement() {
       field: "rolesLabel",
       headerName: "Roles",
       minWidth: 150,
+      flex: 1,
       cellClass: "auto-col-tight",
     },
     {
@@ -776,7 +770,6 @@ export default function ClusterManagement() {
       field: "probeSummary.label",
       headerName: "Probes",
       minWidth: 180,
-      flex: 1,
       cellClass: "auto-col-tight",
       cellRenderer: (params) => (
         <Tooltip title={params?.data?.probeSummary?.detail || "No probe results reported."} placement="top-start" arrow>
@@ -788,7 +781,7 @@ export default function ClusterManagement() {
     },
     buildRowContextMenuColumnDef(openNodeActionMenu, {
       headerName: "Actions",
-      width: 76,
+      width: 96,
       tooltip: (node) => `${valueLabel(node?.node_name, "Node")} Actions`,
     }),
   ], [openNodeActionMenu]);
@@ -954,7 +947,17 @@ export default function ClusterManagement() {
           <Paper sx={CARD_SX}><Typography variant="h6">PostgreSQL role control</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="postgres-node-label">Target node</InputLabel><Select labelId="postgres-node-label" label="Target node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!selectedNode || !normalOperationsEnabled} onClick={() => openAction("switchover")}>Switchover</Button><Button color="error" variant="outlined" disabled={!selectedNode} onClick={() => openAction("emergency_failover")}>Emergency Failover</Button></Stack></Paper>
         </Stack> : null}
 
-        {tab === "updates" ? <Stack spacing={2}>
+        {tab === "operations" ? (
+          <ClusterGrid
+            rowData={operationRows}
+            columnDefs={operationColumnDefs}
+            autoSizeColumnIds={OPERATION_AUTO_SIZE_COLUMNS}
+            getRowId={(params) => params?.data?.id || String(params?.data?.created_at || params?.rowIndex || "")}
+          />
+        ) : null}
+
+        {tab === "maintenance" ? <Stack spacing={2}>
+          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
           <Paper sx={CARD_SX}>
             <Typography variant="h6">Stable Engine Release</Typography>
             {releaseError ? <Alert severity="error" sx={{ mt: 2 }}>{releaseError}</Alert> : null}
@@ -975,19 +978,6 @@ export default function ClusterManagement() {
               <Button variant="outlined" disabled={!rollingUpdateEnabled || !selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
             </Stack>
           </Paper>
-        </Stack> : null}
-
-        {tab === "operations" ? (
-          <ClusterGrid
-            rowData={operationRows}
-            columnDefs={operationColumnDefs}
-            autoSizeColumnIds={OPERATION_AUTO_SIZE_COLUMNS}
-            getRowId={(params) => params?.data?.id || String(params?.data?.created_at || params?.rowIndex || "")}
-          />
-        ) : null}
-
-        {tab === "maintenance" ? <Stack spacing={2}>
-          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
           {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}

@@ -44,7 +44,24 @@ vi.mock("react-router-dom", async (importOriginal) => {
         },
         database: state.database,
         nodes: [
-          { id: "11111111-1111-4111-8111-111111111111", node_name: "engine-1", membership_state: "Active", application_state: state.drainedNodeID === "11111111-1111-4111-8111-111111111111" ? "drained" : "active", roles: { control_vip_owner: true, k3s_version: "v1.36.3+k3s1" }, probe_health: {} },
+          {
+            id: "11111111-1111-4111-8111-111111111111",
+            node_name: "engine-1",
+            membership_state: "Active",
+            application_state: state.drainedNodeID === "11111111-1111-4111-8111-111111111111" ? "drained" : "active",
+            roles: { control_vip_owner: true, k3s_version: "v1.36.3+k3s1" },
+            probe_health: {
+              startup: "passed",
+              readiness: "passed",
+              liveness: "passed",
+              api: "passed",
+              database: "passed",
+              scheduler: "passed",
+              webui: "passed",
+              wireguard: "passed",
+              storage: "passed",
+            },
+          },
           { id: "22222222-2222-4222-8222-222222222222", node_name: "engine-2", membership_state: "Active", application_state: state.drainedNodeID === "22222222-2222-4222-8222-222222222222" ? "drained" : "active", roles: {}, probe_health: {} },
           { id: "33333333-3333-4333-8333-333333333333", node_name: "engine-3", membership_state: "Active", application_state: state.drainedNodeID === "33333333-3333-4333-8333-333333333333" ? "drained" : "active", roles: {}, probe_health: {} },
         ],
@@ -103,12 +120,13 @@ describe("Cluster Management", () => {
     expect(formatClusterTimestamp(1_787_770_000)).toMatch(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/);
   });
 
-  it("shows role ownership, six management views, and cluster-wide HMR warning", () => {
+  it("shows role ownership, five management views, and cluster-wide HMR warning", () => {
     renderClusterManagement();
 
-    for (const tab of ["Overview", "Nodes", "Database", "Updates", "Operations", "Maintenance"]) {
+    for (const tab of ["Overview", "Nodes", "Database", "Cluster Events", "Maintenance"]) {
       expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("tab", { name: "Updates" })).not.toBeInTheDocument();
     expect(screen.getByText(/Cluster-wide non-HA HMR active/)).toBeInTheDocument();
     expect(screen.getByText("etcd leader")).toBeInTheDocument();
     expect(screen.getByText("WireGuard owner")).toBeInTheDocument();
@@ -124,6 +142,7 @@ describe("Cluster Management", () => {
     }
     expect(await screen.findAllByText("Active / Active")).toHaveLength(3);
     expect(screen.getByText("Control VIP Owner")).toBeInTheDocument();
+    expect(screen.getByText("9/9 Passed")).toBeInTheDocument();
     expect(screen.queryByText(/k3s version/i)).not.toBeInTheDocument();
   });
 
@@ -132,7 +151,11 @@ describe("Cluster Management", () => {
     renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
     await openNodeActions();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Enter Maintenance/ }));
+    expect(screen.getByText("Drain active roles to other nodes")).toBeInTheDocument();
+    expect(screen.getByText("Install selected Engine release")).toBeInTheDocument();
+    expect(screen.getByText("Safely remove two cluster nodes")).toBeInTheDocument();
+    expect(screen.getByText("Remove externally fenced node")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Enter Maintenance Mode/ }));
 
     expect(screen.getByText("Administrator access required. Destructive actions also require exact typed confirmation.")).toBeInTheDocument();
     expect(screen.queryByText(/Sign in again/)).not.toBeInTheDocument();
@@ -140,7 +163,7 @@ describe("Cluster Management", () => {
 
   it("explains empty release catalog", () => {
     renderClusterManagement();
-    fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByText(/No published stable cluster-compatible release exists at or above baseline 2026.08.1/)).toBeInTheDocument();
   });
@@ -177,7 +200,7 @@ describe("Cluster Management", () => {
     renderClusterManagement();
 
     expect(screen.getByText(/PostgreSQL recovery remains required even while cluster lifecycle status is Mixed Version/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
     expect(screen.getByRole("button", { name: "Update All One at a Time" })).toBeDisabled();
   });
 
@@ -205,7 +228,7 @@ describe("Cluster Management", () => {
       superseded_by: "22222222-2222-4222-8222-222222222299",
     }];
     renderClusterManagement();
-    fireEvent.click(screen.getByRole("tab", { name: "Operations" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Cluster Events" }));
 
     expect(await screen.findByText("Cluster Node Added")).toBeInTheDocument();
     expect(screen.getByText("Superseded")).toBeInTheDocument();
