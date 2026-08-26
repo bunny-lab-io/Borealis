@@ -30,6 +30,7 @@ const (
 	borealisOperatorServiceAccount  = "/var/run/secrets/kubernetes.io/serviceaccount"
 	borealisOperatorDefaultPort     = "8088"
 	borealisOperatorDefaultWorkload = "borealis-operator"
+	borealisOperatorTransientDrain  = "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"
 )
 
 var borealisOperatorReadOnlyVerbs = []string{
@@ -1347,7 +1348,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 						"timeoutSeconds":      int64(2),
 						"failureThreshold":    int64(3),
 					},
-					"lifecycle": map[string]any{"preStop": map[string]any{"exec": map[string]any{"command": []string{"sh", "-c", "touch /tmp/borealis-draining; sleep 10"}}}},
+					"lifecycle": map[string]any{"preStop": map[string]any{"exec": map[string]any{"command": []string{"sh", "-c", borealisOperatorTransientDrain}}}},
 					"envFrom": []map[string]any{
 						{"secretRef": map[string]any{"name": runtimeSecretName}},
 					},

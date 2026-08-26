@@ -3587,7 +3587,7 @@ borealis_site_worker_runtime_secret_hash() {
       [[ -n "${key}" ]] || continue
       printf '%s=%s\n' "${key}" "$(read_env_value "${key}")"
     done < <(borealis_site_worker_runtime_secret_keys)
-    printf 'BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-v1\n'
+    printf 'BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-transient-drain-v2\n'
   } | sha256sum | awk '{print $1}'
 }
 
@@ -3835,7 +3835,7 @@ $(k3s_timezone_env_entries)
           lifecycle:
             preStop:
               exec:
-                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
+                command: ["sh", "-c", "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 25m
@@ -4226,7 +4226,7 @@ $(k3s_timezone_env_entries)
           lifecycle:
             preStop:
               exec:
-                command: ["/bin/sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
+                command: ["/bin/sh", "-c", "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 75m
@@ -4775,7 +4775,7 @@ $(k3s_timezone_env_entries)
           lifecycle:
             preStop:
               exec:
-                command: ["/bin/sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
+                command: ["/bin/sh", "-c", "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 50m
@@ -5904,7 +5904,7 @@ $(k3s_timezone_env_entries)
           lifecycle:
             preStop:
               exec:
-                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
+                command: ["sh", "-c", "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 50m
@@ -6155,7 +6155,7 @@ $(k3s_timezone_env_entries)
           lifecycle:
             preStop:
               exec:
-                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
+                command: ["sh", "-c", "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 25m
@@ -6810,7 +6810,7 @@ spec:
           lifecycle:
             preStop:
               exec:
-                command: ["sh", "-c", "touch /tmp/borealis-draining; sleep 10"]
+                command: ["sh", "-c", "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10"]
           resources:
             requests:
               cpu: 25m

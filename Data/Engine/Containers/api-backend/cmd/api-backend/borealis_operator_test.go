@@ -481,6 +481,18 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	if coerceInt64(livenessProbe["initialDelaySeconds"]) != 130 {
 		t.Fatalf("site-worker liveness delay must exceed startup failure budget: %#v", livenessProbe)
 	}
+	t.Run("transient preStop marker", func(t *testing.T) {
+		lifecycle := nestedMap(container, "lifecycle")
+		preStop := nestedMap(lifecycle, "preStop")
+		execHook := nestedMap(preStop, "exec")
+		command, _ := execHook["command"].([]any)
+		if len(command) != 3 || cleanText(command[0]) != "sh" || cleanText(command[1]) != "-c" {
+			t.Fatalf("site-worker preStop must use fixed shell command: %#v", command)
+		}
+		if cleanText(command[2]) != "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10" {
+			t.Fatalf("site-worker preStop must remove transient drain marker: %#v", command)
+		}
+	})
 	envList, _ := container["env"].([]any)
 	envByName := map[string]string{}
 	for _, rawEnv := range envList {

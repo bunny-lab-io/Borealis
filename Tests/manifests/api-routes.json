@@ -362,7 +362,7 @@
   {
     "pattern": "/api/server/k3s/operator",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 2153,
+    "line": 2154,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
@@ -551,7 +551,7 @@
   {
     "pattern": "/healthz",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 222,
+    "line": 223,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
@@ -560,7 +560,7 @@
   {
     "pattern": "/live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 224,
+    "line": 225,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
@@ -578,7 +578,7 @@
   {
     "pattern": "/ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 225,
+    "line": 226,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
@@ -596,7 +596,7 @@
   {
     "pattern": "/startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 223,
+    "line": 224,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",
@@ -614,7 +614,7 @@
   {
     "pattern": "/v1/command",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 226,
+    "line": 227,
     "class": "operator",
     "authentication": "operator-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",

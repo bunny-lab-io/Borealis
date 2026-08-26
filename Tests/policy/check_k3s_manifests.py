@@ -24,6 +24,18 @@ CAPABILITY_ALLOWLIST = {
     ("wireguard-tunnel", "wireguard-tunnel"): {"NET_ADMIN", "NET_RAW"},
     ("postgres-db", "postgres-data-permissions"): {"CHOWN", "DAC_OVERRIDE", "FOWNER"},
 }
+TRANSIENT_DRAIN_COMMAND = (
+    "trap 'rm -f /tmp/borealis-draining' EXIT; "
+    "touch /tmp/borealis-draining; sleep 10"
+)
+TRANSIENT_DRAIN_WORKLOADS = {
+    ("api-backend", "api-backend"),
+    ("borealis-operator", "borealis-operator"),
+    ("job-scheduler", "job-scheduler"),
+    ("remote-desktop-guacd", "remote-desktop-guacd"),
+    ("traefik-edge", "traefik-edge"),
+    ("webui-frontend", "webui-frontend"),
+}
 
 
 def validate_startup_liveness_guard(container: dict, workload: str) -> None:
@@ -41,6 +53,25 @@ def validate_startup_liveness_guard(container: dict, workload: str) -> None:
         fail(
             f"{workload} liveness initial delay {liveness_delay}s must exceed "
             f"startup failure budget {startup_budget}s for Kubernetes issue 141155"
+        )
+
+
+def validate_transient_drain_hook(container: dict, workload: str, required: bool) -> None:
+    lifecycle = container.get("lifecycle") or {}
+    pre_stop = lifecycle.get("preStop") or {}
+    command = ((pre_stop.get("exec") or {}).get("command") or [])
+    uses_drain_marker = any("/tmp/borealis-draining" in str(item) for item in command)
+    if not required and not uses_drain_marker:
+        return
+    if (
+        len(command) != 3
+        or command[0] not in {"sh", "/bin/sh"}
+        or command[1] != "-c"
+        or command[2] != TRANSIENT_DRAIN_COMMAND
+    ):
+        fail(
+            f"{workload} preStop must create and remove transient drain marker "
+            "within bounded hook"
         )
 
 
@@ -236,7 +267,7 @@ def validate_node_manager_service_contract() -> None:
         "registry.k8s.io:": "Kubernetes dependency registry mirror",
         "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",
         "if ! cluster_mode_enabled; then": "cluster role-label ownership guard",
-        "BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-v1": "site-worker probe-contract recycle trigger",
+        "BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-transient-drain-v2": "site-worker probe and transient-drain recycle trigger",
         "agent_redeploy_active_work_count": "Agent worker drain work-count gate",
         "agent_redeploy_wait_for_worker_registration": "Agent worker registration gate",
         "agent_redeploy_wait_for_pod_health": "bounded Agent candidate health retry",
@@ -779,6 +810,12 @@ def validate_workload(obj: dict, source: Path) -> None:
         if obj.get("kind") != "Job" and (not container.get("livenessProbe") or not container.get("readinessProbe")):
             fail(f"{name}/{container.get('name')} lacks documented probes")
         validate_startup_liveness_guard(container, f"{name}/{container.get('name')}")
+        container_name = container.get("name", "<unnamed>")
+        validate_transient_drain_hook(
+            container,
+            f"{name}/{container_name}",
+            (name, container_name) in TRANSIENT_DRAIN_WORKLOADS,
+        )
 
     for volume in spec.get("volumes") or []:
         host_path = (volume.get("hostPath") or {}).get("path")
