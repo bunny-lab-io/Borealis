@@ -1682,7 +1682,10 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
 			return err
 		}
-		return r.waitEdgeAndWireGuardOwner(ctx, standby.Name)
+		// PostgreSQL is deliberately pinned to the first restored standby, but
+		// kube-vip may elect either eligible non-target node for edge traffic.
+		// HMR exit only needs production roles to leave the target safely.
+		return r.waitEdgeAndWireGuardOwnerAwayFrom(ctx, target.Name)
 	}
 	if step.Name == "hmr_fence_target_roles" {
 		target := clusterNodeByID(nodes, step.NodeID)

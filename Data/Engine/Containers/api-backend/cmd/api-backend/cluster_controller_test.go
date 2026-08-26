@@ -1974,7 +1974,7 @@ func TestEdgeRoleTransferWaitsForLeaseAndWireGuardReadiness(t *testing.T) {
 	}
 }
 
-func TestEdgeRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.T) {
+func TestHMRExitRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.T) {
 	readyReplicas := int64(1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1998,13 +1998,13 @@ func TestEdgeRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, "engine-1"); err != nil {
-		t.Fatalf("healthy non-target edge/WireGuard owner was rejected: %v", err)
+		t.Fatalf("HMR exit rejected healthy non-target edge/WireGuard owner: %v", err)
 	}
 	readyReplicas = 0
 	unreadyCtx, unreadyCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer unreadyCancel()
 	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(unreadyCtx, "engine-1"); err == nil {
-		t.Fatal("unready non-target edge/WireGuard owner was accepted")
+		t.Fatal("HMR exit accepted unready non-target edge/WireGuard owner")
 	}
 }
 
