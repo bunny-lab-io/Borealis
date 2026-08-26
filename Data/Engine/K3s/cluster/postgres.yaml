@@ -55,6 +55,15 @@ spec:
     # BOREALIS_SYNCHRONOUS_CONFIGURATION
     parameters:
       synchronous_commit: "on"
+  managed:
+    roles:
+      - name: borealis
+        ensure: present
+        login: true
+        inherit: true
+        inRoles:
+          - pg_read_all_stats
+        comment: Borealis application and cluster replication monitoring role
   backup:
     volumeSnapshot:
       className: borealis-longhorn-snapshot

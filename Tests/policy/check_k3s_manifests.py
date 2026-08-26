@@ -436,6 +436,16 @@ def validate_pinned_dependency_adoption_contract() -> None:
     postgres_delay = (((postgres_spec.get("probes") or {}).get("liveness") or {}).get("initialDelaySeconds"))
     if postgres_delay != 330 or postgres_delay <= int(postgres_spec.get("startDelay") or 0):
         fail("CloudNativePG liveness delay must exceed PostgreSQL startup budget")
+    managed_roles = ((postgres_spec.get("managed") or {}).get("roles") or [])
+    borealis_role = next((role for role in managed_roles if role.get("name") == "borealis"), {})
+    if (
+        borealis_role.get("ensure") != "present"
+        or borealis_role.get("login") is not True
+        or borealis_role.get("inherit") is not True
+        or borealis_role.get("inRoles") != ["pg_read_all_stats"]
+        or any(borealis_role.get(attribute) is True for attribute in ("superuser", "createrole", "createdb", "replication", "bypassrls"))
+    ):
+        fail("CloudNativePG application role must retain narrow replication-statistics visibility")
     for marker in (
         "borealis-wireguard-server-keys",
         '--from-file=server_private.key="${wireguard_private_key}"',
