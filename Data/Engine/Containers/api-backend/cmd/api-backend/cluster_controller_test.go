@@ -371,15 +371,23 @@ func TestPostgresPrimaryTransferRejectsReadyButUnsynchronizedReplica(t *testing.
 
 func TestPostgresPrimaryTransferWaitsForSynchronizedCluster(t *testing.T) {
 	current := "borealis-postgres-1"
+	requested := current
 	patches := 0
+	transitionReads := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+			if requested != current && transitionReads > 0 {
+				current = requested
+			}
+			if requested != current {
+				transitionReads++
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"spec": map[string]any{"instances": int64(3)},
 				"status": map[string]any{
 					"currentPrimary": current,
-					"targetPrimary":  current,
+					"targetPrimary":  requested,
 					"readyInstances": int64(3),
 					"phase":          "Cluster in healthy state",
 				},
@@ -393,8 +401,8 @@ func TestPostgresPrimaryTransferWaitsForSynchronizedCluster(t *testing.T) {
 			}}})
 		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres/status"):
 			patches++
-			current = "borealis-postgres-2"
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"currentPrimary": current, "targetPrimary": current}})
+			requested = "borealis-postgres-2"
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"currentPrimary": current, "targetPrimary": requested}})
 		default:
 			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
 		}
@@ -415,6 +423,9 @@ func TestPostgresPrimaryTransferWaitsForSynchronizedCluster(t *testing.T) {
 	}
 	if patches != 1 {
 		t.Fatalf("synchronized replica primary patches=%d", patches)
+	}
+	if transitionReads != 1 {
+		t.Fatalf("CloudNativePG transition reads=%d want 1", transitionReads)
 	}
 	if strings.Join(probes, ",") != "borealis-postgres-2:0,:2" {
 		t.Fatalf("unexpected replication probes %v", probes)

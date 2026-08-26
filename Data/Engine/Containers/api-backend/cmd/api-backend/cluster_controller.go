@@ -3077,9 +3077,6 @@ func (r *kubernetesClusterStepRunner) waitPostgresClusterSynchronized(ctx contex
 			requested := cleanText(status["targetPrimary"])
 			phase := cleanText(status["phase"])
 			lastState = fmt.Sprintf("phase=%s current=%s target=%s ready=%d/%d", phase, current, requested, readyInstances, instances)
-			if strings.EqualFold(phase, "Cluster in healthy state") && current != target {
-				return errors.New("CloudNativePG completed without promoting requested target")
-			}
 			if instances > 0 && readyInstances == instances && current == target && requested == target && strings.EqualFold(phase, "Cluster in healthy state") {
 				replicationReady, probeErr := r.postgresReplicationReady(ctx, "", instances-1)
 				if probeErr != nil {
