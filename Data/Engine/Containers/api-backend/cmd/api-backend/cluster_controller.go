@@ -24,6 +24,7 @@ const (
 	clusterControllerLeaseName          = "cluster-operation-controller"
 	clusterControllerLeaseTTL           = 20 * time.Second
 	clusterControllerLeaseRenewInterval = 5 * time.Second
+	clusterControllerLeaseRenewalGrace  = clusterControllerLeaseTTL - clusterControllerLeaseRenewInterval
 	clusterNodeManagerSocket            = "/run/borealis/node-manager.sock"
 	clusterNodeManagerToken             = "/etc/borealis/node-manager.token"
 	clusterUpgradeNamespace             = "system-upgrade"
@@ -147,8 +148,15 @@ type clusterControllerLeaseGuard struct {
 }
 
 func startClusterControllerLeaseGuard(parent context.Context, interval time.Duration, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
+	return startClusterControllerLeaseGuardWithGrace(parent, interval, clusterControllerLeaseRenewalGrace, renew)
+}
+
+func startClusterControllerLeaseGuardWithGrace(parent context.Context, interval, renewalGrace time.Duration, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
 	if interval <= 0 {
 		interval = clusterControllerLeaseRenewInterval
+	}
+	if renewalGrace <= 0 {
+		renewalGrace = clusterControllerLeaseRenewalGrace
 	}
 	guardCtx, cancel := context.WithCancelCause(parent)
 	heartbeatCtx, heartbeatCancel := context.WithCancel(parent)
@@ -162,6 +170,7 @@ func startClusterControllerLeaseGuard(parent context.Context, interval time.Dura
 		defer close(guard.done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		lastRenewed := time.Now()
 		for {
 			select {
 			case <-heartbeatCtx.Done():
@@ -172,13 +181,17 @@ func startClusterControllerLeaseGuard(parent context.Context, interval time.Dura
 					return
 				}
 				if err != nil {
-					guard.fail(fmt.Errorf("%w: renewal failed: %v", errClusterControllerLeaseLost, err))
-					return
+					if time.Since(lastRenewed) >= renewalGrace {
+						guard.fail(fmt.Errorf("%w: renewal failed throughout grace period: %v", errClusterControllerLeaseLost, err))
+						return
+					}
+					continue
 				}
 				if !owned {
 					guard.fail(errClusterControllerLeaseLost)
 					return
 				}
+				lastRenewed = time.Now()
 			}
 		}
 	}()
@@ -212,11 +225,13 @@ func (g *clusterControllerLeaseGuard) Close() {
 
 type kubernetesClusterStepRunner struct {
 	kube                          *kubernetesAPIClient
+	db                            *sql.DB
 	namespace                     string
 	actionImage                   string
 	soak                          time.Duration
 	jobPollInterval               time.Duration
 	clusterInitAuthorizationGrace time.Duration
+	postgresReplicationProbe      func(context.Context, string, int64) (bool, error)
 }
 
 func clusterControllerMode() bool {
@@ -244,6 +259,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	holder := firstText(strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_CONTROLLER_ID")), strings.TrimSpace(hostname)+"-"+newClusterUUID())
 	runner := &kubernetesClusterStepRunner{
 		kube:        kube,
+		db:          store.db,
 		namespace:   borealisOperatorNamespace(),
 		actionImage: strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
 		soak:        envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
@@ -1636,6 +1652,9 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if err := r.ensurePostgresPrimaryOnNode(ctx, node.Name); err != nil {
 			return err
 		}
+		if err := r.waitPostgresClusterSynchronized(ctx, node.Name); err != nil {
+			return err
+		}
 		for _, candidate := range nodes {
 			target := candidate.ID == node.ID
 			if err := r.setNodeRoleEligibility(ctx, candidate.Name, target); err != nil {
@@ -1652,6 +1671,9 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return errors.New("HMR production restore lacks distinct active role targets")
 		}
 		if err := r.ensurePostgresPrimaryOnNode(ctx, standby.Name); err != nil {
+			return err
+		}
+		if err := r.waitPostgresClusterSynchronized(ctx, standby.Name); err != nil {
 			return err
 		}
 		if err := r.setNodeRoleEligibility(ctx, standby.Name, true); err != nil {
@@ -2979,6 +3001,9 @@ func (r *kubernetesClusterStepRunner) ensurePostgresPrimaryOnNode(ctx context.Co
 	if target == "" {
 		return fmt.Errorf("healthy CloudNativePG replica is unavailable on node %s", nodeName)
 	}
+	if err := r.waitPostgresReplicaSynchronized(ctx, target); err != nil {
+		return err
+	}
 	patch := map[string]any{"status": map[string]any{
 		"targetPrimary":          target,
 		"targetPrimaryTimestamp": time.Now().UTC().Format(time.RFC3339Nano),
@@ -2989,25 +3014,152 @@ func (r *kubernetesClusterStepRunner) ensurePostgresPrimaryOnNode(ctx context.Co
 	if err := r.kube.doJSON(ctx, http.MethodPatch, clusterPath+"/status", patch, "application/merge-patch+json", &output, 30*time.Second); err != nil {
 		return err
 	}
-	ticker := time.NewTicker(2 * time.Second)
+	return r.waitPostgresClusterSynchronized(ctx, target)
+}
+
+func (r *kubernetesClusterStepRunner) waitPostgresReplicaSynchronized(ctx context.Context, target string) error {
+	if !clusterControllerNodeRegex.MatchString(target) {
+		return errors.New("invalid CloudNativePG replica identity")
+	}
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var lastErr error
 	for {
-		if err := r.kube.getJSON(ctx, clusterPath, &cluster); err != nil {
-			return err
-		}
-		status = nestedMap(cluster, "status")
-		if cleanText(status["currentPrimary"]) == target && cleanText(status["targetPrimary"]) == target {
+		ready, err := r.postgresReplicationReady(ctx, target, 0)
+		if err == nil && ready {
 			return nil
 		}
-		if strings.EqualFold(cleanText(status["phase"]), "Cluster in healthy state") && cleanText(status["currentPrimary"]) != target {
-			return errors.New("CloudNativePG completed without promoting requested target")
+		if err != nil {
+			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			message := fmt.Errorf("CloudNativePG replica %s did not become a synchronized streaming quorum candidate: %w", target, ctx.Err())
+			if lastErr != nil {
+				return errors.Join(message, lastErr)
+			}
+			return message
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *kubernetesClusterStepRunner) waitPostgresClusterSynchronized(ctx context.Context, target string) error {
+	if !clusterControllerNodeRegex.MatchString(target) {
+		return errors.New("invalid CloudNativePG primary identity")
+	}
+	clusterPath := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	lastState := "unknown"
+	var lastErr error
+	for {
+		var cluster map[string]any
+		if err := r.kube.getJSON(ctx, clusterPath, &cluster); err != nil {
+			lastErr = err
+		} else {
+			spec := nestedMap(cluster, "spec")
+			status := nestedMap(cluster, "status")
+			instances := coerceInt64(spec["instances"])
+			if instances == 0 {
+				instances = coerceInt64(status["instances"])
+			}
+			readyInstances := coerceInt64(status["readyInstances"])
+			current := cleanText(status["currentPrimary"])
+			requested := cleanText(status["targetPrimary"])
+			phase := cleanText(status["phase"])
+			lastState = fmt.Sprintf("phase=%s current=%s target=%s ready=%d/%d", phase, current, requested, readyInstances, instances)
+			if strings.EqualFold(phase, "Cluster in healthy state") && current != target {
+				return errors.New("CloudNativePG completed without promoting requested target")
+			}
+			if instances > 0 && readyInstances == instances && current == target && requested == target && strings.EqualFold(phase, "Cluster in healthy state") {
+				replicationReady, probeErr := r.postgresReplicationReady(ctx, "", instances-1)
+				if probeErr != nil {
+					lastErr = probeErr
+				} else if replicationReady {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			message := fmt.Errorf("CloudNativePG did not reach synchronized healthy state on %s (%s): %w", target, lastState, ctx.Err())
+			if lastErr != nil {
+				return errors.Join(message, lastErr)
+			}
+			return message
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) postgresReplicationReady(ctx context.Context, target string, expectedReplicas int64) (bool, error) {
+	if r.postgresReplicationProbe != nil {
+		return r.postgresReplicationProbe(ctx, target, expectedReplicas)
+	}
+	if r.db == nil {
+		return false, errors.New("PostgreSQL replication probe database is unavailable")
+	}
+	if target == "" && expectedReplicas <= 0 {
+		return true, nil
+	}
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	if target != "" {
+		var state, syncState string
+		var flushCaughtUp bool
+		queryErr := conn.QueryRowContext(ctx, `
+			SELECT state,
+			       sync_state,
+			       COALESCE(flush_lsn >= pg_current_wal_flush_lsn(), FALSE)
+			FROM pg_stat_replication
+			WHERE application_name=$1
+		`, target).Scan(&state, &syncState, &flushCaughtUp)
+		closeErr := conn.Close()
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return false, closeErr
+		}
+		if queryErr != nil {
+			return false, queryErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		return state == "streaming" && (syncState == "sync" || syncState == "quorum") && flushCaughtUp, nil
+	}
+	var caughtUp, synchronous int64
+	queryErr := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FILTER (
+		           WHERE state='streaming'
+		             AND flush_lsn IS NOT NULL
+		             AND flush_lsn >= pg_current_wal_flush_lsn()
+		       ),
+		       COUNT(*) FILTER (
+		           WHERE state='streaming'
+		             AND sync_state IN ('sync','quorum')
+		             AND flush_lsn IS NOT NULL
+		             AND flush_lsn >= pg_current_wal_flush_lsn()
+		       )
+		FROM pg_stat_replication
+	`).Scan(&caughtUp, &synchronous)
+	closeErr := conn.Close()
+	if queryErr != nil {
+		return false, queryErr
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	return caughtUp >= expectedReplicas && synchronous >= 1, nil
 }
 
 func podReady(pod map[string]any) bool {

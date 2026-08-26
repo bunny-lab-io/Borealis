@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -289,6 +290,28 @@ func TestClusterControllerLeaseGuardRenewsDuringLongStep(t *testing.T) {
 	}
 }
 
+func TestClusterControllerLeaseGuardToleratesTransientRenewalFailure(t *testing.T) {
+	var attempts atomic.Int64
+	guard := startClusterControllerLeaseGuardWithGrace(context.Background(), time.Millisecond, 20*time.Millisecond, func(context.Context) (bool, error) {
+		if attempts.Add(1) <= 3 {
+			return false, errors.New("temporary database switchover")
+		}
+		return true, nil
+	})
+	defer guard.Close()
+	deadline := time.After(time.Second)
+	for attempts.Load() < 5 {
+		select {
+		case <-deadline:
+			t.Fatalf("lease heartbeat stopped after %d attempts", attempts.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := guard.Err(); err != nil || guard.Context().Err() != nil {
+		t.Fatalf("transient renewal failure canceled operation: err=%v context=%v", err, guard.Context().Err())
+	}
+}
+
 func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
 	guard := startClusterControllerLeaseGuard(context.Background(), time.Millisecond, func(context.Context) (bool, error) {
 		return false, nil
@@ -301,6 +324,100 @@ func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
 	}
 	if !errors.Is(guard.Err(), errClusterControllerLeaseLost) || !errors.Is(context.Cause(guard.Context()), errClusterControllerLeaseLost) {
 		t.Fatalf("unexpected lease loss cause: err=%v cause=%v", guard.Err(), context.Cause(guard.Context()))
+	}
+}
+
+func TestPostgresPrimaryTransferRejectsReadyButUnsynchronizedReplica(t *testing.T) {
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{
+				"currentPrimary": "borealis-postgres-1",
+				"targetPrimary":  "borealis-postgres-1",
+				"phase":          "Cluster in healthy state",
+			}})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "borealis-postgres-2"},
+				"status": map[string]any{"conditions": []any{map[string]any{
+					"type": "Ready", "status": "True",
+				}}},
+			}}})
+		case request.Method == http.MethodPatch:
+			patches++
+			t.Fatalf("unsynchronized replica received primary patch")
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:                     &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:                "borealis",
+		jobPollInterval:          time.Millisecond,
+		postgresReplicationProbe: func(context.Context, string, int64) (bool, error) { return false, nil },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	err := runner.ensurePostgresPrimaryOnNode(ctx, "borealis-engine-02")
+	if err == nil || !strings.Contains(err.Error(), "did not become a synchronized streaming quorum candidate") {
+		t.Fatalf("expected synchronization rejection, got %v", err)
+	}
+	if patches != 0 {
+		t.Fatalf("unsynchronized replica primary patches=%d", patches)
+	}
+}
+
+func TestPostgresPrimaryTransferWaitsForSynchronizedCluster(t *testing.T) {
+	current := "borealis-postgres-1"
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"instances": int64(3)},
+				"status": map[string]any{
+					"currentPrimary": current,
+					"targetPrimary":  current,
+					"readyInstances": int64(3),
+					"phase":          "Cluster in healthy state",
+				},
+			})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "borealis-postgres-2"},
+				"status": map[string]any{"conditions": []any{map[string]any{
+					"type": "Ready", "status": "True",
+				}}},
+			}}})
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres/status"):
+			patches++
+			current = "borealis-postgres-2"
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"currentPrimary": current, "targetPrimary": current}})
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	probes := make([]string, 0, 2)
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:       "borealis",
+		jobPollInterval: time.Millisecond,
+		postgresReplicationProbe: func(_ context.Context, target string, expectedReplicas int64) (bool, error) {
+			probes = append(probes, fmt.Sprintf("%s:%d", target, expectedReplicas))
+			return true, nil
+		},
+	}
+	if err := runner.ensurePostgresPrimaryOnNode(context.Background(), "borealis-engine-02"); err != nil {
+		t.Fatal(err)
+	}
+	if patches != 1 {
+		t.Fatalf("synchronized replica primary patches=%d", patches)
+	}
+	if strings.Join(probes, ",") != "borealis-postgres-2:0,:2" {
+		t.Fatalf("unexpected replication probes %v", probes)
 	}
 }
 
