@@ -979,13 +979,17 @@ func (m *manager) prepareApplicationRestore(ctx context.Context) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	if nodeLabelValue([]byte(node), "borealis.io/application-state") != "drained" {
+	applicationState := nodeLabelValue([]byte(node), "borealis.io/application-state")
+	if applicationState != "drained" && applicationState != "active" {
 		return nil, errors.New("application restore requires node to remain drained")
 	}
 	if err := m.scaleNodeApplications(ctx, "active"); err != nil {
 		return nil, err
 	}
-	return map[string]any{"node_name": m.nodeName, "application_state": "drained", "workloads_prepared": true}, nil
+	return map[string]any{
+		"node_name": m.nodeName, "application_state": applicationState,
+		"workloads_prepared": true, "already_active": applicationState == "active",
+	}, nil
 }
 
 func (m *manager) scaleNodeApplications(ctx context.Context, state string) error {

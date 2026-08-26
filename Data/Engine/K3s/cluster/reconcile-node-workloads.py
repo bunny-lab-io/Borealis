@@ -312,6 +312,27 @@ def promotion_selector(
     return selector
 
 
+def enforce_wireguard_promotion_readiness(container: dict[str, Any]) -> None:
+    """Keep pinned pre-standby-probe images ready while safely fenced."""
+    probe = copy.deepcopy(container.get("readinessProbe") or {})
+    probe["exec"] = {
+        "command": [
+            "sh",
+            "-ec",
+            """status="$(borealis-wireguard-control-client status)"
+if printf '%s\\n' "${status}" | grep -Fq '"stdout":"standby"'; then
+  if ip link show dev "${BOREALIS_WIREGUARD_INTERFACE:-borealis-wg}" >/dev/null 2>&1; then
+    printf 'Standby WireGuard interface remains active.\\n' >&2
+    exit 1
+  fi
+  exit 0
+fi
+exec borealis-wireguard-healthcheck""",
+        ]
+    }
+    container["readinessProbe"] = probe
+
+
 def promote_one(base: str, node: str, expected_revision: str) -> str:
     active_name = deployment_name(base, node)
     candidate_name = candidate_deployment_name(base, node)
@@ -385,9 +406,15 @@ def promote_one(base: str, node: str, expected_revision: str) -> str:
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{candidate_name}", "--timeout=5m")
     elif base == "wireguard-tunnel":
         # WireGuard candidate stays stopped. Active controller validates edge
-        # lease ownership and usable tunnel state after replacement.
+        # lease ownership and usable tunnel state after replacement. Promotion
+        # supplies owner-aware readiness for pinned images predating standby
+        # probe support; active owners still run the image's full healthcheck.
         kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{candidate_name}", "--timeout=5m")
+        containers = ((template.get("spec") or {}).get("containers") or [])
+        if not containers:
+            raise RuntimeError(f"candidate deployment {candidate_name} has no WireGuard container")
+        enforce_wireguard_promotion_readiness(containers[0])
     kubectl("apply", "--server-side", "--force-conflicts", "--field-manager=borealis-node-workloads", "-f", "-", stdin=json.dumps(manifest))
     if replicas > 0:
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{active_name}", "--timeout=10m")

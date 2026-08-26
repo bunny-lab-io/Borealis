@@ -250,6 +250,71 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             commands.index(("-n", "borealis", "scale", candidate_name, "--replicas=0")),
         )
 
+    def test_wireguard_promotion_adapts_pinned_standby_readiness(self) -> None:
+        selector = {
+            "app.kubernetes.io/name": "wireguard-tunnel-candidate",
+            "borealis.io/engine-node": "engine-01",
+            "borealis.io/node-workload": "true",
+            "borealis.io/update-candidate": "true",
+            "borealis.io/traffic-state": "candidate",
+        }
+        candidate = {
+            "metadata": {"annotations": {"borealis.io/revision": "a" * 40}},
+            "spec": {
+                "replicas": 0,
+                "selector": {"matchLabels": selector},
+                "template": {
+                    "metadata": {"labels": selector},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "wireguard-tunnel",
+                                "readinessProbe": {
+                                    "exec": {"command": ["borealis-wireguard-healthcheck"]},
+                                    "periodSeconds": 5,
+                                },
+                            }
+                        ]
+                    },
+                },
+            },
+        }
+        active = {
+            "metadata": {},
+            "spec": {
+                "replicas": 1,
+                "selector": {
+                    "matchLabels": {**selector, "app.kubernetes.io/name": "wireguard-tunnel"}
+                },
+            },
+        }
+        calls: list[tuple[tuple[str, ...], str | None]] = []
+
+        def fake_load(resource: str) -> dict | None:
+            return candidate if resource.endswith("-candidate") else active
+
+        def fake_kubectl(*args: str, stdin: str | None = None) -> str:
+            calls.append((args, stdin))
+            return ""
+
+        with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
+            MODULE, "kubectl", side_effect=fake_kubectl
+        ):
+            MODULE.promote_one("wireguard-tunnel", "engine-01", "a" * 40)
+
+        manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+        probe = manifest["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
+        self.assertEqual(probe["periodSeconds"], 5)
+        command = probe["exec"]["command"]
+        self.assertEqual(command[:2], ["sh", "-ec"])
+        self.assertIn('"stdout":"standby"', command[2])
+        self.assertIn("ip link show", command[2])
+        self.assertIn("exec borealis-wireguard-healthcheck", command[2])
+        self.assertIn(
+            ("-n", "borealis", "rollout", "status", "deployment/wireguard-tunnel-engine-01", "--timeout=10m"),
+            [args for args, _ in calls],
+        )
+
     def test_promotion_rejects_candidate_from_different_revision(self) -> None:
         candidate = {
             "metadata": {"annotations": {"borealis.io/revision": "a" * 40}},

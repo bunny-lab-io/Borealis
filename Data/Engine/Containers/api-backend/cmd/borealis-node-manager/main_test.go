@@ -177,6 +177,44 @@ func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	}
 }
 
+func TestPrepareApplicationRestoreIsRetrySafeAfterActivation(t *testing.T) {
+	tempDir := t.TempDir()
+	k3s := filepath.Join(tempDir, "k3s")
+	script := `#!/bin/sh
+case "$*" in
+  "kubectl get node engine-1 -o json")
+    printf '{"metadata":{"labels":{"borealis.io/application-state":"%s"}}}\n' "$BOREALIS_TEST_APPLICATION_STATE"
+    ;;
+  "kubectl -n borealis get deployments "*)
+    printf '%s\n' '{"items":[]}'
+    ;;
+  *)
+    printf 'unexpected k3s arguments: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(k3s, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	manager := &manager{nodeName: "engine-1"}
+	for _, state := range []string{"drained", "active"} {
+		t.Setenv("BOREALIS_TEST_APPLICATION_STATE", state)
+		result, err := manager.prepareApplicationRestore(context.Background())
+		if err != nil {
+			t.Fatalf("prepare restore rejected %s retry state: %v", state, err)
+		}
+		if result["application_state"] != state || result["already_active"] != (state == "active") {
+			t.Fatalf("unexpected %s restore result: %#v", state, result)
+		}
+	}
+	t.Setenv("BOREALIS_TEST_APPLICATION_STATE", "standby")
+	if _, err := manager.prepareApplicationRestore(context.Background()); err == nil {
+		t.Fatal("prepare restore accepted unsupported application state")
+	}
+}
+
 func TestShutdownHandoffRunsOnlyWhileSystemIsStopping(t *testing.T) {
 	if !systemIsStopping([]byte("stopping\n")) {
 		t.Fatal("system stopping state was not recognized")
