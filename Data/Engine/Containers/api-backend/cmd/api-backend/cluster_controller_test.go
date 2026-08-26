@@ -432,6 +432,80 @@ func TestPostgresPrimaryTransferWaitsForSynchronizedCluster(t *testing.T) {
 	}
 }
 
+func TestSafeRemovalMovesPostgresPrimaryToSurvivorBeforeScaleDown(t *testing.T) {
+	nodes := []clusterControllerNode{
+		{ID: "11111111-1111-4111-8111-111111111111", Name: "borealis-engine-01", ApplicationState: "active"},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "borealis-engine-02", ApplicationState: "active"},
+		{ID: "33333333-3333-4333-8333-333333333333", Name: "borealis-engine-03", ApplicationState: "active"},
+	}
+	operation := clusterControllerOperation{Kind: "node_remove", TargetNodeID: nodes[1].ID, Payload: map[string]any{
+		"emergency": false, "removal_node_ids": []any{nodes[1].ID, nodes[2].ID}, "target_size": int64(1),
+	}}
+	primary := "borealis-postgres-3"
+	scaleRequested := false
+	actions := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+			instances := int64(3)
+			if scaleRequested {
+				instances = 1
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"instances": instances},
+				"status": map[string]any{
+					"currentPrimary": primary,
+					"targetPrimary":  primary,
+					"instances":      instances,
+					"readyInstances": instances,
+					"phase":          "Cluster in healthy state",
+				},
+			})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods") && request.URL.Query().Get("fieldSelector") != "":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "borealis-postgres-1"},
+				"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+			}}})
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres/status"):
+			if scaleRequested {
+				t.Fatal("PostgreSQL switchover occurred after scale-down")
+			}
+			actions = append(actions, "switchover")
+			primary = "borealis-postgres-1"
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"currentPrimary": primary, "targetPrimary": primary}})
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+			if primary != "borealis-postgres-1" {
+				t.Fatalf("PostgreSQL scaled before primary reached survivor: %s", primary)
+			}
+			actions = append(actions, "scale")
+			scaleRequested = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"instances": int64(1)}})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "borealis-postgres-1"},
+				"spec":     map[string]any{"nodeName": "borealis-engine-01"},
+			}}})
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace:       "borealis",
+		jobPollInterval: time.Millisecond,
+		postgresReplicationProbe: func(context.Context, string, int64) (bool, error) {
+			return true, nil
+		},
+	}
+	if err := runner.preparePostgresRemoval(context.Background(), operation, nodes); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(actions, ",") != "switchover,scale" {
+		t.Fatalf("unsafe PostgreSQL removal order: %v", actions)
+	}
+}
+
 func TestPostgresClusterSynchronizationResolvesPrimaryPodFromNode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {

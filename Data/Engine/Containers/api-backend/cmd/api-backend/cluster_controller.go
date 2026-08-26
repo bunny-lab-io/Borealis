@@ -2277,6 +2277,23 @@ func (r *kubernetesClusterStepRunner) preparePostgresRemoval(ctx context.Context
 	if targetSize != len(nodes)-len(selected) || (targetSize != 1 && targetSize != 3) {
 		return errors.New("safe paired removal has invalid PostgreSQL target size")
 	}
+	selectedIDs := make(map[string]bool, len(selected))
+	for _, node := range selected {
+		selectedIDs[node.ID] = true
+	}
+	var survivor clusterControllerNode
+	for _, node := range nodes {
+		if !selectedIDs[node.ID] && node.ApplicationState == "active" {
+			survivor = node
+			break
+		}
+	}
+	if survivor.ID == "" {
+		return errors.New("safe paired removal has no active PostgreSQL survivor")
+	}
+	if err := r.ensurePostgresPrimaryOnNode(ctx, survivor.Name); err != nil {
+		return fmt.Errorf("move CloudNativePG primary to surviving node %s: %w", survivor.Name, err)
+	}
 	if err := r.scaleCNPG(ctx, targetSize); err != nil {
 		return err
 	}
