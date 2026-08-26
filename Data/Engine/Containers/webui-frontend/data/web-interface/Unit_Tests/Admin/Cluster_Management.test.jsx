@@ -1,8 +1,13 @@
 import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
-import ClusterManagement from "@/Admin/Cluster_Management.jsx";
+import ClusterManagement, {
+  clusterNodeStatusLabel,
+  formatClusterTimestamp,
+  friendlyClusterOperationName,
+} from "@/Admin/Cluster_Management.jsx";
 
 const state = vi.hoisted(() => ({
   hmrState: "active",
@@ -61,6 +66,18 @@ vi.mock("@/app/hooks/useRoutePageChrome.js", () => ({
   useRoutePageChrome: vi.fn(),
 }));
 
+function renderClusterManagement(initialEntry = "/cluster-management") {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <ClusterManagement />
+    </MemoryRouter>
+  );
+}
+
+async function openNodeActions(nodeName = "engine-1") {
+  fireEvent.click(await screen.findByRole("button", { name: `${nodeName} Actions` }));
+}
+
 describe("Cluster Management", () => {
   afterEach(() => {
     cleanup();
@@ -76,8 +93,18 @@ describe("Cluster Management", () => {
     vi.unstubAllGlobals();
   });
 
+  it("formats operator-facing node and operation labels", () => {
+    expect(clusterNodeStatusLabel({ membership_state: "Active", application_state: "drained" })).toBe("Active / Drained");
+    expect(clusterNodeStatusLabel({ membership_state: "Active", application_state: "active", cordoned: true })).toBe("Active / Cordoned");
+    expect(friendlyClusterOperationName({ kind: "node_maintenance", payload: { action: "enter" } })).toBe("Maintenance Mode Enabled");
+    expect(friendlyClusterOperationName({ kind: "node_maintenance", payload: { action: "exit" } })).toBe("Maintenance Mode Disabled");
+    expect(friendlyClusterOperationName({ kind: "hmr_start" })).toBe("Vite Dev HMR Mode Enabled");
+    expect(friendlyClusterOperationName({ kind: "hmr_exit" })).toBe("Vite Dev HMR Mode Disabled");
+    expect(formatClusterTimestamp(1_787_770_000)).toMatch(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/);
+  });
+
   it("shows role ownership, six management views, and cluster-wide HMR warning", () => {
-    render(<ClusterManagement />);
+    renderClusterManagement();
 
     for (const tab of ["Overview", "Nodes", "Database", "Updates", "Operations", "Maintenance"]) {
       expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
@@ -88,35 +115,37 @@ describe("Cluster Management", () => {
     expect(screen.getAllByText("engine-1").length).toBeGreaterThan(1);
   });
 
-  it("labels node states and keeps K3s metadata out of role list", () => {
-    render(<ClusterManagement />);
+  it("renders node status, identity, role, probe, and action columns", async () => {
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
 
-    expect(screen.getAllByText("Membership: Active")).toHaveLength(3);
-    expect(screen.getAllByText("Application: active")).toHaveLength(3);
-    expect(screen.getByText(/K3s v1.36.3\+k3s1/)).toBeInTheDocument();
-    expect(screen.getByText("Roles: control vip owner")).toBeInTheDocument();
-    expect(screen.queryByText(/Roles:.*k3s version/)).not.toBeInTheDocument();
+    for (const column of ["Status", "Node", "IP Address", "Roles", "Probes", "Actions"]) {
+      expect(await screen.findByRole("columnheader", { name: column })).toBeInTheDocument();
+    }
+    expect(await screen.findAllByText("Active / Active")).toHaveLength(3);
+    expect(screen.getByText("Control VIP Owner")).toBeInTheDocument();
+    expect(screen.queryByText(/k3s version/i)).not.toBeInTheDocument();
   });
 
-  it("uses active Admin session without a cluster step-up prompt", () => {
+  it("uses active Admin session without a cluster step-up prompt", async () => {
     state.hmrState = "inactive";
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Enter Maintenance" })[0]);
+    await openNodeActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Enter Maintenance/ }));
 
     expect(screen.getByText("Administrator access required. Destructive actions also require exact typed confirmation.")).toBeInTheDocument();
     expect(screen.queryByText(/Sign in again/)).not.toBeInTheDocument();
   });
 
   it("explains empty release catalog", () => {
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
 
     expect(screen.getByText(/No published stable cluster-compatible release exists at or above baseline 2026.08.1/)).toBeInTheDocument();
   });
 
-  it("shows reduced PostgreSQL readiness separately from configured instances", () => {
+  it("shows reduced PostgreSQL readiness separately from configured instances", async () => {
     state.clusterStatus = "Degraded Database";
     state.database = {
       configured_instances: 3,
@@ -126,7 +155,7 @@ describe("Cluster Management", () => {
       synchronous_acknowledgements: 1,
       phase: "Waiting for the instances to become active",
     };
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Database" }));
 
     expect(screen.getAllByText(/2 of 3 PostgreSQL instances are Ready/).length).toBeGreaterThan(0);
@@ -134,37 +163,38 @@ describe("Cluster Management", () => {
     expect(screen.getByText("3 / 2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
-    expect(screen.getAllByRole("button", { name: "Enter Maintenance" })[0]).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Update Node" })[0]).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Remove Pair" })[0]).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Emergency Remove" })[0]).toBeEnabled();
+    await openNodeActions();
+    expect(screen.getByRole("menuitem", { name: /Enter Maintenance/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: /Update Node/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: /Remove Pair/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: /Emergency Remove/ })).not.toHaveAttribute("aria-disabled", "true");
   });
 
   it("keeps normal controls fenced when mixed-version status masks database recovery", () => {
     state.hmrState = "inactive";
     state.clusterStatus = "Mixed Version";
     state.database = { configured_instances: 3, ready_instances: 2, fully_ready: false, durability_quorum: true };
-    render(<ClusterManagement />);
+    renderClusterManagement();
 
     expect(screen.getByText(/PostgreSQL recovery remains required even while cluster lifecycle status is Mixed Version/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
     expect(screen.getByRole("button", { name: "Update All One at a Time" })).toBeDisabled();
   });
 
-  it("allows drained-node recovery while fencing additional application drains", () => {
+  it("allows drained-node recovery while fencing additional application drains", async () => {
     state.hmrState = "inactive";
     state.drainedNodeID = "11111111-1111-4111-8111-111111111111";
-    render(<ClusterManagement />);
+    renderClusterManagement();
 
     expect(screen.getByText(/active cluster members remain application-drained/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
-    expect(screen.getByRole("button", { name: "Exit Maintenance" })).toBeEnabled();
-    expect(screen.getAllByRole("button", { name: "Enter Maintenance" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Enter Maintenance" })[0]).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Update Node" })[0]).toBeDisabled();
+    expect(await screen.findByText("Active / Drained")).toBeInTheDocument();
+    await openNodeActions("engine-1");
+    expect(screen.getByRole("menuitem", { name: /Exit Maintenance/ })).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: /Update Node/ })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("marks superseded failures as audit history and removes retry action", () => {
+  it("uses friendly operation labels and removes retry from superseded failures", async () => {
     state.operations = [{
       id: "11111111-1111-4111-8111-111111111199",
       kind: "membership_admit",
@@ -174,34 +204,57 @@ describe("Cluster Management", () => {
       error: "apply_membership: Kubernetes API returned HTTP 503: noisy detail",
       superseded_by: "22222222-2222-4222-8222-222222222299",
     }];
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Operations" }));
 
-    expect(screen.getByText("superseded")).toBeInTheDocument();
-    expect(screen.getByText(/Historical failure retained for audit/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
-    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    expect(await screen.findByText("Cluster Node Added")).toBeInTheDocument();
+    expect(screen.getByText("Superseded")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+  });
+
+  it("renders failed operations with friendly timestamp and retry affordance", async () => {
+    state.operations = [{
+      id: "11111111-1111-4111-8111-111111111199",
+      kind: "node_remove",
+      current_step: "prepare_member_removal",
+      state: "failed",
+      attempt: 3,
+      created_at: 1_787_770_000,
+      error: "prepare_member_removal: node action failed",
+      payload: { emergency: false },
+    }];
+    renderClusterManagement("/cluster-management?tab=operations");
+
+    for (const column of ["Operation", "Timestamp", "Status"]) {
+      expect(await screen.findByRole("columnheader", { name: column })).toBeInTheDocument();
+    }
+    expect(screen.getByText("Node Pair Removed")).toBeInTheDocument();
+    expect(screen.getByText(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/)).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry Node Pair Removed" })).toBeEnabled();
   });
 
   it("requires paired safe removal and explicit external fencing for emergency removal", async () => {
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Remove Pair" })[0]);
+    await openNodeActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Remove Pair/ }));
     expect(screen.getByText(/Safe downscale removes two nodes sequentially/)).toBeInTheDocument();
     expect(screen.getByLabelText("Paired removal node")).toBeInTheDocument();
     expect(screen.getByText("Type REMOVE NODE PAIR")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Emergency Remove" })[0]);
+    await openNodeActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Emergency Remove/ }));
     expect(screen.getByText(/Target must be powered off and unable to rejoin/)).toBeInTheDocument();
     expect(screen.getByLabelText("External fencing confirmation")).toBeInTheDocument();
     expect(screen.getByText("Type EMERGENCY REMOVE NODE")).toBeInTheDocument();
   });
 
-  it("fences expansion after supported three-node membership", () => {
-    render(<ClusterManagement />);
+  it("fences expansion after supported three-node membership", async () => {
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByText(/Three-node release limit reached/)).toBeInTheDocument();
@@ -210,22 +263,24 @@ describe("Cluster Management", () => {
     expect(screen.getByRole("button", { name: "Approve Pair" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
-    expect(screen.getAllByRole("button", { name: "Remove Pair" })[0]).toBeEnabled();
+    await openNodeActions();
+    expect(screen.getByRole("menuitem", { name: /Remove Pair/ })).not.toHaveAttribute("aria-disabled", "true");
   });
 
-  it("fences removal from unsupported five-plus membership", () => {
+  it("fences removal from unsupported five-plus membership", async () => {
     state.activeSize = 5;
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
 
-    expect(screen.getAllByRole("button", { name: "Remove Pair" })[0]).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Emergency Remove" })[0]).toBeDisabled();
+    await openNodeActions();
+    expect(screen.getByRole("menuitem", { name: /Remove Pair/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: /Emergency Remove/ })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("keeps one-to-three membership controls available", () => {
     state.activeSize = 1;
     state.desiredSize = 1;
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByRole("button", { name: "Create Node Invitation" })).toBeEnabled();
@@ -237,7 +292,7 @@ describe("Cluster Management", () => {
     state.activeSize = 2;
     state.desiredSize = 3;
     state.clusterStatus = "Degraded Quorum";
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByText(/running on two surviving members/)).toBeInTheDocument();
@@ -256,7 +311,7 @@ describe("Cluster Management", () => {
       return { ok: true, json: async () => ({ enabled: true, active_size: 3, hmr: { state: "inactive" }, nodes: [], operations: [] }) };
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ClusterManagement />);
+    renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
     fireEvent.click(screen.getByRole("button", { name: "Upgrade K3s One Server at a Time" }));
     fireEvent.change(screen.getByLabelText("Stable K3s target"), { target: { value: "v1.36.4+k3s1" } });

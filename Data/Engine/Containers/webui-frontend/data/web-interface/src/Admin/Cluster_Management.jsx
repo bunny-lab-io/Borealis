@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData } from "react-router-dom";
 import {
   Alert,
   Box,
   Button,
-  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -18,12 +17,31 @@ import {
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { HubRounded as ClusterIcon, RefreshRounded as RefreshIcon } from "@mui/icons-material";
+import {
+  BuildCircleRounded as MaintenanceIcon,
+  DashboardRounded as OverviewIcon,
+  DeleteSweepRounded as RemoveIcon,
+  DnsRounded as NodesIcon,
+  EmergencyRounded as EmergencyIcon,
+  EngineeringRounded as MaintenanceActionIcon,
+  HistoryRounded as OperationsIcon,
+  HubRounded as ClusterIcon,
+  RefreshRounded as RefreshIcon,
+  StorageRounded as DatabaseIcon,
+  SystemUpdateAltRounded as UpdatesIcon,
+  UpdateRounded as UpdateIcon,
+} from "@mui/icons-material";
+import { AgGridReact } from "ag-grid-react";
+import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
+import RowContextMenu from "../Row_Context_Menu.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { useUrlTabState } from "../app/hooks/useUrlTabState.js";
 import {
   createRouteRequestPlan,
   getRouteErrorMessage,
@@ -38,7 +56,15 @@ import {
 
 const HMR_WARNING =
   "This moves all Borealis application traffic to this node and places every other Engine node in drained standby. Cluster loses application HA until production mode is restored.";
-const TABS = ["Overview", "Nodes", "Database", "Updates", "Operations", "Maintenance"];
+const TABS = [
+  { key: "overview", label: "Overview", Icon: OverviewIcon },
+  { key: "nodes", label: "Nodes", Icon: NodesIcon },
+  { key: "database", label: "Database", Icon: DatabaseIcon },
+  { key: "updates", label: "Updates", Icon: UpdatesIcon },
+  { key: "operations", label: "Operations", Icon: OperationsIcon },
+  { key: "maintenance", label: "Maintenance", Icon: MaintenanceIcon },
+];
+const TAB_KEYS = TABS.map((tab) => tab.key);
 const CARD_SX = {
   p: 2.25,
   borderRadius: 3,
@@ -48,6 +74,144 @@ const CARD_SX = {
 };
 const NODE_NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const K3S_VERSION_PATTERN = /^v\d+\.\d+\.\d+\+k3s\d+$/;
+const NAV_TAB_HEIGHT = 32;
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg:
+    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
+const NAV_TABS_SX = {
+  borderBottom: "1px solid rgba(148,163,184,0.35)",
+  minHeight: NAV_TAB_HEIGHT,
+  height: NAV_TAB_HEIGHT,
+  flexShrink: 0,
+  "& .MuiTabs-flexContainer": {
+    minHeight: NAV_TAB_HEIGHT,
+    height: NAV_TAB_HEIGHT,
+    alignItems: "stretch",
+  },
+  "& .MuiTab-root": {
+    color: NAV_TAB_COLORS.text,
+    fontFamily: "inherit",
+    fontSize: "0.8rem",
+    textTransform: "none",
+    fontWeight: 400,
+    minHeight: NAV_TAB_HEIGHT,
+    height: NAV_TAB_HEIGHT,
+    opacity: 1,
+    borderRadius: 1,
+    py: 0.35,
+    transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+    "& .MuiTab-iconWrapper": { color: NAV_TAB_COLORS.icon },
+    "&:hover": { background: NAV_TAB_COLORS.hover },
+    "&:active": { transform: "translateY(0.5px)" },
+  },
+  "& .MuiTab-root.Mui-selected": {
+    color: NAV_TAB_COLORS.textActive,
+    fontWeight: 600,
+    background: NAV_TAB_COLORS.activeBg,
+    "& .MuiTab-iconWrapper": { color: NAV_TAB_COLORS.iconActive },
+    "&:hover": { background: NAV_TAB_COLORS.activeBg },
+  },
+};
+
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const clusterGridTheme = themeQuartz.withParams({
+  accentColor: "#7dd3fc",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  chromeBackgroundColor: { ref: "foregroundColor", mix: 0.07, onto: "backgroundColor" },
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 14,
+});
+const clusterGridThemeClassName = clusterGridTheme.themeName || "ag-theme-quartz";
+const GRID_FONT_FAMILY = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const GRID_ICON_FONT_FAMILY = '"Quartz Regular"';
+const GRID_DEFAULT_COL_DEF = {
+  sortable: true,
+  filter: true,
+  resizable: true,
+  suppressHeaderMenuButton: false,
+};
+const GRID_WRAPPER_SX = {
+  width: "100%",
+  flexGrow: 1,
+  minHeight: 320,
+  height: "100%",
+  overflow: "hidden",
+  borderRadius: 2,
+  border: "1px solid rgba(125,183,255,0.18)",
+  fontFamily: GRID_FONT_FAMILY,
+  "--ag-font-family": GRID_FONT_FAMILY,
+  "--ag-cell-horizontal-padding": "18px",
+  "& .ag-root-wrapper": {
+    minHeight: "100%",
+    border: "none",
+    borderRadius: 0,
+    background: "transparent",
+  },
+  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+    fontFamily: GRID_FONT_FAMILY,
+  },
+  "& .ag-header": {
+    backgroundColor: "rgba(15,23,42,0.9)",
+    borderBottom: "1px solid rgba(148,163,184,0.25)",
+  },
+  "& .ag-header-cell-label": {
+    color: "#e2e8f0",
+    fontWeight: 600,
+    letterSpacing: 0.3,
+  },
+  "& .ag-sort-order, & [data-ref='eSortOrder']": { display: "none !important" },
+  "& .ag-row": { borderColor: "rgba(255,255,255,0.04)" },
+  "& .ag-row-hover": { backgroundColor: "rgba(73,156,196,0.2) !important" },
+  "& .ag-row-selected": {
+    backgroundColor: "rgba(125,211,252,0.2) !important",
+    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+  },
+  "& .ag-icon": { fontFamily: GRID_ICON_FONT_FAMILY },
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    padding: "8px 12px 8px 18px",
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    padding: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+    paddingLeft: "12px",
+    paddingRight: "9px",
+  },
+  "& .ag-center-cols-container .ag-cell.status-pill-cell .ag-cell-wrapper": {
+    overflow: "visible",
+  },
+};
+const GRID_INLINE_STYLE = {
+  "--ag-background-color": "#070b1a",
+  "--ag-foreground-color": "#f4f7ff",
+  "--ag-header-background-color": "#0f172a",
+  "--ag-header-foreground-color": "#cfe0ff",
+  "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+  "--ag-border-color": "rgba(125,183,255,0.18)",
+  "--ag-row-border-color": "rgba(125,183,255,0.14)",
+  "--ag-border-radius": "8px",
+};
+const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "roles"];
+const OPERATION_AUTO_SIZE_COLUMNS = ["operation", "timestamp"];
 
 function validIPv4(value) {
   const parts = String(value || "").split(".");
@@ -81,24 +245,91 @@ function valueLabel(value, fallback = "—") {
   return text || fallback;
 }
 
-function StatusChip({ value, prefix = "" }) {
+function titleCase(value) {
+  return String(value || "")
+    .trim()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function statusPillTheme(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized.includes("failed") || normalized.includes("degraded") || normalized.includes("removed") || normalized.includes("offline")) {
+    return {
+      text: "#ff8a8a",
+      background: "rgba(255,79,79,0.15)",
+      border: "1px solid rgba(255,79,79,0.42)",
+      dot: "#ff4f4f",
+    };
+  }
+  if (normalized.includes("drained") || normalized.includes("cordoned") || normalized.includes("queued") || normalized.includes("waiting") || normalized.includes("cancel")) {
+    return {
+      text: "#ffb347",
+      background: "rgba(255,179,71,0.16)",
+      border: "1px solid rgba(255,179,71,0.45)",
+      dot: "#ffb347",
+    };
+  }
+  if (normalized.includes("active") || normalized.includes("succeeded") || normalized.includes("healthy") || normalized.includes("passed") || normalized.includes("running")) {
+    return {
+      text: "#00d18c",
+      background: "rgba(0,209,140,0.16)",
+      border: "1px solid rgba(0,209,140,0.45)",
+      dot: "#00d18c",
+    };
+  }
+  return {
+    text: "#e2e6f0",
+    background: "rgba(226,230,240,0.12)",
+    border: "1px solid rgba(226,230,240,0.25)",
+    dot: "#e2e6f0",
+  };
+}
+
+function StatusPill({ value }) {
   const label = valueLabel(value, "Unknown");
-  const normalized = label.toLowerCase();
-  const color = normalized.includes("healthy") || normalized.includes("active") || normalized.includes("passed")
-    ? "success"
-    : normalized.includes("degraded") || normalized.includes("failed")
-      ? "error"
-      : "warning";
-  return <Chip size="small" color={color} variant="outlined" label={prefix ? `${prefix}: ${label}` : label} />;
+  const theme = statusPillTheme(label);
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 76,
+        px: 1.5,
+        py: 0.4,
+        borderRadius: 999,
+        backgroundColor: theme.background,
+        border: theme.border,
+        color: theme.text,
+        fontWeight: 600,
+        fontSize: "13px",
+        lineHeight: 1,
+        fontFamily: GRID_FONT_FAMILY,
+        gap: 0.75,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          backgroundColor: theme.dot,
+          boxShadow: "0 0 0 2px rgba(0,0,0,0.22)",
+          flexShrink: 0,
+        }}
+      />
+      {label}
+    </Box>
+  );
 }
 
 function operatorNodeLabel(value, nodes) {
   const id = String(value || "").trim();
   return nodes.find((node) => node?.id === id)?.node_name || value;
-}
-
-function readableIdentifier(value) {
-  return String(value || "unknown").replaceAll("_", " ");
 }
 
 function operationErrorSummary(value) {
@@ -122,63 +353,129 @@ function KeyValueGrid({ entries }) {
   );
 }
 
-function NodeCard({ node, onEmergencyRemove, onMaintenance, onUpdate, onRemove, emergencyRemovalEnabled, normalOperationsEnabled, removalEnabled }) {
-  const roles = node?.roles || {};
-  const roleLabels = Object.entries(roles).filter(([, active]) => active === true).map(([role]) => readableIdentifier(role));
-  return (
-    <Paper sx={CARD_SX}>
-      <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={2}>
-        <Box>
-          <Typography variant="h6">{valueLabel(node?.node_name)}</Typography>
-          <Typography variant="body2" sx={{ color: "#94a3b8" }}>{valueLabel(node?.management_ip)} · {valueLabel(node?.release_tag, "No release")} · K3s {valueLabel(roles?.k3s_version, "not observed")}</Typography>
-        </Box>
-        <Stack direction="row" spacing={1} flexWrap="wrap">
-          <StatusChip prefix="Membership" value={node?.membership_state} />
-          <StatusChip prefix="Application" value={node?.application_state} />
-        </Stack>
-      </Stack>
-      <Typography variant="body2" sx={{ mt: 1.5, color: "#cbd5e1" }}>
-        Roles: {roleLabels.length ? roleLabels.join(", ") : "standby"}
-      </Typography>
-      <Typography variant="body2" sx={{ mt: 0.75, color: "#cbd5e1" }}>
-        Probes: {Object.entries(node?.probe_health || {}).map(([name, status]) => `${name}=${status}`).join(", ") || "not reported"}
-      </Typography>
-      <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-        <Button size="small" variant="outlined" disabled={!normalOperationsEnabled && node?.application_state !== "drained"} onClick={() => onMaintenance(node)}>{node?.application_state === "drained" ? "Exit Maintenance" : "Enter Maintenance"}</Button>
-        <Button size="small" variant="outlined" disabled={!normalOperationsEnabled} onClick={() => onUpdate(node)}>Update Node</Button>
-        <Button size="small" color="warning" variant="outlined" disabled={!removalEnabled} onClick={() => onRemove(node)}>Remove Pair</Button>
-        <Button size="small" color="error" variant="outlined" disabled={!emergencyRemovalEnabled} onClick={() => onEmergencyRemove(node)}>Emergency Remove</Button>
-      </Stack>
-    </Paper>
-  );
+export function clusterNodeStatusLabel(node) {
+  const membership = titleCase(valueLabel(node?.membership_state, "Unknown"));
+  const application = node?.cordoned === true || node?.unschedulable === true
+    ? "Cordoned"
+    : titleCase(valueLabel(node?.application_state, "Unknown"));
+  return `${membership} / ${application}`;
 }
 
-function OperationCard({ operation, busy, mutate }) {
-  const supersededBy = String(operation?.superseded_by || "").trim();
-  const displayState = supersededBy ? "superseded" : operation?.state;
-  const errorSummary = operationErrorSummary(operation?.error);
+function clusterNodeRolesLabel(node) {
+  const roles = node?.roles || {};
+  const roleLabels = {
+    control_vip_owner: "Control VIP Owner",
+    edge_vip_owner: "Edge VIP Owner",
+    etcd_leader: "etcd Leader",
+    postgres_primary: "PostgreSQL Primary",
+    scheduler_leader: "Scheduler Leader",
+    wireguard_owner: "WireGuard Owner",
+  };
+  const labels = Object.entries(roles)
+    .filter(([role, active]) => role !== "k3s_version" && active === true)
+    .map(([role]) => roleLabels[role] || titleCase(role));
+  return labels.length ? labels.join(", ") : "Standby";
+}
+
+function clusterNodeProbeSummary(node) {
+  const entries = Object.entries(node?.probe_health || {});
+  if (!entries.length) return { label: "Not Reported", detail: "No probe results reported." };
+  const passed = entries.filter(([, status]) => String(status || "").toLowerCase() === "passed").length;
+  const failed = entries.length - passed;
+  return {
+    label: failed ? `${passed} Passed / ${failed} Attention` : `${passed} Passed`,
+    detail: entries.map(([name, status]) => `${titleCase(name)}: ${titleCase(status)}`).join(" · "),
+  };
+}
+
+export function friendlyClusterOperationName(operation) {
+  const kind = String(operation?.kind || "").trim().toLowerCase();
+  const payload = operation?.payload || {};
+  const labels = {
+    cluster_enable: "Cluster Mode Enabled",
+    membership_scale: "Cluster Nodes Added",
+    membership_admit: "Cluster Node Added",
+    postgres_switchover: "PostgreSQL Primary Switched",
+    postgres_emergency_failover: "PostgreSQL Emergency Failover",
+    hmr_start: "Vite Dev HMR Mode Enabled",
+    hmr_exit: "Vite Dev HMR Mode Disabled",
+    hmr_recover: "Vite Dev HMR Mode Recovered",
+    engine_update: payload?.scope === "node" ? "Engine Node Updated" : "Engine Cluster Updated",
+    k3s_update: "K3s Servers Updated",
+  };
+  if (kind === "node_maintenance") {
+    return String(payload?.action || "").toLowerCase() === "exit"
+      ? "Maintenance Mode Disabled"
+      : "Maintenance Mode Enabled";
+  }
+  if (kind === "node_remove") {
+    return payload?.emergency === true ? "Node Emergency Removed" : "Node Pair Removed";
+  }
+  return labels[kind] || titleCase(kind || "Cluster Operation");
+}
+
+export function formatClusterTimestamp(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "—";
+  const date = new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} @ ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function ClusterGrid({ rowData, columnDefs, autoSizeColumnIds, getRowId, onCellContextMenu, rowSelection }) {
+  const gridApiRef = useRef(null);
+  const autoSizeColumns = useCallback(() => {
+    if (!gridApiRef.current || !rowData.length || !autoSizeColumnIds.length) return;
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame
+      : (callback) => window.setTimeout(callback, 0);
+    schedule(() => {
+      try {
+        const api = gridApiRef.current;
+        if (!api || api.isDestroyed?.()) return;
+        api.autoSizeColumns(autoSizeColumnIds, true);
+      } catch {
+        // Grid may be leaving current tab while scheduled sizing runs.
+      }
+    });
+  }, [autoSizeColumnIds, rowData.length]);
+
+  useEffect(() => {
+    autoSizeColumns();
+  }, [autoSizeColumns, rowData]);
+
   return (
-    <Paper sx={CARD_SX}>
-      <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={1}>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 650 }}>{readableIdentifier(operation?.kind)} · {readableIdentifier(operation?.current_step)}</Typography>
-          <Typography variant="body2" sx={{ color: "#94a3b8" }}>{operation?.id} · attempt {operation?.attempt}</Typography>
-          {supersededBy ? <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Superseded by successful operation {supersededBy}. Historical failure retained for audit.</Typography> : null}
-          {!supersededBy && errorSummary ? <Typography variant="body2" color="error.light" sx={{ mt: 1 }}>{errorSummary}</Typography> : null}
-          {operation?.error ? (
-            <Box component="details" sx={{ mt: 1, color: "#94a3b8" }}>
-              <Typography component="summary" variant="body2" sx={{ cursor: "pointer", color: "#7dd3fc" }}>Technical details</Typography>
-              <Box component="pre" sx={{ m: 0, mt: 1, p: 1.25, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: 12 }}>{operation.error}</Box>
-            </Box>
-          ) : null}
-        </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <StatusChip value={displayState} />
-          {operation?.state === "failed" && !supersededBy ? <Button size="small" disabled={busy} onClick={() => void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" })}>Retry</Button> : null}
-          {["queued", "waiting"].includes(operation?.state) ? <Button size="small" color="warning" disabled={busy} onClick={() => void mutate(`/api/server/cluster/operations/${operation.id}/cancel`, { confirmation: "CANCEL OPERATION" })}>Cancel</Button> : null}
-        </Stack>
-      </Stack>
-    </Paper>
+    <Box className={clusterGridThemeClassName} sx={GRID_WRAPPER_SX} style={GRID_INLINE_STYLE}>
+      <AgGridReact
+        rowData={rowData}
+        columnDefs={columnDefs}
+        defaultColDef={GRID_DEFAULT_COL_DEF}
+        rowSelection={rowSelection}
+        suppressCellFocus
+        suppressContextMenu
+        preventDefaultOnContextMenu
+        pagination
+        paginationPageSize={20}
+        paginationPageSizeSelector={[20, 50, 100]}
+        rowHeight={44}
+        headerHeight={44}
+        animateRows
+        onGridReady={(params) => {
+          gridApiRef.current = params.api;
+          autoSizeColumns();
+        }}
+        onGridPreDestroyed={() => {
+          gridApiRef.current = null;
+        }}
+        onFirstDataRendered={autoSizeColumns}
+        onRowDataUpdated={autoSizeColumns}
+        onCellContextMenu={onCellContextMenu}
+        getRowId={getRowId}
+        overlayNoRowsTemplate="No cluster records"
+        theme={clusterGridTheme}
+      />
+    </Box>
   );
 }
 
@@ -188,10 +485,14 @@ export default function ClusterManagement() {
   const [cluster, setCluster] = useState(loaderData?.cluster || null);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
-  const [tab, setTab] = useState(0);
+  const { activeKey: tab, setActiveKey: setTab } = useUrlTabState({
+    defaultKey: "overview",
+    allowedKeys: TAB_KEYS,
+  });
   const [error, setError] = useState(loaderData?.initialError || "");
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(null);
+  const [nodeActionMenu, setNodeActionMenu] = useState({ open: false, top: 0, left: 0, node: null });
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
   const [selectedRelease, setSelectedRelease] = useState("");
@@ -346,6 +647,245 @@ export default function ClusterManagement() {
     return undefined;
   }, [architecture, canExpandToThree, canPrepareMembership, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
+  const nodeRows = useMemo(
+    () => nodes.map((node) => ({
+      ...node,
+      statusLabel: clusterNodeStatusLabel(node),
+      rolesLabel: clusterNodeRolesLabel(node),
+      probeSummary: clusterNodeProbeSummary(node),
+    })),
+    [nodes]
+  );
+
+  const operationRows = useMemo(
+    () => operations.map((operation) => {
+      const timestamp = Number(operation?.created_at || operation?.started_at || operation?.updated_at || operation?.finished_at || 0);
+      return {
+        ...operation,
+        operationLabel: friendlyClusterOperationName(operation),
+        timestamp,
+        timestampLabel: formatClusterTimestamp(timestamp),
+      };
+    }),
+    [operations]
+  );
+
+  const closeNodeActionMenu = useCallback(() => {
+    setNodeActionMenu({ open: false, top: 0, left: 0, node: null });
+  }, []);
+
+  const openNodeActionMenu = useCallback((event, node, gridNode) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!node) return;
+    if (gridNode && !gridNode.isSelected?.()) gridNode.setSelected?.(true, true);
+    setNodeActionMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      node,
+    });
+  }, []);
+
+  const nodeActionTarget = nodeActionMenu.node;
+  const nodeActionMenuActions = useMemo(() => {
+    if (!nodeActionTarget) return [];
+    const isDrained = String(nodeActionTarget?.application_state || "").toLowerCase() === "drained";
+    const membershipActive = nodeActionTarget?.membership_state === "Active";
+    const maintenanceDisabled = busy || (!normalOperationsEnabled && !isDrained);
+    const updateDisabled = busy || !normalOperationsEnabled;
+    const removalDisabled = busy || !normalOperationsEnabled || activeSize !== 3 || !membershipActive;
+    const emergencyDisabled = busy || activeSize !== 3 || !membershipActive;
+    return [
+      {
+        id: "maintenance",
+        label: isDrained ? "Exit Maintenance" : "Enter Maintenance",
+        icon: MaintenanceActionIcon,
+        group: "primary",
+        disabled: maintenanceDisabled,
+        disabledReason: maintenanceDisabled ? "Cluster health gates do not allow this maintenance change." : "",
+        description: isDrained ? "Restore node application capacity after health checks." : "Drain application workloads from this node.",
+        onClick: () => openAction("maintenance", nodeActionTarget),
+      },
+      {
+        id: "update-node",
+        label: "Update Node",
+        icon: UpdateIcon,
+        group: "organize",
+        disabled: updateDisabled,
+        disabledReason: updateDisabled ? "Node updates require healthy cluster and database capacity." : "",
+        description: "Apply selected stable Engine release to this node.",
+        onClick: () => openAction("update_node", nodeActionTarget),
+      },
+      {
+        id: "remove-pair",
+        label: "Remove Pair",
+        icon: RemoveIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: removalDisabled,
+        disabledReason: removalDisabled ? "Safe pair removal requires healthy three-node membership." : "",
+        description: "Safely shrink three active members to one.",
+        onClick: () => openAction("remove", nodeActionTarget),
+      },
+      {
+        id: "emergency-remove",
+        label: "Emergency Remove",
+        icon: EmergencyIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: emergencyDisabled,
+        disabledReason: emergencyDisabled ? "Emergency removal requires active three-node membership." : "",
+        description: "Use only after external power fencing proves node cannot rejoin.",
+        onClick: () => openAction("emergency_remove", nodeActionTarget),
+      },
+    ];
+  }, [activeSize, busy, nodeActionTarget, normalOperationsEnabled, openAction]);
+
+  const nodeColumnDefs = useMemo(() => [
+    {
+      colId: "node-status",
+      field: "statusLabel",
+      headerName: "Status",
+      cellClass: "auto-col-tight status-pill-cell",
+      cellRenderer: (params) => <StatusPill value={params.value} />,
+    },
+    {
+      colId: "node",
+      field: "node_name",
+      headerName: "Node",
+      minWidth: 180,
+      cellClass: "auto-col-tight",
+    },
+    {
+      colId: "ip-address",
+      field: "management_ip",
+      headerName: "IP Address",
+      minWidth: 140,
+      cellClass: "auto-col-tight",
+    },
+    {
+      colId: "roles",
+      field: "rolesLabel",
+      headerName: "Roles",
+      minWidth: 150,
+      cellClass: "auto-col-tight",
+    },
+    {
+      colId: "probes",
+      field: "probeSummary.label",
+      headerName: "Probes",
+      minWidth: 180,
+      flex: 1,
+      cellClass: "auto-col-tight",
+      cellRenderer: (params) => (
+        <Tooltip title={params?.data?.probeSummary?.detail || "No probe results reported."} placement="top-start" arrow>
+          <Box component="span" sx={{ color: "#cbd5e1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {params?.data?.probeSummary?.label || "Not Reported"}
+          </Box>
+        </Tooltip>
+      ),
+    },
+    buildRowContextMenuColumnDef(openNodeActionMenu, {
+      headerName: "Actions",
+      width: 76,
+      tooltip: (node) => `${valueLabel(node?.node_name, "Node")} Actions`,
+    }),
+  ], [openNodeActionMenu]);
+
+  const operationColumnDefs = useMemo(() => [
+    {
+      colId: "operation",
+      field: "operationLabel",
+      headerName: "Operation",
+      minWidth: 240,
+      cellClass: "auto-col-tight",
+      cellRenderer: (params) => {
+        const operation = params?.data || {};
+        const detail = operationErrorSummary(operation?.error)
+          || (operation?.current_step && operation.current_step !== "complete" ? titleCase(operation.current_step) : "");
+        return (
+          <Tooltip title={detail} placement="top-start" arrow disableHoverListener={!detail}>
+            <Box component="span" sx={{ color: "#f4f7ff", fontWeight: 550, whiteSpace: "nowrap" }}>
+              {params.value}
+            </Box>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      colId: "timestamp",
+      field: "timestamp",
+      headerName: "Timestamp",
+      minWidth: 210,
+      cellClass: "auto-col-tight",
+      cellRenderer: (params) => params?.data?.timestampLabel || "—",
+      comparator: (left, right) => Number(left || 0) - Number(right || 0),
+      sort: "desc",
+    },
+    {
+      colId: "operation-status",
+      field: "state",
+      headerName: "Status",
+      minWidth: 220,
+      flex: 1,
+      sortable: true,
+      filter: true,
+      cellClass: "status-pill-cell",
+      cellRenderer: (params) => {
+        const operation = params?.data || {};
+        const superseded = Boolean(String(operation?.superseded_by || "").trim());
+        const state = String(operation?.state || "unknown").toLowerCase();
+        const label = superseded
+          ? "Superseded"
+          : state === "running"
+            ? "In Progress"
+            : titleCase(state);
+        const retryable = state === "failed" && !superseded;
+        const cancellable = ["queued", "waiting"].includes(state);
+        return (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
+            <StatusPill value={label} />
+            {retryable ? (
+              <>
+                <Typography component="span" sx={{ color: "#64748b" }}>/</Typography>
+                <Button
+                  size="small"
+                  aria-label={`Retry ${operation.operationLabel}`}
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" });
+                  }}
+                  sx={{ minWidth: 0, px: 0.75, textTransform: "none" }}
+                >
+                  Retry?
+                </Button>
+              </>
+            ) : null}
+            {cancellable ? (
+              <>
+                <Typography component="span" sx={{ color: "#64748b" }}>/</Typography>
+                <Button
+                  size="small"
+                  color="warning"
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void mutate(`/api/server/cluster/operations/${operation.id}/cancel`, { confirmation: "CANCEL OPERATION" });
+                  }}
+                  sx={{ minWidth: 0, px: 0.75, textTransform: "none" }}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : null}
+          </Box>
+        );
+      },
+    },
+  ], [busy, mutate]);
+
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
     title: "Cluster Management",
@@ -363,33 +903,58 @@ export default function ClusterManagement() {
   const owner = (value) => operatorNodeLabel(value, nodes);
   return (
     <PageBodyFrame>
-      <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 } }}>
+      <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 }, flexGrow: 1, minHeight: 0 }}>
         {error ? <Alert severity="error" onClose={() => setError("")}>{error}</Alert> : null}
         {cluster?.hmr?.state && cluster.hmr.state !== "inactive" ? <Alert severity="warning"><strong>Cluster-wide non-HA HMR active.</strong> {HMR_WARNING}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}
         {cluster?.status === "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL is not fully ready: {readyDatabaseInstances ?? "unknown"} of {configuredDatabaseInstances} instances Ready. Normal cluster-changing operations stay blocked until redundancy recovers; recovery controls remain available.</Alert> : null}
         {!databaseRecoveryReady && cluster?.status !== "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL recovery remains required even while cluster lifecycle status is {valueLabel(cluster?.status)}. Normal cluster-changing operations stay blocked.</Alert> : null}
         {!applicationCapacityReady ? <Alert severity="warning">One or more active cluster members remain application-drained. Restore drained node or finish explicit recovery before starting normal cluster operations.</Alert> : null}
-        <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto">
-          {TABS.map((label) => <Tab key={label} label={label} />)}
+        <Tabs
+          value={tab}
+          onChange={(_, value) => setTab(value)}
+          variant="scrollable"
+          scrollButtons="auto"
+          aria-label="Cluster Management sections"
+          TabIndicatorProps={{
+            style: {
+              height: 3,
+              borderRadius: 3,
+              background: NAV_TAB_COLORS.iconActive,
+            },
+          }}
+          sx={NAV_TABS_SX}
+        >
+          {TABS.map(({ key, label, Icon }) => (
+            <Tab key={key} value={key} label={label} icon={<Icon fontSize="small" />} iconPosition="start" />
+          ))}
         </Tabs>
 
-        {tab === 0 ? <KeyValueGrid entries={[
+        {tab === "overview" ? <KeyValueGrid entries={[
           ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Baseline release", cluster?.baseline_release], ["K3s version", cluster?.k3s_version],
           ["etcd leader", owner(leaders?.etcd_leader)], ["Control VIP owner", owner(leaders?.control_vip_owner)], ["Edge VIP owner", owner(leaders?.edge_vip_owner)],
           ["PostgreSQL primary", owner(leaders?.postgres_primary)], ["Scheduler leader", owner(leaders?.scheduler_leader)], ["WireGuard owner", owner(leaders?.wireguard_owner)],
         ]} /> : null}
 
-        {tab === 1 ? <Stack spacing={1.5}>{nodes.map((node) => <NodeCard key={node.id} node={node} normalOperationsEnabled={normalOperationsEnabled} removalEnabled={normalOperationsEnabled && activeSize === 3 && node?.membership_state === "Active"} emergencyRemovalEnabled={activeSize === 3 && node?.membership_state === "Active"} onMaintenance={(value) => openAction("maintenance", value)} onUpdate={(value) => openAction("update_node", value)} onRemove={(value) => openAction("remove", value)} onEmergencyRemove={(value) => openAction("emergency_remove", value)} />)}</Stack> : null}
+        {tab === "nodes" ? (
+          <ClusterGrid
+            rowData={nodeRows}
+            columnDefs={nodeColumnDefs}
+            autoSizeColumnIds={NODE_AUTO_SIZE_COLUMNS}
+            getRowId={(params) => params?.data?.id || params?.data?.node_name}
+            rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
+            onCellContextMenu={(params) => openNodeActionMenu(params?.event, params?.data, params?.node)}
+          />
+        ) : null}
 
-        {tab === 2 ? <Stack spacing={2}>
+        {tab === "database" ? <Stack spacing={2}>
           <KeyValueGrid entries={[["Primary", owner(leaders?.postgres_primary)], ["Configured / ready", `${configuredDatabaseInstances} / ${readyDatabaseInstances ?? "not observed"}`], ["Durability", activeSize > 1 ? `${Number(database?.synchronous_acknowledgements ?? 1)} synchronous acknowledgement` : "Single instance; no standby acknowledgement"], ["Storage", "Strict-local Longhorn, one replica"], ["Snapshots", "Daily, 14 retained + pre-change"], ["Writes", activeSize > 1 ? "Blocked without durability quorum" : "Available while primary is healthy"]]} />
           {databaseReadyObserved && !databaseFullyReady ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>{readyDatabaseInstances} of {configuredDatabaseInstances} PostgreSQL instances are Ready. {databaseDurabilityReady ? "Writes retain required synchronous durability, but node redundancy is reduced." : "Required durability quorum is unavailable; writes may be blocked."} {database?.phase ? `CloudNativePG: ${database.phase}.` : ""}</Alert> : null}
           <Alert severity="info">Snapshots provide in-cluster recovery. They do not replace off-cluster disaster recovery.</Alert>
           <Paper sx={CARD_SX}><Typography variant="h6">PostgreSQL role control</Typography><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="postgres-node-label">Target node</InputLabel><Select labelId="postgres-node-label" label="Target node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button variant="outlined" disabled={!selectedNode || !normalOperationsEnabled} onClick={() => openAction("switchover")}>Switchover</Button><Button color="error" variant="outlined" disabled={!selectedNode} onClick={() => openAction("emergency_failover")}>Emergency Failover</Button></Stack></Paper>
         </Stack> : null}
 
-        {tab === 3 ? <Stack spacing={2}>
+        {tab === "updates" ? <Stack spacing={2}>
           <Paper sx={CARD_SX}>
             <Typography variant="h6">Stable Engine Release</Typography>
             {releaseError ? <Alert severity="error" sx={{ mt: 2 }}>{releaseError}</Alert> : null}
@@ -412,9 +977,16 @@ export default function ClusterManagement() {
           </Paper>
         </Stack> : null}
 
-        {tab === 4 ? <Stack spacing={1.25}>{operations.length ? operations.map((operation) => <OperationCard key={operation.id} operation={operation} busy={busy} mutate={mutate} />) : <Alert severity="info">No cluster operations recorded.</Alert>}</Stack> : null}
+        {tab === "operations" ? (
+          <ClusterGrid
+            rowData={operationRows}
+            columnDefs={operationColumnDefs}
+            autoSizeColumnIds={OPERATION_AUTO_SIZE_COLUMNS}
+            getRowId={(params) => params?.data?.id || String(params?.data?.created_at || params?.rowIndex || "")}
+          />
+        ) : null}
 
-        {tab === 5 ? <Stack spacing={2}>
+        {tab === "maintenance" ? <Stack spacing={2}>
           <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
@@ -422,6 +994,17 @@ export default function ClusterManagement() {
           {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
+
+      <RowContextMenu
+        open={Boolean(nodeActionMenu.open)}
+        onClose={closeNodeActionMenu}
+        position={nodeActionMenu.open ? { top: nodeActionMenu.top, left: nodeActionMenu.left } : null}
+        headerIcon={NodesIcon}
+        title={valueLabel(nodeActionTarget?.node_name, "Node Actions")}
+        subtitle={`${valueLabel(nodeActionTarget?.management_ip, "No IP Address")} · ${clusterNodeStatusLabel(nodeActionTarget)}`}
+        actions={nodeActionMenuActions}
+        widthVariant="standard"
+      />
 
       <Dialog open={Boolean(dialog)} onClose={() => !busy && setDialog(null)} maxWidth="sm" fullWidth>
         <DialogTitle>Confirm cluster operation</DialogTitle>

@@ -104,17 +104,17 @@ Emergency removal is single-node recovery for host already unreachable. Power ta
 Open **Admin > Cluster Management**. Views show:
 
 - Overview: quorum, active release, HMR state, operation lease.
-- Nodes: etcd leader, control VIP, edge VIP, PostgreSQL primary, scheduler leader, WireGuard owner, drain reason, release, and probe state.
+- Nodes: paginated node table with combined membership/application status, management IP, active roles, probe summary, and row action menu.
 - Database: primary/replicas, synchronous durability, switchovers, snapshots.
 - Updates: compatible stable releases, per-node update, ordered update-all.
-- Operations: durable state, event history, retry, recovery, cancellation.
+- Operations: paginated history with friendly operation names, local timestamp, status, retry, and cancellation.
 - Maintenance: paired admission/removal, maintenance drain, emergency actions.
 
 One exclusive cluster operation may mutate placement, membership, HMR, or releases at time. Controller state survives controller restart through PostgreSQL operation records and Kubernetes desired/runtime objects.
 
-Role owners and PostgreSQL primary display operator-facing node names while APIs retain immutable node IDs. Node cards separate membership and application state, and show K3s version as metadata rather than role. Database view reports configured and Ready CloudNativePG instances separately. `Degraded Database` blocks normal cluster-changing operations until all configured instances return Ready; emergency PostgreSQL failover, externally fenced emergency removal, maintenance exit, and HMR exit remain available for recovery. Required synchronous durability may remain available while redundancy is reduced.
+Role owners and PostgreSQL primary display operator-facing node names while APIs retain immutable node IDs. Nodes table combines membership and application state as labels such as `Active / Active`, `Active / Drained`, or `Active / Cordoned`. Its Actions menu groups maintenance, update, safe pair removal, and emergency removal by normal and danger intent. Database view reports configured and Ready CloudNativePG instances separately. `Degraded Database` blocks normal cluster-changing operations until all configured instances return Ready; emergency PostgreSQL failover, externally fenced emergency removal, maintenance exit, and HMR exit remain available for recovery. Required synchronous durability may remain available while redundancy is reduced.
 
-Operations keeps failed records for audit. Older cluster-enable or membership failure becomes `superseded` after newer same-kind operation succeeds; superseded record cannot be retried. Technical error payload stays collapsed until operator opens details. Updates view explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
+Operations keeps failed records for audit and translates internal kinds into operator-facing names such as `Maintenance Mode Enabled`, `Vite Dev HMR Mode Disabled`, and `Node Pair Removed`. Older cluster-enable or membership failure becomes `Superseded` after newer same-kind operation succeeds and cannot be retried. Failed active records expose retry beside status; queued or waiting records expose cancellation. Hovering operation name shows concise current-step or error context without placing raw internal identifiers in table. Updates view explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
 
 Node drain and restore boundaries update durable node state with Kubernetes action progress. Failed rolling update therefore keeps affected node visibly drained with operation reason until retry or explicit maintenance recovery proves health and reactivates it.
 
@@ -215,6 +215,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - Route daemon: `Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/`.
     - CRDs/controller/RBAC/availability: `Data/Engine/K3s/cluster/`.
     - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`.
+    - WebUI tab keys: `overview`, `nodes`, `database`, `updates`, `operations`, and `maintenance` through `?tab=` URL state. Nodes and Operations use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
     - Release compatibility: `Data/Engine/release-manifest.json`.
 
     ### State ownership
