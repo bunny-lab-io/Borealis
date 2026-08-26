@@ -1652,7 +1652,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if err := r.ensurePostgresPrimaryOnNode(ctx, node.Name); err != nil {
 			return err
 		}
-		if err := r.waitPostgresClusterSynchronized(ctx, node.Name); err != nil {
+		if err := r.waitPostgresClusterSynchronizedOnNode(ctx, node.Name); err != nil {
 			return err
 		}
 		for _, candidate := range nodes {
@@ -1673,7 +1673,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		if err := r.ensurePostgresPrimaryOnNode(ctx, standby.Name); err != nil {
 			return err
 		}
-		if err := r.waitPostgresClusterSynchronized(ctx, standby.Name); err != nil {
+		if err := r.waitPostgresClusterSynchronizedOnNode(ctx, standby.Name); err != nil {
 			return err
 		}
 		if err := r.setNodeRoleEligibility(ctx, standby.Name, true); err != nil {
@@ -3046,6 +3046,26 @@ func (r *kubernetesClusterStepRunner) waitPostgresReplicaSynchronized(ctx contex
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *kubernetesClusterStepRunner) waitPostgresClusterSynchronizedOnNode(ctx context.Context, nodeName string) error {
+	if !clusterControllerNodeRegex.MatchString(nodeName) {
+		return errors.New("invalid CloudNativePG primary node")
+	}
+	clusterPath := fmt.Sprintf("/apis/postgresql.cnpg.io/v1/namespaces/%s/clusters/borealis-postgres", r.namespace)
+	var cluster map[string]any
+	if err := r.kube.getJSON(ctx, clusterPath, &cluster); err != nil {
+		return err
+	}
+	primaryPod := cleanText(nestedMap(cluster, "status")["currentPrimary"])
+	primaryNode, err := r.kubernetesPodNode(ctx, r.namespace, primaryPod)
+	if err != nil {
+		return err
+	}
+	if primaryNode != nodeName {
+		return fmt.Errorf("CloudNativePG primary %s is on %s instead of %s", primaryPod, primaryNode, nodeName)
+	}
+	return r.waitPostgresClusterSynchronized(ctx, primaryPod)
 }
 
 func (r *kubernetesClusterStepRunner) waitPostgresClusterSynchronized(ctx context.Context, target string) error {

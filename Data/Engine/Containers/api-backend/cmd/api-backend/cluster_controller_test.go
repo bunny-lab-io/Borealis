@@ -432,6 +432,41 @@ func TestPostgresPrimaryTransferWaitsForSynchronizedCluster(t *testing.T) {
 	}
 }
 
+func TestPostgresClusterSynchronizationResolvesPrimaryPodFromNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"instances": int64(3)},
+				"status": map[string]any{
+					"currentPrimary": "borealis-postgres-1",
+					"targetPrimary":  "borealis-postgres-1",
+					"readyInstances": int64(3),
+					"phase":          "Cluster in healthy state",
+				},
+			})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods/borealis-postgres-1"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"nodeName": "borealis-engine-01"}})
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace: "borealis",
+		postgresReplicationProbe: func(_ context.Context, target string, expectedReplicas int64) (bool, error) {
+			if target != "" || expectedReplicas != 2 {
+				t.Fatalf("replication probe target=%q replicas=%d", target, expectedReplicas)
+			}
+			return true, nil
+		},
+	}
+	if err := runner.waitPostgresClusterSynchronizedOnNode(context.Background(), "borealis-engine-01"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClusterControllerPostgresLeaseSerializesLongStep(t *testing.T) {
 	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
 	if databaseURL == "" {
