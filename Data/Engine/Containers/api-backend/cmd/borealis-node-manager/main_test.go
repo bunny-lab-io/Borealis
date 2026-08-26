@@ -496,8 +496,14 @@ func TestMemberRemovalFenceUsesPersistentNarrowMarkerPath(t *testing.T) {
 	if memberFencePath != "/etc/borealis/k3s-member-removal-fence.json" {
 		t.Fatalf("unexpected member fence path %q", memberFencePath)
 	}
+	if memberFenceDropIn != "/etc/systemd/system/k3s.service.d/90-borealis-member-removal-fence.conf" {
+		t.Fatalf("unexpected member fence drop-in %q", memberFenceDropIn)
+	}
 	if got := requiredReason(map[string]any{"reason": "line one\nline two"}); got != "" {
 		t.Fatalf("multiline removal reason accepted: %q", got)
+	}
+	if got := strings.Join(memberRemovalFenceSystemctlArgs(), " "); got != "disable k3s.service" {
+		t.Fatalf("member removal fence must disable restart without stopping K3s: %q", got)
 	}
 }
 

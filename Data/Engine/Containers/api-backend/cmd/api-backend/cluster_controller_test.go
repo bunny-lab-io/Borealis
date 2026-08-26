@@ -189,7 +189,7 @@ func TestSharedArtifactStorageExpandsAndVerifiesReplicaPerEngine(t *testing.T) {
 	}))
 	defer server.Close()
 	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
-	if err := runner.reconcileSharedArtifactStorage(context.Background(), nodes); err == nil || !strings.Contains(err.Error(), "expansion started") {
+	if err := runner.reconcileSharedArtifactStorage(context.Background(), nodes); err == nil || !strings.Contains(err.Error(), "reconciliation started") {
 		t.Fatalf("expected initial expansion, got %v", err)
 	}
 	if err := runner.reconcileSharedArtifactStorage(context.Background(), nodes); err != nil {
@@ -197,6 +197,71 @@ func TestSharedArtifactStorageExpandsAndVerifiesReplicaPerEngine(t *testing.T) {
 	}
 	if patches != 1 {
 		t.Fatalf("replica expansion patches=%d", patches)
+	}
+}
+
+func TestSharedArtifactStorageRetryProtectsSurvivorThenDownscalesExactly(t *testing.T) {
+	const volumeName = "pvc-60b09c5a-dda0-4bc8-a8db-009254605ffb"
+	replicaCount := int64(3)
+	robustness := "degraded"
+	patches := 0
+	nodes := []clusterControllerNode{{Name: "borealis-engine-01"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/namespaces/borealis/persistentvolumeclaims/borealis-agent-artifacts":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"volumeName": volumeName, "accessModes": []any{"ReadWriteMany"}}, "status": map[string]any{"phase": "Bound"},
+			})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/persistentvolumes/"+volumeName:
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{
+				"claimRef": map[string]any{"namespace": "borealis", "name": "borealis-agent-artifacts"}, "accessModes": []any{"ReadWriteMany"},
+				"csi": map[string]any{"driver": "driver.longhorn.io", "volumeHandle": volumeName},
+			}})
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/volumes/"+volumeName):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{"numberOfReplicas": replicaCount, "accessMode": "rwx"},
+				"status": map[string]any{"robustness": robustness, "kubernetesStatus": map[string]any{
+					"namespace": "borealis", "pvcName": "borealis-agent-artifacts", "pvName": volumeName,
+				}},
+			})
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/volumes/"+volumeName):
+			patches++
+			var patch map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			if got := coerceInt64(nestedMap(patch, "spec")["numberOfReplicas"]); got != 1 {
+				t.Fatalf("downscale replica patch=%d", got)
+			}
+			replicaCount = 1
+			robustness = "healthy"
+			_ = json.NewEncoder(w).Encode(patch)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/replicas"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"spec":   map[string]any{"nodeID": nodes[0].Name, "failedAt": "", "healthyAt": "2026-08-26T15:00:00Z", "desireState": "running", "evictionRequested": false},
+				"status": map[string]any{"currentState": "running"},
+			}}})
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis", jobPollInterval: time.Millisecond,
+	}
+	if err := runner.reconcileSharedArtifactStorageState(context.Background(), nodes, 1, false, false); err != nil {
+		t.Fatalf("degraded retry rejected healthy survivor replica: %v", err)
+	}
+	if patches != 0 {
+		t.Fatalf("retry safety check changed replica count before member removal")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.waitForSharedArtifactStorageState(ctx, nodes, 1, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if patches != 1 || replicaCount != 1 || robustness != "healthy" {
+		t.Fatalf("shared artifact downscale incomplete: patches=%d replicas=%d robustness=%s", patches, replicaCount, robustness)
 	}
 }
 
@@ -1670,17 +1735,63 @@ func TestSafeRemovalFencesAndDeletesPairSequentially(t *testing.T) {
 	for index, step := range steps {
 		if strings.HasSuffix(step.Name, ":prepare_member_removal") {
 			removed++
-			if index+3 >= len(steps) || !strings.HasSuffix(steps[index+1].Name, ":wait_member_fenced") || !strings.HasSuffix(steps[index+2].Name, ":delete_member_node") || !strings.HasSuffix(steps[index+3].Name, ":verify_member_removed") {
+			if index+4 >= len(steps) || !strings.HasSuffix(steps[index+1].Name, ":remove_etcd_membership") || !strings.HasSuffix(steps[index+2].Name, ":wait_member_fenced") || !strings.HasSuffix(steps[index+3].Name, ":delete_member_node") || !strings.HasSuffix(steps[index+4].Name, ":verify_member_removed") {
 				t.Fatalf("unsafe member removal order near %s: %#v", step.Name, steps)
 			}
 			if index <= previousVerify {
 				t.Fatalf("second member began before first verification: %#v", steps)
 			}
-			previousVerify = index + 3
+			previousVerify = index + 4
 		}
 	}
-	if removed != 2 || steps[1].Name != "pre_change_snapshot" || steps[2].Name != "prepare_postgres_removal" {
+	if removed != 2 || steps[1].Name != "pre_change_snapshot" || steps[2].Name != "prepare_postgres_removal" || steps[len(steps)-2].Name != "scale_shared_artifact_membership" {
 		t.Fatalf("safe paired removal sequence incomplete: %#v", steps)
+	}
+}
+
+func TestManagedEtcdRemovalWaitsForK3sConfirmation(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if request.Method != http.MethodGet {
+				t.Fatalf("initial member request method=%s", request.Method)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"annotations": map[string]any{
+				clusterK3sEtcdNodeNameAnnotation: "engine-2-id",
+			}}})
+		case 2:
+			if request.Method != http.MethodPatch {
+				t.Fatalf("member removal request method=%s", request.Method)
+			}
+			var patch map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			annotations, _ := nestedMap(patch, "metadata")["annotations"].(map[string]any)
+			if cleanText(annotations[clusterK3sEtcdRemoveAnnotation]) != "true" {
+				t.Fatalf("managed etcd removal annotation missing: %#v", patch)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"annotations": annotations}})
+		case 3:
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"annotations": map[string]any{
+				clusterK3sEtcdRemovedNameAnnotation: "engine-2-id",
+			}}})
+		default:
+			t.Fatalf("unexpected membership request %d", requests)
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		jobPollInterval: time.Millisecond,
+	}
+	if err := runner.removeEtcdMembership(context.Background(), "engine-2"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 {
+		t.Fatalf("membership requests=%d want 3", requests)
 	}
 }
 
@@ -1701,7 +1812,7 @@ func TestEmergencyRemovalNeverContactsUnreachableTarget(t *testing.T) {
 	for _, step := range steps {
 		joined += step.Name + "\n"
 	}
-	if strings.Contains(joined, "enter_drain") || strings.Contains(joined, "prepare_member_removal") || !strings.Contains(joined, "delete_member_node") || !strings.Contains(joined, "scale_postgres_membership") {
+	if strings.Contains(joined, "enter_drain") || strings.Contains(joined, "prepare_member_removal") || strings.Contains(joined, "remove_etcd_membership") || !strings.Contains(joined, "delete_member_node") || !strings.Contains(joined, "scale_postgres_membership") {
 		t.Fatalf("unsafe emergency sequence: %s", joined)
 	}
 	if desired, status := completedRemovalClusterState(2, true); desired != 3 || status != "Degraded Quorum" {

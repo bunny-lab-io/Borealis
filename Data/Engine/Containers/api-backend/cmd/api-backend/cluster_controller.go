@@ -32,6 +32,9 @@ const (
 	clusterLonghornNamespace            = "longhorn-system"
 	clusterLonghornCSIDriver            = "driver.longhorn.io"
 	clusterSharedArtifactReplicaCount   = int64(3)
+	clusterK3sEtcdRemoveAnnotation      = "etcd.k3s.cattle.io/remove"
+	clusterK3sEtcdRemovedNameAnnotation = "etcd.k3s.cattle.io/removed-node-name"
+	clusterK3sEtcdNodeNameAnnotation    = "etcd.k3s.cattle.io/node-name"
 )
 
 var (
@@ -447,7 +450,20 @@ func (c *clusterController) observeCustomResources(ctx context.Context, runner *
 func (c *clusterController) observeSharedArtifactStorage(ctx context.Context, runner *kubernetesClusterStepRunner) {
 	nodes, err := c.activeNodes(ctx)
 	if err == nil && len(nodes) == int(clusterSharedArtifactReplicaCount) {
-		err = runner.reconcileSharedArtifactStorage(ctx, nodes)
+		for _, node := range nodes {
+			ready, readyErr := runner.nodeReady(ctx, node.Name)
+			if readyErr != nil {
+				err = readyErr
+				break
+			}
+			if !ready {
+				err = fmt.Errorf("full shared artifact replica reconciliation paused while %s is unavailable", node.Name)
+				break
+			}
+		}
+		if err == nil {
+			err = runner.reconcileSharedArtifactStorage(ctx, nodes)
+		}
 	}
 	if err == nil {
 		if c.lastSharedArtifactError != "" {
@@ -1014,11 +1030,11 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		}
 		base = append(base, clusterControllerStep{Name: "pre_change_snapshot"}, clusterControllerStep{Name: "prepare_postgres_removal"})
 		for _, node := range ordered {
-			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "prepare_member_removal", "wait_member_fenced", "delete_member_node", "verify_member_removed"} {
+			for _, action := range []string{"transfer_roles", "enter_drain", "wait_endpoint_withdrawal", "prepare_member_removal", "remove_etcd_membership", "wait_member_fenced", "delete_member_node", "verify_member_removed"} {
 				base = append(base, clusterControllerStep{Name: "node:" + node.ID + ":" + action, NodeID: node.ID})
 			}
 		}
-		return append(base, clusterControllerStep{Name: "verify_quorum"}), nil
+		return append(base, clusterControllerStep{Name: "scale_shared_artifact_membership"}, clusterControllerStep{Name: "verify_quorum"}), nil
 	case "membership_admit", "membership_scale":
 		return append(base, clusterControllerStep{Name: "apply_membership"}, clusterControllerStep{Name: "verify_quorum"}), nil
 	case "postgres_switchover":
@@ -1567,7 +1583,28 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return fmt.Errorf("active node count %d is not supported", len(nodes))
 		}
 		if len(nodes) == int(clusterSharedArtifactReplicaCount) && clusterOperationRequiresSharedArtifactHA(operation) {
-			if err := r.waitForSharedArtifactStorageHA(ctx, nodes); err != nil {
+			storageNodes := nodes
+			requireFullHA := true
+			if operation.Kind == "node_remove" && operation.Attempt > 1 {
+				fenced, err := r.removalRetryHasFencedTarget(ctx, operation, nodes)
+				if err != nil {
+					return err
+				}
+				if fenced {
+					storageNodes, err = clusterRemovalSurvivorNodes(operation, nodes)
+					if err != nil {
+						return err
+					}
+					requireFullHA = false
+				}
+			}
+			var err error
+			if requireFullHA {
+				err = r.waitForSharedArtifactStorageHA(ctx, storageNodes)
+			} else {
+				err = r.waitForSharedArtifactStorageState(ctx, storageNodes, int64(len(storageNodes)), false, false)
+			}
+			if err != nil {
 				return fmt.Errorf("shared Agent artifact storage is not failure-safe: %w", err)
 			}
 		}
@@ -1604,6 +1641,13 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 	}
 	if step.Name == "scale_postgres_membership" {
 		return r.scaleCNPG(ctx, int(coerceInt64(operation.Payload["target_size"])))
+	}
+	if step.Name == "scale_shared_artifact_membership" {
+		survivors, err := clusterRemovalSurvivorNodes(operation, nodes)
+		if err != nil {
+			return err
+		}
+		return r.waitForSharedArtifactStorageState(ctx, survivors, coerceInt64(operation.Payload["target_size"]), true, true)
 	}
 	if step.Name == "expand_schema" || step.Name == "finalize_schema" {
 		node := clusterNodeByID(nodes, step.NodeID)
@@ -1828,6 +1872,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 				return err
 			}
 			return r.nodeActionJob(ctx, operation, step, node, "PrepareMemberRemoval")
+		case "remove_etcd_membership":
+			return r.removeEtcdMembership(ctx, node.Name)
 		case "wait_member_fenced":
 			return r.waitNodeNotReady(ctx, node.Name)
 		case "delete_member_node":
@@ -2083,6 +2129,10 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 }
 
 func (r *kubernetesClusterStepRunner) waitForSharedArtifactStorageHA(ctx context.Context, nodes []clusterControllerNode) error {
+	return r.waitForSharedArtifactStorageState(ctx, nodes, clusterSharedArtifactReplicaCount, true, false)
+}
+
+func (r *kubernetesClusterStepRunner) waitForSharedArtifactStorageState(ctx context.Context, nodes []clusterControllerNode, replicaCount int64, requireHealthy, exactReplicaCount bool) error {
 	pollInterval := r.jobPollInterval
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
@@ -2091,7 +2141,7 @@ func (r *kubernetesClusterStepRunner) waitForSharedArtifactStorageHA(ctx context
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		if err := r.reconcileSharedArtifactStorage(ctx, nodes); err == nil {
+		if err := r.reconcileSharedArtifactStorageState(ctx, nodes, replicaCount, requireHealthy, exactReplicaCount); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -2105,11 +2155,15 @@ func (r *kubernetesClusterStepRunner) waitForSharedArtifactStorageHA(ctx context
 }
 
 func (r *kubernetesClusterStepRunner) reconcileSharedArtifactStorage(ctx context.Context, nodes []clusterControllerNode) error {
+	return r.reconcileSharedArtifactStorageState(ctx, nodes, clusterSharedArtifactReplicaCount, true, false)
+}
+
+func (r *kubernetesClusterStepRunner) reconcileSharedArtifactStorageState(ctx context.Context, nodes []clusterControllerNode, replicaCount int64, requireHealthy, exactReplicaCount bool) error {
 	if r == nil || r.kube == nil {
 		return errors.New("Kubernetes cluster runner is unavailable")
 	}
-	if len(nodes) != int(clusterSharedArtifactReplicaCount) {
-		return fmt.Errorf("shared Agent artifact storage requires exactly %d Engine nodes, got %d", clusterSharedArtifactReplicaCount, len(nodes))
+	if len(nodes) == 0 || replicaCount < 1 || replicaCount > clusterSharedArtifactReplicaCount || int64(len(nodes)) < replicaCount {
+		return errors.New("shared Agent artifact storage received invalid replica safety target")
 	}
 	wantedNodes := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
@@ -2167,16 +2221,20 @@ func (r *kubernetesClusterStepRunner) reconcileSharedArtifactStorage(ctx context
 		cleanText(kubernetesStatus["pvName"]) != volumeName {
 		return errors.New("Longhorn volume ownership or RWX mode does not match fixed shared Agent artifact PVC")
 	}
-	if current := coerceInt64(volumeSpec["numberOfReplicas"]); current < clusterSharedArtifactReplicaCount {
-		patch := map[string]any{"spec": map[string]any{"numberOfReplicas": clusterSharedArtifactReplicaCount}}
+	if current := coerceInt64(volumeSpec["numberOfReplicas"]); current < replicaCount || (exactReplicaCount && current != replicaCount) {
+		patch := map[string]any{"spec": map[string]any{"numberOfReplicas": replicaCount}}
 		var patched map[string]any
 		if err := r.kube.doJSON(ctx, http.MethodPatch, volumePath, patch, "application/merge-patch+json", &patched, 30*time.Second); err != nil {
-			return fmt.Errorf("expand shared Agent artifact Longhorn replicas: %w", err)
+			return fmt.Errorf("reconcile shared Agent artifact Longhorn replicas: %w", err)
 		}
-		return fmt.Errorf("Longhorn replica expansion started: %d of %d configured", current, clusterSharedArtifactReplicaCount)
+		return fmt.Errorf("Longhorn replica reconciliation started: %d of %d configured", current, replicaCount)
 	}
-	if cleanText(volumeStatus["robustness"]) != "healthy" {
-		return fmt.Errorf("Longhorn volume robustness is %q", cleanText(volumeStatus["robustness"]))
+	robustness := cleanText(volumeStatus["robustness"])
+	if requireHealthy && robustness != "healthy" {
+		return fmt.Errorf("Longhorn volume robustness is %q", robustness)
+	}
+	if !requireHealthy && !textInSet(robustness, "healthy", "degraded") {
+		return fmt.Errorf("Longhorn volume robustness is %q", robustness)
 	}
 
 	replicaPath := fmt.Sprintf("/apis/longhorn.io/v1beta2/namespaces/%s/replicas?labelSelector=%s", clusterLonghornNamespace, url.QueryEscape("longhornvolume="+volumeName))
@@ -3829,6 +3887,105 @@ func (r *kubernetesClusterStepRunner) waitNodeNotReady(ctx context.Context, node
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *kubernetesClusterStepRunner) removeEtcdMembership(ctx context.Context, nodeName string) error {
+	if !clusterControllerNodeRegex.MatchString(nodeName) {
+		return errors.New("invalid Kubernetes member node name")
+	}
+	path := "/api/v1/nodes/" + nodeName
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	etcdName := ""
+	var lastErr error
+	for {
+		var observed map[string]any
+		err := r.kube.getJSON(ctx, path, &observed)
+		if err != nil && kubernetesAPIErrorHasStatus(err, http.StatusNotFound) {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			observedAnnotations, _ := nestedMap(observed, "metadata")["annotations"].(map[string]any)
+			removedName := cleanText(observedAnnotations[clusterK3sEtcdRemovedNameAnnotation])
+			if removedName != "" {
+				if etcdName == "" || removedName == etcdName {
+					return nil
+				}
+				return errors.New("K3s confirmed removal for unexpected etcd member identity")
+			}
+			observedName := cleanText(observedAnnotations[clusterK3sEtcdNodeNameAnnotation])
+			if etcdName == "" {
+				if observedName == "" || len(observedName) > 128 {
+					lastErr = errors.New("K3s etcd member identity is unavailable")
+				} else {
+					etcdName = observedName
+				}
+			} else if observedName != "" && observedName != etcdName {
+				return errors.New("K3s etcd member identity changed during removal")
+			}
+			if etcdName != "" && cleanText(observedAnnotations[clusterK3sEtcdRemoveAnnotation]) != "true" {
+				patch := map[string]any{"metadata": map[string]any{"annotations": map[string]any{clusterK3sEtcdRemoveAnnotation: "true"}}}
+				var output map[string]any
+				if patchErr := r.kube.doJSON(ctx, http.MethodPatch, path, patch, "application/strategic-merge-patch+json", &output, 30*time.Second); patchErr != nil {
+					lastErr = patchErr
+				} else {
+					lastErr = nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			message := fmt.Errorf("K3s etcd membership was not removed for %s: %w", nodeName, ctx.Err())
+			if lastErr != nil {
+				return errors.Join(message, lastErr)
+			}
+			return message
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *kubernetesClusterStepRunner) removalRetryHasFencedTarget(ctx context.Context, operation clusterControllerOperation, nodes []clusterControllerNode) (bool, error) {
+	targets := make(map[string]bool, len(anySlice(operation.Payload["removal_node_ids"])))
+	for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
+		targets[cleanText(rawID)] = true
+	}
+	for _, node := range nodes {
+		if !targets[node.ID] {
+			continue
+		}
+		ready, err := r.nodeReady(ctx, node.Name)
+		if err != nil {
+			return false, err
+		}
+		if !ready {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func clusterRemovalSurvivorNodes(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerNode, error) {
+	removed := make(map[string]bool, len(anySlice(operation.Payload["removal_node_ids"])))
+	for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
+		removed[cleanText(rawID)] = true
+	}
+	survivors := make([]clusterControllerNode, 0, len(nodes))
+	for _, node := range nodes {
+		if !removed[node.ID] {
+			survivors = append(survivors, node)
+		}
+	}
+	if int64(len(survivors)) != coerceInt64(operation.Payload["target_size"]) || len(survivors) == 0 {
+		return nil, errors.New("node removal survivor set does not match target size")
+	}
+	return survivors, nil
 }
 
 func (r *kubernetesClusterStepRunner) deleteNodeResource(ctx context.Context, nodeName string) error {

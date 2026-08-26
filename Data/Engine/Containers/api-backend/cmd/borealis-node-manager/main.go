@@ -39,6 +39,7 @@ const (
 	actionRuntimeID     = 64646
 	defaultK3sVersion   = "v1.36.3+k3s1"
 	memberFencePath     = "/etc/borealis/k3s-member-removal-fence.json"
+	memberFenceDropIn   = "/etc/systemd/system/k3s.service.d/90-borealis-member-removal-fence.conf"
 	k3sRegistriesPath   = "/etc/rancher/k3s/registries.yaml"
 	k3sJoinConfigPath   = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
 	k3sImageImportPath  = "/var/lib/rancher/k3s/agent/images"
@@ -577,12 +578,12 @@ func (m *manager) prepareMemberRemoval(ctx context.Context, reason string) (map[
 	if err := os.MkdirAll(filepath.Dir(memberFencePath), 0o750); err != nil {
 		return nil, err
 	}
-	scheduledAt := time.Now().UTC()
+	armedAt := time.Now().UTC()
 	marker, err := json.Marshal(map[string]any{
-		"node_name":    m.nodeName,
-		"reason":       reason,
-		"scheduled_at": scheduledAt.Format(time.RFC3339Nano),
-		"recovery":     "Remove this file and explicitly enable k3s.service only after cluster membership recovery approval.",
+		"node_name": m.nodeName,
+		"reason":    reason,
+		"armed_at":  armedAt.Format(time.RFC3339Nano),
+		"recovery":  "Remove this marker and member-removal systemd drop-in, run systemctl daemon-reload, then explicitly enable and start k3s.service only after cluster membership recovery approval.",
 	})
 	if err != nil {
 		return nil, err
@@ -590,17 +591,40 @@ func (m *manager) prepareMemberRemoval(ctx context.Context, reason string) (map[
 	if err := os.WriteFile(memberFencePath, append(marker, '\n'), 0o600); err != nil {
 		return nil, err
 	}
-	unitName := fmt.Sprintf("borealis-k3s-member-removal-fence-%d", scheduledAt.Unix())
-	if _, err := run(ctx, "", "systemd-run", "--unit", unitName, "--on-active=15s", "--property=Type=oneshot", "--collect", "/usr/bin/systemctl", "disable", "--now", "k3s.service"); err != nil {
+	if err := os.MkdirAll(filepath.Dir(memberFenceDropIn), 0o755); err != nil {
 		return nil, err
 	}
+	if err := os.WriteFile(memberFenceDropIn, []byte("[Service]\nRestart=no\n"), 0o644); err != nil {
+		return nil, err
+	}
+	if _, err := run(ctx, "", "systemctl", memberRemovalFenceSystemctlArgs()...); err != nil {
+		return nil, err
+	}
+	if _, err := run(ctx, "", "systemctl", "daemon-reload"); err != nil {
+		return nil, err
+	}
+	restartPolicy, err := run(ctx, "", "systemctl", "show", "--property=Restart", "--value", "k3s.service")
+	if err != nil || strings.TrimSpace(restartPolicy) != "no" {
+		return nil, errors.New("k3s.service restart policy was not fenced")
+	}
+	activeState, err := run(ctx, "", "systemctl", "is-active", "k3s.service")
+	if err != nil || strings.TrimSpace(activeState) != "active" {
+		return nil, errors.New("k3s.service stopped before managed etcd membership removal")
+	}
 	return map[string]any{
-		"node_name":     m.nodeName,
-		"fence_marker":  memberFencePath,
-		"fence_unit":    unitName,
-		"scheduled_at":  scheduledAt.Format(time.RFC3339Nano),
-		"delay_seconds": 15,
+		"node_name":        m.nodeName,
+		"fence_marker":     memberFencePath,
+		"fence_drop_in":    memberFenceDropIn,
+		"armed_at":         armedAt.Format(time.RFC3339Nano),
+		"service_disabled": true,
+		"k3s_state":        "active",
 	}, nil
+}
+
+func memberRemovalFenceSystemctlArgs() []string {
+	// Disable boot activation before managed etcd removal. Restart=no drop-in
+	// makes member-removal exit final while leaving current process running.
+	return []string{"disable", "k3s.service"}
 }
 
 func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA string) error {
