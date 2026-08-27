@@ -253,7 +253,7 @@ def validate_node_manager_service_contract() -> None:
         "ConfigurationDirectory=borealis": "managed configuration directory",
         "ExecStop=/usr/local/sbin/borealis-node-manager shutdown-handoff": "shutdown-only VIP lease handoff",
         "ProtectSystem=strict": "strict filesystem protection",
-        "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s /var/lib/rancher/k3s/agent/images": "fixed-operation Borealis and K3s image pre-import write paths",
+        "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s /var/lib/rancher/k3s/agent/images /etc/systemd/system/k3s.service.d": "fixed-operation Borealis, K3s image pre-import, and member-removal fence write paths",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK": "Unix socket, K3s API, release-fetch, and host network-inspection contract",
     }
     for marker, description in required.items():
@@ -269,6 +269,8 @@ def validate_node_manager_service_contract() -> None:
         fail("Engine node-manager installer must correct configuration-directory ownership and mode")
     if 'install -d -m 0755 -o root -g root "${K3S_IMAGE_IMPORT_DIR}"' not in engine_source:
         fail("Engine node-manager installer must create its K3s image-import sandbox path")
+    if 'install -d -m 0755 -o root -g root "${K3S_MEMBER_REMOVAL_DROPIN_DIR}"' not in engine_source:
+        fail("Engine node-manager installer must create its member-removal drop-in sandbox path")
     if 'systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"' not in engine_source:
         fail("Engine node-manager installer must restart service after replacing binary or unit")
     try:
@@ -288,6 +290,8 @@ def validate_node_manager_service_contract() -> None:
     ):
         if marker not in manager_source:
             fail(f"node-manager lost local etcd leadership report marker {marker!r}")
+    if manager_source.count("ensureMemberFenceDropInDirectory()") < 4:
+        fail("node-manager must prepare its member-removal drop-in path during fencing, activation, and local installation")
     required_engine_cluster_markers = {
         "render_k3s_registries_config": "managed Spegel registry source configuration",
         "K3S_IMAGE_IMPORT_DIR": "K3s-supported image pre-import directory",

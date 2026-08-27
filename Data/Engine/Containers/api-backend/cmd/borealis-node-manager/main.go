@@ -591,7 +591,7 @@ func (m *manager) prepareMemberRemoval(ctx context.Context, reason string) (map[
 	if err := os.WriteFile(memberFencePath, append(marker, '\n'), 0o600); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(memberFenceDropIn), 0o755); err != nil {
+	if err := ensureMemberFenceDropInDirectory(); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(memberFenceDropIn, []byte("[Service]\nRestart=no\n"), 0o644); err != nil {
@@ -625,6 +625,17 @@ func memberRemovalFenceSystemctlArgs() []string {
 	// Disable boot activation before managed etcd removal. Restart=no drop-in
 	// makes member-removal exit final while leaving current process running.
 	return []string{"disable", "k3s.service"}
+}
+
+func ensureMemberFenceDropInDirectory() error {
+	directory := filepath.Dir(memberFenceDropIn)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chown(directory, 0, 0); err != nil {
+		return err
+	}
+	return os.Chmod(directory, 0o755)
 }
 
 func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA string) error {
@@ -804,6 +815,9 @@ func activateUpdate(args []string) {
 	}
 	if err := replaceExecutable("/usr/local/sbin/borealis-node-manager", binary); err != nil {
 		fatalf("install target node-manager binary: %v", err)
+	}
+	if err := ensureMemberFenceDropInDirectory(); err != nil {
+		fatalf("prepare member-removal systemd drop-in directory: %v", err)
 	}
 	if _, err := run(ctx, "", "install", "-m", "0644", "-o", "root", "-g", "root", serviceSource, "/etc/systemd/system/"+defaultServiceName); err != nil {
 		fatalf("install target node-manager service unit: %v", err)
@@ -1977,6 +1991,9 @@ func installLocalNodeManagerService(repoRoot string) error {
 		return err
 	}
 	if err := os.Chmod(k3sImageImportPath, 0o755); err != nil {
+		return err
+	}
+	if err := ensureMemberFenceDropInDirectory(); err != nil {
 		return err
 	}
 	unitSource := filepath.Join(repoRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")

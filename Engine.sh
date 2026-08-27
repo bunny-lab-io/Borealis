@@ -38,6 +38,7 @@ K3S_BOREALIS_CONFIG="${BOREALIS_K3S_CONFIG_PATH:-${K3S_CONFIG_DIR}/10-borealis.y
 K3S_REGISTRIES_CONFIG="${BOREALIS_K3S_REGISTRIES_PATH:-/etc/rancher/k3s/registries.yaml}"
 K3S_KUBECONFIG="${BOREALIS_K3S_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 K3S_IMAGE_IMPORT_DIR="${BOREALIS_K3S_IMAGE_IMPORT_DIR:-/var/lib/rancher/k3s/agent/images}"
+K3S_MEMBER_REMOVAL_DROPIN_DIR="/etc/systemd/system/k3s.service.d"
 K3S_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-baseline.sha256"
 K3S_CLUSTER_ASSET_DIR="${SCRIPT_DIR}/Data/Engine/K3s/cluster"
 K3S_PROBE_CONFORMANCE_FILE="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/etc/rancher/k3s/borealis-probe-conformance.json}"
@@ -11069,6 +11070,7 @@ install_borealis_node_manager_files() {
   # systemd rejects a missing ReadWritePaths target before node-manager starts.
   # Joined K3s servers do not create the image pre-import leaf until first use.
   run_privileged install -d -m 0755 -o root -g root "${K3S_IMAGE_IMPORT_DIR}"
+  run_privileged install -d -m 0755 -o root -g root "${K3S_MEMBER_REMOVAL_DROPIN_DIR}"
   local next_binary="${BOREALIS_NODE_MANAGER_BINARY}.next"
   run_privileged install -m 0750 -o root -g root "${staged_binary}" "${next_binary}"
   run_privileged mv -f "${next_binary}" "${BOREALIS_NODE_MANAGER_BINARY}"

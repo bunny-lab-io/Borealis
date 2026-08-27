@@ -499,6 +499,9 @@ func TestMemberRemovalFenceUsesPersistentNarrowMarkerPath(t *testing.T) {
 	if memberFenceDropIn != "/etc/systemd/system/k3s.service.d/90-borealis-member-removal-fence.conf" {
 		t.Fatalf("unexpected member fence drop-in %q", memberFenceDropIn)
 	}
+	if filepath.Dir(memberFenceDropIn) != "/etc/systemd/system/k3s.service.d" {
+		t.Fatalf("unexpected member fence drop-in directory %q", filepath.Dir(memberFenceDropIn))
+	}
 	if got := requiredReason(map[string]any{"reason": "line one\nline two"}); got != "" {
 		t.Fatalf("multiline removal reason accepted: %q", got)
 	}
