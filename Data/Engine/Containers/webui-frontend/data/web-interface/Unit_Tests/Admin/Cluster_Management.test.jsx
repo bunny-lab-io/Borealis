@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
 import ClusterManagement, {
+  buildClusterOperationDetails,
+  clusterOperationNodeLabel,
   clusterNodeStatusLabel,
   formatClusterTimestamp,
   friendlyClusterOperationName,
@@ -17,6 +19,7 @@ const state = vi.hoisted(() => ({
   releases: [],
   releaseError: "",
   operations: [],
+  events: [],
   database: {},
   drainedNodeID: "",
 }));
@@ -70,6 +73,8 @@ vi.mock("react-router-dom", async (importOriginal) => {
       },
       releases: { releases: state.releases },
       releaseError: state.releaseError,
+      events: state.events,
+      eventError: "",
       initialError: "",
     }),
   };
@@ -105,6 +110,7 @@ describe("Cluster Management", () => {
     state.releases = [];
     state.releaseError = "";
     state.operations = [];
+    state.events = [];
     state.database = {};
     state.drainedNodeID = "";
     vi.unstubAllGlobals();
@@ -118,6 +124,38 @@ describe("Cluster Management", () => {
     expect(friendlyClusterOperationName({ kind: "hmr_start" })).toBe("Vite Dev HMR Mode Enabled");
     expect(friendlyClusterOperationName({ kind: "hmr_exit" })).toBe("Vite Dev HMR Mode Disabled");
     expect(formatClusterTimestamp(1_787_770_000)).toMatch(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/);
+  });
+
+  it("resolves operation hostnames and redacts copied lifecycle details", () => {
+    const operation = {
+      id: "11111111-1111-4111-8111-111111111199",
+      kind: "membership_admit",
+      state: "running",
+      current_step: "apply_membership",
+      attempt: 1,
+      payload: { admission_ids: ["44444444-4444-4444-8444-444444444444"], invite_bundle: "temporary-secret" },
+    };
+    const events = [{
+      id: 42,
+      event_type: "operation_step_passed",
+      state: "running",
+      message: "Kubernetes membership applied; node conformance started.",
+      details: { next_step: "wait_node_conformance", token: "temporary-secret" },
+    }];
+    const nodeLabel = clusterOperationNodeLabel(
+      operation,
+      [],
+      [{ id: "44444444-4444-4444-8444-444444444444", node_name: "engine-4" }],
+      events
+    );
+    const details = buildClusterOperationDetails(operation, events, nodeLabel);
+
+    expect(nodeLabel).toBe("engine-4");
+    expect(details.summary).toBe("Kubernetes membership applied; node conformance started.");
+    expect(details.copyText).toContain("operation_step_passed");
+    expect(details.copyText).toContain("wait_node_conformance");
+    expect(details.copyText).toContain("[redacted]");
+    expect(details.copyText).not.toContain("temporary-secret");
   });
 
   it("shows role ownership, five management views, and cluster-wide HMR warning", () => {
@@ -244,17 +282,65 @@ describe("Cluster Management", () => {
       attempt: 3,
       created_at: 1_787_770_000,
       error: "prepare_member_removal: node action failed",
+      target_node_id: "11111111-1111-4111-8111-111111111111",
       payload: { emergency: false },
     }];
     renderClusterManagement("/cluster-management?tab=operations");
 
-    for (const column of ["Operation", "Timestamp", "Status"]) {
+    for (const column of ["Node", "Status", "Operation", "Details", "Timestamp"]) {
       expect(await screen.findByRole("columnheader", { name: column })).toBeInTheDocument();
     }
+    const headers = await screen.findAllByRole("columnheader");
+    expect(headers.map((header) => header.querySelector(".ag-header-cell-text")?.textContent)).toEqual([
+      "Node",
+      "Status",
+      "Operation",
+      "Details",
+      "Timestamp",
+    ]);
+    expect(screen.getByText("engine-1")).toBeInTheDocument();
     expect(screen.getByText("Node Pair Removed")).toBeInTheDocument();
     expect(screen.getByText(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/)).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry Node Pair Removed" })).toBeEnabled();
+  });
+
+  it("shows linked lifecycle details and copies redacted diagnostics", async () => {
+    const operationID = "11111111-1111-4111-8111-111111111199";
+    state.operations = [{
+      id: operationID,
+      kind: "membership_admit",
+      current_step: "apply_membership",
+      state: "running",
+      attempt: 1,
+      created_at: 1_787_770_000,
+      requested_by: "admin",
+      payload: { node_names: ["engine-2", "engine-3"], invite_bundle: "temporary-secret" },
+    }];
+    state.events = [{
+      id: 42,
+      operation_id: operationID,
+      event_type: "operation_step_passed",
+      state: "running",
+      message: "Kubernetes membership applied; node conformance started.",
+      details: { step: "apply_membership", next_step: "wait_node_conformance", token: "temporary-secret" },
+      created_at: 1_787_770_010,
+    }];
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, "clipboard", { configurable: true, value: { writeText } });
+
+    renderClusterManagement("/cluster-management?tab=operations");
+
+    expect(await screen.findByText("engine-2, engine-3")).toBeInTheDocument();
+    expect(screen.getByText("Kubernetes membership applied; node conformance started.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy details for Cluster Node Added" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    const copied = writeText.mock.calls[0][0];
+    expect(copied).toContain("Node: engine-2, engine-3");
+    expect(copied).toContain("operation_step_passed");
+    expect(copied).toContain("wait_node_conformance");
+    expect(copied).toContain("[redacted]");
+    expect(copied).not.toContain("temporary-secret");
   });
 
   it("requires paired safe removal and explicit external fencing for emergency removal", async () => {

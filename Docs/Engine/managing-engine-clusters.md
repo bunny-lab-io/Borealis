@@ -106,14 +106,14 @@ Open **Admin > Cluster Management**. Views show:
 - Overview: quorum, active release, HMR state, operation lease.
 - Nodes: paginated node table with combined membership/application status, management IP, active roles, passed/total probe summary, and row action menu.
 - Database: primary/replicas, synchronous durability, switchovers, snapshots.
-- Cluster Events: paginated history with friendly operation names, local timestamp, status, retry, and cancellation.
+- Cluster Events: paginated operation history with affected node hostnames, status, friendly operation names, concise lifecycle details, local timestamp, retry, and cancellation.
 - Maintenance: stable Engine releases, K3s updates, paired admission/removal, maintenance drain, and emergency actions.
 
 One exclusive cluster operation may mutate placement, membership, HMR, or releases at time. Controller state survives controller restart through PostgreSQL operation records and Kubernetes desired/runtime objects.
 
 Role owners and PostgreSQL primary display operator-facing node names while APIs retain immutable node IDs. Nodes table combines membership and application state as labels such as `Active / Active`, `Active / Drained`, or `Active / Cordoned`. Its Actions menu groups maintenance, update, safe pair removal, and emergency removal by normal and danger intent. Database view reports configured and Ready CloudNativePG instances separately. `Degraded Database` blocks normal cluster-changing operations until all configured instances return Ready; emergency PostgreSQL failover, externally fenced emergency removal, maintenance exit, and HMR exit remain available for recovery. Required synchronous durability may remain available while redundancy is reduced.
 
-Cluster Events keeps failed records for audit and translates internal kinds into operator-facing names such as `Maintenance Mode Enabled`, `Vite Dev HMR Mode Disabled`, and `Node Pair Removed`. Older cluster-enable or membership failure becomes `Superseded` after newer same-kind operation succeeds and cannot be retried. Failed active records expose retry beside status; queued or waiting records expose cancellation. Hovering operation name shows concise current-step or error context without placing raw internal identifiers in table. Maintenance explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
+Cluster Events keeps failed records for audit and translates internal kinds into operator-facing names such as `Maintenance Mode Enabled`, `Vite Dev HMR Mode Disabled`, and `Node Pair Removed`. Each row identifies affected node hostnames, summarizes latest lifecycle message or failure, and provides a copy control for full troubleshooting text containing operation metadata, raw step names, error context, redacted payload, and linked lifecycle events. Cluster-wide work is labeled `Cluster-wide`; credentials and invitation secrets are redacted from copied structured data. Older cluster-enable or membership failure becomes `Superseded` after newer same-kind operation succeeds and cannot be retried. Failed active records expose retry beside status; queued or waiting records expose cancellation. Maintenance explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
 
 Node drain and restore boundaries update durable node state with Kubernetes action progress. Failed rolling update therefore keeps affected node visibly drained with operation reason until retry or explicit maintenance recovery proves health and reactivates it.
 
@@ -214,7 +214,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - Route daemon: `Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/`.
     - CRDs/controller/RBAC/availability: `Data/Engine/K3s/cluster/`.
     - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`.
-    - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
+    - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
     - Release compatibility: `Data/Engine/release-manifest.json`.
 
     ### State ownership

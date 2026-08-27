@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  IconButton,
   InputLabel,
   MenuItem,
   Paper,
@@ -22,9 +23,11 @@ import {
 } from "@mui/material";
 import {
   BuildCircleRounded as MaintenanceIcon,
+  ContentCopyRounded as CopyIcon,
   DashboardRounded as OverviewIcon,
   DeleteSweepRounded as RemoveIcon,
   DnsRounded as NodesIcon,
+  DoneRounded as CopiedIcon,
   EmergencyRounded as EmergencyIcon,
   EngineeringRounded as MaintenanceActionIcon,
   HistoryRounded as EventsIcon,
@@ -209,7 +212,9 @@ const GRID_INLINE_STYLE = {
   "--ag-border-radius": "8px",
 };
 const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "probes"];
-const OPERATION_AUTO_SIZE_COLUMNS = ["operation", "timestamp"];
+const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
+const CLUSTER_EVENT_PAGE_SIZE = 500;
+const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
 
 function validIPv4(value) {
   const parts = String(value || "").split(".");
@@ -217,24 +222,52 @@ function validIPv4(value) {
 }
 
 export async function loadClusterManagementPageData(request) {
-  const progress = createRouteRequestPlan(request, 3);
+  const progress = createRouteRequestPlan(request, 4);
   try {
     await requireAdminRequest(request, progress);
     const cluster = await progress.fetchJson("/api/server/cluster");
     let releases = { releases: [] };
     let releaseError = "";
-    try {
-      releases = await progress.fetchJson("/api/server/cluster/releases");
-    } catch (error) {
-      // Cluster state remains usable during GitHub outage.
-      releaseError = getRouteErrorMessage(error, "Stable release catalog could not be loaded.");
-    }
-    return { cluster, releases, releaseError, initialError: "" };
+    let events = [];
+    let eventError = "";
+    await Promise.all([
+      (async () => {
+        try {
+          releases = await progress.fetchJson("/api/server/cluster/releases");
+        } catch (error) {
+          // Cluster state remains usable during GitHub outage.
+          releaseError = getRouteErrorMessage(error, "Stable release catalog could not be loaded.");
+        }
+      })(),
+      (async () => {
+        try {
+          events = await loadClusterEventHistory((path) => progress.fetchJson(path));
+        } catch (error) {
+          // Cluster controls remain usable if audit history is temporarily unavailable.
+          eventError = getRouteErrorMessage(error, "Cluster event details could not be loaded.");
+        }
+      })(),
+    ]);
+    return { cluster, releases, releaseError, events, eventError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
-    return { cluster: null, releases: { releases: [] }, initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
+    return { cluster: null, releases: { releases: [] }, events: [], initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
   } finally {
     progress.finalize();
+  }
+}
+
+async function loadClusterEventHistory(fetchPage, initialAfterID = 0) {
+  const events = [];
+  let afterID = Number(initialAfterID || 0);
+  while (true) {
+    const payload = await fetchPage(`/api/server/cluster/events?after_id=${afterID}`);
+    const page = Array.isArray(payload?.events) ? payload.events : [];
+    events.push(...page);
+    if (page.length < CLUSTER_EVENT_PAGE_SIZE) return events;
+    const nextAfterID = page.reduce((maximum, event) => Math.max(maximum, Number(event?.id || 0)), afterID);
+    if (nextAfterID <= afterID) return events;
+    afterID = nextAfterID;
   }
 }
 
@@ -420,6 +453,183 @@ export function formatClusterTimestamp(value) {
   return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} @ ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+function redactClusterDetail(value, key = "") {
+  if (SENSITIVE_CLUSTER_DETAIL_KEY.test(String(key || ""))) return "[redacted]";
+  if (Array.isArray(value)) return value.map((item) => redactClusterDetail(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([itemKey, itemValue]) => [itemKey, redactClusterDetail(itemValue, itemKey)]));
+  }
+  return value;
+}
+
+function clusterDetailJSON(value) {
+  if (!value || typeof value !== "object" || Object.keys(value).length === 0) return "";
+  return JSON.stringify(redactClusterDetail(value), null, 2);
+}
+
+function friendlyClusterEventName(value) {
+  const eventType = String(value || "").trim().toLowerCase();
+  const labels = {
+    admission_pending: "Node Admission Pending",
+    admission_pair_approved: "Node Pair Approved",
+    operation_started: "Operation Started",
+    operation_step_passed: "Operation Step Passed",
+    operation_failed: "Operation Failed",
+    operation_retry: "Operation Retried",
+    operation_succeeded: "Operation Succeeded",
+    operation_cancelled: "Operation Cancelled",
+  };
+  return labels[eventType] || titleCase(eventType || "Cluster Event");
+}
+
+function clusterOperationStatusLabel(operation) {
+  if (String(operation?.superseded_by || "").trim()) return "Superseded";
+  const state = String(operation?.state || "unknown").toLowerCase();
+  return state === "running" ? "In Progress" : titleCase(state);
+}
+
+export function clusterOperationNodeLabel(operation, nodes = [], admissions = [], events = []) {
+  const names = [];
+  const seen = new Set();
+  const nodeByID = new Map(nodes.map((node) => [String(node?.id || "").toLowerCase(), String(node?.node_name || "").trim()]));
+  const admissionByID = new Map(admissions.map((admission) => [String(admission?.id || "").toLowerCase(), String(admission?.node_name || "").trim()]));
+  const addName = (value) => {
+    const name = String(value || "").trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    names.push(name);
+  };
+  const resolveID = (value) => {
+    const id = String(value || "").trim().toLowerCase();
+    const name = nodeByID.get(id) || admissionByID.get(id);
+    if (name) addName(name);
+  };
+  const inspect = (value, key = "") => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => inspect(item, key));
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.entries(value).forEach(([itemKey, itemValue]) => inspect(itemValue, itemKey));
+      return;
+    }
+    const normalizedKey = String(key || "").toLowerCase();
+    if (normalizedKey === "node_name" || normalizedKey === "node_names") {
+      addName(value);
+      return;
+    }
+    if (normalizedKey.includes("node_id") || normalizedKey.includes("admission_id")) resolveID(value);
+    const uuidMatches = String(value || "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi) || [];
+    uuidMatches.forEach(resolveID);
+  };
+
+  resolveID(operation?.target_node_id);
+  inspect(operation?.payload || {});
+  events.forEach((event) => {
+    resolveID(event?.admission_id);
+    inspect(event?.details || {});
+  });
+  return names.length ? names.join(", ") : "Cluster-wide";
+}
+
+export function buildClusterOperationDetails(operation, events = [], nodeLabel = "Cluster-wide") {
+  const sortedEvents = [...events].sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0));
+  const latestMessage = [...sortedEvents].reverse().find((event) => String(event?.message || "").trim())?.message || "";
+  const currentStep = String(operation?.current_step || "").trim();
+  const errorSummary = operationErrorSummary(operation?.error);
+  const summary = errorSummary
+    || String(latestMessage).trim()
+    || (currentStep && currentStep !== "complete" ? `Current step: ${titleCase(currentStep)}` : "No detailed lifecycle events recorded.");
+  const lines = [
+    `Operation: ${friendlyClusterOperationName(operation)}`,
+    `Node: ${nodeLabel}`,
+    `Status: ${clusterOperationStatusLabel(operation)}`,
+    `Operation ID: ${valueLabel(operation?.id)}`,
+    `Current step: ${currentStep ? `${titleCase(currentStep)} (${currentStep})` : "—"}`,
+    `Attempt: ${valueLabel(operation?.attempt)}`,
+    `Requested by: ${valueLabel(operation?.requested_by)}`,
+    operation?.target_release ? `Target release: ${operation.target_release}` : "",
+    operation?.target_sha ? `Target SHA: ${operation.target_sha}` : "",
+    `Created: ${formatClusterTimestamp(operation?.created_at)}`,
+    operation?.started_at ? `Started: ${formatClusterTimestamp(operation.started_at)}` : "",
+    operation?.updated_at ? `Updated: ${formatClusterTimestamp(operation.updated_at)}` : "",
+    operation?.finished_at ? `Finished: ${formatClusterTimestamp(operation.finished_at)}` : "",
+    operation?.error ? `Error: ${operation.error}` : "",
+  ].filter(Boolean);
+  const payloadJSON = clusterDetailJSON(operation?.payload);
+  if (payloadJSON) lines.push("", "Operation payload:", payloadJSON);
+  if (sortedEvents.length) {
+    lines.push("", "Lifecycle events:");
+    sortedEvents.forEach((event) => {
+      const rawType = String(event?.event_type || "cluster_event");
+      const state = titleCase(event?.state || "unknown");
+      lines.push("", `#${valueLabel(event?.id)} · ${formatClusterTimestamp(event?.created_at)} · ${friendlyClusterEventName(rawType)} (${rawType}) · ${state}`);
+      if (event?.message) lines.push(`Message: ${event.message}`);
+      const detailsJSON = clusterDetailJSON(event?.details);
+      if (detailsJSON) lines.push("Details:", detailsJSON);
+    });
+  }
+  return { summary, copyText: lines.join("\n") };
+}
+
+async function copyClusterText(text) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  if (typeof document === "undefined") throw new Error("Clipboard unavailable.");
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+}
+
+function OperationDetailsCell({ data }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef(null);
+  useEffect(() => () => {
+    if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+  }, []);
+  const copyDetails = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyClusterText(String(data?.detailsText || ""));
+      setCopied(true);
+      if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", width: "100%", minWidth: 0, gap: 1 }}>
+      <Tooltip title={data?.detailSummary || ""} placement="top-start" arrow>
+        <Typography component="span" sx={{ flex: 1, minWidth: 0, color: "#cbd5e1", fontSize: "inherit", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {data?.detailSummary || "No details recorded."}
+        </Typography>
+      </Tooltip>
+      <Tooltip title={copied ? "Copied" : "Copy full event details"} arrow>
+        <IconButton
+          size="small"
+          aria-label={`Copy details for ${data?.operationLabel || "cluster operation"}`}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={copyDetails}
+          sx={{ p: 0.4, flexShrink: 0, color: copied ? "#00d18c" : "#8fbfff" }}
+        >
+          {copied ? <CopiedIcon sx={{ fontSize: 17 }} /> : <CopyIcon sx={{ fontSize: 17 }} />}
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+}
+
 function ClusterGrid({ rowData, columnDefs, autoSizeColumnIds, getRowId, onCellContextMenu, rowSelection }) {
   const gridApiRef = useRef(null);
   const autoSizeColumns = useCallback(() => {
@@ -482,6 +692,12 @@ export default function ClusterManagement() {
   const [cluster, setCluster] = useState(loaderData?.cluster || null);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
+  const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
+  const [eventError, setEventError] = useState(loaderData?.eventError || "");
+  const eventCursorRef = useRef((Array.isArray(loaderData?.events) ? loaderData.events : []).reduce(
+    (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
+    0
+  ));
   const { activeKey: tab, setActiveKey: setTab } = useUrlTabState({
     defaultKey: "overview",
     allowedKeys: TAB_KEYS,
@@ -507,6 +723,7 @@ export default function ClusterManagement() {
 
   const nodes = useMemo(() => Array.isArray(cluster?.nodes) ? cluster.nodes : [], [cluster]);
   const operations = useMemo(() => Array.isArray(cluster?.operations) ? cluster.operations : [], [cluster]);
+  const admissions = useMemo(() => Array.isArray(cluster?.admissions) ? cluster.admissions : [], [cluster]);
   const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
   const activeSize = Number(cluster?.active_size || 1);
   const desiredMembershipSize = Number(cluster?.desired_size || activeSize);
@@ -522,9 +739,18 @@ export default function ClusterManagement() {
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     try {
-      const [clusterResponse, releaseResponse] = await Promise.all([
+      const eventRequest = loadClusterEventHistory(async (path) => {
+        const response = await fetch(path, { credentials: "include", cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
+        return payload;
+      }, eventCursorRef.current)
+        .then((items) => ({ items, error: "" }))
+        .catch((requestError) => ({ items: null, error: requestError?.message || "Cluster event details could not be loaded." }));
+      const [clusterResponse, releaseResponse, eventResult] = await Promise.all([
         fetch("/api/server/cluster", { credentials: "include", cache: "no-store" }),
         fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" }),
+        eventRequest,
       ]);
       const clusterPayload = await clusterResponse.json().catch(() => ({}));
       const releasePayload = await releaseResponse.json().catch(() => ({}));
@@ -535,6 +761,22 @@ export default function ClusterManagement() {
         setReleaseError("");
       } else {
         setReleaseError(releasePayload?.message || "Stable release catalog could not be loaded.");
+      }
+      if (eventResult.items) {
+        if (eventResult.items.length) {
+          setEvents((current) => {
+            const merged = new Map(current.map((event) => [Number(event?.id || 0), event]));
+            eventResult.items.forEach((event) => merged.set(Number(event?.id || 0), event));
+            return [...merged.values()].sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0));
+          });
+          eventCursorRef.current = eventResult.items.reduce(
+            (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
+            eventCursorRef.current
+          );
+        }
+        setEventError("");
+      } else {
+        setEventError(eventResult.error);
       }
       setError("");
       if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
@@ -655,16 +897,32 @@ export default function ClusterManagement() {
   );
 
   const operationRows = useMemo(
-    () => operations.map((operation) => {
-      const timestamp = Number(operation?.created_at || operation?.started_at || operation?.updated_at || operation?.finished_at || 0);
-      return {
-        ...operation,
-        operationLabel: friendlyClusterOperationName(operation),
-        timestamp,
-        timestampLabel: formatClusterTimestamp(timestamp),
-      };
-    }),
-    [operations]
+    () => {
+      const eventsByOperation = new Map();
+      events.forEach((event) => {
+        const operationID = String(event?.operation_id || "").trim();
+        if (!operationID) return;
+        const linkedEvents = eventsByOperation.get(operationID) || [];
+        linkedEvents.push(event);
+        eventsByOperation.set(operationID, linkedEvents);
+      });
+      return operations.map((operation) => {
+        const linkedEvents = eventsByOperation.get(String(operation?.id || "")) || [];
+        const nodeLabel = clusterOperationNodeLabel(operation, nodes, admissions, linkedEvents);
+        const details = buildClusterOperationDetails(operation, linkedEvents, nodeLabel);
+        const timestamp = Number(operation?.created_at || operation?.started_at || operation?.updated_at || operation?.finished_at || 0);
+        return {
+          ...operation,
+          operationLabel: friendlyClusterOperationName(operation),
+          nodeLabel,
+          detailSummary: details.summary,
+          detailsText: details.copyText,
+          timestamp,
+          timestampLabel: formatClusterTimestamp(timestamp),
+        };
+      });
+    },
+    [admissions, events, nodes, operations]
   );
 
   const closeNodeActionMenu = useCallback(() => {
@@ -788,52 +1046,26 @@ export default function ClusterManagement() {
 
   const operationColumnDefs = useMemo(() => [
     {
-      colId: "operation",
-      field: "operationLabel",
-      headerName: "Operation",
-      minWidth: 240,
+      colId: "operation-node",
+      field: "nodeLabel",
+      headerName: "Node",
+      minWidth: 180,
       cellClass: "auto-col-tight",
-      cellRenderer: (params) => {
-        const operation = params?.data || {};
-        const detail = operationErrorSummary(operation?.error)
-          || (operation?.current_step && operation.current_step !== "complete" ? titleCase(operation.current_step) : "");
-        return (
-          <Tooltip title={detail} placement="top-start" arrow disableHoverListener={!detail}>
-            <Box component="span" sx={{ color: "#f4f7ff", fontWeight: 550, whiteSpace: "nowrap" }}>
-              {params.value}
-            </Box>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      colId: "timestamp",
-      field: "timestamp",
-      headerName: "Timestamp",
-      minWidth: 210,
-      cellClass: "auto-col-tight",
-      cellRenderer: (params) => params?.data?.timestampLabel || "—",
-      comparator: (left, right) => Number(left || 0) - Number(right || 0),
-      sort: "desc",
+      tooltipField: "nodeLabel",
     },
     {
       colId: "operation-status",
       field: "state",
       headerName: "Status",
       minWidth: 220,
-      flex: 1,
       sortable: true,
       filter: true,
-      cellClass: "status-pill-cell",
+      cellClass: "auto-col-tight status-pill-cell",
       cellRenderer: (params) => {
         const operation = params?.data || {};
         const superseded = Boolean(String(operation?.superseded_by || "").trim());
         const state = String(operation?.state || "unknown").toLowerCase();
-        const label = superseded
-          ? "Superseded"
-          : state === "running"
-            ? "In Progress"
-            : titleCase(state);
+        const label = clusterOperationStatusLabel(operation);
         const retryable = state === "failed" && !superseded;
         const cancellable = ["queued", "waiting"].includes(state);
         return (
@@ -876,6 +1108,38 @@ export default function ClusterManagement() {
           </Box>
         );
       },
+    },
+    {
+      colId: "operation",
+      field: "operationLabel",
+      headerName: "Operation",
+      minWidth: 240,
+      cellClass: "auto-col-tight",
+      cellRenderer: (params) => (
+        <Box component="span" sx={{ color: "#f4f7ff", fontWeight: 550, whiteSpace: "nowrap" }}>
+          {params.value}
+        </Box>
+      ),
+    },
+    {
+      colId: "operation-details",
+      field: "detailSummary",
+      headerName: "Details",
+      minWidth: 320,
+      flex: 1,
+      sortable: false,
+      filter: true,
+      cellRenderer: OperationDetailsCell,
+    },
+    {
+      colId: "timestamp",
+      field: "timestamp",
+      headerName: "Timestamp",
+      minWidth: 210,
+      cellClass: "auto-col-tight",
+      cellRenderer: (params) => params?.data?.timestampLabel || "—",
+      comparator: (left, right) => Number(left || 0) - Number(right || 0),
+      sort: "desc",
     },
   ], [busy, mutate]);
 
@@ -948,12 +1212,15 @@ export default function ClusterManagement() {
         </Stack> : null}
 
         {tab === "operations" ? (
-          <ClusterGrid
-            rowData={operationRows}
-            columnDefs={operationColumnDefs}
-            autoSizeColumnIds={OPERATION_AUTO_SIZE_COLUMNS}
-            getRowId={(params) => params?.data?.id || String(params?.data?.created_at || params?.rowIndex || "")}
-          />
+          <Stack spacing={1.25} sx={{ minHeight: 320, height: "100%", flexGrow: 1 }}>
+            {eventError ? <Alert severity="warning">{eventError} Operation summaries remain available, but copied details may omit lifecycle events.</Alert> : null}
+            <ClusterGrid
+              rowData={operationRows}
+              columnDefs={operationColumnDefs}
+              autoSizeColumnIds={OPERATION_AUTO_SIZE_COLUMNS}
+              getRowId={(params) => params?.data?.id || String(params?.data?.created_at || params?.rowIndex || "")}
+            />
+          </Stack>
         ) : null}
 
         {tab === "maintenance" ? <Stack spacing={2}>
