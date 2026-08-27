@@ -1914,6 +1914,66 @@ func TestMemberRemovalHealthRequiresReadyEtcdVoters(t *testing.T) {
 	}
 }
 
+func TestMemberRemovalVerificationRetiresResidentWorkloads(t *testing.T) {
+	scaled := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/nodes/engine-1":
+			http.NotFound(w, r)
+		case r.URL.Path == "/api/v1/nodes/engine-2" || r.URL.Path == "/api/v1/nodes/engine-3":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "Ready", "status": "True"},
+				map[string]any{"type": "EtcdIsVoter", "status": "True"},
+			}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/apis/apps/v1/namespaces/borealis/deployments":
+			selector := r.URL.Query().Get("labelSelector")
+			appName := ""
+			for _, candidate := range []string{"borealis-operator", "wireguard-tunnel"} {
+				if strings.Contains(selector, "app.kubernetes.io/name="+candidate) {
+					appName = candidate
+					break
+				}
+			}
+			if appName == "" || !strings.Contains(selector, "borealis.io/engine-node=engine-1") {
+				t.Fatalf("unexpected removed-node workload selector %q", selector)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{
+				map[string]any{"metadata": map[string]any{"name": appName + "-engine-1"}},
+			}})
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/apis/apps/v1/namespaces/borealis/deployments/"):
+			name := strings.TrimPrefix(r.URL.Path, "/apis/apps/v1/namespaces/borealis/deployments/")
+			var patch map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			replicas, present := nestedMap(patch, "spec")["replicas"]
+			if !present || coerceInt64(replicas) != 0 {
+				t.Fatalf("removed-node workload %s was not retired: %#v", name, patch)
+			}
+			scaled[name]++
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": name}})
+		default:
+			t.Fatalf("unexpected member-removal verification request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		namespace: "borealis",
+		soak:      time.Millisecond,
+	}
+	nodes := []clusterControllerNode{{ID: "1", Name: "engine-1"}, {ID: "2", Name: "engine-2"}, {ID: "3", Name: "engine-3"}}
+	operation := clusterControllerOperation{Payload: map[string]any{"removal_node_ids": []any{"1"}}}
+	if err := runner.verifyMemberRemoved(context.Background(), operation, "engine-1", nodes); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"borealis-operator-engine-1", "wireguard-tunnel-engine-1"} {
+		if scaled[name] != 1 {
+			t.Fatalf("removed-node workload %s scaled %d times", name, scaled[name])
+		}
+	}
+}
+
 func TestHMRRequiresActiveTarget(t *testing.T) {
 	_, err := clusterOperationSteps(clusterControllerOperation{Kind: "hmr_start", TargetNodeID: "11111111-1111-4111-8111-111111111111"}, nil)
 	if err == nil {

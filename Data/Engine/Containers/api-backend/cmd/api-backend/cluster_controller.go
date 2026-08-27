@@ -4026,6 +4026,9 @@ func (r *kubernetesClusterStepRunner) verifyMemberRemoved(ctx context.Context, o
 		case <-ticker.C:
 		}
 	}
+	if err := r.retireMemberWorkloads(ctx, targetName); err != nil {
+		return err
+	}
 	timer := time.NewTimer(r.soak)
 	defer timer.Stop()
 	select {
@@ -4072,6 +4075,15 @@ func (r *kubernetesClusterStepRunner) memberRemovalStateHealthy(ctx context.Cont
 		}
 	}
 	return true, nil
+}
+
+func (r *kubernetesClusterStepRunner) retireMemberWorkloads(ctx context.Context, nodeName string) error {
+	for _, appName := range []string{"borealis-operator", "wireguard-tunnel"} {
+		if err := r.scaleNodeWorkload(ctx, nodeName, appName, false); err != nil {
+			return fmt.Errorf("retire %s workload on removed node %s: %w", appName, nodeName, err)
+		}
+	}
+	return nil
 }
 
 func nodeConditionTrue(node map[string]any, conditionType string) bool {
