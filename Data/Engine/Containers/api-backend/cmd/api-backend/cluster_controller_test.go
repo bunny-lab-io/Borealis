@@ -2150,6 +2150,101 @@ func TestClusterRetryUsesFreshNodeActionsAndK3sPlans(t *testing.T) {
 	}
 }
 
+func TestClusterRetryResumesFailedCheckpointAfterPreflight(t *testing.T) {
+	steps := []clusterControllerStep{
+		{Name: "preflight"},
+		{Name: "pre_change_snapshot"},
+		{Name: "node:engine-1:enter_drain"},
+		{Name: "node:engine-1:promote_candidate"},
+		{Name: "node:engine-1:exit_drain"},
+	}
+	operation := clusterControllerOperation{Payload: map[string]any{"retry_resume_step": "node:engine-1:promote_candidate"}}
+	next, err := nextClusterOperationStep(operation, steps, 0)
+	if err != nil || next != "node:engine-1:promote_candidate" {
+		t.Fatalf("retry next step=%q err=%v", next, err)
+	}
+	operation.Payload = map[string]any{}
+	next, err = nextClusterOperationStep(operation, steps, 0)
+	if err != nil || next != "pre_change_snapshot" {
+		t.Fatalf("normal next step=%q err=%v", next, err)
+	}
+	operation.Payload["retry_resume_step"] = "node:missing:promote_candidate"
+	if _, err := nextClusterOperationStep(operation, steps, 0); err == nil || !strings.Contains(err.Error(), "not valid") {
+		t.Fatalf("invalid retry checkpoint did not fail closed: %v", err)
+	}
+}
+
+func TestClusterOperationRetryPersistsFailedStepCheckpoint(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		clusterID   = "9dad8543-68c8-4d08-8c9e-8e87cf472f14"
+		operationID = "24f9fb9a-0ae8-46d6-aefd-0cfcb0f1254e"
+		failedStep  = "node:11111111-1111-4111-8111-111111111111:promote_candidate"
+	)
+	cleanup := func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.realtime_outbox WHERE payload_json LIKE '%' || $1 || '%'`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_audit_events WHERE target_id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET active_operation_id=NULL WHERE id=1 AND active_operation_id=$1`, operationID)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Unix()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Degraded Quorum',3,3,'inactive',NULL,'{}',$2,$2)
+		ON CONFLICT(id) DO UPDATE SET cluster_id=EXCLUDED.cluster_id,enabled=1,status='Degraded Quorum',active_size=3,desired_size=3,hmr_state='inactive',active_operation_id=NULL,updated_at=EXCLUDED.updated_at
+	`, clusterID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_operations(id,kind,state,current_step,requested_by,payload_json,error_text,attempt,created_at,finished_at,updated_at)
+		VALUES($1,'engine_update','failed',$2,'retry-checkpoint-test','{}','first failure',1,$3,$3,$3)
+	`, operationID, failedStep, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.retryClusterOperation(ctx, "retry-checkpoint-test", operationID); err != nil {
+		t.Fatalf("first retry: %v", err)
+	}
+	assertRetry := func(wantAttempt int64) {
+		t.Helper()
+		var state, currentStep, payloadJSON string
+		var attempt int64
+		if err := db.QueryRowContext(ctx, `SELECT state,current_step,payload_json,attempt FROM engine.cluster_operations WHERE id=$1`, operationID).Scan(&state, &currentStep, &payloadJSON, &attempt); err != nil {
+			t.Fatal(err)
+		}
+		if state != "queued" || currentStep != "preflight" || attempt != wantAttempt || cleanText(parseClusterJSON(payloadJSON)["retry_resume_step"]) != failedStep {
+			t.Fatalf("retry state=%s step=%s attempt=%d payload=%s", state, currentStep, attempt, payloadJSON)
+		}
+	}
+	assertRetry(2)
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_operations SET state='failed',error_text='preflight failed',finished_at=$1 WHERE id=$2`, now+1, operationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET active_operation_id=NULL WHERE id=1 AND active_operation_id=$1`, operationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.retryClusterOperation(ctx, "retry-checkpoint-test", operationID); err != nil {
+		t.Fatalf("preflight retry: %v", err)
+	}
+	assertRetry(3)
+}
+
 func TestMemberRemovalHealthRequiresReadyEtcdVoters(t *testing.T) {
 	voter := "True"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

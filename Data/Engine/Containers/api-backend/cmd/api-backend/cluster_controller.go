@@ -408,10 +408,36 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if err != nil {
 		return c.failOperation(runCtx, operation, fmt.Errorf("%s: %w", step.Name, err))
 	}
-	if stepIndex+1 == len(steps) {
+	nextStep, err := nextClusterOperationStep(operation, steps, stepIndex)
+	if err != nil {
+		return c.failOperation(runCtx, operation, err)
+	}
+	if nextStep == "" {
 		return c.completeOperation(runCtx, operation, nodes)
 	}
-	return c.advanceOperation(runCtx, operation, steps[stepIndex+1].Name)
+	return c.advanceOperation(runCtx, operation, nextStep)
+}
+
+func nextClusterOperationStep(operation clusterControllerOperation, steps []clusterControllerStep, currentIndex int) (string, error) {
+	if currentIndex < 0 || currentIndex >= len(steps) {
+		return "", errors.New("current operation step index is invalid")
+	}
+	if currentIndex+1 == len(steps) {
+		return "", nil
+	}
+	if steps[currentIndex].Name != "preflight" {
+		return steps[currentIndex+1].Name, nil
+	}
+	resumeStep := cleanText(operation.Payload["retry_resume_step"])
+	if resumeStep == "" {
+		return steps[currentIndex+1].Name, nil
+	}
+	for index := currentIndex + 1; index < len(steps); index++ {
+		if steps[index].Name == resumeStep {
+			return resumeStep, nil
+		}
+	}
+	return "", fmt.Errorf("recorded retry resume step %q is not valid for current operation state", resumeStep)
 }
 
 func (c *clusterController) observeRuntimeRoles(ctx context.Context, runner *kubernetesClusterStepRunner) {

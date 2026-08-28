@@ -919,15 +919,16 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 		return nil, err
 	}
 	defer tx.Rollback()
-	var state, kind string
+	var state, kind, currentStep, payloadJSON string
 	var attempt int64
-	if err := tx.QueryRowContext(ctx, `SELECT state, kind, attempt FROM engine.cluster_operations WHERE id=$1 FOR UPDATE`, operationID).Scan(&state, &kind, &attempt); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT state, kind, current_step, payload_json, attempt FROM engine.cluster_operations WHERE id=$1 FOR UPDATE`, operationID).Scan(&state, &kind, &currentStep, &payloadJSON, &attempt); errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: operation does not exist", errClusterNotFound)
 	} else if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC().Unix()
 	nextState, step, message := "", "", ""
+	retryResumeStep := ""
 	if action == "retry" {
 		if state != "failed" {
 			return nil, fmt.Errorf("%w: only failed operation can be retried", errClusterConflict)
@@ -952,9 +953,14 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 				return nil, err
 			}
 		}
+		payload := parseClusterJSON(payloadJSON)
+		if currentStep != "preflight" {
+			payload["retry_resume_step"] = currentStep
+		}
+		retryResumeStep = cleanText(payload["retry_resume_step"])
 		nextState, step, message = "queued", "preflight", "Cluster operation queued for retry."
 		attempt++
-		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state=$1, current_step=$2, error_text=NULL, finished_at=NULL, attempt=$3, updated_at=$4 WHERE id=$5`, nextState, step, attempt, now, operationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state=$1, current_step=$2, payload_json=$3, error_text=NULL, finished_at=NULL, attempt=$4, updated_at=$5 WHERE id=$6`, nextState, step, marshalClusterJSON(payload), attempt, now, operationID); err != nil {
 			return nil, err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET active_operation_id=$1,hmr_state=CASE WHEN $3='hmr_start' THEN 'activating' WHEN $3='hmr_exit' THEN 'restoring' ELSE hmr_state END,updated_at=$2 WHERE id=1 AND COALESCE(active_operation_id,'') IN ('',$1)`, operationID, now, kind)
@@ -987,7 +993,11 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	}
 	var clusterID string
 	_ = tx.QueryRowContext(ctx, `SELECT cluster_id FROM engine.cluster_state WHERE id=1`).Scan(&clusterID)
-	if err := insertClusterEvent(ctx, tx, operationID, "", clusterID, "operation_"+action, nextState, message, map[string]any{"attempt": attempt}, now); err != nil {
+	details := map[string]any{"attempt": attempt}
+	if action == "retry" && retryResumeStep != "" {
+		details["resume_step"] = retryResumeStep
+	}
+	if err := insertClusterEvent(ctx, tx, operationID, "", clusterID, "operation_"+action, nextState, message, details, now); err != nil {
 		return nil, err
 	}
 	if err := insertClusterAudit(ctx, tx, actor, "operation_"+action, operationID, nextState, map[string]any{"kind": kind, "attempt": attempt}, now); err != nil {
