@@ -3391,7 +3391,7 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 			}
 		}
 	}
-	if err := validateClusterActionJobIdentity(existing, manifest); err != nil {
+	if err := validateClusterActionJobIdentityForOperation(existing, manifest, operation.Kind == "engine_update"); err != nil {
 		return fmt.Errorf("node action Job %s does not match requested immutable action: %w", jobName, err)
 	}
 	if verb == "EnrollCluster" {
@@ -3655,6 +3655,10 @@ func clusterActionJobManifest(name, namespace, nodeName, imageRef string, args [
 }
 
 func validateClusterActionJobIdentity(actual, expected map[string]any) error {
+	return validateClusterActionJobIdentityForOperation(actual, expected, false)
+}
+
+func validateClusterActionJobIdentityForOperation(actual, expected map[string]any, allowEngineUpdateImageTransition bool) error {
 	actualMetadata := nestedMap(actual, "metadata")
 	expectedMetadata := nestedMap(expected, "metadata")
 	for _, key := range []string{"name", "namespace"} {
@@ -3698,8 +3702,16 @@ func validateClusterActionJobIdentity(actual, expected map[string]any) error {
 	if !actualOK || !expectedOK || cleanText(actualContainer["name"]) != cleanText(expectedContainer["name"]) {
 		return errors.New("action container identity mismatch")
 	}
-	if cleanText(actualContainer["image"]) != cleanText(expectedContainer["image"]) {
-		return errors.New("action image mismatch")
+	actualImage := cleanText(actualContainer["image"])
+	expectedImage := cleanText(expectedContainer["image"])
+	if actualImage != expectedImage {
+		// A rolling Engine update can replace the controller holding the
+		// operation lease while its already-created fixed action Job is still
+		// running. Resume that exact operation/attempt/step only when both old
+		// and new action images remain immutable Borealis image references.
+		if !allowEngineUpdateImageTransition || !borealisOperatorImmutableImageRefPattern.MatchString(actualImage) || !borealisOperatorImmutableImageRefPattern.MatchString(expectedImage) {
+			return errors.New("action image mismatch")
+		}
 	}
 	if !clusterStringSlicesEqual(clusterStringSlice(actualContainer["command"]), clusterStringSlice(expectedContainer["command"])) {
 		return errors.New("action command mismatch")

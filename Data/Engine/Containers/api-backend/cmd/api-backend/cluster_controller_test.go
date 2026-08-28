@@ -1950,6 +1950,10 @@ func TestNodeActionJobRejectsMismatchedExistingJob(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "action image mismatch") {
 		t.Fatalf("mismatched existing Job did not fail closed: %v", err)
 	}
+	operation.Kind = "engine_update"
+	if err := runner.nodeActionJob(context.Background(), operation, step, node, "InspectHealth"); err != nil {
+		t.Fatalf("exact Engine update Job did not survive controller image transition: %v", err)
+	}
 }
 
 func TestMembershipAdmissionRunsNodeConformanceBeforeRedeploy(t *testing.T) {
