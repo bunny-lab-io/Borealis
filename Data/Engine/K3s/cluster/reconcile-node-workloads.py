@@ -198,6 +198,7 @@ def reconcile_one(
     active_name = deployment_name(base, node)
     name = candidate_deployment_name(base, node) if candidate else active_name
     active = load_json(f"deployment/{active_name}")
+    existing = load_json(f"deployment/{name}") if candidate else active
     # Generic zero-replica Deployment remains canonical runtime template in
     # cluster mode. Starting from existing node clone would retain stale env,
     # Secret references, probes, and config hashes after Engine.sh updates it.
@@ -217,11 +218,15 @@ def reconcile_one(
     # active owner-aware workload is replaced.
     spec["replicas"] = 0 if base in HOST_PORT_DEPLOYMENTS and candidate else 1
     spec["revisionHistoryLimit"] = 2
-    selector = copy.deepcopy((spec.get("selector") or {}).get("matchLabels") or {})
-    selector["borealis.io/engine-node"] = node
-    selector[CANDIDATE_LABEL] = "true" if candidate else "false"
-    selector[TRAFFIC_LABEL] = "candidate" if candidate else "active"
-    selector["app.kubernetes.io/name"] = f"{base}-candidate" if candidate else base
+    existing_selector = copy.deepcopy(
+        (((existing or {}).get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+    )
+    selector = existing_selector or copy.deepcopy((spec.get("selector") or {}).get("matchLabels") or {})
+    if not existing_selector:
+        selector["borealis.io/engine-node"] = node
+        selector[CANDIDATE_LABEL] = "true" if candidate else "false"
+        selector[TRAFFIC_LABEL] = "candidate" if candidate else "active"
+        selector["app.kubernetes.io/name"] = f"{base}-candidate" if candidate else base
     spec["selector"] = {"matchLabels": selector}
     template = spec.setdefault("template", {})
     template_metadata = template.setdefault("metadata", {})
@@ -233,6 +238,7 @@ def reconcile_one(
     template_labels["app.kubernetes.io/name"] = f"{base}-candidate" if candidate else base
     if base == "api-backend":
         template_labels["borealis.io/aegis-peer"] = "true"
+    template_labels.update(selector)
     template_metadata["labels"] = template_labels
     template_annotations = copy.deepcopy(template_metadata.get("annotations") or {})
     template_annotations["borealis.io/revision"] = revision

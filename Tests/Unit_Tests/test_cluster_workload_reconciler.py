@@ -136,7 +136,9 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
 
         def fake_load(resource: str) -> dict | None:
             if resource == "deployment/borealis-operator-engine-01":
-                return deployment(stale_image)
+                active = deployment(stale_image)
+                active["spec"]["selector"]["matchLabels"]["borealis.io/node-workload"] = "true"
+                return active
             if resource == "deployment/borealis-operator":
                 return deployment(current_image)
             return None
@@ -160,6 +162,14 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
         apply_args = next(args for args, _stdin in calls if args[:2] == ("apply", "--server-side"))
         self.assertIn("--force-conflicts", apply_args)
+        self.assertEqual(
+            manifest["spec"]["selector"]["matchLabels"]["borealis.io/node-workload"],
+            "true",
+        )
+        self.assertEqual(
+            manifest["spec"]["template"]["metadata"]["labels"]["borealis.io/node-workload"],
+            "true",
+        )
         environment = {
             item["name"]: item.get("value")
             for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
