@@ -158,6 +158,8 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             )
 
         manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+        apply_args = next(args for args, _stdin in calls if args[:2] == ("apply", "--server-side"))
+        self.assertIn("--force-conflicts", apply_args)
         environment = {
             item["name"]: item.get("value")
             for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]

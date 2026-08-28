@@ -291,7 +291,15 @@ def reconcile_one(
     else:
         spec["minReadySeconds"] = max(15, int(spec.get("minReadySeconds") or 0))
         spec["strategy"] = {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}}
-    kubectl("apply", "--server-side", "--field-manager=borealis-node-workloads", "-f", "-", stdin=json.dumps(manifest))
+    kubectl(
+        "apply",
+        "--server-side",
+        "--force-conflicts",
+        "--field-manager=borealis-node-workloads",
+        "-f",
+        "-",
+        stdin=json.dumps(manifest),
+    )
     if spec["replicas"] > 0:
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{name}", "--timeout=10m")
     return name
