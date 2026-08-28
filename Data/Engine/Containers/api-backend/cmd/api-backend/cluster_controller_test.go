@@ -2245,6 +2245,88 @@ func TestClusterOperationRetryPersistsFailedStepCheckpoint(t *testing.T) {
 	assertRetry(3)
 }
 
+func TestClusterControllerClaimPinsOperationActionImage(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		clusterID   = "7cf0b650-ac4c-4c15-b01d-c83202684fc3"
+		operationID = "2a5989ab-7a6a-4cd0-bf30-e07fb8420ddf"
+		holder      = "action-image-pin-test"
+		actionImage = "borealis-engine/api-backend:sha-1234567890ab"
+	)
+	cleanup := func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.realtime_outbox WHERE payload_json LIKE '%' || $1 || '%'`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_application_leases WHERE name=$1 AND holder=$2`, clusterControllerLeaseName, holder)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET active_operation_id=NULL WHERE id=1 AND active_operation_id=$1`, operationID)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Unix()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Healthy',1,1,'inactive',$2,'{}',$3,$3)
+		ON CONFLICT(id) DO UPDATE SET cluster_id=EXCLUDED.cluster_id,enabled=1,status='Healthy',active_size=1,desired_size=1,hmr_state='inactive',active_operation_id=EXCLUDED.active_operation_id,updated_at=EXCLUDED.updated_at
+	`, clusterID, operationID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_operations(id,kind,state,current_step,requested_by,payload_json,attempt,created_at,updated_at)
+		VALUES($1,'membership_admit','queued','preflight','action-image-pin-test','{}',1,$2,$2)
+	`, operationID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at)
+		VALUES($1,$2,$3,$4)
+		ON CONFLICT(name) DO UPDATE SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at
+	`, clusterControllerLeaseName, holder, now+60, now); err != nil {
+		t.Fatal(err)
+	}
+	controller := &clusterController{
+		store:  store,
+		runner: &kubernetesClusterStepRunner{actionImage: actionImage},
+		holder: holder,
+		now:    func() time.Time { return time.Unix(now+1, 0).UTC() },
+	}
+	operation, claimed, err := controller.claimOperation(ctx)
+	if err != nil || !claimed {
+		t.Fatalf("claim operation: claimed=%t err=%v", claimed, err)
+	}
+	if cleanText(operation.Payload["action_image"]) != actionImage || clusterOperationActionImage(operation, "borealis-engine/api-backend:sha-abcdef123456") != actionImage {
+		t.Fatalf("claimed operation did not use pinned action image: %#v", operation.Payload)
+	}
+	var payloadJSON string
+	if err := db.QueryRowContext(ctx, `SELECT payload_json FROM engine.cluster_operations WHERE id=$1`, operationID).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if cleanText(parseClusterJSON(payloadJSON)["action_image"]) != actionImage {
+		t.Fatalf("durable operation action image was not pinned: %s", payloadJSON)
+	}
+}
+
+func TestClusterOperationActionImageFallsBackBeforeClaimPin(t *testing.T) {
+	operation := clusterControllerOperation{Payload: map[string]any{}}
+	fallback := "borealis-engine/api-backend:sha-abcdef123456"
+	if got := clusterOperationActionImage(operation, "  "+fallback+"  "); got != fallback {
+		t.Fatalf("fallback action image=%q", got)
+	}
+}
+
 func TestMemberRemovalHealthRequiresReadyEtcdVoters(t *testing.T) {
 	voter := "True"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

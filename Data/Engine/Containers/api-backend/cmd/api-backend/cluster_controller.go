@@ -1326,6 +1326,18 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 	operation.TargetRelease = targetRelease
 	operation.TargetSHA = targetSHA
 	operation.Payload = parseClusterJSON(payloadJSON)
+	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
+		actionImage := clusterOperationActionImage(operation, runner.actionImage)
+		if !borealisOperatorImmutableImageRefPattern.MatchString(actionImage) {
+			return clusterControllerOperation{}, false, errors.New("cluster operation action image must be immutable")
+		}
+		if cleanText(operation.Payload["action_image"]) == "" {
+			operation.Payload["action_image"] = actionImage
+			if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET payload_json=$1 WHERE id=$2`, marshalClusterJSON(operation.Payload), operation.ID); err != nil {
+				return clusterControllerOperation{}, false, err
+			}
+		}
+	}
 	if operation.Kind == "hmr_exit" && operation.TargetNodeID == "" {
 		_ = tx.QueryRowContext(ctx, `SELECT COALESCE(hmr_node_id,'') FROM engine.cluster_state WHERE id=1`).Scan(&operation.TargetNodeID)
 		operation.Payload["hmr_node_id"] = operation.TargetNodeID
@@ -3393,7 +3405,8 @@ func (r *kubernetesClusterStepRunner) patchNodeLabelValues(ctx context.Context, 
 }
 
 func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operation clusterControllerOperation, step clusterControllerStep, node clusterControllerNode, verb string) error {
-	if !borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) {
+	actionImage := clusterOperationActionImage(operation, r.actionImage)
+	if !borealisOperatorImmutableImageRefPattern.MatchString(actionImage) {
 		return errors.New("BOREALIS_CLUSTER_ACTION_IMAGE must be immutable")
 	}
 	if node.ID == "" || !clusterControllerNodeRegex.MatchString(node.Name) {
@@ -3402,7 +3415,7 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	jobName := clusterActionJobName(operation.ID, fmt.Sprintf("attempt:%d:%s", operation.Attempt, step.Name))
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, jobName)
 	args := clusterNodeActionArgs(operation, verb)
-	manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, r.actionImage, args, operation.ID, step.Name)
+	manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, actionImage, args, operation.ID, step.Name)
 	var existing map[string]any
 	if err := r.kube.getJSON(ctx, path, &existing); err != nil {
 		if !kubernetesAPIErrorHasStatus(err, http.StatusNotFound) {
@@ -3424,6 +3437,13 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		return r.waitClusterInitJob(ctx, jobName)
 	}
 	return r.waitJob(ctx, jobName)
+}
+
+func clusterOperationActionImage(operation clusterControllerOperation, fallback string) string {
+	if pinned := cleanText(operation.Payload["action_image"]); pinned != "" {
+		return pinned
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func clusterNodeActionArgs(operation clusterControllerOperation, verb string) []string {
