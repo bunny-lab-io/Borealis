@@ -67,6 +67,33 @@ import { formatOperatorPresencePage } from "../utils/operatorPresence.js";
 import { APP_AURORA_BACKGROUND } from "../utils/theme.js";
 import PageSubtitleMarkdown from "./PageSubtitleMarkdown.jsx";
 
+const CLUSTER_BANNER_SX = {
+  borderRadius: 0,
+  flexShrink: 0,
+  alignItems: "center",
+  "& .MuiAlert-action": {
+    alignItems: "center",
+    alignSelf: "stretch",
+    display: "flex",
+    ml: "auto",
+    mr: -0.5,
+    p: 0,
+    pl: 2,
+  },
+};
+
+export function clusterBannerIdentity(banner) {
+  const hmrState = String(banner?.hmr_state || "").trim();
+  if (hmrState && hmrState !== "inactive") return `hmr:${hmrState}`;
+  const status = String(banner?.status || "").trim();
+  if (status === "Degraded Quorum" || status === "Degraded Database") return `status:${status}`;
+  const operation = banner?.active_operation;
+  if (!operation) return "";
+  return ["operation", operation.kind, operation.state, operation.current_step]
+    .map((value) => String(value || "").trim())
+    .join(":");
+}
+
 function resolveDeviceId(device) {
   return (
     device?.agent_guid ||
@@ -160,6 +187,7 @@ export default function AppShell() {
   const [newPasskeyLabel, setNewPasskeyLabel] = useState("");
   const [removePasskeyTarget, setRemovePasskeyTarget] = useState(null);
   const [clusterBanner, setClusterBanner] = useState(null);
+  const [dismissedClusterBannerKey, setDismissedClusterBannerKey] = useState("");
 
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
@@ -194,6 +222,11 @@ export default function AppShell() {
       resolvedChrome.actions?.length ||
       resolvedChrome.controls?.length
   );
+  const clusterBannerKey = useMemo(() => clusterBannerIdentity(clusterBanner), [clusterBanner]);
+  const showClusterBanner = Boolean(clusterBannerKey && clusterBannerKey !== dismissedClusterBannerKey);
+  const dismissClusterBanner = useCallback(() => {
+    setDismissedClusterBannerKey(clusterBannerKey);
+  }, [clusterBannerKey]);
 
   const isBufferedRoutePending = useMemo(() => {
     if (navigation.state === "idle" || !navigation.location) {
@@ -263,6 +296,10 @@ export default function AppShell() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!clusterBannerKey) setDismissedClusterBannerKey("");
+  }, [clusterBannerKey]);
 
   const clearResetOwnPasswordState = useCallback(() => {
     setResetOwnPasswordOpen(false);
@@ -755,20 +792,20 @@ export default function AppShell() {
               minWidth: 0,
             }}
           >
-            {clusterBanner?.hmr_state && clusterBanner.hmr_state !== "inactive" ? (
-              <Alert severity="warning" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
+            {showClusterBanner && clusterBanner?.hmr_state && clusterBanner.hmr_state !== "inactive" ? (
+              <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
                 Cluster-wide non-HA HMR active. All Borealis application traffic runs on designated HMR node; standby nodes remain drained until pinned production release is restored.
               </Alert>
-            ) : clusterBanner?.status === "Degraded Quorum" ? (
-              <Alert severity="error" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
+            ) : showClusterBanner && clusterBanner?.status === "Degraded Quorum" ? (
+              <Alert severity="error" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
                 Cluster degraded. Failed node remains drained; Admin retry or recovery required.
               </Alert>
-            ) : clusterBanner?.status === "Degraded Database" ? (
-              <Alert severity="warning" variant="filled" sx={{ borderRadius: 0, flexShrink: 0 }}>
+            ) : showClusterBanner && clusterBanner?.status === "Degraded Database" ? (
+              <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
                 Cluster PostgreSQL is not fully ready. Normal cluster-changing operations remain blocked until database redundancy recovers.
               </Alert>
-            ) : clusterBanner?.active_operation ? (
-              <Alert severity="info" sx={{ borderRadius: 0, flexShrink: 0 }}>
+            ) : showClusterBanner && clusterBanner?.active_operation ? (
+              <Alert severity="info" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
                 Cluster operation {clusterBanner.active_operation.kind} · {clusterBanner.active_operation.current_step} · {clusterBanner.active_operation.state}
               </Alert>
             ) : null}

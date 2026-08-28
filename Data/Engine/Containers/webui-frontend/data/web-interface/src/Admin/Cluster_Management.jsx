@@ -1057,37 +1057,18 @@ export default function ClusterManagement() {
       colId: "operation-status",
       field: "state",
       headerName: "Status",
-      minWidth: 220,
+      minWidth: 150,
       sortable: true,
       filter: true,
       cellClass: "auto-col-tight status-pill-cell",
       cellRenderer: (params) => {
         const operation = params?.data || {};
-        const superseded = Boolean(String(operation?.superseded_by || "").trim());
         const state = String(operation?.state || "unknown").toLowerCase();
         const label = clusterOperationStatusLabel(operation);
-        const retryable = state === "failed" && !superseded;
         const cancellable = ["queued", "waiting"].includes(state);
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />
-            {retryable ? (
-              <>
-                <Typography component="span" sx={{ color: "#64748b" }}>/</Typography>
-                <Button
-                  size="small"
-                  aria-label={`Retry ${operation.operationLabel}`}
-                  disabled={busy}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" });
-                  }}
-                  sx={{ minWidth: 0, px: 0.75, textTransform: "none" }}
-                >
-                  Retry?
-                </Button>
-              </>
-            ) : null}
             {cancellable ? (
               <>
                 <Typography component="span" sx={{ color: "#64748b" }}>/</Typography>

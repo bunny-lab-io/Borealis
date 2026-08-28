@@ -273,7 +273,7 @@ describe("Cluster Management", () => {
     expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
   });
 
-  it("renders failed operations with friendly timestamp and retry affordance", async () => {
+  it("renders failed operations with friendly timestamp and no inline retry affordance", async () => {
     state.operations = [{
       id: "11111111-1111-4111-8111-111111111199",
       kind: "node_remove",
@@ -302,7 +302,7 @@ describe("Cluster Management", () => {
     expect(screen.getByText("Node Pair Removed")).toBeInTheDocument();
     expect(screen.getByText(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/)).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry Node Pair Removed" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
   });
 
   it("shows linked lifecycle details and copies redacted diagnostics", async () => {
