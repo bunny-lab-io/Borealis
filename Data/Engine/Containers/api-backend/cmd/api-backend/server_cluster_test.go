@@ -199,10 +199,15 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 		switch {
 		case strings.Contains(r.URL.Path, "/releases"):
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
+				{TagName: "2026.08.12", Name: "Draft", Draft: true, PublishedAt: "2026-08-25T03:00:00Z"},
+				{TagName: "2026.08.11", Name: "Prerelease", Prerelease: true, PublishedAt: "2026-08-25T02:00:00Z"},
+				{TagName: "main", Name: "Branch Head", PublishedAt: "2026-08-25T01:00:00Z"},
+				// GitHub release ordering is not semantic-version ordering. A
+				// newly published backport must not hide newer rolling targets.
+				{TagName: "2026.08.6", Name: "Out-of-order Backport", PublishedAt: "2026-08-25T00:00:00Z"},
 				{TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update", PublishedAt: "2026-08-24T00:00:00Z"},
 				{TagName: "2026.08.8", Name: "2026.08.8 - Probe Fix", PublishedAt: "2026-08-23T00:00:00Z"},
 				{TagName: "2026.08.7", Name: "2026.08.7 - Current", PublishedAt: "2026-08-21T00:00:00Z"},
-				{TagName: "2026.08.6", Name: "2026.08.6 - Older", PublishedAt: "2026-08-17T00:00:00Z"},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})

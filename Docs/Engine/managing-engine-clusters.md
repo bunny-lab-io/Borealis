@@ -218,6 +218,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`.
     - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
     - Release compatibility: `Data/Engine/release-manifest.json`.
+    - Release catalog traversal does not assume GitHub publication order matches numeric tag order. It skips draft, prerelease, nonnumeric, and downgrade-class entries, then continues until exact current stable tag appears so newly published backports cannot hide newer rolling targets.
 
     ### State ownership
 

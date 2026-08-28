@@ -1025,8 +1025,10 @@ func fetchClusterReleaseCatalog(ctx context.Context, current string) ([]map[stri
 				continue
 			}
 			if current != "" && compareClusterReleases(tag, current) < 0 {
-				foundCurrent = true
-				break
+				// GitHub orders releases by publication metadata, not semantic
+				// version. Skip out-of-order backports without hiding a newer
+				// eligible release later in the same page or a later page.
+				continue
 			}
 			entry, err := hydrateClusterRelease(ctx, release, current)
 			if err != nil {
