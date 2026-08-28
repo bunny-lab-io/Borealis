@@ -90,7 +90,7 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
   "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test ./cmd/api-backend \
-  -run '^(TestVPNSessionStorePostgresReplicaConvergence|TestClusterControllerPostgresLeaseSerializesLongStep|TestClusterMembershipStorePostgresReleaseFences)$' -count=1 \
+  -run '^(TestVPNSessionStorePostgresReplicaConvergence|TestClusterControllerPostgresLeaseSerializesLongStep|TestClusterMembershipStorePostgresReleaseFences|TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity)$' -count=1 \
   >"${RESULT_DIR}/vpn-session-store.log" 2>&1; then
   tail -n 160 "${RESULT_DIR}/vpn-session-store.log" >&2 || true
   exit 1

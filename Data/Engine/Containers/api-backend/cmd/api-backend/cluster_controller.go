@@ -1480,8 +1480,33 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 				err = scanErr
 				break
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,roles_json,probe_health_json,last_seen_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'Active','active',$7,$8,$9,$10,$11,$11,$11) ON CONFLICT(id) DO UPDATE SET membership_state='Active',application_state='active',release_tag=EXCLUDED.release_tag,release_sha=EXCLUDED.release_sha,roles_json=EXCLUDED.roles_json,probe_health_json=EXCLUDED.probe_health_json,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`, id, nodeName, hostname, managementIP, architecture, osVersion, baselineRelease, baselineSHA, rolesJSON, probeHealth, now)
-			if err != nil {
+			var durableNodeID string
+			scanErr = tx.QueryRowContext(ctx, `
+				INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,drain_reason,roles_json,probe_health_json,last_seen_at,created_at,updated_at)
+				VALUES($1,$2,$3,$4,$5,$6,'Active','active',$7,$8,NULL,$9,$10,$11,$11,$11)
+				ON CONFLICT(node_name) DO UPDATE SET
+					hostname=EXCLUDED.hostname,
+					management_ip=EXCLUDED.management_ip,
+					architecture=EXCLUDED.architecture,
+					os_version=EXCLUDED.os_version,
+					membership_state='Active',
+					application_state='active',
+					release_tag=EXCLUDED.release_tag,
+					release_sha=EXCLUDED.release_sha,
+					drain_reason=NULL,
+					roles_json=EXCLUDED.roles_json,
+					probe_health_json=EXCLUDED.probe_health_json,
+					last_seen_at=EXCLUDED.last_seen_at,
+					updated_at=EXCLUDED.updated_at
+				WHERE engine.cluster_nodes.membership_state='Removed' OR engine.cluster_nodes.id=EXCLUDED.id
+				RETURNING id
+			`, id, nodeName, hostname, managementIP, architecture, osVersion, baselineRelease, baselineSHA, rolesJSON, probeHealth, now).Scan(&durableNodeID)
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				err = fmt.Errorf("membership admission node %q conflicts with non-removed durable identity", nodeName)
+				break
+			}
+			if scanErr != nil {
+				err = scanErr
 				break
 			}
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_admissions SET state='Admitted',updated_at=$1 WHERE id=$2`, now, id)

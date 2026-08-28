@@ -1018,6 +1018,156 @@ func TestClusterCompletionPostgresPreservesAndClearsRecoveryState(t *testing.T) 
 	}
 }
 
+func TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity(t *testing.T) {
+	databaseURL := os.Getenv("BOREALIS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := &postgresOperatorStore{db: db}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		clusterID         = "bda02778-144e-4943-a614-0358f40842ac"
+		operationID       = "0db17acb-28fc-4b10-b029-c8ef61f728b1"
+		survivorID        = "69374d32-a9c7-4dba-813c-df3089550119"
+		retainedNodeTwoID = "0a01c416-26f5-4734-9a6f-373178a19918"
+		retainedNodeTriID = "f7f9f965-342d-4ebc-882f-4af47ea0c643"
+		admissionTwoID    = "306a1ca0-bd39-4137-aae0-bac90b51c510"
+		admissionThreeID  = "7a322421-41d7-4d27-85f8-a8ad66daf042"
+		invitationTwoID   = "c813a16e-d4a3-44df-85cc-8bd002d78af7"
+		invitationTriID   = "f0e65df7-4b00-42eb-9511-e29f1df0ef36"
+		holder            = "cluster-readmission-identity-test"
+		baselineRelease   = "2026.08.27"
+		baselineSHA       = "0f829bff08f578328db21d21f3673eb2e1db7993"
+	)
+	nodeNames := []string{"readmit-engine-02", "readmit-engine-03"}
+	cleanup := func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operation_events WHERE operation_id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_operations WHERE id=$1`, operationID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_admissions WHERE id IN ($1,$2)`, admissionTwoID, admissionThreeID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_nodes WHERE id IN ($1,$2,$3,$4,$5) OR node_name IN ($6,$7)`, survivorID, retainedNodeTwoID, retainedNodeTriID, admissionTwoID, admissionThreeID, nodeNames[0], nodeNames[1])
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM engine.cluster_application_leases WHERE name=$1 AND holder=$2`, clusterControllerLeaseName, holder)
+		_, _ = db.ExecContext(context.Background(), `UPDATE engine.cluster_state SET status='Healthy',active_size=1,desired_size=1,active_operation_id=NULL,config_json='{}' WHERE id=1`)
+	}
+	cleanup()
+	defer cleanup()
+	now := time.Now().UTC().Unix()
+	createdAt := now - 100
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_state(id,cluster_id,enabled,status,active_size,desired_size,hmr_state,active_operation_id,config_json,created_at,updated_at)
+		VALUES(1,$1,1,'Degraded Quorum',1,1,'inactive',$2,'{}',$3,$3)
+		ON CONFLICT(id) DO UPDATE SET cluster_id=EXCLUDED.cluster_id,enabled=1,status='Degraded Quorum',active_size=1,desired_size=1,hmr_state='inactive',hmr_node_id=NULL,active_operation_id=EXCLUDED.active_operation_id,config_json='{}',updated_at=EXCLUDED.updated_at
+	`, clusterID, operationID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,drain_reason,roles_json,probe_health_json,created_at,updated_at)
+		VALUES
+			($1,'readmit-engine-01','readmit-engine-01','192.0.2.51','amd64','Ubuntu 24.04','Active','active',$4,$5,NULL,'{}','{}',$6,$7),
+			($2,$8,'retired-hostname-02','192.0.2.152','arm64','Ubuntu 22.04','Removed','drained','2026.08.1',$9,'safe_pair_removal','{}','{}',$6,$7),
+			($3,$10,'retired-hostname-03','192.0.2.153','arm64','Ubuntu 22.04','Removed','drained','2026.08.1',$9,'safe_pair_removal','{}','{}',$6,$7)
+	`, survivorID, retainedNodeTwoID, retainedNodeTriID, baselineRelease, baselineSHA, createdAt, now, nodeNames[0], strings.Repeat("b", 40), nodeNames[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_admissions(id,invitation_id,cluster_id,node_name,hostname,management_ip,architecture,os_version,state,created_at,updated_at)
+		VALUES
+			($1,$2,$5,$6,'readmit-host-02','192.0.2.52','amd64','Ubuntu 24.04','Approved',$8,$8),
+			($3,$4,$5,$7,'readmit-host-03','192.0.2.53','amd64','Ubuntu 24.04','Approved',$8,$8)
+	`, admissionTwoID, invitationTwoID, admissionThreeID, invitationTriID, clusterID, nodeNames[0], nodeNames[1], now); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{
+		"admission_ids":    []any{admissionTwoID, admissionThreeID},
+		"baseline_release": baselineRelease,
+		"baseline_sha":     baselineSHA,
+		"k3s_version":      "v1.36.3+k3s1",
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_operations(id,kind,state,current_step,requested_by,payload_json,attempt,created_at,updated_at)
+		VALUES($1,'membership_admit','running','verify_quorum',$2,$3,2,$4,$4)
+	`, operationID, holder, marshalClusterJSON(payload), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at)
+		VALUES($1,$2,$3,$4)
+		ON CONFLICT(name) DO UPDATE SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at
+	`, clusterControllerLeaseName, holder, now+60, now); err != nil {
+		t.Fatal(err)
+	}
+	controller := &clusterController{store: store, holder: holder, now: func() time.Time { return time.Unix(now+1, 0).UTC() }}
+	operation := clusterControllerOperation{ID: operationID, Kind: "membership_admit", Payload: payload, Attempt: 2}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Active' WHERE id=$1`, retainedNodeTwoID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.completeOperation(ctx, operation, nil); err == nil || !strings.Contains(err.Error(), "conflicts with non-removed durable identity") {
+		t.Fatalf("active node-name collision did not fail closed: %v", err)
+	}
+	var approvedAdmissions int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_admissions WHERE id IN ($1,$2) AND state='Approved'`, admissionTwoID, admissionThreeID).Scan(&approvedAdmissions); err != nil || approvedAdmissions != 2 {
+		t.Fatalf("failed completion did not roll back admission state: approved=%d err=%v", approvedAdmissions, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed' WHERE id=$1`, retainedNodeTwoID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.completeOperation(ctx, operation, nil); err != nil {
+		t.Fatalf("complete retained-node re-admission: %v", err)
+	}
+
+	expected := []struct {
+		nodeName, retainedID, admissionID, hostname, managementIP string
+	}{
+		{nodeNames[0], retainedNodeTwoID, admissionTwoID, "readmit-host-02", "192.0.2.52"},
+		{nodeNames[1], retainedNodeTriID, admissionThreeID, "readmit-host-03", "192.0.2.53"},
+	}
+	for _, want := range expected {
+		var id, hostname, managementIP, architecture, osVersion, membershipState, applicationState, releaseTag, releaseSHA, drainReason, admissionState string
+		var retainedCreatedAt int64
+		if err := db.QueryRowContext(ctx, `
+			SELECT id,hostname,management_ip,architecture,os_version,membership_state,application_state,COALESCE(release_tag,''),COALESCE(release_sha,''),COALESCE(drain_reason,''),created_at
+			FROM engine.cluster_nodes WHERE node_name=$1
+		`, want.nodeName).Scan(&id, &hostname, &managementIP, &architecture, &osVersion, &membershipState, &applicationState, &releaseTag, &releaseSHA, &drainReason, &retainedCreatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if id != want.retainedID || retainedCreatedAt != createdAt {
+			t.Fatalf("node %s identity changed: id=%s created_at=%d", want.nodeName, id, retainedCreatedAt)
+		}
+		if hostname != want.hostname || managementIP != want.managementIP || architecture != "amd64" || osVersion != "Ubuntu 24.04" {
+			t.Fatalf("node %s mutable identity was not refreshed: host=%s ip=%s architecture=%s os=%s", want.nodeName, hostname, managementIP, architecture, osVersion)
+		}
+		if membershipState != "Active" || applicationState != "active" || releaseTag != baselineRelease || releaseSHA != baselineSHA || drainReason != "" {
+			t.Fatalf("node %s was not fully reactivated: membership=%s application=%s release=%s sha=%s drain=%q", want.nodeName, membershipState, applicationState, releaseTag, releaseSHA, drainReason)
+		}
+		var replacementRows int64
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE id=$1`, want.admissionID).Scan(&replacementRows); err != nil || replacementRows != 0 {
+			t.Fatalf("admission UUID replaced retained node identity: rows=%d err=%v", replacementRows, err)
+		}
+		if err := db.QueryRowContext(ctx, `SELECT state FROM engine.cluster_admissions WHERE id=$1`, want.admissionID).Scan(&admissionState); err != nil || admissionState != "Admitted" {
+			t.Fatalf("admission %s state=%q err=%v", want.admissionID, admissionState, err)
+		}
+	}
+	var status, activeOperation, operationState, operationStep string
+	var activeSize, desiredSize int64
+	if err := db.QueryRowContext(ctx, `SELECT status,active_size,desired_size,COALESCE(active_operation_id,'') FROM engine.cluster_state WHERE id=1`).Scan(&status, &activeSize, &desiredSize, &activeOperation); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT state,current_step FROM engine.cluster_operations WHERE id=$1`, operationID).Scan(&operationState, &operationStep); err != nil {
+		t.Fatal(err)
+	}
+	if status != "Healthy" || activeSize != 3 || desiredSize != 3 || activeOperation != "" || operationState != "succeeded" || operationStep != "complete" {
+		t.Fatalf("re-admission did not finalize cluster: status=%s size=%d/%d active_operation=%q operation=%s/%s", status, activeSize, desiredSize, activeOperation, operationState, operationStep)
+	}
+}
+
 func TestClusterNodeRuntimeStateSeparatesDesiredAndObservedState(t *testing.T) {
 	node := clusterControllerNode{
 		ID:               "11111111-1111-4111-8111-111111111111",
