@@ -30,8 +30,9 @@ type blockingClusterLeaseDriver struct{}
 type blockingClusterLeaseConnection struct{}
 
 type recoveringClusterLeaseDriver struct {
-	opens  atomic.Int64
-	closes atomic.Int64
+	opens               atomic.Int64
+	closes              atomic.Int64
+	blockingConnections int64
 }
 
 type recoveringClusterLeaseConnection struct {
@@ -59,7 +60,7 @@ func (blockingClusterLeaseConnection) ExecContext(ctx context.Context, _ string,
 }
 
 func (d *recoveringClusterLeaseDriver) Open(string) (driver.Conn, error) {
-	return &recoveringClusterLeaseConnection{driver: d, blocking: d.opens.Add(1) == 1}, nil
+	return &recoveringClusterLeaseConnection{driver: d, blocking: d.opens.Add(1) <= d.blockingConnections}, nil
 }
 
 func (*recoveringClusterLeaseConnection) Prepare(string) (driver.Stmt, error) {
@@ -452,7 +453,7 @@ func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
 }
 
 func TestClusterControllerLeaseAcquireTimesOutStalePrimaryConnection(t *testing.T) {
-	leaseDriver := &recoveringClusterLeaseDriver{}
+	leaseDriver := &recoveringClusterLeaseDriver{blockingConnections: 4}
 	driverName := fmt.Sprintf("recovering-cluster-lease-%d", time.Now().UnixNano())
 	sql.Register(driverName, leaseDriver)
 	db, err := sql.Open(driverName, "")
@@ -460,14 +461,31 @@ func TestClusterControllerLeaseAcquireTimesOutStalePrimaryConnection(t *testing.
 		t.Fatal(err)
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	staleConnections := make([]*sql.Conn, 0, 4)
+	for range 4 {
+		conn, connErr := db.Conn(context.Background())
+		if connErr != nil {
+			t.Fatal(connErr)
+		}
+		staleConnections = append(staleConnections, conn)
+	}
+	for _, conn := range staleConnections {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+	if leaseDriver.opens.Load() != 4 {
+		t.Fatalf("stale pool connections=%d want 4", leaseDriver.opens.Load())
+	}
 
 	controller := &clusterController{
 		store:               &postgresOperatorStore{db: db},
 		holder:              "standby-controller",
 		now:                 time.Now,
 		leaseAcquireTimeout: 20 * time.Millisecond,
+		maxIdleConnections:  4,
 	}
 	started := time.Now()
 	owned, err := controller.acquireLease(context.Background())
@@ -481,8 +499,8 @@ func TestClusterControllerLeaseAcquireTimesOutStalePrimaryConnection(t *testing.
 	if err != nil || !owned {
 		t.Fatalf("replacement lease connection owned=%v err=%v", owned, err)
 	}
-	if leaseDriver.opens.Load() != 2 || leaseDriver.closes.Load() < 1 {
-		t.Fatalf("stale connection was not retired: opens=%d closes=%d", leaseDriver.opens.Load(), leaseDriver.closes.Load())
+	if leaseDriver.opens.Load() != 5 || leaseDriver.closes.Load() < 4 {
+		t.Fatalf("stale connection pool was not retired: opens=%d closes=%d", leaseDriver.opens.Load(), leaseDriver.closes.Load())
 	}
 }
 

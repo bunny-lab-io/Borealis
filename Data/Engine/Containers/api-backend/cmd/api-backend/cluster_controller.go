@@ -137,6 +137,7 @@ type clusterController struct {
 	now                        func() time.Time
 	leaseRenewInterval         time.Duration
 	leaseAcquireTimeout        time.Duration
+	maxIdleConnections         int
 	lastPrune                  atomic.Int64
 	lastCustomResourceSync     atomic.Int64
 	lastRuntimeRoleObservation string
@@ -270,7 +271,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		actionImage: strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
 		soak:        envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
-	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now}
+	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
 	healthServer := controller.healthServer()
 	healthExited := make(chan error, 1)
 	go func() {
@@ -1228,6 +1229,14 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 	if err != nil {
 		if acquireCtx.Err() != nil {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			// A primary transition can leave several old Service connections
+			// idle in this controller-only pool. Retiring only the connection
+			// selected above would spend one acquisition timeout per stale
+			// socket before a standby can acquire the controller lease.
+			c.store.db.SetMaxIdleConns(0)
+			if c.maxIdleConnections > 0 {
+				c.store.db.SetMaxIdleConns(c.maxIdleConnections)
+			}
 		}
 		return false, err
 	}
