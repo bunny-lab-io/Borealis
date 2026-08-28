@@ -197,7 +197,11 @@ def reconcile_one(
 ) -> str:
     active_name = deployment_name(base, node)
     name = candidate_deployment_name(base, node) if candidate else active_name
-    source = load_json(f"deployment/{active_name}") or load_json(f"deployment/{base}")
+    active = load_json(f"deployment/{active_name}")
+    # Generic zero-replica Deployment remains canonical runtime template in
+    # cluster mode. Starting from existing node clone would retain stale env,
+    # Secret references, probes, and config hashes after Engine.sh updates it.
+    source = load_json(f"deployment/{base}") or active
     if not source:
         raise RuntimeError(f"required deployment template {base} does not exist")
     manifest = {

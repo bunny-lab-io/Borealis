@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,29 @@ type blockingClusterControllerRunner struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type blockingClusterLeaseDriver struct{}
+
+type blockingClusterLeaseConnection struct{}
+
+func (blockingClusterLeaseDriver) Open(string) (driver.Conn, error) {
+	return blockingClusterLeaseConnection{}, nil
+}
+
+func (blockingClusterLeaseConnection) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare is unsupported")
+}
+
+func (blockingClusterLeaseConnection) Close() error { return nil }
+
+func (blockingClusterLeaseConnection) Begin() (driver.Tx, error) {
+	return nil, errors.New("transaction is unsupported")
+}
+
+func (blockingClusterLeaseConnection) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (r *blockingClusterControllerRunner) Run(ctx context.Context, _ clusterControllerOperation, _ clusterControllerStep, _ []clusterControllerNode) error {
@@ -389,6 +413,31 @@ func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
 	}
 	if !errors.Is(guard.Err(), errClusterControllerLeaseLost) || !errors.Is(context.Cause(guard.Context()), errClusterControllerLeaseLost) {
 		t.Fatalf("unexpected lease loss cause: err=%v cause=%v", guard.Err(), context.Cause(guard.Context()))
+	}
+}
+
+func TestClusterControllerLeaseAcquireTimesOutStalePrimaryConnection(t *testing.T) {
+	driverName := fmt.Sprintf("blocking-cluster-lease-%d", time.Now().UnixNano())
+	sql.Register(driverName, blockingClusterLeaseDriver{})
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	controller := &clusterController{
+		store:               &postgresOperatorStore{db: db},
+		holder:              "standby-controller",
+		now:                 time.Now,
+		leaseAcquireTimeout: 20 * time.Millisecond,
+	}
+	started := time.Now()
+	owned, err := controller.acquireLease(context.Background())
+	if owned || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stale lease connection owned=%v err=%v", owned, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("stale lease acquisition took %s", elapsed)
 	}
 }
 

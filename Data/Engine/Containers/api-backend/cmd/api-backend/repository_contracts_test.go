@@ -181,6 +181,28 @@ func TestClusterCandidateReceivesAegisKeyWithoutEnteringPublicService(t *testing
 	}
 }
 
+func TestHMRLostTargetRecoveryFencesRejoinedTargetBeforeCommit(t *testing.T) {
+	source := readRepositoryContractFile(t, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go")
+	start := strings.Index(source, "func (c *clusterController) reconcileLostHMRNode(")
+	end := strings.Index(source, "\nfunc clusterControllerStepTimeout(")
+	if start < 0 || end <= start {
+		t.Fatal("lost HMR target recovery function unavailable")
+	}
+	recovery := source[start:end]
+	fenceStart := strings.Index(recovery, "targetReady, err := runner.nodeReady")
+	if fenceStart < 0 {
+		t.Fatal("lost HMR target recovery fence unavailable")
+	}
+	assertContractOrder(t, recovery[fenceStart:],
+		"targetReady, err := runner.nodeReady",
+		`"EnterApplicationDrain"`,
+		"runner.setNodeRoleEligibility(ctx, targetName, false)",
+		"runner.waitNodeEndpointsWithdrawn(ctx, targetName)",
+		"runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, targetName)",
+		"conn.BeginTx",
+	)
+}
+
 func TestEngineIPFallbackIsResolvedForEveryNetworkMode(t *testing.T) {
 	source := readRepositoryContractFile(t, "Engine.sh")
 	resolver := engineShellFunctionForContractTest(t, source, "resolve_engine_ip_fallback() {", "\nvalidate_engine_fqdn() {")

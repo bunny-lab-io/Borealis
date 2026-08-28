@@ -101,6 +101,69 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         self.assertEqual(environment["BOREALIS_CLUSTER_ACTION_IMAGE"], image)
         self.assertEqual(environment["BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE"], "false")
 
+    def test_reconcile_refreshes_node_clone_from_generic_template(self) -> None:
+        stale_image = "borealis-engine/site-worker:sha-" + "a" * 12
+        current_image = "borealis-engine/site-worker:sha-" + "b" * 12
+
+        def deployment(image: str) -> dict:
+            return {
+                "metadata": {"labels": {"app.kubernetes.io/name": "borealis-operator"}},
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"matchLabels": {"app.kubernetes.io/name": "borealis-operator"}},
+                    "template": {
+                        "metadata": {"labels": {"app.kubernetes.io/name": "borealis-operator"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "borealis-operator",
+                                    "env": [
+                                        {
+                                            "name": "BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST",
+                                            "value": image,
+                                        }
+                                    ],
+                                    "startupProbe": {"periodSeconds": 2, "failureThreshold": 30},
+                                    "livenessProbe": {"initialDelaySeconds": 0},
+                                }
+                            ]
+                        },
+                    },
+                },
+            }
+
+        calls: list[tuple[tuple[str, ...], str | None]] = []
+
+        def fake_load(resource: str) -> dict | None:
+            if resource == "deployment/borealis-operator-engine-01":
+                return deployment(stale_image)
+            if resource == "deployment/borealis-operator":
+                return deployment(current_image)
+            return None
+
+        def fake_kubectl(*args: str, stdin: str | None = None) -> str:
+            calls.append((args, stdin))
+            return ""
+
+        with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
+            MODULE, "kubectl", side_effect=fake_kubectl
+        ):
+            MODULE.reconcile_one(
+                "borealis-operator",
+                "borealis-operator",
+                "engine-01",
+                "c" * 40,
+                {"borealis-operator": "borealis-engine/borealis-operator:sha-" + "d" * 12},
+                False,
+            )
+
+        manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+        environment = {
+            item["name"]: item.get("value")
+            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+        }
+        self.assertEqual(environment["BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST"], current_image)
+
     def test_reconcile_drops_controller_owned_deployment_annotations(self) -> None:
         metadata = MODULE.clean_metadata(
             {

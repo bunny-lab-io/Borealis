@@ -21,20 +21,21 @@ import (
 )
 
 const (
-	clusterControllerLeaseName          = "cluster-operation-controller"
-	clusterControllerLeaseTTL           = 20 * time.Second
-	clusterControllerLeaseRenewInterval = 5 * time.Second
-	clusterControllerLeaseRenewalGrace  = clusterControllerLeaseTTL - clusterControllerLeaseRenewInterval
-	clusterNodeManagerSocket            = "/run/borealis/node-manager.sock"
-	clusterNodeManagerToken             = "/etc/borealis/node-manager.token"
-	clusterUpgradeNamespace             = "system-upgrade"
-	clusterSharedArtifactPVCName        = "borealis-agent-artifacts"
-	clusterLonghornNamespace            = "longhorn-system"
-	clusterLonghornCSIDriver            = "driver.longhorn.io"
-	clusterSharedArtifactReplicaCount   = int64(3)
-	clusterK3sEtcdRemoveAnnotation      = "etcd.k3s.cattle.io/remove"
-	clusterK3sEtcdRemovedNameAnnotation = "etcd.k3s.cattle.io/removed-node-name"
-	clusterK3sEtcdNodeNameAnnotation    = "etcd.k3s.cattle.io/node-name"
+	clusterControllerLeaseName           = "cluster-operation-controller"
+	clusterControllerLeaseTTL            = 20 * time.Second
+	clusterControllerLeaseRenewInterval  = 5 * time.Second
+	clusterControllerLeaseRenewalGrace   = clusterControllerLeaseTTL - clusterControllerLeaseRenewInterval
+	clusterControllerLeaseAcquireTimeout = 5 * time.Second
+	clusterNodeManagerSocket             = "/run/borealis/node-manager.sock"
+	clusterNodeManagerToken              = "/etc/borealis/node-manager.token"
+	clusterUpgradeNamespace              = "system-upgrade"
+	clusterSharedArtifactPVCName         = "borealis-agent-artifacts"
+	clusterLonghornNamespace             = "longhorn-system"
+	clusterLonghornCSIDriver             = "driver.longhorn.io"
+	clusterSharedArtifactReplicaCount    = int64(3)
+	clusterK3sEtcdRemoveAnnotation       = "etcd.k3s.cattle.io/remove"
+	clusterK3sEtcdRemovedNameAnnotation  = "etcd.k3s.cattle.io/removed-node-name"
+	clusterK3sEtcdNodeNameAnnotation     = "etcd.k3s.cattle.io/node-name"
 )
 
 var (
@@ -134,6 +135,7 @@ type clusterController struct {
 	holder                     string
 	now                        func() time.Time
 	leaseRenewInterval         time.Duration
+	leaseAcquireTimeout        time.Duration
 	lastPrune                  atomic.Int64
 	lastCustomResourceSync     atomic.Int64
 	lastRuntimeRoleObservation string
@@ -860,6 +862,34 @@ func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *ku
 			return true, err
 		}
 	}
+	target := clusterNodeByID(nodes, targetID)
+	if target.ID == "" {
+		return true, errors.New("lost HMR target disappeared from active membership")
+	}
+	targetReady, err := runner.nodeReady(ctx, targetName)
+	if err != nil {
+		return true, err
+	}
+	if targetReady {
+		targetRecovery := recovery
+		targetRecovery.TargetNodeID = targetID
+		targetRecovery.Payload = map[string]any{"reason": "hmr_target_lost"}
+		step := clusterControllerStep{Name: "hmr-recovery:" + targetID + ":fence-rejoined-target", NodeID: targetID}
+		if err := runner.nodeActionJob(ctx, targetRecovery, step, target, "EnterApplicationDrain"); err != nil {
+			return true, err
+		}
+	}
+	if err := runner.setNodeRoleEligibility(ctx, targetName, false); err != nil {
+		return true, err
+	}
+	if targetReady {
+		if err := runner.waitNodeEndpointsWithdrawn(ctx, targetName); err != nil {
+			return true, err
+		}
+	}
+	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, targetName); err != nil {
+		return true, err
+	}
 	now := c.now().UTC().Unix()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1173,14 +1203,20 @@ func clusterAllNodesAtRevision(nodes []clusterControllerNode, revision string) b
 }
 
 func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
+	timeout := c.leaseAcquireTimeout
+	if timeout <= 0 {
+		timeout = clusterControllerLeaseAcquireTimeout
+	}
+	acquireCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	now := c.now().UTC().Unix()
 	expires := now + int64(clusterControllerLeaseTTL/time.Second)
-	conn, err := c.store.db.Conn(ctx)
+	conn, err := c.store.db.Conn(acquireCtx)
 	if err != nil {
 		return false, err
 	}
 	defer conn.Close()
-	result, err := conn.ExecContext(ctx, `
+	result, err := conn.ExecContext(acquireCtx, `
 		INSERT INTO engine.cluster_application_leases(name, holder, expires_at, updated_at)
 		VALUES($1,$2,$3,$4)
 		ON CONFLICT(name) DO UPDATE
