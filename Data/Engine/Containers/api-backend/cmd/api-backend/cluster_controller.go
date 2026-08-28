@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -1225,6 +1226,9 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 		   OR engine.cluster_application_leases.expires_at < EXCLUDED.updated_at
 	`, clusterControllerLeaseName, c.holder, expires, now)
 	if err != nil {
+		if acquireCtx.Err() != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
 		return false, err
 	}
 	rows, err := result.RowsAffected()
