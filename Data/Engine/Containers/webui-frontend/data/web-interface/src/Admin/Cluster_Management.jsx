@@ -215,20 +215,6 @@ const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "probes"];
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
 const CLUSTER_EVENT_PAGE_SIZE = 500;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
-const POSTGRES_ROLE_TONES = {
-  active: {
-    label: "PostgreSQL (Active)",
-    text: "#00d18c",
-    background: "rgba(0,209,140,0.16)",
-    border: "rgba(0,209,140,0.45)",
-  },
-  replica: {
-    label: "PostgreSQL (Replica)",
-    text: "#7dd3fc",
-    background: "rgba(125,211,252,0.16)",
-    border: "rgba(125,211,252,0.45)",
-  },
-};
 
 function validIPv4(value) {
   const parts = String(value || "").split(".");
@@ -323,6 +309,14 @@ function statusPillTheme(value) {
       dot: "#00d18c",
     };
   }
+  if (normalized.includes("replica")) {
+    return {
+      text: "#7dd3fc",
+      background: "rgba(125,211,252,0.16)",
+      border: "1px solid rgba(125,211,252,0.45)",
+      dot: "#7dd3fc",
+    };
+  }
   return {
     text: "#e2e6f0",
     background: "rgba(226,230,240,0.12)",
@@ -331,12 +325,13 @@ function statusPillTheme(value) {
   };
 }
 
-function StatusPill({ value }) {
+function StatusPill({ value, postgresRole = "" }) {
   const label = valueLabel(value, "Unknown");
   const theme = statusPillTheme(label);
   return (
     <Box
       component="span"
+      data-postgres-role={postgresRole || undefined}
       sx={{
         display: "inline-flex",
         alignItems: "center",
@@ -423,52 +418,13 @@ export function clusterNodeRolesPresentation(node, postgresPrimaryNodeID = "") {
   const primaryNode = (primaryID !== "" && primaryID === String(node?.id || "").trim())
     || roles?.postgres_primary === true;
   const postgresRole = activeMember ? (primaryNode ? "active" : "replica") : "";
-  const postgresLabel = POSTGRES_ROLE_TONES[postgresRole]?.label || "";
+  const postgresLabel = postgresRole ? `PostgreSQL (${titleCase(postgresRole)})` : "";
   const labels = postgresLabel ? [...ownershipLabels, postgresLabel] : ownershipLabels;
   return {
     ownershipLabels,
     postgresRole,
     label: labels.length ? labels.join(", ") : "Standby",
   };
-}
-
-function PostgresRolePill({ role }) {
-  const tone = POSTGRES_ROLE_TONES[role];
-  if (!tone) return null;
-  return (
-    <Box
-      component="span"
-      data-postgres-role={role}
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 0.65,
-        height: 24,
-        px: 1,
-        borderRadius: 999,
-        color: tone.text,
-        backgroundColor: tone.background,
-        border: `1px solid ${tone.border}`,
-        fontSize: "0.72rem",
-        fontWeight: 700,
-        lineHeight: 1,
-        flexShrink: 0,
-      }}
-    >
-      <Box
-        component="span"
-        sx={{
-          width: 7,
-          height: 7,
-          borderRadius: "50%",
-          backgroundColor: tone.text,
-          boxShadow: `0 0 10px ${tone.text}`,
-          flexShrink: 0,
-        }}
-      />
-      {tone.label}
-    </Box>
-  );
 }
 
 function ClusterNodeRolesCell({ presentation }) {
@@ -480,7 +436,7 @@ function ClusterNodeRolesCell({ presentation }) {
           {presentation.ownershipLabels.join(", ")}
         </Box>
       ) : null}
-      {presentation.postgresRole ? <PostgresRolePill role={presentation.postgresRole} /> : null}
+      {presentation.postgresRole ? <StatusPill value={`PostgreSQL (${titleCase(presentation.postgresRole)})`} postgresRole={presentation.postgresRole} /> : null}
       {!presentation.ownershipLabels.length && !presentation.postgresRole ? "Standby" : null}
     </Box>
   );
