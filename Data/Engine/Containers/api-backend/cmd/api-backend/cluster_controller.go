@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -3963,6 +3964,9 @@ func clusterInitAuthorizationTransitionError(err error) bool {
 func transientKubernetesAPIError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
 	}
 	message := strings.ToLower(err.Error())
 	for _, status := range []string{

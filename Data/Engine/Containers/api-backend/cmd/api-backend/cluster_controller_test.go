@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1537,6 +1538,13 @@ func TestWaitJobToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 	}
 	if requests != 3 {
 		t.Fatalf("unexpected Job poll count %d", requests)
+	}
+}
+
+func TestTransientKubernetesAPIErrorAcceptsEOF(t *testing.T) {
+	err := fmt.Errorf("read Kubernetes API response: %w", io.EOF)
+	if !transientKubernetesAPIError(err) {
+		t.Fatalf("wrapped EOF was not classified as transient: %v", err)
 	}
 }
 
