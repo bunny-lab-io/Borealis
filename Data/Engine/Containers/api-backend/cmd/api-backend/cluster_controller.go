@@ -3571,6 +3571,13 @@ func (r *kubernetesClusterStepRunner) waitK3sUpgradePlan(ctx context.Context, pl
 						return fmt.Errorf("K3s upgrade Plan validation failed: %s", firstText(cleanText(condition["message"]), cleanText(condition["reason"])))
 					}
 					if conditionType == "Complete" && conditionStatus == "True" {
+						if err := r.setNodeUnschedulable(ctx, nodeName, false); err != nil {
+							if !transientKubernetesAPIError(err) {
+								return err
+							}
+							lastTransientErr = err
+							break
+						}
 						return r.verifyK3sNodeVersion(ctx, nodeName, version)
 					}
 				}
@@ -3605,6 +3612,19 @@ func (r *kubernetesClusterStepRunner) waitK3sUpgradePlan(ctx context.Context, pl
 
 func clusterK3sPlanVersionMatches(reported, target string) bool {
 	return reported == target || reported == strings.Replace(target, "+k3s", "-k3s", 1)
+}
+
+func (r *kubernetesClusterStepRunner) setNodeUnschedulable(ctx context.Context, nodeName string, unschedulable bool) error {
+	var output map[string]any
+	return r.kube.doJSON(
+		ctx,
+		http.MethodPatch,
+		"/api/v1/nodes/"+nodeName,
+		map[string]any{"spec": map[string]any{"unschedulable": unschedulable}},
+		"application/merge-patch+json",
+		&output,
+		30*time.Second,
+	)
 }
 
 func (r *kubernetesClusterStepRunner) verifyK3sNodeVersion(ctx context.Context, nodeName, version string) error {

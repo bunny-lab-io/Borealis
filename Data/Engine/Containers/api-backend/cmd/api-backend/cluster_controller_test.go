@@ -2139,6 +2139,7 @@ func TestK3sPlanNameIsStableDNSLabel(t *testing.T) {
 }
 
 func TestK3sPlanVersionAcceptsSystemUpgradeNormalization(t *testing.T) {
+	uncordons := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/plans/"):
@@ -2146,6 +2147,16 @@ func TestK3sPlanVersionAcceptsSystemUpgradeNormalization(t *testing.T) {
 				"latestVersion": "v1.36.4-k3s1",
 				"conditions":    []any{map[string]any{"type": "Complete", "status": "True"}},
 			}})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/nodes/engine-1":
+			var patch map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+				t.Fatal(err)
+			}
+			if nestedMap(patch, "spec")["unschedulable"] != false {
+				t.Fatalf("K3s Plan completion did not uncordon node: %#v", patch)
+			}
+			uncordons++
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-1"}})
 		case r.URL.Path == "/api/v1/nodes/engine-1":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"spec": map[string]any{},
@@ -2169,10 +2180,14 @@ func TestK3sPlanVersionAcceptsSystemUpgradeNormalization(t *testing.T) {
 	if err := runner.waitK3sUpgradePlan(context.Background(), "plan-1", "engine-1", "v1.36.4+k3s1"); err != nil {
 		t.Fatal(err)
 	}
+	if uncordons != 1 {
+		t.Fatalf("K3s Plan uncordons=%d want 1", uncordons)
+	}
 }
 
 func TestK3sPlanWaitToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 	planRequests := 0
+	uncordons := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/plans/"):
@@ -2185,6 +2200,9 @@ func TestK3sPlanWaitToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 				"latestVersion": "v1.36.4+k3s1",
 				"conditions":    []any{map[string]any{"type": "Complete", "status": "True"}},
 			}})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/nodes/engine-1":
+			uncordons++
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-1"}})
 		case r.URL.Path == "/api/v1/nodes/engine-1":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"spec": map[string]any{},
@@ -2212,6 +2230,9 @@ func TestK3sPlanWaitToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 	}
 	if planRequests != 2 {
 		t.Fatalf("K3s Plan polls=%d want 2", planRequests)
+	}
+	if uncordons != 1 {
+		t.Fatalf("K3s Plan uncordons=%d want 1", uncordons)
 	}
 }
 
