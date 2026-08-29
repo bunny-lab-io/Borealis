@@ -104,7 +104,7 @@ Emergency removal is single-node recovery for host already unreachable. Power ta
 Open **Admin > Cluster Management**. Views show:
 
 - Overview: quorum, active release, HMR state, operation lease.
-- Nodes: paginated node table with combined membership/application status, management IP, active roles, passed/total probe summary, and row action menu.
+- Nodes: paginated node table with combined membership/application status, management IP, active roles, green `PostgreSQL (Active)` or Borealis-blue `PostgreSQL (Replica)` badges for current members, passed/total probe summary, and row action menu.
 - Database: primary/replicas, synchronous durability, switchovers, snapshots.
 - Cluster Events: paginated operation history with affected node hostnames, status, friendly operation names, concise lifecycle details, local timestamp, and cancellation for queued or waiting work.
 - Maintenance: stable Engine releases, K3s updates, paired admission/removal, maintenance drain, and emergency actions.
@@ -216,7 +216,7 @@ Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 
     - Route daemon: `Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/`.
     - CRDs/controller/RBAC/availability: `Data/Engine/K3s/cluster/`.
     - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`.
-    - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
+    - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Nodes derives each active member's PostgreSQL badge from `leaders.postgres_primary` with `roles.postgres_primary` fallback; non-primary active members render as replicas, while removed historical rows receive no database role. Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
     - Release compatibility: `Data/Engine/release-manifest.json`.
     - Release catalog traversal does not assume GitHub publication order matches numeric tag order. It skips draft, prerelease, nonnumeric, and downgrade-class entries, then continues until exact current stable tag appears so newly published backports cannot hide newer rolling targets.
 

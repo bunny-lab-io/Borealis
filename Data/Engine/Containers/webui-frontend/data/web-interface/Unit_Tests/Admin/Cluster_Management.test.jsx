@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import ClusterManagement, {
   buildClusterOperationDetails,
   clusterOperationNodeLabel,
+  clusterNodeRolesPresentation,
   clusterNodeStatusLabel,
   formatClusterTimestamp,
   friendlyClusterOperationName,
@@ -126,6 +127,22 @@ describe("Cluster Management", () => {
     expect(formatClusterTimestamp(1_787_770_000)).toMatch(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/);
   });
 
+  it("assigns PostgreSQL roles only to active cluster members", () => {
+    const primaryID = "11111111-1111-4111-8111-111111111111";
+    expect(clusterNodeRolesPresentation({ id: primaryID, membership_state: "Active", roles: {} }, primaryID)).toMatchObject({
+      postgresRole: "active",
+      label: "PostgreSQL (Active)",
+    });
+    expect(clusterNodeRolesPresentation({ id: "22222222-2222-4222-8222-222222222222", membership_state: "Active", roles: {} }, primaryID)).toMatchObject({
+      postgresRole: "replica",
+      label: "PostgreSQL (Replica)",
+    });
+    expect(clusterNodeRolesPresentation({ id: "33333333-3333-4333-8333-333333333333", membership_state: "Removed", roles: {} }, primaryID)).toMatchObject({
+      postgresRole: "",
+      label: "Standby",
+    });
+  });
+
   it("resolves operation hostnames and redacts copied lifecycle details", () => {
     const operation = {
       id: "11111111-1111-4111-8111-111111111199",
@@ -180,6 +197,14 @@ describe("Cluster Management", () => {
     }
     expect(await screen.findAllByText("Active / Active")).toHaveLength(3);
     expect(screen.getByText("Control VIP Owner")).toBeInTheDocument();
+    const activePostgresBadge = screen.getByText("PostgreSQL (Active)");
+    expect(activePostgresBadge).toHaveAttribute("data-postgres-role", "active");
+    expect(activePostgresBadge).toHaveStyle({ color: "#00d18c", backgroundColor: "rgba(0,209,140,0.16)" });
+    expect(screen.getAllByText("PostgreSQL (Replica)")).toHaveLength(2);
+    for (const badge of screen.getAllByText("PostgreSQL (Replica)")) {
+      expect(badge).toHaveAttribute("data-postgres-role", "replica");
+      expect(badge).toHaveStyle({ color: "#7dd3fc", backgroundColor: "rgba(125,211,252,0.16)" });
+    }
     expect(screen.getByText("9/9 Passed")).toBeInTheDocument();
     expect(screen.queryByText(/k3s version/i)).not.toBeInTheDocument();
   });

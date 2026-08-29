@@ -215,6 +215,20 @@ const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "probes"];
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
 const CLUSTER_EVENT_PAGE_SIZE = 500;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
+const POSTGRES_ROLE_TONES = {
+  active: {
+    label: "PostgreSQL (Active)",
+    text: "#00d18c",
+    background: "rgba(0,209,140,0.16)",
+    border: "rgba(0,209,140,0.45)",
+  },
+  replica: {
+    label: "PostgreSQL (Replica)",
+    text: "#7dd3fc",
+    background: "rgba(125,211,252,0.16)",
+    border: "rgba(125,211,252,0.45)",
+  },
+};
 
 function validIPv4(value) {
   const parts = String(value || "").split(".");
@@ -392,20 +406,84 @@ export function clusterNodeStatusLabel(node) {
   return `${membership} / ${application}`;
 }
 
-function clusterNodeRolesLabel(node) {
+export function clusterNodeRolesPresentation(node, postgresPrimaryNodeID = "") {
   const roles = node?.roles || {};
   const roleLabels = {
     control_vip_owner: "Control VIP Owner",
     edge_vip_owner: "Edge VIP Owner",
     etcd_leader: "etcd Leader",
-    postgres_primary: "PostgreSQL Primary",
     scheduler_leader: "Scheduler Leader",
     wireguard_owner: "WireGuard Owner",
   };
-  const labels = Object.entries(roles)
-    .filter(([role, active]) => role !== "k3s_version" && active === true)
+  const ownershipLabels = Object.entries(roles)
+    .filter(([role, active]) => !["k3s_version", "postgres_primary"].includes(role) && active === true)
     .map(([role]) => roleLabels[role] || titleCase(role));
-  return labels.length ? labels.join(", ") : "Standby";
+  const activeMember = String(node?.membership_state || "").toLowerCase() === "active";
+  const primaryID = String(postgresPrimaryNodeID || "").trim();
+  const primaryNode = (primaryID !== "" && primaryID === String(node?.id || "").trim())
+    || roles?.postgres_primary === true;
+  const postgresRole = activeMember ? (primaryNode ? "active" : "replica") : "";
+  const postgresLabel = POSTGRES_ROLE_TONES[postgresRole]?.label || "";
+  const labels = postgresLabel ? [...ownershipLabels, postgresLabel] : ownershipLabels;
+  return {
+    ownershipLabels,
+    postgresRole,
+    label: labels.length ? labels.join(", ") : "Standby",
+  };
+}
+
+function PostgresRolePill({ role }) {
+  const tone = POSTGRES_ROLE_TONES[role];
+  if (!tone) return null;
+  return (
+    <Box
+      component="span"
+      data-postgres-role={role}
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.65,
+        height: 24,
+        px: 1,
+        borderRadius: 999,
+        color: tone.text,
+        backgroundColor: tone.background,
+        border: `1px solid ${tone.border}`,
+        fontSize: "0.72rem",
+        fontWeight: 700,
+        lineHeight: 1,
+        flexShrink: 0,
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          backgroundColor: tone.text,
+          boxShadow: `0 0 10px ${tone.text}`,
+          flexShrink: 0,
+        }}
+      />
+      {tone.label}
+    </Box>
+  );
+}
+
+function ClusterNodeRolesCell({ presentation }) {
+  if (!presentation) return "Standby";
+  return (
+    <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 1, minWidth: 0, whiteSpace: "nowrap" }}>
+      {presentation.ownershipLabels.length ? (
+        <Box component="span" sx={{ color: "#e2e8f0", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {presentation.ownershipLabels.join(", ")}
+        </Box>
+      ) : null}
+      {presentation.postgresRole ? <PostgresRolePill role={presentation.postgresRole} /> : null}
+      {!presentation.ownershipLabels.length && !presentation.postgresRole ? "Standby" : null}
+    </Box>
+  );
 }
 
 function clusterNodeProbeSummary(node) {
@@ -887,13 +965,17 @@ export default function ClusterManagement() {
   }, [architecture, canExpandToThree, canPrepareMembership, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
   const nodeRows = useMemo(
-    () => nodes.map((node) => ({
-      ...node,
-      statusLabel: clusterNodeStatusLabel(node),
-      rolesLabel: clusterNodeRolesLabel(node),
-      probeSummary: clusterNodeProbeSummary(node),
-    })),
-    [nodes]
+    () => nodes.map((node) => {
+      const rolesPresentation = clusterNodeRolesPresentation(node, cluster?.leaders?.postgres_primary);
+      return {
+        ...node,
+        statusLabel: clusterNodeStatusLabel(node),
+        rolesLabel: rolesPresentation.label,
+        rolesPresentation,
+        probeSummary: clusterNodeProbeSummary(node),
+      };
+    }),
+    [cluster?.leaders?.postgres_primary, nodes]
   );
 
   const operationRows = useMemo(
@@ -1022,6 +1104,7 @@ export default function ClusterManagement() {
       minWidth: 150,
       flex: 1,
       cellClass: "auto-col-tight",
+      cellRenderer: (params) => <ClusterNodeRolesCell presentation={params?.data?.rolesPresentation} />,
     },
     {
       colId: "probes",
