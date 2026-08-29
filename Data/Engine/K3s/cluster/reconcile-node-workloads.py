@@ -351,6 +351,51 @@ exec borealis-wireguard-healthcheck""",
     container["readinessProbe"] = probe
 
 
+def refresh_generic_template_images(base: str, promoted_manifest: dict[str, Any], revision: str) -> None:
+    generic = load_json(f"deployment/{base}")
+    if not generic:
+        raise RuntimeError(f"generic deployment {base} does not exist")
+    generic_spec = generic.get("spec") or {}
+    if generic_spec.get("replicas") != 0:
+        raise RuntimeError(f"generic deployment {base} must remain at zero replicas")
+    generic_containers = (((generic_spec.get("template") or {}).get("spec") or {}).get("containers") or [])
+    promoted_containers = (
+        ((((promoted_manifest.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or [])
+    )
+    promoted_images = {
+        str(container.get("name") or ""): str(container.get("image") or "")
+        for container in promoted_containers
+        if container.get("name")
+    }
+    image_patch = []
+    for container in generic_containers:
+        name = str(container.get("name") or "")
+        image = promoted_images.get(name, "")
+        if not name or not image or not ("@sha256:" in image or re.search(r":sha-[0-9a-f]{12,64}$", image)):
+            raise RuntimeError(f"generic deployment {base} container images do not match promoted workload")
+        image_patch.append({"name": name, "image": image})
+    if not image_patch:
+        raise RuntimeError(f"generic deployment {base} has no containers")
+    patch = {
+        "metadata": {"annotations": {"borealis.io/revision": revision}},
+        "spec": {
+            "template": {
+                "metadata": {"annotations": {"borealis.io/revision": revision}},
+                "spec": {"containers": image_patch},
+            }
+        },
+    }
+    kubectl(
+        "-n",
+        NAMESPACE,
+        "patch",
+        f"deployment/{base}",
+        "--type=strategic",
+        "-p",
+        json.dumps(patch, sort_keys=True),
+    )
+
+
 def promote_one(base: str, node: str, expected_revision: str) -> str:
     active_name = deployment_name(base, node)
     candidate_name = candidate_deployment_name(base, node)
@@ -436,6 +481,7 @@ def promote_one(base: str, node: str, expected_revision: str) -> str:
     kubectl("apply", "--server-side", "--force-conflicts", "--field-manager=borealis-node-workloads", "-f", "-", stdin=json.dumps(manifest))
     if replicas > 0:
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{active_name}", "--timeout=10m")
+    refresh_generic_template_images(base, manifest, revision)
     kubectl("-n", NAMESPACE, "delete", f"deployment/{candidate_name}", "--wait=true", "--timeout=5m")
     return active_name
 

@@ -176,6 +176,127 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         }
         self.assertEqual(environment["BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST"], current_image)
 
+    def test_promotion_refreshes_zero_replica_generic_images_after_active_health(self) -> None:
+        revision = "a" * 40
+        target_image = "borealis-engine/borealis-operator:sha-" + "b" * 12
+        selector = {
+            "app.kubernetes.io/name": "borealis-operator-candidate",
+            "borealis.io/engine-node": "engine-01",
+            "borealis.io/node-workload": "true",
+            "borealis.io/update-candidate": "true",
+            "borealis.io/traffic-state": "candidate",
+        }
+        candidate = {
+            "metadata": {"annotations": {"borealis.io/revision": revision}},
+            "spec": {
+                "selector": {"matchLabels": selector},
+                "template": {
+                    "metadata": {"labels": selector},
+                    "spec": {"containers": [{"name": "borealis-operator", "image": target_image}]},
+                },
+            },
+        }
+        active = {
+            "spec": {
+                "selector": {
+                    "matchLabels": {**selector, "app.kubernetes.io/name": "borealis-operator"}
+                }
+            }
+        }
+        generic = {
+            "spec": {
+                "replicas": 0,
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "borealis-operator",
+                                "image": "borealis-engine/borealis-operator:sha-" + "c" * 12,
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+        calls: list[tuple[tuple[str, ...], str | None]] = []
+
+        def fake_load(resource: str) -> dict | None:
+            if resource.endswith("-candidate"):
+                return candidate
+            if resource == "deployment/borealis-operator-engine-01":
+                return active
+            if resource == "deployment/borealis-operator":
+                return generic
+            return None
+
+        def fake_kubectl(*args: str, stdin: str | None = None) -> str:
+            calls.append((args, stdin))
+            return ""
+
+        with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
+            MODULE, "kubectl", side_effect=fake_kubectl
+        ):
+            MODULE.promote_one("borealis-operator", "engine-01", revision)
+
+        commands = [args for args, _stdin in calls]
+        rollout = (
+            "-n",
+            "borealis",
+            "rollout",
+            "status",
+            "deployment/borealis-operator-engine-01",
+            "--timeout=10m",
+        )
+        patch_args = next(args for args in commands if args[:3] == ("-n", "borealis", "patch"))
+        delete = (
+            "-n",
+            "borealis",
+            "delete",
+            "deployment/borealis-operator-engine-01-candidate",
+            "--wait=true",
+            "--timeout=5m",
+        )
+        self.assertLess(commands.index(rollout), commands.index(patch_args))
+        self.assertLess(commands.index(patch_args), commands.index(delete))
+        patch = json.loads(patch_args[patch_args.index("-p") + 1])
+        self.assertEqual(patch["metadata"]["annotations"]["borealis.io/revision"], revision)
+        self.assertEqual(
+            patch["spec"]["template"]["metadata"]["annotations"]["borealis.io/revision"],
+            revision,
+        )
+        self.assertEqual(
+            patch["spec"]["template"]["spec"]["containers"],
+            [{"name": "borealis-operator", "image": target_image}],
+        )
+
+    def test_generic_image_refresh_rejects_serving_template(self) -> None:
+        promoted = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "borealis-operator",
+                                "image": "borealis-engine/borealis-operator:sha-" + "b" * 12,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        generic = {
+            "spec": {
+                "replicas": 1,
+                "template": {"spec": {"containers": [{"name": "borealis-operator"}]}},
+            }
+        }
+        with mock.patch.object(MODULE, "load_json", return_value=generic), mock.patch.object(
+            MODULE, "kubectl"
+        ) as kubectl:
+            with self.assertRaisesRegex(RuntimeError, "must remain at zero replicas"):
+                MODULE.refresh_generic_template_images("borealis-operator", promoted, "a" * 40)
+        kubectl.assert_not_called()
+
     def test_reconcile_drops_controller_owned_deployment_annotations(self) -> None:
         metadata = MODULE.clean_metadata(
             {
@@ -289,7 +410,14 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
                 "selector": {"matchLabels": selector},
                 "template": {
                     "metadata": {"labels": selector},
-                    "spec": {"containers": [{"name": "traefik-edge"}]},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "traefik-edge",
+                                "image": "borealis-engine/traefik-edge:sha-" + "b" * 12,
+                            }
+                        ]
+                    },
                 },
             },
         }
@@ -300,10 +428,20 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
                 "selector": {"matchLabels": {**selector, "app.kubernetes.io/name": "traefik-edge"}},
             },
         }
+        generic = {
+            "spec": {
+                "replicas": 0,
+                "template": {"spec": {"containers": [{"name": "traefik-edge"}]}},
+            }
+        }
         commands: list[tuple[str, ...]] = []
 
         def fake_load(resource: str) -> dict | None:
-            return candidate if resource.endswith("-candidate") else active
+            if resource.endswith("-candidate"):
+                return candidate
+            if resource == "deployment/traefik-edge":
+                return generic
+            return active
 
         def fake_kubectl(*args: str, stdin: str | None = None) -> str:
             commands.append(args)
@@ -344,6 +482,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
                         "containers": [
                             {
                                 "name": "wireguard-tunnel",
+                                "image": "borealis-engine/wireguard-tunnel:sha-" + "b" * 12,
                                 "readinessProbe": {
                                     "exec": {"command": ["borealis-wireguard-healthcheck"]},
                                     "periodSeconds": 5,
@@ -363,10 +502,20 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
                 },
             },
         }
+        generic = {
+            "spec": {
+                "replicas": 0,
+                "template": {"spec": {"containers": [{"name": "wireguard-tunnel"}]}},
+            }
+        }
         calls: list[tuple[tuple[str, ...], str | None]] = []
 
         def fake_load(resource: str) -> dict | None:
-            return candidate if resource.endswith("-candidate") else active
+            if resource.endswith("-candidate"):
+                return candidate
+            if resource == "deployment/wireguard-tunnel":
+                return generic
+            return active
 
         def fake_kubectl(*args: str, stdin: str | None = None) -> str:
             calls.append((args, stdin))
