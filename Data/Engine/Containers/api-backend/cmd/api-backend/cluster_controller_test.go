@@ -2366,6 +2366,44 @@ func TestApplyK3sUpgradeSkipsPlanWhenNodeAlreadyAtTarget(t *testing.T) {
 	}
 }
 
+func TestCleanupK3sUpgradeOperationPlansDeletesOwnedAttempts(t *testing.T) {
+	operationID := "11111111-1111-4111-8111-111111111111"
+	deleted := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		collectionPath := "/apis/upgrade.cattle.io/v1/namespaces/system-upgrade/plans"
+		if r.Method == http.MethodGet && r.URL.Path == collectionPath {
+			if selector := r.URL.Query().Get("labelSelector"); selector != "borealis.io/operation-id="+operationID {
+				t.Fatalf("K3s Plan cleanup selector=%q", selector)
+			}
+			items := []any{}
+			for _, name := range []string{"borealis-k3s-111111111111-aaaaaaaa", "borealis-k3s-111111111111-bbbbbbbb"} {
+				items = append(items, map[string]any{"metadata": map[string]any{
+					"name":   name,
+					"labels": map[string]any{"borealis.io/operation-id": operationID},
+				}})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, collectionPath+"/") {
+			deleted[strings.TrimPrefix(r.URL.Path, collectionPath+"/")] = true
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+			return
+		}
+		t.Fatalf("unexpected K3s Plan cleanup request %s %s", r.Method, r.URL.String())
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+	}
+	if err := runner.cleanupK3sUpgradeOperationPlans(context.Background(), operationID); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 2 || !deleted["borealis-k3s-111111111111-aaaaaaaa"] || !deleted["borealis-k3s-111111111111-bbbbbbbb"] {
+		t.Fatalf("K3s Plan cleanup deleted=%v", deleted)
+	}
+}
+
 func TestClusterRetryUsesFreshNodeActionsAndK3sPlans(t *testing.T) {
 	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Attempt: 1}
 	firstJob := clusterActionJobName(operation.ID, "attempt:1:node:engine-1:inspect_health")

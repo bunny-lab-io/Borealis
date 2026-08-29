@@ -1687,6 +1687,11 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			if !borealisOperatorImmutableImageRefPattern.MatchString(cleanText(operation.Payload["upgrade_image"])) {
 				return errors.New("K3s upgrade image must be content-addressed")
 			}
+			if operation.Attempt > 1 {
+				if err := r.cleanupK3sUpgradeOperationPlans(ctx, operation.ID); err != nil {
+					return err
+				}
+			}
 		}
 		if (operation.Kind == "engine_update" || operation.Kind == "k3s_update") && len(nodes) == 1 && cleanText(operation.Payload["maintenance_outage_acknowledgement"]) != "ACCEPT OUTAGE" {
 			return errors.New("one-node update requires ACCEPT OUTAGE acknowledgement")
@@ -3668,6 +3673,32 @@ func (r *kubernetesClusterStepRunner) cleanupK3sUpgrade(ctx context.Context, ope
 	path := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, planName)
 	if err := r.kube.doJSON(ctx, http.MethodDelete, path, map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"}, "application/json", &output, 30*time.Second); err != nil && !strings.Contains(err.Error(), "returned HTTP 404") {
 		return err
+	}
+	return nil
+}
+
+func (r *kubernetesClusterStepRunner) cleanupK3sUpgradeOperationPlans(ctx context.Context, operationID string) error {
+	listPath := fmt.Sprintf(
+		"/apis/upgrade.cattle.io/v1/namespaces/%s/plans?labelSelector=%s",
+		clusterUpgradeNamespace,
+		url.QueryEscape("borealis.io/operation-id="+operationID),
+	)
+	var plans map[string]any
+	if err := r.kube.getJSON(ctx, listPath, &plans); err != nil {
+		return err
+	}
+	for _, raw := range anySlice(plans["items"]) {
+		plan, _ := raw.(map[string]any)
+		metadata := nestedMap(plan, "metadata")
+		name := cleanText(metadata["name"])
+		if !clusterControllerNodeRegex.MatchString(name) || cleanText(nestedMap(metadata, "labels")["borealis.io/operation-id"]) != operationID {
+			return errors.New("K3s retry found Plan outside operation ownership")
+		}
+		var output map[string]any
+		path := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, name)
+		if err := r.kube.doJSON(ctx, http.MethodDelete, path, map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"}, "application/json", &output, 30*time.Second); err != nil && !strings.Contains(err.Error(), "returned HTTP 404") {
+			return err
+		}
 	}
 	return nil
 }
