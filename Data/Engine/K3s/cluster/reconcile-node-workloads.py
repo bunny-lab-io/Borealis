@@ -358,6 +358,9 @@ def refresh_generic_template_images(base: str, promoted_manifest: dict[str, Any]
     generic_spec = generic.get("spec") or {}
     if generic_spec.get("replicas") != 0:
         raise RuntimeError(f"generic deployment {base} must remain at zero replicas")
+    resource_version = str((generic.get("metadata") or {}).get("resourceVersion") or "")
+    if not resource_version:
+        raise RuntimeError(f"generic deployment {base} lacks resource version")
     generic_containers = (((generic_spec.get("template") or {}).get("spec") or {}).get("containers") or [])
     promoted_containers = (
         ((((promoted_manifest.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or [])
@@ -377,7 +380,10 @@ def refresh_generic_template_images(base: str, promoted_manifest: dict[str, Any]
     if not image_patch:
         raise RuntimeError(f"generic deployment {base} has no containers")
     patch = {
-        "metadata": {"annotations": {"borealis.io/revision": revision}},
+        "metadata": {
+            "resourceVersion": resource_version,
+            "annotations": {"borealis.io/revision": revision},
+        },
         "spec": {
             "template": {
                 "metadata": {"annotations": {"borealis.io/revision": revision}},
@@ -385,7 +391,7 @@ def refresh_generic_template_images(base: str, promoted_manifest: dict[str, Any]
             }
         },
     }
-    kubectl(
+    output = kubectl(
         "-n",
         NAMESPACE,
         "patch",
@@ -393,7 +399,30 @@ def refresh_generic_template_images(base: str, promoted_manifest: dict[str, Any]
         "--type=strategic",
         "-p",
         json.dumps(patch, sort_keys=True),
+        "-o",
+        "json",
     )
+    try:
+        updated = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"generic deployment {base} patch returned invalid state") from exc
+    updated_spec = updated.get("spec") or {}
+    updated_annotations = (updated.get("metadata") or {}).get("annotations") or {}
+    updated_template = updated_spec.get("template") or {}
+    updated_template_annotations = (updated_template.get("metadata") or {}).get("annotations") or {}
+    updated_containers = ((updated_template.get("spec") or {}).get("containers") or [])
+    updated_images = {
+        str(container.get("name") or ""): str(container.get("image") or "")
+        for container in updated_containers
+        if container.get("name")
+    }
+    if (
+        updated_spec.get("replicas") != 0
+        or updated_annotations.get("borealis.io/revision") != revision
+        or updated_template_annotations.get("borealis.io/revision") != revision
+        or any(updated_images.get(item["name"]) != item["image"] for item in image_patch)
+    ):
+        raise RuntimeError(f"generic deployment {base} patch did not converge")
 
 
 def promote_one(base: str, node: str, expected_revision: str) -> str:

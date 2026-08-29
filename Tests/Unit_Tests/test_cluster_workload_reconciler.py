@@ -16,6 +16,21 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def patched_generic_deployment(container_name: str, image: str, revision: str) -> str:
+    return json.dumps(
+        {
+            "metadata": {"annotations": {"borealis.io/revision": revision}},
+            "spec": {
+                "replicas": 0,
+                "template": {
+                    "metadata": {"annotations": {"borealis.io/revision": revision}},
+                    "spec": {"containers": [{"name": container_name, "image": image}]},
+                },
+            },
+        }
+    )
+
+
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
     def test_cluster_workload_probe_guards_exceed_startup_budget(self) -> None:
         for base, delay in MODULE.PROBE_GUARD_DELAYS.items():
@@ -204,6 +219,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             }
         }
         generic = {
+            "metadata": {"resourceVersion": "17"},
             "spec": {
                 "replicas": 0,
                 "template": {
@@ -231,6 +247,8 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
 
         def fake_kubectl(*args: str, stdin: str | None = None) -> str:
             calls.append((args, stdin))
+            if args[:3] == ("-n", "borealis", "patch"):
+                return patched_generic_deployment("borealis-operator", target_image, revision)
             return ""
 
         with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
@@ -259,6 +277,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         self.assertLess(commands.index(rollout), commands.index(patch_args))
         self.assertLess(commands.index(patch_args), commands.index(delete))
         patch = json.loads(patch_args[patch_args.index("-p") + 1])
+        self.assertEqual(patch["metadata"]["resourceVersion"], "17")
         self.assertEqual(patch["metadata"]["annotations"]["borealis.io/revision"], revision)
         self.assertEqual(
             patch["spec"]["template"]["metadata"]["annotations"]["borealis.io/revision"],
@@ -268,6 +287,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             patch["spec"]["template"]["spec"]["containers"],
             [{"name": "borealis-operator", "image": target_image}],
         )
+        self.assertEqual(patch_args[-2:], ("-o", "json"))
 
     def test_generic_image_refresh_rejects_serving_template(self) -> None:
         promoted = {
@@ -296,6 +316,50 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "must remain at zero replicas"):
                 MODULE.refresh_generic_template_images("borealis-operator", promoted, "a" * 40)
         kubectl.assert_not_called()
+
+    def test_generic_image_refresh_requires_resource_version(self) -> None:
+        generic = {
+            "spec": {
+                "replicas": 0,
+                "template": {"spec": {"containers": [{"name": "borealis-operator"}]}},
+            }
+        }
+        with mock.patch.object(MODULE, "load_json", return_value=generic), mock.patch.object(
+            MODULE, "kubectl"
+        ) as kubectl:
+            with self.assertRaisesRegex(RuntimeError, "lacks resource version"):
+                MODULE.refresh_generic_template_images("borealis-operator", {}, "a" * 40)
+        kubectl.assert_not_called()
+
+    def test_generic_image_refresh_rejects_stale_patch_response(self) -> None:
+        revision = "a" * 40
+        target_image = "borealis-engine/borealis-operator:sha-" + "b" * 12
+        promoted = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": "borealis-operator", "image": target_image}]
+                    }
+                }
+            }
+        }
+        generic = {
+            "metadata": {"resourceVersion": "18"},
+            "spec": {
+                "replicas": 0,
+                "template": {"spec": {"containers": [{"name": "borealis-operator"}]}},
+            },
+        }
+        stale = patched_generic_deployment(
+            "borealis-operator",
+            "borealis-engine/borealis-operator:sha-" + "c" * 12,
+            revision,
+        )
+        with mock.patch.object(MODULE, "load_json", return_value=generic), mock.patch.object(
+            MODULE, "kubectl", return_value=stale
+        ):
+            with self.assertRaisesRegex(RuntimeError, "patch did not converge"):
+                MODULE.refresh_generic_template_images("borealis-operator", promoted, revision)
 
     def test_reconcile_drops_controller_owned_deployment_annotations(self) -> None:
         metadata = MODULE.clean_metadata(
@@ -429,6 +493,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             },
         }
         generic = {
+            "metadata": {"resourceVersion": "19"},
             "spec": {
                 "replicas": 0,
                 "template": {"spec": {"containers": [{"name": "traefik-edge"}]}},
@@ -445,6 +510,12 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
 
         def fake_kubectl(*args: str, stdin: str | None = None) -> str:
             commands.append(args)
+            if args[:3] == ("-n", "borealis", "patch"):
+                return patched_generic_deployment(
+                    "traefik-edge",
+                    "borealis-engine/traefik-edge:sha-" + "b" * 12,
+                    "a" * 40,
+                )
             return ""
 
         with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
@@ -503,6 +574,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             },
         }
         generic = {
+            "metadata": {"resourceVersion": "20"},
             "spec": {
                 "replicas": 0,
                 "template": {"spec": {"containers": [{"name": "wireguard-tunnel"}]}},
@@ -519,6 +591,12 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
 
         def fake_kubectl(*args: str, stdin: str | None = None) -> str:
             calls.append((args, stdin))
+            if args[:3] == ("-n", "borealis", "patch"):
+                return patched_generic_deployment(
+                    "wireguard-tunnel",
+                    "borealis-engine/wireguard-tunnel:sha-" + "b" * 12,
+                    "a" * 40,
+                )
             return ""
 
         with mock.patch.object(MODULE, "load_json", side_effect=fake_load), mock.patch.object(
