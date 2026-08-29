@@ -3545,43 +3545,66 @@ func clusterOperationAttemptKey(operation clusterControllerOperation) string {
 func (r *kubernetesClusterStepRunner) waitK3sUpgradePlan(ctx context.Context, planName, nodeName, version string) error {
 	planPath := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, planName)
 	jobsPath := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs?labelSelector=%s", clusterUpgradeNamespace, url.QueryEscape("upgrade.cattle.io/plan="+planName))
-	ticker := time.NewTicker(3 * time.Second)
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 3 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var lastTransientErr error
 	for {
 		var plan map[string]any
 		if err := r.kube.getJSON(ctx, planPath, &plan); err != nil {
-			return err
-		}
-		status := nestedMap(plan, "status")
-		if cleanText(status["latestVersion"]) == version {
-			for _, raw := range anySlice(status["conditions"]) {
-				condition, _ := raw.(map[string]any)
-				conditionType := cleanText(condition["type"])
-				conditionStatus := cleanText(condition["status"])
-				if conditionType == "Validated" && conditionStatus == "False" {
-					return fmt.Errorf("K3s upgrade Plan validation failed: %s", firstText(cleanText(condition["message"]), cleanText(condition["reason"])))
-				}
-				if conditionType == "Complete" && conditionStatus == "True" {
-					return r.verifyK3sNodeVersion(ctx, nodeName, version)
+			if !transientKubernetesAPIError(err) {
+				return err
+			}
+			lastTransientErr = err
+		} else {
+			lastTransientErr = nil
+			status := nestedMap(plan, "status")
+			if clusterK3sPlanVersionMatches(cleanText(status["latestVersion"]), version) {
+				for _, raw := range anySlice(status["conditions"]) {
+					condition, _ := raw.(map[string]any)
+					conditionType := cleanText(condition["type"])
+					conditionStatus := cleanText(condition["status"])
+					if conditionType == "Validated" && conditionStatus == "False" {
+						return fmt.Errorf("K3s upgrade Plan validation failed: %s", firstText(cleanText(condition["message"]), cleanText(condition["reason"])))
+					}
+					if conditionType == "Complete" && conditionStatus == "True" {
+						return r.verifyK3sNodeVersion(ctx, nodeName, version)
+					}
 				}
 			}
-		}
-		var jobs map[string]any
-		if err := r.kube.getJSON(ctx, jobsPath, &jobs); err != nil {
-			return err
-		}
-		for _, raw := range anySlice(jobs["items"]) {
-			job, _ := raw.(map[string]any)
-			if coerceInt64(nestedMap(job, "status")["failed"]) > 0 {
-				return fmt.Errorf("K3s upgrade Plan %s has failed Job", planName)
+			var jobs map[string]any
+			if err := r.kube.getJSON(ctx, jobsPath, &jobs); err != nil {
+				if !transientKubernetesAPIError(err) {
+					return err
+				}
+				lastTransientErr = err
+			} else {
+				lastTransientErr = nil
+				for _, raw := range anySlice(jobs["items"]) {
+					job, _ := raw.(map[string]any)
+					if coerceInt64(nestedMap(job, "status")["failed"]) > 0 {
+						return fmt.Errorf("K3s upgrade Plan %s has failed Job", planName)
+					}
+				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("K3s upgrade Plan %s did not complete: %w", planName, ctx.Err())
+			message := fmt.Errorf("K3s upgrade Plan %s did not complete: %w", planName, ctx.Err())
+			if lastTransientErr != nil {
+				return errors.Join(message, lastTransientErr)
+			}
+			return message
 		case <-ticker.C:
 		}
 	}
+}
+
+func clusterK3sPlanVersionMatches(reported, target string) bool {
+	return reported == target || reported == strings.Replace(target, "+k3s", "-k3s", 1)
 }
 
 func (r *kubernetesClusterStepRunner) verifyK3sNodeVersion(ctx context.Context, nodeName, version string) error {

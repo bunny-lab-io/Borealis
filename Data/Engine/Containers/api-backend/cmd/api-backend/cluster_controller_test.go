@@ -2138,6 +2138,83 @@ func TestK3sPlanNameIsStableDNSLabel(t *testing.T) {
 	}
 }
 
+func TestK3sPlanVersionAcceptsSystemUpgradeNormalization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/plans/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{
+				"latestVersion": "v1.36.4-k3s1",
+				"conditions":    []any{map[string]any{"type": "Complete", "status": "True"}},
+			}})
+		case r.URL.Path == "/api/v1/nodes/engine-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{},
+				"status": map[string]any{
+					"nodeInfo": map[string]any{"kubeletVersion": "v1.36.4+k3s1"},
+					"conditions": []any{
+						map[string]any{"type": "Ready", "status": "True"},
+						map[string]any{"type": "EtcdIsVoter", "status": "True"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected K3s Plan request %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		jobPollInterval: time.Millisecond,
+	}
+	if err := runner.waitK3sUpgradePlan(context.Background(), "plan-1", "engine-1", "v1.36.4+k3s1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestK3sPlanWaitToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
+	planRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/plans/"):
+			planRequests++
+			if planRequests == 1 {
+				http.Error(w, "control plane restarting", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{
+				"latestVersion": "v1.36.4+k3s1",
+				"conditions":    []any{map[string]any{"type": "Complete", "status": "True"}},
+			}})
+		case r.URL.Path == "/api/v1/nodes/engine-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{},
+				"status": map[string]any{
+					"nodeInfo": map[string]any{"kubeletVersion": "v1.36.4+k3s1"},
+					"conditions": []any{
+						map[string]any{"type": "Ready", "status": "True"},
+						map[string]any{"type": "EtcdIsVoter", "status": "True"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected K3s Plan request %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		jobPollInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.waitK3sUpgradePlan(ctx, "plan-1", "engine-1", "v1.36.4+k3s1"); err != nil {
+		t.Fatal(err)
+	}
+	if planRequests != 2 {
+		t.Fatalf("K3s Plan polls=%d want 2", planRequests)
+	}
+}
+
 func TestClusterRetryUsesFreshNodeActionsAndK3sPlans(t *testing.T) {
 	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Attempt: 1}
 	firstJob := clusterActionJobName(operation.ID, "attempt:1:node:engine-1:inspect_health")
