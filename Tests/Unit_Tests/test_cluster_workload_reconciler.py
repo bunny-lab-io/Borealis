@@ -361,6 +361,38 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "patch did not converge"):
                 MODULE.refresh_generic_template_images("borealis-operator", promoted, revision)
 
+    def test_generic_image_refresh_rejects_unexpected_patch_container(self) -> None:
+        revision = "a" * 40
+        target_image = "borealis-engine/borealis-operator:sha-" + "b" * 12
+        promoted = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": "borealis-operator", "image": target_image}]
+                    }
+                }
+            }
+        }
+        generic = {
+            "metadata": {"resourceVersion": "21"},
+            "spec": {
+                "replicas": 0,
+                "template": {"spec": {"containers": [{"name": "borealis-operator"}]}},
+            },
+        }
+        updated = json.loads(patched_generic_deployment("borealis-operator", target_image, revision))
+        updated["spec"]["template"]["spec"]["containers"].append(
+            {
+                "name": "unexpected-sidecar",
+                "image": "borealis-engine/unexpected:sha-" + "c" * 12,
+            }
+        )
+        with mock.patch.object(MODULE, "load_json", return_value=generic), mock.patch.object(
+            MODULE, "kubectl", return_value=json.dumps(updated)
+        ):
+            with self.assertRaisesRegex(RuntimeError, "patch did not converge"):
+                MODULE.refresh_generic_template_images("borealis-operator", promoted, revision)
+
     def test_reconcile_drops_controller_owned_deployment_annotations(self) -> None:
         metadata = MODULE.clean_metadata(
             {

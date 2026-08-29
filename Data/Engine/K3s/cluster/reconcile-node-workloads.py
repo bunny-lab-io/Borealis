@@ -416,11 +416,12 @@ def refresh_generic_template_images(base: str, promoted_manifest: dict[str, Any]
         for container in updated_containers
         if container.get("name")
     }
+    expected_images = {item["name"]: item["image"] for item in image_patch}
     if (
         updated_spec.get("replicas") != 0
         or updated_annotations.get("borealis.io/revision") != revision
         or updated_template_annotations.get("borealis.io/revision") != revision
-        or any(updated_images.get(item["name"]) != item["image"] for item in image_patch)
+        or updated_images != expected_images
     ):
         raise RuntimeError(f"generic deployment {base} patch did not converge")
 
