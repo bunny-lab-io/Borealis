@@ -2236,6 +2236,136 @@ func TestK3sPlanWaitToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
 	}
 }
 
+func TestK3sPlanWaitAllowsRetryableFailedPodCount(t *testing.T) {
+	planRequests := 0
+	jobRequests := 0
+	uncordons := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/plans/"):
+			planRequests++
+			conditions := []any{}
+			if planRequests > 1 {
+				conditions = append(conditions, map[string]any{"type": "Complete", "status": "True"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{
+				"latestVersion": "v1.36.4+k3s1",
+				"conditions":    conditions,
+			}})
+		case strings.Contains(r.URL.Path, "/jobs"):
+			jobRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"status": map[string]any{"failed": 1},
+			}}})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/nodes/engine-1":
+			uncordons++
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-1"}})
+		case r.URL.Path == "/api/v1/nodes/engine-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"spec": map[string]any{},
+				"status": map[string]any{
+					"nodeInfo": map[string]any{"kubeletVersion": "v1.36.4+k3s1"},
+					"conditions": []any{
+						map[string]any{"type": "Ready", "status": "True"},
+						map[string]any{"type": "EtcdIsVoter", "status": "True"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected K3s Plan request %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		jobPollInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.waitK3sUpgradePlan(ctx, "plan-1", "engine-1", "v1.36.4+k3s1"); err != nil {
+		t.Fatal(err)
+	}
+	if planRequests != 2 || jobRequests != 1 || uncordons != 1 {
+		t.Fatalf("K3s retryable Job polling plans=%d jobs=%d uncordons=%d", planRequests, jobRequests, uncordons)
+	}
+}
+
+func TestK3sPlanWaitRejectsTerminalFailedJob(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/plans/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{
+				"latestVersion": "v1.36.4+k3s1",
+				"conditions":    []any{},
+			}})
+		case strings.Contains(r.URL.Path, "/jobs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"status": map[string]any{
+					"failed":     1,
+					"conditions": []any{map[string]any{"type": "Failed", "status": "True"}},
+				},
+			}}})
+		default:
+			t.Fatalf("unexpected K3s Plan request %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+		jobPollInterval: time.Millisecond,
+	}
+	err := runner.waitK3sUpgradePlan(context.Background(), "plan-1", "engine-1", "v1.36.4+k3s1")
+	if err == nil || !strings.Contains(err.Error(), "has failed Job") {
+		t.Fatalf("terminal failed K3s Job error=%v", err)
+	}
+}
+
+func TestApplyK3sUpgradeSkipsPlanWhenNodeAlreadyAtTarget(t *testing.T) {
+	cordoned := true
+	patches := 0
+	nodeReads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/nodes/engine-1" {
+			t.Fatalf("already-upgraded node unexpectedly requested %s", r.URL.String())
+		}
+		if r.Method == http.MethodPatch {
+			patches++
+			cordoned = false
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-1"}})
+			return
+		}
+		nodeReads++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"spec": map[string]any{"unschedulable": cordoned},
+			"status": map[string]any{
+				"nodeInfo": map[string]any{"kubeletVersion": "v1.36.4+k3s1"},
+				"conditions": []any{
+					map[string]any{"type": "Ready", "status": "True"},
+					map[string]any{"type": "EtcdIsVoter", "status": "True"},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+	runner := &kubernetesClusterStepRunner{
+		kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+	}
+	operation := clusterControllerOperation{
+		ID:            "11111111-1111-4111-8111-111111111111",
+		Attempt:       3,
+		TargetRelease: "v1.36.4+k3s1",
+		Payload: map[string]any{
+			"upgrade_image": "docker.io/rancher/k3s-upgrade@sha256:" + strings.Repeat("a", 64),
+		},
+	}
+	if err := runner.applyK3sUpgrade(context.Background(), operation, clusterControllerNode{Name: "engine-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if patches != 1 || nodeReads != 2 || cordoned {
+		t.Fatalf("already-upgraded node patches=%d reads=%d cordoned=%t", patches, nodeReads, cordoned)
+	}
+}
+
 func TestClusterRetryUsesFreshNodeActionsAndK3sPlans(t *testing.T) {
 	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Attempt: 1}
 	firstJob := clusterActionJobName(operation.ID, "attempt:1:node:engine-1:inspect_health")

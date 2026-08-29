@@ -3479,6 +3479,15 @@ func (r *kubernetesClusterStepRunner) applyK3sUpgrade(ctx context.Context, opera
 	if !clusterK3sRE.MatchString(version) || !borealisOperatorImmutableImageRefPattern.MatchString(imageRef) {
 		return errors.New("K3s Plan requires stable version and immutable upgrade image")
 	}
+	var currentNode map[string]any
+	if err := r.kube.getJSON(ctx, "/api/v1/nodes/"+node.Name, &currentNode); err == nil && k3sNodeReadyAtVersion(currentNode, version) {
+		if err := r.setNodeUnschedulable(ctx, node.Name, false); err != nil {
+			return err
+		}
+		return r.verifyK3sNodeVersion(ctx, node.Name, version)
+	} else if err != nil && !transientKubernetesAPIError(err) {
+		return err
+	}
 	attemptKey := clusterOperationAttemptKey(operation)
 	planName := clusterK3sPlanName(attemptKey, node.Name)
 	planPath := fmt.Sprintf("/apis/upgrade.cattle.io/v1/namespaces/%s/plans/%s", clusterUpgradeNamespace, planName)
@@ -3592,7 +3601,7 @@ func (r *kubernetesClusterStepRunner) waitK3sUpgradePlan(ctx context.Context, pl
 				lastTransientErr = nil
 				for _, raw := range anySlice(jobs["items"]) {
 					job, _ := raw.(map[string]any)
-					if coerceInt64(nestedMap(job, "status")["failed"]) > 0 {
+					if resourceConditionTrue(job, "Failed") {
 						return fmt.Errorf("K3s upgrade Plan %s has failed Job", planName)
 					}
 				}
@@ -3633,8 +3642,7 @@ func (r *kubernetesClusterStepRunner) verifyK3sNodeVersion(ctx context.Context, 
 	for {
 		var node map[string]any
 		if err := r.kube.getJSON(ctx, "/api/v1/nodes/"+nodeName, &node); err == nil {
-			nodeInfo := nestedMap(nestedMap(node, "status"), "nodeInfo")
-			if nodeConditionTrue(node, "Ready") && nodeConditionTrue(node, "EtcdIsVoter") && cleanText(nodeInfo["kubeletVersion"]) == version && nestedMap(node, "spec")["unschedulable"] != true {
+			if k3sNodeReadyAtVersion(node, version) && nestedMap(node, "spec")["unschedulable"] != true {
 				return nil
 			}
 		}
@@ -3644,6 +3652,11 @@ func (r *kubernetesClusterStepRunner) verifyK3sNodeVersion(ctx context.Context, 
 		case <-ticker.C:
 		}
 	}
+}
+
+func k3sNodeReadyAtVersion(node map[string]any, version string) bool {
+	nodeInfo := nestedMap(nestedMap(node, "status"), "nodeInfo")
+	return nodeConditionTrue(node, "Ready") && nodeConditionTrue(node, "EtcdIsVoter") && cleanText(nodeInfo["kubeletVersion"]) == version
 }
 
 func (r *kubernetesClusterStepRunner) cleanupK3sUpgrade(ctx context.Context, operation clusterControllerOperation, nodeName string) error {
@@ -4262,7 +4275,11 @@ func (r *kubernetesClusterStepRunner) retireMemberWorkloads(ctx context.Context,
 }
 
 func nodeConditionTrue(node map[string]any, conditionType string) bool {
-	for _, raw := range anySlice(nestedMap(node, "status")["conditions"]) {
+	return resourceConditionTrue(node, conditionType)
+}
+
+func resourceConditionTrue(resource map[string]any, conditionType string) bool {
+	for _, raw := range anySlice(nestedMap(resource, "status")["conditions"]) {
 		condition, _ := raw.(map[string]any)
 		if cleanText(condition["type"]) == conditionType {
 			return cleanText(condition["status"]) == "True"
