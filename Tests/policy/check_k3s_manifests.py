@@ -24,6 +24,677 @@ CAPABILITY_ALLOWLIST = {
     ("wireguard-tunnel", "wireguard-tunnel"): {"NET_ADMIN", "NET_RAW"},
     ("postgres-db", "postgres-data-permissions"): {"CHOWN", "DAC_OVERRIDE", "FOWNER"},
 }
+TRANSIENT_DRAIN_COMMAND = (
+    "trap 'rm -f /tmp/borealis-draining' EXIT; "
+    "touch /tmp/borealis-draining; sleep 10"
+)
+TRANSIENT_DRAIN_WORKLOADS = {
+    ("api-backend", "api-backend"),
+    ("borealis-operator", "borealis-operator"),
+    ("job-scheduler", "job-scheduler"),
+    ("remote-desktop-guacd", "remote-desktop-guacd"),
+    ("traefik-edge", "traefik-edge"),
+    ("webui-frontend", "webui-frontend"),
+}
+
+
+def validate_startup_liveness_guard(container: dict, workload: str) -> None:
+    startup = container.get("startupProbe") or {}
+    liveness = container.get("livenessProbe") or {}
+    if not startup or not liveness:
+        return
+    startup_budget = (
+        int(startup.get("initialDelaySeconds") or 0)
+        + int(startup.get("periodSeconds") or 10) * int(startup.get("failureThreshold") or 3)
+        + int(startup.get("timeoutSeconds") or 1)
+    )
+    liveness_delay = int(liveness.get("initialDelaySeconds") or 0)
+    if liveness_delay <= startup_budget:
+        fail(
+            f"{workload} liveness initial delay {liveness_delay}s must exceed "
+            f"startup failure budget {startup_budget}s for Kubernetes issue 141155"
+        )
+
+
+def validate_transient_drain_hook(container: dict, workload: str, required: bool) -> None:
+    lifecycle = container.get("lifecycle") or {}
+    pre_stop = lifecycle.get("preStop") or {}
+    command = ((pre_stop.get("exec") or {}).get("command") or [])
+    uses_drain_marker = any("/tmp/borealis-draining" in str(item) for item in command)
+    if not required and not uses_drain_marker:
+        return
+    if (
+        len(command) != 3
+        or command[0] not in {"sh", "/bin/sh"}
+        or command[1] != "-c"
+        or command[2] != TRANSIENT_DRAIN_COMMAND
+    ):
+        fail(
+            f"{workload} preStop must create and remove transient drain marker "
+            "within bounded hook"
+        )
+
+
+def validate_probe_conformance_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/run-probe-conformance.sh"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read K3s probe conformance script: {exc}")
+    required = {
+        "/state/fail-liveness": "controlled liveness failure",
+        ".status.containerStatuses[0].containerID": "replacement container identity check",
+        "replacement startup-probe:failure": "replacement startup execution proof",
+        "replacement liveness-probe:": "premature replacement liveness rejection",
+        "Kubernetes issue 141155": "upstream regression context",
+        "nodeName: __BOREALIS_CONFORMANCE_NODE__": "local K3s node pin",
+        'node_name="$(hostname -s': "local K3s node identity",
+        "/etc/rancher/k3s/borealis-probe-conformance.json": "sandbox-writable conformance result path",
+        "trial_count=10": "ten consecutive restart trials",
+        '"trials":%s': "consecutive-trial result evidence",
+        "initialDelaySeconds: 8": "liveness delay mitigation",
+        "pod-restart-policy-liveness-delay-guard-v1": "guarded multi-trial conformance contract",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"probe conformance lost {description}")
+    if "kill -KILL 1" in source or "kill -TERM 1" in source:
+        fail("probe conformance must trigger restart through liveness failure, not direct PID 1 signal")
+    service_path = ROOT / "Data/Engine/K3s/cluster/node-manager.service"
+    try:
+        service_source = service_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read node-manager service: {exc}")
+    if "ReadWritePaths=" not in service_source or "/etc/rancher/k3s" not in service_source:
+        fail("node-manager sandbox must allow fixed conformance result directory")
+    if "/var/lib/rancher/k3s/server" in service_source:
+        fail("node-manager sandbox must not receive broad K3s server-state write access")
+    for relative in (
+        "Engine.sh",
+        "Data/Engine/K3s/cluster/cluster-node-workflow.sh",
+        "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/main.go",
+    ):
+        consumer = ROOT / relative
+        try:
+            consumer_source = consumer.read_text(encoding="utf-8")
+        except OSError as exc:
+            fail(f"cannot read conformance record consumer {relative}: {exc}")
+        if "/etc/rancher/k3s/borealis-probe-conformance.json" not in consumer_source:
+            fail(f"conformance record consumer {relative} lost fixed sandbox-writable path")
+        if "/var/lib/rancher/k3s/server/borealis-probe-conformance.json" in consumer_source:
+            fail(f"conformance record consumer {relative} retained read-only server-state path")
+        if "pod-restart-policy-liveness-delay-guard-v1" not in consumer_source:
+            fail(f"conformance record consumer {relative} does not require guarded multi-trial contract")
+
+
+def validate_cluster_controller_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/controller.yaml"
+    try:
+        objects = [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot parse cluster controller manifest: {exc}")
+    deployments = [
+        item
+        for item in objects
+        if item.get("kind") == "Deployment"
+        and (item.get("metadata") or {}).get("name") == "borealis-cluster-controller"
+    ]
+    if len(deployments) != 1:
+        fail("cluster controller manifest must contain one controller Deployment")
+    pod = (((deployments[0].get("spec") or {}).get("template") or {}).get("spec") or {})
+    if pod.get("serviceAccountName") != "borealis-cluster-controller" or pod.get("automountServiceAccountToken") is not True:
+        fail("cluster controller must explicitly mount its dedicated ServiceAccount token")
+    if (((pod.get("securityContext") or {}).get("seccompProfile") or {}).get("type")) != "RuntimeDefault":
+        fail("cluster controller lacks RuntimeDefault seccomp")
+    containers = pod.get("containers") or []
+    if len(containers) != 1:
+        fail("cluster controller must contain one controller container")
+    security = containers[0].get("securityContext") or {}
+    expected_security = {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": True,
+        "runAsUser": 64646,
+        "runAsGroup": 64646,
+    }
+    for field, expected in expected_security.items():
+        if security.get(field) != expected:
+            fail(f"cluster controller securityContext {field} must be {expected!r}")
+    if set(((security.get("capabilities") or {}).get("drop") or [])) != {"ALL"}:
+        fail("cluster controller must drop ALL capabilities")
+    resources = containers[0].get("resources") or {}
+    if not resources.get("requests") or not resources.get("limits"):
+        fail("cluster controller must declare resource requests and limits")
+    probes = {
+        "startupProbe": "/startup",
+        "readinessProbe": "/ready",
+        "livenessProbe": "/live",
+    }
+    for probe_name, expected_path in probes.items():
+        probe = containers[0].get(probe_name) or {}
+        actual_path = ((probe.get("httpGet") or {}).get("path"))
+        if actual_path != expected_path:
+            fail(f"cluster controller {probe_name} must use distinct {expected_path} contract")
+    validate_startup_liveness_guard(containers[0], "borealis-cluster-controller/controller")
+    roles = [
+        item
+        for item in objects
+        if item.get("kind") == "ClusterRole"
+        and (item.get("metadata") or {}).get("name") == "borealis-cluster-controller"
+    ]
+    if len(roles) != 1:
+        fail("cluster controller manifest must contain one dedicated ClusterRole")
+    rules = (roles[0].get("rules") or [])
+    lease_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {"coordination.k8s.io"}
+            and "leases" in (rule.get("resources") or [])
+        ),
+        {},
+    )
+    if set(lease_rule.get("resourceNames") or []) != {"borealis-control-vip", "borealis-edge-vip"} or set(lease_rule.get("verbs") or []) != {"get"}:
+        fail("cluster controller lease RBAC must stay read-only and limited to fixed Borealis VIP leases")
+    deployment_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {"apps"}
+            and "deployments" in (rule.get("resources") or [])
+        ),
+        {},
+    )
+    if not {"get", "list", "watch", "patch"}.issubset(set(deployment_rule.get("verbs") or [])):
+        fail("cluster controller lacks node-workload Deployment reconciliation RBAC")
+    storage_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {""}
+            and set(rule.get("resources") or []) == {"persistentvolumeclaims", "persistentvolumes"}
+        ),
+        {},
+    )
+    if set(storage_rule.get("verbs") or []) != {"get", "list", "watch"}:
+        fail("cluster controller shared-storage core RBAC must stay read-only")
+    longhorn_volume_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {"longhorn.io"}
+            and set(rule.get("resources") or []) == {"volumes"}
+        ),
+        {},
+    )
+    if set(longhorn_volume_rule.get("verbs") or []) != {"get", "list", "watch", "patch"}:
+        fail("cluster controller Longhorn volume RBAC must allow bounded replica reconciliation only")
+    longhorn_replica_rule = next(
+        (
+            rule
+            for rule in rules
+            if set(rule.get("apiGroups") or []) == {"longhorn.io"}
+            and set(rule.get("resources") or []) == {"replicas"}
+        ),
+        {},
+    )
+    if set(longhorn_replica_rule.get("verbs") or []) != {"get", "list", "watch"}:
+        fail("cluster controller Longhorn replica RBAC must stay read-only")
+
+
+def validate_node_manager_service_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/node-manager.service"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read node-manager systemd unit: {exc}")
+    required = {
+        "RuntimeDirectory=borealis": "managed runtime directory",
+        "ConfigurationDirectory=borealis": "managed configuration directory",
+        "ExecStop=/usr/local/sbin/borealis-node-manager shutdown-handoff": "shutdown-only VIP lease handoff",
+        "ProtectSystem=strict": "strict filesystem protection",
+        "ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s /var/lib/rancher/k3s/agent/images /etc/systemd/system/k3s.service.d": "fixed-operation Borealis, K3s image pre-import, and member-removal fence write paths",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK": "Unix socket, K3s API, release-fetch, and host network-inspection contract",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"node-manager systemd unit lost {description}")
+    if "Requires=k3s.service" in source:
+        fail("node-manager must survive controlled K3s restarts during cluster enrollment and upgrades")
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Engine node-manager installer: {exc}")
+    if 'install -d -m 0750 -o root -g root "$(dirname -- "${BOREALIS_NODE_MANAGER_TOKEN_FILE}")"' not in engine_source:
+        fail("Engine node-manager installer must correct configuration-directory ownership and mode")
+    if 'install -d -m 0755 -o root -g root "${K3S_IMAGE_IMPORT_DIR}"' not in engine_source:
+        fail("Engine node-manager installer must create its K3s image-import sandbox path")
+    if 'install -d -m 0755 -o root -g root "${K3S_MEMBER_REMOVAL_DROPIN_DIR}"' not in engine_source:
+        fail("Engine node-manager installer must create its member-removal drop-in sandbox path")
+    if 'systemctl restart "${BOREALIS_NODE_MANAGER_SERVICE}"' not in engine_source:
+        fail("Engine node-manager installer must restart service after replacing binary or unit")
+    try:
+        manager_source = (
+            ROOT / "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/main.go"
+        ).read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read node-manager source: {exc}")
+    for marker in (
+        "http://127.0.0.1:2381/metrics",
+        '"borealis.io/etcd-leader="+value',
+        "parseEtcdLeadership",
+        "os.MkdirAll(k3sImageImportPath, 0o755)",
+        '"borealis.io/engine-node=false"',
+        '"borealis-control-vip", "borealis-edge-vip"',
+        'systemIsStopping([]byte(state))',
+    ):
+        if marker not in manager_source:
+            fail(f"node-manager lost local etcd leadership report marker {marker!r}")
+    if manager_source.count("ensureMemberFenceDropInDirectory()") < 4:
+        fail("node-manager must prepare its member-removal drop-in path during fencing, activation, and local installation")
+    required_engine_cluster_markers = {
+        "render_k3s_registries_config": "managed Spegel registry source configuration",
+        "K3S_IMAGE_IMPORT_DIR": "K3s-supported image pre-import directory",
+        "k3s_containerd_image_distribution_ready": "Spegel distribution-label verification",
+        "pinned and Spegel-ready": "pinned distributed image completion contract",
+        "prune_stale_k3s_borealis_image_archives": "bounded current-and-rollback image archive retention",
+        "retained_previous": "one rollback predecessor image archive per managed service",
+        "ensure_cluster_wireguard_routes": "shared full and scoped route DaemonSet reconciliation",
+        "rollout status daemonset/borealis-wireguard-routes": "route DaemonSet readiness wait",
+        'git -c "safe.directory=${SCRIPT_DIR}"': "command-scoped root Engine Git trust",
+        "docker.io:": "Borealis local-image registry mirror",
+        "registry.k8s.io:": "Kubernetes dependency registry mirror",
+        "generic_k3s_workload_replicas": "zero-replica generic templates in cluster mode",
+        "if ! cluster_mode_enabled; then": "cluster role-label ownership guard",
+        "BOREALIS_SITE_WORKER_PROBE_CONTRACT=startup-budget-liveness-transient-drain-v2": "site-worker probe and transient-drain recycle trigger",
+        "agent_redeploy_active_work_count": "Agent worker drain work-count gate",
+        "agent_redeploy_wait_for_worker_registration": "Agent worker registration gate",
+        "agent_redeploy_wait_for_pod_health": "bounded Agent candidate health retry",
+        "agent_redeploy_scheduler_deployments": "cluster scheduler Deployment discovery",
+        "agent_redeploy_pause_schedulers": "cluster scheduler assignment pause",
+        "agent_redeploy_restore_schedulers": "exact cluster scheduler replica restoration",
+        "kubernetes.io/service-name=borealis-postgres-rw": "CloudNativePG primary discovery for worker drain",
+        "ensure_cluster_dependency_probe_guards": "cluster dependency probe-guard reconciliation",
+        'cluster.postgresql.cnpg.io/borealis-postgres --type=merge': "CloudNativePG instance guard reconciliation",
+    }
+    for marker, description in required_engine_cluster_markers.items():
+        if marker not in engine_source:
+            fail(f"Engine cluster baseline lost {description}")
+    if "k3s_ctr images import" in engine_source:
+        fail("Engine must use K3s pre-import so Spegel receives distribution-source labels")
+    controller_reconcile = engine_source.find("  ensure_cluster_controller_baseline")
+    guard_reconcile = engine_source.find("  ensure_cluster_dependency_probe_guards", controller_reconcile)
+    edge_reconcile = engine_source.find("  ensure_k3s_traefik_edge", controller_reconcile)
+    if min(controller_reconcile, guard_reconcile, edge_reconcile) < 0 or not controller_reconcile < guard_reconcile < edge_reconcile:
+        fail("full deploy must reconcile cluster dependency probe guards before edge workload")
+    candidate_start = engine_source.find("agent_redeploy_render_candidate()")
+    candidate_end = engine_source.find("agent_redeploy_scheduler_desired_image()", candidate_start)
+    if min(candidate_start, candidate_end) < 0 or '"initialDelaySeconds": 130' not in engine_source[candidate_start:candidate_end]:
+        fail("site-worker update candidate lost startup-budget liveness guard")
+    try:
+        route_manifest = (ROOT / "Data/Engine/K3s/cluster/wireguard-route-daemonset.yaml").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read WireGuard route DaemonSet: {exc}")
+    required_route_markers = {
+        'name: BOREALIS_WIREGUARD_INTERFACE, value: "borealis-wg"': "fixed WireGuard interface",
+        "name: BOREALIS_CLUSTER_EDGE_VIP": "stable edge-VIP route gateway",
+        "key: BOREALIS_WIREGUARD_PEER_NETWORK": "bounded Agent network route source",
+        '["/usr/local/bin/borealis-wireguard-route-daemon", "startup"]': "initialization-only startup probe",
+        '["/usr/local/bin/borealis-wireguard-route-daemon", "health"]': "route-aware readiness probe",
+        '["/usr/local/bin/borealis-wireguard-route-daemon", "live"]': "local-process liveness probe",
+        "initialDelaySeconds: 70": "startup-budget liveness guard",
+    }
+    for marker, description in required_route_markers.items():
+        if marker not in route_manifest:
+            fail(f"WireGuard route DaemonSet lost {description}")
+
+
+def validate_longhorn_host_dependency_contract() -> None:
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Longhorn host dependency contract: {exc}")
+    required = {
+        "ensure_longhorn_nfs_package": "Longhorn RWX NFS prerequisite function",
+        "apt-get install -y nfs-common": "Debian NFS client package",
+        "dnf install -y nfs-utils": "RHEL NFS client package",
+        "pacman -Sy --noconfirm nfs-utils": "Arch NFS client package",
+        "zypper --non-interactive install nfs-client": "SUSE NFS client package",
+        'command_exists mount.nfs || die': "post-install NFS mount helper check",
+        "ensure_longhorn_csi_probe_guard": "Longhorn CSI startup-budget liveness guard",
+        'borealis.io/liveness-startup-guard":"200"': "Longhorn CSI guard annotation",
+        "ensure_longhorn_multipath_compatibility": "Longhorn multipath safety function",
+        "classify_longhorn_multipath_maps": "Longhorn-owned map classifier",
+        "for unit in multipathd.service multipathd.socket": "bounded multipath systemd unit set",
+        'dm_uuid}" == mpath-*': "device-mapper multipath-only filter",
+        'multipath -f "${map_name}"': "exact Longhorn-owned map cleanup",
+        "Configure Longhorn device blacklist per official Longhorn multipath guidance": "genuine multipath fail-closed guidance",
+    }
+    for marker, description in required.items():
+        if marker not in engine_source:
+            fail(f"Engine Longhorn baseline lost {description}")
+    dependency_function = engine_source.find("ensure_longhorn_node_dependencies()")
+    multipath_call = engine_source.find("  ensure_longhorn_multipath_compatibility", dependency_function)
+    iscsi_call = engine_source.find("  ensure_longhorn_iscsi_package", dependency_function)
+    nfs_call = engine_source.find("  ensure_longhorn_nfs_package", dependency_function)
+    module_call = engine_source.find("  ensure_longhorn_iscsi_kernel_module", dependency_function)
+    if min(dependency_function, multipath_call, iscsi_call, nfs_call, module_call) < 0 or not multipath_call < iscsi_call < nfs_call < module_call:
+        fail("Longhorn baseline must reconcile multipath safety before iSCSI/NFS and kernel/service checks")
+
+
+def validate_pinned_dependency_adoption_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/apply-pinned-dependencies.sh"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read pinned dependency installer: {exc}")
+    if "longhorn)" not in source or '${kubectl_bin} apply -f "${target}"' not in source:
+        fail("cluster bootstrap must preserve standalone Longhorn client-side ownership during adoption")
+    for marker in (
+        "apply_dependency_probe_guards",
+        'borealis.io/liveness-startup-guard":"40"',
+        'borealis.io/liveness-startup-guard":"200"',
+        '"manager","livenessProbe":{"initialDelaySeconds":40}',
+        '"longhorn-csi-plugin","livenessProbe":{"initialDelaySeconds":200}',
+    ):
+        if marker not in source:
+            fail(f"pinned dependency installer lost probe guard marker {marker!r}")
+
+    try:
+        dependency_lock = (ROOT / "Data/Engine/K3s/cluster/dependencies.lock").read_text(encoding="utf-8")
+        workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read snapshot dependency contract: {exc}")
+    for dependency in (
+        "csi-volume-snapshot-class-crd|v8.5.0|",
+        "csi-volume-snapshot-content-crd|v8.5.0|",
+        "csi-volume-snapshot-crd|v8.5.0|",
+    ):
+        if dependency not in dependency_lock:
+            fail(f"cluster dependency lock lost {dependency.rstrip('|')}")
+    if "rollout restart deployment/cnpg-controller-manager" not in workflow:
+        fail("cluster bootstrap must restart CNPG after installing snapshot CRDs")
+    if 'k3s crictl inspecti "${api_image}"' not in workflow or "k3s ctr images list -q" in workflow:
+        fail("cluster redeploy must resolve normalized image references through CRI")
+    operator_stop = workflow.find("for deployment in api-backend borealis-operator job-scheduler borealis-cluster-controller")
+    worker_stop = workflow.find("# Site workers are intentionally bare")
+    database_dump = workflow.find("pg_dump -Fc")
+    if min(operator_stop, worker_stop, database_dump) < 0 or not operator_stop < worker_stop < database_dump:
+        fail("cluster database migration must stop operator and drain site workers before dump")
+    if 'wait --for=condition=Ready "${worker}"' not in workflow:
+        fail("cluster database migration must wait for drained site workers to return after cutover")
+    if "get endpointslice" not in workflow or "get endpoints borealis-postgres-rw" in workflow:
+        fail("cluster database migration must resolve ready PostgreSQL primary through EndpointSlice")
+    if 'pg_restore --clean --if-exists --no-owner -h 127.0.0.1' not in workflow:
+        fail("cluster database restore must use password-authenticated CloudNativePG loopback connection")
+    if 'psql -h 127.0.0.1 -At -U "${postgres_user}"' not in workflow:
+        fail("cluster database validation must use password-authenticated CloudNativePG loopback connection")
+    try:
+        postgres_objects = [
+            item
+            for item in yaml.safe_load_all((ROOT / "Data/Engine/K3s/cluster/postgres.yaml").read_text(encoding="utf-8"))
+            if item
+        ]
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot read CloudNativePG probe guard: {exc}")
+    postgres_manifest = next((item for item in postgres_objects if item.get("kind") == "Cluster"), {})
+    postgres_spec = postgres_manifest.get("spec") or {}
+    postgres_delay = (((postgres_spec.get("probes") or {}).get("liveness") or {}).get("initialDelaySeconds"))
+    if postgres_delay != 330 or postgres_delay <= int(postgres_spec.get("startDelay") or 0):
+        fail("CloudNativePG liveness delay must exceed PostgreSQL startup budget")
+    managed_roles = ((postgres_spec.get("managed") or {}).get("roles") or [])
+    borealis_role = next((role for role in managed_roles if role.get("name") == "borealis"), {})
+    if (
+        borealis_role.get("ensure") != "present"
+        or borealis_role.get("login") is not True
+        or borealis_role.get("inherit") is not True
+        or borealis_role.get("inRoles") != ["pg_read_all_stats"]
+        or any(borealis_role.get(attribute) is True for attribute in ("superuser", "createrole", "createdb", "replication", "bypassrls"))
+    ):
+        fail("CloudNativePG application role must retain narrow replication-statistics visibility")
+    for marker in (
+        "borealis-wireguard-server-keys",
+        '--from-file=server_private.key="${wireguard_private_key}"',
+        '--from-file=server_public.key="${wireguard_public_key}"',
+    ):
+        if marker not in workflow:
+            fail(f"cluster bootstrap lost shared WireGuard key migration marker {marker!r}")
+    for marker in (
+        "automountServiceAccountToken: false",
+        "securityContext: {seccompProfile: {type: RuntimeDefault}}",
+        "readOnlyRootFilesystem: true",
+        'capabilities: {add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"], drop: ["ALL"]}',
+        'if [ ! -f "\\${target}" ] || ! cmp -s "\\${source}" "\\${target}"',
+        'cmp "\\${source}" "\\${target}"',
+        "pod/borealis-agent-artifact-seed --timeout=25m",
+    ):
+        if marker not in workflow:
+            fail(f"cluster Agent artifact seed lost security marker {marker!r}")
+
+
+def validate_snapshot_controller_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/snapshot-controller.yaml"
+    try:
+        objects = [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot parse snapshot controller manifest: {exc}")
+    deployments = [
+        item
+        for item in objects
+        if item.get("kind") == "Deployment"
+        and (item.get("metadata") or {}).get("name") == "snapshot-controller"
+    ]
+    if len(deployments) != 1:
+        fail("snapshot controller manifest must contain one Deployment")
+    deployment = deployments[0]
+    if (deployment.get("spec") or {}).get("replicas") != 2:
+        fail("snapshot controller must retain two leader-elected replicas")
+    pod = (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {})
+    containers = pod.get("containers") or []
+    if len(containers) != 1:
+        fail("snapshot controller must contain one container")
+    container = containers[0]
+    if container.get("image") != "registry.k8s.io/sig-storage/snapshot-controller@sha256:74ca61ab13e978f03cf0f336a607281d15f04cda0a38a881306365473b28a3d8":
+        fail("snapshot controller image must retain v8.5.0 manifest-list digest")
+    if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
+        fail("snapshot controller must retain separate startup, readiness, and liveness probes")
+    validate_startup_liveness_guard(container, "snapshot-controller/snapshot-controller")
+    security = container.get("securityContext") or {}
+    expected_security = {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": True,
+        "runAsUser": 65532,
+        "runAsGroup": 65532,
+    }
+    for field, expected in expected_security.items():
+        if security.get(field) != expected:
+            fail(f"snapshot controller securityContext {field} must be {expected!r}")
+    if set(((security.get("capabilities") or {}).get("drop") or [])) != {"ALL"}:
+        fail("snapshot controller must drop ALL capabilities")
+    resources = container.get("resources") or {}
+    if not resources.get("requests") or not resources.get("limits"):
+        fail("snapshot controller must declare resource requests and limits")
+    if not pod.get("topologySpreadConstraints"):
+        fail("snapshot controller must retain topology spread constraints")
+    pdbs = [item for item in objects if item.get("kind") == "PodDisruptionBudget"]
+    if len(pdbs) != 1 or ((pdbs[0].get("spec") or {}).get("minAvailable")) != 1:
+        fail("snapshot controller must retain minAvailable=1 disruption budget")
+    for item in objects:
+        labels = (item.get("metadata") or {}).get("labels") or {}
+        if labels.get("app.kubernetes.io/part-of") != "borealis":
+            fail(f"snapshot controller {item.get('kind')} lost Borealis ownership label")
+        if item.get("kind") in {"ClusterRole", "Role"}:
+            for rule in item.get("rules") or []:
+                if "*" in (rule.get("resources") or []) or "*" in (rule.get("verbs") or []):
+                    fail("snapshot controller RBAC contains wildcard")
+
+
+def validate_kube_vip_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/kube-vip.yaml.in"
+    try:
+        objects = [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+        workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
+    except (OSError, yaml.YAMLError) as exc:
+        fail(f"cannot read kube-vip contract: {exc}")
+    daemonsets = {
+        (item.get("metadata") or {}).get("name"): item
+        for item in objects
+        if item.get("kind") == "DaemonSet"
+    }
+    expected = {
+        "kube-vip-borealis-control": {
+            "address": "${BOREALIS_CONTROL_PLANE_VIP}",
+            "port": "6443",
+            "prometheus_server": ":2112",
+            "probe_port": 2112,
+            "readiness_host": "${BOREALIS_CONTROL_PLANE_VIP}",
+            "readiness_port": 6443,
+        },
+        "kube-vip-borealis-edge": {
+            "address": "${BOREALIS_EDGE_VIP}",
+            "port": "443",
+            "prometheus_server": ":2113",
+            "probe_port": 2113,
+            "readiness_host": "${BOREALIS_EDGE_VIP}",
+            "readiness_port": 443,
+        },
+    }
+    if set(daemonsets) != set(expected):
+        fail("kube-vip manifest must contain separate control and edge DaemonSets")
+    for name, contract in expected.items():
+        daemonset = daemonsets[name]
+        spec = daemonset.get("spec") or {}
+        if spec.get("minReadySeconds") != 5:
+            fail(f"{name} must retain five-second minimum readiness")
+        pod = (((spec.get("template") or {}).get("spec")) or {})
+        if pod.get("serviceAccountName") != "kube-vip-borealis" or pod.get("automountServiceAccountToken") is not True:
+            fail(f"{name} must use dedicated kube-vip ServiceAccount")
+        containers = pod.get("containers") or []
+        if len(containers) != 1:
+            fail(f"{name} must contain one kube-vip container")
+        container = containers[0]
+        env = {entry.get("name"): entry.get("value") for entry in container.get("env") or []}
+        if "vip_address" in env:
+            fail(f"{name} uses deprecated vip_address instead of kube-vip v1.1 address")
+        if "health_check_port" in env:
+            fail(f"{name} must not enable kube-vip health server because it blocks process exit after leadership loss")
+        for key in ("address", "port", "prometheus_server"):
+            value = contract[key]
+            if env.get(key) != value:
+                fail(f"{name} {key} must be {value!r}")
+        for key, value in {"vip_subnet": "32", "cp_namespace": "kube-system", "vip_leaderelection": "true"}.items():
+            if env.get(key) != value:
+                fail(f"{name} {key} must be {value!r}")
+        node_name = next((entry for entry in container.get("env") or [] if entry.get("name") == "vip_nodename"), {})
+        if (((node_name.get("valueFrom") or {}).get("fieldRef") or {}).get("fieldPath")) != "spec.nodeName":
+            fail(f"{name} must identify lease holder from spec.nodeName")
+        if not container.get("startupProbe") or not container.get("readinessProbe") or not container.get("livenessProbe"):
+            fail(f"{name} must retain separate startup, readiness, and liveness probes")
+        validate_startup_liveness_guard(container, f"{name}/kube-vip")
+        startup_socket = (container.get("startupProbe") or {}).get("tcpSocket") or {}
+        liveness_socket = (container.get("livenessProbe") or {}).get("tcpSocket") or {}
+        readiness_socket = (container.get("readinessProbe") or {}).get("tcpSocket") or {}
+        if startup_socket.get("port") != contract["probe_port"] or liveness_socket.get("port") != contract["probe_port"]:
+            fail(f"{name} startup/liveness must use local metrics listener")
+        if readiness_socket.get("host") != contract["readiness_host"] or readiness_socket.get("port") != contract["readiness_port"]:
+            fail(f"{name} readiness must verify advertised VIP service")
+        resources = container.get("resources") or {}
+        if not resources.get("requests") or not resources.get("limits"):
+            fail(f"{name} must declare resource requests and limits")
+    pdb_names = {
+        (item.get("metadata") or {}).get("name")
+        for item in objects
+        if item.get("kind") == "PodDisruptionBudget" and ((item.get("spec") or {}).get("minAvailable")) == 1
+    }
+    if pdb_names != set(expected):
+        fail("control and edge kube-vip workloads must retain minAvailable=1 disruption budgets")
+    for marker in (
+        'rollout status "daemonset/${daemonset}"',
+        'get "lease/${lease}"',
+        'kube-vip address %s not advertised',
+        'get --raw=/readyz',
+    ):
+        if marker not in workflow:
+            fail(f"cluster workflow lost kube-vip verification marker {marker!r}")
+
+
+def validate_cluster_workload_handoff_contract() -> None:
+    path = ROOT / "Data/Engine/K3s/cluster/reconcile-node-workloads.py"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read cluster workload reconciler: {exc}")
+    required = {
+        "stopped_generic_host_workloads": "standalone host-port handoff tracking",
+        'kubectl("-n", NAMESPACE, "scale", f"deployment/{base}", "--replicas=0")': "standalone host-port withdrawal",
+        "for base, replicas in reversed(stopped_generic_host_workloads)": "failed initialization restoration",
+        'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=0")': "candidate host-port withdrawal before promotion",
+        "existing_selector = promotion_selector(base, node, candidate, active)": "first member candidate promotion without prior active workload",
+        "if active:": "immutable existing Deployment selector preservation",
+        "if revision != expected_revision:": "immutable candidate revision promotion gate",
+        'spec["replicas"] = 0 if base in HOST_PORT_DEPLOYMENTS and candidate else 1': "stopped host-port update candidates",
+        'if base == "traefik-edge"': "bounded Traefik host-port candidate handoff",
+        'kubectl("-n", NAMESPACE, "scale", f"deployment/{candidate_name}", "--replicas=1")': "Traefik candidate activation during handoff",
+        'elif base == "wireguard-tunnel"': "standby WireGuard candidate contract",
+        'annotations.pop("deployment.kubernetes.io/revision", None)': "idempotent candidate metadata ownership",
+        "PROBE_GUARD_DELAYS": "per-node candidate startup-budget probe guards",
+        "enforce_startup_liveness_guard(base, template_annotations, containers)": "candidate probe guard enforcement",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", edge_vip)': "edge VIP ownership environment",
+        "WIREGUARD_KEYS_SECRET": "shared WireGuard server identity Secret",
+        '"mountPath": "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets"': "shared WireGuard key mount",
+        'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")': "candidate scheduler leadership fence",
+        'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "true")': "promoted scheduler leadership restore",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")': "candidate cluster-controller lease fence",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_ACTION_IMAGE", image)': "controller action Job image pin",
+        'set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")': "candidate API background-loop fence",
+        'template["metadata"]["labels"]["borealis.io/aegis-peer"] = "true"': "promoted Aegis peer registration",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"cluster workload reconciler lost {description}")
+
+
+def validate_api_release_identity_contract() -> None:
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Engine API manifest renderer: {exc}")
+    for marker in ('"release_version=${release_version}"', '"source_sha=${source_sha}"'):
+        if marker not in engine_source:
+            fail("API manifest cache must include immutable Engine release identity")
+
+
+def validate_k3s_peer_allowlist_contract() -> None:
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read Engine K3s peer allowlist contract: {exc}")
+    required = {
+        'elif [[ -r "${RUNTIME_ENV}" ]]': "existing readable runtime allowlist fallback",
+        'BOREALIS_K3S_PEER_CIDRS=${K3S_PEER_CIDRS}': "runtime Secret persistence",
+        'K3S_PEER_CIDRS="$(awk -F= \'$1 == "BOREALIS_K3S_PEER_CIDRS"': "cluster node runtime hydration",
+        'Cluster runtime environment is missing BOREALIS_K3S_PEER_CIDRS.': "fail-closed cluster node redeploy",
+        'networks.append(str(network))': "canonical private CIDR normalization",
+        'cluster_prepare_node()': "fixed blank-node preparation entrypoint",
+        '  ensure_longhorn_node_dependencies\n  write_k3s_borealis_config >/dev/null || true\n  write_k3s_registries_config >/dev/null || true\n  ensure_k3s_api_firewall\n  printf \'Cluster node host preparation complete.': "blank-node Longhorn, Spegel, and firewall preparation",
+        'Engine.sh --cluster-prepare-node': "documented fixed node preparation command",
+    }
+    for marker, description in required.items():
+        if marker not in engine_source:
+            fail(f"Engine K3s peer allowlist lost {description}")
+
+
+def validate_cluster_enable_vip_recovery_contract() -> None:
+    try:
+        workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read cluster node workflow: {exc}")
+    restart = 'k3s kubectl -n kube-system rollout restart "daemonset/${daemonset}"'
+    rollout = 'k3s kubectl -n kube-system rollout status "daemonset/${daemonset}" --timeout=3m'
+    address = 'for vip in "${control_vip}" "${edge_vip}"; do'
+    if restart not in workflow or workflow.find(restart) > workflow.find(rollout) or workflow.find(rollout) > workflow.find(address):
+        fail("cluster enable must restart kube-vip after K3s datastore conversion before address verification")
 
 
 def fail(message: str) -> None:
@@ -194,6 +865,13 @@ def validate_workload(obj: dict, source: Path) -> None:
             fail(f"{name}/{container.get('name')} lacks resource limits")
         if obj.get("kind") != "Job" and (not container.get("livenessProbe") or not container.get("readinessProbe")):
             fail(f"{name}/{container.get('name')} lacks documented probes")
+        validate_startup_liveness_guard(container, f"{name}/{container.get('name')}")
+        container_name = container.get("name", "<unnamed>")
+        validate_transient_drain_hook(
+            container,
+            f"{name}/{container_name}",
+            (name, container_name) in TRANSIENT_DRAIN_WORKLOADS,
+        )
 
     for volume in spec.get("volumes") or []:
         host_path = (volume.get("hostPath") or {}).get("path")
@@ -224,6 +902,27 @@ def validate_postgres(objects: list[tuple[Path, dict]]) -> None:
         fail("postgres-db PVC lost Borealis Longhorn StorageClass")
 
 
+def validate_cluster_schema_job(objects: list[tuple[Path, dict]]) -> None:
+    jobs = [
+        obj
+        for source, obj in objects
+        if source.name == "cluster-schema.yaml" and obj.get("kind") == "Job"
+    ]
+    if len(jobs) != 1:
+        fail("expected one rendered rolling cluster schema Job")
+    pod = jobs[0].get("spec", {}).get("template", {}).get("spec", {})
+    if pod.get("nodeName") != "engine-1":
+        fail("rolling cluster schema Job must stay pinned to selected update node")
+    containers = pod.get("containers") or []
+    command = containers[0].get("command") if containers else []
+    command_text = "\n".join(str(item) for item in command or [])
+    if "run_cluster_schema_phase" not in command_text or "/bin/sh" in command_text or "/bin/bash" in command_text:
+        fail("rolling cluster schema Job must invoke fixed Python schema contract without shell")
+    environment = {item.get("name"): item.get("value") for item in (containers[0].get("env") or [])}
+    if environment.get("BOREALIS_CLUSTER_SCHEMA_PHASE") != "expand" or environment.get("BOREALIS_CLUSTER_TARGET_REVISION") != "0123456789abcdef0123456789abcdef01234567":
+        fail("rolling cluster schema Job lost immutable phase/revision inputs")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifests", type=Path)
@@ -243,6 +942,17 @@ def main() -> int:
 
 
 def validate(objects: list[tuple[Path, dict]]) -> None:
+    validate_probe_conformance_contract()
+    validate_cluster_controller_contract()
+    validate_node_manager_service_contract()
+    validate_longhorn_host_dependency_contract()
+    validate_pinned_dependency_adoption_contract()
+    validate_snapshot_controller_contract()
+    validate_kube_vip_contract()
+    validate_cluster_workload_handoff_contract()
+    validate_api_release_identity_contract()
+    validate_k3s_peer_allowlist_contract()
+    validate_cluster_enable_vip_recovery_contract()
     seen_workloads: set[tuple[str, str]] = set()
     for source, obj in objects:
         validate_labels(obj, source)
@@ -257,6 +967,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     required = {
         ("api-backend.yaml", "api-backend"),
         ("borealis-operator.yaml", "borealis-operator"),
+        ("cluster-schema.yaml", "borealis-schema-expand-0123456789ab"),
         ("job-scheduler.yaml", "job-scheduler"),
         ("postgres-db.yaml", "postgres-db"),
         ("postgres-schema.yaml", "postgres-db-schema-initializer"),
@@ -269,6 +980,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     if seen_workloads != required:
         fail(f"rendered workload set drifted: missing={sorted(required - seen_workloads)}, extra={sorted(seen_workloads - required)}")
     validate_postgres(objects)
+    validate_cluster_schema_job(objects)
     print(f"K3S POLICY PASS: {len(objects)} rendered objects satisfy namespace, RBAC, token, privilege, hostPath, network, Service, probe, and storage policies")
 
 

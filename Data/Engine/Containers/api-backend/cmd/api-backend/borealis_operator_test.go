@@ -5,10 +5,38 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestBorealisOperatorProbeContractsWithdrawReadinessOnly(t *testing.T) {
+	drainFile := filepath.Join(t.TempDir(), "draining")
+	t.Setenv("BOREALIS_DRAIN_FILE", drainFile)
+	operator := &borealisOperator{}
+	for _, path := range []string{"/startup", "/ready", "/live"} {
+		recorder := httptest.NewRecorder()
+		operator.handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected %s healthy before drain, got %d", path, recorder.Code)
+		}
+	}
+	if err := os.WriteFile(drainFile, []byte("draining\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		path string
+		want int
+	}{{"/startup", http.StatusOK}, {"/ready", http.StatusServiceUnavailable}, {"/live", http.StatusOK}} {
+		recorder := httptest.NewRecorder()
+		operator.handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if recorder.Code != test.want {
+			t.Fatalf("expected %s status %d during drain, got %d", test.path, test.want, recorder.Code)
+		}
+	}
+}
 
 func TestBorealisOperatorRequiresInternalToken(t *testing.T) {
 	operator := &borealisOperator{secret: []byte("test-secret"), namespace: "borealis"}
@@ -439,17 +467,32 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	container, _ := containers[0].(map[string]any)
 	readinessProbe := nestedMap(container, "readinessProbe")
 	readinessHTTP := nestedMap(readinessProbe, "httpGet")
-	if cleanText(readinessHTTP["path"]) != "/health" || cleanText(readinessHTTP["port"]) != "remote-ops" {
+	if cleanText(readinessHTTP["path"]) != "/ready" || cleanText(readinessHTTP["port"]) != "remote-ops" {
 		t.Fatalf("site-worker readiness probe must validate remote ops health: %#v", readinessProbe)
 	}
-	if coerceInt64(readinessProbe["periodSeconds"]) != 2 || coerceInt64(readinessProbe["failureThreshold"]) != 30 {
+	if coerceInt64(readinessProbe["periodSeconds"]) != 2 || coerceInt64(readinessProbe["failureThreshold"]) != 3 {
 		t.Fatalf("site-worker readiness probe should allow bounded startup: %#v", readinessProbe)
 	}
 	livenessProbe := nestedMap(container, "livenessProbe")
 	livenessHTTP := nestedMap(livenessProbe, "httpGet")
-	if cleanText(livenessHTTP["path"]) != "/health" || cleanText(livenessHTTP["port"]) != "remote-ops" {
+	if cleanText(livenessHTTP["path"]) != "/live" || cleanText(livenessHTTP["port"]) != "remote-ops" {
 		t.Fatalf("site-worker liveness probe must validate remote ops health: %#v", livenessProbe)
 	}
+	if coerceInt64(livenessProbe["initialDelaySeconds"]) != 130 {
+		t.Fatalf("site-worker liveness delay must exceed startup failure budget: %#v", livenessProbe)
+	}
+	t.Run("transient preStop marker", func(t *testing.T) {
+		lifecycle := nestedMap(container, "lifecycle")
+		preStop := nestedMap(lifecycle, "preStop")
+		execHook := nestedMap(preStop, "exec")
+		command, _ := execHook["command"].([]any)
+		if len(command) != 3 || cleanText(command[0]) != "sh" || cleanText(command[1]) != "-c" {
+			t.Fatalf("site-worker preStop must use fixed shell command: %#v", command)
+		}
+		if cleanText(command[2]) != "trap 'rm -f /tmp/borealis-draining' EXIT; touch /tmp/borealis-draining; sleep 10" {
+			t.Fatalf("site-worker preStop must remove transient drain marker: %#v", command)
+		}
+	})
 	envList, _ := container["env"].([]any)
 	envByName := map[string]string{}
 	for _, rawEnv := range envList {

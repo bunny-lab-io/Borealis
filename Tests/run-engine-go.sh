@@ -34,6 +34,11 @@ run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLE
   "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
   -o "${RESULT_DIR}/borealis-api-backend-go" ./cmd/api-backend \
   >"${RESULT_DIR}/engine-go-build.log" 2>&1
+cp "${RESULT_DIR}/borealis-api-backend-go" "${RESULT_DIR}/borealis-cluster-controller"
+run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+  "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
+  -o "${RESULT_DIR}/borealis-node-manager" ./cmd/borealis-node-manager \
+  >>"${RESULT_DIR}/engine-go-build.log" 2>&1
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
   "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
   -o "${RESULT_DIR}/borealis-wireguard-control" ./cmd/wireguard-control \
@@ -41,6 +46,10 @@ run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLE
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
   "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
   -o "${RESULT_DIR}/borealis-wireguard-control-client" ./cmd/wireguard-control-client \
+  >>"${RESULT_DIR}/engine-go-build.log" 2>&1
+run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+  "${GO_BIN}" -C "${MODULE_ROOT}" build -trimpath -buildvcs=false \
+  -o "${RESULT_DIR}/borealis-wireguard-route-daemon" ./cmd/wireguard-route-daemon \
   >>"${RESULT_DIR}/engine-go-build.log" 2>&1
 
 python3 "${REPO_ROOT}/Tests/policy/check_api_cutover.py"

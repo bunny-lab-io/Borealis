@@ -1260,6 +1260,7 @@ func engineBackupTableSpecs() []engineBackupTableSpec {
 		{Name: "engine.device_vpn_config", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.device_vpn_ip_leases", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.device_vpn_key_leases", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
+		{Name: "engine.device_vpn_sessions", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.device_sites", OrderBy: []string{"site_id", "device_hostname"}, Export: true, Restore: true},
 		{Name: "engine.device_approvals", OrderBy: []string{"created_at", "id"}, Export: false, Restore: false},
 		{Name: "engine.user_passkeys", OrderBy: []string{"user_id", "id"}, Export: true, Restore: true, ResetSerials: true},

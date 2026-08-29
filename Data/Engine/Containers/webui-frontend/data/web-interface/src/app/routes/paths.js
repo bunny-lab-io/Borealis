@@ -65,6 +65,7 @@ export const APP_PATHS = {
   siteAssignment: "/users/site-assignment",
   backupRestore: "/backup-restore",
   server: "/server",
+  clusterManagement: "/cluster-management",
   metadataFields: "/metadata-fields",
   devTools: "/dev-tools",
   pageStyleTemplate: "/dev-tools?tab=page_style_template",

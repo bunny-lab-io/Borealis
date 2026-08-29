@@ -3,6 +3,11 @@ set -eu
 
 host="${BOREALIS_GUACD_HEALTH_HOST:-127.0.0.1}"
 port="${BOREALIS_GUACD_PORT:-4822}"
+mode="${1:-ready}"
+
+if [ "${mode}" = "ready" ] && [ -e /tmp/borealis-draining ]; then
+  exit 1
+fi
 
 if command -v nc >/dev/null 2>&1; then
   nc -z "${host}" "${port}"

@@ -53,7 +53,7 @@ def apply_all(
     _run_schema_step(progress_callback, ("device_vpn_config",), lambda: _ensure_device_vpn_config_table(conn))
     _run_schema_step(
         progress_callback,
-        ("device_vpn_ip_leases", "device_vpn_key_leases"),
+        ("device_vpn_ip_leases", "device_vpn_key_leases", "device_vpn_sessions"),
         lambda: _ensure_device_vpn_lease_tables(conn),
     )
     _run_schema_step(progress_callback, ("refresh_tokens",), lambda: _ensure_refresh_token_table(conn))
@@ -226,6 +226,37 @@ def _ensure_device_vpn_lease_tables(conn: sqlite3.Connection) -> None:
     ):
         if column_name not in key_lease_columns:
             cur.execute(column_sql)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_vpn_sessions (
+            agent_id TEXT PRIMARY KEY,
+            tunnel_id TEXT NOT NULL UNIQUE,
+            virtual_ip TEXT NOT NULL,
+            endpoint_host TEXT NOT NULL DEFAULT '',
+            allowed_ports_json TEXT NOT NULL DEFAULT '[]',
+            operators_json TEXT NOT NULL DEFAULT '[]',
+            state TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_activity_at TEXT NOT NULL,
+            last_transport_probe_at TEXT,
+            last_transport_confirmed_at TEXT,
+            last_agent_ready_at TEXT,
+            last_agent_ready_tunnel_id TEXT NOT NULL DEFAULT '',
+            last_agent_ready_allowed_ports_json TEXT NOT NULL DEFAULT '[]',
+            last_agent_ready_reason TEXT NOT NULL DEFAULT '',
+            last_agent_ready_service_state TEXT NOT NULL DEFAULT '',
+            generation INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_device_vpn_sessions_state_expires
+            ON device_vpn_sessions(state, expires_at)
+        """
+    )
 
 
 def _ensure_refresh_token_table(conn: sqlite3.Connection) -> None:

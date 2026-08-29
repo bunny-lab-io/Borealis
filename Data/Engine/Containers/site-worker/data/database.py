@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.db import get_database_manager
@@ -27,6 +28,9 @@ def _generate_install_code() -> str:
 
 
 SchemaProgressCallback = Callable[[str], None]
+
+_CLUSTER_SCHEMA_PHASES = frozenset({"expand", "finalize"})
+_CLUSTER_RELEASE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _notify_schema_progress(progress_callback: Optional[SchemaProgressCallback], table_name: str) -> None:
@@ -90,6 +94,22 @@ def initialise_engine_database(
         _run_schema_step(progress_callback, ("credentials",), lambda: _ensure_credentials(conn, logger=logger))
         _run_schema_step(progress_callback, ("github_token",), lambda: _ensure_github_token(conn, logger=logger))
         _run_schema_step(progress_callback, ("aegis_cipher_state",), lambda: _ensure_aegis_cipher_state(conn, logger=logger))
+        _run_schema_step(
+            progress_callback,
+            (
+                "cluster_state",
+                "cluster_nodes",
+                "cluster_invitations",
+                "cluster_admissions",
+                "cluster_operations",
+                "cluster_operation_events",
+                "cluster_audit_events",
+                "realtime_outbox",
+                "cluster_application_leases",
+                "cluster_schema_phases",
+            ),
+            lambda: _ensure_cluster_control_tables(conn, logger=logger),
+        )
         _run_schema_step(progress_callback, ("device_filters",), lambda: _ensure_device_filters(conn, logger=logger))
         _run_schema_step(progress_callback, ("device_filter_sites",), lambda: _ensure_device_filter_sites(conn, logger=logger))
         _run_schema_step(progress_callback, ("device_software_inventory",), lambda: _ensure_device_software_inventory(conn, logger=logger))
@@ -149,6 +169,83 @@ def initialise_engine_database(
             raise
     finally:
         conn.close()
+
+
+def run_cluster_schema_phase(
+    database_url: str,
+    phase: str,
+    release_sha: str,
+    *,
+    progress_callback: Optional[SchemaProgressCallback] = None,
+) -> bool:
+    """Run one fixed rolling-update schema phase and record its completion."""
+
+    database_url = str(database_url or "").strip()
+    phase = str(phase or "").strip()
+    release_sha = str(release_sha or "").strip()
+    if not database_url:
+        raise ValueError("Engine database URL is required for cluster schema phase")
+    if phase not in _CLUSTER_SCHEMA_PHASES:
+        raise ValueError("Cluster schema phase must be expand or finalize")
+    if not _CLUSTER_RELEASE_SHA_RE.fullmatch(release_sha):
+        raise ValueError("Cluster schema release SHA must be 40 lowercase hexadecimal characters")
+
+    manager = get_database_manager(database_url)
+    manager.ensure_schemas()
+    conn = sqlite3.connect(database_url)
+    try:
+        _ensure_cluster_schema_phase_table(conn)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT completed_at FROM cluster_schema_phases WHERE release_sha = ? AND phase = ?",
+                (release_sha, phase),
+            )
+            if cur.fetchone() is not None:
+                conn.commit()
+                return False
+            if phase == "finalize":
+                cur.execute(
+                    "SELECT completed_at FROM cluster_schema_phases WHERE release_sha = ? AND phase = 'expand'",
+                    (release_sha,),
+                )
+                if cur.fetchone() is None:
+                    raise RuntimeError("Cluster schema finalize requires completed expand phase")
+        finally:
+            cur.close()
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Expand runs every additive, backward-compatible initializer shipped by
+    # target release before its first candidate can serve. Finalize currently
+    # has no destructive migrations; it remains explicit so future releases
+    # can add contract-only work without changing controller/node contracts.
+    if phase == "expand":
+        initialise_engine_database(database_url, progress_callback=progress_callback)
+
+    completed_at = int(time.time())
+    conn = sqlite3.connect(database_url)
+    try:
+        _ensure_cluster_schema_phase_table(conn)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO cluster_schema_phases(release_sha, phase, completed_at)
+                VALUES (?, ?, ?)
+                """,
+                (release_sha, phase, completed_at),
+            )
+        finally:
+            cur.close()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return True
 
 
 def _apply_engine_migrations(
@@ -822,6 +919,196 @@ def _ensure_aegis_cipher_state(conn: sqlite3.Connection, *, logger: Optional[log
             raise
     finally:
         cur.close()
+
+
+def _ensure_cluster_control_tables(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_state (
+                id INTEGER PRIMARY KEY,
+                cluster_id TEXT UNIQUE NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'Standalone',
+                active_size INTEGER NOT NULL DEFAULT 1,
+                desired_size INTEGER NOT NULL DEFAULT 1,
+                control_plane_vip TEXT,
+                edge_vip TEXT,
+                baseline_release TEXT,
+                baseline_sha TEXT,
+                hmr_state TEXT NOT NULL DEFAULT 'inactive',
+                hmr_node_id TEXT,
+                active_operation_id TEXT,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_nodes (
+                id TEXT PRIMARY KEY,
+                node_name TEXT UNIQUE NOT NULL,
+                hostname TEXT NOT NULL,
+                management_ip TEXT NOT NULL,
+                architecture TEXT NOT NULL,
+                os_version TEXT NOT NULL,
+                membership_state TEXT NOT NULL DEFAULT 'Pending Quorum',
+                application_state TEXT NOT NULL DEFAULT 'standby',
+                release_tag TEXT,
+                release_sha TEXT,
+                drain_reason TEXT,
+                roles_json TEXT NOT NULL DEFAULT '{}',
+                probe_health_json TEXT NOT NULL DEFAULT '{}',
+                last_seen_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_nodes_membership ON cluster_nodes(membership_state, node_name)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_invitations (
+                id TEXT PRIMARY KEY,
+                cluster_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                token_hash TEXT UNIQUE NOT NULL,
+                created_by TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                consumed_at INTEGER,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_invitations_expiry ON cluster_invitations(expires_at, consumed_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_admissions (
+                id TEXT PRIMARY KEY,
+                invitation_id TEXT UNIQUE NOT NULL,
+                cluster_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                management_ip TEXT NOT NULL,
+                architecture TEXT NOT NULL,
+                os_version TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'Pending Quorum',
+                approved_by TEXT,
+                approved_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_admissions_state ON cluster_admissions(state, created_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_operations (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                state TEXT NOT NULL,
+                current_step TEXT NOT NULL,
+                target_node_id TEXT,
+                target_release TEXT,
+                target_sha TEXT,
+                requested_by TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                error_text TEXT,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_operations_state ON cluster_operations(state, created_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_operation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_id TEXT,
+                admission_id TEXT,
+                cluster_id TEXT,
+                event_type TEXT NOT NULL,
+                state TEXT NOT NULL,
+                message TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_operation_events_operation ON cluster_operation_events(operation_id, id)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_id TEXT,
+                result TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cluster_audit_events_created ON cluster_audit_events(created_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS realtime_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_name TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                published_at INTEGER
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_realtime_outbox_pending ON realtime_outbox(published_at, id)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_application_leases (
+                name TEXT PRIMARY KEY,
+                holder TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        _ensure_cluster_schema_phase_table(conn, cursor=cur)
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure cluster control tables: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_cluster_schema_phase_table(
+    conn: sqlite3.Connection,
+    *,
+    cursor: Optional[sqlite3.Cursor] = None,
+) -> None:
+    owned_cursor = cursor is None
+    cur = cursor or conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_schema_phases (
+                release_sha TEXT NOT NULL,
+                phase TEXT NOT NULL CHECK(phase IN ('expand','finalize')),
+                completed_at INTEGER NOT NULL,
+                PRIMARY KEY (release_sha, phase)
+            )
+            """
+        )
+    finally:
+        if owned_cursor:
+            cur.close()
 
 
 def _ensure_device_filters(conn: sqlite3.Connection, *, logger: Optional[logging.Logger] = None) -> None:

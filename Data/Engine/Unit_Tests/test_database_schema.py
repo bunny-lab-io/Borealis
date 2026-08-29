@@ -57,6 +57,108 @@ def test_engine_database_initialisation_creates_assembly_tables(tmp_path) -> Non
     assert "activity_history" in progress
     assert "devices" in progress
     assert "job_scheduler_work_items" in progress
+    assert "cluster_operations" in progress
+
+
+def test_engine_database_initialisation_creates_cluster_control_tables(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+
+    database.initialise_engine_database(db_url)
+
+    assert _table_columns(db_url, "cluster_state") >= {
+        "cluster_id",
+        "enabled",
+        "active_size",
+        "desired_size",
+        "control_plane_vip",
+        "edge_vip",
+        "baseline_release",
+        "hmr_state",
+        "active_operation_id",
+    }
+    assert _table_columns(db_url, "cluster_nodes") >= {
+        "id",
+        "node_name",
+        "membership_state",
+        "application_state",
+        "release_tag",
+        "probe_health_json",
+    }
+    assert _table_columns(db_url, "cluster_operations") >= {
+        "id",
+        "kind",
+        "state",
+        "current_step",
+        "target_release",
+        "target_sha",
+        "payload_json",
+    }
+    assert _table_columns(db_url, "cluster_operation_events") >= {
+        "operation_id",
+        "admission_id",
+        "event_type",
+        "state",
+        "details_json",
+    }
+    assert _table_columns(db_url, "cluster_schema_phases") == {
+        "release_sha",
+        "phase",
+        "completed_at",
+    }
+
+
+def test_cluster_schema_phases_are_ordered_and_idempotent(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    release_sha = "a" * 40
+    progress: list[str] = []
+
+    assert database.run_cluster_schema_phase(
+        db_url,
+        "expand",
+        release_sha,
+        progress_callback=progress.append,
+    )
+    assert "devices" in progress
+    assert not database.run_cluster_schema_phase(db_url, "expand", release_sha)
+    assert database.run_cluster_schema_phase(db_url, "finalize", release_sha)
+    assert not database.run_cluster_schema_phase(db_url, "finalize", release_sha)
+
+    conn = dbapi.connect(db_url)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT phase FROM cluster_schema_phases WHERE release_sha = ? ORDER BY phase",
+            (release_sha,),
+        )
+        assert [row[0] for row in cur.fetchall()] == ["expand", "finalize"]
+    finally:
+        conn.close()
+
+
+def test_cluster_schema_finalize_rejects_missing_expand(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    try:
+        database.run_cluster_schema_phase(db_url, "finalize", "b" * 40)
+    except RuntimeError as exc:
+        assert "requires completed expand" in str(exc)
+    else:
+        raise AssertionError("finalize succeeded before expand")
+
+
+def test_cluster_schema_phase_rejects_unbounded_contract_values(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    for phase, revision in (
+        ("contract", "c" * 40),
+        ("EXPAND", "c" * 40),
+        ("expand", "not-a-sha"),
+        ("expand", "C" * 40),
+    ):
+        try:
+            database.run_cluster_schema_phase(db_url, phase, revision)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unsafe schema phase input accepted: {phase} {revision}")
 
 
 def test_engine_database_initialisation_creates_vpn_key_lease_table(tmp_path) -> None:
@@ -72,6 +174,38 @@ def test_engine_database_initialisation_creates_vpn_key_lease_table(tmp_path) ->
         "agent_id",
         "client_private_key",
         "client_public_key",
+        "updated_at",
+    }
+
+
+def test_engine_database_initialisation_creates_durable_vpn_session_table(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    progress: list[str] = []
+
+    database.initialise_engine_database(db_url, progress_callback=progress.append)
+
+    columns = _table_columns(db_url, "device_vpn_sessions")
+
+    assert "device_vpn_sessions" in progress
+    assert columns == {
+        "agent_id",
+        "tunnel_id",
+        "virtual_ip",
+        "endpoint_host",
+        "allowed_ports_json",
+        "operators_json",
+        "state",
+        "created_at",
+        "expires_at",
+        "last_activity_at",
+        "last_transport_probe_at",
+        "last_transport_confirmed_at",
+        "last_agent_ready_at",
+        "last_agent_ready_tunnel_id",
+        "last_agent_ready_allowed_ports_json",
+        "last_agent_ready_reason",
+        "last_agent_ready_service_state",
+        "generation",
         "updated_at",
     }
 

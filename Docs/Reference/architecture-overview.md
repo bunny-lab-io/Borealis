@@ -5,7 +5,7 @@ Explain how Borealis is structured and how the core components interact end to e
 ## Platform Shape
 Borealis has two main runtime sides: the Engine server and the Agent clients. The Engine gives operators one web interface for inventory, remote operations, automation, reporting, credentials, and security controls. Agents run on managed endpoints and connect outbound to the Engine.
 
-- **Engine (Server)**: Linux-hosted single-node K3s control plane with Go public API, retained Python worker services, PostgreSQL, Traefik, realtime transport, scheduling, automation, and web UI.
+- **Engine (Server)**: Linux-hosted K3s control plane with Go public API, retained Python worker services, PostgreSQL, Traefik, realtime transport, scheduling, automation, and web UI. Standalone uses one node; current release supports three full K3s server/etcd/workload nodes. Public membership paths fence odd-numbered expansion or shrinking beyond three nodes pending future roadmap work.
 - **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
 - **Transport**: Agents connect outbound to the Engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
 - **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.
@@ -23,6 +23,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 - PostgreSQL database: K3s StatefulSet backed by Longhorn PVC; stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
 - Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with Aurora as the official authoring repo and a bundled seed snapshot kept in the Borealis repo.
 - Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via Apache Guacamole.
+- Cluster control: HA `borealis-cluster-controller`, fixed-verb root node manager, Kubernetes CRDs, PostgreSQL operation ledger, CloudNativePG, kube-vip, and per-node application Deployments.
 
 ## How the Pieces Talk
 - Enrollment: agent calls `/api/agent/enroll/request` and `/api/agent/enroll/poll`, operator approves, Engine issues tokens and cert bundle.
@@ -43,6 +44,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     ### Related documentation
 
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [Managing Engine Clusters](../Engine/managing-engine-clusters.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Security Whitepaper](security-whitepaper.md)
     - [Device Auditing](../Using%20the%20Platform/device-auditing.md)

@@ -71,6 +71,8 @@ type postgresOperatorStore struct {
 	patchPolicySchemaOK      bool
 	agentInstallLinkSchemaMu sync.Mutex
 	agentInstallLinkSchemaOK bool
+	clusterSchemaMu          sync.Mutex
+	clusterSchemaOK          bool
 }
 
 type authService struct {
@@ -169,6 +171,10 @@ func openOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
 	if err := store.ensureAgentInstallLinkSchema(ctx); err != nil && !errors.Is(err, errAgentInstallLinkSchemaPending) {
 		_ = db.Close()
 		return nil, func() {}, fmt.Errorf("failed to ensure Agent install link tables: %w", err)
+	}
+	if err := store.ensureClusterSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, func() {}, fmt.Errorf("failed to ensure cluster control tables: %w", err)
 	}
 	return store, func() { _ = db.Close() }, nil
 }

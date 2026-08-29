@@ -49,7 +49,7 @@ func agentRDPEnsureHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 			return
 		}
 		rdpPort := parseIntDefault(os.Getenv("BOREALIS_RDP_PORT"), defaultRDPBackendPort)
-		sessionPayload := vpnRuntime.sessionPayload(device.AgentID, false)
+		sessionPayload := vpnRuntime.sessionPayload(r.Context(), device.AgentID, false)
 		if sessionPayload == nil {
 			var err error
 			sessionPayload, err = vpnRuntime.connect(r.Context(), vpnConnectRequest{
@@ -162,6 +162,7 @@ func agentVPNTunnelReadyHandler(auth *authService, signer *agentJWTSigner, dpop 
 			return
 		}
 		payload := vpnRuntime.recordAgentReady(
+			r.Context(),
 			device.AgentID,
 			tunnelID,
 			coercePortList(body["allowed_ports"]),
@@ -202,7 +203,7 @@ func agentVNCEnsureHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 			return
 		}
 		vncPort := parseIntDefault(os.Getenv("BOREALIS_VNC_PORT"), defaultVNCBackendPort)
-		sessionPayload := vpnRuntime.sessionPayload(device.AgentID, false)
+		sessionPayload := vpnRuntime.sessionPayload(r.Context(), device.AgentID, false)
 		if sessionPayload == nil {
 			var err error
 			sessionPayload, err = vpnRuntime.connect(r.Context(), vpnConnectRequest{

@@ -133,14 +133,14 @@ func TestEngineAgentBinaryRedeployKeepsOldWorkersUntilHealthCutover(t *testing.T
 	source := readRepositoryContractFile(t, "Engine.sh")
 	function := engineShellFunctionForContractTest(t, source, "redeploy_agent_binaries() {", "\nusage() {")
 	assertContractOrder(t, function,
-		`agent_redeploy_probe_pod "${candidate}"`,
+		`agent_redeploy_wait_for_pod_health "${candidate}"`,
 		`agent_redeploy_patch_service_revision "${service}" "${candidate_revision}"`,
 		`agent_redeploy_probe_service "${candidate}"`,
 		"AGENT_REDEPLOY_COMMIT_STARTED=1",
 		`delete "pod/${pod}" --wait=true`,
 		`agent_redeploy_wait_for_worker_registration "${worker_guid}"`,
 	)
-	for _, expected := range []string{"Traefik route file unchanged", `scale deployment/job-scheduler --replicas=0`} {
+	for _, expected := range []string{"Traefik route file unchanged", "agent_redeploy_pause_schedulers", "agent_redeploy_restore_schedulers"} {
 		if !strings.Contains(function, expected) {
 			t.Fatalf("redeploy cutover lost %q", expected)
 		}
@@ -155,12 +155,52 @@ func TestEngineAgentBinaryRedeployHasPrecommitRollback(t *testing.T) {
 		`agent_redeploy_patch_service_revision "${service}" "${old_revision}"`,
 		`delete "pod/${candidate}"`,
 		"--ignore-not-found=true --wait=true --timeout=90s",
-		`scale deployment/job-scheduler --replicas=1`,
+		"agent_redeploy_set_scheduler_worker_image",
+		"agent_redeploy_restore_schedulers",
 	} {
 		if !strings.Contains(recovery, expected) {
 			t.Fatalf("redeploy rollback lost %q", expected)
 		}
 	}
+}
+
+func TestClusterCandidateReceivesAegisKeyWithoutEnteringPublicService(t *testing.T) {
+	reconciler := readRepositoryContractFile(t, "Data/Engine/K3s/cluster/reconcile-node-workloads.py")
+	for _, expected := range []string{
+		`labels["borealis.io/aegis-peer"] = "true"`,
+		`template_labels["borealis.io/aegis-peer"] = "true"`,
+		`f"{base}-candidate" if candidate else base`,
+	} {
+		if !strings.Contains(reconciler, expected) {
+			t.Fatalf("candidate Aegis isolation contract lost %q", expected)
+		}
+	}
+	aegisService := readRepositoryContractFile(t, "Data/Engine/K3s/cluster/aegis-mtls.yaml")
+	if !strings.Contains(aegisService, `borealis.io/aegis-peer: "true"`) || strings.Contains(aegisService, "selector:\n    app.kubernetes.io/name: api-backend") {
+		t.Fatal("Aegis peer Service no longer selects active and isolated candidate API replicas")
+	}
+}
+
+func TestHMRLostTargetRecoveryFencesRejoinedTargetBeforeCommit(t *testing.T) {
+	source := readRepositoryContractFile(t, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go")
+	start := strings.Index(source, "func (c *clusterController) reconcileLostHMRNode(")
+	end := strings.Index(source, "\nfunc clusterControllerStepTimeout(")
+	if start < 0 || end <= start {
+		t.Fatal("lost HMR target recovery function unavailable")
+	}
+	recovery := source[start:end]
+	fenceStart := strings.Index(recovery, "targetReady, err := runner.nodeReady")
+	if fenceStart < 0 {
+		t.Fatal("lost HMR target recovery fence unavailable")
+	}
+	assertContractOrder(t, recovery[fenceStart:],
+		"targetReady, err := runner.nodeReady",
+		`"EnterApplicationDrain"`,
+		"runner.setNodeRoleEligibility(ctx, targetName, false)",
+		"runner.waitNodeEndpointsWithdrawn(ctx, targetName)",
+		"runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, targetName)",
+		"conn.BeginTx",
+	)
 }
 
 func TestEngineIPFallbackIsResolvedForEveryNetworkMode(t *testing.T) {

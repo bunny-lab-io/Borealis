@@ -41,6 +41,8 @@ def assert_schema_contract() -> None:
         "scheduled_jobs",
         "job_scheduler_work_items",
         "workflow_runs",
+        "device_vpn_sessions",
+        "cluster_schema_phases",
     }
     actual_tables = {
         item[0]
@@ -68,6 +70,18 @@ def assert_schema_contract() -> None:
     indexes = {item[0] for item in rows("SELECT indexname FROM pg_indexes WHERE schemaname = ?", ("engine",))}
     assert "uq_devices_hostname" in indexes
     assert "idx_job_scheduler_work_claim" in indexes
+    assert "idx_device_vpn_sessions_state_expires" in indexes
+
+    vpn_session_columns = {item[1] for item in rows("PRAGMA table_info(device_vpn_sessions)")}
+    assert {
+        "agent_id",
+        "tunnel_id",
+        "virtual_ip",
+        "allowed_ports_json",
+        "state",
+        "generation",
+        "last_agent_ready_at",
+    }.issubset(vpn_session_columns)
 
 
 def assert_translation_and_transactions() -> None:
@@ -169,6 +183,21 @@ def assert_manager_session_contract() -> None:
         connection.close()
 
 
+def assert_cluster_schema_phase_contract() -> None:
+    release_sha = "1" * 40
+    assert database.run_cluster_schema_phase(DATABASE_URL, "expand", release_sha)
+    assert not database.run_cluster_schema_phase(DATABASE_URL, "expand", release_sha)
+    assert database.run_cluster_schema_phase(DATABASE_URL, "finalize", release_sha)
+    assert not database.run_cluster_schema_phase(DATABASE_URL, "finalize", release_sha)
+    assert [
+        item[0]
+        for item in rows(
+            "SELECT phase FROM cluster_schema_phases WHERE release_sha = ? ORDER BY phase",
+            (release_sha,),
+        )
+    ] == ["expand", "finalize"]
+
+
 def main() -> int:
     progress: list[str] = []
     database.initialise_engine_database(DATABASE_URL, progress_callback=progress.append)
@@ -180,7 +209,8 @@ def main() -> int:
     assert_error_mapping()
     assert_partial_and_legacy_repair()
     assert_manager_session_contract()
-    print("POSTGRES INTEGRATION PASS: fresh/idempotent init, repair, translation, transactions, constraints, search_path, and UTC verified")
+    assert_cluster_schema_phase_contract()
+    print("POSTGRES INTEGRATION PASS: fresh/idempotent init, rolling schema phases, repair, translation, transactions, constraints, search_path, and UTC verified")
     return 0
 
 

@@ -6,16 +6,16 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 
 | Route pattern | Class | Authentication | Source |
 | --- | --- | --- | --- |
-| `/` | `fallback` | `shared-public-gate` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:159` |
+| `/` | `fallback` | `shared-public-gate` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:175` |
 | `/api/admin/device-approvals` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:50` |
 | `/api/admin/enrollment-codes` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:48` |
 | `/api/agent/hash` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go:53` |
 | `/api/assemblies` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go:152` |
 | `/api/assemblies/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go:153` |
-| `/api/auth/me` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:300` |
-| `/api/auth/mfa/reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:301` |
-| `/api/auth/passkeys` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:303` |
-| `/api/auth/passkeys/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:308` |
+| `/api/auth/me` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:306` |
+| `/api/auth/mfa/reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:307` |
+| `/api/auth/passkeys` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:309` |
+| `/api/auth/passkeys/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:314` |
 | `/api/credentials` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go:53` |
 | `/api/credentials/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go:54` |
 | `/api/device/activity/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/activity.go:20` |
@@ -46,7 +46,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/scheduled_jobs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:134` |
 | `/api/scheduled_jobs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:135` |
 | `/api/server/ansible-runner-settings` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_settings.go:21` |
-| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2096` |
+| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2154` |
 | `/api/server/logs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:24` |
 | `/api/server/logs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:25` |
 | `/api/server/overview` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go:53` |
@@ -59,16 +59,22 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/sites` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:43` |
 | `/api/sites/device_map` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:44` |
 | `/api/software/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:35` |
-| `/api/system/go-backend/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:110` |
+| `/api/system/go-backend/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:125` |
 | `/api/user_site_assignments/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/user_site_assignments.go:43` |
 | `/api/users` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/users.go:54` |
 | `/api/users/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/users.go:55` |
 | `/api/watchdogs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:168` |
 | `/api/watchdogs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:169` |
 | `/api/workflows/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/workflows.go:105` |
-| `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:109` |
-| `/healthz` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:207` |
-| `/v1/command` | `operator` | `operator-hmac` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:208` |
+| `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:121` |
+| `/healthz` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:223` |
+| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:225` |
+| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:123` |
+| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:226` |
+| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:124` |
+| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:224` |
+| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:122` |
+| `/v1/command` | `operator` | `operator-hmac` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:227` |
 | `DELETE /api/admin/enrollment-codes/{code_id}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:49` |
 | `GET /api/aegis/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:19` |
 | `GET /api/agent/hash_list` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go:54` |
@@ -79,7 +85,8 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `GET /api/agent/update/download/{artifact_id}` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go:54` |
 | `GET /api/agent/update/manifest` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_update.go:53` |
 | `GET /api/agents` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go:83` |
-| `GET /api/bootstrap/state` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:291` |
+| `GET /api/bootstrap/cluster/join/{id}/events` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:124` |
+| `GET /api/bootstrap/state` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:297` |
 | `GET /api/device/details/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go:92` |
 | `GET /api/device/patches/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/patches.go:63` |
 | `GET /api/device/processes/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go:36` |
@@ -98,12 +105,19 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `GET /api/realtime/events` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go:38` |
 | `GET /api/repo/current_hash` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/repo_hash.go:38` |
 | `GET /api/server/backup/export` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:114` |
+| `GET /api/server/cluster` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:106` |
+| `GET /api/server/cluster/banner` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:107` |
+| `GET /api/server/cluster/events` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:108` |
+| `GET /api/server/cluster/releases` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:109` |
 | `GET /api/software/audit` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:32` |
-| `GET /api/tunnel/active` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:217` |
-| `GET /api/tunnel/connect/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:216` |
-| `GET /api/tunnel/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:215` |
+| `GET /api/tunnel/active` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:324` |
+| `GET /api/tunnel/connect/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:323` |
+| `GET /api/tunnel/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:322` |
 | `GET /api/vnc/sessions` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:117` |
 | `GET /api/vnc/viewers` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:112` |
+| `GET /live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:325` |
+| `GET /ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:328` |
+| `GET /startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:322` |
 | `POST /api/admin/device-approvals/{approval_id}/approve` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:51` |
 | `POST /api/admin/device-approvals/{approval_id}/deny` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:52` |
 | `POST /api/aegis/force_reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:23` |
@@ -123,21 +137,22 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /api/agent/vnc/ensure` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go:22` |
 | `POST /api/agent/vpn/ensure` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go:20` |
 | `POST /api/agent/vpn/ready` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go:21` |
-| `POST /api/auth/login` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:297` |
-| `POST /api/auth/logout` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:298` |
-| `POST /api/auth/mfa/verify` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:299` |
-| `POST /api/auth/passkeys/authenticate/options` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:306` |
-| `POST /api/auth/passkeys/authenticate/verify` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:307` |
-| `POST /api/auth/passkeys/register/options` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:304` |
-| `POST /api/auth/passkeys/register/verify` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:305` |
-| `POST /api/auth/password/reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:302` |
-| `POST /api/bootstrap/admin/mfa/verify` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:296` |
-| `POST /api/bootstrap/admin/recover` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:295` |
-| `POST /api/bootstrap/admin/setup` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:294` |
-| `POST /api/bootstrap/aegis/setup` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:292` |
-| `POST /api/bootstrap/aegis/unlock` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:293` |
+| `POST /api/auth/login` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:303` |
+| `POST /api/auth/logout` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:304` |
+| `POST /api/auth/mfa/verify` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:305` |
+| `POST /api/auth/passkeys/authenticate/options` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:312` |
+| `POST /api/auth/passkeys/authenticate/verify` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:313` |
+| `POST /api/auth/passkeys/register/options` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:310` |
+| `POST /api/auth/passkeys/register/verify` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:311` |
+| `POST /api/auth/password/reset` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:308` |
+| `POST /api/bootstrap/admin/mfa/verify` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:302` |
+| `POST /api/bootstrap/admin/recover` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:301` |
+| `POST /api/bootstrap/admin/setup` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:300` |
+| `POST /api/bootstrap/aegis/setup` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:298` |
+| `POST /api/bootstrap/aegis/unlock` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/auth.go:299` |
 | `POST /api/bootstrap/backup/analyze` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:117` |
 | `POST /api/bootstrap/backup/restore` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:118` |
+| `POST /api/bootstrap/cluster/join` | `public-bootstrap` | `bootstrap-contract` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:123` |
 | `POST /api/device/description/{hostname}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go:93` |
 | `POST /api/device/patches/{hostname}/refresh` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/patches.go:64` |
 | `POST /api/device/processes/{hostname}/terminate` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go:37` |
@@ -163,6 +178,19 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /api/scripts/quick_run` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/quick_run.go:34` |
 | `POST /api/server/backup/analyze` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:115` |
 | `POST /api/server/backup/restore` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go:116` |
+| `POST /api/server/cluster/admissions/{id}/approve` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:112` |
+| `POST /api/server/cluster/enable` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:110` |
+| `POST /api/server/cluster/hmr/exit` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:119` |
+| `POST /api/server/cluster/hmr/start` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:118` |
+| `POST /api/server/cluster/invitations` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:111` |
+| `POST /api/server/cluster/membership/scale` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:113` |
+| `POST /api/server/cluster/nodes/{id}/maintenance` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:114` |
+| `POST /api/server/cluster/nodes/{id}/remove` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:115` |
+| `POST /api/server/cluster/operations/{id}/cancel` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:122` |
+| `POST /api/server/cluster/operations/{id}/retry` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:121` |
+| `POST /api/server/cluster/postgres/emergency-failover` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:117` |
+| `POST /api/server/cluster/postgres/switchover` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:116` |
+| `POST /api/server/cluster/updates` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go:120` |
 | `POST /api/shell/disconnect` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go:46` |
 | `POST /api/shell/establish` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go:45` |
 | `POST /api/sites/assign` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:46` |
@@ -172,12 +200,13 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /api/sites/{site_id}/auto-approval` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:48` |
 | `POST /api/software/action/{action}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:33` |
 | `POST /api/software/uninstall` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:34` |
-| `POST /api/tunnel/connect` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:214` |
+| `POST /api/tunnel/connect` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go:321` |
 | `POST /api/users/{username}/directory-cache` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/directory.go:87` |
 | `POST /api/vnc/disconnect` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:115` |
 | `POST /api/vnc/establish` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:113` |
 | `POST /api/vnc/handoff` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:116` |
 | `POST /api/vnc/session` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/vnc_runtime.go:114` |
+| `POST /internal/cluster/aegis-key` | `internal-cluster` | `mutual-tls` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout.go:50` |
 | `PUT /api/devices/{device_id}/metadata_fields/{field_number}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go:87` |
 | `PUT /api/metadata_fields/{field_number}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go:85` |
 

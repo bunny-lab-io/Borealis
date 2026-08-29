@@ -41,6 +41,9 @@ type Config struct {
 	LogDirectory string
 	EnginePrefix string
 	PeerNetwork  string
+	Interface    string
+	EdgeVIP      string
+	OwnsEdgeVIP  func(string) bool
 }
 
 type Result struct {
@@ -59,6 +62,8 @@ func ConfigFromEnv() Config {
 		LogDirectory: filepath.Join(serviceRoot, "logs"),
 		EnginePrefix: firstText(os.Getenv("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP"), defaultEnginePrefix),
 		PeerNetwork:  firstText(os.Getenv("BOREALIS_WIREGUARD_PEER_NETWORK"), defaultPeerNetwork),
+		Interface:    firstText(os.Getenv("BOREALIS_WIREGUARD_INTERFACE"), "borealis-wg"),
+		EdgeVIP:      strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_EDGE_VIP")),
 	}
 }
 
@@ -97,7 +102,9 @@ func HandleRequest(ctx context.Context, raw []byte, cfg Config) []byte {
 	case "ping":
 		result = Result{ReturnCode: 0, Stdout: "pong"}
 	case "status", "reconcile":
-		result = status(ctx)
+		result = status(ctx, cfg)
+	case "withdraw":
+		result = withdraw(ctx, cfg)
 	default:
 		result = Result{ReturnCode: 2, Stderr: "unsupported command: " + command}
 	}
@@ -107,6 +114,15 @@ func HandleRequest(ctx context.Context, raw []byte, cfg Config) []byte {
 func Serve(ctx context.Context, cfg Config) error {
 	if cfg.ServiceRoot == "" {
 		cfg = ConfigFromEnv()
+	}
+	if !isInterface(firstText(cfg.Interface, "borealis-wg")) {
+		return errors.New("BOREALIS_WIREGUARD_INTERFACE is invalid")
+	}
+	if cfg.EdgeVIP != "" {
+		address := net.ParseIP(cfg.EdgeVIP)
+		if address == nil || address.To4() == nil || !address.IsPrivate() {
+			return errors.New("BOREALIS_CLUSTER_EDGE_VIP must be private IPv4")
+		}
 	}
 	runDirectory := filepath.Dir(cfg.SocketPath)
 	if err := os.MkdirAll(runDirectory, 0o775); err != nil {
@@ -128,6 +144,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		return err
 	}
 	logMessage(cfg, "WireGuard control socket listening at "+cfg.SocketPath)
+	go reconcileEdgeOwnership(ctx, cfg)
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -179,10 +196,20 @@ func validateWG(args []string, cfg Config) error {
 }
 
 func validateWGQuick(args []string, cfg Config) error {
-	if len(args) == 3 && args[1] == "up" && isPathUnder(args[2], filepath.Join(cfg.ServiceRoot, "config"), ".conf") {
+	if len(args) == 3 && (args[1] == "up" || args[1] == "down") && isPathUnder(args[2], filepath.Join(cfg.ServiceRoot, "config"), ".conf") {
 		return nil
 	}
 	return errors.New("command_shape_not_allowed:wg-quick")
+}
+
+func withdraw(ctx context.Context, cfg Config) Result {
+	configPath := filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf")
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		return Result{}
+	} else if err != nil {
+		return Result{ReturnCode: 1, Stderr: err.Error()}
+	}
+	return runCommand(ctx, []string{"wg-quick", "down", configPath}, 20, cfg)
 }
 
 func validateIP(args []string, cfg Config) error {
@@ -246,6 +273,9 @@ func runCommand(ctx context.Context, args []string, timeoutSeconds int, cfg Conf
 	if err := ValidateCommand(args, cfg); err != nil {
 		return Result{ReturnCode: 126, Stderr: err.Error()}
 	}
+	if suppressStandbyMutation(args, cfg) {
+		return Result{Stdout: "standby: edge VIP is not local"}
+	}
 	executable, err := resolveExecutable(args[0])
 	if err != nil {
 		return Result{ReturnCode: 126, Stderr: err.Error()}
@@ -274,18 +304,24 @@ func runCommand(ctx context.Context, args []string, timeoutSeconds int, cfg Conf
 	return Result{ReturnCode: 1, Stdout: strings.TrimSpace(stdout.String()), Stderr: err.Error()}
 }
 
-func status(ctx context.Context) Result {
+func status(ctx context.Context, cfg Config) Result {
 	wg, wgErr := exec.LookPath("wg")
 	_, ipErr := exec.LookPath("ip")
 	if wgErr != nil || ipErr != nil {
 		return Result{ReturnCode: 1, Stderr: "wg or ip missing"}
 	}
-	command := exec.CommandContext(ctx, wg, "show", "borealis-wg")
+	command := exec.CommandContext(ctx, wg, "show", firstText(cfg.Interface, "borealis-wg"))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()
+	if cfg.EdgeVIP != "" && !edgeVIPOwned(cfg) {
+		if err == nil {
+			return Result{ReturnCode: 1, Stdout: strings.TrimSpace(stdout.String()), Stderr: "standby node still owns WireGuard interface"}
+		}
+		return Result{Stdout: "standby", Stderr: strings.TrimSpace(stderr.String())}
+	}
 	if err == nil {
 		return Result{Stdout: strings.TrimSpace(stdout.String()), Stderr: strings.TrimSpace(stderr.String())}
 	}
@@ -294,6 +330,83 @@ func status(ctx context.Context) Result {
 		return Result{ReturnCode: exitError.ExitCode(), Stdout: strings.TrimSpace(stdout.String()), Stderr: strings.TrimSpace(stderr.String())}
 	}
 	return Result{ReturnCode: 1, Stdout: strings.TrimSpace(stdout.String()), Stderr: err.Error()}
+}
+
+func suppressStandbyMutation(args []string, cfg Config) bool {
+	if cfg.EdgeVIP == "" || edgeVIPOwned(cfg) || len(args) < 2 {
+		return false
+	}
+	switch filepath.Base(args[0]) {
+	case "wg":
+		return args[1] == "set"
+	case "wg-quick":
+		return args[1] == "up"
+	case "ip":
+		return !(len(args) >= 4 && args[1] == "link" && args[2] == "show")
+	case "iptables":
+		return true
+	default:
+		return false
+	}
+}
+
+func edgeVIPOwned(cfg Config) bool {
+	if cfg.EdgeVIP == "" {
+		return true
+	}
+	if cfg.OwnsEdgeVIP != nil {
+		return cfg.OwnsEdgeVIP(cfg.EdgeVIP)
+	}
+	target := net.ParseIP(cfg.EdgeVIP)
+	if target == nil {
+		return false
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range interfaces {
+		addresses, addressErr := iface.Addrs()
+		if addressErr != nil {
+			continue
+		}
+		for _, raw := range addresses {
+			ip, _, parseErr := net.ParseCIDR(raw.String())
+			if parseErr == nil && ip.Equal(target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func reconcileEdgeOwnership(ctx context.Context, cfg Config) {
+	if cfg.EdgeVIP == "" {
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if !edgeVIPOwned(cfg) && wireGuardInterfacePresent(ctx, firstText(cfg.Interface, "borealis-wg")) {
+			result := withdraw(ctx, cfg)
+			if result.ReturnCode != 0 {
+				logMessage(cfg, "WireGuard standby withdrawal pending: "+firstText(result.Stderr, result.Stdout, "unknown"))
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func wireGuardInterfacePresent(ctx context.Context, interfaceName string) bool {
+	wg, err := exec.LookPath("wg")
+	if err != nil {
+		return false
+	}
+	return exec.CommandContext(ctx, wg, "show", interfaceName).Run() == nil
 }
 
 func resolveExecutable(raw string) (string, error) {

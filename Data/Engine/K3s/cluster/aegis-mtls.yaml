@@ -1,0 +1,83 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: borealis-cluster-selfsigned
+  namespace: borealis
+  labels: {app.kubernetes.io/part-of: borealis}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: borealis-cluster-ca
+  namespace: borealis
+  labels: {app.kubernetes.io/part-of: borealis}
+spec:
+  isCA: true
+  commonName: borealis-cluster-ca
+  secretName: borealis-cluster-ca
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: borealis-cluster-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: borealis-cluster-ca
+  namespace: borealis
+  labels: {app.kubernetes.io/part-of: borealis}
+spec:
+  ca:
+    secretName: borealis-cluster-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: borealis-api-aegis-mtls
+  namespace: borealis
+  labels: {app.kubernetes.io/part-of: borealis}
+spec:
+  secretName: borealis-api-aegis-mtls
+  duration: 2160h
+  renewBefore: 360h
+  commonName: api-backend-aegis.borealis.svc
+  dnsNames:
+    - api-backend-aegis
+    - api-backend-aegis.borealis
+    - api-backend-aegis.borealis.svc
+    - api-backend-aegis.borealis.svc.cluster.local
+  usages:
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: borealis-cluster-ca
+    kind: Issuer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-backend-aegis
+  namespace: borealis
+  labels:
+    app.kubernetes.io/name: api-backend-aegis
+    app.kubernetes.io/part-of: borealis
+spec:
+  clusterIP: None
+  selector:
+    borealis.io/aegis-peer: "true"
+  ports:
+    - name: aegis-mtls
+      port: 9444
+      targetPort: aegis-mtls
+      protocol: TCP

@@ -116,6 +116,13 @@ if ((needs_api_binary)); then
     -trimpath -buildvcs=false -mod=readonly \
     -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/api-backend" ./cmd/api-backend \
     >"${RESULT_DIR}/engine-go-prebuild.log" 2>&1
+  cp "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/api-backend" \
+    "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/borealis-cluster-controller"
+  run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux CGO_ENABLED=0 \
+    "${GO_BIN}" -C "${WORKSPACE}/Data/Engine/Containers/api-backend" build \
+    -trimpath -buildvcs=false -mod=readonly \
+    -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/borealis-node-manager" ./cmd/borealis-node-manager \
+    >>"${RESULT_DIR}/engine-go-prebuild.log" 2>&1
 fi
 if ((needs_wireguard_binary)); then
   printf '==> Prebuild WireGuard control binaries\n'
@@ -128,6 +135,11 @@ if ((needs_wireguard_binary)); then
     "${GO_BIN}" -C "${WORKSPACE}/Data/Engine/Containers/api-backend" build \
     -trimpath -buildvcs=false -mod=readonly \
     -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/wireguard-control-client" ./cmd/wireguard-control-client \
+    >>"${RESULT_DIR}/wireguard-go-prebuild.log" 2>&1
+  run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux CGO_ENABLED=0 \
+    "${GO_BIN}" -C "${WORKSPACE}/Data/Engine/Containers/api-backend" build \
+    -trimpath -buildvcs=false -mod=readonly \
+    -o "${WORKSPACE}/Data/Engine/Containers/api-backend/dist/wireguard-route-daemon" ./cmd/wireguard-route-daemon \
     >>"${RESULT_DIR}/wireguard-go-prebuild.log" 2>&1
 fi
 

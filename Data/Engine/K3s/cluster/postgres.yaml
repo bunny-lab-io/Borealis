@@ -1,0 +1,87 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: borealis-longhorn-local
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  numberOfReplicas: "1"
+  dataLocality: strict-local
+  staleReplicaTimeout: "30"
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: borealis-longhorn-snapshot
+  labels: {app.kubernetes.io/part-of: borealis}
+driver: driver.longhorn.io
+deletionPolicy: Delete
+parameters:
+  type: snap
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: borealis-postgres
+  namespace: borealis
+  labels: {app.kubernetes.io/part-of: borealis}
+spec:
+  instances: 3
+  primaryUpdateStrategy: unsupervised
+  failoverDelay: 10
+  switchoverDelay: 30
+  smartShutdownTimeout: 180
+  stopDelay: 180
+  startDelay: 300
+  probes:
+    liveness:
+      initialDelaySeconds: 330
+      isolationCheck:
+        enabled: true
+  enableSuperuserAccess: false
+  storage:
+    size: 20Gi
+    storageClass: borealis-longhorn-local
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    nodeSelector:
+      borealis.io/engine-node: "true"
+  postgresql:
+    # BOREALIS_SYNCHRONOUS_CONFIGURATION
+    parameters:
+      synchronous_commit: "on"
+  managed:
+    roles:
+      - name: borealis
+        ensure: present
+        login: true
+        inherit: true
+        inRoles:
+          - pg_read_all_stats
+        comment: Borealis application and cluster replication monitoring role
+  backup:
+    volumeSnapshot:
+      className: borealis-longhorn-snapshot
+      snapshotOwnerReference: backup
+  bootstrap:
+    initdb:
+      database: borealis
+      owner: borealis
+      secret: {name: borealis-postgres-app}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: borealis-postgres-daily
+  namespace: borealis
+spec:
+  schedule: "0 15 2 * * *"
+  backupOwnerReference: cluster
+  method: volumeSnapshot
+  immediate: true
+  cluster: {name: borealis-postgres}

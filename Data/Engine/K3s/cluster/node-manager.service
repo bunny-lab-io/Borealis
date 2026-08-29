@@ -1,0 +1,30 @@
+[Unit]
+Description=Borealis Engine Node Manager
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=BOREALIS_PROJECT_ROOT=/opt/Borealis
+ExecStart=/usr/local/sbin/borealis-node-manager serve
+ExecStop=/usr/local/sbin/borealis-node-manager shutdown-handoff
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RuntimeDirectory=borealis
+RuntimeDirectoryMode=0750
+ConfigurationDirectory=borealis
+ConfigurationDirectoryMode=0750
+ReadWritePaths=/opt/Borealis /run/borealis /etc/borealis /etc/rancher/k3s /var/lib/rancher/k3s/agent/images /etc/systemd/system/k3s.service.d
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

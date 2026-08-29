@@ -134,6 +134,12 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 
 K3s is a host-level control-plane baseline plus locked-down workload migration path, not a broad runtime mutation API. It gives Borealis a future migration target while each workload keeps an explicit cutover and rollback boundary.
 
+Multi-node mode adds narrow cluster-controller RBAC plus root-owned `borealis-node-manager`. Node manager accepts only enroll, fetch, fast-forward checkout, revision redeploy/promotion, health inspection, application drain, edge fencing, persistent K3s member fencing, exact-version probe conformance, and status operations authenticated over local Unix socket. Rolling redeploy atomically installs target manager and uses shell-free root-only transient activation after node-action Jobs become idle; activator requires pinned commit SHA, matching target worktree, its exact staged executable inode, and fixed service restart. It has no arbitrary command or remote-shell operation. K3s secrets encryption, checksum-pinned infrastructure manifests, immutable application/upgrade images, explicit peer firewall allowlists, separate control/edge VIPs, and per-node required affinity bound cluster trust surface.
+
+Cluster Aegis unlock propagation uses dedicated TLS 1.3 listener, cert-manager-issued mutual certificate, headless API-peer Service, 1 KiB request limit, strict 32-byte key encoding, and local verification-token proof before memory install. Shared certificate authenticates Borealis API replica membership. Active and isolated candidate API Deployments share only dedicated Aegis-peer selector; unlocked replicas periodically seed replacements before promotion without admitting candidates to public API Service. Key never enters PostgreSQL or Kubernetes Secret.
+
+Safe K3s removal writes root-only persistent fence marker and schedules local `k3s.service` disable/stop before controller deletes Kubernetes Node resource. Emergency path never contacts target and requires operator attestation host is powered off. Cluster controller may delete Node resources and create system-upgrade-controller Plans; those permissions stay isolated from namespace operator and ordinary API workloads.
+
 - `Engine.sh` writes K3s bootstrap and fixed operator manifests during deployment. Runtime services do not receive kubeconfig, Kubernetes API credentials, or kubectl access; they must call `borealis-operator` for allowlisted K3s lifecycle work.
 - Borealis writes its K3s config as `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml` and records the desired hash in `Engine/Deploy/k3s-baseline.sha256`.
 - Bundled K3s Traefik and ServiceLB stay disabled so the Borealis-managed K3s `traefik-edge` workload remains the only ingress owner, certificate owner, and dynamic route-file reader.
@@ -164,6 +170,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 - Aegis protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords, reusable credentials, and GitHub API token storage.
 - Active sessions are revalidated against the operator row on authenticated requests. Deleted users, disabled directory cache entries, and deprovisioned directory users stop passing authorization checks without waiting for token expiry.
 - Only an administrator can explicitly disable MFA for an operator account.
+- Cluster mutations require an active administrator session but do not impose a separate short-lived step-up window. Destructive cluster actions retain exact typed confirmations, health and quorum gates, exclusive-operation fencing, and actor audit records.
 
 ### Enrollment and Device Identity
 
@@ -194,6 +201,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
 - Borealis moved remote transport from a bespoke reverse tunnel stack to WireGuard for encrypted UDP transport and resilient reconnect behavior.
 - Agents ensure the tunnel at boot, keep it outbound-only, and reuse one live VPN tunnel per agent across operators.
+- Clustered API replicas persist active tunnel identity, endpoint, allowed ports, operator association, readiness, and transport timestamps in PostgreSQL with optimistic generation checks. Session rows contain no signed tunnel token; tokens remain short-lived derived values. Existing WireGuard private key lease protection and Backup encryption requirements still apply.
 - Engine issues short-lived, Ed25519-signed tunnel material that the agent verifies before bringing the tunnel up.
 - Each agent gets one host-only `/32`. Engine peer mutation rejects duplicate `/32` assignments, broad prefixes, Engine-address reuse, and duplicate peer public keys.
 - Agent runtime also rejects broad tunnel routes in received session material.

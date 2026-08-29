@@ -96,6 +96,7 @@ render_borealis_operator_manifest \
   >"${OUTPUT_DIR}/borealis-operator.yaml"
 render_k3s_api_backend_bridge_manifest \
   "borealis/api-backend:fixture" "fixture-hash" "64646" "64646" "5001" "1Gi" "1" "k3s" \
+  "2026.08.8.999" "0123456789abcdef0123456789abcdef01234567" \
   >"${OUTPUT_DIR}/api-backend.yaml"
 render_k3s_job_scheduler_manifest \
   "borealis/job-scheduler:fixture" "borealis/site-worker:fixture" "fixture-hash" \
@@ -108,6 +109,10 @@ render_k3s_postgres_statefulset_manifest \
 render_k3s_postgres_schema_job_manifest \
   "borealis/api-backend:fixture" "fixture-hash" "64646" "64646" \
   >"${OUTPUT_DIR}/postgres-schema.yaml"
+render_cluster_schema_phase_job_manifest \
+  "borealis-schema-expand-0123456789ab" "borealis/site-worker:fixture" "engine-1" "expand" \
+  "0123456789abcdef0123456789abcdef01234567" "64646" "64646" \
+  >"${OUTPUT_DIR}/cluster-schema.yaml"
 render_k3s_webui_frontend_bridge_manifest \
   "borealis/webui-frontend:fixture" "prod" "fixture-hash" "64646" "64646" "8000" "512Mi" "1" "k3s" \
   >"${OUTPUT_DIR}/webui-prod.yaml"

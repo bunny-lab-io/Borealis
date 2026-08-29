@@ -13,16 +13,71 @@ GO = ROOT / "Dependencies/Go/go1.25.12/bin/go"
 SOURCE_ROOT = "Data/Engine/Containers/api-backend/cmd/api-backend"
 MANIFEST = ROOT / "Tests/manifests/api-routes.json"
 DOC = ROOT / "Docs/Reference/Data and Schema/api-route-inventory.md"
+PROBE_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go"
+CONTROLLER_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go"
+CLUSTER_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_test.go"
+AEGIS_CLUSTER_TEST = "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout_test.go"
+
+REVIEWED_ROUTE_TESTS = {
+    (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go"): CLUSTER_TEST
+    for pattern in (
+        "GET /api/bootstrap/cluster/join/{id}/events",
+        "GET /api/server/cluster",
+        "GET /api/server/cluster/banner",
+        "GET /api/server/cluster/events",
+        "GET /api/server/cluster/releases",
+        "POST /api/bootstrap/cluster/join",
+        "POST /api/server/cluster/admissions/{id}/approve",
+        "POST /api/server/cluster/enable",
+        "POST /api/server/cluster/hmr/exit",
+        "POST /api/server/cluster/hmr/start",
+        "POST /api/server/cluster/invitations",
+        "POST /api/server/cluster/membership/scale",
+        "POST /api/server/cluster/nodes/{id}/maintenance",
+        "POST /api/server/cluster/nodes/{id}/remove",
+        "POST /api/server/cluster/operations/{id}/cancel",
+        "POST /api/server/cluster/operations/{id}/retry",
+        "POST /api/server/cluster/postgres/emergency-failover",
+        "POST /api/server/cluster/postgres/switchover",
+        "POST /api/server/cluster/updates",
+    )
+}
+REVIEWED_ROUTE_TESTS.update(
+    {
+        (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/main.go"): PROBE_TEST
+        for pattern in ("/startup", "/ready", "/live")
+    }
+)
+REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/aegis-key",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout.go",
+)] = AEGIS_CLUSTER_TEST
+REVIEWED_ROUTE_TESTS.update(
+    {
+        (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go"): (
+            "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go"
+        )
+        for pattern in ("/startup", "/ready", "/live")
+    }
+)
+REVIEWED_ROUTE_TESTS.update(
+    {
+        (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go"): CONTROLLER_TEST
+        for pattern in ("GET /startup", "GET /ready", "GET /live")
+    }
+)
 
 
 def classify(pattern: str) -> tuple[str, str]:
     route_path = pattern.split(" ", 1)[-1]
-    if route_path in {"/health", "/healthz"}:
+    if route_path in {"/health", "/healthz", "/startup", "/ready", "/live"}:
         return "health", "none"
     if route_path.startswith("/v1/"):
         return "operator", "operator-hmac"
     if route_path.startswith("/api/internal/"):
         return "internal-scheduler", "internal-hmac"
+    if route_path.startswith("/internal/cluster/"):
+        return "internal-cluster", "mutual-tls"
     if route_path.startswith("/api/agent/"):
         if route_path.startswith("/api/agent/enroll/"):
             return "agent-enrollment", "public-enrollment-contract"
@@ -51,11 +106,14 @@ def reviewed_evidence() -> dict[tuple[str, str], tuple[str | None, str | None]]:
         return {}
     if not isinstance(inventory, list):
         return {}
-    return {
+    evidence = {
         (entry["pattern"], entry["source"]): (entry.get("test"), entry.get("test_exemption"))
         for entry in inventory
         if isinstance(entry, dict) and isinstance(entry.get("pattern"), str) and isinstance(entry.get("source"), str)
     }
+    for key, test_path in REVIEWED_ROUTE_TESTS.items():
+        evidence[key] = (test_path, None)
+    return evidence
 
 
 def main() -> int:

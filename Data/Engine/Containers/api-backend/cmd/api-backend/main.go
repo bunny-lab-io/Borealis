@@ -75,6 +75,13 @@ func main() {
 		return
 	}
 
+	if clusterControllerMode() {
+		if err := runClusterController(rootCtx, cfg); err != nil {
+			log.Fatalf("borealis-cluster-controller exited: %v", err)
+		}
+		return
+	}
+
 	if retiredSiteWorkerOrchestratorMode() {
 		log.Fatalf("site-worker-orchestrator runtime mode is retired; use borealis-operator managed K3s site-worker lifecycle")
 		return
@@ -99,6 +106,11 @@ func main() {
 		log.Fatalf("failed to initialise Go auth service: %v", err)
 	}
 	defer closeAuth()
+	aegisClusterServer, aegisClusterExited, err := startAegisClusterKeyServer(auth)
+	if err != nil {
+		log.Fatalf("failed to initialise Aegis cluster key listener: %v", err)
+	}
+	startAegisClusterKeyFanoutLoop(rootCtx, auth)
 
 	fallback := http.NotFoundHandler()
 	operatorRealtime := newOperatorRealtimeHub()
@@ -107,6 +119,9 @@ func main() {
 	rdpRuntime := newRDPRuntime(auth, vpnRuntime)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg))
+	mux.HandleFunc("/startup", apiStartupHandler())
+	mux.HandleFunc("/live", apiLivenessHandler())
+	mux.HandleFunc("/ready", apiReadinessHandler(auth))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg))
 	registerRealtimeRoutes(mux, auth, operatorRealtime)
 	registerAuthRoutes(mux, auth, fallback)
@@ -124,6 +139,7 @@ func main() {
 	registerTunnelRoutes(mux, auth, vpnRuntime)
 	registerServerTimeRoutes(mux, auth)
 	registerServerOverviewRoutes(mux, auth, operatorRealtime, fallback)
+	registerServerClusterRoutes(mux, auth)
 	registerBorealisOperatorRoutes(mux, auth)
 	registerServerSettingsRoutes(mux, auth, fallback)
 	registerServerWorkerRoutes(mux, auth, fallback)
@@ -158,6 +174,7 @@ func main() {
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
 	if apiBackgroundLoopsEnabled() {
+		vpnRuntime.startClusterPeerReconciler(rootCtx)
 		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
 		startServerLogRetentionRuntime(rootCtx)
 	} else {
@@ -168,6 +185,9 @@ func main() {
 		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.ListenPort),
 		Handler:           withRequestHeaders(withPublicInputValidation(mux)),
 		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	serverExited := make(chan error, 1)
@@ -182,13 +202,21 @@ func main() {
 
 	exitCode := 0
 	serverAlreadyExited := false
+	aegisClusterAlreadyExited := false
 	select {
 	case <-rootCtx.Done():
+		apiDraining.Store(true)
 		log.Printf("shutdown requested")
 	case err := <-serverExited:
 		serverAlreadyExited = true
 		if err != nil {
 			log.Printf("Go api-backend gateway exited: %v", err)
+			exitCode = 1
+		}
+	case err := <-aegisClusterExited:
+		aegisClusterAlreadyExited = true
+		if err != nil {
+			log.Printf("Aegis cluster key listener exited: %v", err)
 			exitCode = 1
 		}
 	}
@@ -199,11 +227,27 @@ func main() {
 		log.Printf("gateway shutdown error: %v", err)
 		_ = server.Close()
 	}
+	if aegisClusterServer != nil {
+		if err := aegisClusterServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Aegis cluster key listener shutdown error: %v", err)
+			_ = aegisClusterServer.Close()
+		}
+	}
 	if !serverAlreadyExited {
 		select {
 		case err := <-serverExited:
 			if err != nil {
 				log.Printf("Go api-backend gateway exited during shutdown: %v", err)
+				exitCode = 1
+			}
+		default:
+		}
+	}
+	if aegisClusterServer != nil && !aegisClusterAlreadyExited {
+		select {
+		case err := <-aegisClusterExited:
+			if err != nil {
+				log.Printf("Aegis cluster key listener exited during shutdown: %v", err)
 				exitCode = 1
 			}
 		default:

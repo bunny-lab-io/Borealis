@@ -36,6 +36,7 @@ import {
   DashboardCustomizeRounded as PageStyleTemplateIcon,
   LabelRounded as MetadataFieldsIcon,
   BackupRounded as BackupRestoreIcon,
+  HubRounded as ClusterManagementIcon,
 } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { APP_PATHS } from "./app/routes/paths.js";
@@ -237,6 +238,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Server Info",
         navKey: "server",
         to: APP_PATHS.server,
+      },
+      {
+        icon: ClusterManagementIcon,
+        label: "Cluster Management",
+        navKey: "cluster-management",
+        to: APP_PATHS.clusterManagement,
       },
       {
         icon: BackupRestoreIcon,

@@ -236,6 +236,7 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an in-scope agent.
     - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by in-scope agent.
     - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels visible in the current operator's site scope.
+    - Clustered API replicas use shared PostgreSQL session rows for connect/status, Agent-ready callback, scheduler admission, activity, and transport confirmation. One replica restart or edge-owner change therefore keeps active tunnel identity and readiness. Signed tunnel tokens are regenerated and never persisted.
 
     ### Remote Desktop
     - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC tunnel/readiness state and return listener/session metadata for the agent without caching or echoing the VNC password.
@@ -260,11 +261,19 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached runtime service action through `job-scheduler`; supported K3s workload restarts route through `borealis-operator`, and K3s WireGuard reconcile routes through the mounted control socket. Docker/Compose helper actions are retired after Stage 11. Supported actions are `api-backend restart`, `webui-frontend restart`, `postgres-db restart`, `remote-desktop-guacd restart`, `traefik-edge reload`, and `wireguard-tunnel reconcile`. WebUI rebuilds are CLI-only through `Engine.sh --network-mode public|local --service webui-frontend rebuild prod|dev`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
     - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
+    - `GET /api/server/cluster` and `GET /api/server/cluster/events` (Admin) - cluster roles, node/probe/release state, quorum, HMR, operations, and event history.
+    - `POST /api/server/cluster/enable`, `/invitations`, `/admissions/{id}/approve`, and `/membership/scale` (Admin) - gated enablement and paired `1 -> 3` membership workflow. Scale accepts `desired_size=3` only. Invitation creation/consumption and admission approval require active size one; requests that could form five-plus membership fail closed.
+    - `POST /api/server/cluster/nodes/{id}/maintenance`, `/nodes/{id}/remove`, `/postgres/switchover`, and `/postgres/emergency-failover` (Admin) - node/database maintenance operations. Current release removal starts from three active nodes only. Normal `3 -> 1` remove requires distinct canonical paired node and exact `REMOVE NODE PAIR`; emergency remove requires exact external-power-fence and removal acknowledgements. Shrinking from five-plus membership remains future roadmap work.
+    - `GET /api/server/cluster/releases` (Admin) - published stable GitHub release catalog with immutable SHA and compatibility results.
+    - `POST /api/server/cluster/hmr/start`, `/hmr/exit`, and `/updates` (Admin) - exclusive cluster-wide HMR, rolling Engine release, or distinct ordered K3s workflow. K3s update accepts stable `vX.Y.Z+k3sN`, all scope only, exact `UPDATE K3S`, and one-node outage acknowledgement.
+    - `POST /api/server/cluster/operations/{id}/retry` and `/cancel` (Admin) - explicit recovery for halted operations.
+    - `POST /api/bootstrap/cluster/join` and `GET /api/bootstrap/cluster/join/{id}/events` (Invitation Authenticated) - bounded one-use node enrollment and approval event polling.
     - `/api/server/logs*` (Admin) - retired log access surface. Authenticated administrators receive `410 Gone`; log inspection is CLI-only through [Engine Log Access](../../Using%20the%20Platform/engine-log-management.md).
 
     ### Related documentation
 
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+    - [Managing Engine Clusters](../../Engine/managing-engine-clusters.md)
     - [Database Reference](db-reference.md)
     - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
     - [Watchdogs](../../Using%20the%20Platform/watchdogs.md)

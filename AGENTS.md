@@ -10,6 +10,24 @@ Respond like smart caveman. Cut all filler, keep technical substance.
 
 Use this file as entrypoint for Codex instructions. Full knowledgebase lives under `Docs/`, with navigation and documentation rules in `Docs/index.md`.
 
+## Linux VS Code / Codex Sandbox Prerequisite
+When running Codex from VS Code on Linux, Ubuntu AppArmor may block Codex sandbox startup before shell commands run. Typical evidence includes `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` or AppArmor denials for `unprivileged_userns` capabilities.
+
+On dedicated Borealis development hosts, developer should disable AppArmor unprivileged-user-namespace restriction for Codex session:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+Verify user and network namespaces work before continuing:
+
+```bash
+unshare --user --map-root-user --net sh -c \
+  'ip link set lo up && ip link show lo'
+```
+
+Setting is host-wide security relaxation and resets after reboot unless separately persisted. Do not run VS Code or Codex as root. Apply only on operator-approved development host; never change production host or unrelated infrastructure for Codex sandbox access.
+
 ## Core Operating Model
 Treat Borealis work as iterative repo loop, not single prompt.
 

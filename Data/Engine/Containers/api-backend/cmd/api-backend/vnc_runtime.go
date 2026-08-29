@@ -226,7 +226,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	session, participant, created := v.ensureSession(agentID, profile.Username, credential, removeWallpaper)
 	_ = created
 	vncPort := parseIntDefault(os.Getenv("BOREALIS_VNC_PORT"), defaultVNCBackendPort)
-	tunnelPayload := v.vpn.sessionPayload(agentID, false)
+	tunnelPayload := v.vpn.sessionPayload(ctx, agentID, false)
 	if tunnelPayload == nil {
 		var err error
 		log.Printf("vnc_tunnel_connect port=%d", vncPort)
@@ -395,7 +395,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		log.Printf("vnc_worker_token_missing")
 		return map[string]any{"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, http.StatusServiceUnavailable
 	}
-	_ = v.vpn.confirmTransportSuccess(agentID)
+	_ = v.vpn.confirmTransportSuccess(ctx, agentID)
 	wsPath := joinURL(result.Route.RoutePathPrefix, "/remote-desktop/vnc/guacamole")
 	log.Printf("vnc_establish_success port=%d", vncPort)
 	urls := remoteOpsWorkerURLs(r, result.Route)
@@ -1100,7 +1100,7 @@ func vncInternalSessionEventHandler(auth *authService, runtime *vncRuntime) http
 			runtime.recordProxyFirstFrame(sessionID, participantID, cleanText(body["reason"]))
 		case "transport_confirm":
 			if runtime.vpn != nil {
-				runtime.vpn.confirmTransportSuccess(session.AgentID)
+				runtime.vpn.confirmTransportSuccess(r.Context(), session.AgentID)
 			}
 		default:
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_event"})

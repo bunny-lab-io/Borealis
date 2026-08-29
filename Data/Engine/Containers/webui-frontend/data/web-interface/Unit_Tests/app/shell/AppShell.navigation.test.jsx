@@ -1,7 +1,7 @@
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "@/app/providers/AuthContext.jsx";
 import { PageChromeProvider } from "@/app/providers/PageChromeContext.jsx";
 import AppShell from "@/app/shell/AppShell.jsx";
@@ -57,6 +57,11 @@ function buildAuthValue() {
 }
 
 describe("AppShell buffered navigation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it("keeps the current page visible while the next route loader is pending", async () => {
     let resolveSlowRoute;
     const router = createMemoryRouter(
@@ -178,5 +183,64 @@ describe("AppShell buffered navigation", () => {
       expect(screen.getByText("Device Summary")).toBeInTheDocument();
     });
     expect(screen.queryByText("Sidebar")).not.toBeInTheDocument();
+  });
+
+  it("dismisses the current cluster banner until polled banner identity changes", async () => {
+    vi.useFakeTimers();
+    let banner = {
+      enabled: true,
+      status: "Healthy",
+      hmr_state: "inactive",
+      active_operation: {
+        kind: "node_maintenance",
+        current_step: "wait_endpoint_withdrawal",
+        state: "running",
+      },
+    };
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => banner }));
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <AuthContext.Provider value={buildAuthValue()}>
+              <PageChromeProvider>
+                <AppShell />
+              </PageChromeProvider>
+            </AuthContext.Provider>
+          ),
+          children: [{ index: true, element: <div>Home Page</div>, handle: { title: "Home", navKey: "home", pageKey: "home" } }],
+        },
+      ],
+      { initialEntries: ["/"] }
+    );
+
+    render(<RouterProvider router={router} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/Cluster operation node_maintenance/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByText(/Cluster operation node_maintenance/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/Cluster operation node_maintenance/)).not.toBeInTheDocument();
+
+    banner = {
+      ...banner,
+      active_operation: { ...banner.active_operation, current_step: "verify_quorum" },
+    };
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/verify_quorum/)).toBeInTheDocument();
   });
 });
