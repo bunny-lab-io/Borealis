@@ -3446,6 +3446,41 @@ import_k3s_local_image_into_k3s() {
   die "K3s did not pre-import and label ${image} for Spegel within 120 seconds. See ${BUILD_LOG}."
 }
 
+prune_stale_k3s_borealis_image_archives() {
+  run_privileged test -d "${K3S_IMAGE_IMPORT_DIR}" || return 0
+  local service=""
+  local image=""
+  local service_slug=""
+  local archive_id=""
+  local current_archive=""
+  local archive=""
+  local archive_name=""
+  local retained_previous=0
+  for service in "${BUILD_ROLES[@]}"; do
+    image="${IMAGE_TAGS[${service}]:-}"
+    [[ -n "${image}" ]] || continue
+    service_slug="${service//[^[:alnum:]_.-]/-}"
+    archive_id="$(printf '%s' "${image}" | sha256sum | awk '{print substr($1, 1, 16)}')"
+    current_archive="${K3S_IMAGE_IMPORT_DIR}/borealis-${service_slug}-${archive_id}.tar"
+    run_privileged test -s "${current_archive}" || die "Current ${service} K3s image archive is missing before retention cleanup."
+    retained_previous=0
+    while IFS= read -r archive; do
+      [[ -n "${archive}" && "${archive}" != "${current_archive}" ]] || continue
+      if ((retained_previous == 0)); then
+        retained_previous=1
+        continue
+      fi
+      archive_name="${archive##*/}"
+      run_privileged find "${K3S_IMAGE_IMPORT_DIR}" -maxdepth 1 -type f -name "${archive_name}" -delete
+      printf '[%s] Removed stale K3s image archive: %s\n' "$(date +%FT%T)" "${archive_name}" >> "${BUILD_LOG}"
+    done < <(
+      run_privileged find "${K3S_IMAGE_IMPORT_DIR}" -maxdepth 1 -type f -name "borealis-${service_slug}-*.tar" -printf '%T@ %p\n' \
+        | sort -rn \
+        | awk '{$1=""; sub(/^ /, ""); print}'
+    )
+  done
+}
+
 import_borealis_operator_image_into_k3s() {
   import_k3s_local_image_into_k3s "borealis-operator" "$1" "borealis-operator"
 }
@@ -11481,6 +11516,7 @@ for key,value in sorted((payload.get("data") or {}).items()):
     [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
     import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
   done
+  prune_stale_k3s_borealis_image_archives
   local marker_temp=""
   marker_temp="$(mktemp "${DEPLOY_DIR}/cluster-staged-revision.XXXXXX")"
   printf '%s\n' "${CLUSTER_TARGET_REVISION}" > "${marker_temp}"

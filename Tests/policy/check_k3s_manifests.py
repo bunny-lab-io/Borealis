@@ -297,6 +297,8 @@ def validate_node_manager_service_contract() -> None:
         "K3S_IMAGE_IMPORT_DIR": "K3s-supported image pre-import directory",
         "k3s_containerd_image_distribution_ready": "Spegel distribution-label verification",
         "pinned and Spegel-ready": "pinned distributed image completion contract",
+        "prune_stale_k3s_borealis_image_archives": "bounded current-and-rollback image archive retention",
+        "retained_previous": "one rollback predecessor image archive per managed service",
         "ensure_cluster_wireguard_routes": "shared full and scoped route DaemonSet reconciliation",
         "rollout status daemonset/borealis-wireguard-routes": "route DaemonSet readiness wait",
         'git -c "safe.directory=${SCRIPT_DIR}"': "command-scoped root Engine Git trust",
