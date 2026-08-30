@@ -27,10 +27,10 @@ HMR never copies source to standby nodes. Returning to production restores saved
 
 Obtain explicit operator approval and keep operator available before entering HMR. Start only when Cluster Management shows:
 
-- Cluster status `Healthy` with `3 active / 3 desired` membership.
+- Cluster status `Healthy` with active membership equal to desired membership.
 - HMR inactive and no active cluster operation.
 - Every node `Active / Active`, with no drained or cordoned member.
-- CloudNativePG `3 configured / 3 Ready` with synchronous durability available.
+- CloudNativePG configured count equal to Ready count, with synchronous durability available when cluster has multiple members.
 - Current HMR target healthy on pinned production release.
 
 Start from clean issue branch and clean worktree on HMR target. Do not overwrite unrelated operator changes. Confirm deployed network mode instead of guessing:
@@ -60,11 +60,38 @@ Expected value is `local` or `public`.
     export BOREALIS_CLUSTER_CA_FILE='/path/to/ca.pem'
     ```
 
-    Browser `borealis_auth` cookie and Admin Bearer token are not interchangeable. Use Cluster Management WebUI for cluster operations when only browser session is available. Never place password, Admin token, cookie, K3s token, or private key in repository, PR, issue, logs, shell profile, or command arguments.
+    Browser `borealis_auth` cookie and Admin Bearer token are not interchangeable. Browser session can submit HMR isolation through Cluster Management, but later `Engine.sh` development rebuild still requires Bearer token to verify active HMR target. Never place password, Admin token, cookie, K3s token, or private key in repository, PR, issue, logs, shell profile, or command arguments.
 
-### Enter HMR On Target
+### Clear Maintenance State
 
-Run scoped WebUI rebuild from node that will serve development workload:
+Cluster Management disables HMR entry while any active member remains drained. Kubernetes `Ready` alone is insufficient; every active member must also be out of application maintenance.
+
+1. Sign in as Administrator and open **Admin > Cluster Management > Nodes**.
+2. Select **Refresh** and verify every current member reports `Active / Active`.
+3. For each `Active / Drained` member, open row **Actions**, choose **Exit Maintenance Mode**, enter concise reason, and submit once.
+4. Open **Cluster Events** and wait for **Maintenance Mode Disabled** to succeed.
+5. Return to **Nodes**, refresh, and verify member changed to `Active / Active` before restoring another member.
+6. Continue until application-drained warning disappears and every active member is `Active / Active`.
+
+If maintenance exit fails, stop and copy operation details. Do not clear drain labels, patch node runtime objects, uncordon manually, or start second recovery operation.
+
+### Enable HMR From Cluster Management
+
+Choose Engine node holding development checkout and runtime source as HMR target. Selected WebUI node and host used for later rebuild must match.
+
+1. Open **Admin > Cluster Management > Maintenance**.
+2. Find **Cluster-wide HMR isolation**.
+3. Select intended target from **HMR node**.
+4. Select **Enable HMR**.
+5. Read non-HA warning, type `ENABLE HMR`, and submit once.
+6. Open **Cluster Events**, record operation ID, and wait for **Vite Dev HMR Mode Enabled** to succeed.
+7. Confirm cluster-wide HMR banner is active and accepted Cluster Event targets expected node before running development rebuild.
+
+WebUI operation isolates cluster and moves application traffic. It does not copy branch source or start Vite development workload.
+
+### Start Development Workload On HMR Node
+
+After WebUI operation succeeds, run scoped rebuild from same selected node:
 
 ```bash
 cd /opt/Borealis
@@ -76,16 +103,24 @@ sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREAL
   rebuild dev
 ```
 
-Interactive CLI requires typing:
+`Engine.sh` confirms HMR is already active on local node, then syncs durable WebUI source into runtime tree and starts development workload. Bearer token remains required for state check even though browser already submitted HMR operation.
 
-```text
-ENABLE HMR
-```
+??? note "CLI-only HMR entry"
+    Operator may combine isolation and development rebuild through CLI when WebUI path is unavailable. Start from same healthy, maintenance-free preflight and run command above while HMR is inactive. Interactive CLI then requires typing:
 
-Use `--acknowledge-cluster-non-ha` only for non-interactive operation after explicit operator approval. After HMR begins, do not start maintenance, membership, release, K3s, or normal PostgreSQL operations.
+    ```text
+    ENABLE HMR
+    ```
+
+    Use `--acknowledge-cluster-non-ha` only for non-interactive operation after explicit operator approval.
+
+After HMR begins, do not start maintenance, membership, release, K3s, or normal PostgreSQL operations.
 
 ## Start Dev WebUI
 Use a scoped WebUI rebuild when the Engine stack already exists and only the frontend needs dev mode.
+
+!!! warning "Clustered Engine"
+    Commands in this section are standalone shortcuts. On cluster, use **Clustered HMR Preview** above so operator restores every node from maintenance, selects HMR target through Cluster Management, and preserves authenticated CLI variables for rebuild.
 
 === "Local"
 
@@ -102,8 +137,6 @@ Use a scoped WebUI rebuild when the Engine stack already exists and only the fro
     ```
 
 Use full dev deploy when shared Engine configuration changed or when switching a stale stack into dev mode:
-
-For non-interactive clustered use, append `--acknowledge-cluster-non-ha`. Interactive CLI always requires exact typed confirmation.
 
 === "Local"
 
@@ -253,29 +286,38 @@ Run repository validation from `/opt/Borealis`. Keep dependencies and build outp
 Run `bash Tests/run-docs.sh` when documentation changes. Do not run raw `npm`, `vite`, or `vitest` from staged source under `Data/Engine/Containers/*/data`.
 
 ## Return To Production
-Switch WebUI back to production static serving after HMR work:
+Restore cluster from WebUI after operator finishes HMR testing:
 
-```sh
-cd /opt/Borealis
+1. Open **Admin > Cluster Management > Maintenance**.
+2. Under **Cluster-wide HMR isolation**, select **Restore Production HA**.
+3. Type `EXIT HMR` and submit once.
+4. Open **Cluster Events**, record operation ID, and wait for **Vite Dev HMR Mode Disabled** to succeed.
+5. Return to **Overview** and **Nodes**, refresh, and verify HMR inactive plus every current member `Active / Active`.
 
-sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
-  bash Engine.sh \
-  --network-mode <local-or-public> \
-  --service webui-frontend \
-  rebuild prod
-```
+??? note "CLI production restoration"
+    CLI can request same controller-owned restoration when Cluster Management is unavailable:
 
-Interactive clustered CLI requires typing `EXIT HMR`.
+    ```sh
+    cd /opt/Borealis
 
-On cluster, production command requests HMR exit. Controller restores saved pinned production release, keeps local edits untouched, verifies target, and restores standby workloads one node at time. Failed restore leaves HMR state and warning visible for explicit recovery.
+    sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
+      bash Engine.sh \
+      --network-mode <local-or-public> \
+      --service webui-frontend \
+      rebuild prod
+    ```
+
+    Interactive clustered CLI requires typing `EXIT HMR`.
+
+Controller restores saved pinned production release, keeps local edits untouched, verifies target, and restores standby workloads one node at time. Failed restore leaves HMR state and warning visible for explicit recovery.
 
 After successful exit, confirm Cluster Management shows:
 
 - HMR inactive and cluster `Healthy`.
-- `3 active / 3 desired` membership.
+- Active membership equal to desired membership.
 - No active operation.
 - Every node `Active / Active`.
-- CloudNativePG `3 configured / 3 Ready`.
+- CloudNativePG configured count equal to Ready count.
 
 If exit fails, stop. Record operation ID and exact failed step. Do not begin **Update All**, submit second operation, clear drain, patch Deployment, or pull source on standby nodes.
 
@@ -341,6 +383,45 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
     - Never use `sshpass`. Let SSH and remote `sudo` prompt interactively.
     - Do not interact with hypervisor as part of HMR or release workflow.
 
+    ### WebUI-first HMR coordination
+
+    Before asking operator to enable HMR, present explicit checkpoint and wait for confirmation:
+
+    ```text
+    HMR ENTRY CHECKPOINT:
+    - Cluster shows Healthy and Ready.
+    - Active membership equals desired membership.
+    - HMR is inactive and no cluster operation is active.
+    - Every current node shows Active / Active and is out of maintenance mode.
+    - CloudNativePG configured and Ready counts match; required durability is available.
+    - Selected HMR node matches host containing development checkout.
+    - Operator accepts temporary loss of application HA.
+    ```
+
+    Never treat Kubernetes `Ready` or uncordoned state as proof application maintenance ended. Read `BorealisNodeRuntime` desired and observed application states, or use Nodes view. If any member is drained:
+
+    1. Pause HMR work.
+    2. Direct operator to **Nodes > Actions > Exit Maintenance Mode** for one drained member.
+    3. Wait for corresponding Cluster Event to succeed and row to become `Active / Active`.
+    4. Repeat one member at time until no application-drained banner remains.
+    5. Stop on failed maintenance exit. Do not patch Kubernetes labels or runtime CRs.
+
+    Generic read-only preflight:
+
+    ```bash
+    sudo k3s kubectl \
+      --kubeconfig /etc/rancher/k3s/k3s.yaml \
+      -n borealis get borealiscluster/borealis \
+      -o jsonpath='{.status.phase}{"\t"}{.status.hmrState}{"\n"}'
+
+    sudo k3s kubectl \
+      --kubeconfig /etc/rancher/k3s/k3s.yaml \
+      -n borealis get borealisnoderuntimes \
+      -o custom-columns='NODE:.spec.nodeName,DESIRED:.spec.desiredApplicationState,OBSERVED:.status.observedApplicationState,READY:.status.nodeReady'
+    ```
+
+    After operator confirms checkpoint, direct them to **Maintenance > Cluster-wide HMR isolation**, select agreed HMR node, choose **Enable HMR**, type `ENABLE HMR`, and submit once. Wait for operation success before running any development command. Browser action owns isolation only; authenticated CLI rebuild on same target owns source sync, dev image, and Vite startup.
+
     ### Before HMR entry
 
     1. Read this page, [Managing Engine Clusters](managing-engine-clusters.md), [Updating the Engine](updating-the-engine.md), and [Unit Testing](../Reference/Unit_Testing.md).
@@ -348,7 +429,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
     3. Obtain explicit operator approval for cluster-wide non-HA HMR window. Keep operator available until production restore completes.
     4. Confirm Cluster Management reports `Healthy`, Ready, expected active/desired membership, HMR inactive, no active operation, all members `Active / Active`, and full CloudNativePG readiness plus synchronous durability.
     5. Confirm Kubernetes nodes Ready and production workloads healthy. Stop for maintenance, update, admission, database degradation, cordon, drain, or active operation.
-    6. Load Admin token with silent `read` as shown above. Use WebUI instead when only browser cookie exists.
+    6. Load Admin token with silent `read` as shown above. Browser cookie may submit WebUI isolation, but CLI source rebuild still requires Bearer token.
 
     Read-only Kubernetes preflight:
 
@@ -364,14 +445,15 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Development loop
 
-    1. Enter HMR through authenticated scoped WebUI rebuild. Type `ENABLE HMR` interactively.
-    2. Edit runtime WebUI source with `apply_patch` for fast browser feedback.
-    3. Confirm dev pod mode, public HTTPS response, and connected `wss://<engine-fqdn>/__vite_hmr` socket.
-    4. Ask operator to accept live result before reproducing it in durable source.
-    5. Apply only accepted edits under durable `Data/Engine/.../src/`. Remove probes and temporary markers.
-    6. Compare runtime and durable trees. Investigate every unexpected difference; never use broad `rsync --delete` from mutable runtime tree.
-    7. For backend change, edit durable backend source and run authenticated full `deploy dev`; restart alone cannot compile changed Go source.
-    8. Run affected repository, unit, container, and docs lanes. Commit only durable source.
+    1. Operator enables HMR on agreed node through Cluster Management WebUI and waits for success.
+    2. On same node, run authenticated scoped WebUI rebuild. Guard verifies existing HMR target instead of submitting second start operation.
+    3. Edit runtime WebUI source with `apply_patch` for fast browser feedback.
+    4. Confirm dev pod mode, public HTTPS response, and connected `wss://<engine-fqdn>/__vite_hmr` socket.
+    5. Ask operator to accept live result before reproducing it in durable source.
+    6. Apply only accepted edits under durable `Data/Engine/.../src/`. Remove probes and temporary markers.
+    7. Compare runtime and durable trees. Investigate every unexpected difference; never use broad `rsync --delete` from mutable runtime tree.
+    8. For backend change, edit durable backend source and run authenticated full `deploy dev`; restart alone cannot compile changed Go source.
+    9. Run affected repository, unit, container, and docs lanes. Commit only durable source.
 
     Runtime and durable paths:
 
@@ -385,7 +467,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     Exit HMR before creating or rolling release. Production restore returns cluster to saved pinned release; it does not publish local changes.
 
-    After `rebuild prod` completes, require HMR inactive, Healthy status, expected active/desired membership, no active operation, all nodes `Active / Active`, and full CloudNativePG readiness. If exit fails:
+    After WebUI or CLI production restoration completes, require HMR inactive, Healthy status, expected active/desired membership, no active operation, all nodes `Active / Active`, and full CloudNativePG readiness. If exit fails:
 
     - Record operation ID, attempt, target, failed step, exact error, and latest event.
     - Confirm healthy members still serve and whether failed target remains drained.
@@ -488,7 +570,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
     Audit remote hosts through interactive prompt, repeating for every nonlocal Engine node:
 
     ```bash
-    ssh -t nicole@<engine-node>
+    ssh -t <ssh-user>@<engine-node>
     sudo -v
     cd /opt/Borealis
     git status --short --branch
