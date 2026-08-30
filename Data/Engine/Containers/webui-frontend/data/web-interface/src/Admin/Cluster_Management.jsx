@@ -57,7 +57,7 @@ import {
 } from "../app/utils/inputValidation.js";
 
 const HMR_WARNING =
-  "This moves all Borealis application traffic to this node and places every other Engine node in drained standby. Cluster loses application HA until production mode is restored.";
+  "This drains all Borealis application roles from every cluster node except specified node. Use isolation for backend and frontend development. Disable Cluster-Wide Node Isolation to restore application HA and failover.";
 const TABS = [
   { key: "overview", label: "Overview", Icon: OverviewIcon },
   { key: "nodes", label: "Nodes", Icon: NodesIcon },
@@ -211,7 +211,7 @@ const GRID_INLINE_STYLE = {
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
   "--ag-border-radius": "8px",
 };
-const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "probes"];
+const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "database", "probes"];
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
 const CLUSTER_EVENT_PAGE_SIZE = 500;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
@@ -309,6 +309,14 @@ function statusPillTheme(value) {
       dot: "#00d18c",
     };
   }
+  if (normalized.includes("replica")) {
+    return {
+      text: "#7dd3fc",
+      background: "rgba(125,211,252,0.16)",
+      border: "1px solid rgba(125,211,252,0.45)",
+      dot: "#7dd3fc",
+    };
+  }
   return {
     text: "#e2e6f0",
     background: "rgba(226,230,240,0.12)",
@@ -392,20 +400,73 @@ export function clusterNodeStatusLabel(node) {
   return `${membership} / ${application}`;
 }
 
-function clusterNodeRolesLabel(node) {
+export function clusterNodeRolesPresentation(node) {
   const roles = node?.roles || {};
   const roleLabels = {
     control_vip_owner: "Control VIP Owner",
     edge_vip_owner: "Edge VIP Owner",
     etcd_leader: "etcd Leader",
-    postgres_primary: "PostgreSQL Primary",
     scheduler_leader: "Scheduler Leader",
     wireguard_owner: "WireGuard Owner",
   };
-  const labels = Object.entries(roles)
-    .filter(([role, active]) => role !== "k3s_version" && active === true)
+  const ownershipLabels = Object.entries(roles)
+    .filter(([role, active]) => !["k3s_version", "postgres_primary"].includes(role) && active === true)
     .map(([role]) => roleLabels[role] || titleCase(role));
-  return labels.length ? labels.join(", ") : "Standby";
+  return {
+    ownershipLabels,
+    label: ownershipLabels.length ? ownershipLabels.join(", ") : "Standby",
+  };
+}
+
+export function clusterNodeDatabaseStatus(node, postgresPrimaryNodeID = "", database = {}, activeMemberCount = 0) {
+  const roles = node?.roles || {};
+  const activeMember = String(node?.membership_state || "").toLowerCase() === "active";
+  if (!activeMember) return "Not Active";
+
+  const primaryID = String(postgresPrimaryNodeID || "").trim();
+  const primaryNode = (primaryID !== "" && primaryID === String(node?.id || "").trim())
+    || roles?.postgres_primary === true;
+  if (primaryNode) return "Active";
+
+  const configuredInstances = Number(database?.configured_instances);
+  const readyInstances = Number(database?.ready_instances);
+  const expectedInstances = Number(activeMemberCount);
+  const completeReplicaSet = Number.isFinite(configuredInstances)
+    && Number.isFinite(readyInstances)
+    && Number.isFinite(expectedInstances)
+    && expectedInstances > 0
+    && configuredInstances === expectedInstances
+    && readyInstances === configuredInstances
+    && database?.fully_ready !== false;
+  return completeReplicaSet ? "Replica Healthy" : "Not Ready";
+}
+
+function ClusterNodeDatabaseCell({ status, onOpenDatabase }) {
+  if (status !== "Active") return status || "Not Ready";
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpenDatabase();
+      }}
+      sx={{
+        appearance: "none",
+        background: "none",
+        border: 0,
+        color: "#58a6ff",
+        cursor: "pointer",
+        font: "inherit",
+        fontWeight: 500,
+        p: 0,
+        textDecoration: "none",
+        "&:hover, &:focus-visible": { color: "#bae6fd", textDecoration: "none" },
+      }}
+    >
+      Active
+    </Box>
+  );
 }
 
 function clusterNodeProbeSummary(node) {
@@ -427,9 +488,9 @@ export function friendlyClusterOperationName(operation) {
     membership_admit: "Cluster Node Added",
     postgres_switchover: "PostgreSQL Primary Switched",
     postgres_emergency_failover: "PostgreSQL Emergency Failover",
-    hmr_start: "Vite Dev HMR Mode Enabled",
-    hmr_exit: "Vite Dev HMR Mode Disabled",
-    hmr_recover: "Vite Dev HMR Mode Recovered",
+    hmr_start: "Cluster-Wide Node Isolation Enabled",
+    hmr_exit: "Cluster-Wide Node Isolation Disabled",
+    hmr_recover: "Cluster-Wide Node Isolation Recovered",
     engine_update: payload?.scope === "node" ? "Engine Node Updated" : "Engine Cluster Updated",
     k3s_update: "K3s Servers Updated",
   };
@@ -728,6 +789,12 @@ export default function ClusterManagement() {
   const activeSize = Number(cluster?.active_size || 1);
   const desiredMembershipSize = Number(cluster?.desired_size || activeSize);
   const database = cluster?.database || {};
+  const hmrState = String(cluster?.hmr?.state || "inactive").toLowerCase();
+  const isolationInactive = hmrState === "inactive";
+  const isolationExitAllowed = ["active", "restore_failed"].includes(hmrState);
+  const isolatedNodeID = String(cluster?.hmr?.node_id || "");
+  const isolationNodeOptions = isolationInactive ? nodes : nodes.filter((node) => node?.id === isolatedNodeID);
+  const isolationNodeValue = isolationInactive ? selectedNode : isolatedNodeID;
   const databaseRecoveryReady = database?.fully_ready !== false && database?.durability_quorum !== false;
   const applicationCapacityReady = nodes.filter((node) => node?.membership_state === "Active").every((node) => node?.application_state === "active");
   const normalOperationsEnabled = cluster?.status === "Healthy" && databaseRecoveryReady && applicationCapacityReady;
@@ -833,6 +900,10 @@ export default function ClusterManagement() {
     const kind = dialog?.kind;
     const node = dialog?.node;
     const sanitizedReason = sanitizeSingleLineInput(reason).slice(0, 256);
+    const maintenanceDisablesIsolation = kind === "maintenance"
+      && node?.application_state === "drained"
+      && ["active", "restore_failed"].includes(String(cluster?.hmr?.state || "inactive").toLowerCase());
+    if (maintenanceDisablesIsolation) return mutate("/api/server/cluster/hmr/exit", { confirmation });
     if (["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(kind)) {
       const validation = validateInputValue("reason", sanitizedReason, FIELD_CLASS.PLAIN_SINGLE_LINE);
       if (validation) return setError(validation);
@@ -884,16 +955,23 @@ export default function ClusterManagement() {
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
     return undefined;
-  }, [architecture, canExpandToThree, canPrepareMembership, cluster?.active_size, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
+  }, [architecture, canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
   const nodeRows = useMemo(
-    () => nodes.map((node) => ({
-      ...node,
-      statusLabel: clusterNodeStatusLabel(node),
-      rolesLabel: clusterNodeRolesLabel(node),
-      probeSummary: clusterNodeProbeSummary(node),
-    })),
-    [nodes]
+    () => {
+      const activeMemberCount = nodes.filter((member) => String(member?.membership_state || "").toLowerCase() === "active").length;
+      return nodes.map((node) => {
+        const rolesPresentation = clusterNodeRolesPresentation(node);
+        return {
+          ...node,
+          statusLabel: clusterNodeStatusLabel(node),
+          databaseStatus: clusterNodeDatabaseStatus(node, cluster?.leaders?.postgres_primary, database, activeMemberCount),
+          rolesLabel: rolesPresentation.label,
+          probeSummary: clusterNodeProbeSummary(node),
+        };
+      });
+    },
+    [cluster?.leaders?.postgres_primary, database, nodes]
   );
 
   const operationRows = useMemo(
@@ -947,7 +1025,7 @@ export default function ClusterManagement() {
     if (!nodeActionTarget) return [];
     const isDrained = String(nodeActionTarget?.application_state || "").toLowerCase() === "drained";
     const membershipActive = nodeActionTarget?.membership_state === "Active";
-    const maintenanceDisabled = busy || (!normalOperationsEnabled && !isDrained);
+    const maintenanceDisabled = busy || (isDrained && !isolationInactive && !isolationExitAllowed) || (!normalOperationsEnabled && !isDrained);
     const updateDisabled = busy || !normalOperationsEnabled;
     const removalDisabled = busy || !normalOperationsEnabled || activeSize !== 3 || !membershipActive;
     const emergencyDisabled = busy || activeSize !== 3 || !membershipActive;
@@ -991,7 +1069,7 @@ export default function ClusterManagement() {
         onClick: () => openAction("emergency_remove", nodeActionTarget),
       },
     ];
-  }, [activeSize, busy, nodeActionTarget, normalOperationsEnabled, openAction]);
+  }, [activeSize, busy, isolationExitAllowed, isolationInactive, nodeActionTarget, normalOperationsEnabled, openAction]);
 
   const nodeColumnDefs = useMemo(() => [
     {
@@ -1014,6 +1092,14 @@ export default function ClusterManagement() {
       headerName: "IP Address",
       minWidth: 140,
       cellClass: "auto-col-tight",
+    },
+    {
+      colId: "database",
+      field: "databaseStatus",
+      headerName: "Database",
+      minWidth: 120,
+      cellClass: "auto-col-tight",
+      cellRenderer: (params) => <ClusterNodeDatabaseCell status={params.value} onOpenDatabase={() => setTab("database")} />,
     },
     {
       colId: "roles",
@@ -1042,7 +1128,7 @@ export default function ClusterManagement() {
       width: 96,
       tooltip: (node) => `${valueLabel(node?.node_name, "Node")} Actions`,
     }),
-  ], [openNodeActionMenu]);
+  ], [openNodeActionMenu, setTab]);
 
   const operationColumnDefs = useMemo(() => [
     {
@@ -1127,7 +1213,7 @@ export default function ClusterManagement() {
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
     title: "Cluster Management",
-    subtitle: "Quorum, role ownership, HMR isolation, node maintenance, and rolling Engine release operations.",
+    subtitle: "Quorum, role ownership, development node isolation, node maintenance, and rolling Engine release operations.",
     Icon: ClusterIcon,
     actions: pageActions,
   });
@@ -1138,12 +1224,14 @@ export default function ClusterManagement() {
   const readyDatabaseInstances = databaseReadyObserved ? Number(database.ready_instances) : null;
   const databaseFullyReady = database?.fully_ready !== false;
   const databaseDurabilityReady = database?.durability_quorum !== false;
+  const maintenanceExitDisablesIsolation = dialog?.kind === "maintenance"
+    && dialog?.node?.application_state === "drained"
+    && isolationExitAllowed;
   const owner = (value) => operatorNodeLabel(value, nodes);
   return (
     <PageBodyFrame>
       <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 }, flexGrow: 1, minHeight: 0 }}>
         {error ? <Alert severity="error" onClose={() => setError("")}>{error}</Alert> : null}
-        {cluster?.hmr?.state && cluster.hmr.state !== "inactive" ? <Alert severity="warning"><strong>Cluster-wide non-HA HMR active.</strong> {HMR_WARNING}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}
         {cluster?.status === "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL is not fully ready: {readyDatabaseInstances ?? "unknown"} of {configuredDatabaseInstances} instances Ready. Normal cluster-changing operations stay blocked until redundancy recovers; recovery controls remain available.</Alert> : null}
         {!databaseRecoveryReady && cluster?.status !== "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL recovery remains required even while cluster lifecycle status is {valueLabel(cluster?.status)}. Normal cluster-changing operations stay blocked.</Alert> : null}
@@ -1205,9 +1293,10 @@ export default function ClusterManagement() {
         ) : null}
 
         {tab === "maintenance" ? <Stack spacing={2}>
-          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-wide HMR isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">HMR node</InputLabel><Select labelId="hmr-node-label" label="HMR node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("hmr_start")}>Enable HMR</Button><Button variant="outlined" disabled={cluster?.hmr?.state === "inactive"} onClick={() => openAction("hmr_exit")}>Restore Production HA</Button></Stack></Paper>
+          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-Wide Node Isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl disabled={!isolationInactive} sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">Isolated Node</InputLabel><Select labelId="hmr-node-label" label="Isolated Node" value={isolationNodeValue} onChange={(event) => setSelectedNode(event.target.value)}>{isolationNodeOptions.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || !isolationInactive} onClick={() => openAction("hmr_start")}>Enable Isolation</Button><Button variant="outlined" disabled={!isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button></Stack></Paper>
           <Paper sx={CARD_SX}>
             <Typography variant="h6">Stable Engine Release</Typography>
+            <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Loaded from published, non-prerelease GitHub releases that declare cluster compatibility; cluster does not generate versions. Current tags use YYYY.MM.DD.N, with final number distinguishing multiple releases for same date. Borealis pins selected tag to exact commit, then drains, updates, and verifies one node at a time.</Typography>
             {releaseError ? <Alert severity="error" sx={{ mt: 2 }}>{releaseError}</Alert> : null}
             {!releaseError && releases.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No published stable cluster-compatible release exists at or above baseline {valueLabel(cluster?.baseline_release)}. Current release remains pinned.</Alert> : null}
             {!releaseError && releases.length > 0 && selectableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Stable releases were found, but none match current rolling-update and K3s compatibility requirements. Open release list for per-release reason.</Alert> : null}
@@ -1248,6 +1337,7 @@ export default function ClusterManagement() {
         <DialogTitle>Confirm cluster operation</DialogTitle>
         <DialogContent>
           {dialog?.kind === "hmr_start" ? <Alert severity="warning" sx={{ mb: 2 }}>{HMR_WARNING}</Alert> : null}
+          {maintenanceExitDisablesIsolation ? <Alert severity="warning" sx={{ mb: 2 }}>Cluster-Wide Node Isolation will be disabled if the node exits maintenance mode.</Alert> : null}
           {dialog?.kind === "remove" ? <Alert severity="warning" sx={{ mb: 2 }}>Safe downscale removes two nodes sequentially. PostgreSQL replicas must vacate both targets before Borealis self-fences K3s and deletes membership.</Alert> : null}
           {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
           {dialog?.kind === "k3s_update" ? <Alert severity="warning" sx={{ mb: 2 }}>K3s control-plane update stays separate from Engine release update. Failure halts sequence and leaves affected node drained.</Alert> : null}
@@ -1264,11 +1354,11 @@ export default function ClusterManagement() {
           {dialog?.kind === "k3s_update" ? <TextField fullWidth sx={{ mb: 2 }} label="Stable K3s target" value={k3sTargetVersion} onChange={(event) => setK3sTargetVersion(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 32 }} helperText="vX.Y.Z+k3sN; immutable upgrade image and source conformance required" /> : null}
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
           {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
-          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) ? <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {!['maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={dialog?.kind === "hmr_start" ? "Type ENABLE HMR" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR" : dialog?.kind === "cluster_enable" ? "Type ENABLE CLUSTER" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
+          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
+          {maintenanceExitDisablesIsolation || !['maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "cluster_enable" ? "Type ENABLE CLUSTER" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
           <Typography variant="body2" sx={{ mt: 2, color: "text.secondary" }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography>
         </DialogContent>
-        <DialogActions><Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button variant="contained" color={dialog?.kind === "emergency_remove" ? "error" : dialog?.kind === "hmr_start" ? "warning" : "primary"} onClick={() => void submitDialog()} disabled={busy}>Submit</Button></DialogActions>
+        <DialogActions><Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button variant="contained" color={dialog?.kind === "emergency_remove" ? "error" : dialog?.kind === "hmr_start" || maintenanceExitDisablesIsolation ? "warning" : "primary"} onClick={() => void submitDialog()} disabled={busy}>Submit</Button></DialogActions>
       </Dialog>
     </PageBodyFrame>
   );

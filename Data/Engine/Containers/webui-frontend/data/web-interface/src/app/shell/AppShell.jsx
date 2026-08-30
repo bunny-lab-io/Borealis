@@ -84,7 +84,7 @@ const CLUSTER_BANNER_SX = {
 
 export function clusterBannerIdentity(banner) {
   const hmrState = String(banner?.hmr_state || "").trim();
-  if (hmrState && hmrState !== "inactive") return `hmr:${hmrState}`;
+  if (hmrState && hmrState !== "inactive") return `hmr:${hmrState}:${String(banner?.hmr_node_name || "").trim()}`;
   const status = String(banner?.status || "").trim();
   if (status === "Degraded Quorum" || status === "Degraded Database") return `status:${status}`;
   const operation = banner?.active_operation;
@@ -794,7 +794,7 @@ export default function AppShell() {
           >
             {showClusterBanner && clusterBanner?.hmr_state && clusterBanner.hmr_state !== "inactive" ? (
               <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
-                Cluster-wide non-HA HMR active. All Borealis application traffic runs on designated HMR node; standby nodes remain drained until pinned production release is restored.
+                Cluster-Wide Node Isolation enabled. All Borealis application traffic will run exclusively through {String(clusterBanner?.hmr_node_name || "isolated node").trim()}. All remaining cluster nodes will remain on standby until node isolation has been disabled.
               </Alert>
             ) : showClusterBanner && clusterBanner?.status === "Degraded Quorum" ? (
               <Alert severity="error" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>

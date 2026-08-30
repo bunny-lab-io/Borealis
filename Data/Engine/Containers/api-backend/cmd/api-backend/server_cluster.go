@@ -144,8 +144,21 @@ func clusterBannerHandler(auth *authService) http.HandlerFunc {
 		}
 		hmr := mapStringAny(snapshot["hmr"])
 		activeOperation := clusterBannerActiveOperation(snapshot["operations"])
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": snapshot["enabled"], "status": snapshot["status"], "hmr_state": hmr["state"], "active_operation": activeOperation})
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": snapshot["enabled"], "status": snapshot["status"], "hmr_state": hmr["state"], "hmr_node_name": clusterBannerNodeName(snapshot["nodes"], cleanText(hmr["node_id"])), "active_operation": activeOperation})
 	}
+}
+
+func clusterBannerNodeName(value any, nodeID string) any {
+	if nodeID == "" {
+		return nil
+	}
+	for _, raw := range anySlice(value) {
+		node, _ := raw.(map[string]any)
+		if cleanText(node["id"]) == nodeID {
+			return nilIfEmpty(firstText(cleanText(node["node_name"]), cleanText(node["hostname"])))
+		}
+	}
+	return nil
 }
 
 func clusterBannerActiveOperation(value any) any {
