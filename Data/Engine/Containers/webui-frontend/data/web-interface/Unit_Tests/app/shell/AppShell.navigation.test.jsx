@@ -243,4 +243,38 @@ describe("AppShell buffered navigation", () => {
     });
     expect(screen.getByText(/verify_quorum/)).toBeInTheDocument();
   });
+
+  it("names isolated node in global cluster banner", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        enabled: true,
+        status: "HMR Non-HA",
+        hmr_state: "active",
+        hmr_node_name: "engine-isolated",
+        active_operation: null,
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter(
+      [{
+        path: "/",
+        element: (
+          <AuthContext.Provider value={buildAuthValue()}>
+            <PageChromeProvider>
+              <AppShell />
+            </PageChromeProvider>
+          </AuthContext.Provider>
+        ),
+        children: [{ index: true, element: <div>Home Page</div>, handle: { title: "Home", navKey: "home", pageKey: "home" } }],
+      }],
+      { initialEntries: ["/"] }
+    );
+
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(
+      "Cluster-Wide Node Isolation enabled. All Borealis application traffic will run exclusively through engine-isolated. All remaining cluster nodes will remain on standby until node isolation has been disabled."
+    ));
+  });
 });

@@ -461,6 +461,25 @@ func TestClusterBannerIgnoresHistoricalFailures(t *testing.T) {
 	}
 }
 
+func TestClusterBannerIncludesIsolatedNodeName(t *testing.T) {
+	const nodeID = "11111111-1111-4111-8111-111111111111"
+	store := &clusterTestStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: map[string]any{
+			"enabled": true,
+			"status":  "HMR Non-HA",
+			"hmr":     map[string]any{"state": "active", "node_id": nodeID},
+			"nodes":   []map[string]any{{"id": nodeID, "node_name": "engine-isolated"}},
+		},
+	}
+	auth, token := clusterTestAuth(t, store)
+	recorder := httptest.NewRecorder()
+	clusterBannerHandler(auth).ServeHTTP(recorder, clusterTestRequest(t, http.MethodGet, "/api/server/cluster/banner", "", token))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"hmr_node_name":"engine-isolated"`) {
+		t.Fatalf("isolated node missing from banner: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestClusterOperationHistoryMarksGlobalFailuresSuperseded(t *testing.T) {
 	operations := []map[string]any{
 		{"id": "new-success", "kind": "membership_admit", "state": "succeeded", "finished_at": int64(20)},

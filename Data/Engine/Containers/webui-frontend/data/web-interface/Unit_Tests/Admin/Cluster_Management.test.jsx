@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import ClusterManagement, {
   buildClusterOperationDetails,
   clusterOperationNodeLabel,
+  clusterNodeDatabaseStatus,
   clusterNodeRolesPresentation,
   clusterNodeStatusLabel,
   formatClusterTimestamp,
@@ -21,7 +22,7 @@ const state = vi.hoisted(() => ({
   releaseError: "",
   operations: [],
   events: [],
-  database: {},
+  database: { configured_instances: 3, ready_instances: 3, fully_ready: true },
   drainedNodeID: "",
 }));
 
@@ -112,7 +113,7 @@ describe("Cluster Management", () => {
     state.releaseError = "";
     state.operations = [];
     state.events = [];
-    state.database = {};
+    state.database = { configured_instances: 3, ready_instances: 3, fully_ready: true };
     state.drainedNodeID = "";
     vi.unstubAllGlobals();
   });
@@ -127,19 +128,16 @@ describe("Cluster Management", () => {
     expect(formatClusterTimestamp(1_787_770_000)).toMatch(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/);
   });
 
-  it("assigns PostgreSQL roles only to active cluster members", () => {
+  it("separates database state from role ownership", () => {
     const primaryID = "11111111-1111-4111-8111-111111111111";
-    expect(clusterNodeRolesPresentation({ id: primaryID, membership_state: "Active", roles: {} }, primaryID)).toMatchObject({
-      postgresRole: "active",
-      label: "PostgreSQL (Active)",
-    });
-    expect(clusterNodeRolesPresentation({ id: "22222222-2222-4222-8222-222222222222", membership_state: "Active", roles: {} }, primaryID)).toMatchObject({
-      postgresRole: "replica",
-      label: "PostgreSQL (Replica)",
-    });
-    expect(clusterNodeRolesPresentation({ id: "33333333-3333-4333-8333-333333333333", membership_state: "Removed", roles: {} }, primaryID)).toMatchObject({
-      postgresRole: "",
-      label: "Standby",
+    const healthyDatabase = { configured_instances: 3, ready_instances: 3, fully_ready: true };
+    expect(clusterNodeDatabaseStatus({ id: primaryID, membership_state: "Active", roles: {} }, primaryID, healthyDatabase, 3)).toBe("Active");
+    expect(clusterNodeDatabaseStatus({ id: "22222222-2222-4222-8222-222222222222", membership_state: "Active", roles: {} }, primaryID, healthyDatabase, 3)).toBe("Replica Healthy");
+    expect(clusterNodeDatabaseStatus({ id: "22222222-2222-4222-8222-222222222222", membership_state: "Active", roles: {} }, primaryID, { ...healthyDatabase, ready_instances: 2, fully_ready: false }, 3)).toBe("Not Ready");
+    expect(clusterNodeDatabaseStatus({ id: "33333333-3333-4333-8333-333333333333", membership_state: "Removed", roles: {} }, primaryID, healthyDatabase, 3)).toBe("Not Active");
+    expect(clusterNodeRolesPresentation({ roles: { edge_vip_owner: true, postgres_primary: true } })).toMatchObject({
+      ownershipLabels: ["Edge VIP Owner"],
+      label: "Edge VIP Owner",
     });
   });
 
@@ -175,14 +173,14 @@ describe("Cluster Management", () => {
     expect(details.copyText).not.toContain("temporary-secret");
   });
 
-  it("shows role ownership, five management views, and cluster-wide isolation warning", () => {
+  it("shows role ownership and five management views without duplicate isolation warning", () => {
     renderClusterManagement();
 
     for (const tab of ["Overview", "Nodes", "Database", "Cluster Events", "Maintenance"]) {
       expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
     }
     expect(screen.queryByRole("tab", { name: "Updates" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Cluster-Wide Node Isolation active/)).toBeInTheDocument();
+    expect(screen.queryByText(/Cluster-Wide Node Isolation active/)).not.toBeInTheDocument();
     expect(screen.getByText("etcd leader")).toBeInTheDocument();
     expect(screen.getByText("WireGuard owner")).toBeInTheDocument();
     expect(screen.getAllByText("engine-1").length).toBeGreaterThan(1);
@@ -195,31 +193,64 @@ describe("Cluster Management", () => {
 
     expect(screen.getByText("Cluster-Wide Node Isolation")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Isolated Node" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Isolated Node" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Enable Isolation" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disable Isolation" })).toBeInTheDocument();
     expect(screen.getByText(/published, non-prerelease GitHub releases/)).toBeInTheDocument();
     expect(screen.getByText(/YYYY\.MM\.DD\.N/)).toBeInTheDocument();
   });
 
-  it("renders node status, identity, role, probe, and action columns", async () => {
+  it("renders node status, identity, database, role, probe, and action columns", async () => {
     renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
 
-    for (const column of ["Status", "Node", "IP Address", "Roles", "Probes", "Actions"]) {
+    for (const column of ["Status", "Node", "IP Address", "Database", "Roles", "Probes", "Actions"]) {
       expect(await screen.findByRole("columnheader", { name: column })).toBeInTheDocument();
     }
     expect(await screen.findAllByText("Active / Active")).toHaveLength(3);
     expect(screen.getByText("Control VIP Owner")).toBeInTheDocument();
-    const activePostgresBadge = screen.getByText("PostgreSQL (Active)");
-    expect(activePostgresBadge).toHaveAttribute("data-postgres-role", "active");
-    expect(activePostgresBadge).toHaveStyle({ color: "#00d18c", backgroundColor: "rgba(0,209,140,0.16)" });
-    expect(screen.getAllByText("PostgreSQL (Replica)")).toHaveLength(2);
-    for (const badge of screen.getAllByText("PostgreSQL (Replica)")) {
-      expect(badge).toHaveAttribute("data-postgres-role", "replica");
-      expect(badge).toHaveStyle({ color: "#7dd3fc", backgroundColor: "rgba(125,211,252,0.16)" });
-    }
+    const activeDatabaseLink = screen.getByRole("button", { name: "Active" });
+    expect(activeDatabaseLink).toHaveStyle({ color: "#7dd3fc", textDecoration: "none" });
+    expect(screen.getAllByText("Replica Healthy")).toHaveLength(2);
+    expect(screen.queryByText(/PostgreSQL \(/)).not.toBeInTheDocument();
     expect(screen.getByText("9/9 Passed")).toBeInTheDocument();
     expect(screen.queryByText(/k3s version/i)).not.toBeInTheDocument();
+
+    fireEvent.click(activeDatabaseLink);
+    expect(screen.getByRole("tab", { name: "Database" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("locks isolated-node selection to current target while isolation is active", () => {
+    renderClusterManagement("/cluster-management?tab=maintenance");
+
+    const isolatedNode = screen.getByRole("combobox", { name: "Isolated Node" });
+    expect(isolatedNode).toHaveAttribute("aria-disabled", "true");
+    expect(isolatedNode).toHaveTextContent("engine-1");
+  });
+
+  it("disables isolation when operator exits maintenance on drained standby", async () => {
+    state.drainedNodeID = "22222222-2222-4222-8222-222222222222";
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") {
+        return { ok: true, status: 202, json: async () => ({ operation_id: "44444444-4444-4444-8444-444444444444" }) };
+      }
+      if (String(path).endsWith("/releases")) return { ok: true, json: async () => ({ releases: [] }) };
+      if (String(path).includes("/events")) return { ok: true, json: async () => ({ events: [] }) };
+      return { ok: true, json: async () => ({ enabled: true, active_size: 3, hmr: { state: "restoring" }, nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=nodes");
+
+    await openNodeActions("engine-2");
+    fireEvent.click(screen.getByRole("menuitem", { name: /Exit Maintenance Mode/ }));
+    expect(screen.getByText("Cluster-Wide Node Isolation will be disabled if the node exits maintenance mode.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Typed confirmation"), { target: { value: "EXIT HMR" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/hmr/exit",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ confirmation: "EXIT HMR" }) }),
+    ));
   });
 
   it("uses active Admin session without a cluster step-up prompt", async () => {

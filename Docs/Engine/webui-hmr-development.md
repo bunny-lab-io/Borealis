@@ -85,7 +85,7 @@ Choose Engine node holding development checkout and runtime source as isolated n
 4. Select **Enable Isolation**.
 5. Read non-HA warning, type legacy confirmation phrase `ENABLE HMR`, and submit once.
 6. Open **Cluster Events**, record operation ID, and wait for **Cluster-Wide Node Isolation Enabled** to succeed.
-7. Confirm cluster-wide isolation banner is active and accepted Cluster Event targets expected node before running development rebuild.
+7. Confirm cluster-wide isolation banner names expected node and accepted Cluster Event targets same node before running development rebuild. **Isolated Node** selector becomes disabled and shows only current target until isolation is fully disabled.
 
 WebUI operation isolates cluster and moves application traffic. It does not copy branch source, distribute code to standby nodes, or start Vite development workload.
 
@@ -294,6 +294,8 @@ Disable isolation from WebUI after operator finishes HMR testing:
 4. Open **Cluster Events**, record operation ID, and wait for **Cluster-Wide Node Isolation Disabled** to succeed.
 5. Return to **Overview** and **Nodes**, refresh, and verify isolation inactive plus every current member `Active / Active`.
 
+Selecting **Exit Maintenance Mode** on drained standby during isolation is alternate exit path, not single-node activation. WebUI warns that Cluster-Wide Node Isolation will be disabled, requires `EXIT HMR`, and starts same full production-restore operation. Use **Disable Isolation** for clearest normal workflow.
+
 ??? note "CLI production restoration"
     CLI can request same controller-owned restoration when Cluster Management is unavailable:
 
@@ -422,7 +424,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
       -o custom-columns='NODE:.spec.nodeName,DESIRED:.spec.desiredApplicationState,OBSERVED:.status.observedApplicationState,READY:.status.nodeReady'
     ```
 
-    After operator confirms checkpoint, direct them to **Maintenance > Cluster-Wide Node Isolation**, select agreed **Isolated Node**, choose **Enable Isolation**, type legacy confirmation phrase `ENABLE HMR`, and submit once. Wait for operation success before running any development command. Browser action owns isolation only; authenticated CLI rebuild on same target owns source sync, dev image, and Vite startup.
+    After operator confirms checkpoint, direct them to **Maintenance > Cluster-Wide Node Isolation**, select agreed **Isolated Node**, choose **Enable Isolation**, type legacy confirmation phrase `ENABLE HMR`, and submit once. Wait for operation success before running any development command. Browser action owns isolation only; authenticated CLI rebuild on same target owns source sync, dev image, and Vite startup. While isolation is active, selector must remain disabled with only current target visible. Treat standby **Exit Maintenance Mode** as full HMR exit because WebUI reroutes it to controller production restoration after `EXIT HMR` confirmation.
 
     ### Before HMR entry
 
