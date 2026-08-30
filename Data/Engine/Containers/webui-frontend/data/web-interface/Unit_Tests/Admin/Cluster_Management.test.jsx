@@ -210,7 +210,7 @@ describe("Cluster Management", () => {
     expect(await screen.findAllByText("Active / Active")).toHaveLength(3);
     expect(screen.getByText("Control VIP Owner")).toBeInTheDocument();
     const activeDatabaseLink = screen.getByRole("button", { name: "Active" });
-    expect(activeDatabaseLink).toHaveStyle({ color: "#7dd3fc", textDecoration: "none" });
+    expect(activeDatabaseLink).toHaveStyle({ color: "#58a6ff", fontWeight: "500", textDecoration: "none" });
     expect(screen.getAllByText("Replica Healthy")).toHaveLength(2);
     expect(screen.queryByText(/PostgreSQL \(/)).not.toBeInTheDocument();
     expect(screen.getByText("9/9 Passed")).toBeInTheDocument();
