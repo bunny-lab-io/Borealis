@@ -8,32 +8,32 @@ Use this workflow when testing Engine WebUI changes on a K3s-based Borealis Engi
 - Keep durable WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`.
 - Treat `Engine/Services/webui-frontend/data/web-interface/` as disposable runtime source for live HMR sessions.
 
-!!! danger "Cluster-wide non-HA mode"
-    On clustered Engine, every dev deploy and WebUI dev rebuild requests exclusive HMR operation. Admin must type `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto current node, so application HA remains unavailable until production restore completes. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
+!!! danger "Cluster-Wide Node Isolation"
+    On clustered Engine, every dev deploy and WebUI dev rebuild requires exclusive Cluster-Wide Node Isolation operation. Admin must type legacy confirmation phrase `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto isolated node, so application HA remains unavailable until isolation is disabled. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
 
 !!! bug "Clustered HMR remains manual"
-    Clustered HMR is controlled preview workflow, not HA development or release distribution. Network loss of active HMR target can still leave public application unavailable until target returns or operator completes recovery. Keep operator available throughout HMR window, exit HMR before any rolling update, and follow [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466) for automated lost-target recovery work.
+    Clustered HMR is controlled preview workflow, not HA development or release distribution. Network loss of active isolated node can still leave public application unavailable until target returns or operator completes recovery. Keep operator available throughout isolation window, disable isolation before any rolling update, and follow [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466) for automated lost-target recovery work.
 
-## Clustered HMR Preview
+## Clustered Node Isolation / HMR Preview
 
 Clustered development uses two separate phases:
 
-1. HMR preview runs mutable development workload on one selected Engine node while other application nodes remain drained.
+1. Cluster-Wide Node Isolation runs mutable HMR development workload on one selected Engine node while other application nodes remain drained.
 2. Published stable release plus Cluster Management **Update All One at a Time** distributes accepted immutable revision across every Engine node.
 
-HMR never copies source to standby nodes. Returning to production restores saved pinned release, not local development source.
+Isolation never copies source to standby nodes. Returning to production restores saved pinned release, not local development source.
 
 ### Prepare Cluster
 
-Obtain explicit operator approval and keep operator available before entering HMR. Start only when Cluster Management shows:
+Obtain explicit operator approval and keep operator available before enabling isolation. Start only when Cluster Management shows:
 
 - Cluster status `Healthy` with active membership equal to desired membership.
-- HMR inactive and no active cluster operation.
+- Cluster-Wide Node Isolation inactive and no active cluster operation.
 - Every node `Active / Active`, with no drained or cordoned member.
 - CloudNativePG configured count equal to Ready count, with synchronous durability available when cluster has multiple members.
-- Current HMR target healthy on pinned production release.
+- Intended isolated node healthy on pinned production release.
 
-Start from clean issue branch and clean worktree on HMR target. Do not overwrite unrelated operator changes. Confirm deployed network mode instead of guessing:
+Start from clean issue branch and clean worktree on intended isolated node. Do not overwrite unrelated operator changes. Confirm deployed network mode instead of guessing:
 
 ```bash
 awk -F= \
@@ -75,21 +75,21 @@ Cluster Management disables HMR entry while any active member remains drained. K
 
 If maintenance exit fails, stop and copy operation details. Do not clear drain labels, patch node runtime objects, uncordon manually, or start second recovery operation.
 
-### Enable HMR From Cluster Management
+### Enable Cluster-Wide Node Isolation
 
-Choose Engine node holding development checkout and runtime source as HMR target. Selected WebUI node and host used for later rebuild must match.
+Choose Engine node holding development checkout and runtime source as isolated node. Selected WebUI node and host used for later rebuild must match.
 
 1. Open **Admin > Cluster Management > Maintenance**.
-2. Find **Cluster-wide HMR isolation**.
-3. Select intended target from **HMR node**.
-4. Select **Enable HMR**.
-5. Read non-HA warning, type `ENABLE HMR`, and submit once.
-6. Open **Cluster Events**, record operation ID, and wait for **Vite Dev HMR Mode Enabled** to succeed.
-7. Confirm cluster-wide HMR banner is active and accepted Cluster Event targets expected node before running development rebuild.
+2. Find **Cluster-Wide Node Isolation**.
+3. Select intended target from **Isolated Node**.
+4. Select **Enable Isolation**.
+5. Read non-HA warning, type legacy confirmation phrase `ENABLE HMR`, and submit once.
+6. Open **Cluster Events**, record operation ID, and wait for **Cluster-Wide Node Isolation Enabled** to succeed.
+7. Confirm cluster-wide isolation banner is active and accepted Cluster Event targets expected node before running development rebuild.
 
-WebUI operation isolates cluster and moves application traffic. It does not copy branch source or start Vite development workload.
+WebUI operation isolates cluster and moves application traffic. It does not copy branch source, distribute code to standby nodes, or start Vite development workload.
 
-### Start Development Workload On HMR Node
+### Start Development Workload On Isolated Node
 
 After WebUI operation succeeds, run scoped rebuild from same selected node:
 
@@ -114,7 +114,7 @@ sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREAL
 
     Use `--acknowledge-cluster-non-ha` only for non-interactive operation after explicit operator approval.
 
-After HMR begins, do not start maintenance, membership, release, K3s, or normal PostgreSQL operations.
+After isolation begins, do not start maintenance, membership, release, K3s, or normal PostgreSQL operations.
 
 ## Start Dev WebUI
 Use a scoped WebUI rebuild when the Engine stack already exists and only the frontend needs dev mode.
@@ -286,13 +286,13 @@ Run repository validation from `/opt/Borealis`. Keep dependencies and build outp
 Run `bash Tests/run-docs.sh` when documentation changes. Do not run raw `npm`, `vite`, or `vitest` from staged source under `Data/Engine/Containers/*/data`.
 
 ## Return To Production
-Restore cluster from WebUI after operator finishes HMR testing:
+Disable isolation from WebUI after operator finishes HMR testing:
 
 1. Open **Admin > Cluster Management > Maintenance**.
-2. Under **Cluster-wide HMR isolation**, select **Restore Production HA**.
-3. Type `EXIT HMR` and submit once.
-4. Open **Cluster Events**, record operation ID, and wait for **Vite Dev HMR Mode Disabled** to succeed.
-5. Return to **Overview** and **Nodes**, refresh, and verify HMR inactive plus every current member `Active / Active`.
+2. Under **Cluster-Wide Node Isolation**, select **Disable Isolation**.
+3. Type legacy confirmation phrase `EXIT HMR` and submit once.
+4. Open **Cluster Events**, record operation ID, and wait for **Cluster-Wide Node Isolation Disabled** to succeed.
+5. Return to **Overview** and **Nodes**, refresh, and verify isolation inactive plus every current member `Active / Active`.
 
 ??? note "CLI production restoration"
     CLI can request same controller-owned restoration when Cluster Management is unavailable:
@@ -311,9 +311,9 @@ Restore cluster from WebUI after operator finishes HMR testing:
 
 Controller restores saved pinned production release, keeps local edits untouched, verifies target, and restores standby workloads one node at time. Failed restore leaves HMR state and warning visible for explicit recovery.
 
-After successful exit, confirm Cluster Management shows:
+After isolation is disabled, confirm Cluster Management shows:
 
-- HMR inactive and cluster `Healthy`.
+- Isolation inactive and cluster `Healthy`.
 - Active membership equal to desired membership.
 - No active operation.
 - Every node `Active / Active`.
@@ -323,11 +323,13 @@ If exit fails, stop. Record operation ID and exact failed step. Do not begin **U
 
 ## Promote Accepted Work
 
-Commit only durable repository source and documentation after HMR exit and validation. Push issue branch and wait for required GitHub checks. Keep pull request Draft until operator requests review.
+Commit only durable repository source and documentation after isolation is disabled and validation completes. Push issue branch and wait for required GitHub checks. Keep pull request Draft until operator requests review.
 
-Publishing stable release is separate public action requiring explicit operator approval and unused dotted-numeric tag. Cluster updater rejects drafts, prereleases, branch heads, nonnumeric tags, and incompatible release manifests. Never change compatibility fields to bypass selection.
+Publishing stable release is separate public action requiring explicit operator approval and unused dotted-numeric tag. Current convention is `YYYY.MM.DD.N`, where final number distinguishes multiple releases for same date. Suffix is part of publisher-selected GitHub tag; Cluster Management does not generate it. Older releases may use fewer numeric segments. Cluster updater rejects drafts, prereleases, branch heads, nonnumeric tags, and incompatible release manifests. Never change compatibility fields to bypass selection.
 
-After approved stable release exists, use **Admin > Cluster Management > Maintenance > Stable Engine Release > Update All One at a Time**. HMR does not distribute source. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for rollout and recovery contract.
+After approved stable release exists, use **Admin > Cluster Management > Maintenance > Stable Engine Release > Update All One at a Time**. Isolation does not distribute source. Each target verifies exact published tag and commit before local staging. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for rollout and recovery contract.
+
+K3s Spegel can share imported container image layers between cluster peers. It does not copy repository source, publish release, or replace tag/SHA verification. Borealis currently has no supported local-only, non-GitHub source rollout. Internal node-manager fetch and staging commands remain controller-only.
 
 ## Clean Up Credentials
 
@@ -364,16 +366,16 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
     Treat clustered WebUI development and release distribution as separate operations:
 
     ```text
-    HMR preview on one Engine node
+    Cluster-Wide Node Isolation / HMR preview on one Engine node
     -> operator accepts runtime behavior
     -> reproduce accepted edits in durable source
     -> validate, commit, and push issue branch
-    -> exit HMR to pinned production release
+    -> disable isolation to restore pinned production release
     -> operator approves stable qualification release
     -> Cluster Management Update All One at a Time
     ```
 
-    HMR does not synchronize checkout or source between Engine nodes. Do not use HMR as release mechanism.
+    Isolation does not synchronize checkout or source between Engine nodes. Do not use HMR as release mechanism. Spegel distributes imported container image content only; it does not distribute or authorize Git source.
 
     ### Access and secret handling
 
@@ -383,24 +385,24 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
     - Never use `sshpass`. Let SSH and remote `sudo` prompt interactively.
     - Do not interact with hypervisor as part of HMR or release workflow.
 
-    ### WebUI-first HMR coordination
+    ### WebUI-first isolation coordination
 
-    Before asking operator to enable HMR, present explicit checkpoint and wait for confirmation:
+    Before asking operator to enable isolation, present explicit checkpoint and wait for confirmation:
 
     ```text
-    HMR ENTRY CHECKPOINT:
+    NODE ISOLATION ENTRY CHECKPOINT:
     - Cluster shows Healthy and Ready.
     - Active membership equals desired membership.
-    - HMR is inactive and no cluster operation is active.
+    - Cluster-Wide Node Isolation is inactive and no cluster operation is active.
     - Every current node shows Active / Active and is out of maintenance mode.
     - CloudNativePG configured and Ready counts match; required durability is available.
-    - Selected HMR node matches host containing development checkout.
+    - Selected isolated node matches host containing development checkout.
     - Operator accepts temporary loss of application HA.
     ```
 
     Never treat Kubernetes `Ready` or uncordoned state as proof application maintenance ended. Read `BorealisNodeRuntime` desired and observed application states, or use Nodes view. If any member is drained:
 
-    1. Pause HMR work.
+    1. Pause isolation/HMR work.
     2. Direct operator to **Nodes > Actions > Exit Maintenance Mode** for one drained member.
     3. Wait for corresponding Cluster Event to succeed and row to become `Active / Active`.
     4. Repeat one member at time until no application-drained banner remains.
@@ -420,14 +422,14 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
       -o custom-columns='NODE:.spec.nodeName,DESIRED:.spec.desiredApplicationState,OBSERVED:.status.observedApplicationState,READY:.status.nodeReady'
     ```
 
-    After operator confirms checkpoint, direct them to **Maintenance > Cluster-wide HMR isolation**, select agreed HMR node, choose **Enable HMR**, type `ENABLE HMR`, and submit once. Wait for operation success before running any development command. Browser action owns isolation only; authenticated CLI rebuild on same target owns source sync, dev image, and Vite startup.
+    After operator confirms checkpoint, direct them to **Maintenance > Cluster-Wide Node Isolation**, select agreed **Isolated Node**, choose **Enable Isolation**, type legacy confirmation phrase `ENABLE HMR`, and submit once. Wait for operation success before running any development command. Browser action owns isolation only; authenticated CLI rebuild on same target owns source sync, dev image, and Vite startup.
 
     ### Before HMR entry
 
     1. Read this page, [Managing Engine Clusters](managing-engine-clusters.md), [Updating the Engine](updating-the-engine.md), and [Unit Testing](../Reference/Unit_Testing.md).
     2. Confirm issue branch, matching issue PR, clean worktree, and exact deployed network mode.
-    3. Obtain explicit operator approval for cluster-wide non-HA HMR window. Keep operator available until production restore completes.
-    4. Confirm Cluster Management reports `Healthy`, Ready, expected active/desired membership, HMR inactive, no active operation, all members `Active / Active`, and full CloudNativePG readiness plus synchronous durability.
+    3. Obtain explicit operator approval for cluster-wide non-HA isolation window. Keep operator available until production restore completes.
+    4. Confirm Cluster Management reports `Healthy`, Ready, expected active/desired membership, isolation inactive, no active operation, all members `Active / Active`, and full CloudNativePG readiness plus synchronous durability.
     5. Confirm Kubernetes nodes Ready and production workloads healthy. Stop for maintenance, update, admission, database degradation, cordon, drain, or active operation.
     6. Load Admin token with silent `read` as shown above. Browser cookie may submit WebUI isolation, but CLI source rebuild still requires Bearer token.
 
@@ -445,8 +447,8 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Development loop
 
-    1. Operator enables HMR on agreed node through Cluster Management WebUI and waits for success.
-    2. On same node, run authenticated scoped WebUI rebuild. Guard verifies existing HMR target instead of submitting second start operation.
+    1. Operator enables isolation on agreed node through Cluster Management WebUI and waits for success.
+    2. On same node, run authenticated scoped WebUI rebuild. Guard verifies existing internal HMR target instead of submitting second start operation.
     3. Edit runtime WebUI source with `apply_patch` for fast browser feedback.
     4. Confirm dev pod mode, public HTTPS response, and connected `wss://<engine-fqdn>/__vite_hmr` socket.
     5. Ask operator to accept live result before reproducing it in durable source.
@@ -465,9 +467,9 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Production restoration gate
 
-    Exit HMR before creating or rolling release. Production restore returns cluster to saved pinned release; it does not publish local changes.
+    Disable isolation before creating or rolling release. Production restore returns cluster to saved pinned release; it does not publish local changes.
 
-    After WebUI or CLI production restoration completes, require HMR inactive, Healthy status, expected active/desired membership, no active operation, all nodes `Active / Active`, and full CloudNativePG readiness. If exit fails:
+    After WebUI or CLI production restoration completes, require isolation inactive, Healthy status, expected active/desired membership, no active operation, all nodes `Active / Active`, and full CloudNativePG readiness. If exit fails:
 
     - Record operation ID, attempt, target, failed step, exact error, and latest event.
     - Confirm healthy members still serve and whether failed target remains drained.
@@ -477,7 +479,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Qualification release checkpoint
 
-    Stable release publication is external public action. Stop for explicit operator approval and unused dotted-numeric tag after branch validation succeeds. Confirm clean worktree, local/remote branch SHA match, compatible release manifest, and successful PR checks:
+    Stable release publication is external public action. Stop for explicit operator approval and unused dotted-numeric tag after branch validation succeeds. Use current `YYYY.MM.DD.N` convention unless operator directs otherwise; `N` increments for additional release on same date and remains part of immutable GitHub tag. Confirm clean worktree, local/remote branch SHA match, compatible release manifest, and successful PR checks:
 
     ```bash
     cd /opt/Borealis
@@ -518,13 +520,13 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     In **Admin > Cluster Management > Maintenance > Stable Engine Release**:
 
-    1. Reconfirm cluster Healthy, HMR inactive, and no active operation.
+    1. Reconfirm cluster Healthy, isolation inactive, and no active operation.
     2. Select exact approved qualification tag and verify expected SHA.
     3. Choose **Update All One at a Time**.
     4. Type `UPDATE CLUSTER` and submit once.
     5. Copy operation ID immediately and monitor Cluster Events to terminal state.
 
-    Controller owns backup, immutable target SHA verification, non-leader-first ordering, role transfer, drain and EndpointSlice withdrawal, local image staging, schema expansion, isolated candidate creation, candidate health/soak, promotion, active and role-aware health/soak, drain exit, schema finalize, and cluster baseline advancement. Never replace controller flow with node-to-node copies, host-by-host `git pull`, manual image import, or Deployment patch.
+    Controller owns backup, immutable target SHA verification, non-leader-first ordering, role transfer, drain and EndpointSlice withdrawal, local image staging, schema expansion, isolated candidate creation, candidate health/soak, promotion, active and role-aware health/soak, drain exit, schema finalize, and cluster baseline advancement. Every target fetches published tag and verifies exact SHA before staging. Spegel may provide peer image layers after import, but source remains Git-backed. Never replace controller flow with node-to-node copies, host-by-host `git pull`, manual image import, or Deployment patch.
 
     ### Failed rolling operation
 
@@ -546,7 +548,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Post-rollout audit
 
-    Require Cluster Management to report Healthy and Ready, expected active/desired membership, HMR inactive, exact release tag/SHA baseline, every node desired/observed revision matching target, all nodes active without drain reason, all node probes passing, full CloudNativePG readiness and synchronous durability, and no active operation or pending admission.
+    Require Cluster Management to report Healthy and Ready, expected active/desired membership, isolation inactive, exact release tag/SHA baseline, every node desired/observed revision matching target, all nodes active without drain reason, all node probes passing, full CloudNativePG readiness and synchronous durability, and no active operation or pending admission.
 
     Inspect Kubernetes state:
 

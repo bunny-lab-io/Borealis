@@ -794,7 +794,7 @@ export default function AppShell() {
           >
             {showClusterBanner && clusterBanner?.hmr_state && clusterBanner.hmr_state !== "inactive" ? (
               <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
-                Cluster-wide non-HA HMR active. All Borealis application traffic runs on designated HMR node; standby nodes remain drained until pinned production release is restored.
+                Cluster-Wide Node Isolation active. Borealis application traffic runs on isolated development node; standby application nodes remain drained until isolation is disabled.
               </Alert>
             ) : showClusterBanner && clusterBanner?.status === "Degraded Quorum" ? (
               <Alert severity="error" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>

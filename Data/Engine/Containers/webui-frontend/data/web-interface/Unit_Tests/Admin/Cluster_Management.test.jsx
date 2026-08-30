@@ -122,8 +122,8 @@ describe("Cluster Management", () => {
     expect(clusterNodeStatusLabel({ membership_state: "Active", application_state: "active", cordoned: true })).toBe("Active / Cordoned");
     expect(friendlyClusterOperationName({ kind: "node_maintenance", payload: { action: "enter" } })).toBe("Maintenance Mode Enabled");
     expect(friendlyClusterOperationName({ kind: "node_maintenance", payload: { action: "exit" } })).toBe("Maintenance Mode Disabled");
-    expect(friendlyClusterOperationName({ kind: "hmr_start" })).toBe("Vite Dev HMR Mode Enabled");
-    expect(friendlyClusterOperationName({ kind: "hmr_exit" })).toBe("Vite Dev HMR Mode Disabled");
+    expect(friendlyClusterOperationName({ kind: "hmr_start" })).toBe("Cluster-Wide Node Isolation Enabled");
+    expect(friendlyClusterOperationName({ kind: "hmr_exit" })).toBe("Cluster-Wide Node Isolation Disabled");
     expect(formatClusterTimestamp(1_787_770_000)).toMatch(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/);
   });
 
@@ -175,17 +175,30 @@ describe("Cluster Management", () => {
     expect(details.copyText).not.toContain("temporary-secret");
   });
 
-  it("shows role ownership, five management views, and cluster-wide HMR warning", () => {
+  it("shows role ownership, five management views, and cluster-wide isolation warning", () => {
     renderClusterManagement();
 
     for (const tab of ["Overview", "Nodes", "Database", "Cluster Events", "Maintenance"]) {
       expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
     }
     expect(screen.queryByRole("tab", { name: "Updates" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Cluster-wide non-HA HMR active/)).toBeInTheDocument();
+    expect(screen.getByText(/Cluster-Wide Node Isolation active/)).toBeInTheDocument();
     expect(screen.getByText("etcd leader")).toBeInTheDocument();
     expect(screen.getByText("WireGuard owner")).toBeInTheDocument();
     expect(screen.getAllByText("engine-1").length).toBeGreaterThan(1);
+  });
+
+  it("labels development isolation and explains stable GitHub releases", () => {
+    state.hmrState = "inactive";
+    renderClusterManagement();
+    fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
+
+    expect(screen.getByText("Cluster-Wide Node Isolation")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Isolated Node" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enable Isolation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disable Isolation" })).toBeInTheDocument();
+    expect(screen.getByText(/published, non-prerelease GitHub releases/)).toBeInTheDocument();
+    expect(screen.getByText(/YYYY\.MM\.DD\.N/)).toBeInTheDocument();
   });
 
   it("renders node status, identity, role, probe, and action columns", async () => {
