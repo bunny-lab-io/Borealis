@@ -11,6 +11,79 @@ Use this workflow when testing Engine WebUI changes on a K3s-based Borealis Engi
 !!! danger "Cluster-wide non-HA mode"
     On clustered Engine, every dev deploy and WebUI dev rebuild requests exclusive HMR operation. Admin must type `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto current node, so application HA remains unavailable until production restore completes. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
 
+!!! bug "Clustered HMR remains manual"
+    Clustered HMR is controlled preview workflow, not HA development or release distribution. Network loss of active HMR target can still leave public application unavailable until target returns or operator completes recovery. Keep operator available throughout HMR window, exit HMR before any rolling update, and follow [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466) for automated lost-target recovery work.
+
+## Clustered HMR Preview
+
+Clustered development uses two separate phases:
+
+1. HMR preview runs mutable development workload on one selected Engine node while other application nodes remain drained.
+2. Published stable release plus Cluster Management **Update All One at a Time** distributes accepted immutable revision across every Engine node.
+
+HMR never copies source to standby nodes. Returning to production restores saved pinned release, not local development source.
+
+### Prepare Cluster
+
+Obtain explicit operator approval and keep operator available before entering HMR. Start only when Cluster Management shows:
+
+- Cluster status `Healthy` with `3 active / 3 desired` membership.
+- HMR inactive and no active cluster operation.
+- Every node `Active / Active`, with no drained or cordoned member.
+- CloudNativePG `3 configured / 3 Ready` with synchronous durability available.
+- Current HMR target healthy on pinned production release.
+
+Start from clean issue branch and clean worktree on HMR target. Do not overwrite unrelated operator changes. Confirm deployed network mode instead of guessing:
+
+```bash
+awk -F= \
+  '$1 == "BOREALIS_ENGINE_NETWORK_MODE" {
+    print substr($0, index($0, "=") + 1)
+  }' \
+  /opt/Borealis/Engine/Deploy/runtime.env
+```
+
+Expected value is `local` or `public`.
+
+??? note "Authenticate Cluster CLI"
+    Clustered `Engine.sh` HMR commands require current Admin Bearer token. Load it without placing secret in shell history or command arguments:
+
+    ```bash
+    cd /opt/Borealis
+
+    export BOREALIS_CLUSTER_API_URL='https://<engine-fqdn>'
+    read -rsp 'Paste recent Borealis Admin access token: ' BOREALIS_CLUSTER_ADMIN_TOKEN
+    printf '\n'
+    export BOREALIS_CLUSTER_ADMIN_TOKEN
+
+    # Set only when Engine uses custom CA.
+    export BOREALIS_CLUSTER_CA_FILE='/path/to/ca.pem'
+    ```
+
+    Browser `borealis_auth` cookie and Admin Bearer token are not interchangeable. Use Cluster Management WebUI for cluster operations when only browser session is available. Never place password, Admin token, cookie, K3s token, or private key in repository, PR, issue, logs, shell profile, or command arguments.
+
+### Enter HMR On Target
+
+Run scoped WebUI rebuild from node that will serve development workload:
+
+```bash
+cd /opt/Borealis
+
+sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
+  bash Engine.sh \
+  --network-mode <local-or-public> \
+  --service webui-frontend \
+  rebuild dev
+```
+
+Interactive CLI requires typing:
+
+```text
+ENABLE HMR
+```
+
+Use `--acknowledge-cluster-non-ha` only for non-interactive operation after explicit operator approval. After HMR begins, do not start maintenance, membership, release, K3s, or normal PostgreSQL operations.
+
 ## Start Dev WebUI
 Use a scoped WebUI rebuild when the Engine stack already exists and only the frontend needs dev mode.
 
@@ -48,6 +121,9 @@ For non-interactive clustered use, append `--acknowledge-cluster-non-ha`. Intera
 
 ## Switch WebUI Modes
 Use these commands to move only the WebUI between dev/HMR and production static serving.
+
+!!! warning "Cluster authentication"
+    Basic commands below suit standalone Engine. On cluster, preserve authenticated CLI variables exactly as shown in **Clustered HMR Preview** so `Engine.sh` can submit and monitor HMR operation.
 
 === "Local Dev"
 
@@ -99,8 +175,40 @@ When edits are ready to keep, make the same source changes under:
 Then run the scoped dev rebuild again to refresh the runtime copy from committed source:
 
 ```sh
-sudo bash Engine.sh --network-mode local --service webui-frontend rebuild dev
+sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
+  bash Engine.sh --network-mode <local-or-public> --service webui-frontend rebuild dev
 ```
+
+Do not blindly copy whole runtime tree when it contains temporary probes or experiments. Reproduce only accepted edits in durable source, remove temporary markers, then compare trees:
+
+```bash
+diff -ru \
+  /opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src \
+  /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src
+```
+
+Expected differences should match accepted work only.
+
+## Backend Or Combined Changes
+
+Backend source is not live-mounted. Edit durable source under:
+
+```text
+/opt/Borealis/Data/Engine/Containers/api-backend/
+```
+
+After accepted WebUI edits exist in durable source, use full development deploy for backend or combined change:
+
+```bash
+cd /opt/Borealis
+
+sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
+  bash Engine.sh \
+  --network-mode <local-or-public> \
+  deploy dev
+```
+
+Do not use `api-backend restart` for changed Go source; restart does not build new image. Do not run direct production deploy while cluster mode is active.
 
 ## Verify HMR
 Confirm the WebUI pod is in dev mode:
@@ -117,15 +225,79 @@ curl -kI https://<engine-fqdn>/
 
 Open browser developer tools on the Borealis page and check the Network tab for `__vite_hmr`. It should use `wss` and stay connected.
 
+## Validate Durable Changes
+
+Run repository validation from `/opt/Borealis`. Keep dependencies and build output outside staged source:
+
+=== "WebUI"
+
+    ```bash
+    bash Tests/run-repository-policy.sh
+    bash Tests/run-webui.sh
+    BOREALIS_DOCKER_USE_SUDO=1 \
+      bash Tests/run-containers.sh --service webui-frontend
+    git diff --check
+    ```
+
+=== "Backend or Combined"
+
+    ```bash
+    bash Tests/run-repository-policy.sh
+    bash Tests/run-engine-go.sh
+    bash Tests/run-k3s-policy.sh
+    BOREALIS_DOCKER_USE_SUDO=1 \
+      bash Tests/run-containers.sh --service api-backend
+    git diff --check
+    ```
+
+Run `bash Tests/run-docs.sh` when documentation changes. Do not run raw `npm`, `vite`, or `vitest` from staged source under `Data/Engine/Containers/*/data`.
+
 ## Return To Production
 Switch WebUI back to production static serving after HMR work:
 
 ```sh
 cd /opt/Borealis
-sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
+
+sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
+  bash Engine.sh \
+  --network-mode <local-or-public> \
+  --service webui-frontend \
+  rebuild prod
 ```
 
+Interactive clustered CLI requires typing `EXIT HMR`.
+
 On cluster, production command requests HMR exit. Controller restores saved pinned production release, keeps local edits untouched, verifies target, and restores standby workloads one node at time. Failed restore leaves HMR state and warning visible for explicit recovery.
+
+After successful exit, confirm Cluster Management shows:
+
+- HMR inactive and cluster `Healthy`.
+- `3 active / 3 desired` membership.
+- No active operation.
+- Every node `Active / Active`.
+- CloudNativePG `3 configured / 3 Ready`.
+
+If exit fails, stop. Record operation ID and exact failed step. Do not begin **Update All**, submit second operation, clear drain, patch Deployment, or pull source on standby nodes.
+
+## Promote Accepted Work
+
+Commit only durable repository source and documentation after HMR exit and validation. Push issue branch and wait for required GitHub checks. Keep pull request Draft until operator requests review.
+
+Publishing stable release is separate public action requiring explicit operator approval and unused dotted-numeric tag. Cluster updater rejects drafts, prereleases, branch heads, nonnumeric tags, and incompatible release manifests. Never change compatibility fields to bypass selection.
+
+After approved stable release exists, use **Admin > Cluster Management > Maintenance > Stable Engine Release > Update All One at a Time**. HMR does not distribute source. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for rollout and recovery contract.
+
+## Clean Up Credentials
+
+Remove temporary CLI credentials after HMR operations:
+
+```bash
+unset BOREALIS_CLUSTER_ADMIN_TOKEN
+unset BOREALIS_CLUSTER_API_URL
+unset BOREALIS_CLUSTER_CA_FILE
+```
+
+Close temporary port-forwards. Do not persist these variables in shell profile or environment file.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -145,46 +317,198 @@ On cluster, production command requests HMR exit. Controller restores saved pinn
     - Dev source mounts are read-only hostPath mounts from `Engine/Services/webui-frontend/data/web-interface/` into `/opt/Borealis/Data/Engine/web-interface/`. Vite optimizer and temporary config output use memory-backed `emptyDir` mounts at `node_modules/.vite` and `node_modules/.vite-temp`.
     - Do not run raw `npm`, `vite`, or `vitest` from staged source under `Data/Engine/Containers/webui-frontend/data/web-interface/`. Use `Engine.sh` for deploy/rebuild validation and `./Engine_Unit_Tests.sh --domain webui` for WebUI unit tests when the runtime test cache exists.
 
-    ### Codex UI/UX workflow
+    ### Codex clustered HMR workflow
 
-    When an operator asks Codex to stage WebUI UI/UX changes, use the HMR runtime-first path unless the operator explicitly asks for staging-only or non-runtime work.
+    Treat clustered WebUI development and release distribution as separate operations:
 
-    1. Confirm the active branch and current network mode.
-    2. Switch only WebUI into dev/HMR mode with `sudo bash Engine.sh --network-mode <public|local> --service webui-frontend rebuild dev`.
-    3. Make first-pass UI/UX edits under `/opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/`.
-    4. Ask the operator to validate the live browser behavior through HMR before mirroring.
-    5. After operator approval, mirror the accepted source changes into `/opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
-    6. Remove temporary HMR markers or test-only visual probes before staging or committing.
-    7. Run targeted validation, then commit only the staging-source docs/code changes that belong in the repository.
-
-    Use runtime edits for fast visual iteration:
-
-    ```sh
-    sudo nano /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/<file>
+    ```text
+    HMR preview on one Engine node
+    -> operator accepts runtime behavior
+    -> reproduce accepted edits in durable source
+    -> validate, commit, and push issue branch
+    -> exit HMR to pinned production release
+    -> operator approves stable qualification release
+    -> Cluster Management Update All One at a Time
     ```
 
-    Mirror accepted runtime source back to staging after validation:
+    HMR does not synchronize checkout or source between Engine nodes. Do not use HMR as release mechanism.
 
-    ```sh
-    sudo rsync -a --delete \
-      /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/ \
-      /opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src/
+    ### Access and secret handling
+
+    - Work locally on chosen HMR target when possible. Use interactive SSH for remote host audit only when needed.
+    - Request SSH/sudo password and fresh Admin Bearer token from operator through secure channel when unavailable. Never infer or fabricate credentials.
+    - Never place password, Admin token, browser cookie, K3s token, or private key in command arguments, source, shell profile, logs, issue, PR, or commit history.
+    - Never use `sshpass`. Let SSH and remote `sudo` prompt interactively.
+    - Do not interact with hypervisor as part of HMR or release workflow.
+
+    ### Before HMR entry
+
+    1. Read this page, [Managing Engine Clusters](managing-engine-clusters.md), [Updating the Engine](updating-the-engine.md), and [Unit Testing](../Reference/Unit_Testing.md).
+    2. Confirm issue branch, matching issue PR, clean worktree, and exact deployed network mode.
+    3. Obtain explicit operator approval for cluster-wide non-HA HMR window. Keep operator available until production restore completes.
+    4. Confirm Cluster Management reports `Healthy`, Ready, expected active/desired membership, HMR inactive, no active operation, all members `Active / Active`, and full CloudNativePG readiness plus synchronous durability.
+    5. Confirm Kubernetes nodes Ready and production workloads healthy. Stop for maintenance, update, admission, database degradation, cordon, drain, or active operation.
+    6. Load Admin token with silent `read` as shown above. Use WebUI instead when only browser cookie exists.
+
+    Read-only Kubernetes preflight:
+
+    ```bash
+    sudo k3s kubectl \
+      --kubeconfig /etc/rancher/k3s/k3s.yaml \
+      get nodes -o wide
+
+    sudo k3s kubectl \
+      --kubeconfig /etc/rancher/k3s/k3s.yaml \
+      -n borealis get pods
     ```
 
-    Then compare source trees before committing:
+    ### Development loop
 
-    ```sh
-    diff -ru \
-      /opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src \
-      /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src
+    1. Enter HMR through authenticated scoped WebUI rebuild. Type `ENABLE HMR` interactively.
+    2. Edit runtime WebUI source with `apply_patch` for fast browser feedback.
+    3. Confirm dev pod mode, public HTTPS response, and connected `wss://<engine-fqdn>/__vite_hmr` socket.
+    4. Ask operator to accept live result before reproducing it in durable source.
+    5. Apply only accepted edits under durable `Data/Engine/.../src/`. Remove probes and temporary markers.
+    6. Compare runtime and durable trees. Investigate every unexpected difference; never use broad `rsync --delete` from mutable runtime tree.
+    7. For backend change, edit durable backend source and run authenticated full `deploy dev`; restart alone cannot compile changed Go source.
+    8. Run affected repository, unit, container, and docs lanes. Commit only durable source.
+
+    Runtime and durable paths:
+
+    ```text
+    Runtime WebUI: /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/
+    Durable WebUI: /opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src/
+    Durable API:   /opt/Borealis/Data/Engine/Containers/api-backend/
     ```
 
-    Expected result is no diff for accepted source files. If runtime has throwaway test markers, remove them from runtime before mirroring or revert them from staging before commit.
+    ### Production restoration gate
+
+    Exit HMR before creating or rolling release. Production restore returns cluster to saved pinned release; it does not publish local changes.
+
+    After `rebuild prod` completes, require HMR inactive, Healthy status, expected active/desired membership, no active operation, all nodes `Active / Active`, and full CloudNativePG readiness. If exit fails:
+
+    - Record operation ID, attempt, target, failed step, exact error, and latest event.
+    - Confirm healthy members still serve and whether failed target remains drained.
+    - Capture related Kubernetes Job and Pod logs.
+    - Do not submit Update All or second operation.
+    - Do not delete Jobs or audit records, clear drain, uncordon, patch images, patch generic templates, or pull source on standby nodes.
+
+    ### Qualification release checkpoint
+
+    Stable release publication is external public action. Stop for explicit operator approval and unused dotted-numeric tag after branch validation succeeds. Confirm clean worktree, local/remote branch SHA match, compatible release manifest, and successful PR checks:
+
+    ```bash
+    cd /opt/Borealis
+
+    git status --short --branch
+    git rev-parse HEAD
+    git rev-parse origin/issue/<descriptive-dashed-name>
+    jq . Data/Engine/release-manifest.json
+    gh pr checks <pr-number> --repo bunny-lab-io/Borealis
+    ```
+
+    After approval, publish exact committed SHA:
+
+    ```bash
+    QUALIFICATION_TAG='<operator-approved-tag>'
+    QUALIFICATION_SHA="$(git rev-parse HEAD)"
+
+    gh release create "${QUALIFICATION_TAG}" \
+      --repo bunny-lab-io/Borealis \
+      --target "${QUALIFICATION_SHA}" \
+      --title "${QUALIFICATION_TAG}" \
+      --notes 'Qualification release for issue #<number>. Includes <concise scope>.'
+    ```
+
+    Verify release is published, stable, and resolves exact commit:
+
+    ```bash
+    gh release view "${QUALIFICATION_TAG}" \
+      --repo bunny-lab-io/Borealis \
+      --json tagName,targetCommitish,isDraft,isPrerelease,publishedAt,url
+
+    git ls-remote origin "refs/tags/${QUALIFICATION_TAG}"
+    ```
+
+    Stop if catalog marks release incompatible. Inspect displayed reason and `release-manifest.json`; never bypass catalog or patch database state.
+
+    ### Rolling distribution
+
+    In **Admin > Cluster Management > Maintenance > Stable Engine Release**:
+
+    1. Reconfirm cluster Healthy, HMR inactive, and no active operation.
+    2. Select exact approved qualification tag and verify expected SHA.
+    3. Choose **Update All One at a Time**.
+    4. Type `UPDATE CLUSTER` and submit once.
+    5. Copy operation ID immediately and monitor Cluster Events to terminal state.
+
+    Controller owns backup, immutable target SHA verification, non-leader-first ordering, role transfer, drain and EndpointSlice withdrawal, local image staging, schema expansion, isolated candidate creation, candidate health/soak, promotion, active and role-aware health/soak, drain exit, schema finalize, and cluster baseline advancement. Never replace controller flow with node-to-node copies, host-by-host `git pull`, manual image import, or Deployment patch.
+
+    ### Failed rolling operation
+
+    Record operation ID, attempt, failed step, target node, error, latest event, related Job/Pod logs, drain state, and serving state on healthy members. Do not create second operation, delete failure evidence, clear drain, uncordon, patch workloads, or remove recovery artifacts.
+
+    Retry existing operation only after root cause is understood and operator approves. Retry resumes recorded checkpoint; it does not create replacement operation. API contract is:
+
+    ```http
+    POST /api/server/cluster/operations/<operation-id>/retry
+    ```
+
+    ```json
+    {
+      "confirmation": "RETRY OPERATION"
+    }
+    ```
+
+    Never retry terminal successful operation.
+
+    ### Post-rollout audit
+
+    Require Cluster Management to report Healthy and Ready, expected active/desired membership, HMR inactive, exact release tag/SHA baseline, every node desired/observed revision matching target, all nodes active without drain reason, all node probes passing, full CloudNativePG readiness and synchronous durability, and no active operation or pending admission.
+
+    Inspect Kubernetes state:
+
+    ```bash
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get deployments
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get daemonsets
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get jobs
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get endpointslices
+    ```
+
+    Expected state:
+
+    - Every K3s node Ready and uncordoned.
+    - Active node-scoped Deployments ready; candidate Deployments and generic templates at zero replicas.
+    - Generic templates record exact target revision and container-image map.
+    - WireGuard route DaemonSet ready on every node.
+    - API, WebUI, guacd, and PostgreSQL RW EndpointSlices contain no unexpected unready endpoints.
+    - No active Jobs or nonterminal node-action Pods.
+
+    Audit remote hosts through interactive prompt, repeating for every nonlocal Engine node:
+
+    ```bash
+    ssh -t nicole@<engine-node>
+    sudo -v
+    cd /opt/Borealis
+    git status --short --branch
+    git rev-parse HEAD
+    sudo systemctl is-active borealis-node-manager
+    sudo test -S /run/borealis/node-manager.sock && echo node-manager-socket-present
+    sudo cat /etc/borealis/node-manager-revision
+    exit
+    ```
+
+    Do not place password in command. Do not delete quarantine, recovery, audit, or temporary recovery artifacts without operator approval.
+
+    ### Final PR evidence
+
+    Before merge, record issue goal, files and behavior, qualification tag and exact SHA, rolling operation ID/attempt/order, backup and schema results, candidate and promotion results, continuity evidence, final cluster/K3s/CloudNativePG/Deployment/EndpointSlice/storage/host state, commands actually run, GitHub check result, remaining risks, and release synthesis instructions. Keep PR Draft until operator directs review. Never merge or publish release automatically.
 
     ### Validation
 
-    - Browser check: confirm the visible UI/UX change updates without full Engine redeploy.
+    - Browser check: visible UI/UX change updates without full Engine redeploy.
     - HMR socket check: browser Network tab shows `__vite_hmr` connected over `wss`.
     - Pod mode check: `sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/webui-frontend -- sh -lc 'test "$BOREALIS_WEBUI_MODE" = dev && echo webui-dev'`.
     - Repository check: `git diff -- Data/Engine/Containers/webui-frontend/data/web-interface/src`.
-    - Optional WebUI unit tests: `./Engine_Unit_Tests.sh --domain webui` only when runtime WebUI test dependencies exist.
+    - Run current portable lanes from [Unit Testing](../Reference/Unit_Testing.md); do not depend on stale runtime caches.

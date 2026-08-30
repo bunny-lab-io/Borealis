@@ -149,6 +149,8 @@ Cluster banner remains visible on every page until exit completes. Updates, memb
 
 Exit restores saved pinned production release, not local working tree. Local edits remain available for later commit/release. Controller first returns standby production nodes one at time; each stays drained until workload and role-aware health complete two minimum-ready soaks. It then moves roles away from HMR node, drains its development workloads, builds saved production revision as isolated candidate, probes and soaks candidate, promotes it, and repeats active plus role-aware health checks before clearing final drain. This ordering keeps production available while HMR node changes back. One-node cluster uses same candidate gates with expected maintenance interruption. Lost HMR node gets fenced before pinned production workloads recover on standby members through same sequence.
 
+Use [WebUI HMR Development](webui-hmr-development.md#clustered-hmr-preview) for manual clustered preview workflow, secure CLI authentication, durable-source mirroring, validation, production restore, and stable-release handoff. HMR never distributes mutable source to standby nodes; only Cluster Management stable-release update moves accepted immutable revision across all nodes.
+
 ## Cluster-Aware Updates
 
 Use Maintenance instead of `git pull` on clustered Engines. Stable Engine Release card shows published stable GitHub releases only. Drafts, prereleases, branch heads, nonnumeric tags, downgrades, and incompatible manifests cannot be selected.
