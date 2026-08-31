@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -239,6 +240,7 @@ func client(args []string) {
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
 		"PrepareApplicationRestore": true,
+		"ReconcileVIPPlacement":     true,
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"StageRevisionImages": true,
@@ -484,6 +486,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.setApplicationState(ctx, "active", "")
 	case "PrepareApplicationRestore":
 		return m.prepareApplicationRestore(ctx)
+	case "ReconcileVIPPlacement":
+		return m.reconcileVIPPlacement(ctx)
 	case "FenceEdge":
 		return m.setNodeLabel(ctx, "borealis.io/edge-eligible", "false")
 	case "RestoreEdgeEligibility":
@@ -961,6 +965,7 @@ func persistJoinedK3sRuntimeLabels(path, applicationState string) error {
 	eligible := strconv.FormatBool(applicationState == "active")
 	updates := map[string]string{
 		"borealis.io/application-state":         applicationState,
+		"borealis.io/control-plane-eligible":    eligible,
 		"borealis.io/edge-eligible":             eligible,
 		"borealis.io/scheduler-eligible":        eligible,
 		"borealis.io/postgres-primary-eligible": eligible,
@@ -980,11 +985,56 @@ func persistJoinedK3sRuntimeLabels(path, applicationState string) error {
 		}
 	}
 	for key := range updates {
+		if key == "borealis.io/control-plane-eligible" && seen[key] == 0 {
+			lines, err = insertJoinedK3sNodeLabel(lines, key, updates[key])
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if seen[key] != 1 {
 			return fmt.Errorf("joined K3s config must contain exactly one %s label", key)
 		}
 	}
 	return replaceSecureConfig(path, []byte(strings.Join(lines, "\n")))
+}
+
+func insertJoinedK3sNodeLabel(lines []string, key, value string) ([]string, error) {
+	nodeLabelIndex := -1
+	itemIndent := ""
+	insertIndex := len(lines)
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "node-label:" {
+			if nodeLabelIndex >= 0 {
+				return nil, errors.New("joined K3s config contains duplicate node-label blocks")
+			}
+			nodeLabelIndex = index
+			continue
+		}
+		if nodeLabelIndex < 0 || index <= nodeLabelIndex {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if len(indent) == 0 {
+			insertIndex = index
+			break
+		}
+		if strings.HasPrefix(trimmed, "- ") && itemIndent == "" {
+			itemIndent = indent
+		}
+	}
+	if nodeLabelIndex < 0 || itemIndent == "" {
+		return nil, errors.New("joined K3s config lacks valid node-label list")
+	}
+	line := itemIndent + "- " + key + "=" + value
+	lines = append(lines, "")
+	copy(lines[insertIndex+1:], lines[insertIndex:])
+	lines[insertIndex] = line
+	return lines, nil
 }
 
 func replaceSecureConfig(destination string, content []byte) error {
@@ -1095,6 +1145,65 @@ func (m *manager) setNodeLabel(ctx context.Context, key, value string) (map[stri
 		}
 	}
 	return map[string]any{"node_name": m.nodeName, "label": key, "value": value}, nil
+}
+
+func (m *manager) reconcileVIPPlacement(ctx context.Context) (map[string]any, error) {
+	raw, err := run(ctx, "", "k3s", "kubectl", "get", "nodes", "-l", "borealis.io/engine-node=true", "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	eligibility, err := controlVIPEligibilityByNode([]byte(raw))
+	if err != nil {
+		return nil, err
+	}
+	nodeNames := make([]string, 0, len(eligibility))
+	for nodeName := range eligibility {
+		nodeNames = append(nodeNames, nodeName)
+	}
+	sort.Strings(nodeNames)
+	for _, nodeName := range nodeNames {
+		if _, err := run(ctx, "", "k3s", "kubectl", "label", "node", nodeName, "borealis.io/control-plane-eligible="+eligibility[nodeName], "--overwrite"); err != nil {
+			return nil, err
+		}
+	}
+	selectorPatch := `{"spec":{"template":{"spec":{"nodeSelector":{"borealis.io/control-plane-eligible":"true"}}}}}`
+	if _, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "patch", "daemonset/kube-vip-borealis-control", "--type=merge", "-p", selectorPatch); err != nil {
+		return nil, err
+	}
+	if _, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/kube-vip-borealis-control", "--timeout=3m"); err != nil {
+		return nil, err
+	}
+	return map[string]any{"nodes": nodeNames, "control_vip_selector": "borealis.io/control-plane-eligible=true"}, nil
+}
+
+func controlVIPEligibilityByNode(raw []byte) (map[string]string, error) {
+	var payload struct {
+		Items []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("decode Engine node eligibility: %w", err)
+	}
+	if len(payload.Items) == 0 {
+		return nil, errors.New("no Engine nodes available for Control VIP placement")
+	}
+	result := make(map[string]string, len(payload.Items))
+	for _, item := range payload.Items {
+		nodeName := strings.TrimSpace(item.Metadata.Name)
+		if !nodePattern.MatchString(nodeName) || !strings.EqualFold(strings.TrimSpace(item.Metadata.Labels["borealis.io/engine-node"]), "true") {
+			return nil, fmt.Errorf("invalid Engine node identity %q", nodeName)
+		}
+		applicationState := strings.TrimSpace(item.Metadata.Labels["borealis.io/application-state"])
+		if applicationState != "active" && applicationState != "drained" {
+			return nil, fmt.Errorf("Engine node %s has invalid application state %q", nodeName, applicationState)
+		}
+		result[nodeName] = strconv.FormatBool(applicationState == "active")
+	}
+	return result, nil
 }
 
 func (m *manager) scaleNamedNodeWorkload(ctx context.Context, appName, replicas string) error {
@@ -1877,7 +1986,7 @@ func installJoinedK3sServer(nodeName, managementIP, serverURL, tokenFile, versio
 	if err != nil || net.ParseIP(controlVIP) == nil {
 		return errors.New("K3s server URL does not contain control-plane IPv4")
 	}
-	config := fmt.Sprintf("server: %q\ntoken-file: %q\nnode-name: %q\nnode-ip: %q\ntls-san:\n  - %q\ndisable:\n  - traefik\n  - servicelb\nsecrets-encryption: true\nembedded-registry: true\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n", serverURL, tokenFile, nodeName, managementIP, controlVIP)
+	config := fmt.Sprintf("server: %q\ntoken-file: %q\nnode-name: %q\nnode-ip: %q\ntls-san:\n  - %q\ndisable:\n  - traefik\n  - servicelb\nsecrets-encryption: true\nembedded-registry: true\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/control-plane-eligible=false\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n", serverURL, tokenFile, nodeName, managementIP, controlVIP)
 	if err := os.WriteFile(k3sJoinConfigPath, []byte(config), 0o600); err != nil {
 		return err
 	}

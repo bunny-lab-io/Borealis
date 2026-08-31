@@ -2843,6 +2843,7 @@ label_k3s_nodes() {
     if ! cluster_mode_enabled; then
       k3s_kubectl label "${node_ref}" \
         borealis.io/application-state=active \
+        borealis.io/control-plane-eligible=true \
         borealis.io/edge-eligible=true \
         borealis.io/scheduler-eligible=true \
         borealis.io/postgres-primary-eligible=true \

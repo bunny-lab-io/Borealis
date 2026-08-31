@@ -9,7 +9,7 @@ Use this workflow when testing Engine WebUI changes on a K3s-based Borealis Engi
 - Treat `Engine/Services/webui-frontend/data/web-interface/` as disposable runtime source for live HMR sessions.
 
 !!! danger "Cluster-Wide Node Isolation"
-    On clustered Engine, every dev deploy and WebUI dev rebuild requires exclusive Cluster-Wide Node Isolation operation. Admin must type legacy confirmation phrase `ENABLE HMR`. Borealis drains application workloads on other nodes and moves application traffic onto isolated node, so application HA remains unavailable until isolation is disabled. Infrastructure quorum remains active. See [Managing Engine Clusters](managing-engine-clusters.md).
+    On clustered Engine, every dev deploy and WebUI dev rebuild requires exclusive Cluster-Wide Node Isolation operation. Admin must type legacy confirmation phrase `ENABLE HMR`. Borealis drains application workloads on other nodes and moves Control VIP, Edge VIP, and application traffic onto isolated node, so application HA remains unavailable until isolation is disabled. K3s and embedded-etcd quorum remain active. See [Managing Engine Clusters](managing-engine-clusters.md).
 
 !!! bug "Clustered HMR remains manual"
     Clustered HMR is controlled preview workflow, not HA development or release distribution. Network loss of active isolated node can still leave public application unavailable until target returns or operator completes recovery. Keep operator available throughout isolation window, disable isolation before any rolling update, and follow [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466) for automated lost-target recovery work.
@@ -87,7 +87,7 @@ Choose Engine node holding development checkout and runtime source as isolated n
 6. Open **Cluster Events**, record operation ID, and wait for **Cluster-Wide Node Isolation Enabled** to succeed.
 7. Confirm cluster-wide isolation banner names expected node and accepted Cluster Event targets same node before running development rebuild. **Isolated Node** selector becomes disabled and shows only current target until isolation is fully disabled.
 
-WebUI operation isolates cluster and moves application traffic. It does not copy branch source, distribute code to standby nodes, or start Vite development workload.
+WebUI operation isolates cluster, fences both VIP roles from drained standbys, and moves application traffic to selected node. It does not copy branch source, distribute code to standby nodes, or start Vite development workload.
 
 ### Start Development Workload On Isolated Node
 

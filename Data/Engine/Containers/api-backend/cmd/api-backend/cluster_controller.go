@@ -916,7 +916,7 @@ func (c *clusterController) reconcileLostHMRNode(ctx context.Context, runner *ku
 			return true, err
 		}
 	}
-	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, targetName); err != nil {
+	if err := runner.waitVIPAndWireGuardOwnersAwayFrom(ctx, targetName); err != nil {
 		return true, err
 	}
 	now := c.now().UTC().Unix()
@@ -1007,6 +1007,7 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 		return append(base,
 			clusterControllerStep{Name: "pre_change_snapshot"},
 			clusterControllerStep{Name: "hmr_stage_pinned_release", NodeID: operation.TargetNodeID},
+			clusterControllerStep{Name: "hmr_reconcile_vip_placement", NodeID: operation.TargetNodeID},
 			clusterControllerStep{Name: "hmr_move_roles", NodeID: operation.TargetNodeID},
 			clusterControllerStep{Name: "hmr_drain_standby", NodeID: operation.TargetNodeID},
 			clusterControllerStep{Name: "hmr_activate_target", NodeID: operation.TargetNodeID},
@@ -1021,6 +1022,7 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 			return nil, errors.New("saved HMR target is not an active cluster node")
 		}
 		steps := append([]clusterControllerStep{}, base...)
+		steps = append(steps, clusterControllerStep{Name: "hmr_reconcile_vip_placement", NodeID: targetID})
 		standbyID := ""
 		for _, node := range nodes {
 			if node.ID != targetID {
@@ -1062,9 +1064,10 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 	case "node_maintenance":
 		action := cleanText(operation.Payload["action"])
 		if action == "enter" {
-			return append(base, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":transfer_roles", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":enter_drain", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":wait_endpoint_withdrawal", NodeID: operation.TargetNodeID}), nil
+			return append(base, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":reconcile_vip_placement", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":transfer_roles", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":enter_drain", NodeID: operation.TargetNodeID}, clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":wait_endpoint_withdrawal", NodeID: operation.TargetNodeID}), nil
 		}
 		return append(base,
+			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":reconcile_vip_placement", NodeID: operation.TargetNodeID},
 			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":prepare_restore", NodeID: operation.TargetNodeID},
 			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":inspect_health", NodeID: operation.TargetNodeID},
 			clusterControllerStep{Name: "node:" + operation.TargetNodeID + ":minimum_ready_soak", NodeID: operation.TargetNodeID},
@@ -1809,6 +1812,13 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 	if step.Name == "apply_membership" {
 		return r.recordClusterIntent(ctx, operation, step)
 	}
+	if step.Name == "hmr_reconcile_vip_placement" {
+		node := clusterNodeByID(nodes, step.NodeID)
+		if node.ID == "" {
+			return errors.New("HMR VIP reconciliation target disappeared")
+		}
+		return r.nodeActionJob(ctx, operation, step, node, "ReconcileVIPPlacement")
+	}
 	if step.Name == "hmr_move_roles" {
 		node := clusterNodeByID(nodes, step.NodeID)
 		if err := r.ensurePostgresPrimaryOnNode(ctx, node.Name); err != nil {
@@ -1823,7 +1833,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 				return err
 			}
 		}
-		return r.waitEdgeAndWireGuardOwner(ctx, node.Name)
+		return r.waitVIPAndWireGuardOwner(ctx, node.Name)
 	}
 	if step.Name == "hmr_move_roles_to_standby" {
 		targetID := firstText(operation.TargetNodeID, cleanText(operation.Payload["hmr_node_id"]))
@@ -1845,9 +1855,9 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return err
 		}
 		// PostgreSQL is deliberately pinned to the first restored standby, but
-		// kube-vip may elect either eligible non-target node for edge traffic.
+		// kube-vip may elect either eligible non-target node for each VIP.
 		// HMR exit only needs production roles to leave the target safely.
-		return r.waitEdgeAndWireGuardOwnerAwayFrom(ctx, target.Name)
+		return r.waitVIPAndWireGuardOwnersAwayFrom(ctx, target.Name)
 	}
 	if step.Name == "hmr_fence_target_roles" {
 		target := clusterNodeByID(nodes, step.NodeID)
@@ -1864,7 +1874,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 				state = "active"
 				edge = "true"
 			}
-			if err := r.patchNodeLabels(ctx, node.Name, map[string]string{"borealis.io/application-state": state, "borealis.io/edge-eligible": edge, "borealis.io/hmr-target": strconv.FormatBool(node.ID == step.NodeID)}); err != nil {
+			if err := r.patchNodeLabels(ctx, node.Name, map[string]string{"borealis.io/application-state": state, "borealis.io/control-plane-eligible": edge, "borealis.io/edge-eligible": edge, "borealis.io/hmr-target": strconv.FormatBool(node.ID == step.NodeID)}); err != nil {
 				return err
 			}
 			if node.ID != step.NodeID {
@@ -1897,7 +1907,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			}
 			return r.minimumReadySoak(ctx, node.Name)
 		}
-		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{"borealis.io/application-state": "active", "borealis.io/edge-eligible": "true", "borealis.io/scheduler-eligible": "true", "borealis.io/postgres-primary-eligible": "true", "borealis.io/hmr-target": "true"}); err != nil {
+		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{"borealis.io/application-state": "active", "borealis.io/control-plane-eligible": "true", "borealis.io/edge-eligible": "true", "borealis.io/scheduler-eligible": "true", "borealis.io/postgres-primary-eligible": "true", "borealis.io/hmr-target": "true"}); err != nil {
 			return err
 		}
 		return r.nodeActionJob(ctx, operation, step, node, "ExitApplicationDrain")
@@ -1976,6 +1986,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			}
 		}
 		switch action {
+		case "reconcile_vip_placement":
+			return r.nodeActionJob(ctx, operation, step, node, "ReconcileVIPPlacement")
 		case "transfer_roles":
 			if operation.Kind == "node_remove" {
 				return r.transferRemovalRolesAway(ctx, operation, node, nodes)
@@ -2040,7 +2052,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 				return err
 			}
 			if len(nodes) == 1 {
-				return r.waitEdgeAndWireGuardOwner(ctx, node.Name)
+				return r.waitVIPAndWireGuardOwner(ctx, node.Name)
 			}
 			return nil
 		case "inspect_role_health":
@@ -2137,6 +2149,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{
 			"borealis.io/application-state":         "drained",
+			"borealis.io/control-plane-eligible":    "false",
 			"borealis.io/edge-eligible":             "false",
 			"borealis.io/scheduler-eligible":        "false",
 			"borealis.io/postgres-primary-eligible": "false",
@@ -2211,6 +2224,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 			return err
 		}
 		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{
+			"borealis.io/control-plane-eligible":    "true",
 			"borealis.io/edge-eligible":             "true",
 			"borealis.io/scheduler-eligible":        "true",
 			"borealis.io/postgres-primary-eligible": "true",
@@ -2235,6 +2249,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 		if activationErr != nil {
 			_ = r.patchNodeLabels(ctx, node.Name, map[string]string{
+				"borealis.io/control-plane-eligible":    "false",
 				"borealis.io/edge-eligible":             "false",
 				"borealis.io/scheduler-eligible":        "false",
 				"borealis.io/postgres-primary-eligible": "false",
@@ -2542,7 +2557,7 @@ func (r *kubernetesClusterStepRunner) transferRolesAway(ctx context.Context, tar
 	if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
 		return err
 	}
-	return r.waitEdgeAndWireGuardOwnerAwayFrom(ctx, target.Name)
+	return r.waitVIPAndWireGuardOwnersAwayFrom(ctx, target.Name)
 }
 
 func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Context, operation clusterControllerOperation, target clusterControllerNode, nodes []clusterControllerNode) error {
@@ -2569,12 +2584,13 @@ func (r *kubernetesClusterStepRunner) transferRemovalRolesAway(ctx context.Conte
 	if err := r.setNodeRoleEligibility(ctx, target.Name, false); err != nil {
 		return err
 	}
-	return r.waitEdgeAndWireGuardOwnerAwayFrom(ctx, target.Name)
+	return r.waitVIPAndWireGuardOwnersAwayFrom(ctx, target.Name)
 }
 
 func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context, nodeName string, eligible bool) error {
 	value := strconv.FormatBool(eligible)
 	labels := map[string]string{
+		"borealis.io/control-plane-eligible":    value,
 		"borealis.io/edge-eligible":             value,
 		"borealis.io/scheduler-eligible":        value,
 		"borealis.io/postgres-primary-eligible": value,
@@ -2582,9 +2598,9 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 	if err := r.patchNodeLabels(ctx, nodeName, labels); err != nil {
 		return err
 	}
-	// Controller remains available on every active node. Its owner-aware
-	// readiness and interface gate follow actual edge VIP lease ownership.
-	// Eligibility changes happen before edge ownership moves. Keep the
+	// WireGuard controller remains available on every active node. Its
+	// owner-aware readiness and interface gate follow Edge VIP ownership.
+	// Eligibility changes happen before VIP ownership moves. Keep the
 	// controller present without requiring standby readiness from the prior
 	// release; transfer callers prove the elected owner's readiness afterward.
 	if err := r.scaleNodeWorkloadWithReadiness(ctx, nodeName, "wireguard-tunnel", true, false); err != nil {
@@ -2592,6 +2608,7 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 			return err
 		}
 		rollbackLabels := map[string]string{
+			"borealis.io/control-plane-eligible":    "false",
 			"borealis.io/edge-eligible":             "false",
 			"borealis.io/scheduler-eligible":        "false",
 			"borealis.io/postgres-primary-eligible": "false",
@@ -2602,50 +2619,47 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 	return nil
 }
 
-func (r *kubernetesClusterStepRunner) waitEdgeAndWireGuardOwner(ctx context.Context, nodeName string) error {
+func (r *kubernetesClusterStepRunner) waitVIPAndWireGuardOwner(ctx context.Context, nodeName string) error {
 	if !clusterControllerNodeRegex.MatchString(nodeName) {
-		return errors.New("invalid edge owner node")
+		return errors.New("invalid VIP owner node")
 	}
-	path := "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip"
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		var lease map[string]any
-		if err := r.kube.getJSON(ctx, path, &lease); err == nil && cleanText(nestedMap(lease, "spec")["holderIdentity"]) == nodeName {
+		controlOwner, controlErr := r.kubernetesLeaseOwner(ctx, "borealis-control-vip")
+		edgeOwner, edgeErr := r.kubernetesLeaseOwner(ctx, "borealis-edge-vip")
+		if controlErr == nil && edgeErr == nil && controlOwner == nodeName && edgeOwner == nodeName {
 			return r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", true)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("edge VIP and WireGuard ownership did not move to %s: %w", nodeName, ctx.Err())
+			return fmt.Errorf("control VIP, edge VIP, and WireGuard ownership did not move to %s: %w", nodeName, ctx.Err())
 		case <-ticker.C:
 		}
 	}
 }
 
-func (r *kubernetesClusterStepRunner) waitEdgeAndWireGuardOwnerAwayFrom(ctx context.Context, targetNodeName string) error {
+func (r *kubernetesClusterStepRunner) waitVIPAndWireGuardOwnersAwayFrom(ctx context.Context, targetNodeName string) error {
 	if !clusterControllerNodeRegex.MatchString(targetNodeName) {
-		return errors.New("invalid former edge owner node")
+		return errors.New("invalid former VIP owner node")
 	}
-	path := "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip"
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		var lease map[string]any
-		if err := r.kube.getJSON(ctx, path, &lease); err == nil {
-			owner := cleanText(nestedMap(lease, "spec")["holderIdentity"])
-			if owner != targetNodeName && clusterControllerNodeRegex.MatchString(owner) {
-				ready, readyErr := r.nodeWorkloadReady(ctx, owner, "wireguard-tunnel")
-				if readyErr != nil {
-					return readyErr
-				}
-				if ready {
-					return nil
-				}
+		controlOwner, controlErr := r.kubernetesLeaseOwner(ctx, "borealis-control-vip")
+		edgeOwner, edgeErr := r.kubernetesLeaseOwner(ctx, "borealis-edge-vip")
+		if controlErr == nil && edgeErr == nil && controlOwner != targetNodeName && edgeOwner != targetNodeName && clusterControllerNodeRegex.MatchString(controlOwner) && clusterControllerNodeRegex.MatchString(edgeOwner) {
+			ready, readyErr := r.nodeWorkloadReady(ctx, edgeOwner, "wireguard-tunnel")
+			if readyErr != nil {
+				return readyErr
+			}
+			if ready {
+				return nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("edge VIP and WireGuard ownership did not move away from %s: %w", targetNodeName, ctx.Err())
+			return fmt.Errorf("control VIP, edge VIP, and WireGuard ownership did not move away from %s: %w", targetNodeName, ctx.Err())
 		case <-ticker.C:
 		}
 	}

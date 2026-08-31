@@ -550,6 +550,10 @@ def validate_kube_vip_contract() -> None:
             "probe_port": 2112,
             "readiness_host": "${BOREALIS_CONTROL_PLANE_VIP}",
             "readiness_port": 6443,
+            "node_selector": {
+                "borealis.io/engine-node": "true",
+                "borealis.io/control-plane-eligible": "true",
+            },
         },
         "kube-vip-borealis-edge": {
             "address": "${BOREALIS_EDGE_VIP}",
@@ -558,6 +562,10 @@ def validate_kube_vip_contract() -> None:
             "probe_port": 2113,
             "readiness_host": "${BOREALIS_EDGE_VIP}",
             "readiness_port": 443,
+            "node_selector": {
+                "borealis.io/engine-node": "true",
+                "borealis.io/edge-eligible": "true",
+            },
         },
     }
     if set(daemonsets) != set(expected):
@@ -568,6 +576,8 @@ def validate_kube_vip_contract() -> None:
         if spec.get("minReadySeconds") != 5:
             fail(f"{name} must retain five-second minimum readiness")
         pod = (((spec.get("template") or {}).get("spec")) or {})
+        if pod.get("nodeSelector") != contract["node_selector"]:
+            fail(f"{name} must use explicit VIP eligibility node selector")
         if pod.get("serviceAccountName") != "kube-vip-borealis" or pod.get("automountServiceAccountToken") is not True:
             fail(f"{name} must use dedicated kube-vip ServiceAccount")
         containers = pod.get("containers") or []
