@@ -45,7 +45,7 @@ spec:
       hostNetwork: true
       terminationGracePeriodSeconds: 20
       securityContext: {seccompProfile: {type: RuntimeDefault}}
-      nodeSelector: {borealis.io/engine-node: "true"}
+      nodeSelector: {borealis.io/engine-node: "true", borealis.io/control-plane-eligible: "true"}
       containers:
         - name: kube-vip
           image: ghcr.io/kube-vip/kube-vip@sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410

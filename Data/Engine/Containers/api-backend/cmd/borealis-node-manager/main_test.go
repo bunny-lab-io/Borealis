@@ -177,6 +177,74 @@ func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	}
 }
 
+func TestControlVIPEligibilityFollowsApplicationMaintenanceState(t *testing.T) {
+	eligibility, err := controlVIPEligibilityByNode([]byte(`{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}},{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"drained"}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eligibility["engine-1"] != "true" || eligibility["engine-2"] != "false" {
+		t.Fatalf("unexpected Control VIP eligibility: %#v", eligibility)
+	}
+	for _, raw := range []string{
+		`{"items":[]}`,
+		`{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"unknown"}}}]}`,
+		`{"items":[{"metadata":{"name":"invalid_name","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}}]}`,
+	} {
+		if _, err := controlVIPEligibilityByNode([]byte(raw)); err == nil {
+			t.Fatalf("unsafe Control VIP eligibility payload accepted: %s", raw)
+		}
+	}
+}
+
+func TestReconcileVIPPlacementLabelsNodesBeforeApplyingControlSelector(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "k3s.log")
+	k3s := filepath.Join(tempDir, "k3s")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$BOREALIS_TEST_K3S_LOG"
+case "$*" in
+  "kubectl get nodes -l borealis.io/engine-node=true -o json")
+    printf '%s\n' '{"items":[{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"drained"}}},{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}}]}'
+    ;;
+  "kubectl label node engine-1 borealis.io/control-plane-eligible=true --overwrite"|"kubectl label node engine-2 borealis.io/control-plane-eligible=false --overwrite")
+    ;;
+  "kubectl -n kube-system patch daemonset/kube-vip-borealis-control --type=merge -p "*)
+    ;;
+  "kubectl -n kube-system rollout status daemonset/kube-vip-borealis-control --timeout=3m")
+    ;;
+  *)
+    printf 'unexpected k3s arguments: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(k3s, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BOREALIS_TEST_K3S_LOG", logPath)
+	manager := &manager{nodeName: "engine-1"}
+	result, err := manager.reconcileVIPPlacement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["control_vip_selector"] != "borealis.io/control-plane-eligible=true" {
+		t.Fatalf("unexpected VIP reconciliation result: %#v", result)
+	}
+	rawLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(rawLog)
+	activeLabel := strings.Index(log, "kubectl label node engine-1 borealis.io/control-plane-eligible=true --overwrite")
+	drainedLabel := strings.Index(log, "kubectl label node engine-2 borealis.io/control-plane-eligible=false --overwrite")
+	selectorPatch := strings.Index(log, "kubectl -n kube-system patch daemonset/kube-vip-borealis-control")
+	rolloutWait := strings.Index(log, "kubectl -n kube-system rollout status daemonset/kube-vip-borealis-control --timeout=3m")
+	if activeLabel < 0 || drainedLabel < 0 || selectorPatch < 0 || rolloutWait < 0 || activeLabel > selectorPatch || drainedLabel > selectorPatch || selectorPatch > rolloutWait {
+		t.Fatalf("unsafe Control VIP selector migration order: %s", log)
+	}
+}
+
 func TestPrepareApplicationRestoreIsRetrySafeAfterActivation(t *testing.T) {
 	tempDir := t.TempDir()
 	k3s := filepath.Join(tempDir, "k3s")
@@ -414,7 +482,7 @@ func TestK3sRegistryMirrorsCoverBorealisAndPinnedDependencies(t *testing.T) {
 
 func TestJoinedK3sRuntimeLabelsSurviveRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "20-borealis-cluster-join.yaml")
-	initial := "server: \"https://192.168.3.249:6443\"\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n"
+	initial := "server: \"https://192.168.3.249:6443\"\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/control-plane-eligible=false\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n"
 	if err := os.WriteFile(path, []byte(initial), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -427,6 +495,7 @@ func TestJoinedK3sRuntimeLabelsSurviveRestart(t *testing.T) {
 	}
 	for _, label := range []string{
 		"borealis.io/application-state=active",
+		"borealis.io/control-plane-eligible=true",
 		"borealis.io/edge-eligible=true",
 		"borealis.io/scheduler-eligible=true",
 		"borealis.io/postgres-primary-eligible=true",
@@ -449,7 +518,7 @@ func TestJoinedK3sRuntimeLabelsSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(drained), "borealis.io/application-state=drained") || strings.Count(string(drained), "-eligible=false") != 3 {
+	if !strings.Contains(string(drained), "borealis.io/application-state=drained") || strings.Count(string(drained), "-eligible=false") != 4 {
 		t.Fatalf("drained joined config is unsafe: %s", string(drained))
 	}
 }
@@ -467,6 +536,28 @@ func TestJoinedK3sRuntimeLabelsRejectMalformedConfig(t *testing.T) {
 	}
 	if err := persistJoinedK3sRuntimeLabels(path, "unknown"); err == nil {
 		t.Fatal("invalid application state was accepted")
+	}
+}
+
+func TestJoinedK3sRuntimeLabelsMigratesMissingControlVIPEligibility(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "20-borealis-cluster-join.yaml")
+	legacy := "server: \"https://192.0.2.10:6443\"\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=active\n  - borealis.io/edge-eligible=true\n  - borealis.io/scheduler-eligible=true\n  - borealis.io/postgres-primary-eligible=true\nnode-taint:\n  - example.invalid/test=true:NoSchedule\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistJoinedK3sRuntimeLabels(path, "drained"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Count(text, "borealis.io/control-plane-eligible=false") != 1 {
+		t.Fatalf("legacy joined config did not receive one safe Control VIP label: %s", text)
+	}
+	if strings.Index(text, "borealis.io/control-plane-eligible=false") > strings.Index(text, "node-taint:") {
+		t.Fatalf("Control VIP label escaped node-label block: %s", text)
 	}
 }
 

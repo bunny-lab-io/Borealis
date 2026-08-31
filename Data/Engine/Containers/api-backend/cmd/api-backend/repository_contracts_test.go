@@ -198,7 +198,7 @@ func TestHMRLostTargetRecoveryFencesRejoinedTargetBeforeCommit(t *testing.T) {
 		`"EnterApplicationDrain"`,
 		"runner.setNodeRoleEligibility(ctx, targetName, false)",
 		"runner.waitNodeEndpointsWithdrawn(ctx, targetName)",
-		"runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, targetName)",
+		"runner.waitVIPAndWireGuardOwnersAwayFrom(ctx, targetName)",
 		"conn.BeginTx",
 	)
 }

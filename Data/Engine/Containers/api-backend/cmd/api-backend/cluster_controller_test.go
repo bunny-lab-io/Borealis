@@ -2807,7 +2807,8 @@ func TestHMRExitRestoresStandbyBeforeClearingDrain(t *testing.T) {
 	}
 	targetPositions := nodeStepPositions(steps, targetID)
 	assertStepOrder(t, targetPositions, []string{"enter_drain", "wait_endpoint_withdrawal", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
-	if positions["exit_drain"] >= allPositions["hmr_move_roles_to_standby"] ||
+	if allPositions["hmr_reconcile_vip_placement"] >= positions["prepare_restore"] ||
+		positions["exit_drain"] >= allPositions["hmr_move_roles_to_standby"] ||
 		allPositions["hmr_move_roles_to_standby"] >= targetPositions["enter_drain"] ||
 		targetPositions["wait_endpoint_withdrawal"] >= allPositions["hmr_restore_pinned_release"] ||
 		allPositions["hmr_restore_pinned_release"] >= allPositions["hmr_inspect_candidate"] ||
@@ -2861,7 +2862,34 @@ func TestMaintenanceExitProvesHealthBeforeClearingDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	positions := nodeStepPositions(steps, nodeID)
-	assertStepOrder(t, positions, []string{"prepare_restore", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
+	assertStepOrder(t, positions, []string{"reconcile_vip_placement", "prepare_restore", "inspect_health", "minimum_ready_soak", "restore_roles", "inspect_role_health", "minimum_role_soak", "exit_drain"})
+}
+
+func TestMaintenanceAndHMRReconcileVIPPlacementBeforeRoleTransfer(t *testing.T) {
+	targetID := "11111111-1111-4111-8111-111111111111"
+	nodes := []clusterControllerNode{
+		{ID: targetID, Name: "engine-1"},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2"},
+		{ID: "33333333-3333-4333-8333-333333333333", Name: "engine-3"},
+	}
+	maintenance, err := clusterOperationSteps(clusterControllerOperation{Kind: "node_maintenance", TargetNodeID: targetID, Payload: map[string]any{"action": "enter"}}, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenancePositions := nodeStepPositions(maintenance, targetID)
+	assertStepOrder(t, maintenancePositions, []string{"reconcile_vip_placement", "transfer_roles", "enter_drain"})
+
+	hmr, err := clusterOperationSteps(clusterControllerOperation{Kind: "hmr_start", TargetNodeID: targetID}, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hmrPositions := map[string]int{}
+	for index, step := range hmr {
+		hmrPositions[step.Name] = index
+	}
+	if hmrPositions["hmr_reconcile_vip_placement"] >= hmrPositions["hmr_move_roles"] || hmrPositions["hmr_move_roles"] >= hmrPositions["hmr_drain_standby"] {
+		t.Fatalf("unsafe HMR VIP placement order: %#v", hmrPositions)
+	}
 }
 
 func nodeStepPositions(steps []clusterControllerStep, nodeID string) map[string]int {
@@ -2958,9 +2986,12 @@ func TestWaitNodeEndpointsWithdrawnIgnoresResidentInfrastructureEndpoints(t *tes
 	}
 }
 
-func TestEdgeRoleTransferWaitsForLeaseAndWireGuardReadiness(t *testing.T) {
+func TestVIPRoleTransferWaitsForBothLeasesAndWireGuardReadiness(t *testing.T) {
+	controlOwner := "engine-1"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-control-vip":
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": controlOwner}})
 		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip":
 			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-2"}})
 		case "/apis/apps/v1/namespaces/borealis/deployments":
@@ -2984,10 +3015,16 @@ func TestEdgeRoleTransferWaitsForLeaseAndWireGuardReadiness(t *testing.T) {
 	}))
 	defer server.Close()
 	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
+	blockedCtx, blockedCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer blockedCancel()
+	if err := runner.waitVIPAndWireGuardOwner(blockedCtx, "engine-2"); err == nil {
+		t.Fatal("VIP role transfer accepted stale Control VIP owner")
+	}
+	controlOwner = "engine-2"
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := runner.waitEdgeAndWireGuardOwner(ctx, "engine-2"); err != nil {
-		t.Fatalf("edge/WireGuard ownership did not converge: %v", err)
+	if err := runner.waitVIPAndWireGuardOwner(ctx, "engine-2"); err != nil {
+		t.Fatalf("Control VIP, Edge VIP, and WireGuard ownership did not converge: %v", err)
 	}
 }
 
@@ -2995,6 +3032,8 @@ func TestHMRExitRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.
 	readyReplicas := int64(1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-control-vip":
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-2"}})
 		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip":
 			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-3"}})
 		case "/apis/apps/v1/namespaces/borealis/deployments":
@@ -3014,22 +3053,30 @@ func TestHMRExitRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.
 	runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis"}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(ctx, "engine-1"); err != nil {
-		t.Fatalf("HMR exit rejected healthy non-target edge/WireGuard owner: %v", err)
+	if err := runner.waitVIPAndWireGuardOwnersAwayFrom(ctx, "engine-1"); err != nil {
+		t.Fatalf("HMR exit rejected healthy non-target VIP/WireGuard owners: %v", err)
 	}
 	readyReplicas = 0
 	unreadyCtx, unreadyCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer unreadyCancel()
-	if err := runner.waitEdgeAndWireGuardOwnerAwayFrom(unreadyCtx, "engine-1"); err == nil {
-		t.Fatal("HMR exit accepted unready non-target edge/WireGuard owner")
+	if err := runner.waitVIPAndWireGuardOwnersAwayFrom(unreadyCtx, "engine-1"); err == nil {
+		t.Fatal("HMR exit accepted unready non-target VIP/WireGuard owners")
 	}
 }
 
 func TestRoleEligibilityDoesNotWaitForLegacyStandbyWireGuardReadiness(t *testing.T) {
 	readinessGets := 0
+	patchedLabels := map[string]any{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/nodes/engine-1":
+			if r.Method == http.MethodPatch {
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				patchedLabels = nestedMap(nestedMap(payload, "metadata"), "labels")
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-1"}})
 		case "/apis/apps/v1/namespaces/borealis/deployments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "wireguard-tunnel-engine-1"}}}})
@@ -3050,7 +3097,10 @@ func TestRoleEligibilityDoesNotWaitForLegacyStandbyWireGuardReadiness(t *testing
 		t.Fatalf("legacy standby WireGuard readiness blocked role fencing: %v", err)
 	}
 	if readinessGets != 0 {
-		t.Fatalf("role fencing performed %d readiness GETs before edge ownership moved", readinessGets)
+		t.Fatalf("role fencing performed %d readiness GETs before VIP ownership moved", readinessGets)
+	}
+	if cleanText(patchedLabels["borealis.io/control-plane-eligible"]) != "false" || cleanText(patchedLabels["borealis.io/edge-eligible"]) != "false" {
+		t.Fatalf("role fencing did not withdraw both VIP eligibility labels: %#v", patchedLabels)
 	}
 }
 
