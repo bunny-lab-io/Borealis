@@ -24,18 +24,30 @@ func testConfig(t *testing.T) Config {
 	}
 	configPath := filepath.Join(serviceRoot, "config", "borealis-wg.conf")
 	keyPath := filepath.Join(serviceRoot, "secrets", "server_private.key")
+	publicKeyPath := filepath.Join(serviceRoot, "secrets", "server_public.key")
+	privateKey, publicKey, err := generateServerKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(configPath, []byte("[Interface]\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyPath, []byte("private\n"), 0o640); err != nil {
+	if err := os.WriteFile(keyPath, []byte(privateKey+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(publicKeyPath, []byte(publicKey+"\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	return Config{
-		ServiceRoot:  serviceRoot,
-		SocketPath:   filepath.Join(serviceRoot, "run", "control.sock"),
-		LogDirectory: filepath.Join(serviceRoot, "logs"),
-		EnginePrefix: "10.255.0.1/32",
-		PeerNetwork:  "10.255.0.0/16",
+		ServiceRoot:   serviceRoot,
+		SocketPath:    filepath.Join(serviceRoot, "run", "control.sock"),
+		LogDirectory:  filepath.Join(serviceRoot, "logs"),
+		EnginePrefix:  "10.255.0.1/32",
+		PeerNetwork:   "10.255.0.0/16",
+		Interface:     "borealis-wg",
+		ListenPort:    30000,
+		MTU:           1420,
+		CommandRunner: func(context.Context, []string, int, Config) Result { return Result{} },
 	}
 }
 
@@ -134,6 +146,121 @@ func TestHandleRequestSupportsPingAndRejectsUnsupportedCommands(t *testing.T) {
 	}
 	if result.ReturnCode != 2 || !strings.Contains(result.Stderr, "unsupported command") {
 		t.Fatalf("unexpected unsupported result %#v", result)
+	}
+}
+
+func TestBootstrapRuntimeCreatesIdentityAndCompleteListener(t *testing.T) {
+	cfg := testConfig(t)
+	for _, path := range []string{
+		filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf"),
+		filepath.Join(cfg.ServiceRoot, "secrets", "server_private.key"),
+		filepath.Join(cfg.ServiceRoot, "secrets", "server_public.key"),
+	} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commands := []string{}
+	cfg.CommandRunner = func(_ context.Context, args []string, _ int, _ Config) Result {
+		commands = append(commands, strings.Join(args, " "))
+		if len(args) >= 2 && args[0] == "iptables" && (args[1] == "-N" || args[1] == "-C") {
+			return Result{ReturnCode: 1, Stderr: "not present"}
+		}
+		return Result{}
+	}
+
+	if err := bootstrapRuntime(context.Background(), cfg, false); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(cfg.ServiceRoot, "secrets", "server_private.key"),
+		filepath.Join(cfg.ServiceRoot, "secrets", "server_public.key"),
+		filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf"),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o640 {
+			t.Fatalf("%s mode is %o, want 640", path, info.Mode().Perm())
+		}
+	}
+	configRaw, err := os.ReadFile(filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(configRaw)
+	for _, marker := range []string{"ListenPort = 30000", "Address = 10.255.0.1/32", "MTU = 1420"} {
+		if !strings.Contains(config, marker) {
+			t.Fatalf("base config missing %q: %s", marker, config)
+		}
+	}
+	required := []string{
+		"wg-quick up " + filepath.Join(cfg.ServiceRoot, "config", "borealis-wg.conf"),
+		"ip address replace 10.255.0.1/32 dev borealis-wg",
+		"ip route replace 10.255.0.0/16 dev borealis-wg",
+		"ip link set up dev borealis-wg",
+		"iptables -F BOREALIS-WG-INPUT",
+		"iptables -F BOREALIS-WG-FWD",
+		"iptables -I INPUT 1 -i borealis-wg -j BOREALIS-WG-INPUT",
+		"iptables -I FORWARD 1 -i borealis-wg -j BOREALIS-WG-FWD",
+	}
+	for _, expected := range required {
+		found := false
+		for _, command := range commands {
+			if command == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("bootstrap command %q missing from %#v", expected, commands)
+		}
+	}
+}
+
+func TestReconcileRuntimeLeavesCleanStandbyUnconfigured(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EdgeVIP = "10.10.10.10"
+	cfg.OwnsEdgeVIP = func(string) bool { return false }
+	commands := []string{}
+	cfg.CommandRunner = func(_ context.Context, args []string, _ int, _ Config) Result {
+		commands = append(commands, strings.Join(args, " "))
+		return Result{ReturnCode: 1, Stderr: "interface missing"}
+	}
+
+	if err := reconcileRuntime(context.Background(), cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 || commands[0] != "wg show borealis-wg" {
+		t.Fatalf("clean standby mutated runtime: %#v", commands)
+	}
+}
+
+func TestWithdrawalRequestSuppressesOwnershipReactivation(t *testing.T) {
+	cfg := testConfig(t)
+	commands := []string{}
+	cfg.CommandRunner = func(_ context.Context, args []string, _ int, _ Config) Result {
+		commands = append(commands, strings.Join(args, " "))
+		return Result{}
+	}
+
+	if result := requestWithdrawal(context.Background(), cfg); result.ReturnCode != 0 {
+		t.Fatalf("withdrawal request failed: %#v", result)
+	}
+	if !withdrawalRequested(cfg) {
+		t.Fatal("withdrawal request marker was not retained through preStop window")
+	}
+	commands = nil
+	if err := reconcileRuntime(context.Background(), cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("withdrawn runtime reactivated: %#v", commands)
+	}
+	if err := clearWithdrawalRequest(cfg); err != nil {
+		t.Fatal(err)
 	}
 }
 

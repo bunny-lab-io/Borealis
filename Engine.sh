@@ -111,8 +111,8 @@ K3S_BRIDGE_WORKLOADS_VERSION="4"
 K3S_WEBUI_FRONTEND_VERSION="1"
 K3S_REMOTE_DESKTOP_GUACD_VERSION="1"
 K3S_JOB_SCHEDULER_VERSION="4"
-K3S_WIREGUARD_TUNNEL_VERSION="1"
-K3S_TRAEFIK_EDGE_VERSION="1"
+K3S_WIREGUARD_TUNNEL_VERSION="2"
+K3S_TRAEFIK_EDGE_VERSION="2"
 K3S_POSTGRES_VERSION="3"
 K3S_POSTGRES_SCHEMA_JOB_NAME="${BOREALIS_K3S_POSTGRES_SCHEMA_JOB_NAME:-postgres-db-schema-initializer}"
 K3S_POSTGRES_SCHEMA_TIMEOUT="${BOREALIS_K3S_POSTGRES_SCHEMA_TIMEOUT:-180s}"
@@ -1571,6 +1571,51 @@ log_webui_url() {
   printf '[%s] WebUI Accessible @ %b%s%b\n' "$(date +%FT%T)" "${C_BLUE}${C_BOLD}" "${public_base_url}" "${C_RESET}"
 }
 
+append_public_tls_diagnostics() {
+  {
+    printf '[%s] Public TLS certificate diagnostics\n' "$(date +%FT%T)"
+    tail -n 240 "${RUNTIME_ROOT}/Services/traefik-edge/logs/traefik.log"
+  } >> "${BUILD_LOG}" 2>&1 || true
+}
+
+wait_for_public_tls_certificate() {
+  local deployment_profile=""
+  local acme_email=""
+  local public_host=""
+  deployment_profile="$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)"
+  acme_email="$(read_env_value BOREALIS_ACME_EMAIL)"
+  public_host="$(read_env_value BOREALIS_PUBLIC_HOSTNAME)"
+  [[ "${deployment_profile}" == "externally-accessible" ]] || return 0
+  [[ -n "${acme_email}" && -n "${public_host}" && "${public_host}" != "localhost" ]] || return 0
+  [[ "$(generic_k3s_workload_replicas)" != "0" ]] || return 0
+  public_host="${public_host%:443}"
+
+  log_status "k3s-traefik-edge" "Waiting For Trusted TLS" "${C_YELLOW}"
+  local attempt=0
+  for ((attempt = 1; attempt <= 90; attempt++)); do
+    if curl --fail --silent --show-error --output /dev/null \
+      --noproxy '*' \
+      --connect-timeout 3 \
+      --max-time 10 \
+      --resolve "${public_host}:443:127.0.0.1" \
+      "https://${public_host}/" >/dev/null 2>&1; then
+      log_status "k3s-traefik-edge" "Trusted TLS Ready" "${C_GREEN}"
+      return 0
+    fi
+    sleep 2
+  done
+
+  curl --fail --silent --show-error --output /dev/null \
+    --noproxy '*' \
+    --connect-timeout 3 \
+    --max-time 10 \
+    --resolve "${public_host}:443:127.0.0.1" \
+    "https://${public_host}/" >> "${BUILD_LOG}" 2>&1 || true
+  append_public_tls_diagnostics
+  log_status "k3s-traefik-edge" "Trusted TLS Failed" "${C_RED}"
+  die "Public TLS certificate for ${public_host} was not issued. Confirm TCP/443 reaches Traefik with TLS-ALPN preserved, then redeploy. See ${BUILD_LOG}."
+}
+
 die() {
   if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
     dashboard_update_status "Error" "$*" "${C_RED}"
@@ -1596,6 +1641,37 @@ run_privileged() {
     return $?
   fi
   return 1
+}
+
+apt_get_with_lock_wait() {
+  run_privileged apt-get -o DPkg::Lock::Timeout=300 "$@"
+}
+
+sudo_invoking_owner() {
+  local sudo_user="${SUDO_USER:-}"
+  local sudo_uid="${SUDO_UID:-}"
+  local sudo_gid="${SUDO_GID:-}"
+  [[ -n "${sudo_user}" && "${sudo_user}" != "root" ]] || return 1
+  [[ "${sudo_uid}" =~ ^[0-9]+$ && "${sudo_uid}" -gt 0 ]] || return 1
+  [[ "${sudo_gid}" =~ ^[0-9]+$ && "${sudo_gid}" -gt 0 ]] || return 1
+  [[ "$(id -u -- "${sudo_user}" 2>/dev/null || true)" == "${sudo_uid}" ]] || return 1
+  [[ "$(id -g -- "${sudo_user}" 2>/dev/null || true)" == "${sudo_gid}" ]] || return 1
+  printf '%s:%s\n' "${sudo_uid}" "${sudo_gid}"
+}
+
+reconcile_install_checkout_owner() {
+  local install_root="$1"
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || return 0
+  [[ -n "${install_root}" && "${install_root}" != "/" ]] \
+    || die "Refusing to reconcile checkout ownership for empty path or '/'."
+  [[ -d "${install_root}/.git" ]] || return 0
+
+  local install_owner=""
+  install_owner="$(sudo_invoking_owner)" || return 0
+  run_privileged chown --no-dereference -- "${install_owner}" "${install_root}"
+  run_privileged find "${install_root}" -xdev -mindepth 1 \
+    \( -path "${install_root}/Engine" -o -path "${install_root}/Engine.old" -o -path "${install_root}/Agent" \) -prune -o \
+    -exec chown --no-dereference -- "${install_owner}" {} +
 }
 
 validate_numeric_id() {
@@ -1726,8 +1802,8 @@ ensure_gum_bootstrap_dependencies() {
   detect_distro
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt-get update -qq >/dev/null
-      run_privileged apt-get install -y ca-certificates curl tar gzip coreutils >/dev/null
+      apt_get_with_lock_wait update -qq >/dev/null
+      apt_get_with_lock_wait install -y ca-certificates curl tar gzip coreutils >/dev/null
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
@@ -1876,8 +1952,8 @@ ensure_git_dependency() {
   detect_distro
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq
-      run_privileged apt install -y git ca-certificates
+      apt_get_with_lock_wait update -qq
+      apt_get_with_lock_wait install -y git ca-certificates
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
@@ -1932,6 +2008,7 @@ sync_repo() {
   run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Engine.old -e Agent
   run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" >/dev/null 2>&1 || true
+  reconcile_install_checkout_owner "${INSTALL_DIR}"
   restore_selinux_context_if_needed "${INSTALL_DIR}"
 }
 
@@ -2186,8 +2263,8 @@ install_engine_apt_dependencies() {
   codename="$(docker_apt_codename)"
   arch="$(dpkg --print-architecture)"
 
-  run_privileged apt-get update -qq
-  run_privileged apt-get install -y python3 ca-certificates curl gnupg
+  apt_get_with_lock_wait update -qq
+  apt_get_with_lock_wait install -y python3 ca-certificates curl gnupg
   run_privileged install -m 0755 -d /etc/apt/keyrings
   run_privileged curl -fsSL "https://download.docker.com/linux/${repo_os}/gpg" -o /etc/apt/keyrings/docker.asc
   run_privileged chmod a+r /etc/apt/keyrings/docker.asc
@@ -2206,8 +2283,8 @@ EOF
   run_privileged install -m 0644 "${temp_file}" "${source_file}"
   rm -f "${temp_file}"
 
-  run_privileged apt-get update -qq
-  run_privileged apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+  apt_get_with_lock_wait update -qq
+  apt_get_with_lock_wait install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 }
 
 ensure_engine_dependencies() {
@@ -2395,8 +2472,8 @@ ensure_k3s_install_dependencies() {
   detect_distro
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
-      run_privileged apt-get update -qq
-      run_privileged apt-get install -y ca-certificates curl iptables python3
+      apt_get_with_lock_wait update -qq
+      apt_get_with_lock_wait install -y ca-certificates curl iptables python3
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
@@ -2913,8 +2990,8 @@ ensure_longhorn_iscsi_package() {
   detect_distro
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
-      if ! run_privileged apt-get update -qq >> "${BUILD_LOG}" 2>&1 \
-        || ! run_privileged apt-get install -y open-iscsi >> "${BUILD_LOG}" 2>&1; then
+      if ! apt_get_with_lock_wait update -qq >> "${BUILD_LOG}" 2>&1 \
+        || ! apt_get_with_lock_wait install -y open-iscsi >> "${BUILD_LOG}" 2>&1; then
         log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
         die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
       fi
@@ -2957,8 +3034,8 @@ ensure_longhorn_nfs_package() {
   detect_distro
   case "${DISTRO_ID}" in
     ubuntu|debian|linuxmint|pop)
-      if ! run_privileged apt-get update -qq >> "${BUILD_LOG}" 2>&1 \
-        || ! run_privileged apt-get install -y nfs-common >> "${BUILD_LOG}" 2>&1; then
+      if ! apt_get_with_lock_wait update -qq >> "${BUILD_LOG}" 2>&1 \
+        || ! apt_get_with_lock_wait install -y nfs-common >> "${BUILD_LOG}" 2>&1; then
         log_status "k3s-longhorn-storage" "NFS Install Failed" "${C_RED}"
         die "Failed to install nfs-common for Longhorn RWX volumes. See ${BUILD_LOG}."
       fi
@@ -3172,8 +3249,18 @@ wait_for_longhorn_rollouts() {
   done
 }
 
+wait_for_longhorn_workload_creation() {
+  local resource="$1"
+  if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" wait --for=create "${resource}" \
+    --timeout="${K3S_LONGHORN_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "Workload Creation Failed" "${C_RED}"
+    die "Longhorn workload ${resource} was not created. See ${BUILD_LOG}."
+  fi
+}
+
 ensure_longhorn_csi_probe_guard() {
   local patch='{"spec":{"template":{"metadata":{"annotations":{"borealis.io/liveness-startup-guard":"200"}},"spec":{"containers":[{"name":"longhorn-csi-plugin","livenessProbe":{"initialDelaySeconds":200}}]}}}}'
+  wait_for_longhorn_workload_creation "daemonset/longhorn-csi-plugin"
   if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" patch daemonset/longhorn-csi-plugin --type=strategic -p "${patch}" >> "${BUILD_LOG}" 2>&1; then
     log_status "k3s-longhorn-storage" "Probe Guard Failed" "${C_RED}"
     die "Longhorn CSI liveness startup guard could not be applied. See ${BUILD_LOG}."
@@ -3349,6 +3436,7 @@ ensure_longhorn_storage_baseline() {
 
   wait_for_longhorn_rollouts
   ensure_longhorn_csi_probe_guard
+  wait_for_longhorn_rollouts
   wait_for_k3s_storage_class "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" "k3s-longhorn-storage"
   ensure_k3s_storage_class_explicit_only "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}"
   ensure_borealis_longhorn_storage_class
@@ -6542,6 +6630,47 @@ k3s_wireguard_control_client() {
   k3s_kubectl -n "${K3S_NAMESPACE}" exec "${pod_name}" -c wireguard-tunnel -- borealis-wireguard-control-client "${command}"
 }
 
+k3s_wireguard_progress_deadline_exceeded() {
+  [[ "$(
+    k3s_kubectl -n "${K3S_NAMESPACE}" get deployment/wireguard-tunnel \
+      -o jsonpath='{range .status.conditions[?(@.type=="Progressing")]}{.reason}{end}' 2>/dev/null || true
+  )" == "ProgressDeadlineExceeded" ]]
+}
+
+append_k3s_wireguard_rollout_diagnostics() {
+  local interface=""
+  local port=""
+  interface="$(read_env_value BOREALIS_WIREGUARD_INTERFACE)"
+  interface="${interface:-borealis-wg}"
+  port="$(read_env_value BOREALIS_WIREGUARD_PORT)"
+  port="${port:-30000}"
+  {
+    printf '[%s] WireGuard rollout diagnostics\n' "$(date +%FT%T)"
+    k3s_kubectl -n "${K3S_NAMESPACE}" get deployment/wireguard-tunnel -o wide
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+      -l 'app.kubernetes.io/name=wireguard-tunnel,app.kubernetes.io/part-of=borealis' -o wide
+    k3s_kubectl -n "${K3S_NAMESPACE}" describe deployment/wireguard-tunnel
+  } >> "${BUILD_LOG}" 2>&1 || true
+
+  local pod_name=""
+  while IFS= read -r pod_name; do
+    [[ -n "${pod_name}" ]] || continue
+    k3s_kubectl -n "${K3S_NAMESPACE}" describe "pod/${pod_name}" >> "${BUILD_LOG}" 2>&1 || true
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "pod/${pod_name}" -c wireguard-tunnel --tail=240 >> "${BUILD_LOG}" 2>&1 || true
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "pod/${pod_name}" -c wireguard-tunnel --previous --tail=240 >> "${BUILD_LOG}" 2>&1 || true
+  done < <(
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+      -l 'app.kubernetes.io/name=wireguard-tunnel,app.kubernetes.io/part-of=borealis' \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+  )
+
+  {
+    ip -details link show dev "${interface}"
+    ss -lunp "sport = :${port}"
+    tail -n 240 "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs/control.log"
+  } >> "${BUILD_LOG}" 2>&1 || true
+}
+
 render_k3s_wireguard_tunnel_manifest() {
   local image="$1"
   local config_hash="$2"
@@ -6742,6 +6871,7 @@ ensure_k3s_wireguard_tunnel() {
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}" \
       "wireguard_runtime=${RUNTIME_ROOT}/Services/wireguard-tunnel" \
+      "runtime_permissions=dirs-0770-files-0640" \
       "dev_net_tun=/dev/net/tun" \
       "timezone=$(host_timezone_value)" \
       "timezone_host_mounts=host-zoneinfo-v1" \
@@ -6751,38 +6881,52 @@ ensure_k3s_wireguard_tunnel() {
 
   import_k3s_local_image_into_k3s "wireguard-tunnel" "${image}" "k3s-wireguard-tunnel"
   retire_compose_wireguard_tunnel_container
+  local manifest_current=0
   if k3s_manifest_config_current \
     "${K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE}" \
     "${config_hash}" \
     "borealis.io/wireguard-config-hash" \
     "secret/${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}" \
     "deployment/wireguard-tunnel"; then
-    log_k3s_manifest_unchanged "k3s-wireguard-tunnel" "${config_hash}"
-    ensure_cluster_wireguard_routes
-    return 0
+    manifest_current=1
+    if ! k3s_wireguard_progress_deadline_exceeded; then
+      log_k3s_manifest_unchanged "k3s-wireguard-tunnel" "${config_hash}"
+      ensure_cluster_wireguard_routes
+      return 0
+    fi
   fi
 
-  log_status "k3s-wireguard-tunnel" "Applying Manifests" "${C_YELLOW}"
-  local manifest_file
-  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-wireguard-tunnel.XXXXXX.yaml")"
-  chmod 0600 "${manifest_file}" 2>/dev/null || true
-  render_k3s_wireguard_tunnel_manifest \
-    "${image}" \
-    "${config_hash}" \
-    "${runtime_gid}" \
-    "${port}" \
-    "${memory_limit}" \
-    "${cpu_limit}" \
-    > "${manifest_file}"
-  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+  if ((manifest_current == 0)); then
+    log_status "k3s-wireguard-tunnel" "Applying Manifests" "${C_YELLOW}"
+    local manifest_file
+    manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-wireguard-tunnel.XXXXXX.yaml")"
+    chmod 0600 "${manifest_file}" 2>/dev/null || true
+    render_k3s_wireguard_tunnel_manifest \
+      "${image}" \
+      "${config_hash}" \
+      "${runtime_gid}" \
+      "${port}" \
+      "${memory_limit}" \
+      "${cpu_limit}" \
+      > "${manifest_file}"
+    if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+      rm -f "${manifest_file}"
+      log_status "k3s-wireguard-tunnel" "Apply Failed" "${C_RED}"
+      die "Failed to apply K3s WireGuard tunnel manifest. See ${BUILD_LOG}."
+    fi
     rm -f "${manifest_file}"
-    log_status "k3s-wireguard-tunnel" "Apply Failed" "${C_RED}"
-    die "Failed to apply K3s WireGuard tunnel manifest. See ${BUILD_LOG}."
+  else
+    log_status "k3s-wireguard-tunnel" "Resetting Failed Rollout" "${C_YELLOW}"
+    if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/wireguard-tunnel" >> "${BUILD_LOG}" 2>&1; then
+      append_k3s_wireguard_rollout_diagnostics
+      log_status "k3s-wireguard-tunnel" "Rollout Reset Failed" "${C_RED}"
+      die "K3s WireGuard failed rollout could not be reset. See ${BUILD_LOG}."
+    fi
   fi
-  rm -f "${manifest_file}"
 
   log_status "k3s-wireguard-tunnel" "Waiting For Rollout" "${C_YELLOW}"
   if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/wireguard-tunnel" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    append_k3s_wireguard_rollout_diagnostics
     log_status "k3s-wireguard-tunnel" "Rollout Failed" "${C_RED}"
     die "K3s WireGuard tunnel rollout failed. See ${BUILD_LOG}."
   fi
@@ -7035,6 +7179,7 @@ ensure_k3s_traefik_edge() {
     "secret/${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME}" \
     "deployment/traefik-edge"; then
     log_k3s_manifest_unchanged "k3s-traefik-edge" "${config_hash}"
+    wait_for_public_tls_certificate
     return 0
   fi
 
@@ -7072,6 +7217,7 @@ ensure_k3s_traefik_edge() {
     log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
     die "K3s Traefik edge healthcheck failed. See ${BUILD_LOG}."
   fi
+  wait_for_public_tls_certificate
 
   printf '%s  k3s-traefik-edge\n' "${config_hash}" > "${K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE}"
   log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
@@ -7635,8 +7781,8 @@ apply_runtime_service_ownership() {
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets" 2>/dev/null || true
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens" 2>/dev/null || true
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates" 2>/dev/null || true
-  chmod 0750 "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" 2>/dev/null || true
-  chmod 0750 "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" 2>/dev/null || true
+  chmod 0770 "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" 2>/dev/null || true
+  chmod 0770 "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/api-backend/secrets" \
     -type f -exec chmod go-rwx {} + 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
@@ -10181,6 +10327,7 @@ service_action() {
           die "K3s WireGuard tunnel restart failed. See ${BUILD_LOG}."
         fi
         if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/wireguard-tunnel" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          append_k3s_wireguard_rollout_diagnostics
           log_status "k3s-wireguard-tunnel" "Rollout Failed" "${C_RED}"
           die "K3s WireGuard tunnel rollout failed after restart. See ${BUILD_LOG}."
         fi
@@ -10279,9 +10426,11 @@ service_action() {
       [[ "${service}" == "wireguard-tunnel" ]] || die "reconcile supported for wireguard-tunnel only."
       ensure_k3s_cluster_baseline
       ensure_k3s_wireguard_tunnel "${mode}"
-      log_status "k3s-wireguard-tunnel" "Reconciling Control Socket" "${C_YELLOW}"
+      log_status "k3s-wireguard-tunnel" "Reconciling Runtime" "${C_YELLOW}"
       if ! k3s_wireguard_control_client reconcile >> "${BUILD_LOG}" 2>&1; then
-        printf '[%s] WireGuard reconcile returned nonzero; keeping K3s tunnel pod running for API-driven peer repair.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+        append_k3s_wireguard_rollout_diagnostics
+        log_status "k3s-wireguard-tunnel" "Reconcile Failed" "${C_RED}"
+        die "K3s WireGuard runtime reconcile failed. See ${BUILD_LOG}."
       fi
       log_status "k3s-wireguard-tunnel" "Ready" "${C_GREEN}"
       ;;
@@ -11758,6 +11907,7 @@ main() {
     require_explicit_engine_network_mode || exit $?
   fi
   sync_and_reexec_if_needed
+  reconcile_install_checkout_owner "${SCRIPT_DIR}"
   set -- "${LAUNCH_ARGS[@]}"
   local command="${1:-deploy}"
   case "${command}" in

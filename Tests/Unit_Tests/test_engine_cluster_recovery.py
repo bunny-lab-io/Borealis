@@ -80,6 +80,135 @@ ensure_longhorn_multipath_compatibility
                 "systemctl disable --now multipathd.service multipathd.socket",
             )
 
+    def test_debian_longhorn_dependency_install_waits_for_apt_lock(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            calls = root / "calls"
+            installed = root / "installed"
+            build_log = root / "build.log"
+            result = self.run_engine_library(
+                r'''
+BUILD_LOG="$BOREALIS_TEST_BUILD_LOG"
+detect_distro() { DISTRO_ID=ubuntu; }
+command_exists() {
+  [[ "$1" == "iscsiadm" && -e "$BOREALIS_TEST_INSTALLED" ]]
+}
+run_privileged() {
+  printf '%s\n' "$*" >>"$BOREALIS_TEST_CALLS"
+  if [[ "$*" == *"install -y open-iscsi" ]]; then
+    : >"$BOREALIS_TEST_INSTALLED"
+  fi
+}
+ensure_longhorn_iscsi_package
+''',
+                extra_env={
+                    "BOREALIS_TEST_BUILD_LOG": str(build_log),
+                    "BOREALIS_TEST_CALLS": str(calls),
+                    "BOREALIS_TEST_INSTALLED": str(installed),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                calls.read_text(encoding="utf-8").splitlines(),
+                [
+                    "apt-get -o DPkg::Lock::Timeout=300 update -qq",
+                    "apt-get -o DPkg::Lock::Timeout=300 install -y open-iscsi",
+                ],
+            )
+
+    def test_longhorn_probe_guard_waits_for_csi_daemonset_creation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            calls = root / "calls"
+            build_log = root / "build.log"
+            result = self.run_engine_library(
+                r'''
+BUILD_LOG="$BOREALIS_TEST_BUILD_LOG"
+K3S_LONGHORN_NAMESPACE=longhorn-system
+K3S_LONGHORN_ROLLOUT_TIMEOUT=17s
+log_status() { :; }
+k3s_kubectl() {
+  printf '%s\n' "$*" >>"$BOREALIS_TEST_CALLS"
+}
+ensure_longhorn_csi_probe_guard
+''',
+                extra_env={
+                    "BOREALIS_TEST_BUILD_LOG": str(build_log),
+                    "BOREALIS_TEST_CALLS": str(calls),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = calls.read_text(encoding="utf-8").splitlines()
+            creation = commands.index(
+                "-n longhorn-system wait --for=create daemonset/longhorn-csi-plugin --timeout=17s"
+            )
+            patch = next(
+                index
+                for index, command in enumerate(commands)
+                if "patch daemonset/longhorn-csi-plugin" in command
+            )
+            rollout = commands.index(
+                "-n longhorn-system rollout status daemonset/longhorn-csi-plugin --timeout=17s"
+            )
+            self.assertLess(creation, patch)
+            self.assertLess(patch, rollout)
+
+    def test_sudo_checkout_owner_requires_matching_nonroot_account(self):
+        result = self.run_engine_library(
+            r'''
+id() {
+  case "$1" in
+    -u) printf '%s\n' '1234' ;;
+    -g) printf '%s\n' '2345' ;;
+    *) return 64 ;;
+  esac
+}
+SUDO_USER=operator
+SUDO_UID=1234
+SUDO_GID=2345
+[[ "$(sudo_invoking_owner)" == "1234:2345" ]]
+SUDO_UID=9999
+if sudo_invoking_owner >/dev/null 2>&1; then
+  exit 70
+fi
+'''
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_repo_sync_reowns_source_but_prunes_runtime_state(self):
+        engine = (REPO_ROOT / "Engine.sh").read_text(encoding="utf-8")
+        owner_start = engine.index("reconcile_install_checkout_owner() {")
+        owner_end = engine.index("\nvalidate_numeric_id()", owner_start)
+        owner_function = engine[owner_start:owner_end]
+        for runtime_root in ("Engine", "Engine.old", "Agent"):
+            self.assertIn(f' -path "${{install_root}}/{runtime_root}"', owner_function)
+        self.assertIn("-prune -o", owner_function)
+        self.assertNotIn("chown -R", owner_function)
+
+        sync_start = engine.index("sync_repo() {")
+        sync_end = engine.index("\nsource_available()", sync_start)
+        sync_function = engine[sync_start:sync_end]
+        clean = sync_function.index("git -C \"${INSTALL_DIR}\" clean")
+        reconcile = sync_function.index(
+            'reconcile_install_checkout_owner "${INSTALL_DIR}"'
+        )
+        selinux = sync_function.index(
+            'restore_selinux_context_if_needed "${INSTALL_DIR}"'
+        )
+        self.assertLess(clean, reconcile)
+        self.assertLess(reconcile, selinux)
+
+        main_start = engine.index("main() {")
+        main_end = engine.index(
+            '\nif [[ "${BOREALIS_ENGINE_LIBRARY_MODE:-0}" != "1" ]]', main_start
+        )
+        main_function = engine[main_start:main_end]
+        sync = main_function.index("  sync_and_reexec_if_needed")
+        local_reconcile = main_function.index(
+            '  reconcile_install_checkout_owner "${SCRIPT_DIR}"'
+        )
+        self.assertLess(sync, local_reconcile)
+
     def test_cnpg_runtime_url_is_preserved_only_for_cluster_service(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime_env = pathlib.Path(temp_dir) / "runtime.env"
@@ -274,6 +403,164 @@ esac
 """
         )
         self.assertNotEqual(result.returncode, 0)
+
+    def test_wireguard_rollout_failure_collects_pod_diagnostics(self):
+        engine = (REPO_ROOT / "Engine.sh").read_text(encoding="utf-8")
+        diagnostics_start = engine.index(
+            "append_k3s_wireguard_rollout_diagnostics() {"
+        )
+        diagnostics_end = engine.index(
+            "\nrender_k3s_wireguard_tunnel_manifest()", diagnostics_start
+        )
+        diagnostics = engine[diagnostics_start:diagnostics_end]
+        for marker in (
+            "describe deployment/wireguard-tunnel",
+            'describe "pod/${pod_name}"',
+            'logs "pod/${pod_name}" -c wireguard-tunnel --tail=240',
+            'logs "pod/${pod_name}" -c wireguard-tunnel --previous --tail=240',
+            "Services/wireguard-tunnel/logs/control.log",
+        ):
+            self.assertIn(marker, diagnostics)
+        self.assertGreaterEqual(
+            engine.count("    append_k3s_wireguard_rollout_diagnostics"), 2
+        )
+
+    def test_wireguard_runtime_directories_allow_control_group_writes(self):
+        engine = (REPO_ROOT / "Engine.sh").read_text(encoding="utf-8")
+        ownership_start = engine.index("apply_runtime_service_ownership() {")
+        ownership_end = engine.index(
+            "\napply_deploy_env_file_permissions()", ownership_start
+        )
+        ownership = engine[ownership_start:ownership_end]
+        for directory in ("secrets", "config"):
+            self.assertIn(
+                f'chmod 0770 "${{RUNTIME_ROOT}}/Services/wireguard-tunnel/{directory}"',
+                ownership,
+            )
+            self.assertNotIn(
+                f'chmod 0750 "${{RUNTIME_ROOT}}/Services/wireguard-tunnel/{directory}"',
+                ownership,
+            )
+        self.assertIn(
+            'find "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/config"',
+            ownership,
+        )
+        self.assertIn("-type f -exec chmod 0640 {} +", ownership)
+
+    def test_wireguard_retry_resets_stale_progress_deadline(self):
+        engine = (REPO_ROOT / "Engine.sh").read_text(encoding="utf-8")
+        detector_start = engine.index(
+            "k3s_wireguard_progress_deadline_exceeded() {"
+        )
+        detector_end = engine.index(
+            "\nappend_k3s_wireguard_rollout_diagnostics()", detector_start
+        )
+        detector = engine[detector_start:detector_end]
+        self.assertIn('get deployment/wireguard-tunnel', detector)
+        self.assertIn('== "ProgressDeadlineExceeded"', detector)
+
+        reconcile_start = engine.index("ensure_k3s_wireguard_tunnel() {")
+        reconcile_end = engine.index(
+            "\nk3s_traefik_edge_healthcheck()", reconcile_start
+        )
+        reconcile = engine[reconcile_start:reconcile_end]
+        self.assertIn('"runtime_permissions=dirs-0770-files-0640"', reconcile)
+        current = reconcile.index("if k3s_manifest_config_current")
+        failed = reconcile.index("if ! k3s_wireguard_progress_deadline_exceeded")
+        restart = reconcile.index(
+            'rollout restart "deployment/wireguard-tunnel"'
+        )
+        wait = reconcile.index('rollout status "deployment/wireguard-tunnel"')
+        self.assertLess(current, failed)
+        self.assertLess(failed, restart)
+        self.assertLess(restart, wait)
+
+    def test_public_traefik_uses_tls_alpn_challenge(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            executable_dir = root / "bin"
+            executable_dir.mkdir()
+            traefik = executable_dir / "traefik"
+            traefik.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            traefik.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{executable_dir}:{env['PATH']}",
+                    "BOREALIS_PROJECT_ROOT": str(root),
+                    "BOREALIS_PUBLIC_HOSTNAME": "engine.example.test",
+                    "BOREALIS_PUBLIC_HOSTNAME_ALIASES": "engine.example.test",
+                    "BOREALIS_ENGINE_DEPLOYMENT_PROFILE": "externally-accessible",
+                    "BOREALIS_ACME_EMAIL": "operator@example.test",
+                }
+            )
+            result = subprocess.run(
+                [
+                    "sh",
+                    str(
+                        REPO_ROOT
+                        / "Data/Engine/Containers/traefik-edge/entrypoint.sh"
+                    ),
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            service_root = root / "Engine/Services/traefik-edge"
+            static_config = (service_root / "config/traefik.yml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("tlsChallenge: {}", static_config)
+            self.assertNotIn("httpChallenge:", static_config)
+            dynamic_config = (
+                service_root / "config/dynamic/core.yml"
+            ).read_text(encoding="utf-8")
+            self.assertNotIn("/.well-known/acme-challenge/", dynamic_config)
+
+    def test_public_tls_readiness_requires_trusted_hostname_certificate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            calls = root / "calls"
+            build_log = root / "build.log"
+            traefik_log = root / "traefik.log"
+            traefik_log.write_text("", encoding="utf-8")
+            result = self.run_engine_library(
+                r'''
+BUILD_LOG="$BOREALIS_TEST_BUILD_LOG"
+RUNTIME_ROOT="$BOREALIS_TEST_RUNTIME_ROOT"
+read_env_value() {
+  case "$1" in
+    BOREALIS_ENGINE_DEPLOYMENT_PROFILE) printf '%s\n' externally-accessible ;;
+    BOREALIS_ACME_EMAIL) printf '%s\n' operator@example.test ;;
+    BOREALIS_PUBLIC_HOSTNAME) printf '%s\n' engine.example.test ;;
+  esac
+}
+generic_k3s_workload_replicas() { printf '%s\n' 1; }
+log_status() { :; }
+sleep() { :; }
+curl() {
+  printf '%s\n' "$*" >>"$BOREALIS_TEST_CALLS"
+  [[ "$(wc -l <"$BOREALIS_TEST_CALLS")" -ge 3 ]]
+}
+wait_for_public_tls_certificate
+''',
+                extra_env={
+                    "BOREALIS_TEST_BUILD_LOG": str(build_log),
+                    "BOREALIS_TEST_CALLS": str(calls),
+                    "BOREALIS_TEST_RUNTIME_ROOT": str(root),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = calls.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(commands), 3)
+            for command in commands:
+                self.assertIn(
+                    "--resolve engine.example.test:443:127.0.0.1", command
+                )
+                self.assertIn("https://engine.example.test/", command)
 
     def test_agent_redeploy_reads_running_work_from_cnpg_primary(self):
         with tempfile.TemporaryDirectory() as temp_dir:
