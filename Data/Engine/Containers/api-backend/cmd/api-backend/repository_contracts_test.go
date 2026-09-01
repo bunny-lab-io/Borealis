@@ -226,14 +226,24 @@ func TestTraefikEntrypointWritesHostnameAndProxyContracts(t *testing.T) {
 	dynamicConfig, staticConfig, _ := runTraefikEntrypointContractTest(t, map[string]string{
 		"BOREALIS_PUBLIC_HOSTNAME":           "borealis.example.test",
 		"BOREALIS_PUBLIC_HOSTNAME_ALIASES":   "borealis.example.test, alias.example.test",
+		"BOREALIS_ACME_EMAIL":                "operator@example.test",
 		"BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS": "192.168.5.29/32, 10.42.0.0/16",
 	})
 	hostRule := "Host(`borealis.example.test`,`alias.example.test`)"
 	if count := strings.Count(dynamicConfig, hostRule); count != 4 {
 		t.Fatalf("hostname rule occurs %d times, want 4", count)
 	}
-	if !strings.Contains(dynamicConfig, hostRule+" && !PathPrefix(`/.well-known/acme-challenge/`)") {
-		t.Fatal("HTTP redirect no longer excludes ACME challenge")
+	if !strings.Contains(dynamicConfig, "      rule: \""+hostRule+"\"") {
+		t.Fatal("HTTP redirect lost public hostname rule")
+	}
+	if strings.Contains(dynamicConfig, "/.well-known/acme-challenge/") {
+		t.Fatal("TLS-ALPN ACME flow retained obsolete HTTP challenge route")
+	}
+	if !strings.Contains(staticConfig, "      tlsChallenge: {}") {
+		t.Fatal("public Traefik no longer uses TLS-ALPN ACME challenge")
+	}
+	if strings.Contains(staticConfig, "httpChallenge:") {
+		t.Fatal("public Traefik returned to intercepted HTTP-01 challenge")
 	}
 	for expected, count := range map[string]int{
 		"forwardedHeaders:":           2,

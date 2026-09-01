@@ -183,8 +183,7 @@ certificatesResolvers:
     acme:
       email: "${ACME_EMAIL}"
       storage: "${STATE_DIR}/acme.json"
-      httpChallenge:
-        entryPoint: web
+      tlsChallenge: {}
 EOF
   TLS_BLOCK="      tls:\n        certResolver: letsencrypt"
   TLS_STATIC_BLOCK=""
@@ -207,7 +206,7 @@ http:
     borealis-http:
       entryPoints:
         - web
-      rule: "${HOST_RULE} && !PathPrefix(\`/.well-known/acme-challenge/\`)"
+      rule: "${HOST_RULE}"
       middlewares:
         - redirect-to-https
       service: noop@internal

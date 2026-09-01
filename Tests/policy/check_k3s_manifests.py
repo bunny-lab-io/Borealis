@@ -356,12 +356,15 @@ def validate_longhorn_host_dependency_contract() -> None:
         fail(f"cannot read Longhorn host dependency contract: {exc}")
     required = {
         "ensure_longhorn_nfs_package": "Longhorn RWX NFS prerequisite function",
-        "apt-get install -y nfs-common": "Debian NFS client package",
+        "apt_get_with_lock_wait install -y nfs-common": "Debian NFS client package with bounded package-lock wait",
+        "DPkg::Lock::Timeout=300": "bounded Debian package-lock wait",
         "dnf install -y nfs-utils": "RHEL NFS client package",
         "pacman -Sy --noconfirm nfs-utils": "Arch NFS client package",
         "zypper --non-interactive install nfs-client": "SUSE NFS client package",
         'command_exists mount.nfs || die': "post-install NFS mount helper check",
         "ensure_longhorn_csi_probe_guard": "Longhorn CSI startup-budget liveness guard",
+        "wait_for_longhorn_workload_creation": "Longhorn controller-created workload creation wait",
+        'wait_for_longhorn_workload_creation "daemonset/longhorn-csi-plugin"': "Longhorn CSI DaemonSet creation gate",
         'borealis.io/liveness-startup-guard":"200"': "Longhorn CSI guard annotation",
         "ensure_longhorn_multipath_compatibility": "Longhorn multipath safety function",
         "classify_longhorn_multipath_maps": "Longhorn-owned map classifier",
@@ -380,6 +383,20 @@ def validate_longhorn_host_dependency_contract() -> None:
     module_call = engine_source.find("  ensure_longhorn_iscsi_kernel_module", dependency_function)
     if min(dependency_function, multipath_call, iscsi_call, nfs_call, module_call) < 0 or not multipath_call < iscsi_call < nfs_call < module_call:
         fail("Longhorn baseline must reconcile multipath safety before iSCSI/NFS and kernel/service checks")
+    probe_function = engine_source.find("ensure_longhorn_csi_probe_guard()")
+    creation_wait = engine_source.find('  wait_for_longhorn_workload_creation "daemonset/longhorn-csi-plugin"', probe_function)
+    probe_patch = engine_source.find(" patch daemonset/longhorn-csi-plugin", probe_function)
+    probe_end = engine_source.find("\n}", probe_function)
+    if min(probe_function, creation_wait, probe_patch, probe_end) < 0 or not creation_wait < probe_patch < probe_end:
+        fail("Longhorn CSI probe guard must wait for controller-created DaemonSet before patching")
+
+    baseline_function = engine_source.find("ensure_longhorn_storage_baseline()")
+    baseline_end = engine_source.find("\n}", baseline_function)
+    initial_rollout = engine_source.find("  wait_for_longhorn_rollouts", baseline_function)
+    guard = engine_source.find("  ensure_longhorn_csi_probe_guard", initial_rollout)
+    final_rollout = engine_source.find("  wait_for_longhorn_rollouts", guard)
+    if min(baseline_function, baseline_end, initial_rollout, guard, final_rollout) < 0 or not initial_rollout < guard < final_rollout < baseline_end:
+        fail("fresh Longhorn reconcile must recheck dynamically created workloads after CSI guard")
 
 
 def validate_pinned_dependency_adoption_contract() -> None:
@@ -663,6 +680,44 @@ def validate_cluster_workload_handoff_contract() -> None:
     for marker, description in required.items():
         if marker not in source:
             fail(f"cluster workload reconciler lost {description}")
+
+
+def validate_wireguard_control_bootstrap_contract() -> None:
+    path = (
+        ROOT
+        / "Data/Engine/Containers/api-backend/internal/wireguardcontrol/server.go"
+    )
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read WireGuard control bootstrap: {exc}")
+    required = {
+        "reconcileRuntime(ctx, cfg, true)": "owner bootstrap before control readiness",
+        "generateServerKeyPair()": "fresh-host server identity generation",
+        '[]string{"wg-quick", "up", configPath}': "base interface activation",
+        '[]string{"ip", "route", "replace", configuredPeerNetwork(cfg)': "peer route activation",
+        "ensureRuntimeFirewall(ctx, cfg)": "listener firewall bootstrap",
+        "withdrawalRequested(cfg)": "preStop reactivation fence",
+        'logMessage(cfg, "WireGuard runtime bootstrap failed: "+err.Error())': "durable bootstrap failure diagnostics",
+    }
+    for marker, description in required.items():
+        if marker not in source:
+            fail(f"WireGuard control service lost {description}")
+    try:
+        engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read WireGuard runtime permission contract: {exc}")
+    permission_markers = {
+        'chmod 0770 "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets"': "control-group key creation",
+        'chmod 0770 "${RUNTIME_ROOT}/Services/wireguard-tunnel/config"': "control-group config creation",
+        '-type f -exec chmod 0640 {} +': "group-readable file boundary",
+        '"runtime_permissions=dirs-0770-files-0640"': "permission contract manifest hash",
+        '== "ProgressDeadlineExceeded"': "failed rollout detection",
+        'rollout restart "deployment/wireguard-tunnel"': "failed rollout reset",
+    }
+    for marker, description in permission_markers.items():
+        if marker not in engine_source:
+            fail(f"WireGuard runtime permissions lost {description}")
 
 
 def validate_api_release_identity_contract() -> None:
@@ -960,6 +1015,7 @@ def validate(objects: list[tuple[Path, dict]]) -> None:
     validate_snapshot_controller_contract()
     validate_kube_vip_contract()
     validate_cluster_workload_handoff_contract()
+    validate_wireguard_control_bootstrap_contract()
     validate_api_release_identity_contract()
     validate_k3s_peer_allowlist_contract()
     validate_cluster_enable_vip_recovery_contract()
