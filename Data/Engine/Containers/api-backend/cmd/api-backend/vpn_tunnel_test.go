@@ -215,7 +215,7 @@ func TestWireGuardRuntimeRejectsDuplicateAllowedIPAndPublicKey(t *testing.T) {
 	}
 }
 
-func TestWireGuardRuntimeCreatesGroupReadableKeys(t *testing.T) {
+func TestWireGuardRuntimeCreatesGroupWritableKeys(t *testing.T) {
 	runtime := testWireGuardRuntime(t)
 	runtime.privateKeyPath = filepath.Join(t.TempDir(), "secrets", "server_private.key")
 	runtime.publicKeyPath = filepath.Join(filepath.Dir(runtime.privateKeyPath), "server_public.key")
@@ -224,12 +224,12 @@ func TestWireGuardRuntimeCreatesGroupReadableKeys(t *testing.T) {
 	if privateKey == "" || publicKey == "" {
 		t.Fatalf("expected generated WireGuard key pair")
 	}
-	assertFileMode(t, filepath.Dir(runtime.privateKeyPath), 0o750)
+	assertFileMode(t, filepath.Dir(runtime.privateKeyPath), 0o770)
 	assertFileMode(t, runtime.privateKeyPath, 0o640)
 	assertFileMode(t, runtime.publicKeyPath, 0o640)
 }
 
-func TestWireGuardRuntimeCreatesGroupReadableConfig(t *testing.T) {
+func TestWireGuardRuntimeCreatesGroupWritableConfig(t *testing.T) {
 	runtime := testWireGuardRuntime(t)
 	runtime.serverPrivate = "test-private-key"
 	runtime.commandRunner = func(args []string) (int, string, string) {
@@ -246,8 +246,24 @@ func TestWireGuardRuntimeCreatesGroupReadableConfig(t *testing.T) {
 		t.Fatalf("ensureListenerLocked returned error: %v", err)
 	}
 
-	assertFileMode(t, runtime.configRoot, 0o750)
+	assertFileMode(t, runtime.configRoot, 0o770)
 	assertFileMode(t, filepath.Join(runtime.configRoot, defaultWireGuardConfigName+".conf"), 0o640)
+}
+
+func TestWireGuardRuntimeRepairsSharedConfigModeBeforeExistingListener(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	if err := os.Chmod(runtime.configRoot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	runtime.commandRunner = func([]string) (int, string, string) {
+		return 0, "", ""
+	}
+
+	if err := runtime.ensureListenerLocked(); err != nil {
+		t.Fatalf("ensureListenerLocked returned error: %v", err)
+	}
+
+	assertFileMode(t, runtime.configRoot, 0o770)
 }
 
 func TestWireGuardRuntimeInstallsDefaultDenyFirewallChains(t *testing.T) {

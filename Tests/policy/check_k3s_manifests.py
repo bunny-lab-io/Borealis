@@ -692,6 +692,30 @@ def validate_wireguard_control_bootstrap_contract() -> None:
     for marker, description in required.items():
         if marker not in source:
             fail(f"WireGuard control service lost {description}")
+    for marker, description in {
+        'isPathUnder(path, filepath.Dir(path), ".key")': "projected Secret path containment",
+        "info, err := os.Stat(path)": "projected Secret regular-file resolution",
+        "os.MkdirAll(path, 0o770)": "shared control directory creation",
+    }.items():
+        if marker not in source:
+            fail(f"WireGuard control service lost {description}")
+    try:
+        api_source = (
+            ROOT
+            / "Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go"
+        ).read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read API WireGuard runtime manager: {exc}")
+    if api_source.count("os.Chmod(w.configRoot, 0o770)") != 1:
+        fail("API WireGuard runtime must preserve group-write access on config directory")
+    if "os.Chmod(filepath.Dir(w.privateKeyPath), 0o770)" not in api_source:
+        fail("API WireGuard runtime must preserve group-write access on key directory")
+    for retired in (
+        "os.Chmod(w.configRoot, 0o750)",
+        "os.Chmod(filepath.Dir(w.privateKeyPath), 0o750)",
+    ):
+        if retired in api_source:
+            fail(f"API WireGuard runtime restored incompatible permission {retired!r}")
     try:
         engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
     except OSError as exc:

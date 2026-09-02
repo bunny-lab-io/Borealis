@@ -1084,9 +1084,10 @@ func fetchClusterReleaseCatalog(ctx context.Context, current string) ([]map[stri
 				break
 			}
 		}
-		// Standalone or pre-migration installs may not have a recorded baseline yet.
-		// One page is enough to populate the picker without walking the full catalog.
-		if current == "" {
+		// Standalone and commit-backed development baselines have no stable
+		// current tag to find. One page populates the picker without walking
+		// irrelevant historical release pages.
+		if current == "" || clusterDevelopmentReleaseRE.MatchString(current) {
 			foundCurrent = true
 		}
 	}

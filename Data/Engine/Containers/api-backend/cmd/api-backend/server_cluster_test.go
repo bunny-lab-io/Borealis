@@ -330,10 +330,21 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	}
 }
 
-func TestClusterDevelopmentBaselineCanSelectFirstStableRelease(t *testing.T) {
+func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRelease(t *testing.T) {
 	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
+	releasePageRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.Contains(r.URL.Path, "/releases"):
+			releasePageRequests++
+			if r.URL.Query().Get("page") != "1" {
+				http.Error(w, "unexpected historical release page", http.StatusGatewayTimeout)
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
+				{TagName: "2026.09.1", Name: "First Stable"},
+				{TagName: "2026.09.1-rc1", Name: "Prerelease", Prerelease: true},
+			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
 		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
@@ -346,13 +357,46 @@ func TestClusterDevelopmentBaselineCanSelectFirstStableRelease(t *testing.T) {
 	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entry, err := hydrateClusterRelease(context.Background(), clusterGitHubRelease{TagName: "2026.09.1", Name: "First Stable"}, "dev-fedcba987654")
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry["selectable"] != true || entry["reason"] != "" {
-		t.Fatalf("first stable release should be selectable from development baseline: %#v", entry)
+	if releasePageRequests != 1 {
+		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
+	}
+	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1" || entries[0]["selectable"] != true || entries[0]["reason"] != "" {
+		t.Fatalf("first stable release should be selectable from development baseline: %#v", entries)
+	}
+}
+
+func TestClusterDevelopmentBaselineTreatsPrereleaseOnlyCatalogAsEmpty(t *testing.T) {
+	releasePageRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		releasePageRequests++
+		if r.URL.Query().Get("page") != "1" {
+			http.Error(w, "unexpected historical release page", http.StatusGatewayTimeout)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
+			{TagName: "2026.09.1-rc1", Name: "Cluster Preview", Prerelease: true},
+			{TagName: "main", Name: "Branch Head"},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	serverClusterReleaseCache = clusterReleaseCache{}
+
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if releasePageRequests != 1 {
+		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("prerelease-only catalog should be empty, got %#v", entries)
 	}
 }
 

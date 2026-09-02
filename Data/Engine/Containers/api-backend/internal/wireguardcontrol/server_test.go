@@ -121,6 +121,63 @@ func TestValidateCommandRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestEnsureServerKeysAcceptsProjectedSecretSymlinks(t *testing.T) {
+	cfg := testConfig(t)
+	secretRoot := filepath.Join(cfg.ServiceRoot, "secrets")
+	privateKey, publicKey, err := generateServerKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := filepath.Join(secretRoot, "..2026_09_02_09_43_31")
+	if err := os.Mkdir(projection, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{
+		"server_private.key": privateKey,
+		"server_public.key":  publicKey,
+	} {
+		if err := os.WriteFile(filepath.Join(projection, name), []byte(value+"\n"), 0o440); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(secretRoot, name)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..data", name), filepath.Join(secretRoot, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Base(projection), filepath.Join(secretRoot, "..data")); err != nil {
+		t.Fatal(err)
+	}
+
+	gotPrivate, gotPublic, err := ensureServerKeys(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrivate != privateKey || gotPublic != publicKey {
+		t.Fatalf("projected keypair mismatch private=%q public=%q", gotPrivate, gotPublic)
+	}
+}
+
+func TestReadWireGuardKeyRejectsSymlinkOutsideKeyDirectory(t *testing.T) {
+	cfg := testConfig(t)
+	privateKey, _, err := generateServerKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.key")
+	if err := os.WriteFile(outside, []byte(privateKey+"\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cfg.ServiceRoot, "secrets", "escaped.key")
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readWireGuardKey(path); err == nil || !strings.Contains(err.Error(), "inside key directory") {
+		t.Fatalf("outside key symlink accepted: %v", err)
+	}
+}
+
 func TestConfiguredNetworksFallBackFromUnsafeValues(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnginePrefix = "8.8.8.8/32"
