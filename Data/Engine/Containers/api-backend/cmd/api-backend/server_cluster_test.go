@@ -178,7 +178,7 @@ func TestClusterEnableRemainsProbeConformanceGated(t *testing.T) {
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
-	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10","confirmation":"ENABLE CLUSTER"}`, token)
+	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10"}`, token)
 	recorder := httptest.NewRecorder()
 
 	mux.ServeHTTP(recorder, request)
@@ -190,7 +190,7 @@ func TestClusterEnableRemainsProbeConformanceGated(t *testing.T) {
 
 func TestClusterEnableDerivesAMD64NodeIdentityAndSynchronizesVIPStorage(t *testing.T) {
 	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
-	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "2026.08.23")
+	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "dev-aaaaaaaaaaaa")
 	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "ENGINE-1")
@@ -201,7 +201,7 @@ func TestClusterEnableDerivesAMD64NodeIdentityAndSynchronizesVIPStorage(t *testi
 	registerServerClusterRoutes(mux, auth)
 	recorder := httptest.NewRecorder()
 
-	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10","confirmation":"ENABLE CLUSTER"}`, token))
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10"}`, token))
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("expected cluster enable acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -212,6 +212,48 @@ func TestClusterEnableDerivesAMD64NodeIdentityAndSynchronizesVIPStorage(t *testi
 	}
 	if payload["node_name"] != "engine-1" || payload["management_ip"] != "10.20.30.12" || payload["architecture"] != "amd64" {
 		t.Fatalf("local node identity was not derived: %#v", payload)
+	}
+	if payload["baseline_release"] != "dev-aaaaaaaaaaaa" || payload["baseline_sha"] != strings.Repeat("a", 40) {
+		t.Fatalf("development baseline was not pinned: %#v", payload)
+	}
+}
+
+func TestClusterEnableRejectsRetiredTypedConfirmationField(t *testing.T) {
+	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
+	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "dev-aaaaaaaaaaaa")
+	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "engine-1")
+	t.Setenv("BOREALIS_ENGINE_MANAGEMENT_IP", "10.20.30.12")
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10","confirmation":"ENABLE CLUSTER"}`, token))
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"field":"confirmation"`) || !strings.Contains(recorder.Body.String(), "field is not allowed") {
+		t.Fatalf("expected retired confirmation rejection, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestValidClusterBaselineReleaseRequiresDevelopmentNameToMatchSHA(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	for _, test := range []struct {
+		release string
+		sha     string
+		want    bool
+	}{
+		{release: "2026.09.1", sha: sha, want: true},
+		{release: "dev-0123456789ab", sha: sha, want: true},
+		{release: "dev-fedcba987654", sha: sha, want: false},
+		{release: "dev-0123456789ab", sha: "not-a-sha", want: false},
+		{release: "main", sha: sha, want: false},
+	} {
+		if got := validClusterBaselineRelease(test.release, test.sha); got != test.want {
+			t.Fatalf("validClusterBaselineRelease(%q, %q)=%v want %v", test.release, test.sha, got, test.want)
+		}
 	}
 }
 
@@ -252,7 +294,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "baseline_sha": commitSHA, "active_size": int64(3)}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
@@ -285,6 +327,32 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	}
 	if store.mutation.TargetSHA != commitSHA || store.mutation.TargetRelease != "2026.08.9" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
 		t.Fatalf("update did not pin release SHA: %+v", store.mutation)
+	}
+}
+
+func TestClusterDevelopmentBaselineCanSelectFirstStableRelease(t *testing.T) {
+	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
+		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+
+	entry, err := hydrateClusterRelease(context.Background(), clusterGitHubRelease{TagName: "2026.09.1", Name: "First Stable"}, "dev-fedcba987654")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry["selectable"] != true || entry["reason"] != "" {
+		t.Fatalf("first stable release should be selectable from development baseline: %#v", entry)
 	}
 }
 

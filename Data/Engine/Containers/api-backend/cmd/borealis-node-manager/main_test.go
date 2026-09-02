@@ -34,6 +34,76 @@ func TestNodeManagerActionTimeoutAllowsBoundedBootstrapAndRedeploy(t *testing.T)
 	}
 }
 
+func TestValidPinnedReleaseAcceptsStableAndMatchingDevelopmentIdentity(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	for _, test := range []struct {
+		release string
+		sha     string
+		want    bool
+	}{
+		{release: "2026.09.1", sha: sha, want: true},
+		{release: "dev-0123456789ab", sha: sha, want: true},
+		{release: "dev-fedcba987654", sha: sha, want: false},
+		{release: "dev-0123456789ab", sha: "not-a-sha", want: false},
+		{release: "main", sha: sha, want: false},
+	} {
+		if got := validPinnedRelease(test.release, test.sha); got != test.want {
+			t.Fatalf("validPinnedRelease(%q, %q)=%v want %v", test.release, test.sha, got, test.want)
+		}
+	}
+}
+
+func TestVerifyReleaseRefFetchesCommitBackedDevelopmentIdentity(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "origin.git")
+	seed := filepath.Join(root, "seed")
+	checkout := filepath.Join(root, "checkout")
+	runGitCommand := func(workdir string, args ...string) string {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = workdir
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s failed: %v: %s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+
+	runGitCommand(root, "init", "--bare", remote)
+	if err := os.MkdirAll(seed, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(seed, "init")
+	runGitCommand(seed, "config", "user.email", "borealis-tests@example.invalid")
+	runGitCommand(seed, "config", "user.name", "Borealis Tests")
+	if err := os.WriteFile(filepath.Join(seed, "baseline.txt"), []byte("stable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(seed, "add", "baseline.txt")
+	runGitCommand(seed, "commit", "-m", "stable seed")
+	runGitCommand(seed, "remote", "add", "origin", remote)
+	runGitCommand(seed, "push", "origin", "HEAD:refs/heads/main")
+	runGitCommand(root, "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+	runGitCommand(root, "clone", remote, checkout)
+
+	if err := os.WriteFile(filepath.Join(seed, "baseline.txt"), []byte("development\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(seed, "add", "baseline.txt")
+	runGitCommand(seed, "commit", "-m", "development baseline")
+	sha := runGitCommand(seed, "rev-parse", "HEAD")
+	runGitCommand(seed, "push", "origin", "HEAD:refs/heads/fix/development-baseline")
+
+	t.Setenv("BOREALIS_ENGINE_REPOSITORY_URL", remote)
+	m := &manager{repoRoot: checkout}
+	if err := m.verifyReleaseRef(context.Background(), "dev-"+sha[:12], sha); err != nil {
+		t.Fatal(err)
+	}
+	if resolved := runGitCommand(checkout, "rev-parse", sha+"^{commit}"); resolved != sha {
+		t.Fatalf("development baseline resolved to %q want %q", resolved, sha)
+	}
+}
+
 func TestNodeActionPodsActiveWaitsForRunningOrUnknownWork(t *testing.T) {
 	tests := []struct {
 		name string

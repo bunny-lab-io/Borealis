@@ -49,11 +49,12 @@ const (
 )
 
 var (
-	releasePattern     = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
-	shaPattern         = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	nodePattern        = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
-	k3sPattern         = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`)
-	clusterUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	stableReleasePattern      = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
+	developmentReleasePattern = regexp.MustCompile(`^dev-[0-9a-f]{12}$`)
+	shaPattern                = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	nodePattern               = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
+	k3sPattern                = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`)
+	clusterUUIDPattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 type actionRequest struct {
@@ -639,7 +640,7 @@ func ensureMemberFenceDropInDirectory() error {
 }
 
 func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA string) error {
-	if !releasePattern.MatchString(release) || !shaPattern.MatchString(targetSHA) {
+	if !validPinnedRelease(release, targetSHA) {
 		return errors.New("release_tag and target_sha are required and must use fixed formats")
 	}
 	if err := validateRepositoryRoot(m.repoRoot); err != nil {
@@ -650,14 +651,37 @@ func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA strin
 	if err != nil || normalizeRemote(origin) != expectedOrigin {
 		return errors.New("origin does not match configured Borealis repository")
 	}
-	if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "origin", "refs/tags/"+release+":refs/tags/"+release); err != nil {
+	ref := "refs/tags/" + release
+	if developmentReleasePattern.MatchString(release) {
+		ref = targetSHA
+		if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "origin", targetSHA); err != nil {
+			return err
+		}
+	} else if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "origin", ref+":"+ref); err != nil {
 		return err
 	}
-	resolved, err := runGit(ctx, m.repoRoot, "rev-parse", "refs/tags/"+release+"^{commit}")
+	resolved, err := runGit(ctx, m.repoRoot, "rev-parse", ref+"^{commit}")
 	if err != nil || strings.ToLower(strings.TrimSpace(resolved)) != targetSHA {
-		return errors.New("release tag does not resolve to pinned target SHA")
+		return errors.New("release reference does not resolve to pinned target SHA")
 	}
 	return nil
+}
+
+func validPinnedRelease(release, targetSHA string) bool {
+	release = strings.TrimSpace(release)
+	targetSHA = strings.ToLower(strings.TrimSpace(targetSHA))
+	if !shaPattern.MatchString(targetSHA) {
+		return false
+	}
+	if stableReleasePattern.MatchString(release) {
+		return true
+	}
+	return developmentReleasePattern.MatchString(release) && release == "dev-"+targetSHA[:12]
+}
+
+func validReleaseName(release string) bool {
+	release = strings.TrimSpace(release)
+	return stableReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release)
 }
 
 func (m *manager) stagePinnedRelease(ctx context.Context, release, targetSHA string) (map[string]any, error) {
@@ -2164,7 +2188,7 @@ func ensureSecureDirectory(path string) error {
 
 func requiredRelease(params map[string]any) string {
 	value := strings.TrimSpace(fmt.Sprint(params["release_tag"]))
-	if !releasePattern.MatchString(value) {
+	if !validReleaseName(value) {
 		return ""
 	}
 	return value

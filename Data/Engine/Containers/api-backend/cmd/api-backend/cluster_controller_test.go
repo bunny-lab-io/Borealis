@@ -2830,6 +2830,15 @@ func TestHMRPinnedRestoreUsesSavedImmutableRelease(t *testing.T) {
 	if _, err := hmrPinnedRestoreOperation(clusterControllerOperation{}, clusterControllerNode{}); err == nil {
 		t.Fatal("missing pinned production release accepted")
 	}
+	development := clusterControllerOperation{Payload: map[string]any{"baseline_release": "dev-aaaaaaaaaaaa", "baseline_sha": sha}}
+	restore, err = hmrPinnedRestoreOperation(development, clusterControllerNode{})
+	if err != nil || restore.TargetRelease != "dev-aaaaaaaaaaaa" || restore.TargetSHA != sha {
+		t.Fatalf("saved development baseline not restored: %#v err=%v", restore, err)
+	}
+	development.Payload["baseline_release"] = "dev-bbbbbbbbbbbb"
+	if _, err := hmrPinnedRestoreOperation(development, clusterControllerNode{}); err == nil {
+		t.Fatal("development baseline mismatched to full SHA accepted")
+	}
 }
 
 func TestSingleNodeHMRExitFencesHostPortsBeforeCandidate(t *testing.T) {

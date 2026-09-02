@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
@@ -245,22 +245,25 @@ describe("Cluster Management", () => {
     renderClusterManagement("/cluster-management?tab=maintenance");
 
     fireEvent.click(screen.getByRole("button", { name: "Enable Cluster" }));
+    const enableDialog = screen.getByRole("dialog");
+    expect(within(enableDialog).getByText("Enable cluster")).toBeInTheDocument();
+    expect(within(enableDialog).getByText("Set address shared by K3s API, ingress, and WireGuard.")).toBeInTheDocument();
     expect(screen.getByLabelText("Cluster Virtual IP")).toBeInTheDocument();
     for (const removedField of ["Control-plane VIP", "Borealis edge VIP", "Current node management IPv4", "Current node name", "Architecture"]) {
       expect(screen.queryByLabelText(removedField)).not.toBeInTheDocument();
     }
-    fireEvent.change(screen.getByLabelText("Typed confirmation"), { target: { value: "ENABLE CLUSTER" } });
+    expect(screen.queryByLabelText("Typed confirmation")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Cluster Virtual IP"), { target: { value: "8.8.8.8" } });
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.click(within(enableDialog).getByRole("button", { name: "Enable Cluster" }));
     expect(screen.getByText("Valid private Cluster Virtual IP required.")).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
 
     fireEvent.change(screen.getByLabelText("Cluster Virtual IP"), { target: { value: "192.168.3.249" } });
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.click(within(enableDialog).getByRole("button", { name: "Enable Cluster" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/server/cluster/enable",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ cluster_vip: "192.168.3.249", confirmation: "ENABLE CLUSTER" }) }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ cluster_vip: "192.168.3.249" }) }),
     ));
   });
 

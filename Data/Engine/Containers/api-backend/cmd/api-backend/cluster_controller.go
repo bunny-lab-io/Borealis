@@ -2112,8 +2112,8 @@ func completedRemovalClusterState(targetSize int64, emergency bool) (int64, stri
 func hmrPinnedRestoreOperation(operation clusterControllerOperation, node clusterControllerNode) (clusterControllerOperation, error) {
 	sha := firstText(operation.TargetSHA, cleanText(operation.Payload["baseline_sha"]), node.ReleaseSHA)
 	release := firstText(operation.TargetRelease, cleanText(operation.Payload["baseline_release"]), node.ReleaseTag)
-	if !clusterControllerSHARegex.MatchString(sha) || !clusterReleaseRE.MatchString(release) {
-		return clusterControllerOperation{}, errors.New("saved pinned production release is unavailable")
+	if !validClusterBaselineRelease(release, sha) {
+		return clusterControllerOperation{}, errors.New("saved pinned cluster baseline is unavailable")
 	}
 	restore := operation
 	restore.TargetSHA = sha
@@ -2136,7 +2136,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 	if err := validateCurrentReleaseAdmission(len(activeNodes), len(ids)); err != nil {
 		return err
 	}
-	if len(names) != len(ids) || !clusterReleaseRE.MatchString(baselineRelease) || !clusterControllerSHARegex.MatchString(baselineSHA) {
+	if len(names) != len(ids) || !validClusterBaselineRelease(baselineRelease, baselineSHA) {
 		return errors.New("membership admission lacks pinned cluster baseline")
 	}
 	pending := make([]clusterControllerNode, 0, len(ids))
@@ -2769,7 +2769,7 @@ func clusterNodeRuntimeState(node clusterControllerNode, kubernetesNode map[stri
 		"nodeName":                node.Name,
 		"desiredApplicationState": desiredApplicationState,
 	}
-	if clusterReleaseRE.MatchString(node.ReleaseTag) {
+	if clusterReleaseRE.MatchString(node.ReleaseTag) || validClusterBaselineRelease(node.ReleaseTag, node.ReleaseSHA) {
 		spec["desiredRelease"] = node.ReleaseTag
 	}
 	if clusterControllerSHARegex.MatchString(node.ReleaseSHA) {
@@ -2861,7 +2861,7 @@ func clusterResourceState(state clusterControllerState) (map[string]any, map[str
 		"desiredSize": state.DesiredSize,
 		"clusterVIP":  clusterVIP,
 	}
-	if clusterReleaseRE.MatchString(state.BaselineRelease) {
+	if clusterReleaseRE.MatchString(state.BaselineRelease) || validClusterBaselineRelease(state.BaselineRelease, state.BaselineSHA) {
 		spec["baselineRelease"] = state.BaselineRelease
 	}
 	if clusterControllerSHARegex.MatchString(state.BaselineSHA) {
@@ -2986,7 +2986,7 @@ func clusterOperationResourceState(resource clusterControllerOperationResource) 
 	if clusterUUIDRE.MatchString(operation.TargetNodeID) {
 		spec["targetNodeID"] = operation.TargetNodeID
 	}
-	if clusterReleaseRE.MatchString(operation.TargetRelease) {
+	if clusterReleaseRE.MatchString(operation.TargetRelease) || validClusterBaselineRelease(operation.TargetRelease, operation.TargetSHA) {
 		spec["targetRelease"] = operation.TargetRelease
 	}
 	if clusterControllerSHARegex.MatchString(operation.TargetSHA) {

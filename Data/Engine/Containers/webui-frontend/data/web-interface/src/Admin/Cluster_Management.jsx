@@ -39,6 +39,19 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_DANGER_BUTTON_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_SELECT_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
 import RowContextMenu from "../Row_Context_Menu.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
@@ -937,7 +950,7 @@ export default function ClusterManagement() {
     }
     if (kind === "cluster_enable") {
       if (!validPrivateIPv4(clusterVIP)) return setError("Valid private Cluster Virtual IP required.");
-      return mutate("/api/server/cluster/enable", { cluster_vip: clusterVIP, confirmation });
+      return mutate("/api/server/cluster/enable", { cluster_vip: clusterVIP });
     }
     if (kind === "invite") {
       if (!canPrepareMembership) return setError("Current release supports node invitations only for one-to-three expansion or degraded-quorum replacement.");
@@ -1315,7 +1328,7 @@ export default function ClusterManagement() {
           </Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
-          {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
+          {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first. Clean development commits can become pinned cluster baseline without GitHub release.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
           {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
@@ -1331,32 +1344,37 @@ export default function ClusterManagement() {
         widthVariant="standard"
       />
 
-      <Dialog open={Boolean(dialog)} onClose={() => !busy && setDialog(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Confirm cluster operation</DialogTitle>
-        <DialogContent>
+      <Dialog open={Boolean(dialog)} onClose={() => !busy && setDialog(null)} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={dialog?.kind === "cluster_enable" ? "Enable cluster" : "Confirm cluster operation"}
+            subtitle={dialog?.kind === "cluster_enable" ? "Set address shared by K3s API, ingress, and WireGuard." : "Review requested cluster operation before continuing."}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           {dialog?.kind === "hmr_start" ? <Alert severity="warning" sx={{ mb: 2 }}>{HMR_WARNING}</Alert> : null}
           {maintenanceExitDisablesIsolation ? <Alert severity="warning" sx={{ mb: 2 }}>Cluster-Wide Node Isolation will be disabled if the node exits maintenance mode.</Alert> : null}
           {dialog?.kind === "remove" ? <Alert severity="warning" sx={{ mb: 2 }}>Safe downscale removes two nodes sequentially. PostgreSQL replicas must vacate both targets before Borealis self-fences K3s and deletes membership.</Alert> : null}
           {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
           {dialog?.kind === "k3s_update" ? <Alert severity="warning" sx={{ mb: 2 }}>K3s control-plane update stays separate from Engine release update. Failure halts sequence and leaves affected node drained.</Alert> : null}
           {dialog?.kind === "update_node" || dialog?.kind === "update_all" ? (
-            <FormControl fullWidth sx={{ mb: 2 }}>
+            <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}>
               <InputLabel id="dialog-release-label">Release</InputLabel>
               <Select labelId="dialog-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
                 {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}</MenuItem>)}
               </Select>
             </FormControl>
           ) : null}
-          {dialog?.kind === "cluster_enable" ? <TextField fullWidth sx={{ mb: 2 }} label="Cluster Virtual IP" value={clusterVIP} onChange={(event) => setClusterVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} helperText="Unused private IPv4 on current Engine subnet. Borealis derives current node name, management IP, and amd64 architecture." /> : null}
-          {dialog?.kind === "invite" ? <TextField fullWidth label="New node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /> : null}
-          {dialog?.kind === "k3s_update" ? <TextField fullWidth sx={{ mb: 2 }} label="Stable K3s target" value={k3sTargetVersion} onChange={(event) => setK3sTargetVersion(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 32 }} helperText="vX.Y.Z+k3sN; immutable upgrade image and source conformance required" /> : null}
-          {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
-          {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
-          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {maintenanceExitDisablesIsolation || !['maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "cluster_enable" ? "Type ENABLE CLUSTER" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
-          <Typography variant="body2" sx={{ mt: 2, color: "text.secondary" }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography>
+          {dialog?.kind === "cluster_enable" ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }} label="Cluster Virtual IP" value={clusterVIP} onChange={(event) => setClusterVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} helperText="Unused private IPv4 on current Engine subnet. Node identity and AMD64 architecture are derived automatically." /> : null}
+          {dialog?.kind === "invite" ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }} label="New node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /> : null}
+          {dialog?.kind === "k3s_update" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25, mb: 2 }} label="Stable K3s target" value={k3sTargetVersion} onChange={(event) => setK3sTargetVersion(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 32 }} helperText="vX.Y.Z+k3sN; immutable upgrade image and source conformance required" /> : null}
+          {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
+          {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
+          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
+          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
+          {dialog?.kind !== "cluster_enable" ? <Typography variant="body2" sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2 }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography> : null}
         </DialogContent>
-        <DialogActions><Button onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button variant="contained" color={dialog?.kind === "emergency_remove" ? "error" : dialog?.kind === "hmr_start" || maintenanceExitDisablesIsolation ? "warning" : "primary"} onClick={() => void submitDialog()} disabled={busy}>Submit</Button></DialogActions>
+        <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
       </Dialog>
     </PageBodyFrame>
   );
