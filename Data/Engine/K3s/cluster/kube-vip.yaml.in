@@ -30,22 +30,22 @@ subjects:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: kube-vip-borealis-control
+  name: kube-vip-borealis-cluster
   namespace: kube-system
-  labels: {app.kubernetes.io/name: kube-vip-borealis-control, app.kubernetes.io/part-of: borealis}
+  labels: {app.kubernetes.io/name: kube-vip-borealis-cluster, app.kubernetes.io/part-of: borealis}
 spec:
   minReadySeconds: 5
   updateStrategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1}}
-  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-control}}
+  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-cluster}}
   template:
-    metadata: {labels: {app.kubernetes.io/name: kube-vip-borealis-control, app.kubernetes.io/part-of: borealis}}
+    metadata: {labels: {app.kubernetes.io/name: kube-vip-borealis-cluster, app.kubernetes.io/part-of: borealis}}
     spec:
       serviceAccountName: kube-vip-borealis
       automountServiceAccountToken: true
       hostNetwork: true
       terminationGracePeriodSeconds: 20
       securityContext: {seccompProfile: {type: RuntimeDefault}}
-      nodeSelector: {borealis.io/engine-node: "true", borealis.io/control-plane-eligible: "true"}
+      nodeSelector: {borealis.io/engine-node: "true", borealis.io/control-plane-eligible: "true", borealis.io/edge-eligible: "true"}
       containers:
         - name: kube-vip
           image: ghcr.io/kube-vip/kube-vip@sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410
@@ -58,10 +58,10 @@ spec:
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
             - {name: vip_interface, value: "${BOREALIS_CLUSTER_INTERFACE}"}
             - {name: vip_subnet, value: "32"}
-            - {name: address, value: "${BOREALIS_CONTROL_PLANE_VIP}"}
+            - {name: address, value: "${BOREALIS_CLUSTER_VIP}"}
             - {name: cp_namespace, value: kube-system}
             - {name: vip_leaderelection, value: "true"}
-            - {name: vip_leasename, value: borealis-control-vip}
+            - {name: vip_leasename, value: borealis-cluster-vip}
             - {name: vip_leaseduration, value: "10"}
             - {name: vip_renewdeadline, value: "5"}
             - {name: vip_retryperiod, value: "2"}
@@ -73,7 +73,7 @@ spec:
             periodSeconds: 1
             failureThreshold: 30
           readinessProbe:
-            tcpSocket: {host: "${BOREALIS_CONTROL_PLANE_VIP}", port: 6443}
+            tcpSocket: {host: "${BOREALIS_CLUSTER_VIP}", port: 6443}
             periodSeconds: 2
             failureThreshold: 2
           livenessProbe:
@@ -89,84 +89,12 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {add: ["NET_ADMIN", "NET_RAW"], drop: ["ALL"]}
 ---
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: kube-vip-borealis-edge
-  namespace: kube-system
-  labels: {app.kubernetes.io/name: kube-vip-borealis-edge, app.kubernetes.io/part-of: borealis}
-spec:
-  minReadySeconds: 5
-  updateStrategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1}}
-  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-edge}}
-  template:
-    metadata: {labels: {app.kubernetes.io/name: kube-vip-borealis-edge, app.kubernetes.io/part-of: borealis}}
-    spec:
-      serviceAccountName: kube-vip-borealis
-      automountServiceAccountToken: true
-      hostNetwork: true
-      terminationGracePeriodSeconds: 20
-      securityContext: {seccompProfile: {type: RuntimeDefault}}
-      nodeSelector: {borealis.io/engine-node: "true", borealis.io/edge-eligible: "true"}
-      containers:
-        - name: kube-vip
-          image: ghcr.io/kube-vip/kube-vip@sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410
-          imagePullPolicy: IfNotPresent
-          args: [manager]
-          env:
-            - {name: vip_arp, value: "true"}
-            - {name: port, value: "443"}
-            - name: vip_nodename
-              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
-            - {name: vip_interface, value: "${BOREALIS_CLUSTER_INTERFACE}"}
-            - {name: vip_subnet, value: "32"}
-            - {name: address, value: "${BOREALIS_EDGE_VIP}"}
-            - {name: cp_namespace, value: kube-system}
-            - {name: vip_leaderelection, value: "true"}
-            - {name: vip_leasename, value: borealis-edge-vip}
-            - {name: vip_leaseduration, value: "10"}
-            - {name: vip_renewdeadline, value: "5"}
-            - {name: vip_retryperiod, value: "2"}
-            - {name: cp_enable, value: "true"}
-            - {name: svc_enable, value: "false"}
-            - {name: prometheus_server, value: ":2113"}
-          startupProbe:
-            tcpSocket: {port: 2113}
-            periodSeconds: 1
-            failureThreshold: 30
-          readinessProbe:
-            tcpSocket: {host: "${BOREALIS_EDGE_VIP}", port: 443}
-            periodSeconds: 2
-            failureThreshold: 2
-          livenessProbe:
-            tcpSocket: {port: 2113}
-            initialDelaySeconds: 40
-            periodSeconds: 10
-            failureThreshold: 3
-          resources:
-            requests: {cpu: 25m, memory: 32Mi}
-            limits: {cpu: 250m, memory: 128Mi}
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: {add: ["NET_ADMIN", "NET_RAW"], drop: ["ALL"]}
----
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: kube-vip-borealis-control
+  name: kube-vip-borealis-cluster
   namespace: kube-system
-  labels: {app.kubernetes.io/name: kube-vip-borealis-control, app.kubernetes.io/part-of: borealis}
+  labels: {app.kubernetes.io/name: kube-vip-borealis-cluster, app.kubernetes.io/part-of: borealis}
 spec:
   minAvailable: 1
-  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-control}}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: kube-vip-borealis-edge
-  namespace: kube-system
-  labels: {app.kubernetes.io/name: kube-vip-borealis-edge, app.kubernetes.io/part-of: borealis}
-spec:
-  minAvailable: 1
-  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-edge}}
+  selector: {matchLabels: {app.kubernetes.io/name: kube-vip-borealis-cluster}}

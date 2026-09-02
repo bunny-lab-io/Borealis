@@ -171,17 +171,47 @@ func TestClusterEnableRemainsProbeConformanceGated(t *testing.T) {
 	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "failed")
 	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "2026.08.23")
 	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "engine-1")
+	t.Setenv("BOREALIS_ENGINE_MANAGEMENT_IP", "10.20.30.12")
 	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
-	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"control_plane_vip":"10.20.30.10","edge_vip":"10.20.30.11","management_ip":"10.20.30.12","architecture":"amd64","node_name":"engine-1","confirmation":"ENABLE CLUSTER"}`, token)
+	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10","confirmation":"ENABLE CLUSTER"}`, token)
 	recorder := httptest.NewRecorder()
 
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "probe_conformance") {
 		t.Fatalf("expected conformance gate, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestClusterEnableDerivesAMD64NodeIdentityAndSynchronizesVIPStorage(t *testing.T) {
+	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
+	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "2026.08.23")
+	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "ENGINE-1")
+	t.Setenv("BOREALIS_ENGINE_MANAGEMENT_IP", "10.20.30.12")
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10","confirmation":"ENABLE CLUSTER"}`, token))
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected cluster enable acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	payload := store.mutation.Payload
+	if store.mutation.Kind != "cluster_enable" || payload["cluster_vip"] != "10.20.30.10" || payload["control_plane_vip"] != "10.20.30.10" || payload["edge_vip"] != "10.20.30.10" {
+		t.Fatalf("Cluster Virtual IP contract was not synchronized: %+v", store.mutation)
+	}
+	if payload["node_name"] != "engine-1" || payload["management_ip"] != "10.20.30.12" || payload["architecture"] != "amd64" {
+		t.Fatalf("local node identity was not derived: %#v", payload)
 	}
 }
 
@@ -669,8 +699,13 @@ func TestK3sUpgradePathRejectsDowngradeSameVersionAndMinorSkip(t *testing.T) {
 }
 
 func TestClusterInputClassesEnforceIPv4UbuntuAndOperationalLimits(t *testing.T) {
-	if len(validateClusterIP("management_ip", "2001:db8::1")) == 0 || len(validateClusterIP("management_ip", "10.20.30.40")) != 0 {
-		t.Fatal("cluster management addresses must be IPv4")
+	for _, address := range []string{"2001:db8::1", "8.8.8.8", "127.0.0.1", "169.254.1.1"} {
+		if len(validateClusterIP("management_ip", address)) == 0 {
+			t.Fatalf("unsafe cluster address accepted: %s", address)
+		}
+	}
+	if len(validateClusterIP("management_ip", "10.20.30.40")) != 0 {
+		t.Fatal("private unicast cluster IPv4 address rejected")
 	}
 	if !clusterSupportedUbuntu("Ubuntu 24.04") || !clusterSupportedUbuntu("Ubuntu 26.04 LTS") || clusterSupportedUbuntu("Ubuntu 22.04") || clusterSupportedUbuntu("Debian 13") {
 		t.Fatal("unexpected Ubuntu baseline validation")
@@ -680,6 +715,21 @@ func TestClusterInputClassesEnforceIPv4UbuntuAndOperationalLimits(t *testing.T) 
 	}
 	if len(validateClusterRelease(strings.Repeat("1", clusterReleaseMaxLength+1))) == 0 || len(validateClusterNodeName("node_name", strings.Repeat("n", clusterNodeNameMaxLength+1))) == 0 {
 		t.Fatal("release or node-name maximum missing")
+	}
+}
+
+func TestClusterJoinRejectsNonAMD64ArchitectureBeforeAuthentication(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, _ := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	body := `{"invite_bundle":"invalid","node_name":"engine-2","hostname":"engine-2","management_ip":"10.20.30.42","architecture":"arm64","os_version":"Ubuntu 24.04"}`
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/bootstrap/cluster/join", body, ""))
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "must be amd64") {
+		t.Fatalf("expected non-amd64 rejection, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

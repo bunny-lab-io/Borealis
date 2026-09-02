@@ -216,9 +216,11 @@ const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "oper
 const CLUSTER_EVENT_PAGE_SIZE = 500;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
 
-function validIPv4(value) {
+function validPrivateIPv4(value) {
   const parts = String(value || "").split(".");
-  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255 && String(Number(part)) === part);
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255 && String(Number(part)) === part)) return false;
+  const octets = parts.map(Number);
+  return octets[0] === 10 || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) || (octets[0] === 192 && octets[1] === 168);
 }
 
 export async function loadClusterManagementPageData(request) {
@@ -403,15 +405,15 @@ export function clusterNodeStatusLabel(node) {
 export function clusterNodeRolesPresentation(node) {
   const roles = node?.roles || {};
   const roleLabels = {
-    control_vip_owner: "Control VIP Owner",
-    edge_vip_owner: "Edge VIP Owner",
+    control_vip_owner: "Cluster Virtual IP Owner",
+    edge_vip_owner: "Cluster Virtual IP Owner",
     etcd_leader: "etcd Leader",
     scheduler_leader: "Scheduler Leader",
     wireguard_owner: "WireGuard Owner",
   };
-  const ownershipLabels = Object.entries(roles)
+  const ownershipLabels = [...new Set(Object.entries(roles)
     .filter(([role, active]) => !["k3s_version", "postgres_primary"].includes(role) && active === true)
-    .map(([role]) => roleLabels[role] || titleCase(role));
+    .map(([role]) => roleLabels[role] || titleCase(role)))];
   return {
     ownershipLabels,
     label: ownershipLabels.length ? ownershipLabels.join(", ") : "Standby",
@@ -771,11 +773,8 @@ export default function ClusterManagement() {
   const [reason, setReason] = useState("");
   const [selectedRelease, setSelectedRelease] = useState("");
   const [selectedNode, setSelectedNode] = useState("");
-  const [controlVIP, setControlVIP] = useState("");
-  const [edgeVIP, setEdgeVIP] = useState("");
+  const [clusterVIP, setClusterVIP] = useState("");
   const [nodeName, setNodeName] = useState("");
-  const [managementIP, setManagementIP] = useState("");
-  const [architecture, setArchitecture] = useState("amd64");
   const [desiredSize, setDesiredSize] = useState(3);
   const [inviteBundle, setInviteBundle] = useState("");
   const [pairedNode, setPairedNode] = useState("");
@@ -937,9 +936,8 @@ export default function ClusterManagement() {
       return mutate(`/api/server/cluster/nodes/${node.id}/maintenance`, { action, reason: sanitizedReason });
     }
     if (kind === "cluster_enable") {
-      if (!validIPv4(controlVIP) || !validIPv4(edgeVIP) || controlVIP === edgeVIP || !validIPv4(managementIP)) return setError("Distinct valid IPv4 control-plane and edge VIPs plus valid management IPv4 required.");
-      if (!NODE_NAME_PATTERN.test(nodeName)) return setError("Node name must be DNS-label syntax and no longer than 63 characters.");
-      return mutate("/api/server/cluster/enable", { control_plane_vip: controlVIP, edge_vip: edgeVIP, node_name: nodeName, management_ip: managementIP, architecture, confirmation });
+      if (!validPrivateIPv4(clusterVIP)) return setError("Valid private Cluster Virtual IP required.");
+      return mutate("/api/server/cluster/enable", { cluster_vip: clusterVIP, confirmation });
     }
     if (kind === "invite") {
       if (!canPrepareMembership) return setError("Current release supports node invitations only for one-to-three expansion or degraded-quorum replacement.");
@@ -955,7 +953,7 @@ export default function ClusterManagement() {
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
     return undefined;
-  }, [architecture, canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, confirmation, controlVIP, desiredSize, dialog, edgeVIP, fencingConfirmation, k3sTargetVersion, managementIP, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
+  }, [canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
 
   const nodeRows = useMemo(
     () => {
@@ -1258,7 +1256,7 @@ export default function ClusterManagement() {
 
         {tab === "overview" ? <KeyValueGrid entries={[
           ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Baseline release", cluster?.baseline_release], ["K3s version", cluster?.k3s_version],
-          ["etcd leader", owner(leaders?.etcd_leader)], ["Control VIP owner", owner(leaders?.control_vip_owner)], ["Edge VIP owner", owner(leaders?.edge_vip_owner)],
+          ["etcd leader", owner(leaders?.etcd_leader)], ["Cluster Virtual IP owner", owner(leaders?.cluster_vip_owner || leaders?.control_vip_owner || leaders?.edge_vip_owner)],
           ["PostgreSQL primary", owner(leaders?.postgres_primary)], ["Scheduler leader", owner(leaders?.scheduler_leader)], ["WireGuard owner", owner(leaders?.wireguard_owner)],
         ]} /> : null}
 
@@ -1349,7 +1347,7 @@ export default function ClusterManagement() {
               </Select>
             </FormControl>
           ) : null}
-          {dialog?.kind === "cluster_enable" ? <Stack spacing={1.5} sx={{ mb: 2 }}><TextField label="Control-plane VIP" value={controlVIP} onChange={(event) => setControlVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /><TextField label="Borealis edge VIP" value={edgeVIP} onChange={(event) => setEdgeVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /><TextField label="Current node management IPv4" value={managementIP} onChange={(event) => setManagementIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /><TextField label="Current node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /><FormControl><InputLabel id="cluster-architecture-label">Architecture</InputLabel><Select labelId="cluster-architecture-label" label="Architecture" value={architecture} onChange={(event) => setArchitecture(event.target.value)}><MenuItem value="amd64">amd64</MenuItem><MenuItem value="arm64">arm64</MenuItem></Select></FormControl></Stack> : null}
+          {dialog?.kind === "cluster_enable" ? <TextField fullWidth sx={{ mb: 2 }} label="Cluster Virtual IP" value={clusterVIP} onChange={(event) => setClusterVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} helperText="Unused private IPv4 on current Engine subnet. Borealis derives current node name, management IP, and amd64 architecture." /> : null}
           {dialog?.kind === "invite" ? <TextField fullWidth label="New node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /> : null}
           {dialog?.kind === "k3s_update" ? <TextField fullWidth sx={{ mb: 2 }} label="Stable K3s target" value={k3sTargetVersion} onChange={(event) => setK3sTargetVersion(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 32 }} helperText="vX.Y.Z+k3sN; immutable upgrade image and source conformance required" /> : null}
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}

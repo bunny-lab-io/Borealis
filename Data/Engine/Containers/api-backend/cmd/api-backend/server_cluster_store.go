@@ -191,6 +191,7 @@ func (s *postgresOperatorStore) clusterSnapshot(ctx context.Context) (map[string
 		payload["status"] = status
 		payload["active_size"] = activeSize
 		payload["desired_size"] = desiredSize
+		payload["cluster_vip"] = nilIfEmpty(firstText(controlVIP, edgeVIP))
 		payload["control_plane_vip"] = nilIfEmpty(controlVIP)
 		payload["edge_vip"] = nilIfEmpty(edgeVIP)
 		payload["baseline_release"] = nilIfEmpty(baselineRelease)
@@ -625,9 +626,8 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		return nil, err
 	}
 	if mutation.Kind == "cluster_enable" {
-		controlVIP := cleanText(mutation.Payload["control_plane_vip"])
-		edgeVIP := cleanText(mutation.Payload["edge_vip"])
-		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Enabling', control_plane_vip=$1, edge_vip=$2, active_operation_id=$3, updated_at=$4 WHERE id=1`, controlVIP, edgeVIP, operationID, now); err != nil {
+		clusterVIP := cleanText(mutation.Payload["cluster_vip"])
+		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Enabling', control_plane_vip=$1, edge_vip=$1, active_operation_id=$2, updated_at=$3 WHERE id=1`, clusterVIP, operationID, now); err != nil {
 			return nil, err
 		}
 	} else if mutation.Kind == "hmr_start" {
@@ -1027,15 +1027,16 @@ func queryClusterRows(ctx context.Context, conn *sql.Conn, query string, scan fu
 }
 
 func collectClusterLeaders(nodes []map[string]any) map[string]any {
-	leaders := map[string]any{"etcd_leader": nil, "control_vip_owner": nil, "edge_vip_owner": nil, "postgres_primary": nil, "scheduler_leader": nil, "wireguard_owner": nil}
+	leaders := map[string]any{"etcd_leader": nil, "cluster_vip_owner": nil, "control_vip_owner": nil, "edge_vip_owner": nil, "postgres_primary": nil, "scheduler_leader": nil, "wireguard_owner": nil}
 	for _, node := range nodes {
 		roles, _ := node["roles"].(map[string]any)
-		for role := range leaders {
+		for _, role := range []string{"etcd_leader", "control_vip_owner", "edge_vip_owner", "postgres_primary", "scheduler_leader", "wireguard_owner"} {
 			if coerceClusterBool(roles[role]) {
 				leaders[role] = node["id"]
 			}
 		}
 	}
+	leaders["cluster_vip_owner"] = firstNonNil(leaders["control_vip_owner"], leaders["edge_vip_owner"])
 	return leaders
 }
 

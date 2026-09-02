@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -247,23 +248,15 @@ func clusterReleasesHandler(auth *authService) http.HandlerFunc {
 
 func clusterEnableHandler(auth *authService) http.HandlerFunc {
 	return clusterMutationHandler(auth, "cluster_enable", func(body map[string]any) (clusterMutation, []publicValidationError) {
-		allowed := map[string]bool{"control_plane_vip": true, "edge_vip": true, "node_name": true, "management_ip": true, "architecture": true, "confirmation": true}
+		allowed := map[string]bool{"cluster_vip": true, "confirmation": true}
 		errs := rejectUnknownClusterFields(body, allowed)
-		controlVIP := cleanText(body["control_plane_vip"])
-		edgeVIP := cleanText(body["edge_vip"])
-		nodeName := cleanText(body["node_name"])
-		managementIP := cleanText(body["management_ip"])
-		architecture := strings.ToLower(cleanText(body["architecture"]))
+		clusterVIP := cleanText(body["cluster_vip"])
 		confirmation := cleanText(body["confirmation"])
-		errs = append(errs, validateClusterIP("control_plane_vip", controlVIP)...)
-		errs = append(errs, validateClusterIP("edge_vip", edgeVIP)...)
-		errs = append(errs, validateClusterNodeName("node_name", nodeName)...)
-		errs = append(errs, validateClusterIP("management_ip", managementIP)...)
-		if architecture != "amd64" && architecture != "arm64" {
-			errs = append(errs, publicValidationError{Field: "architecture", Message: "must be amd64 or arm64"})
-		}
-		if controlVIP != "" && controlVIP == edgeVIP {
-			errs = append(errs, publicValidationError{Field: "edge_vip", Message: "must differ from control_plane_vip"})
+		nodeName, managementIP, architecture, identityErrs := clusterLocalNodeIdentity()
+		errs = append(errs, validateClusterIP("cluster_vip", clusterVIP)...)
+		errs = append(errs, identityErrs...)
+		if clusterVIP != "" && clusterVIP == managementIP {
+			errs = append(errs, publicValidationError{Field: "cluster_vip", Message: "must differ from current node management IPv4"})
 		}
 		if confirmation != "ENABLE CLUSTER" {
 			errs = append(errs, publicValidationError{Field: "confirmation", Message: "must equal ENABLE CLUSTER"})
@@ -280,7 +273,19 @@ func clusterEnableHandler(auth *authService) http.HandlerFunc {
 		if !clusterReleaseRE.MatchString(baselineRelease) || !clusterControllerSHARegex.MatchString(baselineSHA) {
 			errs = append(errs, publicValidationError{Field: "release", Message: "cluster enable requires a published dotted-numeric Engine release pinned to a commit SHA"})
 		}
-		return clusterMutation{Kind: "cluster_enable", Payload: map[string]any{"control_plane_vip": controlVIP, "edge_vip": edgeVIP, "node_name": nodeName, "management_ip": managementIP, "architecture": architecture, "baseline_release": baselineRelease, "baseline_sha": baselineSHA, "k3s_version": k3sVersion}}, errs
+		return clusterMutation{Kind: "cluster_enable", Payload: map[string]any{
+			"cluster_vip": clusterVIP,
+			// Legacy storage keys remain synchronized while existing cluster_state
+			// rows migrate to one operator-facing Cluster Virtual IP contract.
+			"control_plane_vip": clusterVIP,
+			"edge_vip":          clusterVIP,
+			"node_name":         nodeName,
+			"management_ip":     managementIP,
+			"architecture":      architecture,
+			"baseline_release":  baselineRelease,
+			"baseline_sha":      baselineSHA,
+			"k3s_version":       k3sVersion,
+		}}, errs
 	})
 }
 
@@ -690,8 +695,8 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 			errs = append(errs, publicValidationError{Field: "hostname", Message: "must be a valid hostname no longer than 253 characters"})
 		}
 		errs = append(errs, validateClusterIP("management_ip", managementIP)...)
-		if architecture != "amd64" && architecture != "arm64" {
-			errs = append(errs, publicValidationError{Field: "architecture", Message: "must be amd64 or arm64"})
+		if architecture != "amd64" {
+			errs = append(errs, publicValidationError{Field: "architecture", Message: "must be amd64"})
 		}
 		if !clusterSupportedUbuntu(osVersion) {
 			errs = append(errs, publicValidationError{Field: "os_version", Message: "must identify Ubuntu 24.04 or newer"})
@@ -902,10 +907,22 @@ func validateClusterNodeName(field, value string) []publicValidationError {
 
 func validateClusterIP(field, value string) []publicValidationError {
 	ip := net.ParseIP(value)
-	if ip == nil || ip.To4() == nil || strings.Contains(value, ":") || ip.IsUnspecified() || ip.IsMulticast() {
-		return []publicValidationError{{Field: field, Message: "must be a unicast IPv4 address"}}
+	if ip == nil || ip.To4() == nil || strings.Contains(value, ":") || !ip.IsPrivate() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return []publicValidationError{{Field: field, Message: "must be a private unicast IPv4 address"}}
 	}
 	return nil
+}
+
+func clusterLocalNodeIdentity() (string, string, string, []publicValidationError) {
+	nodeName := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_NODE_NAME")))
+	managementIP := strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MANAGEMENT_IP"))
+	architecture := runtime.GOARCH
+	errs := validateClusterNodeName("node_name", nodeName)
+	errs = append(errs, validateClusterIP("management_ip", managementIP)...)
+	if architecture != "amd64" {
+		errs = append(errs, publicValidationError{Field: "architecture", Message: "cluster nodes require amd64"})
+	}
+	return nodeName, managementIP, architecture, errs
 }
 
 func clusterSupportedUbuntu(value string) bool {

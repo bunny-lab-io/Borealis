@@ -151,8 +151,7 @@ SYNC_REQUESTED=0
 DISTRO_ID="unknown"
 LAUNCH_ARGS=()
 CLUSTER_NON_HA_ACKNOWLEDGED=0
-CLUSTER_CONTROL_PLANE_VIP=""
-CLUSTER_EDGE_VIP=""
+CLUSTER_VIP=""
 CLUSTER_TARGET_REVISION=""
 CLUSTER_SCHEMA_PHASE=""
 if [[ -n "${REPO_REF}" ]]; then
@@ -2020,7 +2019,7 @@ parse_launch_options() {
   LAUNCH_ARGS=()
   while (($#)); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision|--schema-phase)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--cluster-vip|--revision|--schema-phase)
         [[ $# -ge 2 ]] || die "Missing value for ${1}."
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
@@ -2036,8 +2035,7 @@ parse_launch_options() {
             export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
             export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
             ;;
-          --control-plane-vip) CLUSTER_CONTROL_PLANE_VIP="$2" ;;
-          --edge-vip) CLUSTER_EDGE_VIP="$2" ;;
+          --cluster-vip) CLUSTER_VIP="$2" ;;
           --revision) CLUSTER_TARGET_REVISION="$2" ;;
           --schema-phase) CLUSTER_SCHEMA_PHASE="$2" ;;
           --ref|--branch|--repo-branch|--repo_branch)
@@ -2049,12 +2047,12 @@ parse_launch_options() {
             ;;
         esac
         case "$1" in
-          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision|--schema-phase) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--cluster-vip|--revision|--schema-phase) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift 2
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--control-plane-vip=*|--edge-vip=*|--revision=*|--schema-phase=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--cluster-vip=*|--revision=*|--schema-phase=*)
         local key="${1%%=*}"
         local value="${1#*=}"
         case "${key}" in
@@ -2071,8 +2069,7 @@ parse_launch_options() {
             export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
             export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
             ;;
-          --control-plane-vip) CLUSTER_CONTROL_PLANE_VIP="${value}" ;;
-          --edge-vip) CLUSTER_EDGE_VIP="${value}" ;;
+          --cluster-vip) CLUSTER_VIP="${value}" ;;
           --revision) CLUSTER_TARGET_REVISION="${value}" ;;
           --schema-phase) CLUSTER_SCHEMA_PHASE="${value}" ;;
           --ref|--branch|--repo-branch|--repo_branch)
@@ -2084,7 +2081,7 @@ parse_launch_options() {
             ;;
         esac
         case "${key}" in
-          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--control-plane-vip|--edge-vip|--revision|--schema-phase) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile|--cluster-vip|--revision|--schema-phase) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift
@@ -4422,6 +4419,14 @@ $(k3s_timezone_env_entries)
               value: "${release_version}"
             - name: BOREALIS_ENGINE_SOURCE_SHA
               value: "${source_sha}"
+            - name: BOREALIS_ENGINE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: BOREALIS_ENGINE_MANAGEMENT_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: HOME
               value: "/tmp"
           startupProbe:
@@ -11327,15 +11332,15 @@ ensure_cluster_wireguard_routes() {
   route_image="$(service_image_tag_or_previous wireguard-tunnel borealis-engine/wireguard-tunnel:local)"
   [[ "${route_image}" =~ :sha-[0-9a-f]{12,64}$ || "${route_image}" =~ @sha256:[0-9a-f]{64}$ ]] \
     || die "Cluster WireGuard route DaemonSet requires immutable image; saw ${route_image}."
-  local edge_vip=""
-  edge_vip="$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.edgeVIP}')"
-  [[ "${edge_vip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
-    || die "Enabled cluster has invalid edge VIP for WireGuard route reconciliation."
+  local cluster_vip=""
+  cluster_vip="$(k3s_kubectl -n "${K3S_NAMESPACE}" get borealiscluster/borealis -o jsonpath='{.spec.clusterVIP}')"
+  [[ "${cluster_vip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+    || die "Enabled cluster has invalid Cluster Virtual IP for WireGuard route reconciliation."
   local route_manifest=""
   route_manifest="$(mktemp "${DEPLOY_DIR}/wireguard-route-daemon.XXXXXX.yaml")"
   sed \
     -e "s|borealis-engine/wireguard-tunnel:sha-000000000000|${route_image}|g" \
-    -e "s|192.0.2.2|${edge_vip}|g" \
+    -e "s|192.0.2.2|${cluster_vip}|g" \
     "${K3S_CLUSTER_ASSET_DIR}/wireguard-route-daemonset.yaml" > "${route_manifest}"
   k3s_kubectl apply --server-side --field-manager=borealis-engine -f "${route_manifest}" >> "${BUILD_LOG}" 2>&1
   find "$(dirname -- "${route_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${route_manifest}")" -delete
@@ -11382,10 +11387,9 @@ ensure_cluster_dependency_probe_guards() {
     || die "CloudNativePG operator liveness startup guard could not be applied. See ${BUILD_LOG}."
   k3s_kubectl -n kube-system patch deployment/snapshot-controller --type=strategic -p "${snapshot_patch}" >> "${BUILD_LOG}" 2>&1 \
     || die "Snapshot controller liveness startup guard could not be applied. See ${BUILD_LOG}."
-  for resource in kube-vip-borealis-control kube-vip-borealis-edge; do
-    k3s_kubectl -n kube-system patch "daemonset/${resource}" --type=strategic -p "${vip_patch}" >> "${BUILD_LOG}" 2>&1 \
-      || die "${resource} liveness startup guard could not be applied. See ${BUILD_LOG}."
-  done
+  resource="kube-vip-borealis-cluster"
+  k3s_kubectl -n kube-system patch "daemonset/${resource}" --type=strategic -p "${vip_patch}" >> "${BUILD_LOG}" 2>&1 \
+    || die "${resource} liveness startup guard could not be applied. See ${BUILD_LOG}."
   k3s_kubectl -n "${K3S_NAMESPACE}" patch cluster.postgresql.cnpg.io/borealis-postgres --type=merge -p "${postgres_patch}" >> "${BUILD_LOG}" 2>&1 \
     || die "CloudNativePG instance liveness startup guard could not be applied. See ${BUILD_LOG}."
 
@@ -11393,10 +11397,8 @@ ensure_cluster_dependency_probe_guards() {
     || die "CloudNativePG operator probe-guard rollout failed. See ${BUILD_LOG}."
   k3s_kubectl -n kube-system rollout status deployment/snapshot-controller --timeout=5m >> "${BUILD_LOG}" 2>&1 \
     || die "Snapshot controller probe-guard rollout failed. See ${BUILD_LOG}."
-  for resource in kube-vip-borealis-control kube-vip-borealis-edge; do
-    k3s_kubectl -n kube-system rollout status "daemonset/${resource}" --timeout=5m >> "${BUILD_LOG}" 2>&1 \
-      || die "${resource} probe-guard rollout failed. See ${BUILD_LOG}."
-  done
+  k3s_kubectl -n kube-system rollout status "daemonset/${resource}" --timeout=5m >> "${BUILD_LOG}" 2>&1 \
+    || die "${resource} probe-guard rollout failed. See ${BUILD_LOG}."
 
   local desired_instances=""
   local deadline=$((SECONDS + 900))
@@ -11552,34 +11554,19 @@ print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_i
 }
 
 cluster_enable_engine() {
-  [[ "${EUID:-$(id -u)}" -eq 0 ]] || exec sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE bash "${SCRIPT_DIR}/Engine.sh" --cluster-enable --control-plane-vip "${CLUSTER_CONTROL_PLANE_VIP}" --edge-vip "${CLUSTER_EDGE_VIP}"
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || exec sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE bash "${SCRIPT_DIR}/Engine.sh" --cluster-enable --cluster-vip "${CLUSTER_VIP}"
   [[ "$(k3s_probe_conformance_status)" == "passed" ]] || die "Stable K3s probe conformance missing or stale. Run ${K3S_CLUSTER_ASSET_DIR}/run-probe-conformance.sh first."
-  [[ -n "${CLUSTER_CONTROL_PLANE_VIP}" && -n "${CLUSTER_EDGE_VIP}" ]] || die "Cluster enable requires --control-plane-vip and --edge-vip."
+  [[ -n "${CLUSTER_VIP}" ]] || die "Cluster enable requires --cluster-vip."
   [[ -f "${IMAGE_MANIFEST}" ]] || die "Existing Engine deployment missing image manifest."
   load_existing_image_tags
   local api_image="${IMAGE_TAGS[api-backend]:-}"
   [[ -n "${api_image}" ]] || die "Existing immutable API image unavailable."
   if [[ "${BOREALIS_CLUSTER_ENROLL_OPERATION:-0}" != "1" ]]; then
-    local node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
-    local interface=""
-    local management_ip=""
-    local architecture=""
-    interface="$(ip -4 route show default | awk 'NR == 1 {print $5}')"
-    management_ip="$(ip -o -4 address show dev "${interface}" scope global | awk 'NR == 1 {sub(/\/.*/, "", $4); print $4}')"
-    case "$(uname -m)" in
-      x86_64|amd64) architecture="amd64" ;;
-      aarch64|arm64) architecture="arm64" ;;
-      *) die "Cluster mode supports amd64 or arm64 only." ;;
-    esac
     local body=""
-    body="$(python3 - "${CLUSTER_CONTROL_PLANE_VIP}" "${CLUSTER_EDGE_VIP}" "${node_name}" "${management_ip}" "${architecture}" <<'PY'
+    body="$(python3 - "${CLUSTER_VIP}" <<'PY'
 import json, sys
 print(json.dumps({
-    "control_plane_vip": sys.argv[1],
-    "edge_vip": sys.argv[2],
-    "node_name": sys.argv[3],
-    "management_ip": sys.argv[4],
-    "architecture": sys.argv[5],
+    "cluster_vip": sys.argv[1],
     "confirmation": "ENABLE CLUSTER",
 }, separators=(",", ":")))
 PY
@@ -11592,7 +11579,7 @@ PY
     cluster_wait_for_operation "${operation_id}"
     return 0
   fi
-  BOREALIS_CLUSTER_API_IMAGE="${api_image}" BOREALIS_CLUSTER_ACTIVE_SIZE=1 "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" enable "${CLUSTER_CONTROL_PLANE_VIP}" "${CLUSTER_EDGE_VIP}"
+  BOREALIS_CLUSTER_API_IMAGE="${api_image}" BOREALIS_CLUSTER_ACTIVE_SIZE=1 "${K3S_CLUSTER_ASSET_DIR}/cluster-node-workflow.sh" enable "${CLUSTER_VIP}"
   ensure_cluster_controller_baseline
 }
 
@@ -11885,7 +11872,7 @@ Usage:
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
   Engine.sh --redeploy-agent-binaries
   Engine.sh --cluster-prepare-node
-  Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4
+  Engine.sh --cluster-enable --cluster-vip IPv4
   Engine.sh --cluster-stage-revision --revision COMMIT_SHA
   Engine.sh --cluster-node-redeploy --revision COMMIT_SHA
   Engine.sh --cluster-schema-phase --schema-phase <expand|finalize> --revision COMMIT_SHA
@@ -11926,7 +11913,7 @@ main() {
       cluster_prepare_node
       ;;
     --cluster-enable)
-      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-enable --control-plane-vip IPv4 --edge-vip IPv4"
+      [[ "$#" -eq 1 ]] || die "Usage: Engine.sh --cluster-enable --cluster-vip IPv4"
       cluster_enable_engine
       ;;
     --cluster-node-redeploy)

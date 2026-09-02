@@ -58,10 +58,18 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             self.assertEqual(mount["mountPath"], "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets")
             self.assertTrue(mount["readOnly"])
 
-    def test_cluster_edge_environment_replaces_stale_value(self) -> None:
+    def test_cluster_virtual_ip_environment_replaces_stale_value(self) -> None:
         container = {"env": [{"name": "BOREALIS_CLUSTER_EDGE_VIP", "value": "192.0.2.2"}]}
         MODULE.set_container_environment(container, "BOREALIS_CLUSTER_EDGE_VIP", "192.168.3.248")
         self.assertEqual(container["env"], [{"name": "BOREALIS_CLUSTER_EDGE_VIP", "value": "192.168.3.248"}])
+
+    def test_cluster_virtual_ip_reads_canonical_crd_field(self) -> None:
+        with mock.patch.object(MODULE, "load_json", return_value={"spec": {"clusterVIP": "192.168.3.248"}}):
+            self.assertEqual(MODULE.cluster_virtual_ip(), "192.168.3.248")
+        for payload in ({"spec": {"clusterVIP": "8.8.8.8"}}, {"spec": {"clusterVIP": "2001:db8::1"}}, {}):
+            with self.subTest(payload=payload), mock.patch.object(MODULE, "load_json", return_value=payload):
+                with self.assertRaises(RuntimeError):
+                    MODULE.cluster_virtual_ip()
 
     def test_api_candidate_joins_only_aegis_peer_routing(self) -> None:
         metadata = MODULE.clean_metadata({}, "api-backend-candidate-engine-2", "engine-2", "a" * 40, "api-backend", True)

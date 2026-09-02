@@ -1205,10 +1205,15 @@ func clusterRemovalNodes(operation clusterControllerOperation, nodes []clusterCo
 
 func clusterNodeLeadershipWeight(node clusterControllerNode) int {
 	weight := 0
-	for _, key := range []string{"etcd_leader", "control_vip_owner", "edge_vip_owner", "postgres_primary", "scheduler_leader", "wireguard_owner"} {
+	for _, key := range []string{"etcd_leader", "postgres_primary", "scheduler_leader", "wireguard_owner"} {
 		if value, _ := node.Roles[key].(bool); value {
 			weight++
 		}
+	}
+	controlOwner, _ := node.Roles["control_vip_owner"].(bool)
+	edgeOwner, _ := node.Roles["edge_vip_owner"].(bool)
+	if controlOwner || edgeOwner {
+		weight++
 	}
 	return weight
 }
@@ -2599,7 +2604,7 @@ func (r *kubernetesClusterStepRunner) setNodeRoleEligibility(ctx context.Context
 		return err
 	}
 	// WireGuard controller remains available on every active node. Its
-	// owner-aware readiness and interface gate follow Edge VIP ownership.
+	// owner-aware readiness and interface gate follow Cluster Virtual IP ownership.
 	// Eligibility changes happen before VIP ownership moves. Keep the
 	// controller present without requiring standby readiness from the prior
 	// release; transfer callers prove the elected owner's readiness afterward.
@@ -2626,14 +2631,13 @@ func (r *kubernetesClusterStepRunner) waitVIPAndWireGuardOwner(ctx context.Conte
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		controlOwner, controlErr := r.kubernetesLeaseOwner(ctx, "borealis-control-vip")
-		edgeOwner, edgeErr := r.kubernetesLeaseOwner(ctx, "borealis-edge-vip")
-		if controlErr == nil && edgeErr == nil && controlOwner == nodeName && edgeOwner == nodeName {
+		clusterOwner, ownerErr := r.kubernetesLeaseOwner(ctx, "borealis-cluster-vip")
+		if ownerErr == nil && clusterOwner == nodeName {
 			return r.scaleNodeWorkload(ctx, nodeName, "wireguard-tunnel", true)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("control VIP, edge VIP, and WireGuard ownership did not move to %s: %w", nodeName, ctx.Err())
+			return fmt.Errorf("Cluster Virtual IP and WireGuard ownership did not move to %s: %w", nodeName, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -2646,10 +2650,9 @@ func (r *kubernetesClusterStepRunner) waitVIPAndWireGuardOwnersAwayFrom(ctx cont
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		controlOwner, controlErr := r.kubernetesLeaseOwner(ctx, "borealis-control-vip")
-		edgeOwner, edgeErr := r.kubernetesLeaseOwner(ctx, "borealis-edge-vip")
-		if controlErr == nil && edgeErr == nil && controlOwner != targetNodeName && edgeOwner != targetNodeName && clusterControllerNodeRegex.MatchString(controlOwner) && clusterControllerNodeRegex.MatchString(edgeOwner) {
-			ready, readyErr := r.nodeWorkloadReady(ctx, edgeOwner, "wireguard-tunnel")
+		clusterOwner, ownerErr := r.kubernetesLeaseOwner(ctx, "borealis-cluster-vip")
+		if ownerErr == nil && clusterOwner != targetNodeName && clusterControllerNodeRegex.MatchString(clusterOwner) {
+			ready, readyErr := r.nodeWorkloadReady(ctx, clusterOwner, "wireguard-tunnel")
 			if readyErr != nil {
 				return readyErr
 			}
@@ -2659,7 +2662,7 @@ func (r *kubernetesClusterStepRunner) waitVIPAndWireGuardOwnersAwayFrom(ctx cont
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("control VIP, edge VIP, and WireGuard ownership did not move away from %s: %w", targetNodeName, ctx.Err())
+			return fmt.Errorf("Cluster Virtual IP and WireGuard ownership did not move away from %s: %w", targetNodeName, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -2670,11 +2673,7 @@ func (r *kubernetesClusterStepRunner) runtimeRoleOwners(ctx context.Context, db 
 	if err != nil {
 		return nil, err
 	}
-	controlOwner, err := r.kubernetesLeaseOwner(ctx, "borealis-control-vip")
-	if err != nil {
-		return nil, err
-	}
-	edgeOwner, err := r.kubernetesLeaseOwner(ctx, "borealis-edge-vip")
+	clusterOwner, err := r.kubernetesLeaseOwner(ctx, "borealis-cluster-vip")
 	if err != nil {
 		return nil, err
 	}
@@ -2708,15 +2707,15 @@ func (r *kubernetesClusterStepRunner) runtimeRoleOwners(ctx context.Context, db 
 		}
 	}
 	wireGuardOwner := ""
-	if ready, readyErr := r.nodeWorkloadReady(ctx, edgeOwner, "wireguard-tunnel"); readyErr != nil {
+	if ready, readyErr := r.nodeWorkloadReady(ctx, clusterOwner, "wireguard-tunnel"); readyErr != nil {
 		return nil, readyErr
 	} else if ready {
-		wireGuardOwner = edgeOwner
+		wireGuardOwner = clusterOwner
 	}
 	return map[string]string{
 		"etcd_leader":       etcdOwner,
-		"control_vip_owner": controlOwner,
-		"edge_vip_owner":    edgeOwner,
+		"control_vip_owner": clusterOwner,
+		"edge_vip_owner":    clusterOwner,
 		"postgres_primary":  postgresOwner,
 		"scheduler_leader":  schedulerOwner,
 		"wireguard_owner":   wireGuardOwner,
@@ -2853,16 +2852,14 @@ func clusterResourceState(state clusterControllerState) (map[string]any, map[str
 	if !supportedMembership && !replacementRecovery {
 		return nil, nil, errors.New("cluster custom-resource size is invalid")
 	}
-	controlVIP := net.ParseIP(state.ControlPlaneVIP)
-	edgeVIP := net.ParseIP(state.EdgeVIP)
-	if len(validateClusterIP("control_plane_vip", state.ControlPlaneVIP)) != 0 || len(validateClusterIP("edge_vip", state.EdgeVIP)) != 0 || controlVIP.Equal(edgeVIP) {
-		return nil, nil, errors.New("cluster custom-resource VIPs are invalid")
+	clusterVIP := firstText(state.ControlPlaneVIP, state.EdgeVIP)
+	if len(validateClusterIP("cluster_vip", clusterVIP)) != 0 || (state.ControlPlaneVIP != "" && state.EdgeVIP != "" && state.ControlPlaneVIP != state.EdgeVIP) {
+		return nil, nil, errors.New("cluster custom-resource Cluster Virtual IP is invalid")
 	}
 	spec := map[string]any{
-		"activeSize":      state.ActiveSize,
-		"desiredSize":     state.DesiredSize,
-		"controlPlaneVIP": state.ControlPlaneVIP,
-		"edgeVIP":         state.EdgeVIP,
+		"activeSize":  state.ActiveSize,
+		"desiredSize": state.DesiredSize,
+		"clusterVIP":  clusterVIP,
 	}
 	if clusterReleaseRE.MatchString(state.BaselineRelease) {
 		spec["baselineRelease"] = state.BaselineRelease
@@ -2932,7 +2929,7 @@ func clusterAdmissionResourceState(admission clusterControllerAdmission) (map[st
 	if len(validateClusterIP("management_ip", admission.ManagementIP)) != 0 {
 		return nil, nil, errors.New("cluster admission management IP is invalid")
 	}
-	if !textInSet(admission.Architecture, "amd64", "arm64") || admission.OSVersion == "" || len(admission.OSVersion) > 64 {
+	if admission.Architecture != "amd64" || admission.OSVersion == "" || len(admission.OSVersion) > 64 {
 		return nil, nil, errors.New("cluster admission platform is invalid")
 	}
 	spec := map[string]any{
@@ -3075,7 +3072,7 @@ func (r *kubernetesClusterStepRunner) reconcileNamespacedClusterResource(
 }
 
 func (r *kubernetesClusterStepRunner) kubernetesLeaseOwner(ctx context.Context, name string) (string, error) {
-	if name != "borealis-control-vip" && name != "borealis-edge-vip" {
+	if name != "borealis-cluster-vip" {
 		return "", errors.New("unsupported cluster lease")
 	}
 	var lease map[string]any
@@ -3485,8 +3482,7 @@ func clusterNodeActionArgs(operation clusterControllerOperation, verb string) []
 	}
 	if verb == "EnrollCluster" {
 		args = append(args,
-			"--control-plane-vip", cleanText(operation.Payload["control_plane_vip"]),
-			"--edge-vip", cleanText(operation.Payload["edge_vip"]),
+			"--cluster-vip", cleanText(operation.Payload["cluster_vip"]),
 			"--target-sha", cleanText(operation.Payload["baseline_sha"]),
 		)
 	}

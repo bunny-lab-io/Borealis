@@ -161,7 +161,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
 | shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
-| shared-engine | kube-vip `v1.1.0` (control-plane and Borealis edge VIP leases; checksum-pinned SBOM artifact) | [Apache-2.0](https://github.com/kube-vip/kube-vip/blob/main/LICENSE) |
+| shared-engine | kube-vip `v1.1.0` (Cluster Virtual IP lease; checksum-pinned SBOM artifact) | [Apache-2.0](https://github.com/kube-vip/kube-vip/blob/main/LICENSE) |
 | shared-engine | CloudNativePG `v1.30.0` (cluster PostgreSQL operator and synchronous replication) | [Apache-2.0](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/LICENSE) |
 | shared-engine | cert-manager `v1.21.1` (cluster workload mTLS certificate lifecycle) | [Apache-2.0](https://github.com/cert-manager/cert-manager/blob/master/LICENSE) |
 | shared-engine | system-upgrade-controller `v0.20.1` (gated one-server-at-time K3s upgrade controller) | [Apache-2.0](https://github.com/rancher/system-upgrade-controller/blob/master/LICENSE) |

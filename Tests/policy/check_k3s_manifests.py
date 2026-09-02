@@ -194,8 +194,8 @@ def validate_cluster_controller_contract() -> None:
         ),
         {},
     )
-    if set(lease_rule.get("resourceNames") or []) != {"borealis-control-vip", "borealis-edge-vip"} or set(lease_rule.get("verbs") or []) != {"get"}:
-        fail("cluster controller lease RBAC must stay read-only and limited to fixed Borealis VIP leases")
+    if set(lease_rule.get("resourceNames") or []) != {"borealis-cluster-vip"} or set(lease_rule.get("verbs") or []) != {"get"}:
+        fail("cluster controller lease RBAC must stay read-only and limited to fixed Borealis Cluster Virtual IP lease")
     deployment_rule = next(
         (
             rule
@@ -285,7 +285,7 @@ def validate_node_manager_service_contract() -> None:
         "parseEtcdLeadership",
         "os.MkdirAll(k3sImageImportPath, 0o755)",
         '"borealis.io/engine-node=false"',
-        '"borealis-control-vip", "borealis-edge-vip"',
+        '"borealis-cluster-vip"',
         'systemIsStopping([]byte(state))',
     ):
         if marker not in manager_source:
@@ -560,33 +560,22 @@ def validate_kube_vip_contract() -> None:
         if item.get("kind") == "DaemonSet"
     }
     expected = {
-        "kube-vip-borealis-control": {
-            "address": "${BOREALIS_CONTROL_PLANE_VIP}",
+        "kube-vip-borealis-cluster": {
+            "address": "${BOREALIS_CLUSTER_VIP}",
             "port": "6443",
             "prometheus_server": ":2112",
             "probe_port": 2112,
-            "readiness_host": "${BOREALIS_CONTROL_PLANE_VIP}",
+            "readiness_host": "${BOREALIS_CLUSTER_VIP}",
             "readiness_port": 6443,
             "node_selector": {
                 "borealis.io/engine-node": "true",
                 "borealis.io/control-plane-eligible": "true",
-            },
-        },
-        "kube-vip-borealis-edge": {
-            "address": "${BOREALIS_EDGE_VIP}",
-            "port": "443",
-            "prometheus_server": ":2113",
-            "probe_port": 2113,
-            "readiness_host": "${BOREALIS_EDGE_VIP}",
-            "readiness_port": 443,
-            "node_selector": {
-                "borealis.io/engine-node": "true",
                 "borealis.io/edge-eligible": "true",
             },
         },
     }
     if set(daemonsets) != set(expected):
-        fail("kube-vip manifest must contain separate control and edge DaemonSets")
+        fail("kube-vip manifest must contain one Cluster Virtual IP DaemonSet")
     for name, contract in expected.items():
         daemonset = daemonsets[name]
         spec = daemonset.get("spec") or {}
@@ -635,11 +624,11 @@ def validate_kube_vip_contract() -> None:
         if item.get("kind") == "PodDisruptionBudget" and ((item.get("spec") or {}).get("minAvailable")) == 1
     }
     if pdb_names != set(expected):
-        fail("control and edge kube-vip workloads must retain minAvailable=1 disruption budgets")
+        fail("Cluster Virtual IP workload must retain minAvailable=1 disruption budget")
     for marker in (
-        'rollout status "daemonset/${daemonset}"',
-        'get "lease/${lease}"',
-        'kube-vip address %s not advertised',
+        "rollout status daemonset/kube-vip-borealis-cluster",
+        "get lease/borealis-cluster-vip",
+        "Cluster Virtual IP %s not advertised",
         'get --raw=/readyz',
     ):
         if marker not in workflow:
@@ -667,7 +656,7 @@ def validate_cluster_workload_handoff_contract() -> None:
         'annotations.pop("deployment.kubernetes.io/revision", None)': "idempotent candidate metadata ownership",
         "PROBE_GUARD_DELAYS": "per-node candidate startup-budget probe guards",
         "enforce_startup_liveness_guard(base, template_annotations, containers)": "candidate probe guard enforcement",
-        'set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", edge_vip)': "edge VIP ownership environment",
+        'set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", cluster_vip)': "Cluster Virtual IP ownership environment",
         "WIREGUARD_KEYS_SECRET": "shared WireGuard server identity Secret",
         '"mountPath": "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets"': "shared WireGuard key mount",
         'set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")': "candidate scheduler leadership fence",
@@ -725,9 +714,14 @@ def validate_api_release_identity_contract() -> None:
         engine_source = (ROOT / "Engine.sh").read_text(encoding="utf-8")
     except OSError as exc:
         fail(f"cannot read Engine API manifest renderer: {exc}")
-    for marker in ('"release_version=${release_version}"', '"source_sha=${source_sha}"'):
+    for marker in (
+        '"release_version=${release_version}"',
+        '"source_sha=${source_sha}"',
+        "- name: BOREALIS_ENGINE_NODE_NAME\n              valueFrom:\n                fieldRef:\n                  fieldPath: spec.nodeName",
+        "- name: BOREALIS_ENGINE_MANAGEMENT_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.hostIP",
+    ):
         if marker not in engine_source:
-            fail("API manifest cache must include immutable Engine release identity")
+            fail("API manifest must include immutable release and Kubernetes-derived node identity")
 
 
 def validate_k3s_peer_allowlist_contract() -> None:
@@ -755,11 +749,13 @@ def validate_cluster_enable_vip_recovery_contract() -> None:
         workflow = (ROOT / "Data/Engine/K3s/cluster/cluster-node-workflow.sh").read_text(encoding="utf-8")
     except OSError as exc:
         fail(f"cannot read cluster node workflow: {exc}")
-    restart = 'k3s kubectl -n kube-system rollout restart "daemonset/${daemonset}"'
-    rollout = 'k3s kubectl -n kube-system rollout status "daemonset/${daemonset}" --timeout=3m'
-    address = 'for vip in "${control_vip}" "${edge_vip}"; do'
+    restart = "k3s kubectl -n kube-system rollout restart daemonset/kube-vip-borealis-cluster"
+    rollout = "k3s kubectl -n kube-system rollout status daemonset/kube-vip-borealis-cluster --timeout=3m"
+    address = 'grep -Fxq "${cluster_vip}"'
     if restart not in workflow or workflow.find(restart) > workflow.find(rollout) or workflow.find(rollout) > workflow.find(address):
         fail("cluster enable must restart kube-vip after K3s datastore conversion before address verification")
+    if "cluster not in management.network" not in workflow:
+        fail("cluster enable must reject Cluster Virtual IP outside current management subnet")
 
 
 def fail(message: str) -> None:

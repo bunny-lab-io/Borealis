@@ -8,13 +8,12 @@ repo_root="$(cd -- "${script_dir}/../../../.." && pwd)"
 namespace="${BOREALIS_K3S_NAMESPACE:-borealis}"
 result_file="${BOREALIS_K3S_PROBE_CONFORMANCE_FILE:-/etc/rancher/k3s/borealis-probe-conformance.json}"
 operation="${1:-}"
-control_vip="${2:-}"
-edge_vip="${3:-}"
+cluster_vip="${2:-}"
 active_size="${BOREALIS_CLUSTER_ACTIVE_SIZE:-1}"
 api_image="${BOREALIS_CLUSTER_API_IMAGE:-}"
 
 [[ "${EUID}" -eq 0 ]] || { printf 'Cluster node workflow requires root.\n' >&2; exit 1; }
-[[ "${operation}" == "enable" || "${operation}" == "redeploy" ]] || { printf 'Usage: cluster-node-workflow.sh <enable|redeploy> [control-vip] [edge-vip]\n' >&2; exit 64; }
+[[ "${operation}" == "enable" || "${operation}" == "redeploy" ]] || { printf 'Usage: cluster-node-workflow.sh <enable|redeploy> [cluster-vip]\n' >&2; exit 64; }
 [[ "${active_size}" == "1" || "${active_size}" == "3" ]] || { printf 'Active cluster size must be 1 or 3 in current release.\n' >&2; exit 64; }
 
 . /etc/os-release
@@ -46,12 +45,12 @@ if [[ "${operation}" == "redeploy" ]]; then
   exit 0
 fi
 
-python3 - "${control_vip}" "${edge_vip}" <<'PY'
+python3 - "${cluster_vip}" "${management_cidr}" <<'PY'
 import ipaddress, sys
-control = ipaddress.ip_address(sys.argv[1])
-edge = ipaddress.ip_address(sys.argv[2])
-if control.version != 4 or edge.version != 4 or control == edge:
-    raise SystemExit("Distinct control-plane and edge IPv4 VIPs required")
+cluster = ipaddress.ip_address(sys.argv[1])
+management = ipaddress.ip_interface(sys.argv[2])
+if cluster.version != 4 or not cluster.is_private or cluster == management.ip or cluster not in management.network:
+    raise SystemExit("Cluster Virtual IP must be unused private IPv4 on current node management subnet")
 PY
 
 cluster_config_dir="/etc/rancher/k3s/config.yaml.d"
@@ -61,7 +60,7 @@ cluster_config_temp="$(mktemp)"
 cat > "${cluster_config_temp}" <<EOF
 cluster-init: true
 tls-san:
-  - ${control_vip}
+  - ${cluster_vip}
 EOF
 install -m 0600 "${cluster_config_temp}" "${cluster_config}"
 find "$(dirname -- "${cluster_config_temp}")" -maxdepth 1 -type f -name "$(basename -- "${cluster_config_temp}")" -delete
@@ -102,34 +101,27 @@ k3s kubectl -n "${namespace}" create secret generic borealis-wireguard-server-ke
 
 vip_manifest="$(mktemp)"
 sed -e "s|\${BOREALIS_CLUSTER_INTERFACE}|${interface}|g" \
-    -e "s|\${BOREALIS_CONTROL_PLANE_VIP}|${control_vip}|g" \
-    -e "s|\${BOREALIS_EDGE_VIP}|${edge_vip}|g" \
+    -e "s|\${BOREALIS_CLUSTER_VIP}|${cluster_vip}|g" \
     "${script_dir}/kube-vip.yaml.in" > "${vip_manifest}"
 k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${vip_manifest}"
 find "$(dirname -- "${vip_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${vip_manifest}")" -delete
-for daemonset in kube-vip-borealis-control kube-vip-borealis-edge; do
-  # Existing kube-vip processes surrender their leases during K3s datastore
-  # restart. Reapplying an unchanged DaemonSet does not restart those processes,
-  # so force one bounded restart before checking leases and host addresses.
-  k3s kubectl -n kube-system rollout restart "daemonset/${daemonset}"
-  k3s kubectl -n kube-system rollout status "daemonset/${daemonset}" --timeout=3m
+# Existing kube-vip process surrenders lease during K3s datastore restart.
+# Reapplying unchanged DaemonSet does not restart process, so force one bounded
+# restart before checking lease, advertised address, and K3s API through VIP.
+k3s kubectl -n kube-system rollout restart daemonset/kube-vip-borealis-cluster
+k3s kubectl -n kube-system rollout status daemonset/kube-vip-borealis-cluster --timeout=3m
+for attempt in {1..60}; do
+  lease_holder="$(k3s kubectl -n kube-system get lease/borealis-cluster-vip -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)"
+  [[ -n "${lease_holder}" ]] && break
+  [[ "${attempt}" -lt 60 ]] || { printf 'Cluster VIP lease has no holder.\n' >&2; exit 1; }
+  sleep 2
 done
-for lease in borealis-control-vip borealis-edge-vip; do
-  for attempt in {1..60}; do
-    lease_holder="$(k3s kubectl -n kube-system get "lease/${lease}" -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)"
-    [[ -n "${lease_holder}" ]] && break
-    [[ "${attempt}" -lt 60 ]] || { printf 'kube-vip lease %s has no holder.\n' "${lease}" >&2; exit 1; }
-    sleep 2
-  done
+for attempt in {1..60}; do
+  ip -o -4 address show dev "${interface}" | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "${cluster_vip}" && break
+  [[ "${attempt}" -lt 60 ]] || { printf 'Cluster Virtual IP %s not advertised on %s.\n' "${cluster_vip}" "${interface}" >&2; exit 1; }
+  sleep 2
 done
-for vip in "${control_vip}" "${edge_vip}"; do
-  for attempt in {1..60}; do
-    ip -o -4 address show dev "${interface}" | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "${vip}" && break
-    [[ "${attempt}" -lt 60 ]] || { printf 'kube-vip address %s not advertised on %s.\n' "${vip}" "${interface}" >&2; exit 1; }
-    sleep 2
-  done
-done
-k3s kubectl --server="https://${control_vip}:6443" get --raw=/readyz >/dev/null
+k3s kubectl --server="https://${cluster_vip}:6443" get --raw=/readyz >/dev/null
 
 postgres_user="$(awk -F= '$1 == "POSTGRES_USER" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
 postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
@@ -324,8 +316,7 @@ metadata:
 spec:
   activeSize: ${active_size}
   desiredSize: ${active_size}
-  controlPlaneVIP: ${control_vip}
-  edgeVIP: ${edge_vip}
+  clusterVIP: ${cluster_vip}
 EOF
 
 node_name="${BOREALIS_CLUSTER_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"

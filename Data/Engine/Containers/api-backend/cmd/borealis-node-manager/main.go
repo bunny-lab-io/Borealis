@@ -143,7 +143,7 @@ func (m *manager) performShutdownHandoff(ctx context.Context, interval time.Dura
 }
 
 func (m *manager) waitForVIPLeaseHandoff(ctx context.Context, interval time.Duration) (map[string]string, error) {
-	leaseNames := []string{"borealis-control-vip", "borealis-edge-vip"}
+	leaseNames := []string{"borealis-cluster-vip"}
 	lastHolders := map[string]string{}
 	var lastErr error
 	for {
@@ -234,8 +234,7 @@ func client(args []string) {
 	schemaPhase := flags.String("schema-phase", "", "Fixed cluster schema phase")
 	k3sVersion := flags.String("k3s-version", "", "Stable K3s version")
 	reason := flags.String("reason", "", "Single-line drain reason")
-	controlVIP := flags.String("control-plane-vip", "", "K3s control-plane VIP")
-	edgeVIP := flags.String("edge-vip", "", "Borealis edge VIP")
+	clusterVIP := flags.String("cluster-vip", "", "Borealis Cluster Virtual IP")
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
@@ -269,11 +268,8 @@ func client(args []string) {
 	if strings.TrimSpace(*reason) != "" {
 		params["reason"] = strings.TrimSpace(*reason)
 	}
-	if strings.TrimSpace(*controlVIP) != "" {
-		params["control_plane_vip"] = strings.TrimSpace(*controlVIP)
-	}
-	if strings.TrimSpace(*edgeVIP) != "" {
-		params["edge_vip"] = strings.TrimSpace(*edgeVIP)
+	if strings.TrimSpace(*clusterVIP) != "" {
+		params["cluster_vip"] = strings.TrimSpace(*clusterVIP)
 	}
 	raw, _ := json.Marshal(actionRequest{Verb: strings.TrimSpace(*verb), Params: params})
 	socketPath := envDefault("BOREALIS_NODE_MANAGER_SOCKET", defaultSocketPath)
@@ -730,12 +726,10 @@ func stagedRedeployEnvironment(base []string, repoRoot string) []string {
 }
 
 func (m *manager) enrollCluster(ctx context.Context, params map[string]any, baselineSHA string) (map[string]any, error) {
-	controlVIP := strings.TrimSpace(fmt.Sprint(params["control_plane_vip"]))
-	edgeVIP := strings.TrimSpace(fmt.Sprint(params["edge_vip"]))
-	controlIP := net.ParseIP(controlVIP)
-	edgeIP := net.ParseIP(edgeVIP)
-	if controlIP == nil || controlIP.To4() == nil || edgeIP == nil || edgeIP.To4() == nil || controlVIP == edgeVIP {
-		return nil, errors.New("distinct control_plane_vip and edge_vip IPv4 values are required")
+	clusterVIP := strings.TrimSpace(fmt.Sprint(params["cluster_vip"]))
+	clusterIP := net.ParseIP(clusterVIP)
+	if clusterIP == nil || clusterIP.To4() == nil || !clusterIP.IsPrivate() {
+		return nil, errors.New("private cluster_vip IPv4 value is required")
 	}
 	if !shaPattern.MatchString(baselineSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
@@ -744,11 +738,11 @@ func (m *manager) enrollCluster(ctx context.Context, params map[string]any, base
 		return nil, err
 	}
 	enginePath := filepath.Join(m.repoRoot, "Engine.sh")
-	output, err := run(ctx, m.repoRoot, "/usr/bin/env", "BOREALIS_CLUSTER_ENROLL_OPERATION=1", "BOREALIS_CLUSTER_BASELINE_SHA="+baselineSHA, "/usr/bin/bash", enginePath, "--cluster-enable", "--control-plane-vip", controlVIP, "--edge-vip", edgeVIP)
+	output, err := run(ctx, m.repoRoot, "/usr/bin/env", "BOREALIS_CLUSTER_ENROLL_OPERATION=1", "BOREALIS_CLUSTER_BASELINE_SHA="+baselineSHA, "/usr/bin/bash", enginePath, "--cluster-enable", "--cluster-vip", clusterVIP)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"node_name": m.nodeName, "control_plane_vip": controlVIP, "edge_vip": edgeVIP, "enrolled": true, "output": truncate(output, 8192)}, nil
+	return map[string]any{"node_name": m.nodeName, "cluster_vip": clusterVIP, "enrolled": true, "output": truncate(output, 8192)}, nil
 }
 
 func (m *manager) status(ctx context.Context) (map[string]any, error) {
@@ -1138,7 +1132,7 @@ func (m *manager) setNodeLabel(ctx context.Context, key, value string) (map[stri
 		return nil, err
 	}
 	if key == "borealis.io/edge-eligible" {
-		// WireGuard control stays present on every active node. Edge VIP
+		// WireGuard control stays present on every active node. Cluster Virtual IP
 		// ownership gates shared interface activation inside controller.
 		if err := m.scaleNamedNodeWorkload(ctx, "wireguard-tunnel", "1"); err != nil {
 			return nil, err
@@ -1152,7 +1146,7 @@ func (m *manager) reconcileVIPPlacement(ctx context.Context) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
-	eligibility, err := controlVIPEligibilityByNode([]byte(raw))
+	eligibility, err := clusterVIPEligibilityByNode([]byte(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -1165,18 +1159,21 @@ func (m *manager) reconcileVIPPlacement(ctx context.Context) (map[string]any, er
 		if _, err := run(ctx, "", "k3s", "kubectl", "label", "node", nodeName, "borealis.io/control-plane-eligible="+eligibility[nodeName], "--overwrite"); err != nil {
 			return nil, err
 		}
+		if _, err := run(ctx, "", "k3s", "kubectl", "label", "node", nodeName, "borealis.io/edge-eligible="+eligibility[nodeName], "--overwrite"); err != nil {
+			return nil, err
+		}
 	}
-	selectorPatch := `{"spec":{"template":{"spec":{"nodeSelector":{"borealis.io/control-plane-eligible":"true"}}}}}`
-	if _, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "patch", "daemonset/kube-vip-borealis-control", "--type=merge", "-p", selectorPatch); err != nil {
+	selectorPatch := `{"spec":{"template":{"spec":{"nodeSelector":{"borealis.io/control-plane-eligible":"true","borealis.io/edge-eligible":"true"}}}}}`
+	if _, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "patch", "daemonset/kube-vip-borealis-cluster", "--type=merge", "-p", selectorPatch); err != nil {
 		return nil, err
 	}
-	if _, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/kube-vip-borealis-control", "--timeout=3m"); err != nil {
+	if _, err := run(ctx, "", "k3s", "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/kube-vip-borealis-cluster", "--timeout=3m"); err != nil {
 		return nil, err
 	}
-	return map[string]any{"nodes": nodeNames, "control_vip_selector": "borealis.io/control-plane-eligible=true"}, nil
+	return map[string]any{"nodes": nodeNames, "cluster_vip_selector": "control-plane-eligible=true,edge-eligible=true"}, nil
 }
 
-func controlVIPEligibilityByNode(raw []byte) (map[string]string, error) {
+func clusterVIPEligibilityByNode(raw []byte) (map[string]string, error) {
 	var payload struct {
 		Items []struct {
 			Metadata struct {
@@ -1189,7 +1186,7 @@ func controlVIPEligibilityByNode(raw []byte) (map[string]string, error) {
 		return nil, fmt.Errorf("decode Engine node eligibility: %w", err)
 	}
 	if len(payload.Items) == 0 {
-		return nil, errors.New("no Engine nodes available for Control VIP placement")
+		return nil, errors.New("no Engine nodes available for Cluster Virtual IP placement")
 	}
 	result := make(map[string]string, len(payload.Items))
 	for _, item := range payload.Items {
@@ -1453,12 +1450,12 @@ func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
 		return nil, fmt.Errorf("Agent API Service path probe failed: %w", err)
 	}
 	if nodeLabelTrue([]byte(node), "borealis.io/edge-eligible") {
-		edgeVIP, err := clusterEdgeVIP([]byte(cluster))
+		clusterVIP, err := clusterVirtualIP([]byte(cluster))
 		if err != nil {
 			return nil, err
 		}
-		if err := probeTCP(ctx, edgeVIP, 443); err != nil {
-			return nil, fmt.Errorf("edge VIP probe failed: %w", err)
+		if err := probeTCP(ctx, clusterVIP, 443); err != nil {
+			return nil, fmt.Errorf("Cluster Virtual IP probe failed: %w", err)
 		}
 	}
 	requiredWorkloads := []string{"api-backend", "job-scheduler"}
@@ -1478,18 +1475,18 @@ func (m *manager) inspectHealth(ctx context.Context) (map[string]any, error) {
 	return map[string]any{"node_name": m.nodeName, "probes": probes, "workloads": workloads}, nil
 }
 
-func clusterEdgeVIP(raw []byte) (string, error) {
+func clusterVirtualIP(raw []byte) (string, error) {
 	var cluster struct {
 		Spec struct {
-			EdgeVIP string `json:"edgeVIP"`
+			ClusterVIP string `json:"clusterVIP"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(raw, &cluster); err != nil {
 		return "", fmt.Errorf("decode Borealis cluster: %w", err)
 	}
-	address := net.ParseIP(strings.TrimSpace(cluster.Spec.EdgeVIP))
+	address := net.ParseIP(strings.TrimSpace(cluster.Spec.ClusterVIP))
 	if address == nil || address.To4() == nil || !address.IsPrivate() {
-		return "", errors.New("Borealis cluster edge VIP is invalid")
+		return "", errors.New("Borealis Cluster Virtual IP is invalid")
 	}
 	return address.String(), nil
 }
@@ -1788,13 +1785,16 @@ func join(args []string) {
 	if os.Geteuid() != 0 {
 		fatalf("join requires root")
 	}
+	if runtime.GOARCH != "amd64" {
+		fatalf("join requires amd64 Engine host")
+	}
 	managementAddress := net.ParseIP(strings.TrimSpace(*managementIP))
 	if strings.TrimSpace(*endpoint) == "" || strings.TrimSpace(*bundle) == "" || !nodePattern.MatchString(strings.ToLower(strings.TrimSpace(*nodeName))) || managementAddress == nil || managementAddress.To4() == nil {
 		fatalf("join requires endpoint, invite-bundle, valid node-name, and management IPv4")
 	}
 	serverURL, err := url.Parse(strings.TrimSpace(*k3sServer))
 	if err != nil || serverURL.Scheme != "https" || serverURL.Hostname() == "" || serverURL.Port() != "6443" || serverURL.Path != "" {
-		fatalf("join requires --k3s-server https://<control-plane-vip>:6443")
+		fatalf("join requires --k3s-server https://<cluster-vip>:6443")
 	}
 	if !k3sPattern.MatchString(strings.TrimSpace(*k3sVersion)) {
 		fatalf("join requires pinned K3s version")
