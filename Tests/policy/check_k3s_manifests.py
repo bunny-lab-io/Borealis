@@ -741,6 +741,10 @@ def validate_api_release_identity_contract() -> None:
     for marker in (
         '"release_version=${release_version}"',
         '"source_sha=${source_sha}"',
+        '"probe_conformance=${probe_conformance}"',
+        '"k3s_version=${k3s_version}"',
+        '- name: BOREALIS_K3S_PROBE_CONFORMANCE\n              value: "${probe_conformance}"',
+        '- name: BOREALIS_K3S_VERSION\n              value: "${k3s_version}"',
         "- name: BOREALIS_ENGINE_NODE_NAME\n              valueFrom:\n                fieldRef:\n                  fieldPath: spec.nodeName",
         "- name: BOREALIS_ENGINE_MANAGEMENT_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.hostIP",
     ):

@@ -103,7 +103,7 @@ K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
 K3S_POSTGRES_SCHEMA_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-schema.sha256"
 K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-site-worker-runtime-env.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
-K3S_API_BACKEND_BRIDGE_VERSION="4"
+K3S_API_BACKEND_BRIDGE_VERSION="5"
 K3S_API_BACKEND_DB_VALIDATION_VERSION="3"
 K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
@@ -4253,6 +4253,8 @@ render_k3s_api_backend_bridge_manifest() {
   local traffic_owner="$8"
   local release_version="$9"
   local source_sha="${10}"
+  local probe_conformance="${11}"
+  local k3s_version="${12}"
   local service_host
   local replicas
   service_host="$(api_backend_service_dns_name)"
@@ -4410,9 +4412,9 @@ $(k3s_timezone_env_entries)
             - name: BOREALIS_K3S_API_BACKEND_BRIDGE
               value: "1"
             - name: BOREALIS_K3S_PROBE_CONFORMANCE
-              value: "$(k3s_probe_conformance_status)"
+              value: "${probe_conformance}"
             - name: BOREALIS_K3S_VERSION
-              value: "$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}' || true)"
+              value: "${k3s_version}"
             - name: BOREALIS_K3S_UPGRADE_IMAGE
               value: "${K3S_UPGRADE_IMAGE}"
             - name: BOREALIS_ENGINE_RELEASE_VERSION
@@ -4574,6 +4576,8 @@ ensure_k3s_api_backend_bridge() {
   local pids_limit
   local release_version
   local source_sha
+  local probe_conformance
+  local k3s_version
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
@@ -4585,6 +4589,8 @@ ensure_k3s_api_backend_bridge() {
   pids_limit="$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
   release_version="$(engine_release_version)"
   source_sha="$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  probe_conformance="$(k3s_probe_conformance_status)"
+  k3s_version="$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}' || true)"
 
   local config_hash
   config_hash="$(
@@ -4606,6 +4612,8 @@ ensure_k3s_api_backend_bridge() {
       "traffic_owner=${traffic_owner}" \
       "release_version=${release_version}" \
       "source_sha=${source_sha}" \
+      "probe_conformance=${probe_conformance}" \
+      "k3s_version=${k3s_version}" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
       "project_root=${ENGINE_HOST_ROOT}" \
@@ -4640,6 +4648,8 @@ ensure_k3s_api_backend_bridge() {
     "${traffic_owner}" \
     "${release_version}" \
     "${source_sha}" \
+    "${probe_conformance}" \
+    "${k3s_version}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
