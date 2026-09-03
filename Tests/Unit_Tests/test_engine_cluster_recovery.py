@@ -175,6 +175,80 @@ fi
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_engine_release_version_uses_clean_commit_backed_development_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = pathlib.Path(temp_dir) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "borealis-tests@example.invalid"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Borealis Tests"],
+                cwd=repo,
+                check=True,
+            )
+            tracked = repo / "tracked.txt"
+            tracked.write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "test baseline"], cwd=repo, check=True, capture_output=True)
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            result = self.run_engine_library(
+                'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"dev-{sha[:12]}")
+
+            subprocess.run(["git", "tag", "2026.09.1"], cwd=repo, check=True)
+            result = self.run_engine_library(
+                'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "2026.09.1")
+
+            tracked.write_text("dirty\n", encoding="utf-8")
+            result = self.run_engine_library(
+                'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "")
+
+            result = self.run_engine_library(
+                r'''git() {
+  if [[ "$*" == *" status --porcelain --untracked-files=normal" ]]; then
+    return 1
+  fi
+  command git "$@"
+}
+SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"
+engine_release_version''',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "")
+
+            tracked.write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "tag", "-d", "2026.09.1"], cwd=repo, check=True, capture_output=True)
+            tracked.write_text("dirty\n", encoding="utf-8")
+            result = self.run_engine_library(
+                'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "")
+
     def test_repo_sync_reowns_source_but_prunes_runtime_state(self):
         engine = (REPO_ROOT / "Engine.sh").read_text(encoding="utf-8")
         owner_start = engine.index("reconcile_install_checkout_owner() {")

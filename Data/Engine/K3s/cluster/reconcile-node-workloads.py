@@ -82,15 +82,15 @@ def load_json(resource: str) -> dict[str, Any] | None:
     return json.loads(result.stdout)
 
 
-def cluster_edge_vip() -> str:
+def cluster_virtual_ip() -> str:
     payload = load_json("borealiscluster.engine.borealis.io/borealis") or {}
-    value = str(((payload.get("spec") or {}).get("edgeVIP") or "")).strip()
+    value = str(((payload.get("spec") or {}).get("clusterVIP") or "")).strip()
     try:
         address = ipaddress.ip_address(value)
     except ValueError as exc:
-        raise RuntimeError("Borealis cluster edge VIP is unavailable") from exc
+        raise RuntimeError("Borealis Cluster Virtual IP is unavailable") from exc
     if address.version != 4 or not address.is_private:
-        raise RuntimeError("Borealis cluster edge VIP must be private IPv4")
+        raise RuntimeError("Borealis Cluster Virtual IP must be private IPv4")
     return value
 
 
@@ -264,8 +264,8 @@ def reconcile_one(
     if base == "api-backend":
         set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")
     if base in {"api-backend", "wireguard-tunnel"}:
-        edge_vip = cluster_edge_vip()
-        set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", edge_vip)
+        cluster_vip = cluster_virtual_ip()
+        set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", cluster_vip)
         mount_shared_wireguard_keys(base, pod_spec, containers[0])
     if base == "api-backend":
         volumes = pod_spec.setdefault("volumes", [])

@@ -1620,8 +1620,8 @@ func (w *wireGuardRuntime) ensureServerKeys() (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	_ = os.MkdirAll(filepath.Dir(w.privateKeyPath), 0o750)
-	_ = os.Chmod(filepath.Dir(w.privateKeyPath), 0o750)
+	_ = os.MkdirAll(filepath.Dir(w.privateKeyPath), 0o770)
+	_ = os.Chmod(filepath.Dir(w.privateKeyPath), 0o770)
 	_ = os.WriteFile(w.privateKeyPath, []byte(keys.Private+"\n"), 0o640)
 	_ = os.WriteFile(w.publicKeyPath, []byte(keys.Public+"\n"), 0o640)
 	return keys.Private, keys.Public
@@ -1796,6 +1796,12 @@ func (w *wireGuardRuntime) checkPeerHealth(publicKey string) map[string]any {
 }
 
 func (w *wireGuardRuntime) ensureListenerLocked() error {
+	if err := os.MkdirAll(w.configRoot, 0o770); err != nil {
+		return err
+	}
+	if err := os.Chmod(w.configRoot, 0o770); err != nil {
+		return err
+	}
 	if w.interfaceExistsLocked() {
 		code, out, errOut := w.runCommand([]string{w.bin("wg"), "set", w.interfaceName, "listen-port", strconv.Itoa(w.port), "private-key", w.privateKeyPath})
 		if code != 0 {
@@ -1803,10 +1809,6 @@ func (w *wireGuardRuntime) ensureListenerLocked() error {
 		}
 		return w.ensureLinuxRuntimeLocked()
 	}
-	if err := os.MkdirAll(w.configRoot, 0o750); err != nil {
-		return err
-	}
-	_ = os.Chmod(w.configRoot, 0o750)
 	configPath := filepath.Join(w.configRoot, defaultWireGuardConfigName+".conf")
 	if err := os.WriteFile(configPath, []byte(w.renderBaseConfig()), 0o640); err != nil {
 		return err

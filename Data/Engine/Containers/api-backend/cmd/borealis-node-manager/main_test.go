@@ -34,6 +34,76 @@ func TestNodeManagerActionTimeoutAllowsBoundedBootstrapAndRedeploy(t *testing.T)
 	}
 }
 
+func TestValidPinnedReleaseAcceptsStableAndMatchingDevelopmentIdentity(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	for _, test := range []struct {
+		release string
+		sha     string
+		want    bool
+	}{
+		{release: "2026.09.1", sha: sha, want: true},
+		{release: "dev-0123456789ab", sha: sha, want: true},
+		{release: "dev-fedcba987654", sha: sha, want: false},
+		{release: "dev-0123456789ab", sha: "not-a-sha", want: false},
+		{release: "main", sha: sha, want: false},
+	} {
+		if got := validPinnedRelease(test.release, test.sha); got != test.want {
+			t.Fatalf("validPinnedRelease(%q, %q)=%v want %v", test.release, test.sha, got, test.want)
+		}
+	}
+}
+
+func TestVerifyReleaseRefFetchesCommitBackedDevelopmentIdentity(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "origin.git")
+	seed := filepath.Join(root, "seed")
+	checkout := filepath.Join(root, "checkout")
+	runGitCommand := func(workdir string, args ...string) string {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = workdir
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s failed: %v: %s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+
+	runGitCommand(root, "init", "--bare", remote)
+	if err := os.MkdirAll(seed, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(seed, "init")
+	runGitCommand(seed, "config", "user.email", "borealis-tests@example.invalid")
+	runGitCommand(seed, "config", "user.name", "Borealis Tests")
+	if err := os.WriteFile(filepath.Join(seed, "baseline.txt"), []byte("stable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(seed, "add", "baseline.txt")
+	runGitCommand(seed, "commit", "-m", "stable seed")
+	runGitCommand(seed, "remote", "add", "origin", remote)
+	runGitCommand(seed, "push", "origin", "HEAD:refs/heads/main")
+	runGitCommand(root, "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+	runGitCommand(root, "clone", remote, checkout)
+
+	if err := os.WriteFile(filepath.Join(seed, "baseline.txt"), []byte("development\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(seed, "add", "baseline.txt")
+	runGitCommand(seed, "commit", "-m", "development baseline")
+	sha := runGitCommand(seed, "rev-parse", "HEAD")
+	runGitCommand(seed, "push", "origin", "HEAD:refs/heads/fix/development-baseline")
+
+	t.Setenv("BOREALIS_ENGINE_REPOSITORY_URL", remote)
+	m := &manager{repoRoot: checkout}
+	if err := m.verifyReleaseRef(context.Background(), "dev-"+sha[:12], sha); err != nil {
+		t.Fatal(err)
+	}
+	if resolved := runGitCommand(checkout, "rev-parse", sha+"^{commit}"); resolved != sha {
+		t.Fatalf("development baseline resolved to %q want %q", resolved, sha)
+	}
+}
+
 func TestNodeActionPodsActiveWaitsForRunningOrUnknownWork(t *testing.T) {
 	tests := []struct {
 		name string
@@ -177,26 +247,26 @@ func TestNodeHealthParsersRequireReadyNodeAndWorkloads(t *testing.T) {
 	}
 }
 
-func TestControlVIPEligibilityFollowsApplicationMaintenanceState(t *testing.T) {
-	eligibility, err := controlVIPEligibilityByNode([]byte(`{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}},{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"drained"}}}]}`))
+func TestClusterVIPEligibilityFollowsApplicationMaintenanceState(t *testing.T) {
+	eligibility, err := clusterVIPEligibilityByNode([]byte(`{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}},{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"drained"}}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if eligibility["engine-1"] != "true" || eligibility["engine-2"] != "false" {
-		t.Fatalf("unexpected Control VIP eligibility: %#v", eligibility)
+		t.Fatalf("unexpected Cluster Virtual IP eligibility: %#v", eligibility)
 	}
 	for _, raw := range []string{
 		`{"items":[]}`,
 		`{"items":[{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"unknown"}}}]}`,
 		`{"items":[{"metadata":{"name":"invalid_name","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}}]}`,
 	} {
-		if _, err := controlVIPEligibilityByNode([]byte(raw)); err == nil {
-			t.Fatalf("unsafe Control VIP eligibility payload accepted: %s", raw)
+		if _, err := clusterVIPEligibilityByNode([]byte(raw)); err == nil {
+			t.Fatalf("unsafe Cluster Virtual IP eligibility payload accepted: %s", raw)
 		}
 	}
 }
 
-func TestReconcileVIPPlacementLabelsNodesBeforeApplyingControlSelector(t *testing.T) {
+func TestReconcileVIPPlacementLabelsNodesBeforeApplyingClusterSelector(t *testing.T) {
 	tempDir := t.TempDir()
 	logPath := filepath.Join(tempDir, "k3s.log")
 	k3s := filepath.Join(tempDir, "k3s")
@@ -206,11 +276,11 @@ case "$*" in
   "kubectl get nodes -l borealis.io/engine-node=true -o json")
     printf '%s\n' '{"items":[{"metadata":{"name":"engine-2","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"drained"}}},{"metadata":{"name":"engine-1","labels":{"borealis.io/engine-node":"true","borealis.io/application-state":"active"}}}]}'
     ;;
-  "kubectl label node engine-1 borealis.io/control-plane-eligible=true --overwrite"|"kubectl label node engine-2 borealis.io/control-plane-eligible=false --overwrite")
+  "kubectl label node engine-1 borealis.io/control-plane-eligible=true --overwrite"|"kubectl label node engine-2 borealis.io/control-plane-eligible=false --overwrite"|"kubectl label node engine-1 borealis.io/edge-eligible=true --overwrite"|"kubectl label node engine-2 borealis.io/edge-eligible=false --overwrite")
     ;;
-  "kubectl -n kube-system patch daemonset/kube-vip-borealis-control --type=merge -p "*)
+  "kubectl -n kube-system patch daemonset/kube-vip-borealis-cluster --type=merge -p "*)
     ;;
-  "kubectl -n kube-system rollout status daemonset/kube-vip-borealis-control --timeout=3m")
+  "kubectl -n kube-system rollout status daemonset/kube-vip-borealis-cluster --timeout=3m")
     ;;
   *)
     printf 'unexpected k3s arguments: %s\n' "$*" >&2
@@ -228,7 +298,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["control_vip_selector"] != "borealis.io/control-plane-eligible=true" {
+	if result["cluster_vip_selector"] != "control-plane-eligible=true,edge-eligible=true" {
 		t.Fatalf("unexpected VIP reconciliation result: %#v", result)
 	}
 	rawLog, err := os.ReadFile(logPath)
@@ -236,12 +306,21 @@ esac
 		t.Fatal(err)
 	}
 	log := string(rawLog)
-	activeLabel := strings.Index(log, "kubectl label node engine-1 borealis.io/control-plane-eligible=true --overwrite")
-	drainedLabel := strings.Index(log, "kubectl label node engine-2 borealis.io/control-plane-eligible=false --overwrite")
-	selectorPatch := strings.Index(log, "kubectl -n kube-system patch daemonset/kube-vip-borealis-control")
-	rolloutWait := strings.Index(log, "kubectl -n kube-system rollout status daemonset/kube-vip-borealis-control --timeout=3m")
-	if activeLabel < 0 || drainedLabel < 0 || selectorPatch < 0 || rolloutWait < 0 || activeLabel > selectorPatch || drainedLabel > selectorPatch || selectorPatch > rolloutWait {
-		t.Fatalf("unsafe Control VIP selector migration order: %s", log)
+	selectorPatch := strings.Index(log, "kubectl -n kube-system patch daemonset/kube-vip-borealis-cluster")
+	rolloutWait := strings.Index(log, "kubectl -n kube-system rollout status daemonset/kube-vip-borealis-cluster --timeout=3m")
+	for _, label := range []string{
+		"kubectl label node engine-1 borealis.io/control-plane-eligible=true --overwrite",
+		"kubectl label node engine-2 borealis.io/control-plane-eligible=false --overwrite",
+		"kubectl label node engine-1 borealis.io/edge-eligible=true --overwrite",
+		"kubectl label node engine-2 borealis.io/edge-eligible=false --overwrite",
+	} {
+		position := strings.Index(log, label)
+		if position < 0 || selectorPatch < 0 || position > selectorPatch {
+			t.Fatalf("unsafe Cluster Virtual IP selector migration order: %s", log)
+		}
+	}
+	if rolloutWait < 0 || selectorPatch > rolloutWait {
+		t.Fatalf("Cluster Virtual IP rollout wait missing or misordered: %s", log)
 	}
 }
 
@@ -315,7 +394,7 @@ func TestShutdownHandoffParsersRequireReadyEnginePeerAndLeaseHolder(t *testing.T
 	}
 }
 
-func TestPerformShutdownHandoffWithdrawsEngineNodeAndWaitsForBothVIPs(t *testing.T) {
+func TestPerformShutdownHandoffWithdrawsEngineNodeAndWaitsForClusterVIP(t *testing.T) {
 	tempDir := t.TempDir()
 	logPath := filepath.Join(tempDir, "k3s.log")
 	k3s := filepath.Join(tempDir, "k3s")
@@ -328,7 +407,7 @@ case "$*" in
   "kubectl label node engine-1 borealis.io/engine-node=false --overwrite")
     printf '%s\n' 'node/engine-1 labeled'
     ;;
-  "kubectl -n kube-system get lease borealis-control-vip -o json"|"kubectl -n kube-system get lease borealis-edge-vip -o json")
+  "kubectl -n kube-system get lease borealis-cluster-vip -o json")
     printf '%s\n' '{"spec":{"holderIdentity":"engine-2"}}'
     ;;
   *)
@@ -358,8 +437,7 @@ esac
 	log := string(rawLog)
 	for _, command := range []string{
 		"kubectl label node engine-1 borealis.io/engine-node=false --overwrite",
-		"kubectl -n kube-system get lease borealis-control-vip -o json",
-		"kubectl -n kube-system get lease borealis-edge-vip -o json",
+		"kubectl -n kube-system get lease borealis-cluster-vip -o json",
 	} {
 		if !strings.Contains(log, command) {
 			t.Fatalf("shutdown handoff missed %q: %s", command, log)
@@ -416,14 +494,14 @@ func TestNodeHealthParsersRequireReadyPostgresAndValidService(t *testing.T) {
 	}
 }
 
-func TestClusterEdgeVIPRequiresPrivateIPv4(t *testing.T) {
-	got, err := clusterEdgeVIP([]byte(`{"spec":{"edgeVIP":"192.168.3.248"}}`))
+func TestClusterVirtualIPRequiresPrivateIPv4(t *testing.T) {
+	got, err := clusterVirtualIP([]byte(`{"spec":{"clusterVIP":"192.168.3.248"}}`))
 	if err != nil || got != "192.168.3.248" {
-		t.Fatalf("private edge VIP rejected got=%q err=%v", got, err)
+		t.Fatalf("private Cluster Virtual IP rejected got=%q err=%v", got, err)
 	}
-	for _, payload := range []string{`{"spec":{"edgeVIP":"8.8.8.8"}}`, `{"spec":{"edgeVIP":"2001:db8::1"}}`, `{}`} {
-		if _, err := clusterEdgeVIP([]byte(payload)); err == nil {
-			t.Fatalf("unsafe edge VIP accepted: %s", payload)
+	for _, payload := range []string{`{"spec":{"clusterVIP":"8.8.8.8"}}`, `{"spec":{"clusterVIP":"2001:db8::1"}}`, `{}`} {
+		if _, err := clusterVirtualIP([]byte(payload)); err == nil {
+			t.Fatalf("unsafe Cluster Virtual IP accepted: %s", payload)
 		}
 	}
 }

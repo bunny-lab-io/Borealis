@@ -1,9 +1,11 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
 import ClusterManagement, {
+  RELEASE_MENU_PROPS,
+  RELEASE_SELECT_PROPS,
   buildClusterOperationDetails,
   clusterOperationNodeLabel,
   clusterNodeDatabaseStatus,
@@ -14,6 +16,7 @@ import ClusterManagement, {
 } from "@/Admin/Cluster_Management.jsx";
 
 const state = vi.hoisted(() => ({
+  enabled: true,
   hmrState: "active",
   activeSize: 3,
   desiredSize: 3,
@@ -32,7 +35,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
     ...actual,
     useLoaderData: () => ({
       cluster: {
-        enabled: true,
+        enabled: state.enabled,
         status: state.clusterStatus,
         active_size: state.activeSize,
         desired_size: state.desiredSize,
@@ -105,6 +108,7 @@ async function openNodeActions(nodeName = "engine-1") {
 describe("Cluster Management", () => {
   afterEach(() => {
     cleanup();
+    state.enabled = true;
     state.hmrState = "active";
     state.activeSize = 3;
     state.desiredSize = 3;
@@ -136,8 +140,8 @@ describe("Cluster Management", () => {
     expect(clusterNodeDatabaseStatus({ id: "22222222-2222-4222-8222-222222222222", membership_state: "Active", roles: {} }, primaryID, { ...healthyDatabase, ready_instances: 2, fully_ready: false }, 3)).toBe("Not Ready");
     expect(clusterNodeDatabaseStatus({ id: "33333333-3333-4333-8333-333333333333", membership_state: "Removed", roles: {} }, primaryID, healthyDatabase, 3)).toBe("Not Active");
     expect(clusterNodeRolesPresentation({ roles: { edge_vip_owner: true, postgres_primary: true } })).toMatchObject({
-      ownershipLabels: ["Edge VIP Owner"],
-      label: "Edge VIP Owner",
+      ownershipLabels: ["Cluster Virtual IP Owner"],
+      label: "Cluster Virtual IP Owner",
     });
   });
 
@@ -208,7 +212,7 @@ describe("Cluster Management", () => {
       expect(await screen.findByRole("columnheader", { name: column })).toBeInTheDocument();
     }
     expect(await screen.findAllByText("Active / Active")).toHaveLength(3);
-    expect(screen.getByText("Control VIP Owner")).toBeInTheDocument();
+    expect(screen.getByText("Cluster Virtual IP Owner")).toBeInTheDocument();
     const activeDatabaseLink = screen.getByRole("button", { name: "Active" });
     expect(activeDatabaseLink).toHaveStyle({ color: "#58a6ff", fontWeight: "500", textDecoration: "none" });
     expect(screen.getAllByText("Replica Healthy")).toHaveLength(2);
@@ -226,6 +230,43 @@ describe("Cluster Management", () => {
     const isolatedNode = screen.getByRole("combobox", { name: "Isolated Node" });
     expect(isolatedNode).toHaveAttribute("aria-disabled", "true");
     expect(isolatedNode).toHaveTextContent("engine-1");
+  });
+
+  it("enables clustering with one private Cluster Virtual IP", async () => {
+    state.enabled = false;
+    state.hmrState = "inactive";
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") {
+        return { ok: true, status: 202, json: async () => ({ operation_id: "44444444-4444-4444-8444-444444444444" }) };
+      }
+      if (String(path).endsWith("/releases")) return { ok: true, json: async () => ({ releases: [] }) };
+      if (String(path).includes("/events")) return { ok: true, json: async () => ({ events: [] }) };
+      return { ok: true, json: async () => ({ enabled: false, active_size: 1, hmr: { state: "inactive" }, nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=maintenance");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable Cluster" }));
+    const enableDialog = screen.getByRole("dialog");
+    expect(within(enableDialog).getByText("Enable cluster")).toBeInTheDocument();
+    expect(within(enableDialog).getByText("Set address shared by K3s API, ingress, and WireGuard.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Cluster Virtual IP")).toBeInTheDocument();
+    for (const removedField of ["Control-plane VIP", "Borealis edge VIP", "Current node management IPv4", "Current node name", "Architecture"]) {
+      expect(screen.queryByLabelText(removedField)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByLabelText("Typed confirmation")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Cluster Virtual IP"), { target: { value: "8.8.8.8" } });
+    fireEvent.click(within(enableDialog).getByRole("button", { name: "Enable Cluster" }));
+    expect(screen.getByText("Valid private Cluster Virtual IP required.")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
+
+    fireEvent.change(screen.getByLabelText("Cluster Virtual IP"), { target: { value: "192.168.3.249" } });
+    fireEvent.click(within(enableDialog).getByRole("button", { name: "Enable Cluster" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/enable",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ cluster_vip: "192.168.3.249" }) }),
+    ));
   });
 
   it("disables isolation when operator exits maintenance on drained standby", async () => {
@@ -273,6 +314,16 @@ describe("Cluster Management", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByText(/No published stable cluster-compatible release exists at or above baseline 2026.08.1/)).toBeInTheDocument();
+  });
+
+  it("bounds release catalog menu dimensions", () => {
+    expect(RELEASE_SELECT_PROPS).toMatchObject({ autoWidth: true, MenuProps: RELEASE_MENU_PROPS });
+    expect(RELEASE_MENU_PROPS.PaperProps.sx).toMatchObject({
+      width: 720,
+      maxWidth: "calc(100vw - 32px)",
+      maxHeight: 360,
+    });
+    expect(RELEASE_MENU_PROPS.PaperProps.sx["& .MuiMenuItem-root"].whiteSpace).toBe("normal");
   });
 
   it("shows reduced PostgreSQL readiness separately from configured instances", async () => {

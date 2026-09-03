@@ -96,7 +96,7 @@ render_borealis_operator_manifest \
   >"${OUTPUT_DIR}/borealis-operator.yaml"
 render_k3s_api_backend_bridge_manifest \
   "borealis/api-backend:fixture" "fixture-hash" "64646" "64646" "5001" "1Gi" "1" "k3s" \
-  "2026.08.8.999" "0123456789abcdef0123456789abcdef01234567" \
+  "2026.08.8.999" "0123456789abcdef0123456789abcdef01234567" "passed" "v1.36.3+k3s1" \
   >"${OUTPUT_DIR}/api-backend.yaml"
 render_k3s_job_scheduler_manifest \
   "borealis/job-scheduler:fixture" "borealis/site-worker:fixture" "fixture-hash" \

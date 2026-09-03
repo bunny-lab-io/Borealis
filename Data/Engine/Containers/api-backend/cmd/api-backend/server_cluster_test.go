@@ -171,17 +171,89 @@ func TestClusterEnableRemainsProbeConformanceGated(t *testing.T) {
 	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "failed")
 	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "2026.08.23")
 	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "engine-1")
+	t.Setenv("BOREALIS_ENGINE_MANAGEMENT_IP", "10.20.30.12")
 	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
-	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"control_plane_vip":"10.20.30.10","edge_vip":"10.20.30.11","management_ip":"10.20.30.12","architecture":"amd64","node_name":"engine-1","confirmation":"ENABLE CLUSTER"}`, token)
+	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10"}`, token)
 	recorder := httptest.NewRecorder()
 
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "probe_conformance") {
 		t.Fatalf("expected conformance gate, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestClusterEnableDerivesAMD64NodeIdentityAndSynchronizesVIPStorage(t *testing.T) {
+	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
+	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "dev-aaaaaaaaaaaa")
+	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "ENGINE-1")
+	t.Setenv("BOREALIS_ENGINE_MANAGEMENT_IP", "10.20.30.12")
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10"}`, token))
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected cluster enable acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	payload := store.mutation.Payload
+	if store.mutation.Kind != "cluster_enable" || payload["cluster_vip"] != "10.20.30.10" || payload["control_plane_vip"] != "10.20.30.10" || payload["edge_vip"] != "10.20.30.10" {
+		t.Fatalf("Cluster Virtual IP contract was not synchronized: %+v", store.mutation)
+	}
+	if payload["node_name"] != "engine-1" || payload["management_ip"] != "10.20.30.12" || payload["architecture"] != "amd64" {
+		t.Fatalf("local node identity was not derived: %#v", payload)
+	}
+	if payload["baseline_release"] != "dev-aaaaaaaaaaaa" || payload["baseline_sha"] != strings.Repeat("a", 40) {
+		t.Fatalf("development baseline was not pinned: %#v", payload)
+	}
+}
+
+func TestClusterEnableRejectsRetiredTypedConfirmationField(t *testing.T) {
+	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
+	t.Setenv("BOREALIS_ENGINE_RELEASE_VERSION", "dev-aaaaaaaaaaaa")
+	t.Setenv("BOREALIS_ENGINE_SOURCE_SHA", strings.Repeat("a", 40))
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	t.Setenv("BOREALIS_ENGINE_NODE_NAME", "engine-1")
+	t.Setenv("BOREALIS_ENGINE_MANAGEMENT_IP", "10.20.30.12")
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/enable", `{"cluster_vip":"10.20.30.10","confirmation":"ENABLE CLUSTER"}`, token))
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"field":"confirmation"`) || !strings.Contains(recorder.Body.String(), "field is not allowed") {
+		t.Fatalf("expected retired confirmation rejection, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestValidClusterBaselineReleaseRequiresDevelopmentNameToMatchSHA(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	for _, test := range []struct {
+		release string
+		sha     string
+		want    bool
+	}{
+		{release: "2026.09.1", sha: sha, want: true},
+		{release: "dev-0123456789ab", sha: sha, want: true},
+		{release: "dev-fedcba987654", sha: sha, want: false},
+		{release: "dev-0123456789ab", sha: "not-a-sha", want: false},
+		{release: "main", sha: sha, want: false},
+	} {
+		if got := validClusterBaselineRelease(test.release, test.sha); got != test.want {
+			t.Fatalf("validClusterBaselineRelease(%q, %q)=%v want %v", test.release, test.sha, got, test.want)
+		}
 	}
 }
 
@@ -222,7 +294,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "baseline_sha": commitSHA, "active_size": int64(3)}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
@@ -255,6 +327,120 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	}
 	if store.mutation.TargetSHA != commitSHA || store.mutation.TargetRelease != "2026.08.9" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
 		t.Fatalf("update did not pin release SHA: %+v", store.mutation)
+	}
+}
+
+func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRelease(t *testing.T) {
+	const baselineSHA = "fedcba9876543210fedcba9876543210fedcba98"
+	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
+	releasePageRequests := 0
+	compareRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/releases"):
+			releasePageRequests++
+			if r.URL.Query().Get("page") != "1" {
+				http.Error(w, "unexpected historical release page", http.StatusGatewayTimeout)
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
+				{TagName: "2026.09.1", Name: "First Stable"},
+				{TagName: "2026.09.1-rc1", Name: "Prerelease", Prerelease: true},
+			})
+		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			compareRequests++
+			if !strings.HasSuffix(r.URL.Path, "/compare/"+baselineSHA+"..."+commitSHA) {
+				http.Error(w, "unexpected comparison", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ahead"})
+		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	serverClusterReleaseCache = clusterReleaseCache{}
+
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if releasePageRequests != 1 {
+		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
+	}
+	if compareRequests != 1 {
+		t.Fatalf("development baseline requested %d ancestry comparisons, want 1", compareRequests)
+	}
+	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1" || entries[0]["selectable"] != true || entries[0]["reason"] != "" {
+		t.Fatalf("first stable release should be selectable from development baseline: %#v", entries)
+	}
+}
+
+func TestClusterDevelopmentBaselineTreatsPrereleaseOnlyCatalogAsEmpty(t *testing.T) {
+	releasePageRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		releasePageRequests++
+		if r.URL.Query().Get("page") != "1" {
+			http.Error(w, "unexpected historical release page", http.StatusGatewayTimeout)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
+			{TagName: "2026.09.1-rc1", Name: "Cluster Preview", Prerelease: true},
+			{TagName: "main", Name: "Branch Head"},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	serverClusterReleaseCache = clusterReleaseCache{}
+
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", "fedcba9876543210fedcba9876543210fedcba98")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if releasePageRequests != 1 {
+		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("prerelease-only catalog should be empty, got %#v", entries)
+	}
+}
+
+func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testing.T) {
+	const baselineSHA = "fedcba9876543210fedcba9876543210fedcba98"
+	const targetSHA = "0123456789abcdef0123456789abcdef01234567"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/releases"):
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{{TagName: "2026.09.1", Name: "Unrelated Stable"}})
+		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "diverged"})
+		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	serverClusterReleaseCache = clusterReleaseCache{}
+
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0]["selectable"] != false || entries[0]["reason"] != "release does not contain current development baseline" {
+		t.Fatalf("unrelated stable release should be filtered from development baseline: %#v", entries)
 	}
 }
 
@@ -669,8 +855,13 @@ func TestK3sUpgradePathRejectsDowngradeSameVersionAndMinorSkip(t *testing.T) {
 }
 
 func TestClusterInputClassesEnforceIPv4UbuntuAndOperationalLimits(t *testing.T) {
-	if len(validateClusterIP("management_ip", "2001:db8::1")) == 0 || len(validateClusterIP("management_ip", "10.20.30.40")) != 0 {
-		t.Fatal("cluster management addresses must be IPv4")
+	for _, address := range []string{"2001:db8::1", "8.8.8.8", "127.0.0.1", "169.254.1.1"} {
+		if len(validateClusterIP("management_ip", address)) == 0 {
+			t.Fatalf("unsafe cluster address accepted: %s", address)
+		}
+	}
+	if len(validateClusterIP("management_ip", "10.20.30.40")) != 0 {
+		t.Fatal("private unicast cluster IPv4 address rejected")
 	}
 	if !clusterSupportedUbuntu("Ubuntu 24.04") || !clusterSupportedUbuntu("Ubuntu 26.04 LTS") || clusterSupportedUbuntu("Ubuntu 22.04") || clusterSupportedUbuntu("Debian 13") {
 		t.Fatal("unexpected Ubuntu baseline validation")
@@ -680,6 +871,21 @@ func TestClusterInputClassesEnforceIPv4UbuntuAndOperationalLimits(t *testing.T) 
 	}
 	if len(validateClusterRelease(strings.Repeat("1", clusterReleaseMaxLength+1))) == 0 || len(validateClusterNodeName("node_name", strings.Repeat("n", clusterNodeNameMaxLength+1))) == 0 {
 		t.Fatal("release or node-name maximum missing")
+	}
+}
+
+func TestClusterJoinRejectsNonAMD64ArchitectureBeforeAuthentication(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth, _ := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	body := `{"invite_bundle":"invalid","node_name":"engine-2","hostname":"engine-2","management_ip":"10.20.30.42","architecture":"arm64","os_version":"Ubuntu 24.04"}`
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/bootstrap/cluster/join", body, ""))
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "must be amd64") {
+		t.Fatalf("expected non-amd64 rejection, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

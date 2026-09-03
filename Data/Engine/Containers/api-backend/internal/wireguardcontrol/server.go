@@ -390,11 +390,14 @@ func generateServerKeyPair() (string, string, error) {
 }
 
 func readWireGuardKey(path string) (string, error) {
-	info, err := os.Lstat(path)
+	if !isPathUnder(path, filepath.Dir(path), ".key") {
+		return "", errors.New("WireGuard key path must resolve inside key directory")
+	}
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() {
 		return "", errors.New("WireGuard key path must be regular file")
 	}
 	raw, err := os.ReadFile(path)
@@ -427,10 +430,10 @@ func ensurePrivateDirectory(path string) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(path, 0o750); err != nil {
+	if err := os.MkdirAll(path, 0o770); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o750)
+	return os.Chmod(path, 0o770)
 }
 
 func writeExclusivePrivateFile(path string, value string) error {

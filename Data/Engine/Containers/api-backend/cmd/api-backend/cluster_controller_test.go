@@ -924,7 +924,7 @@ func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET active_size=3,desired_size=3 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	admission := map[string]any{"id": firstPending, "invitation_id": invitationID, "cluster_id": clusterID, "token_hash": invitation["token_hash"], "node_name": "engine-2", "hostname": "engine-2", "management_ip": "192.0.2.22", "architecture": "amd64", "os_version": "Ubuntu 24.04"}
+	admission := map[string]any{"id": firstPending, "invitation_id": invitationID, "cluster_id": clusterID, "token_hash": invitation["token_hash"], "node_name": "engine-2", "hostname": "engine-2", "management_ip": "10.20.30.22", "architecture": "amd64", "os_version": "Ubuntu 24.04"}
 	if _, err := store.consumeClusterInvitation(ctx, admission); !errors.Is(err, errClusterConflict) {
 		t.Fatalf("stale invitation bypassed three-node fence: %v", err)
 	}
@@ -1185,8 +1185,8 @@ func TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity(t *testing.T)
 		INSERT INTO engine.cluster_nodes(id,node_name,hostname,management_ip,architecture,os_version,membership_state,application_state,release_tag,release_sha,drain_reason,roles_json,probe_health_json,created_at,updated_at)
 		VALUES
 			($1,'readmit-engine-01','readmit-engine-01','192.0.2.51','amd64','Ubuntu 24.04','Active','active',$4,$5,NULL,'{}','{}',$6,$7),
-			($2,$8,'retired-hostname-02','192.0.2.152','arm64','Ubuntu 22.04','Removed','drained','2026.08.1',$9,'safe_pair_removal','{}','{}',$6,$7),
-			($3,$10,'retired-hostname-03','192.0.2.153','arm64','Ubuntu 22.04','Removed','drained','2026.08.1',$9,'safe_pair_removal','{}','{}',$6,$7)
+			($2,$8,'retired-hostname-02','10.20.30.152','amd64','Ubuntu 22.04','Removed','drained','2026.08.1',$9,'safe_pair_removal','{}','{}',$6,$7),
+			($3,$10,'retired-hostname-03','10.20.30.153','amd64','Ubuntu 22.04','Removed','drained','2026.08.1',$9,'safe_pair_removal','{}','{}',$6,$7)
 	`, survivorID, retainedNodeTwoID, retainedNodeTriID, baselineRelease, baselineSHA, createdAt, now, nodeNames[0], strings.Repeat("b", 40), nodeNames[1]); err != nil {
 		t.Fatal(err)
 	}
@@ -1335,8 +1335,8 @@ func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testi
 		Status:          "Mixed Version",
 		ActiveSize:      1,
 		DesiredSize:     3,
-		ControlPlaneVIP: "192.0.2.10",
-		EdgeVIP:         "192.0.2.11",
+		ControlPlaneVIP: "10.20.30.10",
+		EdgeVIP:         "10.20.30.10",
 		BaselineRelease: "2026.08.24",
 		BaselineSHA:     strings.Repeat("a", 40),
 		HMRState:        "inactive",
@@ -1347,7 +1347,7 @@ func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coerceInt64(spec["activeSize"]) != 1 || coerceInt64(spec["desiredSize"]) != 3 {
+	if coerceInt64(spec["activeSize"]) != 1 || coerceInt64(spec["desiredSize"]) != 3 || cleanText(spec["clusterVIP"]) != "10.20.30.10" {
 		t.Fatalf("cluster desired sizes missing: %#v", spec)
 	}
 	replacement := state
@@ -1388,7 +1388,7 @@ func TestClusterCustomResourceStatesKeepDesiredAndRuntimeFieldsSeparate(t *testi
 		ID:           "33333333-3333-4333-8333-333333333333",
 		NodeName:     "engine-2",
 		Hostname:     "engine-2.example.test",
-		ManagementIP: "192.0.2.12",
+		ManagementIP: "10.20.30.12",
 		Architecture: "amd64",
 		OSVersion:    "Ubuntu 24.04",
 		State:        "Approved",
@@ -2830,6 +2830,15 @@ func TestHMRPinnedRestoreUsesSavedImmutableRelease(t *testing.T) {
 	if _, err := hmrPinnedRestoreOperation(clusterControllerOperation{}, clusterControllerNode{}); err == nil {
 		t.Fatal("missing pinned production release accepted")
 	}
+	development := clusterControllerOperation{Payload: map[string]any{"baseline_release": "dev-aaaaaaaaaaaa", "baseline_sha": sha}}
+	restore, err = hmrPinnedRestoreOperation(development, clusterControllerNode{})
+	if err != nil || restore.TargetRelease != "dev-aaaaaaaaaaaa" || restore.TargetSHA != sha {
+		t.Fatalf("saved development baseline not restored: %#v err=%v", restore, err)
+	}
+	development.Payload["baseline_release"] = "dev-bbbbbbbbbbbb"
+	if _, err := hmrPinnedRestoreOperation(development, clusterControllerNode{}); err == nil {
+		t.Fatal("development baseline mismatched to full SHA accepted")
+	}
 }
 
 func TestSingleNodeHMRExitFencesHostPortsBeforeCandidate(t *testing.T) {
@@ -2986,14 +2995,12 @@ func TestWaitNodeEndpointsWithdrawnIgnoresResidentInfrastructureEndpoints(t *tes
 	}
 }
 
-func TestVIPRoleTransferWaitsForBothLeasesAndWireGuardReadiness(t *testing.T) {
-	controlOwner := "engine-1"
+func TestVIPRoleTransferWaitsForClusterLeaseAndWireGuardReadiness(t *testing.T) {
+	clusterOwner := "engine-1"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-control-vip":
-			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": controlOwner}})
-		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip":
-			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-2"}})
+		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-cluster-vip":
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": clusterOwner}})
 		case "/apis/apps/v1/namespaces/borealis/deployments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "wireguard-tunnel-engine-2"}}}})
 		case "/apis/apps/v1/namespaces/borealis/deployments/wireguard-tunnel-engine-2":
@@ -3018,23 +3025,21 @@ func TestVIPRoleTransferWaitsForBothLeasesAndWireGuardReadiness(t *testing.T) {
 	blockedCtx, blockedCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer blockedCancel()
 	if err := runner.waitVIPAndWireGuardOwner(blockedCtx, "engine-2"); err == nil {
-		t.Fatal("VIP role transfer accepted stale Control VIP owner")
+		t.Fatal("VIP role transfer accepted stale Cluster Virtual IP owner")
 	}
-	controlOwner = "engine-2"
+	clusterOwner = "engine-2"
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := runner.waitVIPAndWireGuardOwner(ctx, "engine-2"); err != nil {
-		t.Fatalf("Control VIP, Edge VIP, and WireGuard ownership did not converge: %v", err)
+		t.Fatalf("Cluster Virtual IP and WireGuard ownership did not converge: %v", err)
 	}
 }
 
-func TestHMRExitRoleTransferAwayAcceptsDifferentHealthyEligibleOwner(t *testing.T) {
+func TestHMRExitRoleTransferAwayAcceptsHealthyEligibleOwner(t *testing.T) {
 	readyReplicas := int64(1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-control-vip":
-			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-2"}})
-		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-edge-vip":
+		case "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/borealis-cluster-vip":
 			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"holderIdentity": "engine-3"}})
 		case "/apis/apps/v1/namespaces/borealis/deployments":
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{

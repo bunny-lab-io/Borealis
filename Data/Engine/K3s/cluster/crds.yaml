@@ -22,13 +22,12 @@ spec:
           properties:
             spec:
               type: object
-              required: [activeSize, controlPlaneVIP, edgeVIP]
+              required: [activeSize, clusterVIP]
               properties:
                 activeSize: {type: integer, enum: [1, 2, 3]}
                 desiredSize: {type: integer, enum: [1, 3]}
-                controlPlaneVIP: {type: string, format: ipv4}
-                edgeVIP: {type: string, format: ipv4}
-                baselineRelease: {type: string, maxLength: 32, pattern: '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$'}
+                clusterVIP: {type: string, format: ipv4}
+                baselineRelease: {type: string, maxLength: 32, pattern: '^(?:[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?|dev-[0-9a-f]{12})$'}
                 baselineSHA: {type: string, pattern: '^[0-9a-f]{40}$'}
                 hmrNodeID: {type: string, format: uuid}
             status:
@@ -63,7 +62,7 @@ spec:
                 nodeName: {type: string, maxLength: 63}
                 hostname: {type: string, maxLength: 253}
                 managementIP: {type: string, format: ipv4}
-                architecture: {type: string, enum: [amd64, arm64]}
+                architecture: {type: string, enum: [amd64]}
                 osVersion: {type: string, maxLength: 64}
             status: {type: object, x-kubernetes-preserve-unknown-fields: true}
 ---
