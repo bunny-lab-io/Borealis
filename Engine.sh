@@ -11255,7 +11255,9 @@ PY
 
 engine_release_version() {
   local release="" dirty=""
-  dirty="$(git -C "${SCRIPT_DIR}" status --porcelain --untracked-files=normal 2>/dev/null || true)"
+  if ! dirty="$(git -C "${SCRIPT_DIR}" status --porcelain --untracked-files=normal 2>/dev/null)"; then
+    return 0
+  fi
   [[ -z "${dirty}" ]] || return 0
 
   release="$(git -C "${SCRIPT_DIR}" tag --points-at HEAD 2>/dev/null \

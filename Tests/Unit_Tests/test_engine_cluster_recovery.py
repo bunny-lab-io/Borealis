@@ -225,6 +225,20 @@ fi
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "")
 
+            result = self.run_engine_library(
+                r'''git() {
+  if [[ "$*" == *" status --porcelain --untracked-files=normal" ]]; then
+    return 1
+  fi
+  command git "$@"
+}
+SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"
+engine_release_version''',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "")
+
             tracked.write_text("clean\n", encoding="utf-8")
             subprocess.run(["git", "tag", "-d", "2026.09.1"], cwd=repo, check=True, capture_output=True)
             tracked.write_text("dirty\n", encoding="utf-8")
