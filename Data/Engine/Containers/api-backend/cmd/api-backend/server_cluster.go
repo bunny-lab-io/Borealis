@@ -237,8 +237,8 @@ func clusterReleasesHandler(auth *authService) http.HandlerFunc {
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
 		ctx = clusterContextWithGitHubToken(ctx, auth)
-		current := clusterCurrentRelease(auth, ctx)
-		items, err := fetchClusterReleaseCatalog(ctx, current)
+		current, currentSHA := clusterCurrentRelease(auth, ctx)
+		items, err := fetchClusterReleaseCatalog(ctx, current, currentSHA)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "release_catalog_unavailable", "message": err.Error()})
 			return
@@ -483,8 +483,8 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		ctx = clusterContextWithGitHubToken(ctx, auth)
-		current := clusterCurrentRelease(auth, ctx)
-		release, err := resolveClusterRelease(ctx, releaseTag, current)
+		current, currentSHA := clusterCurrentRelease(auth, ctx)
+		release, err := resolveClusterRelease(ctx, releaseTag, current, currentSHA)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "release_not_selectable", "message": err.Error()})
 			return
@@ -1012,12 +1012,14 @@ func clusterTokenHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func clusterCurrentRelease(auth *authService, ctx context.Context) string {
+func clusterCurrentRelease(auth *authService, ctx context.Context) (string, string) {
 	if auth != nil {
 		if store, ok := auth.store.(clusterStore); ok {
 			if payload, err := store.clusterSnapshot(ctx); err == nil {
-				if current := cleanText(payload["baseline_release"]); clusterReleaseRE.MatchString(current) || validClusterBaselineRelease(current, cleanText(payload["baseline_sha"])) {
-					return current
+				current := cleanText(payload["baseline_release"])
+				currentSHA := strings.ToLower(cleanText(payload["baseline_sha"]))
+				if clusterReleaseRE.MatchString(current) || validClusterBaselineRelease(current, currentSHA) {
+					return current, currentSHA
 				}
 			}
 		}
@@ -1025,9 +1027,9 @@ func clusterCurrentRelease(auth *authService, ctx context.Context) string {
 	release := firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_RELEASE_VERSION")), strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_SOURCE_RELEASE")))
 	sha := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_SOURCE_SHA")))
 	if validClusterBaselineRelease(release, sha) || clusterReleaseRE.MatchString(release) {
-		return release
+		return release, sha
 	}
-	return ""
+	return "", ""
 }
 
 func clusterGitHubRepo() string {
@@ -1041,9 +1043,9 @@ func clusterGitHubAPIBase() string {
 	return strings.TrimRight(firstText(strings.TrimSpace(os.Getenv("BOREALIS_GITHUB_API_BASE_URL")), "https://api.github.com"), "/")
 }
 
-func fetchClusterReleaseCatalog(ctx context.Context, current string) ([]map[string]any, error) {
+func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA string) ([]map[string]any, error) {
 	repo := clusterGitHubRepo()
-	cacheKey := repo + "|" + current + "|" + clusterGitHubAPIBase()
+	cacheKey := repo + "|" + current + "|" + currentSHA + "|" + clusterGitHubAPIBase()
 	serverClusterReleaseCache.mu.Lock()
 	if serverClusterReleaseCache.key == cacheKey && time.Now().Before(serverClusterReleaseCache.expiresAt) {
 		items := copyClusterReleaseItems(serverClusterReleaseCache.items)
@@ -1074,7 +1076,7 @@ func fetchClusterReleaseCatalog(ctx context.Context, current string) ([]map[stri
 				// eligible release later in the same page or a later page.
 				continue
 			}
-			entry, err := hydrateClusterRelease(ctx, release, current)
+			entry, err := hydrateClusterRelease(ctx, release, current, currentSHA)
 			if err != nil {
 				entry = map[string]any{"tag": tag, "title": firstText(strings.TrimSpace(release.Name), tag), "published_at": release.PublishedAt, "selectable": false, "reason": err.Error()}
 			}
@@ -1102,7 +1104,7 @@ func fetchClusterReleaseCatalog(ctx context.Context, current string) ([]map[stri
 	return items, nil
 }
 
-func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, current string) (map[string]any, error) {
+func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, current, currentSHA string) (map[string]any, error) {
 	tag := strings.TrimSpace(release.TagName)
 	sha, err := resolveClusterGitHubTagSHA(ctx, tag)
 	if err != nil {
@@ -1130,12 +1132,21 @@ func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, cu
 	} else if runningK3s != "" && runningK3s != manifest.RequiredK3sBaseline {
 		selectable = false
 		reason = "running K3s baseline does not match release manifest"
+	} else if clusterDevelopmentReleaseRE.MatchString(current) {
+		descends, ancestryErr := clusterReleaseDescendsFromBaseline(ctx, currentSHA, sha)
+		if ancestryErr != nil {
+			return nil, fmt.Errorf("release ancestry could not be verified: %w", ancestryErr)
+		}
+		if !descends {
+			selectable = false
+			reason = "release does not contain current development baseline"
+		}
 	}
 	return map[string]any{"tag": tag, "title": firstText(strings.TrimSpace(release.Name), tag), "published_at": release.PublishedAt, "commit_sha": sha, "current": tag == current, "selectable": selectable, "reason": reason, "compatibility": manifest}, nil
 }
 
-func resolveClusterRelease(ctx context.Context, tag string, current string) (map[string]any, error) {
-	items, err := fetchClusterReleaseCatalog(ctx, current)
+func resolveClusterRelease(ctx context.Context, tag, current, currentSHA string) (map[string]any, error) {
+	items, err := fetchClusterReleaseCatalog(ctx, current, currentSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -1148,6 +1159,32 @@ func resolveClusterRelease(ctx context.Context, tag string, current string) (map
 		}
 	}
 	return nil, errors.New("release is not present in stable catalog")
+}
+
+func clusterReleaseDescendsFromBaseline(ctx context.Context, baselineSHA, targetSHA string) (bool, error) {
+	baselineSHA = strings.ToLower(strings.TrimSpace(baselineSHA))
+	targetSHA = strings.ToLower(strings.TrimSpace(targetSHA))
+	if !clusterControllerSHARegex.MatchString(baselineSHA) || !clusterControllerSHARegex.MatchString(targetSHA) {
+		return false, errors.New("release ancestry requires valid commit SHAs")
+	}
+	if baselineSHA == targetSHA {
+		return true, nil
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/compare/%s...%s", clusterGitHubAPIBase(), clusterGitHubRepo(), baselineSHA, targetSHA)
+	var comparison struct {
+		Status string `json:"status"`
+	}
+	if err := clusterGitHubJSON(ctx, endpoint, &comparison); err != nil {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(comparison.Status)) {
+	case "ahead", "identical":
+		return true, nil
+	case "behind", "diverged":
+		return false, nil
+	default:
+		return false, errors.New("GitHub returned invalid commit comparison")
+	}
 }
 
 func resolveClusterGitHubTagSHA(ctx context.Context, tag string) (string, error) {

@@ -331,8 +331,10 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 }
 
 func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRelease(t *testing.T) {
+	const baselineSHA = "fedcba9876543210fedcba9876543210fedcba98"
 	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
 	releasePageRequests := 0
+	compareRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/releases"):
@@ -347,6 +349,13 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRel
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			compareRequests++
+			if !strings.HasSuffix(r.URL.Path, "/compare/"+baselineSHA+"..."+commitSHA) {
+				http.Error(w, "unexpected comparison", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ahead"})
 		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
 			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
 		default:
@@ -359,12 +368,15 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRel
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654")
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if releasePageRequests != 1 {
 		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
+	}
+	if compareRequests != 1 {
+		t.Fatalf("development baseline requested %d ancestry comparisons, want 1", compareRequests)
 	}
 	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1" || entries[0]["selectable"] != true || entries[0]["reason"] != "" {
 		t.Fatalf("first stable release should be selectable from development baseline: %#v", entries)
@@ -388,7 +400,7 @@ func TestClusterDevelopmentBaselineTreatsPrereleaseOnlyCatalogAsEmpty(t *testing
 	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654")
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", "fedcba9876543210fedcba9876543210fedcba98")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +409,38 @@ func TestClusterDevelopmentBaselineTreatsPrereleaseOnlyCatalogAsEmpty(t *testing
 	}
 	if len(entries) != 0 {
 		t.Fatalf("prerelease-only catalog should be empty, got %#v", entries)
+	}
+}
+
+func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testing.T) {
+	const baselineSHA = "fedcba9876543210fedcba9876543210fedcba98"
+	const targetSHA = "0123456789abcdef0123456789abcdef01234567"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/releases"):
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{{TagName: "2026.09.1", Name: "Unrelated Stable"}})
+		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "diverged"})
+		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
+	serverClusterReleaseCache = clusterReleaseCache{}
+
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0]["selectable"] != false || entries[0]["reason"] != "release does not contain current development baseline" {
+		t.Fatalf("unrelated stable release should be filtered from development baseline: %#v", entries)
 	}
 }
 

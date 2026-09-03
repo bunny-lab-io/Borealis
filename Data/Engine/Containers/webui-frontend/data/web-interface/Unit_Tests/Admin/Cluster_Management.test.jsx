@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
 import ClusterManagement, {
+  RELEASE_MENU_PROPS,
+  RELEASE_SELECT_PROPS,
   buildClusterOperationDetails,
   clusterOperationNodeLabel,
   clusterNodeDatabaseStatus,
@@ -312,6 +314,16 @@ describe("Cluster Management", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByText(/No published stable cluster-compatible release exists at or above baseline 2026.08.1/)).toBeInTheDocument();
+  });
+
+  it("bounds release catalog menu dimensions", () => {
+    expect(RELEASE_SELECT_PROPS).toMatchObject({ autoWidth: true, MenuProps: RELEASE_MENU_PROPS });
+    expect(RELEASE_MENU_PROPS.PaperProps.sx).toMatchObject({
+      width: 720,
+      maxWidth: "calc(100vw - 32px)",
+      maxHeight: 360,
+    });
+    expect(RELEASE_MENU_PROPS.PaperProps.sx["& .MuiMenuItem-root"].whiteSpace).toBe("normal");
   });
 
   it("shows reduced PostgreSQL readiness separately from configured instances", async () => {

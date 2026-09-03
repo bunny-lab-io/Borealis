@@ -86,6 +86,35 @@ const CARD_SX = {
   background: "linear-gradient(155deg, rgba(13,20,38,0.94), rgba(7,11,26,0.9))",
   color: "#e2e8f0",
 };
+export const RELEASE_MENU_PROPS = {
+  PaperProps: {
+    sx: {
+      width: 720,
+      maxWidth: "calc(100vw - 32px)",
+      maxHeight: 360,
+      borderRadius: 2.5,
+      border: "1px solid rgba(125,183,255,0.28)",
+      background: "rgba(8,12,24,0.98)",
+      boxShadow: "0 24px 60px rgba(2,8,23,0.72)",
+      backdropFilter: "blur(18px)",
+      color: "#e2e8f0",
+      "& .MuiMenu-list": { p: 0.5 },
+      "& .MuiMenuItem-root": {
+        minHeight: 36,
+        borderRadius: 1.25,
+        fontSize: "0.88rem",
+        lineHeight: 1.35,
+        whiteSpace: "normal",
+      },
+      "& .MuiMenuItem-root:hover": { background: "rgba(125,183,255,0.12)" },
+      "& .MuiMenuItem-root.Mui-selected": { background: "rgba(125,183,255,0.2)" },
+    },
+  },
+};
+export const RELEASE_SELECT_PROPS = {
+  autoWidth: true,
+  MenuProps: RELEASE_MENU_PROPS,
+};
 const NODE_NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const K3S_VERSION_PATTERN = /^v\d+\.\d+\.\d+\+k3s\d+$/;
 const NAV_TAB_HEIGHT = 32;
@@ -1313,7 +1342,7 @@ export default function ClusterManagement() {
             {!releaseError && releases.length > 0 && selectableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Stable releases were found, but none match current rolling-update and K3s compatibility requirements. Open release list for per-release reason.</Alert> : null}
             <FormControl fullWidth sx={{ mt: 2 }}>
               <InputLabel id="cluster-release-label">Release</InputLabel>
-              <Select labelId="cluster-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
+              <Select {...RELEASE_SELECT_PROPS} labelId="cluster-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
                 {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}{release.selectable ? "" : ` — ${release.reason || "incompatible"}`}</MenuItem>)}
               </Select>
             </FormControl>
@@ -1360,7 +1389,7 @@ export default function ClusterManagement() {
           {dialog?.kind === "update_node" || dialog?.kind === "update_all" ? (
             <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}>
               <InputLabel id="dialog-release-label">Release</InputLabel>
-              <Select labelId="dialog-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
+              <Select {...RELEASE_SELECT_PROPS} labelId="dialog-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
                 {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}</MenuItem>)}
               </Select>
             </FormControl>
