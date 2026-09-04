@@ -161,6 +161,8 @@ Use Maintenance instead of `git pull` on clustered Engines. Cluster Management e
 
 Stable releases use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` and must be normal GitHub releases. Qualification releases append `-rc.N`, such as `2026.09.2-rc.1`, and must have GitHub prerelease status. `N` starts at `1` and increases for each candidate for same intended stable version. Branch names, draft releases, malformed tags, and tag/GitHub-channel mismatches never become targets.
 
+Maintainers create immutable qualification and stable releases through [Publishing Engine Releases](publishing-engine-releases.md). Operators select approved result here; cluster never creates, retags, or repairs release.
+
 Each selector hides versions older than pinned baseline. Same-version and newer entries remain visible; incompatible entries remain disabled with reason. Stable release ranks after all `-rc.N` candidates sharing its dotted base, allowing tested qualification commit to become stable without downgrade. Borealis rolling support policy covers only latest stable release or hotfix. Qualification clusters remain visibly unsupported until promoted forward to stable.
 
 Commit-backed `dev-*` baseline has no calendar version. API therefore shows only stable or qualification targets whose tagged commits contain pinned development commit and satisfy compatibility checks. `dev-*` affects initial formation, membership, and HMR restoration; it never makes mutable branch heads selectable.

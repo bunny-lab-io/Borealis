@@ -85,6 +85,7 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine/de
     Documentation Map:
 
     - [Engine Deployment](Engine/deploying-the-engine.md) - install path, architecture, security, UI rules, and testing entrypoints.
+    - [Publishing Engine Releases](Engine/publishing-engine-releases.md) - maintainer release channels, draft packaging, immutable publication, verification, and correction rules.
     - [Managing Engine Clusters](Engine/managing-engine-clusters.md) - quorum, probes, HMR isolation, membership, rolling updates, and recovery.
     - [Screenshots](screenshots.md) - visual tour of Borealis operator surfaces.
     - [Using the Platform](Using%20the%20Platform/index.md) - operator workflows for devices, sites, remote operations, automation, access, logs, and software.

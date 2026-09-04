@@ -67,6 +67,7 @@ When only Agent source changed, use `bash Engine.sh --redeploy-agent-binaries` f
     ### Related documentation
 
     - [Engine Deployment](deploying-the-engine.md)
+    - [Publishing Engine Releases](publishing-engine-releases.md)
     - [Managing Engine Clusters](managing-engine-clusters.md)
     - [WebUI HMR Development](webui-hmr-development.md)
     - [Service Maintenance Commands](engine-maintenance-commands.md)
@@ -75,28 +76,7 @@ When only Agent source changed, use `bash Engine.sh --redeploy-agent-binaries` f
 
     ### Stable release publication
 
-    Repository must have GitHub immutable releases enabled before packaging. Stable release tags use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX`; release candidates use separate cluster qualification flow and cannot serve stable curl installer.
-
-    1. Merge reviewed release source and create stable tag at intended full commit SHA.
-    2. Create GitHub release as non-prerelease draft. Do not publish it yet.
-    3. Dispatch `publish-engine-release-assets.yml` with exact tag. Workflow checks immutable-release repository setting, draft flags, exact tag checkout, and source SHA; then uploads four assets without overwrite.
-    4. Inspect draft asset names, sizes, GitHub `sha256:` digests, generated manifest, and `SHA256SUMS`.
-    5. Publish draft. GitHub locks tag and assets. Never delete and recreate stable release version to replace content; issue higher hotfix version.
-
-    ```sh
-    release="YYYY.MM.REVISION"
-    gh release create "${release}" --draft --verify-tag \
-      --title "${release}" --generate-notes
-    gh workflow run publish-engine-release-assets.yml -f "release=${release}"
-
-    # Inspect workflow and draft before publication.
-    gh run list --workflow publish-engine-release-assets.yml --event workflow_dispatch --limit 1
-    gh release view "${release}" --json tagName,isDraft,isPrerelease,assets
-
-    # Publish only after packaging workflow passes and asset review succeeds.
-    gh release edit "${release}" --draft=false --latest
-    gh release verify "${release}"
-    ```
+    Use [Publishing Engine Releases](publishing-engine-releases.md) for qualification tags, stable draft packaging, asset inspection, immutable publication, and correction rules. Do not duplicate release-creation commands here; this page covers Engine consumer update path.
 
     ### Runtime behavior
 

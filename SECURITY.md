@@ -30,7 +30,9 @@ These numbers do not independently indicate whether a release contains major, mi
 
 Qualification releases append `-rc.N`, where `N` starts at `1` and increases for each candidate built from same intended stable version. For example, `2026.07.6-rc.2` is second qualification candidate for intended `2026.07.6` stable release. Qualification tag must also be published through GitHub with **Set as a pre-release** enabled. Tag suffix and GitHub prerelease metadata must agree.
 
-Qualification releases exist for development and cluster testing before stable publication. They are immutable tagged builds, but remain unsupported for production. Stable publication removes `-rc.N`, uses GitHub normal release status, and supersedes qualification candidates for that version.
+Qualification releases exist for development and cluster testing before stable publication. They are immutable tagged builds, but remain unsupported for production. Stable publication creates separate tag and normal GitHub release using same dotted base without `-rc.N`; it does not rename or replace qualification release.
+
+Every new published Borealis release uses GitHub immutable release protection. Publication locks associated Git tag and uploaded assets; existing releases published before protection was enabled remain mutable. Maintainers create draft first, attach and verify all required assets, then publish. Broken published candidate advances to next `-rc.N`; broken stable release advances to hotfix or next normal revision. Published version is never repaired by moving tag or replacing assets. See [Publishing Engine Releases](Docs/Engine/publishing-engine-releases.md).
 
 Borealis follows a rolling support model. Security fixes are developed for the latest published release, including any hotfixes published for that release.
 
