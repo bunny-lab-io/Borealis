@@ -19,6 +19,15 @@ def sha256(path: pathlib.Path) -> str:
 
 
 class EngineReleaseBootstrapTests(unittest.TestCase):
+    def test_release_packaging_avoids_admin_only_settings_api(self):
+        workflow = (
+            REPO_ROOT / ".github/workflows/publish-engine-release-assets.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("repos/${GITHUB_REPOSITORY}/immutable-releases", workflow)
+        self.assertIn("gh release view", workflow)
+        self.assertIn("--json isDraft,isPrerelease,tagName", workflow)
+        self.assertNotIn("--clobber", workflow)
+
     def run_engine_library(self, script: str):
         env = os.environ.copy()
         env["BOREALIS_ENGINE_LIBRARY_MODE"] = "1"
