@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   IconButton,
   InputLabel,
   MenuItem,
@@ -32,6 +33,7 @@ import {
   EngineeringRounded as MaintenanceActionIcon,
   HistoryRounded as EventsIcon,
   HubRounded as ClusterIcon,
+  InfoOutlined as VersionInfoIcon,
   RefreshRounded as RefreshIcon,
   StorageRounded as DatabaseIcon,
   UpdateRounded as UpdateIcon,
@@ -115,6 +117,9 @@ export const RELEASE_SELECT_PROPS = {
   autoWidth: true,
   MenuProps: RELEASE_MENU_PROPS,
 };
+const BOREALIS_STABLE_VERSION_PATTERN = /^(\d{4})\.(\d{1,2})\.(\d+)(?:\.(\d+))?$/;
+const BOREALIS_VERSION_TOOLTIP =
+  "Normal releases use YYYY.MM.REVISION, where REVISION counts published updates within that month. Focused corrections use YYYY.MM.REVISION.HOTFIX. Only latest published release or hotfix receives security support.";
 const NODE_NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const K3S_VERSION_PATTERN = /^v\d+\.\d+\.\d+\+k3s\d+$/;
 const NAV_TAB_HEIGHT = 32;
@@ -257,6 +262,60 @@ const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "database",
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
 const CLUSTER_EVENT_PAGE_SIZE = 500;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
+
+function borealisVersionParts(value) {
+  const match = BOREALIS_STABLE_VERSION_PATTERN.exec(String(value || "").trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] || 0)];
+}
+
+export function compareBorealisVersions(left, right) {
+  const leftParts = borealisVersionParts(left);
+  const rightParts = borealisVersionParts(right);
+  if (!leftParts || !rightParts) return null;
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] < rightParts[index]) return -1;
+    if (leftParts[index] > rightParts[index]) return 1;
+  }
+  return 0;
+}
+
+export function clusterReleaseOptionsAtOrAboveBaseline(releases, baselineRelease) {
+  const items = Array.isArray(releases) ? releases : [];
+  if (!borealisVersionParts(baselineRelease)) {
+    // Development baselines have no calendar version. API ancestry and
+    // compatibility checks are authoritative for their first stable target.
+    return items.filter((release) => release?.selectable === true);
+  }
+  return items.filter((release) => {
+    const comparison = compareBorealisVersions(release?.tag, baselineRelease);
+    return comparison !== null && comparison >= 0;
+  });
+}
+
+function releaseOptionLabel(release) {
+  const tag = String(release?.tag || "").trim();
+  const title = String(release?.title || "").trim();
+  if (!title || title === tag || title.startsWith(`${tag} `)) return title || tag;
+  return `${tag} — ${title}`;
+}
+
+function ReleaseMenuItem({ release, showReason = false }) {
+  const tag = String(release?.tag || "").trim();
+  const reason = String(release?.reason || "Does not satisfy cluster update requirements.").trim();
+  const tooltip = release?.selectable
+    ? `${tag} is compatible with current cluster baseline.`
+    : `${tag} cannot be selected: ${reason}`;
+  return (
+    <MenuItem value={tag} disabled={!release?.selectable}>
+      <Tooltip title={tooltip} placement="right" arrow>
+        <Box component="span" sx={{ display: "block", width: "100%" }}>
+          {releaseOptionLabel(release)}{showReason && !release?.selectable ? ` — ${reason}` : ""}
+        </Box>
+      </Tooltip>
+    </MenuItem>
+  );
+}
 
 function validPrivateIPv4(value) {
   const parts = String(value || "").split(".");
@@ -826,7 +885,11 @@ export default function ClusterManagement() {
   const nodes = useMemo(() => Array.isArray(cluster?.nodes) ? cluster.nodes : [], [cluster]);
   const operations = useMemo(() => Array.isArray(cluster?.operations) ? cluster.operations : [], [cluster]);
   const admissions = useMemo(() => Array.isArray(cluster?.admissions) ? cluster.admissions : [], [cluster]);
-  const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
+  const releaseOptions = useMemo(
+    () => clusterReleaseOptionsAtOrAboveBaseline(releases, cluster?.baseline_release),
+    [cluster?.baseline_release, releases]
+  );
+  const selectableReleases = useMemo(() => releaseOptions.filter((release) => release?.selectable), [releaseOptions]);
   const activeSize = Number(cluster?.active_size || 1);
   const desiredMembershipSize = Number(cluster?.desired_size || activeSize);
   const database = cluster?.database || {};
@@ -1085,7 +1148,7 @@ export default function ClusterManagement() {
         icon: UpdateIcon,
         group: "organize",
         disabled: updateDisabled,
-        description: "Install selected Engine release",
+        description: "Install selected same-version or newer Engine version",
         onClick: () => openAction("update_node", nodeActionTarget),
       },
       {
@@ -1335,17 +1398,30 @@ export default function ClusterManagement() {
         {tab === "maintenance" ? <Stack spacing={2}>
           <Paper sx={CARD_SX}><Typography variant="h6">Cluster-Wide Node Isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl disabled={!isolationInactive} sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">Isolated Node</InputLabel><Select labelId="hmr-node-label" label="Isolated Node" value={isolationNodeValue} onChange={(event) => setSelectedNode(event.target.value)}>{isolationNodeOptions.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || !isolationInactive} onClick={() => openAction("hmr_start")}>Enable Isolation</Button><Button variant="outlined" disabled={!isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button></Stack></Paper>
           <Paper sx={CARD_SX}>
-            <Typography variant="h6">Stable Engine Release</Typography>
-            <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Loaded from published, non-prerelease GitHub releases that declare cluster compatibility; cluster does not generate versions. Current tags use YYYY.MM.DD.N, with final number distinguishing multiple releases for same date. Borealis pins selected tag to exact commit, then drains, updates, and verifies one node at a time.</Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <Typography variant="h6">Stable Engine Version</Typography>
+              <Tooltip title={BOREALIS_VERSION_TOOLTIP} placement="right" arrow>
+                <IconButton size="small" aria-label="Borealis version format" sx={{ color: "#8fbfff" }}>
+                  <VersionInfoIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+            <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Borealis uses YYYY.MM.REVISION for normal monthly releases and YYYY.MM.REVISION.HOTFIX for focused corrections. Revision counts normal releases published during month; hotfix counts corrections based on that revision. Selector hides older versions and lists published, non-prerelease GitHub releases at or above pinned baseline that declare cluster compatibility. Only latest published release or hotfix receives security support. Borealis pins chosen tag to exact commit, then drains, updates, and verifies one node at a time.</Typography>
             {releaseError ? <Alert severity="error" sx={{ mt: 2 }}>{releaseError}</Alert> : null}
             {!releaseError && releases.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No published stable cluster-compatible release exists at or above baseline {valueLabel(cluster?.baseline_release)}. Current release remains pinned.</Alert> : null}
-            {!releaseError && releases.length > 0 && selectableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Stable releases were found, but none match current rolling-update and K3s compatibility requirements. Open release list for per-release reason.</Alert> : null}
-            <FormControl fullWidth sx={{ mt: 2 }}>
-              <InputLabel id="cluster-release-label">Release</InputLabel>
-              <Select {...RELEASE_SELECT_PROPS} labelId="cluster-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
-                {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}{release.selectable ? "" : ` — ${release.reason || "incompatible"}`}</MenuItem>)}
-              </Select>
-            </FormControl>
+            {!releaseError && releases.length > 0 && releaseOptions.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No same-version or newer compatible stable release exists for baseline {valueLabel(cluster?.baseline_release)}. Older releases are hidden.</Alert> : null}
+            {!releaseError && releaseOptions.length > 0 && selectableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Same-version or newer stable releases were found, but none match current rolling-update and K3s compatibility requirements. Open version list for per-release reason.</Alert> : null}
+            <Tooltip title={`Current baseline: ${valueLabel(cluster?.baseline_release)}. Older versions are hidden. Development baselines show only compatible stable releases whose tagged commit contains current development commit.`} placement="top-start" arrow>
+              <Box sx={{ mt: 2 }}>
+                <FormControl fullWidth disabled={releaseOptions.length === 0}>
+                  <InputLabel id="cluster-release-label">Target Engine Version</InputLabel>
+                  <Select {...RELEASE_SELECT_PROPS} labelId="cluster-release-label" label="Target Engine Version" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
+                    {releaseOptions.map((release) => <ReleaseMenuItem key={release.tag} release={release} showReason />)}
+                  </Select>
+                  <FormHelperText sx={{ color: "#94a3b8" }}>Current baseline: {valueLabel(cluster?.baseline_release)}. Older versions are not shown.</FormHelperText>
+                </FormControl>
+              </Box>
+            </Tooltip>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}>
               <Button variant="contained" disabled={!rollingUpdateEnabled || !selectedRelease || !selectableReleases.length} onClick={() => openAction("update_all")}>Update All One at a Time</Button>
               <FormControl sx={{ minWidth: 220 }}>
@@ -1388,10 +1464,11 @@ export default function ClusterManagement() {
           {dialog?.kind === "k3s_update" ? <Alert severity="warning" sx={{ mb: 2 }}>K3s control-plane update stays separate from Engine release update. Failure halts sequence and leaves affected node drained.</Alert> : null}
           {dialog?.kind === "update_node" || dialog?.kind === "update_all" ? (
             <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}>
-              <InputLabel id="dialog-release-label">Release</InputLabel>
-              <Select {...RELEASE_SELECT_PROPS} labelId="dialog-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
-                {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}</MenuItem>)}
+              <InputLabel id="dialog-release-label">Target Engine Version</InputLabel>
+              <Select {...RELEASE_SELECT_PROPS} labelId="dialog-release-label" label="Target Engine Version" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
+                {releaseOptions.map((release) => <ReleaseMenuItem key={release.tag} release={release} showReason />)}
               </Select>
+              <FormHelperText sx={{ color: "#94a3b8" }}>Current baseline: {valueLabel(cluster?.baseline_release)}. Older versions are not shown.</FormHelperText>
             </FormControl>
           ) : null}
           {dialog?.kind === "cluster_enable" ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }} label="Cluster Virtual IP" value={clusterVIP} onChange={(event) => setClusterVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /> : null}

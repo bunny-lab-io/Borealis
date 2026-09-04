@@ -7,10 +7,12 @@ import ClusterManagement, {
   RELEASE_MENU_PROPS,
   RELEASE_SELECT_PROPS,
   buildClusterOperationDetails,
+  clusterReleaseOptionsAtOrAboveBaseline,
   clusterOperationNodeLabel,
   clusterNodeDatabaseStatus,
   clusterNodeRolesPresentation,
   clusterNodeStatusLabel,
+  compareBorealisVersions,
   formatClusterTimestamp,
   friendlyClusterOperationName,
 } from "@/Admin/Cluster_Management.jsx";
@@ -145,6 +147,31 @@ describe("Cluster Management", () => {
     });
   });
 
+  it("orders monthly revisions and hotfixes while hiding older release options", () => {
+    expect(compareBorealisVersions("2026.08.7", "2026.08.7")).toBe(0);
+    expect(compareBorealisVersions("2026.08.7.1", "2026.08.7")).toBe(1);
+    expect(compareBorealisVersions("2026.09.1", "2026.08.99.9")).toBe(1);
+    expect(compareBorealisVersions("2026.08.6", "2026.08.7")).toBe(-1);
+    expect(compareBorealisVersions("v2026.08.8", "2026.08.7")).toBeNull();
+
+    const releases = [
+      { tag: "2026.08.6", selectable: true },
+      { tag: "2026.08.7", selectable: true },
+      { tag: "2026.08.7.1", selectable: true },
+      { tag: "2026.08.8", selectable: false, reason: "K3s baseline mismatch" },
+    ];
+    expect(clusterReleaseOptionsAtOrAboveBaseline(releases, "2026.08.7").map((release) => release.tag)).toEqual([
+      "2026.08.7",
+      "2026.08.7.1",
+      "2026.08.8",
+    ]);
+    expect(clusterReleaseOptionsAtOrAboveBaseline(releases, "dev-fedcba987654").map((release) => release.tag)).toEqual([
+      "2026.08.6",
+      "2026.08.7",
+      "2026.08.7.1",
+    ]);
+  });
+
   it("resolves operation hostnames and redacts copied lifecycle details", () => {
     const operation = {
       id: "11111111-1111-4111-8111-111111111199",
@@ -190,7 +217,7 @@ describe("Cluster Management", () => {
     expect(screen.getAllByText("engine-1").length).toBeGreaterThan(1);
   });
 
-  it("labels development isolation and explains stable GitHub releases", () => {
+  it("labels development isolation and explains monthly revision and hotfix versions", async () => {
     state.hmrState = "inactive";
     renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
@@ -201,7 +228,13 @@ describe("Cluster Management", () => {
     expect(screen.getByRole("button", { name: "Enable Isolation" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disable Isolation" })).toBeInTheDocument();
     expect(screen.getByText(/published, non-prerelease GitHub releases/)).toBeInTheDocument();
-    expect(screen.getByText(/YYYY\.MM\.DD\.N/)).toBeInTheDocument();
+    expect(screen.getByText(/YYYY\.MM\.REVISION for normal monthly releases/)).toBeInTheDocument();
+    expect(screen.getByText(/YYYY\.MM\.REVISION\.HOTFIX for focused corrections/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Target Engine Version" })).toBeInTheDocument();
+    expect(screen.getByText(/Older versions are not shown/)).toBeInTheDocument();
+
+    fireEvent.mouseOver(screen.getByRole("button", { name: "Borealis version format" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/REVISION counts published updates within that month/);
   });
 
   it("renders node status, identity, database, role, probe, and action columns", async () => {
@@ -300,7 +333,7 @@ describe("Cluster Management", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Nodes" }));
     await openNodeActions();
     expect(screen.getByText("Drain active roles to other nodes")).toBeInTheDocument();
-    expect(screen.getByText("Install selected Engine release")).toBeInTheDocument();
+    expect(screen.getByText("Install selected same-version or newer Engine version")).toBeInTheDocument();
     expect(screen.getByText("Safely remove two cluster nodes")).toBeInTheDocument();
     expect(screen.getByText("Remove externally fenced node")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: /Enter Maintenance Mode/ }));

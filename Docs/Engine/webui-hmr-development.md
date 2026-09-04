@@ -327,9 +327,9 @@ If exit fails, stop. Record operation ID and exact failed step. Do not begin **U
 
 Commit only durable repository source and documentation after isolation is disabled and validation completes. Push issue branch and wait for required GitHub checks. Keep pull request Draft until operator requests review.
 
-Publishing stable release is separate public action requiring explicit operator approval and unused dotted-numeric tag. Current convention is `YYYY.MM.DD.N`, where final number distinguishes multiple releases for same date. Suffix is part of publisher-selected GitHub tag; Cluster Management does not generate it. Older releases may use fewer numeric segments. Cluster updater rejects drafts, prereleases, branch heads, nonnumeric tags, and incompatible release manifests. Never change compatibility fields to bypass selection.
+Publishing stable release is separate public action requiring explicit operator approval and unused dotted-numeric tag. Use `YYYY.MM.REVISION` for normal monthly release or `YYYY.MM.REVISION.HOTFIX` for focused correction. `REVISION` increments for each normal release during month; `HOTFIX` increments for corrections based on one normal revision. Monthly revision sequence may restart when month changes. Cluster Management does not generate versions. Cluster updater hides older releases and rejects drafts, prereleases, branch heads, nonnumeric tags, and incompatible release manifests. Never change compatibility fields to bypass selection.
 
-After approved stable release exists, use **Admin > Cluster Management > Maintenance > Stable Engine Release > Update All One at a Time**. Isolation does not distribute source. Each target verifies exact published tag and commit before local staging. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for rollout and recovery contract.
+After approved stable release exists, use **Admin > Cluster Management > Maintenance > Stable Engine Version > Update All One at a Time**. Isolation does not distribute source. Each target verifies exact published tag and commit before local staging. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for rollout and recovery contract.
 
 K3s Spegel can share imported container image layers between cluster peers. It does not copy repository source, publish release, or replace tag/SHA verification. Borealis currently has no supported local-only, non-GitHub source rollout. Internal node-manager fetch and staging commands remain controller-only.
 
@@ -481,7 +481,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Qualification release checkpoint
 
-    Stable release publication is external public action. Stop for explicit operator approval and unused dotted-numeric tag after branch validation succeeds. Use current `YYYY.MM.DD.N` convention unless operator directs otherwise; `N` increments for additional release on same date and remains part of immutable GitHub tag. Confirm clean worktree, local/remote branch SHA match, compatible release manifest, and successful PR checks:
+    Stable release publication is external public action. Stop for explicit operator approval and unused dotted-numeric tag after branch validation succeeds. Use `YYYY.MM.REVISION` for normal monthly release or `YYYY.MM.REVISION.HOTFIX` for focused correction. Increment `REVISION` for each normal release during month; increment `HOTFIX` for corrections based on one normal revision. Confirm clean worktree, local/remote branch SHA match, compatible release manifest, and successful PR checks:
 
     ```bash
     cd /opt/Borealis
@@ -520,7 +520,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Rolling distribution
 
-    In **Admin > Cluster Management > Maintenance > Stable Engine Release**:
+    In **Admin > Cluster Management > Maintenance > Stable Engine Version**:
 
     1. Reconfirm cluster Healthy, isolation inactive, and no active operation.
     2. Select exact approved qualification tag and verify expected SHA.
