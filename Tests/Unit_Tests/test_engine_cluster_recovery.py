@@ -290,6 +290,14 @@ engine_release_version''',
             '  reconcile_install_checkout_owner "${SCRIPT_DIR}"'
         )
         self.assertLess(sync, local_reconcile)
+        self.assertEqual(
+            main_function.count('  reconcile_install_checkout_owner "${SCRIPT_DIR}"'),
+            2,
+        )
+        final_reconcile = main_function.rindex(
+            '  reconcile_install_checkout_owner "${SCRIPT_DIR}"'
+        )
+        self.assertGreater(final_reconcile, main_function.rindex("  esac"))
 
     def test_cnpg_runtime_url_is_preserved_only_for_cluster_service(self):
         with tempfile.TemporaryDirectory() as temp_dir:
