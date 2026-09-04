@@ -1513,6 +1513,9 @@ func TestNodeRuntimeReconcileCreatesStatusAndAvoidsNoopWrites(t *testing.T) {
 	if _, present := nestedMap(object, "spec")["desiredRelease"]; present {
 		t.Fatalf("stale optional desired release survived merge patch: %#v", object)
 	}
+	if _, present := nestedMap(object, "spec")["desiredReleaseChannel"]; present {
+		t.Fatalf("stale optional desired release channel survived merge patch: %#v", object)
+	}
 }
 
 func TestWaitJobToleratesTemporaryKubernetesAPIOutage(t *testing.T) {
@@ -1777,6 +1780,53 @@ func TestClusterUpdateWithoutDatabaseMigrationOmitsSchemaPhases(t *testing.T) {
 		if step.Name == "expand_schema" || step.Name == "finalize_schema" {
 			t.Fatalf("database_migration=none included schema phase: %#v", steps)
 		}
+	}
+}
+
+func TestQualificationUpdateDefersSchemaFinalization(t *testing.T) {
+	node := clusterControllerNode{ID: "11111111-1111-4111-8111-111111111111", Name: "engine-1", Roles: map[string]any{}}
+	operation := clusterControllerOperation{Kind: "engine_update", TargetRelease: "2026.09.1-rc.2", TargetSHA: strings.Repeat("d", 40), Payload: map[string]any{"scope": "all", "release_channel": "qualification", "compatibility": map[string]any{"database_migration": "expand-contract"}}}
+	steps, err := clusterOperationSteps(operation, []clusterControllerNode{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundExpand := false
+	for _, step := range steps {
+		if step.Name == "expand_schema" {
+			foundExpand = true
+		}
+		if step.Name == "finalize_schema" {
+			t.Fatalf("qualification update finalized contract schema: %#v", steps)
+		}
+	}
+	if !foundExpand {
+		t.Fatalf("qualification update omitted expand schema phase: %#v", steps)
+	}
+}
+
+func TestCompletedEngineReleaseConfigTracksQualificationAndStablePromotion(t *testing.T) {
+	stableSHA := strings.Repeat("a", 40)
+	qualificationSHA := strings.Repeat("b", 40)
+	qualification := clusterControllerOperation{
+		TargetRelease: "2026.09.2-rc.1",
+		TargetSHA:     qualificationSHA,
+		Payload: map[string]any{
+			"source_release": "2026.09.1",
+			"source_sha":     stableSHA,
+			"compatibility":  map[string]any{"database_migration": "expand-contract"},
+		},
+	}
+	config := completedEngineReleaseConfig(map[string]any{"k3s_version": "v1.36.3+k3s1"}, qualification)
+	if config["release_channel"] != "qualification" || config["last_stable_release"] != "2026.09.1" || config["last_stable_sha"] != stableSHA || config["qualification_schema_finalize_pending"] != true {
+		t.Fatalf("qualification state was not persisted: %#v", config)
+	}
+	promotion := clusterControllerOperation{TargetRelease: "2026.09.2", TargetSHA: qualificationSHA, Payload: map[string]any{"compatibility": map[string]any{"database_migration": "expand-contract"}}}
+	config = completedEngineReleaseConfig(config, promotion)
+	if config["release_channel"] != "stable" || config["last_stable_release"] != "2026.09.2" || config["last_stable_sha"] != qualificationSHA {
+		t.Fatalf("stable promotion state was not persisted: %#v", config)
+	}
+	if _, present := config["qualification_schema_finalize_pending"]; present {
+		t.Fatalf("stable promotion retained pending schema finalization: %#v", config)
 	}
 }
 

@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   IconButton,
   InputLabel,
   MenuItem,
@@ -32,6 +33,7 @@ import {
   EngineeringRounded as MaintenanceActionIcon,
   HistoryRounded as EventsIcon,
   HubRounded as ClusterIcon,
+  InfoOutlined as VersionInfoIcon,
   RefreshRounded as RefreshIcon,
   StorageRounded as DatabaseIcon,
   UpdateRounded as UpdateIcon,
@@ -115,6 +117,10 @@ export const RELEASE_SELECT_PROPS = {
   autoWidth: true,
   MenuProps: RELEASE_MENU_PROPS,
 };
+const BOREALIS_STABLE_VERSION_PATTERN = /^(\d{4})\.(\d{1,2})\.(\d+)(?:\.(\d+))?$/;
+const BOREALIS_RELEASE_VERSION_PATTERN = /^(\d{4})\.(\d{1,2})\.(\d+)(?:\.(\d+))?(?:-rc\.([1-9]\d*))?$/;
+const BOREALIS_VERSION_TOOLTIP =
+  "Stable releases use YYYY.MM.REVISION[.HOTFIX]; REVISION counts published updates within that month. Qualification releases append -rc.N and must be published as GitHub prereleases. Only latest stable release or hotfix receives security support.";
 const NODE_NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const K3S_VERSION_PATTERN = /^v\d+\.\d+\.\d+\+k3s\d+$/;
 const NAV_TAB_HEIGHT = 32;
@@ -258,6 +264,69 @@ const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "oper
 const CLUSTER_EVENT_PAGE_SIZE = 500;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
 
+function borealisVersionParts(value) {
+  const match = BOREALIS_STABLE_VERSION_PATTERN.exec(String(value || "").trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] || 0)];
+}
+
+export function compareBorealisVersions(left, right) {
+  const parse = (value) => {
+    const match = BOREALIS_RELEASE_VERSION_PATTERN.exec(String(value || "").trim());
+    if (!match) return null;
+    return { parts: [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] || 0)], rc: match[5] ? Number(match[5]) : null };
+  };
+  const leftRelease = parse(left);
+  const rightRelease = parse(right);
+  if (!leftRelease || !rightRelease) return null;
+  for (let index = 0; index < leftRelease.parts.length; index += 1) {
+    if (leftRelease.parts[index] < rightRelease.parts[index]) return -1;
+    if (leftRelease.parts[index] > rightRelease.parts[index]) return 1;
+  }
+  if (leftRelease.rc === null && rightRelease.rc !== null) return 1;
+  if (leftRelease.rc !== null && rightRelease.rc === null) return -1;
+  if (leftRelease.rc < rightRelease.rc) return -1;
+  if (leftRelease.rc > rightRelease.rc) return 1;
+  return 0;
+}
+
+export function clusterReleaseOptionsAtOrAboveBaseline(releases, baselineRelease, channel = "stable") {
+  const items = (Array.isArray(releases) ? releases : []).filter((release) => String(release?.channel || "stable") === channel);
+  if (!BOREALIS_RELEASE_VERSION_PATTERN.test(String(baselineRelease || "").trim())) {
+    // Development baselines have no calendar version. API ancestry and
+    // compatibility checks are authoritative for first tagged target.
+    return items.filter((release) => release?.selectable === true);
+  }
+  return items.filter((release) => {
+    const comparison = compareBorealisVersions(release?.tag, baselineRelease);
+    return comparison !== null && comparison >= 0;
+  });
+}
+
+function releaseOptionLabel(release) {
+  const tag = String(release?.tag || "").trim();
+  const title = String(release?.title || "").trim();
+  if (!title || title === tag || title.startsWith(`${tag} `)) return title || tag;
+  return `${tag} — ${title}`;
+}
+
+function ReleaseMenuItem({ release, showReason = false, ...selectItemProps }) {
+  const tag = String(release?.tag || "").trim();
+  const reason = String(release?.reason || "Does not satisfy cluster update requirements.").trim();
+  const tooltip = release?.selectable
+    ? `${tag} is compatible with current cluster baseline.`
+    : `${tag} cannot be selected: ${reason}`;
+  return (
+    <MenuItem {...selectItemProps} value={tag} disabled={!release?.selectable}>
+      <Tooltip title={tooltip} placement="right" arrow>
+        <Box component="span" sx={{ display: "block", width: "100%" }}>
+          {releaseOptionLabel(release)}{showReason && !release?.selectable ? ` — ${reason}` : ""}
+        </Box>
+      </Tooltip>
+    </MenuItem>
+  );
+}
+
 function validPrivateIPv4(value) {
   const parts = String(value || "").split(".");
   if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255 && String(Number(part)) === part)) return false;
@@ -280,7 +349,7 @@ export async function loadClusterManagementPageData(request) {
           releases = await progress.fetchJson("/api/server/cluster/releases");
         } catch (error) {
           // Cluster state remains usable during GitHub outage.
-          releaseError = getRouteErrorMessage(error, "Stable release catalog could not be loaded.");
+          releaseError = getRouteErrorMessage(error, "Engine release catalog could not be loaded.");
         }
       })(),
       (async () => {
@@ -814,6 +883,7 @@ export default function ClusterManagement() {
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
   const [selectedRelease, setSelectedRelease] = useState("");
+  const [selectedQualificationRelease, setSelectedQualificationRelease] = useState("");
   const [selectedNode, setSelectedNode] = useState("");
   const [clusterVIP, setClusterVIP] = useState("");
   const [nodeName, setNodeName] = useState("");
@@ -826,7 +896,16 @@ export default function ClusterManagement() {
   const nodes = useMemo(() => Array.isArray(cluster?.nodes) ? cluster.nodes : [], [cluster]);
   const operations = useMemo(() => Array.isArray(cluster?.operations) ? cluster.operations : [], [cluster]);
   const admissions = useMemo(() => Array.isArray(cluster?.admissions) ? cluster.admissions : [], [cluster]);
-  const selectableReleases = useMemo(() => releases.filter((release) => release?.selectable), [releases]);
+  const stableReleaseOptions = useMemo(
+    () => clusterReleaseOptionsAtOrAboveBaseline(releases, cluster?.baseline_release, "stable"),
+    [cluster?.baseline_release, releases]
+  );
+  const qualificationReleaseOptions = useMemo(
+    () => clusterReleaseOptionsAtOrAboveBaseline(releases, cluster?.baseline_release, "qualification"),
+    [cluster?.baseline_release, releases]
+  );
+  const selectableStableReleases = useMemo(() => stableReleaseOptions.filter((release) => release?.selectable), [stableReleaseOptions]);
+  const selectableQualificationReleases = useMemo(() => qualificationReleaseOptions.filter((release) => release?.selectable), [qualificationReleaseOptions]);
   const activeSize = Number(cluster?.active_size || 1);
   const desiredMembershipSize = Number(cluster?.desired_size || activeSize);
   const database = cluster?.database || {};
@@ -840,6 +919,7 @@ export default function ClusterManagement() {
   const applicationCapacityReady = nodes.filter((node) => node?.membership_state === "Active").every((node) => node?.application_state === "active");
   const normalOperationsEnabled = cluster?.status === "Healthy" && databaseRecoveryReady && applicationCapacityReady;
   const rollingUpdateEnabled = (normalOperationsEnabled || cluster?.status === "Mixed Version") && databaseRecoveryReady && applicationCapacityReady;
+  const qualificationActive = String(cluster?.release_channel || "").toLowerCase() === "qualification";
   const replacementRecovery = activeSize === 2 && desiredMembershipSize === 3 && cluster?.status === "Degraded Quorum";
   const canPrepareMembership = (activeSize === 1 || replacementRecovery) && applicationCapacityReady;
   const canExpandToThree = activeSize === 1;
@@ -868,7 +948,7 @@ export default function ClusterManagement() {
         setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
         setReleaseError("");
       } else {
-        setReleaseError(releasePayload?.message || "Stable release catalog could not be loaded.");
+        setReleaseError(releasePayload?.message || "Engine release catalog could not be loaded.");
       }
       if (eventResult.items) {
         if (eventResult.items.length) {
@@ -951,12 +1031,13 @@ export default function ClusterManagement() {
     }
     if (kind === "hmr_start") return mutate("/api/server/cluster/hmr/start", { node_id: selectedNode, confirmation });
     if (kind === "hmr_exit") return mutate("/api/server/cluster/hmr/exit", { confirmation });
-    if (kind === "update_all" || kind === "update_node") {
+    if (kind === "update_all" || kind === "update_node" || kind === "update_qualification") {
       const oneNode = Number(cluster?.active_size || 1) === 1;
+      const qualification = kind === "update_qualification";
       return mutate("/api/server/cluster/updates", {
-        scope: kind === "update_all" ? "all" : "node",
-        node_ids: kind === "update_all" ? [] : [selectedNode],
-        release_tag: selectedRelease,
+        scope: qualification || kind === "update_all" ? "all" : "node",
+        node_ids: qualification || kind === "update_all" ? [] : [selectedNode],
+        release_tag: qualification ? selectedQualificationRelease : selectedRelease,
         confirmation,
         maintenance_outage_acknowledgement: oneNode ? "ACCEPT OUTAGE" : "",
       });
@@ -995,7 +1076,7 @@ export default function ClusterManagement() {
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
     return undefined;
-  }, [canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedRelease]);
+  }, [canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedQualificationRelease, selectedRelease]);
 
   const nodeRows = useMemo(
     () => {
@@ -1066,7 +1147,7 @@ export default function ClusterManagement() {
     const isDrained = String(nodeActionTarget?.application_state || "").toLowerCase() === "drained";
     const membershipActive = nodeActionTarget?.membership_state === "Active";
     const maintenanceDisabled = busy || (isDrained && !isolationInactive && !isolationExitAllowed) || (!normalOperationsEnabled && !isDrained);
-    const updateDisabled = busy || !normalOperationsEnabled;
+    const updateDisabled = busy || !normalOperationsEnabled || qualificationActive;
     const removalDisabled = busy || !normalOperationsEnabled || activeSize !== 3 || !membershipActive;
     const emergencyDisabled = busy || activeSize !== 3 || !membershipActive;
     return [
@@ -1085,7 +1166,7 @@ export default function ClusterManagement() {
         icon: UpdateIcon,
         group: "organize",
         disabled: updateDisabled,
-        description: "Install selected Engine release",
+        description: qualificationActive ? "Stable promotion must update whole cluster" : "Install selected same-version or newer Engine version",
         onClick: () => openAction("update_node", nodeActionTarget),
       },
       {
@@ -1109,7 +1190,7 @@ export default function ClusterManagement() {
         onClick: () => openAction("emergency_remove", nodeActionTarget),
       },
     ];
-  }, [activeSize, busy, isolationExitAllowed, isolationInactive, nodeActionTarget, normalOperationsEnabled, openAction]);
+  }, [activeSize, busy, isolationExitAllowed, isolationInactive, nodeActionTarget, normalOperationsEnabled, openAction, qualificationActive]);
 
   const nodeColumnDefs = useMemo(() => [
     {
@@ -1276,6 +1357,7 @@ export default function ClusterManagement() {
         {cluster?.status === "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL is not fully ready: {readyDatabaseInstances ?? "unknown"} of {configuredDatabaseInstances} instances Ready. Normal cluster-changing operations stay blocked until redundancy recovers; recovery controls remain available.</Alert> : null}
         {!databaseRecoveryReady && cluster?.status !== "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL recovery remains required even while cluster lifecycle status is {valueLabel(cluster?.status)}. Normal cluster-changing operations stay blocked.</Alert> : null}
         {!applicationCapacityReady ? <Alert severity="warning">One or more active cluster members remain application-drained. Restore drained node or finish explicit recovery before starting normal cluster operations.</Alert> : null}
+        {qualificationActive ? <Alert severity="warning">Qualification channel active on {valueLabel(cluster?.baseline_release)}. This GitHub prerelease is unsupported for production. Last stable baseline: {valueLabel(cluster?.last_stable_release, "none recorded")}. {cluster?.qualification_schema_finalize_pending ? "Contract-phase schema finalization remains pending. " : ""}Promote whole cluster forward to approved stable release; downgrade rollback is not supported.</Alert> : null}
         <Tabs
           value={tab}
           onChange={(_, value) => setTab(value)}
@@ -1297,7 +1379,7 @@ export default function ClusterManagement() {
         </Tabs>
 
         {tab === "overview" ? <KeyValueGrid entries={[
-          ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Baseline release", cluster?.baseline_release], ["K3s version", cluster?.k3s_version],
+          ["Cluster status", cluster?.status], ["Active / desired", `${cluster?.active_size || 1} / ${cluster?.desired_size || 1}`], ["Release channel", cluster?.release_channel], ["Baseline release", cluster?.baseline_release], ["K3s version", cluster?.k3s_version],
           ["etcd leader", owner(leaders?.etcd_leader)], ["Cluster Virtual IP owner", owner(leaders?.cluster_vip_owner || leaders?.control_vip_owner || leaders?.edge_vip_owner)],
           ["PostgreSQL primary", owner(leaders?.postgres_primary)], ["Scheduler leader", owner(leaders?.scheduler_leader)], ["WireGuard owner", owner(leaders?.wireguard_owner)],
         ]} /> : null}
@@ -1335,25 +1417,54 @@ export default function ClusterManagement() {
         {tab === "maintenance" ? <Stack spacing={2}>
           <Paper sx={CARD_SX}><Typography variant="h6">Cluster-Wide Node Isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl disabled={!isolationInactive} sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">Isolated Node</InputLabel><Select labelId="hmr-node-label" label="Isolated Node" value={isolationNodeValue} onChange={(event) => setSelectedNode(event.target.value)}>{isolationNodeOptions.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || !isolationInactive} onClick={() => openAction("hmr_start")}>Enable Isolation</Button><Button variant="outlined" disabled={!isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button></Stack></Paper>
           <Paper sx={CARD_SX}>
-            <Typography variant="h6">Stable Engine Release</Typography>
-            <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Loaded from published, non-prerelease GitHub releases that declare cluster compatibility; cluster does not generate versions. Current tags use YYYY.MM.DD.N, with final number distinguishing multiple releases for same date. Borealis pins selected tag to exact commit, then drains, updates, and verifies one node at a time.</Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <Typography variant="h6">Stable Engine Version</Typography>
+              <Tooltip title={BOREALIS_VERSION_TOOLTIP} placement="right" arrow>
+                <IconButton size="small" aria-label="Borealis version format" sx={{ color: "#8fbfff" }}>
+                  <VersionInfoIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+            <Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Borealis uses YYYY.MM.REVISION for normal monthly releases and YYYY.MM.REVISION.HOTFIX for focused corrections. Revision counts normal releases published during month; hotfix counts corrections based on that revision. Selector hides older versions and lists published, non-prerelease GitHub releases at or above pinned baseline that declare cluster compatibility. Only latest published release or hotfix receives security support. Borealis pins chosen tag to exact commit, then drains, updates, and verifies one node at a time.</Typography>
             {releaseError ? <Alert severity="error" sx={{ mt: 2 }}>{releaseError}</Alert> : null}
-            {!releaseError && releases.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No published stable cluster-compatible release exists at or above baseline {valueLabel(cluster?.baseline_release)}. Current release remains pinned.</Alert> : null}
-            {!releaseError && releases.length > 0 && selectableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Stable releases were found, but none match current rolling-update and K3s compatibility requirements. Open release list for per-release reason.</Alert> : null}
-            <FormControl fullWidth sx={{ mt: 2 }}>
-              <InputLabel id="cluster-release-label">Release</InputLabel>
-              <Select {...RELEASE_SELECT_PROPS} labelId="cluster-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
-                {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}{release.selectable ? "" : ` — ${release.reason || "incompatible"}`}</MenuItem>)}
-              </Select>
-            </FormControl>
+            {!releaseError && releases.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No approved Engine release exists at or above baseline {valueLabel(cluster?.baseline_release)}. Current release remains pinned.</Alert> : null}
+            {!releaseError && releases.length > 0 && stableReleaseOptions.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No same-version or newer stable release exists for baseline {valueLabel(cluster?.baseline_release)}. Older releases are hidden.</Alert> : null}
+            {!releaseError && stableReleaseOptions.length > 0 && selectableStableReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Same-version or newer stable releases were found, but none match current ancestry, rolling-update, manifest-channel, and K3s requirements. Open version list for reason.</Alert> : null}
+            <Tooltip title={`Current baseline: ${valueLabel(cluster?.baseline_release)}. Older versions are hidden. Development baselines show only compatible stable releases whose tagged commit contains current development commit.`} placement="top-start" arrow>
+              <Box sx={{ mt: 2 }}>
+                <FormControl fullWidth disabled={stableReleaseOptions.length === 0}>
+                  <InputLabel id="cluster-release-label">Target Engine Version</InputLabel>
+                  <Select {...RELEASE_SELECT_PROPS} labelId="cluster-release-label" label="Target Engine Version" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
+                    {stableReleaseOptions.map((release) => <ReleaseMenuItem key={release.tag} value={release.tag} release={release} showReason />)}
+                  </Select>
+                  <FormHelperText sx={{ color: "#94a3b8" }}>Current baseline: {valueLabel(cluster?.baseline_release)}. Older versions are not shown.</FormHelperText>
+                </FormControl>
+              </Box>
+            </Tooltip>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}>
-              <Button variant="contained" disabled={!rollingUpdateEnabled || !selectedRelease || !selectableReleases.length} onClick={() => openAction("update_all")}>Update All One at a Time</Button>
+              <Button variant="contained" disabled={!rollingUpdateEnabled || !selectedRelease || !selectableStableReleases.length} onClick={() => openAction("update_all")}>Update All One at a Time</Button>
               <FormControl sx={{ minWidth: 220 }}>
                 <InputLabel id="update-node-label">Node</InputLabel>
                 <Select labelId="update-node-label" label="Node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select>
               </FormControl>
-              <Button variant="outlined" disabled={!rollingUpdateEnabled || !selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
+              <Button variant="outlined" disabled={!rollingUpdateEnabled || qualificationActive || !selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
             </Stack>
+          </Paper>
+          <Paper sx={CARD_SX}>
+            <Typography variant="h6">Qualification Engine Version</Typography>
+            <Alert severity="warning" sx={{ mt: 1.5 }}>Qualification releases use YYYY.MM.REVISION[.HOTFIX]-rc.N and must be GitHub prereleases. They remain unsupported, update whole cluster, and defer contract-phase schema finalization until stable promotion. Branches, drafts, unrelated commits, older releases, and channel-mismatched tags remain blocked.</Alert>
+            {!releaseError && qualificationReleaseOptions.length === 0 ? <Alert severity="info" sx={{ mt: 2 }}>No same-version or newer qualification release is available for baseline {valueLabel(cluster?.baseline_release)}.</Alert> : null}
+            {!releaseError && qualificationReleaseOptions.length > 0 && selectableQualificationReleases.length === 0 ? <Alert severity="warning" sx={{ mt: 2 }}>Qualification releases were found, but none satisfy current ancestry, rolling-update, manifest-channel, and K3s requirements. Open version list for reason.</Alert> : null}
+            <Box sx={{ mt: 2 }}>
+              <FormControl fullWidth disabled={qualificationReleaseOptions.length === 0}>
+                <InputLabel id="cluster-qualification-release-label">Qualification Version</InputLabel>
+                <Select {...RELEASE_SELECT_PROPS} labelId="cluster-qualification-release-label" label="Qualification Version" value={selectedQualificationRelease} onChange={(event) => setSelectedQualificationRelease(event.target.value)}>
+                  {qualificationReleaseOptions.map((release) => <ReleaseMenuItem key={release.tag} value={release.tag} release={release} showReason />)}
+                </Select>
+                <FormHelperText sx={{ color: "#94a3b8" }}>Whole-cluster test deployment. Exact typed acknowledgement required.</FormHelperText>
+              </FormControl>
+            </Box>
+            <Button sx={{ mt: 2 }} color="warning" variant="contained" disabled={!rollingUpdateEnabled || !selectedQualificationRelease || !selectableQualificationReleases.length} onClick={() => openAction("update_qualification")}>Deploy Qualification One Node at a Time</Button>
           </Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
@@ -1386,12 +1497,14 @@ export default function ClusterManagement() {
           {dialog?.kind === "remove" ? <Alert severity="warning" sx={{ mb: 2 }}>Safe downscale removes two nodes sequentially. PostgreSQL replicas must vacate both targets before Borealis self-fences K3s and deletes membership.</Alert> : null}
           {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
           {dialog?.kind === "k3s_update" ? <Alert severity="warning" sx={{ mb: 2 }}>K3s control-plane update stays separate from Engine release update. Failure halts sequence and leaves affected node drained.</Alert> : null}
-          {dialog?.kind === "update_node" || dialog?.kind === "update_all" ? (
+          {dialog?.kind === "update_qualification" ? <Alert severity="warning" sx={{ mb: 2 }}>Selected GitHub prerelease is unsupported qualification software. Operation updates whole cluster and cannot downgrade back to last stable source. Promote forward after qualification.</Alert> : null}
+          {dialog?.kind === "update_node" || dialog?.kind === "update_all" || dialog?.kind === "update_qualification" ? (
             <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}>
-              <InputLabel id="dialog-release-label">Release</InputLabel>
-              <Select {...RELEASE_SELECT_PROPS} labelId="dialog-release-label" label="Release" value={selectedRelease} onChange={(event) => setSelectedRelease(event.target.value)}>
-                {releases.map((release) => <MenuItem key={release.tag} value={release.tag} disabled={!release.selectable}>{release.title || release.tag}</MenuItem>)}
+              <InputLabel id="dialog-release-label">{dialog?.kind === "update_qualification" ? "Qualification Version" : "Target Engine Version"}</InputLabel>
+              <Select {...RELEASE_SELECT_PROPS} labelId="dialog-release-label" label={dialog?.kind === "update_qualification" ? "Qualification Version" : "Target Engine Version"} value={dialog?.kind === "update_qualification" ? selectedQualificationRelease : selectedRelease} onChange={(event) => dialog?.kind === "update_qualification" ? setSelectedQualificationRelease(event.target.value) : setSelectedRelease(event.target.value)}>
+                {(dialog?.kind === "update_qualification" ? qualificationReleaseOptions : stableReleaseOptions).map((release) => <ReleaseMenuItem key={release.tag} value={release.tag} release={release} showReason />)}
               </Select>
+              <FormHelperText sx={{ color: "#94a3b8" }}>Current baseline: {valueLabel(cluster?.baseline_release)}. Older versions and unapproved channels are not shown.</FormHelperText>
             </FormControl>
           ) : null}
           {dialog?.kind === "cluster_enable" ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }} label="Cluster Virtual IP" value={clusterVIP} onChange={(event) => setClusterVIP(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 15 }} /> : null}
@@ -1400,10 +1513,10 @@ export default function ClusterManagement() {
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
           {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
           {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : "Type UPDATE CLUSTER"} /> : null}
+          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
           {dialog?.kind !== "cluster_enable" ? <Typography variant="body2" sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2 }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography> : null}
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
+        <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button color={dialog?.kind === "update_qualification" ? "warning" : "primary"} sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
       </Dialog>
     </PageBodyFrame>
   );

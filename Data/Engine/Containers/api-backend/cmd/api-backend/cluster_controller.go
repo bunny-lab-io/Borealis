@@ -984,7 +984,8 @@ func clusterOperationSteps(operation clusterControllerOperation, nodes []cluster
 				}
 			}
 		}
-		if migration == "expand-contract" {
+		releaseChannel := clusterReleaseChannel(operation.TargetRelease)
+		if migration == "expand-contract" && releaseChannel == "stable" {
 			base = append(base, clusterControllerStep{Name: "finalize_schema", NodeID: ordered[0].ID})
 		}
 		return append(base, clusterControllerStep{Name: "verify_cluster"}), nil
@@ -1509,7 +1510,16 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 			ON CONFLICT(node_name) DO UPDATE SET membership_state='Active', application_state='active',management_ip=EXCLUDED.management_ip,architecture=EXCLUDED.architecture,release_tag=EXCLUDED.release_tag,release_sha=EXCLUDED.release_sha,roles_json=EXCLUDED.roles_json,probe_health_json=EXCLUDED.probe_health_json,last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at
 		`, nodeID, nodeName, managementIP, architecture, cleanText(operation.Payload["baseline_release"]), cleanText(operation.Payload["baseline_sha"]), rolesJSON, `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`, now)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET enabled=1,status='Healthy',active_size=1,desired_size=1,baseline_release=$1,baseline_sha=$2,hmr_state='inactive',config_json=jsonb_set(COALESCE(NULLIF(config_json,''),'{}')::jsonb,'{k3s_version}',to_jsonb($3::text),true)::text,updated_at=$4 WHERE id=1`, cleanText(operation.Payload["baseline_release"]), cleanText(operation.Payload["baseline_sha"]), cleanText(operation.Payload["k3s_version"]), now)
+			baselineRelease := cleanText(operation.Payload["baseline_release"])
+			baselineSHA := cleanText(operation.Payload["baseline_sha"])
+			nextConfig := parseClusterJSON(configJSON)
+			nextConfig["k3s_version"] = cleanText(operation.Payload["k3s_version"])
+			nextConfig["release_channel"] = clusterReleaseChannel(baselineRelease)
+			if clusterReleaseChannel(baselineRelease) == "stable" {
+				nextConfig["last_stable_release"] = baselineRelease
+				nextConfig["last_stable_sha"] = baselineSHA
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET enabled=1,status='Healthy',active_size=1,desired_size=1,baseline_release=$1,baseline_sha=$2,hmr_state='inactive',config_json=$3,updated_at=$4 WHERE id=1`, baselineRelease, baselineSHA, marshalClusterJSON(nextConfig), now)
 		}
 	case "hmr_start":
 		if _, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='active',hmr_node_id=$1,status='HMR Non-HA',updated_at=$2 WHERE id=1`, operation.TargetNodeID, now); err == nil {
@@ -1522,9 +1532,10 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		}
 	case "engine_update":
 		var remaining int64
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active' AND COALESCE(release_sha,'')<>$1`, operation.TargetSHA).Scan(&remaining); err == nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_nodes WHERE membership_state='Active' AND (COALESCE(release_sha,'')<>$1 OR COALESCE(release_tag,'')<>$2)`, operation.TargetSHA, operation.TargetRelease).Scan(&remaining); err == nil {
 			if remaining == 0 {
-				_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET baseline_release=$1,baseline_sha=$2,status='Healthy',updated_at=$3 WHERE id=1`, operation.TargetRelease, operation.TargetSHA, now)
+				nextConfig := completedEngineReleaseConfig(parseClusterJSON(configJSON), operation)
+				_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET baseline_release=$1,baseline_sha=$2,status='Healthy',config_json=$3,updated_at=$4 WHERE id=1`, operation.TargetRelease, operation.TargetSHA, marshalClusterJSON(nextConfig), now)
 			} else {
 				_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Mixed Version',updated_at=$1 WHERE id=1`, now)
 			}
@@ -1654,6 +1665,26 @@ func clusterOperationNodeStateTransition(operation clusterControllerOperation) (
 	}
 }
 
+func completedEngineReleaseConfig(config map[string]any, operation clusterControllerOperation) map[string]any {
+	nextConfig := copyMap(config)
+	releaseChannel := clusterReleaseChannel(operation.TargetRelease)
+	nextConfig["release_channel"] = releaseChannel
+	compatibility := clusterCompatibilityMap(operation.Payload["compatibility"])
+	if releaseChannel == "qualification" && cleanText(compatibility["database_migration"]) == "expand-contract" {
+		nextConfig["qualification_schema_finalize_pending"] = true
+	}
+	if releaseChannel == "qualification" && clusterReleaseChannel(cleanText(operation.Payload["source_release"])) == "stable" {
+		nextConfig["last_stable_release"] = cleanText(operation.Payload["source_release"])
+		nextConfig["last_stable_sha"] = cleanText(operation.Payload["source_sha"])
+	}
+	if releaseChannel == "stable" {
+		nextConfig["last_stable_release"] = operation.TargetRelease
+		nextConfig["last_stable_sha"] = operation.TargetSHA
+		delete(nextConfig, "qualification_schema_finalize_pending")
+	}
+	return nextConfig
+}
+
 func completedClusterRecoveryStatus(operation clusterControllerOperation, current string, activeSize, desiredSize int64, allApplicationsActive bool, config map[string]any) string {
 	if activeSize == 2 && desiredSize == 3 {
 		return "Degraded Quorum"
@@ -1686,7 +1717,7 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return errors.New("Kubernetes cluster runner is unavailable")
 	}
 	if step.Name == "preflight" {
-		if operation.Kind == "engine_update" && (!clusterReleaseRE.MatchString(operation.TargetRelease) || !clusterControllerSHARegex.MatchString(operation.TargetSHA)) {
+		if operation.Kind == "engine_update" && (!validClusterBaselineRelease(operation.TargetRelease, operation.TargetSHA) || clusterDevelopmentReleaseRE.MatchString(operation.TargetRelease)) {
 			return errors.New("update release tag or pinned SHA is invalid")
 		}
 		if operation.Kind == "k3s_update" {
@@ -2771,6 +2802,7 @@ func clusterNodeRuntimeState(node clusterControllerNode, kubernetesNode map[stri
 	}
 	if clusterReleaseRE.MatchString(node.ReleaseTag) || validClusterBaselineRelease(node.ReleaseTag, node.ReleaseSHA) {
 		spec["desiredRelease"] = node.ReleaseTag
+		spec["desiredReleaseChannel"] = clusterReleaseChannel(node.ReleaseTag)
 	}
 	if clusterControllerSHARegex.MatchString(node.ReleaseSHA) {
 		spec["desiredSHA"] = node.ReleaseSHA
@@ -2863,6 +2895,7 @@ func clusterResourceState(state clusterControllerState) (map[string]any, map[str
 	}
 	if clusterReleaseRE.MatchString(state.BaselineRelease) || validClusterBaselineRelease(state.BaselineRelease, state.BaselineSHA) {
 		spec["baselineRelease"] = state.BaselineRelease
+		spec["releaseChannel"] = clusterReleaseChannel(state.BaselineRelease)
 	}
 	if clusterControllerSHARegex.MatchString(state.BaselineSHA) {
 		spec["baselineSHA"] = state.BaselineSHA
@@ -2988,6 +3021,7 @@ func clusterOperationResourceState(resource clusterControllerOperationResource) 
 	}
 	if clusterReleaseRE.MatchString(operation.TargetRelease) || validClusterBaselineRelease(operation.TargetRelease, operation.TargetSHA) {
 		spec["targetRelease"] = operation.TargetRelease
+		spec["targetReleaseChannel"] = clusterReleaseChannel(operation.TargetRelease)
 	}
 	if clusterControllerSHARegex.MatchString(operation.TargetSHA) {
 		spec["targetSHA"] = operation.TargetSHA

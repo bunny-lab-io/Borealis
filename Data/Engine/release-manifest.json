@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "cluster_compatible": true,
+  "allowed_release_channels": ["stable", "qualification"],
   "minimum_rolling_version": "2026.08.0",
   "maximum_version_skew_releases": 1,
   "database_migration": "expand-contract",

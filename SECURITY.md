@@ -7,6 +7,8 @@ Borealis uses calendar-based versioning in one of the following formats:
 ```text
 YYYY.MM.REVISION
 YYYY.MM.REVISION.HOTFIX
+YYYY.MM.REVISION-rc.N
+YYYY.MM.REVISION.HOTFIX-rc.N
 ```
 
 For example, version `2026.07.5` represents:
@@ -26,6 +28,10 @@ The revision number identifies the order of normal releases within a calendar mo
 
 These numbers do not independently indicate whether a release contains major, minor, or patch-level changes.
 
+Qualification releases append `-rc.N`, where `N` starts at `1` and increases for each candidate built from same intended stable version. For example, `2026.07.6-rc.2` is second qualification candidate for intended `2026.07.6` stable release. Qualification tag must also be published through GitHub with **Set as a pre-release** enabled. Tag suffix and GitHub prerelease metadata must agree.
+
+Qualification releases exist for development and cluster testing before stable publication. They are immutable tagged builds, but remain unsupported for production. Stable publication removes `-rc.N`, uses GitHub normal release status, and supersedes qualification candidates for that version.
+
 Borealis follows a rolling support model. Security fixes are developed for the latest published release, including any hotfixes published for that release.
 
 Long-term support branches are not currently maintained, and security fixes are not routinely backported to earlier releases.
@@ -33,6 +39,7 @@ Long-term support branches are not currently maintained, and security fixes are 
 | Version                             | Supported                  |
 | ----------------------------------- | -------------------------- |
 | Latest published release or hotfix  | :white_check_mark:         |
+| `*-rc.N` GitHub prereleases         | :warning: Qualification only |
 | `main` branch and unreleased builds | :warning: Development only |
 | Earlier published releases          | :x:                        |
 | Forks or locally modified builds    | :x:                        |

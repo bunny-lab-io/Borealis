@@ -246,6 +246,8 @@ func TestValidClusterBaselineReleaseRequiresDevelopmentNameToMatchSHA(t *testing
 		want    bool
 	}{
 		{release: "2026.09.1", sha: sha, want: true},
+		{release: "2026.09.1-rc.2", sha: sha, want: true},
+		{release: "2026.09.1-rc.0", sha: sha, want: false},
 		{release: "dev-0123456789ab", sha: sha, want: true},
 		{release: "dev-fedcba987654", sha: sha, want: false},
 		{release: "dev-0123456789ab", sha: "not-a-sha", want: false},
@@ -284,7 +286,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
 		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
-			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.08.7", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, AllowedReleaseChannels: []string{"stable", "qualification"}, MinimumRollingVersion: "2026.08.7", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -330,7 +332,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	}
 }
 
-func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRelease(t *testing.T) {
+func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsApprovedChannels(t *testing.T) {
 	const baselineSHA = "fedcba9876543210fedcba9876543210fedcba98"
 	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
 	releasePageRequests := 0
@@ -345,7 +347,7 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRel
 			}
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
 				{TagName: "2026.09.1", Name: "First Stable"},
-				{TagName: "2026.09.1-rc1", Name: "Prerelease", Prerelease: true},
+				{TagName: "2026.09.1-rc.1", Name: "Qualification", Prerelease: true},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
@@ -357,7 +359,7 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRel
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ahead"})
 		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
-			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, AllowedReleaseChannels: []string{"stable", "qualification"}, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -375,40 +377,68 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsStableRel
 	if releasePageRequests != 1 {
 		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
 	}
-	if compareRequests != 1 {
-		t.Fatalf("development baseline requested %d ancestry comparisons, want 1", compareRequests)
+	if compareRequests != 2 {
+		t.Fatalf("development baseline requested %d ancestry comparisons, want 2", compareRequests)
 	}
-	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1" || entries[0]["selectable"] != true || entries[0]["reason"] != "" {
-		t.Fatalf("first stable release should be selectable from development baseline: %#v", entries)
+	if len(entries) != 2 || entries[0]["tag"] != "2026.09.1" || entries[0]["channel"] != "stable" || entries[1]["tag"] != "2026.09.1-rc.1" || entries[1]["channel"] != "qualification" || entries[0]["selectable"] != true || entries[1]["selectable"] != true {
+		t.Fatalf("approved stable and qualification releases should be selectable from development baseline: %#v", entries)
 	}
 }
 
-func TestClusterDevelopmentBaselineTreatsPrereleaseOnlyCatalogAsEmpty(t *testing.T) {
+func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *testing.T) {
+	const baselineSHA = "fedcba9876543210fedcba9876543210fedcba98"
+	const targetSHA = "0123456789abcdef0123456789abcdef01234567"
 	releasePageRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		releasePageRequests++
-		if r.URL.Query().Get("page") != "1" {
-			http.Error(w, "unexpected historical release page", http.StatusGatewayTimeout)
-			return
+		switch {
+		case strings.Contains(r.URL.Path, "/releases"):
+			releasePageRequests++
+			if r.URL.Query().Get("page") != "1" {
+				http.Error(w, "unexpected historical release page", http.StatusGatewayTimeout)
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
+				{TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true},
+				{TagName: "2026.09.2", Name: "Mismatched Stable", Prerelease: true},
+				{TagName: "main", Name: "Branch Head"},
+			})
+		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ahead"})
+		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, AllowedReleaseChannels: []string{"qualification"}, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+		default:
+			http.NotFound(w, r)
 		}
-		_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-			{TagName: "2026.09.1-rc1", Name: "Cluster Preview", Prerelease: true},
-			{TagName: "main", Name: "Branch Head"},
-		})
 	}))
 	defer server.Close()
 	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", "fedcba9876543210fedcba9876543210fedcba98")
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if releasePageRequests != 1 {
 		t.Fatalf("development baseline requested %d release pages, want 1", releasePageRequests)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("prerelease-only catalog should be empty, got %#v", entries)
+	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1-rc.1" || entries[0]["channel"] != "qualification" || entries[0]["selectable"] != true {
+		t.Fatalf("approved qualification prerelease should be selectable and mismatched metadata rejected: %#v", entries)
+	}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "dev-fedcba987654", "baseline_sha": baselineSHA, "release_channel": "development", "active_size": int64(3)}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/updates", `{"scope":"all","node_ids":[],"release_tag":"2026.09.1-rc.1","confirmation":"DEPLOY QUALIFICATION"}`, token))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected qualification update acceptance, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.TargetRelease != "2026.09.1-rc.1" || store.mutation.TargetSHA != targetSHA || store.mutation.Payload["release_channel"] != "qualification" || store.mutation.Payload["source_sha"] != baselineSHA {
+		t.Fatalf("qualification update did not preserve immutable channel metadata: %+v", store.mutation)
 	}
 }
 
@@ -424,7 +454,7 @@ func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testin
 		case strings.Contains(r.URL.Path, "/compare/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "diverged"})
 		case strings.Contains(r.URL.Path, "/Data/Engine/release-manifest.json"):
-			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
+			_ = json.NewEncoder(w).Encode(clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, AllowedReleaseChannels: []string{"stable"}, MinimumRollingVersion: "2026.09.1", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -439,7 +469,7 @@ func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0]["selectable"] != false || entries[0]["reason"] != "release does not contain current development baseline" {
+	if len(entries) != 1 || entries[0]["selectable"] != false || entries[0]["reason"] != "release does not contain current pinned baseline" {
 		t.Fatalf("unrelated stable release should be filtered from development baseline: %#v", entries)
 	}
 }
@@ -478,6 +508,50 @@ func TestClusterUpdateRejectsUnexpectedFieldsAndInvalidUUID(t *testing.T) {
 	for _, field := range []string{"node_ids[0]", "release_tag", "command"} {
 		if !strings.Contains(recorder.Body.String(), field) {
 			t.Fatalf("validation response missing %s: %s", field, recorder.Body.String())
+		}
+	}
+}
+
+func TestClusterQualificationUpdateRequiresWholeClusterAndExplicitConfirmation(t *testing.T) {
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.09.1", "active_size": int64(3)}}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+
+	for _, body := range []string{
+		`{"scope":"all","node_ids":[],"release_tag":"2026.09.2-rc.1","confirmation":"UPDATE CLUSTER"}`,
+		`{"scope":"node","node_ids":["11111111-1111-4111-8111-111111111111"],"release_tag":"2026.09.2-rc.1","confirmation":"DEPLOY QUALIFICATION"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/updates", body, token))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected qualification validation failure, got %d body=%s", recorder.Code, recorder.Body.String())
+		}
+	}
+	store.snapshot = map[string]any{"baseline_release": "2026.09.2-rc.1", "release_channel": "qualification", "active_size": int64(3)}
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/updates", `{"scope":"node","node_ids":["11111111-1111-4111-8111-111111111111"],"release_tag":"2026.09.2","confirmation":"UPDATE CLUSTER"}`, token))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "whole cluster") {
+		t.Fatalf("expected qualification promotion scope failure, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mutation.Kind != "" {
+		t.Fatalf("invalid qualification update reached store: %+v", store.mutation)
+	}
+}
+
+func TestCompareClusterReleasesOrdersQualificationBeforeStable(t *testing.T) {
+	for _, test := range []struct {
+		left  string
+		right string
+		want  int
+	}{
+		{left: "2026.09.1-rc.1", right: "2026.09.1-rc.2", want: -1},
+		{left: "2026.09.1-rc.2", right: "2026.09.1", want: -1},
+		{left: "2026.09.1", right: "2026.09.1-rc.2", want: 1},
+		{left: "2026.09.2-rc.1", right: "2026.09.1", want: 1},
+	} {
+		if got := compareClusterReleases(test.left, test.right); got != test.want {
+			t.Fatalf("compareClusterReleases(%q,%q)=%d want %d", test.left, test.right, got, test.want)
 		}
 	}
 }
@@ -640,9 +714,13 @@ func TestClusterBannerIgnoresHistoricalFailures(t *testing.T) {
 	}
 
 	store.snapshot["operations"] = []map[string]any{{"kind": "engine_update", "state": "running", "current_step": "pre_change_snapshot"}}
+	store.snapshot["release_channel"] = "qualification"
+	store.snapshot["baseline_release"] = "2026.09.2-rc.1"
+	store.snapshot["last_stable_release"] = "2026.09.1"
+	store.snapshot["qualification_schema_finalize_pending"] = true
 	recorder = httptest.NewRecorder()
 	clusterBannerHandler(auth).ServeHTTP(recorder, clusterTestRequest(t, http.MethodGet, "/api/server/cluster/banner", "", token))
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"state":"running"`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"state":"running"`) || !strings.Contains(recorder.Body.String(), `"release_channel":"qualification"`) || !strings.Contains(recorder.Body.String(), `"qualification_schema_finalize_pending":true`) {
 		t.Fatalf("running operation missing from banner: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

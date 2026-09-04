@@ -327,9 +327,9 @@ If exit fails, stop. Record operation ID and exact failed step. Do not begin **U
 
 Commit only durable repository source and documentation after isolation is disabled and validation completes. Push issue branch and wait for required GitHub checks. Keep pull request Draft until operator requests review.
 
-Publishing stable release is separate public action requiring explicit operator approval and unused dotted-numeric tag. Current convention is `YYYY.MM.DD.N`, where final number distinguishes multiple releases for same date. Suffix is part of publisher-selected GitHub tag; Cluster Management does not generate it. Older releases may use fewer numeric segments. Cluster updater rejects drafts, prereleases, branch heads, nonnumeric tags, and incompatible release manifests. Never change compatibility fields to bypass selection.
+Publishing release remains separate GitHub action. For cluster testing, publish immutable `YYYY.MM.REVISION[.HOTFIX]-rc.N` tag as GitHub prerelease, then use **Qualification Engine Version > Deploy Qualification One Node at a Time** and type `DEPLOY QUALIFICATION`. Qualification stays unsupported and visible until forward promotion. Never use branch head as cluster target.
 
-After approved stable release exists, use **Admin > Cluster Management > Maintenance > Stable Engine Release > Update All One at a Time**. Isolation does not distribute source. Each target verifies exact published tag and commit before local staging. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for rollout and recovery contract.
+After candidate passes, publish same commit or descendant as normal `YYYY.MM.REVISION[.HOTFIX]` GitHub release. Use **Stable Engine Version > Update All One at a Time** and type `UPDATE CLUSTER`. Stable promotion runs deferred contract-phase schema work. Downgrade rollback is not supported. Each target verifies exact published tag, pinned commit, ancestry, release channel, and compatibility manifest before staging. Do not copy files, run host-by-host `git pull`, or patch workloads manually. See [Cluster-Aware Updates](managing-engine-clusters.md#cluster-aware-updates) for full contract.
 
 K3s Spegel can share imported container image layers between cluster peers. It does not copy repository source, publish release, or replace tag/SHA verification. Borealis currently has no supported local-only, non-GitHub source rollout. Internal node-manager fetch and staging commands remain controller-only.
 
@@ -481,7 +481,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Qualification release checkpoint
 
-    Stable release publication is external public action. Stop for explicit operator approval and unused dotted-numeric tag after branch validation succeeds. Use current `YYYY.MM.DD.N` convention unless operator directs otherwise; `N` increments for additional release on same date and remains part of immutable GitHub tag. Confirm clean worktree, local/remote branch SHA match, compatible release manifest, and successful PR checks:
+    Qualification publication is external public action. Stop for explicit operator approval and unused `YYYY.MM.REVISION[.HOTFIX]-rc.N` tag after branch validation succeeds. Increment `N` for each candidate built for same intended stable base. Confirm clean worktree, local/remote branch SHA match, compatibility manifest allows `qualification`, and PR checks pass:
 
     ```bash
     cd /opt/Borealis
@@ -496,17 +496,18 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
     After approval, publish exact committed SHA:
 
     ```bash
-    QUALIFICATION_TAG='<operator-approved-tag>'
+    QUALIFICATION_TAG='2026.09.2-rc.1'
     QUALIFICATION_SHA="$(git rev-parse HEAD)"
 
     gh release create "${QUALIFICATION_TAG}" \
       --repo bunny-lab-io/Borealis \
       --target "${QUALIFICATION_SHA}" \
       --title "${QUALIFICATION_TAG}" \
+      --prerelease \
       --notes 'Qualification release for issue #<number>. Includes <concise scope>.'
     ```
 
-    Verify release is published, stable, and resolves exact commit:
+    Verify release is published as prerelease and resolves exact commit:
 
     ```bash
     gh release view "${QUALIFICATION_TAG}" \
@@ -520,15 +521,19 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Rolling distribution
 
-    In **Admin > Cluster Management > Maintenance > Stable Engine Release**:
+    In **Admin > Cluster Management > Maintenance > Qualification Engine Version**:
 
     1. Reconfirm cluster Healthy, isolation inactive, and no active operation.
     2. Select exact approved qualification tag and verify expected SHA.
-    3. Choose **Update All One at a Time**.
-    4. Type `UPDATE CLUSTER` and submit once.
+    3. Choose **Deploy Qualification One Node at a Time**.
+    4. Type `DEPLOY QUALIFICATION` and submit once.
     5. Copy operation ID immediately and monitor Cluster Events to terminal state.
 
-    Controller owns backup, immutable target SHA verification, non-leader-first ordering, role transfer, drain and EndpointSlice withdrawal, local image staging, schema expansion, isolated candidate creation, candidate health/soak, promotion, active and role-aware health/soak, drain exit, schema finalize, and cluster baseline advancement. Every target fetches published tag and verifies exact SHA before staging. Spegel may provide peer image layers after import, but source remains Git-backed. Never replace controller flow with node-to-node copies, host-by-host `git pull`, manual image import, or Deployment patch.
+    Controller owns backup, immutable target SHA verification, non-leader-first ordering, role transfer, drain and EndpointSlice withdrawal, local image staging, schema expansion, isolated candidate creation, candidate health/soak, promotion, active and role-aware health/soak, drain exit, and cluster baseline advancement. Qualification leaves contract-phase schema finalization pending. Every target fetches published tag and verifies exact SHA before staging. Spegel may provide peer image layers after import, but source remains Git-backed. Never replace controller flow with node-to-node copies, host-by-host `git pull`, manual image import, or Deployment patch.
+
+    ### Stable promotion
+
+    After qualification passes, create normal GitHub release without `-rc.N`, targeting tested commit or descendant. Manifest must allow `stable`; retain `database_migration=expand-contract` when qualification left schema finalization pending. In Stable Engine Version, select release, choose **Update All One at a Time**, and type `UPDATE CLUSTER`. Stable rollout completes deferred contract-phase schema work only after every active node reports stable target SHA and tag. Do not delete qualification release or attempt source downgrade as rollback.
 
     ### Failed rolling operation
 

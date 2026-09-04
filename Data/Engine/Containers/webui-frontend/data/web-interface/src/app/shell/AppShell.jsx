@@ -87,6 +87,9 @@ export function clusterBannerIdentity(banner) {
   if (hmrState && hmrState !== "inactive") return `hmr:${hmrState}:${String(banner?.hmr_node_name || "").trim()}`;
   const status = String(banner?.status || "").trim();
   if (status === "Degraded Quorum" || status === "Degraded Database") return `status:${status}`;
+  if (String(banner?.release_channel || "").trim() === "qualification") {
+    return `qualification:${String(banner?.baseline_release || "").trim()}:${Boolean(banner?.qualification_schema_finalize_pending)}`;
+  }
   const operation = banner?.active_operation;
   if (!operation) return "";
   return ["operation", operation.kind, operation.state, operation.current_step]
@@ -803,6 +806,10 @@ export default function AppShell() {
             ) : showClusterBanner && clusterBanner?.status === "Degraded Database" ? (
               <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
                 Cluster PostgreSQL is not fully ready. Normal cluster-changing operations remain blocked until database redundancy recovers.
+              </Alert>
+            ) : showClusterBanner && clusterBanner?.release_channel === "qualification" ? (
+              <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
+                Unsupported qualification release {String(clusterBanner?.baseline_release || "unknown").trim()} active. Last stable: {String(clusterBanner?.last_stable_release || "none recorded").trim()}. {clusterBanner?.qualification_schema_finalize_pending ? "Schema finalization remains pending. " : ""}Promote whole cluster forward to stable; downgrade rollback is unsupported.
               </Alert>
             ) : showClusterBanner && clusterBanner?.active_operation ? (
               <Alert severity="info" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
