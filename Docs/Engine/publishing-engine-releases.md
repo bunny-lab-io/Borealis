@@ -107,7 +107,7 @@ gh release create "${RELEASE}" --repo "${REPOSITORY}" \
   --verify-tag --draft \
   --title "${RELEASE}" --generate-notes
 
-# Workflow checks setting, draft status, stable tag, and exact checkout.
+# Maintainer check above verifies setting. Workflow checks draft and exact tag.
 gh workflow run publish-engine-release-assets.yml \
   --repo "${REPOSITORY}" --ref main -f "release=${RELEASE}"
 gh run list --repo "${REPOSITORY}" \
@@ -175,7 +175,7 @@ Do not use deletion as version rollback. Clusters reject older or unrelated targ
 
     ### Source map
 
-    - `.github/workflows/publish-engine-release-assets.yml` packages stable draft only and refuses mutable-release repository setting, non-stable tag, published release, or GitHub pre-release.
+    - `.github/workflows/publish-engine-release-assets.yml` packages stable draft only and refuses non-stable tag, published release, or GitHub pre-release. GitHub's workflow token cannot query immutable-release setting because endpoint requires repository Administration permission; maintainer performs that check before dispatch.
     - `Tests/tools/build_engine_release_assets.py` copies exact tag's `Install-Engine.sh` and `Engine.sh`, writes installer manifest, and generates `SHA256SUMS`.
     - `Install-Engine.sh` accepts only published, non-prerelease, immutable stable release and validates GitHub plus manifest identities before invoking `Engine.sh`.
     - `Data/Engine/release-manifest.json` controls cluster release compatibility independently from standalone installer manifest.

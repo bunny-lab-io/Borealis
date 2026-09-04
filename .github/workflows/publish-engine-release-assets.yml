@@ -25,8 +25,9 @@ jobs:
             echo "Release must use stable YYYY.MM.REVISION[.HOTFIX] form." >&2
             exit 64
           }
-          gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled' \
-            | grep -Fx true
+          # Immutable-release settings require repository Administration access,
+          # which GitHub's workflow token does not receive. Maintainer verifies
+          # setting before dispatch; bootstrap verifies release after publication.
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json isDraft,isPrerelease,tagName \
             --jq '[.tagName, .isDraft, .isPrerelease] | @tsv' \
