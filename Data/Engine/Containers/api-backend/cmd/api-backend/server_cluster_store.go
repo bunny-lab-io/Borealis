@@ -196,6 +196,23 @@ func (s *postgresOperatorStore) clusterSnapshot(ctx context.Context) (map[string
 		payload["edge_vip"] = nilIfEmpty(edgeVIP)
 		payload["baseline_release"] = nilIfEmpty(baselineRelease)
 		payload["baseline_sha"] = nilIfEmpty(baselineSHA)
+		releaseChannel := cleanText(config["release_channel"])
+		if releaseChannel != clusterReleaseChannel(baselineRelease) {
+			releaseChannel = clusterReleaseChannel(baselineRelease)
+		}
+		payload["release_channel"] = nilIfEmpty(releaseChannel)
+		lastStableRelease := cleanText(config["last_stable_release"])
+		lastStableSHA := cleanText(config["last_stable_sha"])
+		if releaseChannel == "stable" {
+			lastStableRelease = baselineRelease
+			lastStableSHA = baselineSHA
+		} else if clusterReleaseChannel(lastStableRelease) != "stable" || !validClusterBaselineRelease(lastStableRelease, lastStableSHA) {
+			lastStableRelease = ""
+			lastStableSHA = ""
+		}
+		payload["last_stable_release"] = nilIfEmpty(lastStableRelease)
+		payload["last_stable_sha"] = nilIfEmpty(lastStableSHA)
+		payload["qualification_schema_finalize_pending"] = coerceClusterBool(config["qualification_schema_finalize_pending"])
 		payload["active_operation_id"] = nilIfEmpty(activeOperationID)
 		payload["hmr"] = map[string]any{"state": hmrState, "node_id": nilIfEmpty(hmrNodeID)}
 		payload["config"] = config
@@ -540,6 +557,26 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 	}
 	if mutation.Kind == "engine_update" {
 		compatibility := clusterCompatibilityMap(mutation.Payload["compatibility"])
+		releaseChannel := firstText(cleanText(mutation.Payload["release_channel"]), clusterReleaseChannel(mutation.TargetRelease))
+		if releaseChannel != clusterReleaseChannel(mutation.TargetRelease) || !textInSet(releaseChannel, "stable", "qualification") {
+			return nil, fmt.Errorf("%w: Engine update release channel does not match target tag", errClusterConflict)
+		}
+		mutation.Payload["release_channel"] = releaseChannel
+		if sourceRelease := cleanText(mutation.Payload["source_release"]); sourceRelease != "" && sourceRelease != baselineRelease {
+			return nil, fmt.Errorf("%w: Engine update source release changed before operation was queued", errClusterConflict)
+		}
+		if sourceSHA := cleanText(mutation.Payload["source_sha"]); sourceSHA != "" && sourceSHA != baselineSHA {
+			return nil, fmt.Errorf("%w: Engine update source SHA changed before operation was queued", errClusterConflict)
+		}
+		if releaseChannel == "qualification" && cleanText(mutation.Payload["scope"]) != "all" {
+			return nil, fmt.Errorf("%w: qualification release must update whole cluster", errClusterConflict)
+		}
+		if clusterReleaseChannel(baselineRelease) == "qualification" && releaseChannel == "stable" && cleanText(mutation.Payload["scope"]) != "all" {
+			return nil, fmt.Errorf("%w: stable promotion from qualification must update whole cluster", errClusterConflict)
+		}
+		if releaseChannel == "stable" && coerceClusterBool(parseClusterJSON(configJSON)["qualification_schema_finalize_pending"]) && cleanText(compatibility["database_migration"]) != "expand-contract" {
+			return nil, fmt.Errorf("%w: stable promotion must complete pending expand-contract schema migration", errClusterConflict)
+		}
 		if activeSize > 1 && (!textInSet(cleanText(compatibility["database_migration"]), "none", "expand-contract") || coerceInt64(compatibility["maximum_version_skew_releases"]) < 1) {
 			return nil, fmt.Errorf("%w: release does not permit safe mixed-version rolling update", errClusterConflict)
 		}
@@ -691,6 +728,7 @@ func clusterCompatibilityMap(value any) map[string]any {
 	switch typed := value.(type) {
 	case clusterReleaseManifest:
 		return map[string]any{
+			"allowed_release_channels":      typed.AllowedReleaseChannels,
 			"database_migration":            typed.DatabaseMigration,
 			"maximum_version_skew_releases": typed.MaximumVersionSkewReleases,
 		}

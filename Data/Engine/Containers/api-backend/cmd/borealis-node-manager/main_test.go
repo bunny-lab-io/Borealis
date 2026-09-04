@@ -34,7 +34,7 @@ func TestNodeManagerActionTimeoutAllowsBoundedBootstrapAndRedeploy(t *testing.T)
 	}
 }
 
-func TestValidPinnedReleaseAcceptsStableAndMatchingDevelopmentIdentity(t *testing.T) {
+func TestValidPinnedReleaseAcceptsStableQualificationAndMatchingDevelopmentIdentity(t *testing.T) {
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	for _, test := range []struct {
 		release string
@@ -42,6 +42,8 @@ func TestValidPinnedReleaseAcceptsStableAndMatchingDevelopmentIdentity(t *testin
 		want    bool
 	}{
 		{release: "2026.09.1", sha: sha, want: true},
+		{release: "2026.09.1-rc.2", sha: sha, want: true},
+		{release: "2026.09.1-rc.0", sha: sha, want: false},
 		{release: "dev-0123456789ab", sha: sha, want: true},
 		{release: "dev-fedcba987654", sha: sha, want: false},
 		{release: "dev-0123456789ab", sha: "not-a-sha", want: false},

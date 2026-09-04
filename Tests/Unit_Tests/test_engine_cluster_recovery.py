@@ -209,6 +209,14 @@ fi
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), f"dev-{sha[:12]}")
 
+            subprocess.run(["git", "tag", "2026.09.1-rc.2"], cwd=repo, check=True)
+            result = self.run_engine_library(
+                'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',
+                extra_env={"BOREALIS_TEST_GIT_ROOT": str(repo)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "2026.09.1-rc.2")
+
             subprocess.run(["git", "tag", "2026.09.1"], cwd=repo, check=True)
             result = self.run_engine_library(
                 'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',
@@ -240,7 +248,7 @@ engine_release_version''',
             self.assertEqual(result.stdout.strip(), "")
 
             tracked.write_text("clean\n", encoding="utf-8")
-            subprocess.run(["git", "tag", "-d", "2026.09.1"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "tag", "-d", "2026.09.1", "2026.09.1-rc.2"], cwd=repo, check=True, capture_output=True)
             tracked.write_text("dirty\n", encoding="utf-8")
             result = self.run_engine_library(
                 'SCRIPT_DIR="$BOREALIS_TEST_GIT_ROOT"\nengine_release_version',

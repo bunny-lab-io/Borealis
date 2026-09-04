@@ -49,12 +49,13 @@ const (
 )
 
 var (
-	stableReleasePattern      = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
-	developmentReleasePattern = regexp.MustCompile(`^dev-[0-9a-f]{12}$`)
-	shaPattern                = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	nodePattern               = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
-	k3sPattern                = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`)
-	clusterUUIDPattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	stableReleasePattern        = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
+	qualificationReleasePattern = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?-rc\.[1-9][0-9]*$`)
+	developmentReleasePattern   = regexp.MustCompile(`^dev-[0-9a-f]{12}$`)
+	shaPattern                  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	nodePattern                 = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
+	k3sPattern                  = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`)
+	clusterUUIDPattern          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 type actionRequest struct {
@@ -230,7 +231,7 @@ func leaseHolder(raw []byte) (string, error) {
 func client(args []string) {
 	flags := flag.NewFlagSet("client", flag.ExitOnError)
 	verb := flags.String("verb", "", "Fixed node-manager action")
-	release := flags.String("release-tag", "", "Dotted numeric release tag")
+	release := flags.String("release-tag", "", "Stable or qualification release tag")
 	targetSHA := flags.String("target-sha", "", "Pinned lowercase commit SHA")
 	schemaPhase := flags.String("schema-phase", "", "Fixed cluster schema phase")
 	k3sVersion := flags.String("k3s-version", "", "Stable K3s version")
@@ -673,7 +674,7 @@ func validPinnedRelease(release, targetSHA string) bool {
 	if !shaPattern.MatchString(targetSHA) {
 		return false
 	}
-	if stableReleasePattern.MatchString(release) {
+	if stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) {
 		return true
 	}
 	return developmentReleasePattern.MatchString(release) && release == "dev-"+targetSHA[:12]
@@ -681,7 +682,7 @@ func validPinnedRelease(release, targetSHA string) bool {
 
 func validReleaseName(release string) bool {
 	release = strings.TrimSpace(release)
-	return stableReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release)
+	return stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release)
 }
 
 func (m *manager) stagePinnedRelease(ctx context.Context, release, targetSHA string) (map[string]any, error) {

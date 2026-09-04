@@ -25,6 +25,8 @@ const state = vi.hoisted(() => ({
   clusterStatus: "Healthy",
   releases: [],
   releaseError: "",
+  releaseChannel: "stable",
+  lastStableRelease: "2026.08.1",
   operations: [],
   events: [],
   database: { configured_instances: 3, ready_instances: 3, fully_ready: true },
@@ -42,6 +44,8 @@ vi.mock("react-router-dom", async (importOriginal) => {
         active_size: state.activeSize,
         desired_size: state.desiredSize,
         baseline_release: "2026.08.1",
+        release_channel: state.releaseChannel,
+        last_stable_release: state.lastStableRelease,
         k3s_version: "v1.36.3+k3s1",
         hmr: { state: state.hmrState, node_id: state.hmrState === "active" ? "11111111-1111-4111-8111-111111111111" : "" },
         leaders: {
@@ -117,6 +121,8 @@ describe("Cluster Management", () => {
     state.clusterStatus = "Healthy";
     state.releases = [];
     state.releaseError = "";
+    state.releaseChannel = "stable";
+    state.lastStableRelease = "2026.08.1";
     state.operations = [];
     state.events = [];
     state.database = { configured_instances: 3, ready_instances: 3, fully_ready: true };
@@ -152,6 +158,8 @@ describe("Cluster Management", () => {
     expect(compareBorealisVersions("2026.08.7.1", "2026.08.7")).toBe(1);
     expect(compareBorealisVersions("2026.09.1", "2026.08.99.9")).toBe(1);
     expect(compareBorealisVersions("2026.08.6", "2026.08.7")).toBe(-1);
+    expect(compareBorealisVersions("2026.08.7-rc.1", "2026.08.7-rc.2")).toBe(-1);
+    expect(compareBorealisVersions("2026.08.7-rc.2", "2026.08.7")).toBe(-1);
     expect(compareBorealisVersions("v2026.08.8", "2026.08.7")).toBeNull();
 
     const releases = [
@@ -159,6 +167,7 @@ describe("Cluster Management", () => {
       { tag: "2026.08.7", selectable: true },
       { tag: "2026.08.7.1", selectable: true },
       { tag: "2026.08.8", selectable: false, reason: "K3s baseline mismatch" },
+      { tag: "2026.08.8-rc.1", channel: "qualification", selectable: true },
     ];
     expect(clusterReleaseOptionsAtOrAboveBaseline(releases, "2026.08.7").map((release) => release.tag)).toEqual([
       "2026.08.7",
@@ -169,6 +178,9 @@ describe("Cluster Management", () => {
       "2026.08.6",
       "2026.08.7",
       "2026.08.7.1",
+    ]);
+    expect(clusterReleaseOptionsAtOrAboveBaseline(releases, "2026.08.7", "qualification").map((release) => release.tag)).toEqual([
+      "2026.08.8-rc.1",
     ]);
   });
 
@@ -346,7 +358,47 @@ describe("Cluster Management", () => {
     renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
-    expect(screen.getByText(/No published stable cluster-compatible release exists at or above baseline 2026.08.1/)).toBeInTheDocument();
+    expect(screen.getByText(/No approved Engine release exists at or above baseline 2026.08.1/)).toBeInTheDocument();
+  });
+
+  it("shows unsupported qualification state and submits whole-cluster acknowledgement", async () => {
+    state.hmrState = "inactive";
+    state.releaseChannel = "qualification";
+    state.releases = [{ tag: "2026.08.2-rc.1", title: "Cluster candidate", channel: "qualification", selectable: true }];
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") {
+        return { ok: true, status: 202, json: async () => ({ operation_id: "44444444-4444-4444-8444-444444444444" }) };
+      }
+      if (String(path).endsWith("/releases")) return { ok: true, json: async () => ({ releases: state.releases }) };
+      if (String(path).includes("/events")) return { ok: true, json: async () => ({ events: [] }) };
+      return { ok: true, json: async () => ({ enabled: true, status: "Healthy", active_size: 3, desired_size: 3, baseline_release: "2026.08.2-rc.1", release_channel: "qualification", last_stable_release: "2026.08.1", hmr: { state: "inactive" }, database: state.database, nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=maintenance");
+
+    expect(screen.getByText(/Qualification channel active/)).toHaveTextContent(/unsupported for production/);
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Qualification Version" }));
+    fireEvent.click(await screen.findByRole("option", { name: /2026\.08\.2-rc\.1 is compatible/ }));
+    const deployButton = screen.getByRole("button", { name: "Deploy Qualification One Node at a Time" });
+    await waitFor(() => expect(deployButton).toBeEnabled());
+    fireEvent.click(deployButton);
+    expect(await screen.findByText(/cannot downgrade back to last stable source/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Typed confirmation"), { target: { value: "DEPLOY QUALIFICATION" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/updates",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          scope: "all",
+          node_ids: [],
+          release_tag: "2026.08.2-rc.1",
+          confirmation: "DEPLOY QUALIFICATION",
+          maintenance_outage_acknowledgement: "",
+        }),
+      }),
+    ));
   });
 
   it("bounds release catalog menu dimensions", () => {

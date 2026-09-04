@@ -277,4 +277,41 @@ describe("AppShell buffered navigation", () => {
       "Cluster-Wide Node Isolation enabled. All Borealis application traffic will run exclusively through engine-isolated. All remaining cluster nodes will remain on standby until node isolation has been disabled."
     ));
   });
+
+  it("keeps qualification support state visible in global cluster banner", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        enabled: true,
+        status: "Healthy",
+        hmr_state: "inactive",
+        release_channel: "qualification",
+        baseline_release: "2026.09.2-rc.1",
+        last_stable_release: "2026.09.1",
+        qualification_schema_finalize_pending: true,
+        active_operation: null,
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter(
+      [{
+        path: "/",
+        element: (
+          <AuthContext.Provider value={buildAuthValue()}>
+            <PageChromeProvider>
+              <AppShell />
+            </PageChromeProvider>
+          </AuthContext.Provider>
+        ),
+        children: [{ index: true, element: <div>Home Page</div>, handle: { title: "Home", navKey: "home", pageKey: "home" } }],
+      }],
+      { initialEntries: ["/"] }
+    );
+
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(
+      "Unsupported qualification release 2026.09.2-rc.1 active. Last stable: 2026.09.1. Schema finalization remains pending. Promote whole cluster forward to stable; downgrade rollback is unsupported."
+    ));
+  });
 });

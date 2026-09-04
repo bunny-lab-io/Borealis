@@ -11270,6 +11270,16 @@ engine_release_version() {
     return 0
   fi
 
+  release="$(git -C "${SCRIPT_DIR}" tag --points-at HEAD 2>/dev/null \
+    | grep -E '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(\.[0-9]+)?-rc\.[1-9][0-9]*$' \
+    | sort -V \
+    | tail -n 1 \
+    || true)"
+  if [[ -n "${release}" ]]; then
+    printf '%s\n' "${release}"
+    return 0
+  fi
+
   local source_sha=""
   source_sha="$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
   [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
