@@ -130,8 +130,7 @@ GUM_READY=0
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
-DEFAULT_RELEASE_CHANNEL="${BOREALIS_ENGINE_RELEASE_CHANNEL:-unstable}"
-DEFAULT_STABLE_REF="${BOREALIS_ENGINE_STABLE_REF:-}"
+DEFAULT_RELEASE_CHANNEL="${BOREALIS_ENGINE_RELEASE_CHANNEL:-stable}"
 DEFAULT_UNSTABLE_REF="${BOREALIS_ENGINE_UNSTABLE_REF:-${DEFAULT_REPO_REF}}"
 INSTALL_DIR="${BOREALIS_INSTALL_DIR:-${DEFAULT_INSTALL_DIR}}"
 ENGINE_RUNTIME_USER="${BOREALIS_ENGINE_RUNTIME_USER:-borealis-engine}"
@@ -145,6 +144,8 @@ REPO_REF="${BOREALIS_ENGINE_REF:-}"
 REPO_CHECKOUT_BRANCH="${BOREALIS_ENGINE_CHECKOUT_BRANCH:-}"
 REPO_REF_EXPLICIT=0
 RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
+REQUESTED_RELEASE="${BOREALIS_ENGINE_RELEASE_VERSION:-}"
+REQUESTED_RELEASE_SHA="${BOREALIS_ENGINE_SOURCE_SHA:-}"
 ENGINE_NETWORK_MODE="${BOREALIS_ENGINE_NETWORK_MODE:-}"
 ENGINE_DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-}"
 SYNC_REQUESTED=0
@@ -1896,45 +1897,35 @@ normalize_release_channel() {
   esac
 }
 
-resolve_latest_stable_tag() {
-  local repo_url="$1"
-  git ls-remote --tags --refs "${repo_url}" \
-    | awk '{print $2}' \
-    | sed 's#refs/tags/##' \
-    | grep -E '^[0-9]+(\.[0-9]+)*$' \
-    | sort -V \
-    | tail -n 1
-}
-
 resolve_repo_ref() {
   RELEASE_CHANNEL="$(normalize_release_channel "${RELEASE_CHANNEL}")"
+  if [[ -n "${REQUESTED_RELEASE}" || -n "${REQUESTED_RELEASE_SHA}" ]]; then
+    [[ -n "${REQUESTED_RELEASE}" && -n "${REQUESTED_RELEASE_SHA}" ]] \
+      || die "Stable release sync requires both --release and --release-sha."
+    [[ "${REQUESTED_RELEASE}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(\.[0-9]+)?$ ]] \
+      || die "Release must use stable YYYY.MM.REVISION[.HOTFIX] form."
+    [[ "${REQUESTED_RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+      || die "Release source SHA must be 40 lowercase hexadecimal characters."
+    [[ "${RELEASE_CHANNEL}" == "stable" ]] \
+      || die "--release and --release-sha cannot be combined with unstable channel."
+    if [[ "${REPO_REF_EXPLICIT}" -eq 1 && "${REPO_REF}" != "${REQUESTED_RELEASE}" ]]; then
+      die "Repository ref '${REPO_REF}' conflicts with release '${REQUESTED_RELEASE}'."
+    fi
+    REPO_REF="${REQUESTED_RELEASE}"
+    REPO_REF_EXPLICIT=1
+    REPO_CHECKOUT_BRANCH="${REPO_CHECKOUT_BRANCH:-borealis-release-${REQUESTED_RELEASE}}"
+    return 0
+  fi
+
+  if [[ "${RELEASE_CHANNEL}" == "stable" ]]; then
+    die "Stable repository sync requires exact --release and --release-sha values from Install-Engine.sh."
+  fi
   if [[ "${REPO_REF_EXPLICIT}" -eq 1 ]]; then
     [[ -n "${REPO_REF}" ]] || die "Repository ref cannot be empty."
     return 0
   fi
-
-  case "${RELEASE_CHANNEL}" in
-    stable)
-      if [[ -n "${DEFAULT_STABLE_REF}" ]]; then
-        REPO_REF="${DEFAULT_STABLE_REF}"
-        log "Resolved stable release channel to configured ref '${REPO_REF}'."
-        return 0
-      fi
-      local stable_tag=""
-      stable_tag="$(resolve_latest_stable_tag "${REPO_URL}" || true)"
-      if [[ -n "${stable_tag}" ]]; then
-        REPO_REF="${stable_tag}"
-        log "Resolved stable release channel to latest tag '${REPO_REF}'."
-        return 0
-      fi
-      REPO_REF="${DEFAULT_UNSTABLE_REF}"
-      log "Stable release channel could not resolve a remote release tag; falling back to '${REPO_REF}'."
-      ;;
-    unstable)
-      REPO_REF="${DEFAULT_UNSTABLE_REF}"
-      log "Resolved unstable release channel to ref '${REPO_REF}'."
-      ;;
-  esac
+  REPO_REF="${DEFAULT_UNSTABLE_REF}"
+  log "Resolved explicitly requested unstable release channel to ref '${REPO_REF}'."
 }
 
 checkout_branch_name() {
@@ -2002,9 +1993,24 @@ sync_repo() {
 
   local checkout_branch
   checkout_branch="$(checkout_branch_name)"
-  run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin "${REPO_REF}"
+  if [[ -n "${REQUESTED_RELEASE}" ]]; then
+    run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin \
+      "refs/tags/${REQUESTED_RELEASE}:refs/tags/${REQUESTED_RELEASE}"
+    local resolved_release_sha=""
+    resolved_release_sha="$(run_privileged git -C "${INSTALL_DIR}" rev-parse "refs/tags/${REQUESTED_RELEASE}^{commit}" 2>/dev/null || true)"
+    [[ "${resolved_release_sha}" == "${REQUESTED_RELEASE_SHA}" ]] \
+      || die "Release tag '${REQUESTED_RELEASE}' resolves to '${resolved_release_sha:-unknown}', expected '${REQUESTED_RELEASE_SHA}'."
+  else
+    run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin "${REPO_REF}"
+  fi
   run_privileged git -C "${INSTALL_DIR}" checkout --force -B "${checkout_branch}" FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
+  if [[ -n "${REQUESTED_RELEASE_SHA}" ]]; then
+    local checked_out_sha=""
+    checked_out_sha="$(run_privileged git -C "${INSTALL_DIR}" rev-parse HEAD 2>/dev/null || true)"
+    [[ "${checked_out_sha}" == "${REQUESTED_RELEASE_SHA}" ]] \
+      || die "Checked-out Engine source differs from verified release SHA."
+  fi
   run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Engine.old -e Agent
   run_privileged chmod +x "${INSTALL_DIR}/Engine.sh" >/dev/null 2>&1 || true
   reconcile_install_checkout_owner "${INSTALL_DIR}"
@@ -2019,12 +2025,14 @@ parse_launch_options() {
   LAUNCH_ARGS=()
   while (($#)); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--cluster-vip|--revision|--schema-phase)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--release|--release-sha|--network-mode|--network_mode|--deployment-profile|--deployment_profile|--cluster-vip|--revision|--schema-phase)
         [[ $# -ge 2 ]] || die "Missing value for ${1}."
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
           --repo-url) REPO_URL="$2" ;;
           --release-channel|--release_channel) RELEASE_CHANNEL="$2" ;;
+          --release) REQUESTED_RELEASE="$2" ;;
+          --release-sha) REQUESTED_RELEASE_SHA="$2" ;;
           --network-mode|--network_mode)
             ENGINE_NETWORK_MODE="$2"
             export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
@@ -2052,13 +2060,15 @@ parse_launch_options() {
         esac
         shift 2
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--cluster-vip=*|--revision=*|--schema-phase=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--release=*|--release-sha=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*|--cluster-vip=*|--revision=*|--schema-phase=*)
         local key="${1%%=*}"
         local value="${1#*=}"
         case "${key}" in
           --install-dir) INSTALL_DIR="${value}" ;;
           --repo-url) REPO_URL="${value}" ;;
           --release-channel|--release_channel) RELEASE_CHANNEL="${value}" ;;
+          --release) REQUESTED_RELEASE="${value}" ;;
+          --release-sha) REQUESTED_RELEASE_SHA="${value}" ;;
           --network-mode|--network_mode)
             ENGINE_NETWORK_MODE="${value}"
             export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
@@ -11903,7 +11913,8 @@ usage() {
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
   Engine.sh --network-mode <public|local> --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
-  Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
+  Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] --release VERSION --release-sha COMMIT_SHA deploy [prod|dev]
+  Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] --release-channel unstable [--repo-branch REF] deploy [prod|dev]
   Engine.sh --redeploy-agent-binaries
   Engine.sh --cluster-prepare-node
   Engine.sh --cluster-enable --cluster-vip IPv4

@@ -1,38 +1,41 @@
 # Updating the Engine
-Use this page when updating an existing Borealis Engine host from the Git repository.
+Use this page when moving an existing standalone Borealis Engine host to exact stable release.
 
 !!! warning "Clustered Engines"
     Do not run host-by-host `git pull` or direct production deploy on clustered Engine. Use **Admin > Cluster Management > Updates** so Borealis pins immutable release SHA, drains one node, transfers roles, validates candidate, and restores service before moving to next node. See [Managing Engine Clusters](managing-engine-clusters.md).
 
 !!! info "Expected path"
-    Run these commands from the Engine host. They pull current staging files and redeploy the production container stack. Keep the same network mode used during install. Use `sudo` for `Engine.sh` unless the shell user can access `/var/run/docker.sock`.
+    Run these commands from Engine host. Choose release version explicitly and keep same network mode used during install. Standalone bootstrap verifies selected identity but does not choose version for operator; Cluster Management separately limits cluster choices to compatible same-or-newer releases.
 
 === "Public"
 
     ```sh
-    cd /opt/Borealis
-
-    # Pull down changed Engine staging files.
-    git pull --ff-only
-
-    # Redeploy updated Engine containers.
-    sudo bash Engine.sh --network-mode public deploy prod
+    BOREALIS_RELEASE="YYYY.MM.REVISION"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      --output Install-Engine.sh \
+      "https://github.com/bunny-lab-io/Borealis/releases/download/${BOREALIS_RELEASE}/Install-Engine.sh"
+    less Install-Engine.sh
+    sudo bash Install-Engine.sh --release "${BOREALIS_RELEASE}" --network-mode public
     ```
 
 === "Local"
 
     ```sh
-    cd /opt/Borealis
-
-    # Pull down changed Engine staging files.
-    git pull --ff-only
-
-    # Redeploy updated Engine containers.
-    sudo bash Engine.sh --network-mode local deploy prod
+    BOREALIS_RELEASE="YYYY.MM.REVISION"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      --output Install-Engine.sh \
+      "https://github.com/bunny-lab-io/Borealis/releases/download/${BOREALIS_RELEASE}/Install-Engine.sh"
+    less Install-Engine.sh
+    sudo bash Install-Engine.sh --release "${BOREALIS_RELEASE}" --network-mode local
     ```
 
+Installer requires stable `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` tag backed by published, non-prerelease, immutable GitHub release. It verifies release assets and exact tag commit before replacing checked-out source. No stable update command resolves `latest` or falls back to `main`.
+
 !!! warning "Local changes"
-    `git pull --ff-only` stops if local files changed. Review those changes before updating so Engine deployment does not mix local edits with upstream changes.
+    Stable update resets tracked source to selected release commit and removes untracked source outside preserved `Engine`, `Engine.old`, and `Agent` runtime roots. Review and commit development changes before update.
+
+!!! info "GitHub unavailable"
+    New release install or update stops before source changes when GitHub release metadata or assets cannot be verified. Existing standalone Engine can still reconcile its already checked-out release with local `sudo bash Engine.sh --network-mode public|local deploy prod` command.
 
 Every redeploy rebuilds Engine-hosted Agent artifact from `Data/Agent` on Engine host. Sites install links and Agent updates use that artifact exclusively; Borealis does not publish or retrieve Agent binaries through GitHub.
 
@@ -70,8 +73,36 @@ When only Agent source changed, use `bash Engine.sh --redeploy-agent-binaries` f
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 
+    ### Stable release publication
+
+    Repository must have GitHub immutable releases enabled before packaging. Stable release tags use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX`; release candidates use separate cluster qualification flow and cannot serve stable curl installer.
+
+    1. Merge reviewed release source and create stable tag at intended full commit SHA.
+    2. Create GitHub release as non-prerelease draft. Do not publish it yet.
+    3. Dispatch `publish-engine-release-assets.yml` with exact tag. Workflow checks immutable-release repository setting, draft flags, exact tag checkout, and source SHA; then uploads four assets without overwrite.
+    4. Inspect draft asset names, sizes, GitHub `sha256:` digests, generated manifest, and `SHA256SUMS`.
+    5. Publish draft. GitHub locks tag and assets. Never delete and recreate stable release version to replace content; issue higher hotfix version.
+
+    ```sh
+    release="YYYY.MM.REVISION"
+    gh release create "${release}" --draft --verify-tag \
+      --title "${release}" --generate-notes
+    gh workflow run publish-engine-release-assets.yml -f "release=${release}"
+
+    # Inspect workflow and draft before publication.
+    gh run list --workflow publish-engine-release-assets.yml --event workflow_dispatch --limit 1
+    gh release view "${release}" --json tagName,isDraft,isPrerelease,assets
+
+    # Publish only after packaging workflow passes and asset review succeeds.
+    gh release edit "${release}" --draft=false --latest
+    gh release verify "${release}"
+    ```
+
     ### Runtime behavior
 
+    - Stable update starts from exact `Install-Engine.sh` release asset. Bootstrap requires immutable, published, non-prerelease GitHub release; verifies GitHub asset digests plus manifest release, repository, Linux platform, artifact URLs, sizes, and hashes; resolves tag commit SHA; then calls `Engine.sh --release VERSION --release-sha COMMIT_SHA`.
+    - Stable `Engine.sh` sync fetches exact tag and refuses missing, malformed, or mismatched release/SHA identity. It never resolves latest tag and never falls back to mutable branch.
+    - Development repo sync requires explicit `--release-channel unstable`; ref defaults to `main` when developer does not provide `--repo-branch`.
     - `Engine.sh --network-mode public|local deploy prod` stages source, checks dependencies, builds the local Agent installer cache from `Data/Agent/build-agent.sh`, builds changed images, writes deploy manifests, reconciles K3s-owned workloads, and keeps Docker Compose retired through the empty manifest/policy check.
     - `Engine.sh --redeploy-agent-binaries` is scoped Agent maintenance. It uses existing deployed mode/network state, does not rebuild API/WebUI/Traefik/PostgreSQL/WireGuard/guacd, and updates job-scheduler only to change desired site-worker image after validated blue/green cutover.
     - Production mode serves the static WebUI from the K3s `webui-frontend` workload through the existing Traefik edge. The retired Compose WebUI container is removed during deploy.

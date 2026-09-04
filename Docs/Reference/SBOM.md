@@ -159,6 +159,8 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
 | shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
 | shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| shared-engine | curl (HTTPS transport for verified Engine release bootstrap and pinned dependency downloads) | [curl License](https://curl.se/docs/copyright.html) |
+| shared-engine | GNU Coreutils (`sha256sum`, `stat`, and `mktemp` used by verified Engine release bootstrap) | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
 | shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
 | shared-engine | kube-vip `v1.1.0` (Cluster Virtual IP lease; checksum-pinned SBOM artifact) | [Apache-2.0](https://github.com/kube-vip/kube-vip/blob/main/LICENSE) |
@@ -177,6 +179,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | PyYAML 6.0.3 (repository validation manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | Zensical 0.0.55 (documentation validation and Pages build) | [MIT](https://github.com/zensical/zensical/blob/main/LICENSE) |
 | shared-engine | actionlint v1.7.7 (GitHub Actions workflow validation) | [MIT](https://github.com/rhysd/actionlint/blob/main/LICENSE.txt) |
+| shared-engine | GitHub CLI (GitHub-hosted runner tool used to validate draft releases and upload Engine release assets) | [MIT](https://github.com/cli/cli/blob/trunk/LICENSE) |
 | shared-engine | ShellCheck (Ubuntu runner package used for shell validation) | [GPL-3.0-only](https://github.com/koalaman/shellcheck/blob/master/LICENSE) |
 | shared-engine | PowerShell (GitHub runner parser used for `.ps1` syntax validation) | [MIT](https://github.com/PowerShell/PowerShell/blob/master/LICENSE.txt) |
 
