@@ -7,6 +7,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 ## Executive Summary
 
 - Borealis is self-hosted: operators own the Engine host, network exposure, DNS, certificates, backups, and account lifecycle.
+- Stable Engine installation uses exact immutable GitHub release, release-asset SHA-256 digests, Borealis install manifest, and full source commit SHA. Stable bootstrap has no mutable branch or latest-release fallback.
 - Agents connect outbound to the Engine over CA-validated HTTPS and Borealis-managed WireGuard. Externally Accessible deployments use public CA validation; Internal-Only deployments use a Borealis local CA plus normal hostname validation. Internal-Only agents may use a persisted Engine IP fallback as a route hint, but the Engine FQDN remains the TLS identity. Endpoint inbound exposure is not required for normal remote operations.
 - Device trust starts with operator-approved enrollment, device-generated Ed25519 identity, short-lived access tokens, hashed refresh tokens, and device status checks.
 - Operator trust is protected by Aegis Cipher, MFA by default, WebAuthn passkeys, RBAC, site scoping, and strict session invalidation.
@@ -99,6 +100,12 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 
 ### Engine Edge and Bootstrap
 
+- Stable installation begins with downloaded `Install-Engine.sh` release asset. Pipe-to-shell execution is blocked so operator can inspect file and bootstrap can hash its own on-disk bytes.
+- Bootstrap requires exact stable tag, published non-prerelease release, GitHub immutable-release flag, supported Linux architecture, complete uploaded asset set, and GitHub-provided SHA-256 digests. It verifies its own asset, manifest asset, repository/release/platform/artifact URL identity, `Engine.sh` asset, release tag commit, and downloaded file sizes before execution.
+- Verified release and full commit SHA are passed to `Engine.sh`. Stable sync fetches exact tag ref and verifies both tag target and checked-out `HEAD`; it never selects latest tag or falls back to `main`. Mutable ref sync requires explicit `--release-channel unstable` and remains development-only.
+- Release packaging uses draft-first publication. Maintainer creates stable draft, workflow checks out exact tag and uploads `Install-Engine.sh`, `Engine.sh`, `borealis-engine-install-manifest.json`, and `SHA256SUMS`, then maintainer publishes release. Repository immutable releases lock tag and assets at publication.
+- Controls address mutable branch drift, stale latest selection, tag/SHA disagreement, missing assets, asset substitution, and transport/storage corruption. They do not make malicious reviewed release code safe, protect compromised GitHub repository administration before publication, or protect already-compromised Engine host. GitHub HTTPS API and repository administration remain supply-chain trust roots.
+- Fresh install and version-changing update fail closed when GitHub metadata or assets are unavailable. Existing standalone checkout can reconcile same source release without network source sync; cluster updates remain controlled through Cluster Management.
 - Borealis renders Traefik runtime state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`. Let's Encrypt state is used for Externally Accessible deployments; Borealis local CA and leaf certificate state is used for Internal-Only deployments.
 - Internal engine-only material such as WireGuard keys, code-signing keys, Aegis state, and auth secrets stays under Engine service runtime paths.
 - First deployment follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
@@ -321,6 +328,11 @@ Safe K3s removal writes root-only persistent fence marker and schedules local `k
 
     ### Source map
 
+    - Stable release bootstrap: `Install-Engine.sh`.
+    - Exact release sync boundary: `Engine.sh` functions `resolve_repo_ref` and `sync_repo`.
+    - Release asset builder: `Tests/tools/build_engine_release_assets.py`.
+    - Draft release packaging workflow: `.github/workflows/publish-engine-release-assets.yml`.
+    - Bootstrap regression tests: `Tests/Unit_Tests/test_engine_release_bootstrap.py`.
     - Engine auth bootstrap: `Data/Engine/Containers/api-backend/cmd/api-backend/bootstrap_*.go`.
     - Operator auth and passkeys: `Data/Engine/Containers/api-backend/cmd/api-backend/auth_*.go`.
     - Directory providers: `Data/Engine/Containers/api-backend/cmd/api-backend/directory_*.go`.

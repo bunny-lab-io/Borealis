@@ -386,16 +386,23 @@ cd /opt/Borealis
 bash Engine.sh --network-mode local deploy dev
 ```
 
-Branch install or redeploy from raw launcher:
+Development ref install from exact launcher commit:
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --network-mode local --repo-branch feature/containerize-all-borealis-services deploy prod
+BOREALIS_DEV_REF="40-character-commit-sha"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output Engine.sh \
+  "https://raw.githubusercontent.com/bunny-lab-io/Borealis/${BOREALIS_DEV_REF}/Engine.sh"
+sudo bash Engine.sh --network-mode local --release-channel unstable \
+  --repo-branch "${BOREALIS_DEV_REF}" deploy dev
 ```
 
-Update from a cloned checkout:
+Update development checkout:
 ```sh
 git pull --ff-only
 bash Engine.sh --network-mode local deploy prod
 ```
+
+Production installs and updates use exact immutable release bootstrap documented in [Deploying the Engine](../../Engine/deploying-the-engine.md) and [Updating the Engine](../../Engine/updating-the-engine.md).
 
 Build and publish current Agent binaries, then replace outdated active site workers:
 ```sh

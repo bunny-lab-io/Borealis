@@ -1,0 +1,70 @@
+name: Package Engine Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Stable draft release tag (YYYY.MM.REVISION[.HOTFIX])
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package-engine-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require stable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(\.[0-9]+)?$ ]] || {
+            echo "Release must use stable YYYY.MM.REVISION[.HOTFIX] form." >&2
+            exit 64
+          }
+          gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled' \
+            | grep -Fx true
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,tagName \
+            --jq '[.tagName, .isDraft, .isPrerelease] | @tsv' \
+            | grep -Fx "${RELEASE_TAG}"$'\ttrue\tfalse'
+
+      - name: Checkout immutable release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build release assets
+        env:
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$(git rev-list -n 1 "$RELEASE_TAG")" == "$source_sha" ]]
+          python3 Tests/tools/build_engine_release_assets.py \
+            --release "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$source_sha" \
+            --engine-script Engine.sh \
+            --bootstrap-script Install-Engine.sh \
+            --output-dir "$RUNNER_TEMP/borealis-engine-release"
+
+      - name: Upload assets to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/borealis-engine-release/Install-Engine.sh" \
+            "$RUNNER_TEMP/borealis-engine-release/Engine.sh" \
+            "$RUNNER_TEMP/borealis-engine-release/borealis-engine-install-manifest.json" \
+            "$RUNNER_TEMP/borealis-engine-release/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY"

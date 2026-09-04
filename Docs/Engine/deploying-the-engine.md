@@ -6,8 +6,9 @@ You can follow the instructions on this page to install the Borealis Engine onto
     **Engine Host**:
 
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
+    - Stable release bootstrap supports Linux AMD64 and ARM64 and requires `curl`, Python 3, and GNU Coreutils. Multi-node clusters remain AMD64-only.
     - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
-    - Run `Engine.sh` with `sudo` unless the shell user can access `/var/run/docker.sock`.
+    - Run `Install-Engine.sh` and later `Engine.sh` with `sudo` unless shell user can access `/var/run/docker.sock`.
 
     **DNS Records & Certificate Considerations**:
 
@@ -129,7 +130,7 @@ date -s "1 JAN 2025 03:30:00"
 ```
 
 ## Deploy the Engine
-When deploying Borealis, you have to choose the Engine network mode first.  This is represented as either "local" or "public". Use the matching one-line installer command when starting from a fresh Linux host. Public and Local deployments use different TLS and network assumptions, so every deployment command must include `--network-mode`.
+When deploying Borealis, choose an exact stable release and Engine network mode first. Download `Install-Engine.sh` from that release, inspect it, then run it from disk. Installer verifies published release, GitHub asset digests, Borealis manifest, release tag, and source commit before deployment. Public and Local deployments use different TLS and network assumptions, so every deployment command must include `--network-mode`.
 
 !!! warning "Network Mode Required"
 
@@ -140,7 +141,14 @@ When deploying Borealis, you have to choose the Engine network mode first.  This
     Use this when Borealis serves multiple sites, operators, or managed environments through public DNS. Public mode is the MSP-friendly architecture: agents and operators reach the Engine through a public FQDN, Traefik requests public Let's Encrypt certificates, and clients trust the Engine through normal public CA validation.
 
     ```sh
-    curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --network-mode public deploy prod
+    BOREALIS_RELEASE="YYYY.MM.REVISION"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      --output Install-Engine.sh \
+      "https://github.com/bunny-lab-io/Borealis/releases/download/${BOREALIS_RELEASE}/Install-Engine.sh"
+
+    # Inspect downloaded bootstrap before granting root access.
+    less Install-Engine.sh
+    sudo bash Install-Engine.sh --release "${BOREALIS_RELEASE}" --network-mode public
     ```
 
     If Borealis sits behind an outer/nested reverse proxy, set `BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS` to the outer proxy IP/CIDR so Traefik preserves client IP metadata.  Dont worry, if you don't configure environment variables, you will be prompted during engine deployment for this information.
@@ -150,31 +158,36 @@ When deploying Borealis, you have to choose the Engine network mode first.  This
     Use this when Borealis stays inside one local environment, such as a homelab, one company / small business, or VPN-only deployment. Local mode does not request public certificates. Traefik serves a Borealis-managed local CA leaf certificate for the Engine FQDN.
 
     ```sh
-    curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --network-mode local deploy prod
+    BOREALIS_RELEASE="YYYY.MM.REVISION"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      --output Install-Engine.sh \
+      "https://github.com/bunny-lab-io/Borealis/releases/download/${BOREALIS_RELEASE}/Install-Engine.sh"
+
+    # Inspect downloaded bootstrap before granting root access.
+    less Install-Engine.sh
+    sudo bash Install-Engine.sh --release "${BOREALIS_RELEASE}" --network-mode local
     ```
 
     Agent install commands include the local CA bundle automatically (this makes the command larger). Automatically-generated agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Linux WireGuard tunnel setup also falls back to that IP when `wg-quick` cannot resolve the Engine FQDN. Browsers need the Borealis local CA imported into the operator's device or managed trust store before they show the Engine as trusted. Local deployments do not ask for an outer reverse proxy during interactive deployment and assume that there is none.
 
-During deployment, Borealis starts with a short bootstrap, installs the pinned Gum terminal renderer when missing, reconciles the single-node K3s baseline, prepares runtime configuration, builds the Engine-hosted Agent installer cache from `Data/Agent`, builds changed service container images, applies K3s-owned workloads, and keeps the retired Docker Compose manifest empty.
+Replace example value with exact stable release tag shown on GitHub, using `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX`. Installer does not accept `latest`, branches, release candidates, GitHub prereleases, drafts, or mutable releases.
 
-Public deployment does not report WebUI accessible until Traefik serves hostname certificate trusted by host CA store. Certificate failure leaves Traefik diagnostics in `Engine/Deploy/build.log`; fix DNS, TCP `443`, or outer TLS pass-through and rerun same one-line deployment.
+During deployment, Borealis starts with verified release bootstrap, installs pinned Gum terminal renderer when missing, reconciles single-node K3s baseline, prepares runtime configuration, builds Engine-hosted Agent installer cache from `Data/Agent`, builds changed service container images, applies K3s-owned workloads, and keeps retired Docker Compose manifest empty.
+
+Public deployment does not report WebUI accessible until Traefik serves hostname certificate trusted by host CA store. Certificate failure leaves Traefik diagnostics in `Engine/Deploy/build.log`; fix DNS, TCP `443`, or outer TLS pass-through and rerun same release deployment.
 
 !!! info "Fresh host package activity"
     Ubuntu may still be running its automatic package updater when first deployment starts. Borealis waits up to five minutes for the package-manager lock instead of failing immediately or stopping that updater.
 
 ### Local Redeploy Commands
-After the first install, update and redeploy from the checked-out Borealis repository. Keep the same network mode. Local `Engine.sh` runs use whatever source is already on disk, so pull the current GitHub branch before redeploying when you want newer Engine code.
+After first install, rerun checked-out release without changing version. Keep same network mode. Use [Updating the Engine](updating-the-engine.md) when moving to another stable release.
 
-One-line installation keeps `/opt/Borealis` Git metadata and source writable by operator account that invoked `sudo`. Root-owned Engine and Agent runtime state stays excluded from that ownership change, so normal `git checkout` and `git pull` commands need no `sudo`.
+Verified installation keeps `/opt/Borealis` Git metadata and source writable by operator account that invoked `sudo`. Root-owned Engine and Agent runtime state stays excluded from that ownership change, so development `git checkout` and `git pull` commands need no `sudo`.
 
 === "Public"
 
     ```sh
     cd /opt/Borealis
-
-    # Use the repo branch you want to deploy from.
-    git checkout main
-    git pull --ff-only
 
     sudo bash Engine.sh --network-mode public deploy prod
     ```
@@ -183,10 +196,6 @@ One-line installation keeps `/opt/Borealis` Git metadata and source writable by 
 
     ```sh
     cd /opt/Borealis
-
-    # Use the repo branch you want to deploy from.
-    git checkout main
-    git pull --ff-only
 
     sudo bash Engine.sh --network-mode local deploy prod
     ```
@@ -246,7 +255,7 @@ You will be asked as series of questions during initial setup for a new engine. 
 
 !!! warning "Local Changes (Developer-Focused)"
 
-    `git pull --ff-only` stops when local files have changed or when the branch cannot fast-forward cleanly. Review those changes before deployment so Engine updates do not mix local edits with upstream source changes, causing headaches.
+    Production release checkouts should remain unmodified. `Engine.sh` reports development identity instead of stable release identity when tracked or untracked source changes exist.
 
 ??? note "Optional: Development and Branch Installs"
     Use these commands only when testing changes or validating a specific release channel.  *Do not use in Production.*
@@ -255,11 +264,16 @@ You will be asked as series of questions during initial setup for a new engine. 
     # Deploy the development stack with WebUI Vite HMR behind Traefik for Local validation.
     ./Engine.sh --network-mode local deploy dev
 
-    # Install from the stable release channel for Public use.
-    curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --network-mode public --release-channel stable deploy prod
+    # Download bootstrap from exact development commit, then inspect it.
+    BOREALIS_DEV_REF="40-character-commit-sha"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      --output Engine.sh \
+      "https://raw.githubusercontent.com/bunny-lab-io/Borealis/${BOREALIS_DEV_REF}/Engine.sh"
+    less Engine.sh
 
-    # Install from a specific branch for Local validation.
-    curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --network-mode local --repo-branch optimization/agent-context-socket-consolidation deploy prod
+    # Non-release source sync requires explicit unstable channel.
+    sudo bash Engine.sh --network-mode local --release-channel unstable \
+      --repo-branch "${BOREALIS_DEV_REF}" deploy dev
     ```
 
 ## First Run Checklist
@@ -292,6 +306,9 @@ After deployment finishes:
 
     ### Bootstrap and runtime separation
 
+    - Stable fresh installs start with release asset `Install-Engine.sh`, never raw branch content. Bootstrap reads exact GitHub release, requires `draft=false`, `prerelease=false`, and `immutable=true`, validates GitHub SHA-256 asset digests, validates manifest repository/release/platform/asset URL/hash/size identity, resolves tag to full commit SHA, and passes exact release/SHA pair to `Engine.sh`.
+    - `Engine.sh` fetches exact tag ref, verifies tag commit and checked-out `HEAD` against bootstrap-provided SHA, then re-executes checked-out script. Stable sync has no latest-tag lookup and no fallback to `main`.
+    - Mutable branch/ref sync is development-only and requires explicit `--release-channel unstable`. Existing local `Engine.sh` execution performs no Git sync unless repo/release options request it.
     - Engine public API source lives in `Data/Engine/Containers/api-backend/cmd/api-backend/`. Python under `Data/Engine/Containers/site-worker/data/` belongs to site workers and pre-API schema bootstrap; API image does not ship it.
     - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
     - Engine WebUI dev/HMR runtime source lives in `Engine/Services/webui-frontend/data/web-interface/` after first Engine deploy.
@@ -302,7 +319,7 @@ After deployment finishes:
 
     ### Launch mechanics
 
-    - `Engine.sh` is the Linux Engine first-run and redeploy path. It starts by printing `Starting Borealis Engine Bootstrap`, then ensures the pinned Gum binary is available under `Dependencies/Gum/bin/gum` before the deployment dashboard starts. The Gum dashboard renders stable task rows with `Resource`, `Status`, `Task`, and `Sub-Task` columns. `Resource` names are Borealis blue, `Status` shows the coarse row state, `Task` shows the task progress bar plus `[completed/total] Task`, and `Sub-Task` shows the current muted detail. Intermediate checkpoint completions tick the task counter forward, so K3s bootstrap, storage, workloads, site workers, and Docker cleanup expose staged progress without jumping around the table or permanently expanding every checkpoint row. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
+    - `Engine.sh` is Linux Engine first-run and redeploy path after verified release bootstrap. It starts by printing `Starting Borealis Engine Bootstrap`, then ensures pinned Gum binary is available under `Dependencies/Gum/bin/gum` before deployment dashboard starts. Gum dashboard renders stable task rows with `Resource`, `Status`, `Task`, and `Sub-Task` columns. `Resource` names are Borealis blue, `Status` shows coarse row state, `Task` shows task progress bar plus `[completed/total] Task`, and `Sub-Task` shows current muted detail. Intermediate checkpoint completions tick task counter forward, so K3s bootstrap, storage, workloads, site workers, and Docker cleanup expose staged progress without jumping around table or permanently expanding every checkpoint row.
     - Every sudo-origin launch validates `SUDO_USER`, `SUDO_UID`, and `SUDO_GID` against local account records after optional Git checkout. It transfers ownership of checkout root, `.git`, and non-runtime source to that operator while pruning `Engine`, `Engine.old`, and `Agent`; root automation without validated sudo-origin identity does not change ownership.
     - Debian-family package commands use a 300-second `DPkg::Lock::Timeout`, allowing normal unattended package activity to finish without killing package-manager processes or requiring a manual retry.
     - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, builds Windows/Linux Agent binaries from `Data/Agent/build-agent.sh` into `Engine/Services/api-backend/cache/AgentUpdates`, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies PostgreSQL/API/scheduler/WireGuard/Traefik/WebUI/guacd K3s workloads, defaults to production, and keeps Docker Compose retired under project name `borealis-engine`.
