@@ -11984,6 +11984,9 @@ main() {
       exit 2
       ;;
   esac
+  # Deployment-time Git inspection may refresh index metadata while this script
+  # runs as root. Restore operator ownership after successful command dispatch.
+  reconcile_install_checkout_owner "${SCRIPT_DIR}"
 }
 
 if [[ "${BOREALIS_ENGINE_LIBRARY_MODE:-0}" != "1" ]]; then
