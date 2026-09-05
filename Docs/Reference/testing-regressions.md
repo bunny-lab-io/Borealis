@@ -69,6 +69,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-051 | Identity-bound planned member removal | `cluster_removal_fence_test.go`, `member_removal_test.go`, and `TestManagedEtcdRemovalWaitsForK3sConfirmation` | fixed | H01 review under #493 found NotReady/missing Node treated as fence proof, including retry storage shortcuts. Network partitions can produce those observations before any host fence. | Persist target/operation/Node UID/etcd identity before fixed host action; acknowledge only matching success under live controller lease. Require proof before membership mutation; reject partitions, stale operation replay, hostname reuse and changed member identity. Recover interrupted acknowledgement only from exact completed Job and prior intent. PostgreSQL test is required in H07 inventory. |
 
+| REG-TEST-053 | Immutable release and authoritative K3s identity | `cluster_release_identity_test.go`, `TestClusterReleaseIdentityPostgresQueueAndRetry`, `TestVerifyReleaseRefFetchesCommitBackedDevelopmentIdentity`, and `test_engine_redeploy_preserves_newer_installed_k3s` | fixed | H06 review found cluster update accepted mutable GitHub releases, fetched manifests through movable tags, and reused picker compatibility calculated from stale API K3s environment after upgrade. | Refresh immutable publication for queueing, resolve one SHA and fetch its manifest, retain verified identity across retry, reject source changes under database lock, and observe K3s before mutation. Preserve installed K3s during Engine redeploy and qualify the exact manifest baseline in Q01. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

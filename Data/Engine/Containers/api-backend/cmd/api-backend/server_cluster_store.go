@@ -521,6 +521,9 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		mutation.Payload["target_size"] = activeSize - int64(len(ids))
 	}
 	if mutation.Kind == "k3s_update" {
+		if configured := cleanText(parseClusterJSON(configJSON)["k3s_version"]); !clusterK3sRE.MatchString(configured) || configured != cleanText(mutation.Payload["source_k3s_version"]) {
+			return nil, fmt.Errorf("%w: source K3s version changed before operation was queued", errClusterConflict)
+		}
 		if clusterStatus != "Healthy" || (activeSize != 1 && activeSize != 3) {
 			return nil, fmt.Errorf("%w: K3s update requires healthy supported membership", errClusterConflict)
 		}
@@ -557,6 +560,12 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		}
 	}
 	if mutation.Kind == "engine_update" {
+		if err := validateClusterEngineUpdateIdentity(mutation.TargetRelease, mutation.TargetSHA, mutation.Payload); err != nil {
+			return nil, fmt.Errorf("%w: %v", errClusterConflict, err)
+		}
+		if cleanText(parseClusterJSON(configJSON)["k3s_version"]) != cleanText(mutation.Payload["source_k3s_version"]) {
+			return nil, fmt.Errorf("%w: source K3s version changed before operation was queued", errClusterConflict)
+		}
 		compatibility := clusterCompatibilityMap(mutation.Payload["compatibility"])
 		releaseChannel := firstText(cleanText(mutation.Payload["release_channel"]), clusterReleaseChannel(mutation.TargetRelease))
 		if releaseChannel != clusterReleaseChannel(mutation.TargetRelease) || !textInSet(releaseChannel, "stable", "qualification") {
@@ -729,6 +738,7 @@ func clusterCompatibilityMap(value any) map[string]any {
 	switch typed := value.(type) {
 	case clusterReleaseManifest:
 		return map[string]any{
+			"required_k3s_baseline":         typed.RequiredK3sBaseline,
 			"allowed_release_channels":      typed.AllowedReleaseChannels,
 			"database_migration":            typed.DatabaseMigration,
 			"maximum_version_skew_releases": typed.MaximumVersionSkewReleases,

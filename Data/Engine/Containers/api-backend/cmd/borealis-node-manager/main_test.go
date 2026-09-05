@@ -104,6 +104,24 @@ func TestVerifyReleaseRefFetchesCommitBackedDevelopmentIdentity(t *testing.T) {
 	if resolved := runGitCommand(checkout, "rev-parse", sha+"^{commit}"); resolved != sha {
 		t.Fatalf("development baseline resolved to %q want %q", resolved, sha)
 	}
+
+	// A release selected at this SHA may never execute a subsequently moved tag.
+	baseline := runGitCommand(checkout, "rev-parse", "HEAD")
+	for _, tag := range []string{"2026.09.2", "2026.09.2-rc.1"} {
+		runGitCommand(seed, "tag", tag, sha)
+		runGitCommand(seed, "push", "origin", "refs/tags/"+tag)
+		if err := m.verifyReleaseRef(context.Background(), tag, sha); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(seed, "tag", "--force", tag, baseline)
+		runGitCommand(seed, "push", "--force", "origin", "refs/tags/"+tag)
+		if err := m.verifyReleaseRef(context.Background(), tag, sha); err == nil {
+			t.Fatalf("moved release %s accepted", tag)
+		}
+		if head := runGitCommand(checkout, "rev-parse", "HEAD"); head != baseline {
+			t.Fatalf("rejected release changed checkout to %s", head)
+		}
+	}
 }
 
 func TestNodeActionPodsActiveWaitsForRunningOrUnknownWork(t *testing.T) {

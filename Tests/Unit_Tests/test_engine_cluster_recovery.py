@@ -29,6 +29,27 @@ class EngineClusterRecoveryTests(unittest.TestCase):
             check=False,
         )
 
+    def test_engine_redeploy_preserves_newer_installed_k3s(self):
+        result = self.run_engine_library(
+            r'''
+K3S_INSTALL_VERSION="v1.36.3+k3s1"
+k3s_cluster_installed() { return 0; }
+k3s() { printf 'k3s version v1.36.4+k3s1\n'; }
+log_status() { :; }
+run_privileged() { printf 'UNEXPECTED INSTALLER\n'; return 99; }
+if install_k3s_if_missing; then
+    exit 88
+else
+    result=$?
+    [[ "$result" -eq 1 ]] || exit "$result"
+fi
+k3s --version
+'''
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("v1.36.4+k3s1", result.stdout)
+        self.assertNotIn("UNEXPECTED INSTALLER", result.stdout)
+
     def test_longhorn_multipath_guard_fails_closed_for_genuine_map(self):
         result = self.run_engine_library(
             r'''
