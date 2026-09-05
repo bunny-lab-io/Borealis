@@ -684,36 +684,6 @@ func TestSafeRemovalMovesPostgresPrimaryToSurvivorBeforeScaleDown(t *testing.T) 
 	}
 }
 
-func TestSafeRemovalRetrySkipsNodeJobsAfterTargetFence(t *testing.T) {
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		requests++
-		if request.Method != http.MethodGet || !strings.HasSuffix(request.URL.Path, "/nodes/borealis-engine-02") {
-			t.Fatalf("fenced target received Kubernetes request %s %s", request.Method, request.URL.String())
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"conditions": []any{map[string]any{
-			"type": "Ready", "status": "Unknown",
-		}}}})
-	}))
-	defer server.Close()
-	runner := &kubernetesClusterStepRunner{
-		kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
-		namespace: "borealis",
-	}
-	nodeID := "22222222-2222-4222-8222-222222222222"
-	nodes := []clusterControllerNode{{ID: nodeID, Name: "borealis-engine-02", ApplicationState: "drained"}}
-	operation := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Kind: "node_remove", TargetNodeID: nodeID, Attempt: 2}
-	for _, action := range []string{"enter_drain", "prepare_member_removal"} {
-		step := clusterControllerStep{Name: "node:" + nodeID + ":" + action, NodeID: nodeID}
-		if err := runner.Run(context.Background(), operation, step, nodes); err != nil {
-			t.Fatalf("fenced retry action %s failed: %v", action, err)
-		}
-	}
-	if requests != 2 {
-		t.Fatalf("fenced retry Kubernetes requests=%d want 2 Ready checks", requests)
-	}
-}
-
 func TestWaitNodeNotReadyRetriesTransientKubernetesFailure(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -2082,7 +2052,7 @@ func TestManagedEtcdRemovalWaitsForK3sConfirmation(t *testing.T) {
 			if request.Method != http.MethodGet {
 				t.Fatalf("initial member request method=%s", request.Method)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"annotations": map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-2", "uid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "resourceVersion": "10", "annotations": map[string]any{
 				clusterK3sEtcdNodeNameAnnotation: "engine-2-id",
 			}}})
 		case 2:
@@ -2093,13 +2063,16 @@ func TestManagedEtcdRemovalWaitsForK3sConfirmation(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
 				t.Fatal(err)
 			}
+			if cleanText(nestedMap(patch, "metadata")["uid"]) != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || cleanText(nestedMap(patch, "metadata")["resourceVersion"]) != "10" {
+				t.Fatalf("removal patch lost identity preconditions: %#v", patch)
+			}
 			annotations, _ := nestedMap(patch, "metadata")["annotations"].(map[string]any)
 			if cleanText(annotations[clusterK3sEtcdRemoveAnnotation]) != "true" {
 				t.Fatalf("managed etcd removal annotation missing: %#v", patch)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"annotations": annotations}})
 		case 3:
-			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"annotations": map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": "engine-2", "uid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "resourceVersion": "10", "annotations": map[string]any{
 				clusterK3sEtcdRemovedNameAnnotation: "engine-2-id",
 			}}})
 		default:
@@ -2111,7 +2084,7 @@ func TestManagedEtcdRemovalWaitsForK3sConfirmation(t *testing.T) {
 		kube:            &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
 		jobPollInterval: time.Millisecond,
 	}
-	if err := runner.removeEtcdMembership(context.Background(), "engine-2"); err != nil {
+	if err := runner.removeEtcdMembership(context.Background(), "engine-2", clusterRemovalFence{NodeName: "engine-2", NodeUID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", EtcdMemberName: "engine-2-id", AcknowledgedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 3 {

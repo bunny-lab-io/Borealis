@@ -240,6 +240,7 @@ type kubernetesClusterStepRunner struct {
 	jobPollInterval               time.Duration
 	clusterInitAuthorizationGrace time.Duration
 	postgresReplicationProbe      func(context.Context, string, int64) (bool, error)
+	persistRemovalFence           func(context.Context, clusterControllerOperation, clusterRemovalFence) error
 }
 
 func clusterControllerMode() bool {
@@ -273,6 +274,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		soak:        envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
 	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
+	runner.persistRemovalFence = controller.persistRemovalFence
 	healthServer := controller.healthServer()
 	healthExited := make(chan error, 1)
 	go func() {
@@ -1717,6 +1719,17 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return errors.New("Kubernetes cluster runner is unavailable")
 	}
 	if step.Name == "preflight" {
+		if plannedClusterRemoval(operation) {
+			targets, err := clusterRemovalNodes(operation, nodes)
+			if err != nil {
+				return err
+			}
+			for _, target := range targets {
+				if _, _, err := r.removalFenceStatus(ctx, operation, target); err != nil {
+					return err
+				}
+			}
+		}
 		if operation.Kind == "engine_update" && (!validClusterBaselineRelease(operation.TargetRelease, operation.TargetSHA) || clusterDevelopmentReleaseRE.MatchString(operation.TargetRelease)) {
 			return errors.New("update release tag or pinned SHA is invalid")
 		}
@@ -2003,21 +2016,17 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			return errors.New("operation target is not an active node")
 		}
 		action := strings.TrimPrefix(step.Name, "node:"+step.NodeID+":")
-		if operation.Kind == "node_remove" && action == "transfer_roles" {
-			exists, err := r.kubernetesNodeExists(ctx, node.Name)
+		var removalFence clusterRemovalFence
+		if plannedClusterRemoval(operation) {
+			var err error
+			removalFence, _, err = r.removalFenceStatus(ctx, operation, node)
 			if err != nil {
 				return err
 			}
-			if !exists {
-				return nil
+			if textInSet(action, "remove_etcd_membership", "wait_member_fenced", "delete_member_node", "verify_member_removed") && removalFence.AcknowledgedAt == 0 {
+				return removalFenceRequired(node.Name)
 			}
-		}
-		if operation.Kind == "node_remove" && textInSet(action, "enter_drain", "prepare_member_removal") {
-			ready, err := r.nodeReady(ctx, node.Name)
-			if err != nil {
-				return err
-			}
-			if !ready {
+			if removalFence.AcknowledgedAt > 0 && textInSet(action, "transfer_roles", "enter_drain", "prepare_member_removal") {
 				return nil
 			}
 		}
@@ -2037,12 +2046,15 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			if err := r.recordClusterIntent(ctx, operation, step); err != nil {
 				return err
 			}
-			return r.nodeActionJob(ctx, operation, step, node, "PrepareMemberRemoval")
+			return r.prepareRemovalFence(ctx, operation, node)
 		case "remove_etcd_membership":
-			return r.removeEtcdMembership(ctx, node.Name)
+			return r.removeEtcdMembership(ctx, node.Name, removalFence)
 		case "wait_member_fenced":
 			return r.waitNodeNotReady(ctx, node.Name)
 		case "delete_member_node":
+			if plannedClusterRemoval(operation) {
+				return r.deleteNodeResourceWithFence(ctx, node.Name, &removalFence)
+			}
 			return r.deleteNodeResource(ctx, node.Name)
 		case "verify_member_removed":
 			return r.verifyMemberRemoved(ctx, operation, node.Name, nodes)
@@ -3466,6 +3478,16 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	jobName := clusterActionJobName(operation.ID, fmt.Sprintf("attempt:%d:%s", operation.Attempt, step.Name))
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, jobName)
 	args := clusterNodeActionArgs(operation, verb)
+	if verb == "PrepareMemberRemoval" {
+		fence, exists, err := removalFenceRecord(operation, node)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return removalFenceRequired(node.Name)
+		}
+		args = append(args, removalFenceArgs(fence)...)
+	}
 	manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, actionImage, args, operation.ID, step.Name)
 	var existing map[string]any
 	if err := r.kube.getJSON(ctx, path, &existing); err != nil {
@@ -4156,9 +4178,10 @@ func (r *kubernetesClusterStepRunner) waitNodeNotReady(ctx context.Context, node
 	}
 }
 
-func (r *kubernetesClusterStepRunner) removeEtcdMembership(ctx context.Context, nodeName string) error {
-	if !clusterControllerNodeRegex.MatchString(nodeName) {
-		return errors.New("invalid Kubernetes member node name")
+func (r *kubernetesClusterStepRunner) removeEtcdMembership(ctx context.Context, nodeName string, fence clusterRemovalFence) error {
+	if !clusterControllerNodeRegex.MatchString(nodeName) || fence.NodeName != nodeName || fence.AcknowledgedAt == 0 ||
+		!clusterUUIDRE.MatchString(fence.NodeUID) || !clusterEtcdMemberNameRE.MatchString(fence.EtcdMemberName) {
+		return removalFenceRequired(nodeName)
 	}
 	path := "/api/v1/nodes/" + nodeName
 	pollInterval := r.jobPollInterval
@@ -4167,7 +4190,6 @@ func (r *kubernetesClusterStepRunner) removeEtcdMembership(ctx context.Context, 
 	}
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	etcdName := ""
 	var lastErr error
 	for {
 		var observed map[string]any
@@ -4178,26 +4200,20 @@ func (r *kubernetesClusterStepRunner) removeEtcdMembership(ctx context.Context, 
 		if err != nil {
 			lastErr = err
 		} else {
+			if err := validateRemovalNodeIdentity(observed, fence); err != nil {
+				return err
+			}
 			observedAnnotations, _ := nestedMap(observed, "metadata")["annotations"].(map[string]any)
 			removedName := cleanText(observedAnnotations[clusterK3sEtcdRemovedNameAnnotation])
 			if removedName != "" {
-				if etcdName == "" || removedName == etcdName {
-					return nil
-				}
-				return errors.New("K3s confirmed removal for unexpected etcd member identity")
+				return nil
 			}
-			observedName := cleanText(observedAnnotations[clusterK3sEtcdNodeNameAnnotation])
-			if etcdName == "" {
-				if observedName == "" || len(observedName) > 128 {
-					lastErr = errors.New("K3s etcd member identity is unavailable")
-				} else {
-					etcdName = observedName
+			if cleanText(observedAnnotations[clusterK3sEtcdRemoveAnnotation]) != "true" {
+				resourceVersion := cleanText(nestedMap(observed, "metadata")["resourceVersion"])
+				if resourceVersion == "" {
+					return errors.New("Kubernetes member resource version is unavailable")
 				}
-			} else if observedName != "" && observedName != etcdName {
-				return errors.New("K3s etcd member identity changed during removal")
-			}
-			if etcdName != "" && cleanText(observedAnnotations[clusterK3sEtcdRemoveAnnotation]) != "true" {
-				patch := map[string]any{"metadata": map[string]any{"annotations": map[string]any{clusterK3sEtcdRemoveAnnotation: "true"}}}
+				patch := map[string]any{"metadata": map[string]any{"uid": fence.NodeUID, "resourceVersion": resourceVersion, "annotations": map[string]any{clusterK3sEtcdRemoveAnnotation: "true"}}}
 				var output map[string]any
 				if patchErr := r.kube.doJSON(ctx, http.MethodPatch, path, patch, "application/strategic-merge-patch+json", &output, 30*time.Second); patchErr != nil {
 					lastErr = patchErr
@@ -4223,19 +4239,18 @@ func (r *kubernetesClusterStepRunner) removalRetryHasFencedTarget(ctx context.Co
 	for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
 		targets[cleanText(rawID)] = true
 	}
+	fenced := false
 	for _, node := range nodes {
 		if !targets[node.ID] {
 			continue
 		}
-		ready, err := r.nodeReady(ctx, node.Name)
+		fence, _, err := r.removalFenceStatus(ctx, operation, node)
 		if err != nil {
 			return false, err
 		}
-		if !ready {
-			return true, nil
-		}
+		fenced = fenced || fence.AcknowledgedAt > 0
 	}
-	return false, nil
+	return fenced, nil
 }
 
 func clusterRemovalSurvivorNodes(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerNode, error) {
@@ -4256,6 +4271,10 @@ func clusterRemovalSurvivorNodes(operation clusterControllerOperation, nodes []c
 }
 
 func (r *kubernetesClusterStepRunner) deleteNodeResource(ctx context.Context, nodeName string) error {
+	return r.deleteNodeResourceWithFence(ctx, nodeName, nil)
+}
+
+func (r *kubernetesClusterStepRunner) deleteNodeResourceWithFence(ctx context.Context, nodeName string, fence *clusterRemovalFence) error {
 	if !clusterControllerNodeRegex.MatchString(nodeName) {
 		return errors.New("invalid Kubernetes member node name")
 	}
@@ -4271,7 +4290,18 @@ func (r *kubernetesClusterStepRunner) deleteNodeResource(ctx context.Context, no
 	if uid == "" || len(uid) > 128 {
 		return errors.New("Kubernetes member node UID is unavailable")
 	}
-	deleteOptions := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": map[string]any{"uid": uid}}
+	preconditions := map[string]any{"uid": uid}
+	if fence != nil {
+		if err := validateRemovalNodeIdentity(node, *fence); err != nil {
+			return err
+		}
+		version := cleanText(nestedMap(node, "metadata")["resourceVersion"])
+		if version == "" {
+			return errors.New("Kubernetes member resource version is unavailable")
+		}
+		preconditions["resourceVersion"] = version
+	}
+	deleteOptions := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Foreground", "preconditions": preconditions}
 	var output map[string]any
 	return r.kube.doJSON(ctx, http.MethodDelete, path, deleteOptions, "application/json", &output, 30*time.Second)
 }

@@ -311,6 +311,7 @@ finally:
     - `engine.cluster_nodes` stores membership/application state, management identity, Engine release, role/K3s-version state, drain reason, and probe health.
     - `engine.cluster_invitations` and `engine.cluster_admissions` store bounded one-use invite metadata and paired approvals.
     - `engine.cluster_operations` plus `engine.cluster_operation_events` store restart-safe Engine update, K3s update, HMR, membership, and maintenance state machines plus ordered events.
+    - Planned removal stores identity-bound fence intent and acknowledgement inside existing operation `payload_json.removal_fences`, without schema migration. Short transactions verify controller lease plus current active operation/attempt/step, retain prior target identity, preserve other payload fields, and append fence events. Kubernetes observation, node-manager execution and Job polling happen outside database connection scope. See [Managing Engine Clusters](../../Engine/managing-engine-clusters.md) for removal and recovery behavior.
     - `engine.cluster_audit_events` stores actor/action/result audit history.
     - `engine.realtime_outbox` stores cluster UI notifications pending publish.
     - `engine.cluster_application_leases` provides singleton controller, scheduler, HMR, update, membership, and maintenance ownership.

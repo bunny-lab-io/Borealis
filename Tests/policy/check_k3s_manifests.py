@@ -277,6 +277,9 @@ def validate_node_manager_service_contract() -> None:
         manager_source = (
             ROOT / "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/main.go"
         ).read_text(encoding="utf-8")
+        removal_source = (
+            ROOT / "Data/Engine/Containers/api-backend/cmd/borealis-node-manager/member_removal.go"
+        ).read_text(encoding="utf-8")
     except OSError as exc:
         fail(f"cannot read node-manager source: {exc}")
     for marker in (
@@ -290,7 +293,7 @@ def validate_node_manager_service_contract() -> None:
     ):
         if marker not in manager_source:
             fail(f"node-manager lost local etcd leadership report marker {marker!r}")
-    if manager_source.count("ensureMemberFenceDropInDirectory()") < 4:
+    if manager_source.count("ensureMemberFenceDropInDirectory()") < 3 or "ensureMemberFenceDropInDirectory()" not in removal_source:
         fail("node-manager must prepare its member-removal drop-in path during fencing, activation, and local installation")
     required_engine_cluster_markers = {
         "render_k3s_registries_config": "managed Spegel registry source configuration",
