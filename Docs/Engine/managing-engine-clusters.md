@@ -1,87 +1,124 @@
-# Managing Engine Clusters
-Borealis Engine clustering runs application workloads, K3s control-plane services, embedded etcd, and PostgreSQL across homogeneous Engine nodes. Current release supports one or three active Ubuntu nodes on same Layer 2 network, plus temporary two-of-three degraded membership while replacing externally fenced failed node. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work and is fenced from operator interfaces.
+---
 
-!!! danger "Qualification gate"
-    Cluster conversion remains disabled until exact installed stable K3s version passes Borealis guarded-probe conformance and disposable three-node qualification. Do not copy or fabricate conformance record, use release candidate, fork Kubernetes, or bypass gate. Current API and WebUI refuse expansion beyond three active nodes. Production conversion needs separate operator approval.
+tags:
+
+* Borealis
+* K3s
+* Clustering
+* Kubernetes
+
+---
+
+## Purpose
+
+This document describes how to manage Borealis Engine clustering across the supported cluster lifecycle, including initial enablement, ingress cutover, node admission and removal, maintenance, Cluster-Wide Node Isolation, Engine and K3s updates, and recovery.  Borealis clustering runs application workloads, K3s control-plane services, embedded etcd, and PostgreSQL across homogeneous Engine nodes.
+
+The current release supports one or three active Ubuntu nodes on the same Layer 2 network.  Temporary `2 active / 3 desired` membership is supported only as `Degraded Quorum` while replacing an externally fenced failed node.  Expansion or shrinking beyond three active nodes remains future roadmap work and is blocked by the current API, WebUI, and transactional store.
+
+!!! danger "Cluster Qualification Gate"
+Cluster conversion remains disabled until the exact installed stable K3s version passes Borealis guarded-probe conformance and disposable three-node qualification.  Do not copy or fabricate a conformance record, use a release candidate, fork Kubernetes, or bypass this gate.  Production conversion also requires separate operator approval.
 
 ## Requirements
 
-- Ubuntu 24.04 or newer on every node.
-- AMD64/Intel server architecture and same Borealis sizing profile. ARM nodes are not supported.
-- Static private IPv4 addresses on same Layer 2 network.
-- One unused private IPv4 address on same Layer 2 network for Cluster Virtual IP.
-- Explicit `BOREALIS_K3S_PEER_CIDRS` allowlist covering every current and planned cluster management address. Prefer one `/32` entry per Engine node.
-- Peer access on K3s/Spegel TCP ports `6443` and `5001`; Borealis firewall manages both from same allowlist.
-- Clean Git worktrees using configured repository origin and same pinned Borealis baseline. Initial development baseline commit must exist in configured origin before additional nodes join.
-- Working Longhorn iSCSI and NFSv4 client prerequisites plus enough capacity for one shared-artifact replica and node-local candidates on every Engine. Normal Engine deployment installs missing host packages.
-- `multipathd` disabled on dedicated Engine hosts. Normal Engine deployment disables it when no genuine multipath storage exists; hosts using genuine multipath storage must apply Longhorn device blacklist before deployment.
-- Supported odd active membership: one or three nodes. Five-plus expansion and shrinking from five-plus membership remain future roadmap work.
-- Content-addressed `rancher/k3s-upgrade` image in `BOREALIS_K3S_UPGRADE_IMAGE` before requesting K3s control-plane update.
+* Ubuntu 24.04 or newer on every node
+* AMD64/Intel server architecture using the same Borealis sizing profile; ARM nodes are not supported
+* Static private IPv4 addresses on the same Layer 2 network
+* One unused private IPv4 address on the same Layer 2 network for the Cluster Virtual IP
+* An explicit `BOREALIS_K3S_PEER_CIDRS` allowlist covering every current and planned cluster management address; prefer one `/32` entry per Engine node
+* Peer access to K3s and Spegel TCP ports `6443` and `5001`; the Borealis firewall manages both from the same allowlist
+* Clean Git worktrees using the configured repository origin and the same pinned Borealis baseline
+* The initial development baseline commit present in the configured origin before additional nodes join
+* Working Longhorn iSCSI and NFSv4 client prerequisites plus enough capacity for one shared-artifact replica and node-local candidates on every Engine
+* `multipathd` disabled on dedicated Engine hosts
 
-## Enable First Node
+  * Normal Engine deployment disables it when no genuine multipath storage exists
+  * Hosts using genuine multipath storage must apply the Longhorn device blacklist before deployment
+* Supported odd active membership of one or three nodes
+* A content-addressed `rancher/k3s-upgrade` image configured in `BOREALIS_K3S_UPGRADE_IMAGE` before requesting a K3s control-plane update
 
-Run probe conformance against installed stable K3s before requesting conversion:
+## Enable the First Cluster Node
+
+Run probe conformance against the installed stable K3s release before requesting cluster conversion.
+
+On the first Engine node, run:
 
 ```sh
 export BOREALIS_K3S_PEER_CIDRS=192.168.50.21/32,192.168.50.22/32,192.168.50.23/32
-sudo bash Data/Engine/K3s/cluster/run-probe-conformance.sh
-sudo --preserve-env=BOREALIS_K3S_PEER_CIDRS \
-  bash Engine.sh --network-mode <public-or-local> deploy prod
 
-# Supply current Engine API URL and recently issued Admin token.
+sudo bash Data/Engine/K3s/cluster/run-probe-conformance.sh
+
+sudo --preserve-env=BOREALIS_K3S_PEER_CIDRS \
+  bash Engine.sh --network-mode <NETWORK_MODE> deploy prod
+
+# Supply the current Engine API URL and a recently issued Admin token.
 export BOREALIS_CLUSTER_API_URL=https://engine.example.com
-export BOREALIS_CLUSTER_ADMIN_TOKEN=<recent-admin-access-token>
+export BOREALIS_CLUSTER_ADMIN_TOKEN=<RECENT_ADMIN_ACCESS_TOKEN>
+
 sudo --preserve-env=BOREALIS_CLUSTER_API_URL,BOREALIS_CLUSTER_ADMIN_TOKEN,BOREALIS_CLUSTER_CA_FILE \
   bash Engine.sh --cluster-enable \
   --cluster-vip 192.168.50.10
 ```
 
-Production redeploy after conformance publishes exact-version pass state to API workload. Cluster Management **Enable Cluster** asks only for **Cluster Virtual IP**. API derives current Kubernetes node name and host management IPv4 from Pod metadata and enforces AMD64 runtime; operator does not enter those values. CLI performs same authenticated operation through `--cluster-vip`.
+Use `public` or `local` for `<NETWORK_MODE>` according to the Engine deployment being converted.
 
-GitHub release is not required for initial cluster formation. Exact dotted-numeric tag at deployed commit becomes stable baseline. Clean untagged checkout becomes immutable `dev-<first-12-commit-characters>` baseline tied to full source SHA. Dirty checkout has no valid baseline and cluster enablement fails closed. Push development commit to configured origin before admitting other nodes so every host can fetch same object. Probe conformance remains required for both baseline types.
+Production redeploy after conformance publishes the exact-version pass state to the API workload.  In Cluster Management, "**Enable Cluster**" asks only for "**Cluster Virtual IP**".  The API derives the current Kubernetes node name and host management IPv4 from Pod metadata and enforces the AMD64 runtime, so the operator does not enter those values.  The CLI performs the same authenticated operation through `--cluster-vip`.
 
-Enablement creates cluster CRDs, controller RBAC, node manager, fixed VIP resources, per-node workloads, application availability policies, and CloudNativePG migration workflow. Existing standalone PostgreSQL remains authoritative until logical import validates and traffic cuts over. Cutover stops scheduler and operator assignments, gracefully drains site workers, then pauses remaining database clients before dump. Old PVC plus encrypted dump remain retained after old StatefulSet scales down.
+A GitHub release is not required for initial cluster formation.  An exact dotted-numeric tag at the deployed commit becomes the stable baseline.  A clean untagged checkout becomes an immutable `dev-<FIRST_12_COMMIT_CHARACTERS>` baseline tied to the full source SHA.  A dirty checkout has no valid baseline, and cluster enablement fails closed.
 
-If API restarts while CLI watches enablement, CLI reconnects for one minute without submitting second request. If connection stays unavailable, copy displayed operation ID and inspect Cluster Events before trying anything again. Accepted operation keeps running server-side.
+Before admitting additional nodes from a development baseline, push the development commit to the configured origin so every host can fetch the same object.  Probe conformance remains required for both stable and development baseline types.
 
-!!! warning "One-way database cutover"
-    Cluster enablement does not automatically move database traffic back into standalone StatefulSet. Restore from retained old PVC or encrypted dump is explicit recovery work.
+Enablement creates the cluster CRDs, controller RBAC, node manager, fixed Cluster Virtual IP resources, per-node workloads, application availability policies, and CloudNativePG migration workflow.  Existing standalone PostgreSQL remains authoritative until logical import validates and traffic cuts over.
 
-!!! warning "Split-VIP preview clusters"
-    In-place conversion from earlier preview clusters using separate control-plane and edge VIPs is not supported. Finish this release qualification from fresh standalone Engine nodes. Do not redeploy unified-VIP release over split-VIP cluster without separate migration plan and proxy/K3s certificate cutover.
+During database cutover, Borealis stops scheduler and operator assignments, gracefully drains site workers, and then pauses remaining database clients before the dump.  The old PVC and encrypted dump remain retained after the old StatefulSet scales down.
 
-## Cut Over Outer Reverse Proxy
+If the API restarts while the CLI watches enablement, the CLI reconnects for one minute without submitting a second request.  If the connection remains unavailable, copy the displayed operation ID and inspect "**Admin > Cluster Management > Cluster Events**" before attempting another action.  The accepted operation continues running server-side.
 
-Cluster conversion changes K3s API, public application ingress, and WireGuard ownership from standalone Engine node address to fixed Cluster Virtual IP. Any outer or nested proxy still pinned to standalone node address loses Borealis WebUI, API, WebSocket, remote-desktop, or Agent tunnel access when that node enters maintenance, updates, or fails. Healthy cluster does not make node-address upstream highly available.
+!!! warning "One-Way Database Cutover"
+Cluster enablement does not automatically move database traffic back into the standalone StatefulSet.  Restoring from the retained old PVC or encrypted dump is explicit recovery work.
 
-After Cluster Virtual IP becomes reachable, replace standalone node address with Cluster Virtual IP in every Borealis outer-proxy service:
+!!! warning "Split-VIP Preview Clusters"
+In-place conversion from earlier preview clusters that use separate control-plane and edge VIPs is not supported.  Complete release qualification from fresh standalone Engine nodes.  Do not redeploy the unified-VIP release over a split-VIP cluster without a separate migration plan and proxy/K3s certificate cutover.
 
-- HTTP router: `<cluster-vip>:80`, preserving Engine FQDN as `Host` header.
-- HTTPS TCP passthrough router: `<cluster-vip>:443`, preserving TLS SNI and any configured PROXY protocol version.
-- WireGuard UDP router: `<cluster-vip>:30000`.
+## Cut Over the Outer Reverse Proxy
 
-Keep WebSocket upgrades enabled. When outer proxy sends forwarded headers or PROXY protocol, include its source IP or CIDR in `BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS`. K3s API uses same Cluster Virtual IP on TCP `6443`; application and WireGuard proxy routes remain on ports `80`, `443`, and `30000`.
+Cluster conversion moves K3s API, public application ingress, and WireGuard ownership from the standalone Engine node address to the fixed Cluster Virtual IP.  Any outer or nested proxy that remains pinned to a standalone node address can lose Borealis WebUI, API, WebSocket, remote-desktop, or Agent tunnel access when that node enters maintenance, updates, or fails.  A healthy cluster does not make a node-address upstream highly available.
 
-!!! warning "Plan ingress cutover before conversion"
-    Pre-stage Cluster Virtual IP upstream as disabled backend when proxy supports it. Enable or switch backend immediately after cluster enablement advertises Cluster Virtual IP and before draining first Engine node. Missing this cutover causes operator-facing outage even while cluster remains healthy.
+!!! warning "Plan Ingress Cutover Before Conversion"
+Pre-stage the Cluster Virtual IP upstream as a disabled backend when the proxy supports it.  Enable or switch the backend immediately after cluster enablement advertises the Cluster Virtual IP and before draining the first Engine node.  Missing this cutover causes an operator-facing outage even while the cluster remains healthy.
 
-Verify from outer proxy host using actual Engine FQDN and Cluster Virtual IP:
+After the Cluster Virtual IP becomes reachable, replace the standalone node address in every Borealis outer-proxy service:
+
+* HTTP router: `<CLUSTER_VIP>:80`, preserving the Engine FQDN as the `Host` header
+* HTTPS TCP passthrough router: `<CLUSTER_VIP>:443`, preserving TLS SNI and any configured PROXY protocol version
+* WireGuard UDP router: `<CLUSTER_VIP>:30000`
+
+Keep WebSocket upgrades enabled.  When the outer proxy sends forwarded headers or PROXY protocol, include its source IP address or CIDR in `BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS`.
+
+The K3s API uses the same Cluster Virtual IP on TCP `6443`.  Application and WireGuard proxy routes remain on ports `80`, `443`, and `30000`.
+
+### Validate the Outer Proxy
+
+From the outer proxy host, test the actual Engine FQDN against the Cluster Virtual IP:
 
 ```sh
 curl --resolve engine.example.com:443:192.168.50.10 \
   https://engine.example.com/health
 ```
 
-Expected response is HTTP `200`. Then verify normal FQDN login, live updates, remote desktop, and fresh Agent WireGuard handshake through outer proxy. Port `80` remains HTTP/ACME and redirect entrypoint; HTTPS router must continue using TCP `443`.
+Confirm the request returns HTTP `200`.  Then verify normal FQDN login, live updates, remote desktop, and a fresh Agent WireGuard handshake through the outer proxy.
+
+Port `80` remains the HTTP/ACME and redirect entrypoint.  The HTTPS router must continue using TCP `443`.
 
 ## Add or Replace Nodes
 
-Create invitation in Cluster Management, copy K3s server token to root-only file on each new host through trusted management channel, then run node-manager join command. Include same private peer allowlist used on first node:
+Create an invitation in "**Admin > Cluster Management**", then copy the K3s server token to a root-only file on each new host through a trusted management channel.
+
+On each joining host, run the node-manager join command using the same private peer allowlist configured on the first node:
 
 ```sh
 sudo borealis-node-manager join \
   --endpoint https://engine.example.com \
-  --invite-bundle '<one-use-invitation>' \
+  --invite-bundle '<ONE_USE_INVITATION>' \
   --node-name engine-02 \
   --management-ip 192.168.50.22 \
   --peer-cidrs 192.168.50.21/32,192.168.50.22/32,192.168.50.23/32 \
@@ -89,219 +126,691 @@ sudo borealis-node-manager join \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-Node manager first prepares firewall, iSCSI, NFSv4, and K3s host prerequisites through fixed Engine workflow. It does not expose arbitrary shell execution. Invitation join then creates `Pending Quorum` admission and waits for Admin approval. Normal `1 -> 3` expansion requires complete pair. After externally fenced emergency removal leaves `2 active / 3 desired`, replacement requires one invitation and one approval. Approved members remain application-drained and role-ineligible. Probe conformance runs while pinned to each joining node. Borealis then expands CloudNativePG, deploys isolated pinned candidates, probes and soaks them, promotes them into active workloads, enables normal HA role eligibility, verifies active workload and WireGuard health through another soak, clears application drain, and records restored three-node membership.
+The node manager first prepares the firewall, iSCSI, NFSv4, and K3s host prerequisites through the fixed Engine workflow.  It does not expose arbitrary shell execution.
 
-!!! info "Current membership limit"
-    Three active nodes is current release maximum. Cluster Management disables invitation, admission approval, and pair-expansion controls after three nodes become active. Single-invitation replacement becomes available only in recorded `2 active / 3 desired` `Degraded Quorum` state. Public API and transactional store enforce same limit and replacement state, including stale invitation and pending-admission races. Odd-numbered expansion or shrinking beyond three nodes needs separate future implementation, qualification, issue, and pull request.
+Invitation join creates a `Pending Quorum` admission and waits for Admin approval.  AMD64 architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work begins.
 
-Temporary even K3s membership during pair admission does not disable healthy existing nodes. AMD64 architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work.
+### Expand from One Node to Three
 
-Safe downscale supports `3 -> 1` in current release. Select both targets from Nodes view and type `REMOVE NODE PAIR`. Controller snapshots state, moves synchronized PostgreSQL primary onto surviving member, waits for healthy replication, then scales CloudNativePG. Failure to prepare survivor stops operation before database membership changes. Controller also refuses fencing unless PostgreSQL vacated both targets. Each target then drains, writes persistent removal-fence marker, disables future K3s service restarts while leaving current process active, asks K3s to transfer leadership and remove embedded-etcd membership, waits for durable removal confirmation and local K3s exit, then deletes Kubernetes Node resource. Remaining servers must stay `Ready=True` and `EtcdIsVoter=True` through soak before next target starts. Shared Agent artifact storage must retain healthy replica on survivor throughout retry and removal; controller reduces Longhorn replica target to one only after both removed nodes are fenced and deleted.
+Normal `1 -> 3` expansion requires a complete pair of joining nodes.  Temporary even K3s membership during pair admission does not disable healthy existing nodes.
 
-Emergency removal is single-node recovery for host already unreachable. Power target off through external management first, then type both `TARGET IS POWERED OFF` and `EMERGENCY REMOVE NODE`. Borealis never contacts target in this path. It deletes Node resource, verifies surviving etcd voters, scales PostgreSQL to two instances with one synchronous acknowledgement, and records `2 active / 3 desired` `Degraded Quorum`. Create one new invitation and approve its replacement admission to restore supported three-node membership. Normal cluster-changing operations stay blocked during replacement recovery.
+After approval, members remain application-drained and role-ineligible while Borealis:
 
-!!! danger "Never fake emergency fencing"
-    Deleting live K3s server membership can let removed host retain or rebuild conflicting local control-plane state. Emergency confirmation asserts host cannot run or rejoin. Safe path uses node-manager persistent fence instead.
+* Runs probe conformance pinned to each joining node
+* Expands CloudNativePG
+* Deploys isolated pinned candidates
+* Probes and soaks the candidates
+* Promotes them into active workloads
+* Enables normal HA role eligibility
+* Verifies active workload and WireGuard health through another soak
+* Clears application drain
+* Records restored three-node membership
+
+!!! info "Current Membership Limit"
+Three active nodes is the current release maximum.  Cluster Management disables invitation, admission approval, and pair-expansion controls after three nodes become active.  The public API and transactional store enforce the same limit, including stale invitation and pending-admission races.
+
+### Replace an Externally Fenced Failed Node
+
+After emergency removal records `2 active / 3 desired` `Degraded Quorum`, create one invitation and approve one replacement admission.  Single-invitation replacement is available only in this recorded recovery state.
+
+Normal cluster-changing operations remain blocked until supported three-node membership is restored.
+
+### Remove Two Nodes Safely
+
+Safe downscale supports `3 -> 1` in the current release.
+
+In the Nodes view, select both removal targets and type `REMOVE NODE PAIR`.
+
+The controller first snapshots state, moves the synchronized PostgreSQL primary onto the surviving member, waits for healthy replication, and then scales CloudNativePG.  Failure to prepare the survivor stops the operation before database membership changes.
+
+The controller also refuses fencing unless PostgreSQL has vacated both targets.  Each target is then processed in sequence:
+
+* Drain the target
+* Write the persistent removal-fence marker
+* Disable future K3s service restarts while leaving the current process active
+* Ask K3s to transfer leadership and remove embedded-etcd membership
+* Wait for durable removal confirmation and local K3s exit
+* Delete the Kubernetes Node resource
+
+Remaining servers must stay `Ready=True` and `EtcdIsVoter=True` through the required soak before the next target starts.
+
+Shared Agent artifact storage must retain a healthy replica on the surviving Engine throughout retry and removal.  The controller reduces the Longhorn replica target to one only after both removed nodes are fenced and deleted.
+
+### Emergency Remove a Failed Node
+
+Emergency removal is a single-node recovery path for a host that is already unreachable.
+
+!!! danger "Externally Fence the Target First"
+Power the target off through external management before using emergency removal.  Borealis never contacts the target in this path.  The confirmation asserts that the host cannot run or rejoin.
+
+In Cluster Management, confirm both required phrases:
+
+* `TARGET IS POWERED OFF`
+* `EMERGENCY REMOVE NODE`
+
+Borealis deletes the Node resource, verifies surviving etcd voters, scales PostgreSQL to two instances with one synchronous acknowledgement, and records `2 active / 3 desired` `Degraded Quorum`.
+
+Create one new invitation and approve its replacement admission to restore supported three-node membership.  Normal cluster-changing operations remain blocked during replacement recovery.
+
+!!! danger "Never Fake Emergency Fencing"
+Deleting live K3s server membership can allow the removed host to retain or rebuild conflicting local control-plane state.  The safe removal path uses the node-manager persistent fence instead.
 
 ## Read Cluster State
 
-Open **Admin > Cluster Management**. Views show:
+Navigate to "**Admin > Cluster Management**".
 
-- Overview: quorum, active release, HMR state, operation lease.
-- Nodes: paginated node table with combined membership/application status, management IP, plain-text database state, active role ownership, passed/total probe summary, and row action menu.
-- Database: primary/replicas, synchronous durability, switchovers, snapshots.
-- Cluster Events: paginated operation history with affected node hostnames, status, friendly operation names, concise lifecycle details, local timestamp, and cancellation for queued or waiting work.
-- Maintenance: stable Engine releases, K3s updates, paired admission/removal, maintenance drain, and emergency actions.
+The interface provides the following views:
 
-Global cluster-state banners include a close control on the far right. Active isolation banner names isolated node carrying all Borealis application traffic. Dismissing one keeps that exact banner hidden while current browser shell polls unchanged state; changed operation step, cluster condition, or isolated node appears as new banner.
+* **Overview**
 
-One exclusive cluster operation may mutate placement, membership, HMR, or releases at time. Controller state survives controller restart through PostgreSQL operation records and Kubernetes desired/runtime objects.
+  * Quorum
+  * Active release
+  * HMR state
+  * Operation lease
+* **Nodes**
 
-Role owners and PostgreSQL primary display operator-facing node names while APIs retain immutable node IDs. Nodes table combines membership and application state as labels such as `Active / Active`, `Active / Drained`, or `Active / Cordoned`. Its Database column shows blue linked `Active` text for PostgreSQL primary; link opens Database view. Active replicas show `Replica Healthy` when all configured CloudNativePG instances are Ready; incomplete or unknown replica readiness shows `Not Ready`. Its Actions menu groups maintenance, update, safe pair removal, and emergency removal by normal and danger intent. Database view reports configured and Ready CloudNativePG instances separately. `Degraded Database` blocks normal cluster-changing operations until all configured instances return Ready; emergency PostgreSQL failover, externally fenced emergency removal, maintenance exit, and HMR exit remain available for recovery. Required synchronous durability may remain available while redundancy is reduced.
+  * Paginated node table
+  * Combined membership and application status
+  * Management IP
+  * Plain-text database state
+  * Active role ownership
+  * Passed/total probe summary
+  * Row action menu
+* **Database**
 
-Cluster Events keeps failed records for audit and translates internal kinds into operator-facing names such as `Maintenance Mode Enabled`, `Cluster-Wide Node Isolation Disabled`, and `Node Pair Removed`. Each row identifies affected node hostnames, summarizes latest lifecycle message or failure, and provides a copy control for full troubleshooting text containing operation metadata, raw step names, error context, redacted payload, and linked lifecycle events. Cluster-wide work is labeled `Cluster-wide`; credentials and invitation secrets are redacted from copied structured data. Older cluster-enable or membership failure becomes `Superseded` after newer same-kind operation succeeds and cannot be retried. Failed records remain diagnostic-only in Cluster Events and do not expose inline retry; queued or waiting records expose cancellation. Maintenance explains empty catalog when no published stable cluster-compatible release exists at or above pinned baseline.
+  * Primary and replica state
+  * Synchronous durability
+  * Switchovers
+  * Snapshots
+* **Cluster Events**
 
-Node drain and restore boundaries update durable node state with Kubernetes action progress. Failed rolling update therefore keeps affected node visibly drained with operation reason until retry or explicit maintenance recovery proves health and reactivates it.
+  * Paginated operation history
+  * Affected node hostnames
+  * Status
+  * Friendly operation names
+  * Concise lifecycle details
+  * Local timestamp
+  * Cancellation for queued or waiting work
+* **Maintenance**
 
-Maintenance admits one drained application node at time. Restore existing drained node before draining another. Before maintenance drain starts, controller moves PostgreSQL, scheduler, Cluster Virtual IP, and WireGuard ownership away from target and verifies Cluster Virtual IP lease names eligible non-target node. Drained node remains ineligible for Cluster Virtual IP until verified maintenance exit restores role eligibility. Embedded-etcd voter membership stays active; application maintenance is not cluster membership removal. Durable application-capacity gate blocks updates, HMR start, membership changes, normal PostgreSQL switchovers, and additional maintenance while any active member remains drained. Successful maintenance recovery clears failed-operation degradation only after every recorded active application node is active and supported membership plus observed PostgreSQL health remain intact. During Cluster-Wide Node Isolation, selecting **Exit Maintenance Mode** on drained standby warns that isolation will end, requires `EXIT HMR`, and submits controller-owned isolation exit instead of independent node restore.
+  * Stable Engine releases
+  * K3s updates
+  * Paired admission and removal
+  * Maintenance drain
+  * Emergency actions
+
+Global cluster-state banners include a close control on the far right.  The active isolation banner names the isolated node carrying all Borealis application traffic.  Dismissing a banner keeps that exact state hidden only while the current browser shell continues polling unchanged state.  A changed operation step, cluster condition, or isolated node appears as a new banner.
+
+Only one exclusive cluster operation may mutate placement, membership, HMR, or releases at a time.  Controller state survives controller restart through PostgreSQL operation records and Kubernetes desired/runtime objects.
+
+### Interpret Node and Database State
+
+Role owners and the PostgreSQL primary display operator-facing node names while APIs retain immutable node IDs.
+
+The Nodes table combines membership and application state into labels such as:
+
+* `Active / Active`
+* `Active / Drained`
+* `Active / Cordoned`
+
+The Database column displays linked `Active` text for the PostgreSQL primary.  The link opens the Database view.
+
+Active replicas display `Replica Healthy` only when all configured CloudNativePG instances are Ready.  Incomplete or unknown replica readiness displays `Not Ready`.
+
+The Database view reports configured and Ready CloudNativePG instances separately.
+
+`Degraded Database` blocks normal cluster-changing operations until all configured instances return Ready.  Emergency PostgreSQL failover, externally fenced emergency removal, maintenance exit, and HMR exit remain available for recovery.  Required synchronous durability can remain available while redundancy is reduced.
+
+### Use Cluster Events
+
+Cluster Events preserves failed records for audit and translates internal operation kinds into operator-facing names such as `Maintenance Mode Enabled`, `Cluster-Wide Node Isolation Disabled`, and `Node Pair Removed`.
+
+Each row identifies affected node hostnames, summarizes the latest lifecycle message or failure, and provides a copy control for full troubleshooting text containing operation metadata, raw step names, error context, redacted payload, and linked lifecycle events.
+
+Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
+
+An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried.  Failed records remain diagnostic-only and do not expose inline retry.  Queued or waiting records expose cancellation.
+
+Maintenance explains an empty release catalog when no published stable cluster-compatible release exists at or above the pinned baseline.
+
+## Manage Maintenance and Drain State
+
+Node drain and restore boundaries update durable node state together with Kubernetes action progress.  A failed rolling update therefore leaves the affected node visibly drained with the operation reason until retry or explicit maintenance recovery proves health and reactivates it.
+
+Maintenance admits one drained application node at a time.  Restore the existing drained node before draining another.
+
+Before maintenance drain starts, the controller moves PostgreSQL, scheduler, Cluster Virtual IP, and WireGuard ownership away from the target and verifies that the Cluster Virtual IP lease names an eligible non-target node.  The drained node remains ineligible for Cluster Virtual IP ownership until verified maintenance exit restores role eligibility.
+
+Embedded-etcd voter membership remains active during application maintenance.  Maintenance drain is not cluster membership removal.
+
+The durable application-capacity gate blocks updates, HMR start, membership changes, normal PostgreSQL switchovers, and additional maintenance while any active member remains drained.
+
+Successful maintenance recovery clears failed-operation degradation only after every recorded active application node is active and supported membership plus observed PostgreSQL health remain intact.
+
+During Cluster-Wide Node Isolation, selecting "**Exit Maintenance Mode**" on the drained standby warns that isolation will end, requires `EXIT HMR`, and submits controller-owned isolation exit instead of an independent node restore.
 
 ## Probe and Shutdown Contract
 
-Borealis follows three distinct probe contracts:
+Borealis uses three distinct probe contracts:
 
-- Startup proves initialization completed. Slow initialization belongs here.
-- Readiness proves workload can serve current role. API and scheduler readiness includes required PostgreSQL access. WireGuard owner readiness requires interface and usable tunnel state; standby readiness requires controller socket healthy and shared interface withdrawn. Route DaemonSet separately proves owner routes use tunnel while standby routes use Cluster Virtual IP.
-- Liveness detects local recoverable process failure only. Scheduler liveness never depends on PostgreSQL.
+* **Startup** proves initialization completed; slow initialization belongs here
+* **Readiness** proves the workload can serve its current role
 
-Current stable K3s can incorrectly run liveness before startup after liveness restarts a container. Borealis makes that early execution harmless: every container using both probes delays liveness longer than startup probe's complete failure budget. Startup remains responsible for failed initialization, readiness keeps traffic away, and liveness begins only after startup either succeeds or performs its own restart. Exact-version qualification proves this delay resets across ten consecutive liveness-triggered replacements on every node. This is Borealis compatibility protection, not claim that upstream bug is fixed.
+  * API and scheduler readiness include required PostgreSQL access
+  * WireGuard owner readiness requires the interface and usable tunnel state
+  * WireGuard standby readiness requires the controller socket to be healthy and the shared interface withdrawn
+  * The Route DaemonSet separately proves owner routes use the tunnel while standby routes use the Cluster Virtual IP
+* **Liveness** detects local recoverable process failure only
 
-Drain sequence stops assignments, withdraws readiness, waits for node EndpointSlices to converge, forwards termination signals, and bounds in-flight drain inside `terminationGracePeriodSeconds`. Workloads use `preStop`, `minReadySeconds`, topology constraints, and disruption budgets. `preStop` readiness marker exists only during bounded shutdown hold and gets removed before hook returns; container restart inside existing Pod cannot inherit stale drain state from pod-local temporary storage. Maintenance and HMR drain remain durable through cluster controller and node-label state.
+  * Scheduler liveness never depends on PostgreSQL
 
-Returning from maintenance uses reverse safety order. Borealis starts node workloads while node remains application-drained, waits for ready endpoints and minimum-ready soak, restores role eligibility, verifies WireGuard and role-aware health through another soak, then clears drain. Failed restore leaves node drained instead of sending work to partial service.
+Current stable K3s can incorrectly run liveness before startup after liveness restarts a container.  Borealis makes that early execution harmless by delaying liveness longer than the startup probe's complete failure budget for every container that uses both probes.
 
-[ngrok probe guidance](https://ngrok.com/blog/probes) is sound: readiness must describe traffic eligibility while liveness should remain narrow. One caveat matters: Kubernetes starts endpoint removal and pod termination concurrently; Service withdrawal is not guaranteed to finish before `SIGTERM`. Borealis therefore combines readiness withdrawal, EndpointSlice verification, `preStop`, signal handling, and connection draining. See [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) and [pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
+Startup remains responsible for failed initialization, readiness keeps traffic away, and liveness begins only after startup either succeeds or performs its own restart.  Exact-version qualification proves this delay resets across ten consecutive liveness-triggered replacements on every node.  This is Borealis compatibility protection, not a claim that the upstream bug is fixed.
 
-## Cluster-Wide Node Isolation
+### Drain Workloads
 
-Cluster-Wide Node Isolation is development mode built on Borealis HMR controller. Starting `deploy dev` or `webui-frontend rebuild dev` on clustered Engine requires Admin access and typed `ENABLE HMR`. Confirmation phrase and API names retain `HMR` for compatibility. Non-interactive CLI also requires `--acknowledge-cluster-non-ha`.
+The drain sequence:
 
-> This drains all Borealis application roles from every cluster node except specified node. Use isolation for backend and frontend development. Disable Cluster-Wide Node Isolation to restore application HA and failover.
+* Stops assignments
+* Withdraws readiness
+* Waits for node EndpointSlices to converge
+* Forwards termination signals
+* Bounds in-flight drain inside `terminationGracePeriodSeconds`
 
-Controller first checks quorum, capacity, target production health, and exclusive-operation state. It moves Cluster Virtual IP/WireGuard ownership, scheduler leadership, site workers, application endpoints, and caught-up PostgreSQL primary to selected isolated node. Standby nodes become ineligible for Cluster Virtual IP lease while keeping K3s, etcd, Longhorn, and PostgreSQL replicas running; application scheduling is drained without cordoning infrastructure.
+Workloads use `preStop`, `minReadySeconds`, topology constraints, and disruption budgets.  The `preStop` readiness marker exists only during the bounded shutdown hold and is removed before the hook returns, so a container restart inside the existing Pod cannot inherit stale drain state from pod-local temporary storage.
 
-Cluster banner names isolated node and remains visible on every page until dismissed or isolation is disabled. Maintenance selector stays locked to current isolated node while isolation state is not fully inactive. Updates, membership, and normal maintenance remain blocked during isolation.
+Maintenance and HMR drain remain durable through cluster-controller and node-label state.
 
-Disabling isolation restores saved pinned cluster baseline, not local working tree. Local edits remain available for later commit/release. Controller first returns standby nodes one at time; each stays drained until workload and role-aware health complete two minimum-ready soaks. It then moves roles away from isolated node, drains its development workloads, builds saved baseline revision as isolated candidate, probes and soaks candidate, promotes it, and repeats active plus role-aware health checks before clearing final drain. This ordering keeps production available while isolated node changes back. One-node cluster uses same candidate gates with expected maintenance interruption. Lost isolated node gets fenced before pinned baseline workloads recover on standby members through same sequence.
+### Restore Workloads
 
-Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hmr-preview) for manual clustered preview workflow, secure CLI authentication, durable-source mirroring, validation, production restore, and stable-release handoff. Isolation never distributes mutable source to standby nodes; only Cluster Management stable-release update moves accepted immutable revision across all nodes.
+Returning from maintenance uses the reverse safety order.
 
-## Cluster-Aware Updates
+Borealis starts node workloads while the node remains application-drained, waits for ready endpoints and the minimum-ready soak, restores role eligibility, verifies WireGuard and role-aware health through another soak, and only then clears drain.
 
-Use Maintenance instead of `git pull` on clustered Engines. Cluster Management exposes separate stable and qualification selectors backed by configured Borealis GitHub repository. Cluster does not generate versions.
+A failed restore leaves the node drained instead of sending work to a partially restored service.
 
-Stable releases use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` and must be normal GitHub releases. Qualification releases append `-rc.N`, such as `2026.09.2-rc.1`, and must have GitHub prerelease status. `N` starts at `1` and increases for each candidate for same intended stable version. Branch names, draft releases, malformed tags, and tag/GitHub-channel mismatches never become targets.
+[ngrok probe guidance](https://ngrok.com/blog/probes) correctly treats readiness as traffic eligibility and liveness as a narrow local-health check.  Kubernetes starts endpoint removal and Pod termination concurrently, however, so Service withdrawal is not guaranteed to finish before `SIGTERM`.  Borealis therefore combines readiness withdrawal, EndpointSlice verification, `preStop`, signal handling, and connection draining.
 
-Maintainers create immutable qualification and stable releases through [Publishing Engine Releases](publishing-engine-releases.md). Operators select approved result here; cluster never creates, retags, or repairs release.
+See [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) and [Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) for the upstream behavior.
 
-Each selector hides versions older than pinned baseline. Same-version and newer entries remain visible; incompatible entries remain disabled with reason. Stable release ranks after all `-rc.N` candidates sharing its dotted base, allowing tested qualification commit to become stable without downgrade. Borealis rolling support policy covers only latest stable release or hotfix. Qualification clusters remain visibly unsupported until promoted forward to stable.
+## Use Cluster-Wide Node Isolation
 
-Commit-backed `dev-*` baseline has no calendar version. API therefore shows only stable or qualification targets whose tagged commits contain pinned development commit and satisfy compatibility checks. `dev-*` affects initial formation, membership, and HMR restoration; it never makes mutable branch heads selectable.
+Cluster-Wide Node Isolation is the development mode built on the Borealis HMR controller.
 
-Selected tag resolves once to immutable commit SHA. API verifies target is same commit or fast-forward descendant of current pinned SHA. Node manager independently verifies exact tag-to-SHA resolution, clean checkout, configured origin, and fast-forward ancestry before staging. Downgrades and unrelated histories fail closed.
+Starting `deploy dev` or `webui-frontend rebuild dev` on a clustered Engine requires Admin access and the typed confirmation `ENABLE HMR`.  The confirmation phrase and API names retain `HMR` for compatibility.  Non-interactive CLI use also requires `--acknowledge-cluster-non-ha`.
 
-Every cluster-capable release must include `Data/Engine/release-manifest.json`. `allowed_release_channels` must explicitly contain `stable`, `qualification`, or both. Manifest also declares minimum rolling source, mixed-version window, schema phase, K3s baseline, and required probe conformance.
+!!! warning "Cluster-Wide Node Isolation Disables Application HA"
+Isolation drains all Borealis application roles from every cluster node except the selected node.  Use it for backend and frontend development.  Disable Cluster-Wide Node Isolation to restore application HA and failover.
 
-Deploying qualification release requires whole-cluster action and exact `DEPLOY QUALIFICATION` acknowledgement. Borealis records last stable baseline and displays unsupported warning globally plus in Cluster Management. Expand-schema phase may run for qualification candidate; contract/finalize phase waits for stable promotion. Promotion from qualification also requires whole-cluster stable action so every node moves from RC tag to stable tag even when both resolve same commit. Stable promotion manifest must retain `expand-contract` while schema finalization remains pending. Automatic rollback and destructive schema rollback are not supported. Recover failed operation, then promote or roll forward.
+The controller first checks quorum, capacity, target production health, and exclusive-operation state.  It then moves Cluster Virtual IP and WireGuard ownership, scheduler leadership, site workers, application endpoints, and a caught-up PostgreSQL primary to the selected isolated node.
 
-### Source And Image Distribution
+Standby nodes become ineligible for the Cluster Virtual IP lease while K3s, etcd, Longhorn, and PostgreSQL replicas continue running.  Application scheduling is drained without cordoning infrastructure.
 
-No supported local-only source replication exists between Engine nodes. Update controller requires every target node to fetch selected published tag from configured Git origin, verify tag resolves to recorded SHA, and fast-forward clean checkout before local image staging. Dirty, diverged, or manually copied worktree fails closed. Untagged clean checkout is allowed only as commit-backed development baseline; it cannot be selected as rolling-update target.
+The cluster banner names the isolated node and remains visible on every page until dismissed or isolation is disabled.  The Maintenance selector remains locked to the current isolated node while isolation is not fully inactive.  Updates, membership operations, and normal maintenance remain blocked during isolation.
 
-K3s Spegel remains active for peer-to-peer container image content. It can serve imported image layers between cluster nodes after Borealis pins them in containerd, but it does not copy Git checkout, create release metadata, validate compatibility manifest, or authorize local branch as cluster release. Internal `FetchRelease`, `StageRevisionImages`, and `--cluster-stage-revision` contracts belong to controller and node manager; operators must not call them as substitute distribution path.
+### Disable Isolation
 
-Offline or non-GitHub cluster release would require separate signed release-bundle feature carrying source revision, manifest, image identity, and controller audit data. Current paths remain published stable GitHub release through **Update Node** or **Update All One at a Time**, or approved GitHub prerelease through **Deploy Qualification One Node at a Time**.
+Disabling isolation restores the saved pinned cluster baseline, not the local working tree.  Local edits remain available for a later commit or release.
 
-`Update Node` and `Update All` use same node workflow:
+The controller restores standby nodes one at a time.  Each node remains drained until workload and role-aware health complete two minimum-ready soaks.
 
-1. Acquire exclusive operation lease and create pre-change snapshot.
-2. Move PostgreSQL, edge/WireGuard, and scheduler leadership away when needed.
+The controller then moves roles away from the isolated node, drains its development workloads, builds the saved baseline revision as an isolated candidate, probes and soaks that candidate, promotes it, and repeats active plus role-aware health checks before clearing the final drain.
+
+This ordering keeps production available while the isolated node returns to the pinned baseline.  A one-node cluster uses the same candidate gates with the expected maintenance interruption.
+
+If the isolated node is lost, Borealis fences it before recovering pinned-baseline workloads on standby members through the same sequence.
+
+Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hmr-preview) for the manual clustered preview workflow, secure CLI authentication, durable-source mirroring, validation, production restore, and stable-release handoff.
+
+Isolation never distributes mutable source to standby nodes.  Only a Cluster Management stable-release update moves an accepted immutable revision across all nodes.
+
+## Perform Cluster-Aware Engine Updates
+
+Use Maintenance instead of `git pull` on clustered Engines.  Cluster Management exposes separate stable and qualification selectors backed by the configured Borealis GitHub repository.  The cluster does not generate versions.
+
+### Release Channels
+
+Stable releases use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` and must be normal GitHub releases.
+
+Qualification releases append `-rc.N`, such as `2026.09.2-rc.1`, and must have GitHub prerelease status.  `N` begins at `1` and increases for each candidate of the same intended stable version.
+
+Branch names, draft releases, malformed tags, and tag/GitHub-channel mismatches never become selectable targets.
+
+Maintainers create immutable qualification and stable releases through [Publishing Engine Releases](publishing-engine-releases.md).  Operators select the approved result here; the cluster never creates, retags, or repairs a release.
+
+Each selector hides versions older than the pinned baseline.  Same-version and newer entries remain visible, while incompatible entries remain disabled with a reason.
+
+A stable release ranks after all `-rc.N` candidates that share its dotted base, which allows a tested qualification commit to become stable without being treated as a downgrade.
+
+Borealis rolling support policy covers only the latest stable release or hotfix.  Qualification clusters remain visibly unsupported until promoted forward to stable.
+
+A commit-backed `dev-*` baseline has no calendar version.  The API therefore shows only stable or qualification targets whose tagged commits contain the pinned development commit and satisfy compatibility checks.  The `dev-*` identity affects initial formation, membership, and HMR restoration; it never makes mutable branch heads selectable.
+
+The selected tag resolves once to an immutable commit SHA.  The API verifies that the target is the same commit or a fast-forward descendant of the current pinned SHA.  The node manager independently verifies exact tag-to-SHA resolution, clean checkout, configured origin, and fast-forward ancestry before staging.
+
+Downgrades and unrelated histories fail closed.
+
+Every cluster-capable release must include `Data/Engine/release-manifest.json`.  `allowed_release_channels` must explicitly contain `stable`, `qualification`, or both.  The manifest also declares the minimum rolling source, mixed-version window, schema phase, K3s baseline, and required probe conformance.
+
+### Deploy a Qualification Release
+
+Deploying a qualification release requires a whole-cluster action and the exact acknowledgement `DEPLOY QUALIFICATION`.
+
+Borealis records the last stable baseline and displays an unsupported warning globally and in Cluster Management.
+
+The expand-schema phase may run for a qualification candidate.  The contract/finalize phase waits for stable promotion.
+
+Promotion from qualification also requires a whole-cluster stable action so every node moves from the RC tag to the stable tag even when both resolve to the same commit.  The stable promotion manifest must retain `expand-contract` while schema finalization remains pending.
+
+Automatic rollback and destructive schema rollback are not supported.  Recover the failed operation, then promote or roll forward.
+
+### Distribute Source and Images
+
+No supported local-only source replication exists between Engine nodes.
+
+The update controller requires every target node to fetch the selected published tag from the configured Git origin, verify that the tag resolves to the recorded SHA, and fast-forward a clean checkout before local image staging.  A dirty, diverged, or manually copied worktree fails closed.
+
+An untagged clean checkout is allowed only as a commit-backed development baseline.  It cannot be selected as a rolling-update target.
+
+K3s Spegel remains active for peer-to-peer container-image content.  Spegel can serve imported image layers between cluster nodes after Borealis pins them in containerd, but it does not copy the Git checkout, create release metadata, validate the compatibility manifest, or authorize a local branch as a cluster release.
+
+Internal `FetchRelease`, `StageRevisionImages`, and `--cluster-stage-revision` contracts belong to the controller and node manager.  Operators must not call them as a substitute distribution path.
+
+An offline or non-GitHub cluster release would require a separate signed release-bundle feature carrying source revision, manifest, image identity, and controller audit data.
+
+Current supported paths remain:
+
+* A published stable GitHub release through "**Update Node**" or "**Update All One at a Time**"
+* An approved GitHub prerelease through "**Deploy Qualification One Node at a Time**"
+
+### Update Engine Nodes
+
+`Update Node` and `Update All` use the same node workflow:
+
+1. Acquire the exclusive operation lease and create the pre-change snapshot.
+2. Move PostgreSQL, edge/WireGuard, and scheduler leadership away when required.
 3. Stop assignments, withdraw readiness, drain work, and verify EndpointSlice withdrawal.
-4. Fetch release and fast-forward checkout to stored SHA. Dirty or diverged worktree fails without stash/reset.
-5. Invoke target revision's fixed image-staging workflow locally and build/import immutable images without starting candidate workloads.
-6. When release declares `expand-contract`, run target image's fixed, idempotent expand-schema Job before first target candidate starts.
-7. Create node-pinned candidates outside shared Services through separate labels and selectors. Require startup, readiness, liveness, direct endpoint, database, scheduler, Agent-path, and candidate soak checks.
-8. Promote candidate into active Deployment, then require shared Service, VIP, database, scheduler, Agent-path, WireGuard, and ready-soak checks.
-9. Restore role eligibility, repeat health and ready-soak checks, restore assignments, then clear application drain.
-10. For stable channel, run target image's finalize-schema Job only after every active node reports target SHA. Qualification channel defers this contract phase. Then verify cluster and advance baseline release/channel.
+4. Fetch the release and fast-forward the checkout to the stored SHA.  A dirty or diverged worktree fails without stash or reset.
+5. Invoke the target revision's fixed image-staging workflow locally and build/import immutable images without starting candidate workloads.
+6. When the release declares `expand-contract`, run the target image's fixed, idempotent expand-schema Job before the first target candidate starts.
+7. Create node-pinned candidates outside shared Services through separate labels and selectors.  Require startup, readiness, liveness, direct-endpoint, database, scheduler, Agent-path, and candidate-soak checks.
+8. Promote the candidate into the active Deployment, then require shared Service, VIP, database, scheduler, Agent-path, WireGuard, and ready-soak checks.
+9. Restore role eligibility, repeat health and ready-soak checks, restore assignments, and then clear application drain.
+10. For the stable channel, run the target image's finalize-schema Job only after every active node reports the target SHA.  The qualification channel defers this contract phase.  Verify the cluster and advance the baseline release/channel after finalization.
 
-Update All records immutable non-leader-first node order when request starts, then transfers roles and updates one application node at time. Runtime role movement cannot reorder or repeat nodes mid-operation. Failure halts operation and leaves failed node drained; healthy old/new nodes keep serving. Retry resumes explicit operation. No automatic code rollback or skip-and-continue occurs. Cluster release baseline advances only after all active nodes reach target.
+`Update All` records an immutable non-leader-first node order when the request begins, then transfers roles and updates one application node at a time.  Runtime role movement cannot reorder or repeat nodes in the middle of the operation.
 
-One-node updates require maintenance-outage acknowledgement. Three-node continuity covers ready HTTP/API/Agent endpoints, durable queued work, graceful drain, and reconnect after socket movement. Existing interactive shell, desktop, or WebSocket sessions cannot transfer live.
+A failure halts the operation and leaves the failed node drained.  Healthy old and new nodes continue serving.  Retry resumes the explicit operation.  Borealis does not automatically roll back code or skip the failed node.
 
-`Update Node` may intentionally leave cluster in mixed-version state. Expand phase remains complete and contract phase stays pending until last active node reaches same target through later explicit update. Borealis records both phases by immutable release SHA, so controller restart or operator retry cannot apply completed phase twice.
+The cluster release baseline advances only after all active nodes reach the target.
 
-Engine release update and K3s upgrade stay separate operations. Maintenance view accepts stable `vX.Y.Z+k3sN` target only. Target must be newer than current version and stay on current minor or advance exactly one minor. Source version must already pass Borealis probe conformance, and upgrade image must use `registry/repository@sha256:digest` form.
+One-node updates require maintenance-outage acknowledgement.  Three-node continuity covers ready HTTP/API/Agent endpoints, durable queued work, graceful drain, and reconnect after socket movement.  Existing interactive shell, desktop, or WebSocket sessions cannot transfer live.
 
-K3s controller takes pre-change snapshot, orders non-leaders before leaders, drains one application node, and creates exclusive system-upgrade-controller Plan selecting only that server. Plan concurrency stays one and cordons host while immutable `k3s-upgrade` image applies exact version. Borealis then requires Node Ready, etcd voter health, exact kubelet version, and local probe conformance. Application workloads start while node stays drained; Engine health, ready soak, restored-role health, and second soak must pass before drain clears and next server begins. Failed Plan or probe halts update and leaves node drained. One-node clusters require `ACCEPT OUTAGE`.
+`Update Node` may intentionally leave the cluster in a mixed-version state.  The expand phase remains complete and the contract phase stays pending until the final active node reaches the same target through a later explicit update.
+
+Borealis records both schema phases by immutable release SHA so controller restart or operator retry cannot apply an already completed phase twice.
+
+## Update K3s
+
+Engine release updates and K3s upgrades are separate operations.
+
+The Maintenance view accepts only a stable `vX.Y.Z+k3sN` K3s target.  The target must be newer than the current version and remain on the current minor release or advance exactly one minor.
+
+The source version must already pass Borealis probe conformance.  The upgrade image must use `registry/repository@sha256:digest` form.
+
+The K3s controller:
+
+1. Takes a pre-change snapshot.
+2. Orders non-leaders before leaders.
+3. Drains one application node.
+4. Creates an exclusive system-upgrade-controller Plan selecting only that server.
+5. Keeps Plan concurrency at one and cordons the host while the immutable `k3s-upgrade` image applies the exact version.
+6. Requires Node Ready state, etcd voter health, exact kubelet version, and local probe conformance.
+7. Starts application workloads while the node remains drained.
+8. Requires Engine health and ready soak.
+9. Restores role eligibility.
+10. Requires a second health soak before clearing drain and moving to the next server.
+
+A failed Plan or probe halts the update and leaves the node drained.
+
+One-node clusters require the exact acknowledgement `ACCEPT OUTAGE`.
 
 ## Aegis Unlock Across Replicas
 
-Aegis key stays memory-only. Clustered API replicas use cert-manager-issued TLS 1.3 mutual certificate endpoint on headless internal Service. One successful setup/unlock verifies key locally, resolves current API replica addresses, and sends bounded 32-byte key to every replica. Unlocked replicas continue bounded reconciliation so later replacement candidates receive key before promotion. Receiver re-verifies key against Aegis verification token before installing memory copy. Endpoint accepts no operator session, arbitrary payload, or non-mTLS caller. All-cold cluster restart still requires one operator unlock.
+The Aegis key remains memory-only.
+
+Clustered API replicas use a cert-manager-issued TLS 1.3 mutual-certificate endpoint on a headless internal Service.  One successful setup or unlock verifies the key locally, resolves the current API replica addresses, and sends the bounded 32-byte key to every replica.
+
+Unlocked replicas continue bounded reconciliation so later replacement candidates receive the key before promotion.
+
+The receiver re-verifies the key against the Aegis verification token before installing the memory copy.  The endpoint accepts no operator session, arbitrary payload, or non-mTLS caller.
+
+An all-cold cluster restart still requires one operator unlock.
 
 ## Failure and Recovery Rules
 
-- `Degraded Quorum` records emergency two-of-three membership after externally fenced removal. Healthy nodes remain enabled; single replacement admission remains available.
-- Failed cluster operation also fails closed under `Degraded Quorum`. Retry remains normal recovery. When failed operation target is permanently unavailable and cluster still records three active members, externally fence target before using emergency removal; same two exact confirmations and three-member store checks still apply.
-- `Degraded Database` records fewer Ready CloudNativePG instances than configured. Controller returns status to `Healthy` after all configured instances recover, but does not overwrite HMR, mixed-version, pending-membership, or operation-failure state.
-- Planned PostgreSQL switchover creates pre-change backup before role movement. Emergency failover skips new backup because failed primary may be unable to produce one; use retained scheduled and prior pre-change backups when recovery needs older data.
-- PostgreSQL synchronous quorum requires one replica acknowledgement on supported three-node clusters. Writes stop when durability quorum is unavailable. Planned role movement requires selected replica to be actively streaming, participating in synchronous quorum, and caught up through primary's current flushed WAL before promotion. Controller waits for all configured replicas to return synchronized after switchover before moving other application roles.
-- When CloudNativePG reports missing archived WAL or failed `pg_rewind`, do not force that replica into service. Keep confirmed primary plus one synchronized replica, take primary-targeted snapshot, then rebuild stale replica one at time by deleting only its Pod and PVC. Confirm retained stale Longhorn volume does not consume node capacity needed for replacement volume before continuing.
-- No automatic PostgreSQL or VIP failback. Operator chooses switchover after failed owner returns.
-- Host-initiated shutdown or reboot performs bounded Cluster Virtual IP handoff to Ready Engine peer before K3s stops. One-node clusters skip handoff because no peer exists. Sudden power loss still relies on lease expiry and can interrupt ingress until new owner acquires VIP.
-- Three-node clusters keep one healthy shared Agent-artifact volume replica on every Engine. Planned maintenance, HMR entry, node removal, and Engine or K3s updates wait for all three copies; emergency recovery and maintenance/HMR exit remain available when storage is degraded.
-- Safe removal supports `3 -> 1`. Emergency removal from supported three-node membership needs external power fence plus two exact confirmations and records degraded state.
-- Longhorn snapshots use daily fourteen-snapshot retention plus pre-change snapshots. They are in-cluster recovery, not disaster recovery.
-- Prove a recovery snapshot before relying on it by restoring into a separately named one-instance CloudNativePG validation cluster. Kubernetes VolumeSnapshot data sources are namespace-scoped, so keep validation cluster in same namespace with unique Services and PVCs, verify restored data without changing production, then remove only validation resources after recording evidence.
-- Aegis key remains memory-only. All-cold restart requires operator unlock.
+* `Degraded Quorum` records emergency two-of-three membership after an externally fenced removal.  Healthy nodes remain enabled, and single-replacement admission remains available.
+* A failed cluster operation can also fail closed under `Degraded Quorum`.  Retry remains the normal recovery path.
+* When a failed operation target is permanently unavailable and the cluster still records three active members, externally fence the target before using emergency removal.  The same two exact confirmations and three-member store checks still apply.
+* `Degraded Database` records fewer Ready CloudNativePG instances than configured.  The controller returns status to `Healthy` after all configured instances recover but does not overwrite HMR, mixed-version, pending-membership, or operation-failure state.
+* Planned PostgreSQL switchover creates a pre-change backup before role movement.
+* Emergency PostgreSQL failover skips the new backup because a failed primary may be unable to produce one.  Use retained scheduled and previous pre-change backups when recovery requires older data.
+* PostgreSQL synchronous quorum requires one replica acknowledgement on supported three-node clusters.  Writes stop when durability quorum is unavailable.
+* Planned PostgreSQL role movement requires the selected replica to be actively streaming, participating in synchronous quorum, and caught up through the primary's current flushed WAL before promotion.
+* The controller waits for all configured replicas to return synchronized after switchover before moving other application roles.
+* When CloudNativePG reports missing archived WAL or failed `pg_rewind`, do not force that replica into service.
+
+  * Keep the confirmed primary plus one synchronized replica.
+  * Take a primary-targeted snapshot.
+  * Rebuild the stale replica one at a time by deleting only its Pod and PVC.
+  * Confirm the retained stale Longhorn volume does not consume node capacity required for the replacement volume before continuing.
+* Borealis does not perform automatic PostgreSQL or Cluster Virtual IP failback.  The operator chooses switchover after the failed owner returns.
+* Host-initiated shutdown or reboot performs bounded Cluster Virtual IP handoff to a Ready Engine peer before K3s stops.  A one-node cluster skips handoff because no peer exists.
+* Sudden power loss still relies on lease expiry and can interrupt ingress until a new owner acquires the Cluster Virtual IP.
+* Three-node clusters keep one healthy shared Agent-artifact volume replica on every Engine.
+* Planned maintenance, HMR entry, node removal, and Engine or K3s updates wait for all three Agent-artifact copies.
+* Emergency recovery and maintenance/HMR exit remain available when storage is degraded.
+* Safe removal supports `3 -> 1`.
+* Emergency removal from supported three-node membership requires an external power fence plus both exact confirmations and records degraded state.
+* Longhorn snapshots use daily fourteen-snapshot retention plus pre-change snapshots.  They provide in-cluster recovery, not disaster recovery.
+* Prove a recovery snapshot before relying on it by restoring it into a separately named one-instance CloudNativePG validation cluster.
+* Kubernetes VolumeSnapshot data sources are namespace-scoped.  Keep the validation cluster in the same namespace with unique Services and PVCs, verify restored data without changing production, and remove only the validation resources after recording evidence.
+* The Aegis key remains memory-only.  An all-cold restart requires operator unlock.
+
+## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+### API Endpoints
+- Cluster state and events: `GET /api/server/cluster`, `GET /api/server/cluster/events`
+- Lightweight banner state: `GET /api/server/cluster/banner`
+- Includes `hmr_node_name`
+- Includes release channel and baseline
+- Includes last stable identity
+- Includes pending schema-finalization state
+- Allows the global shell to display isolation or qualification risk without loading the Admin-only cluster snapshot
+- Enable, invitation, admission, and scaling:
+- `POST /api/server/cluster/enable`
+- `POST /api/server/cluster/invitations`
+- `POST /api/server/cluster/admissions/{id}/approve`
+- `POST /api/server/cluster/membership/scale`
+- The enable body permits only `cluster_vip`.  The API derives node name and host management IPv4 from Downward API environment and architecture from the AMD64 Go runtime.
+- Stable, qualification `*-rc.N`, or exact `dev-<12-character SHA prefix>` baseline must pair with the full lowercase commit SHA.
+- The current release accepts pair preparation and `desired_size=3` while active size is one, or one replacement while state is exactly `2 active / 3 desired` `Degraded Quorum`.  Size-five and stale invitation/admission paths fail closed.
+- Node and database operations:
+- `POST /api/server/cluster/nodes/{id}/maintenance`
+- `POST /api/server/cluster/nodes/{id}/remove`
+- `POST /api/server/cluster/postgres/switchover`
+- `POST /api/server/cluster/postgres/emergency-failover`
+- Safe `3 -> 1` removal requires canonical `paired_node_id` plus `REMOVE NODE PAIR`.
+- Emergency removal requires `TARGET IS POWERED OFF` plus `EMERGENCY REMOVE NODE`.
+- Release, HMR, and operation endpoints:
+- `GET /api/server/cluster/releases`
+- `POST /api/server/cluster/hmr/start`
+- `POST /api/server/cluster/hmr/exit`
+- `POST /api/server/cluster/updates`
+- `POST /api/server/cluster/operations/{id}/retry`
+- `POST /api/server/cluster/operations/{id}/cancel`
+- Catalog entries include `channel=stable|qualification`.  Tag syntax and GitHub prerelease status must agree.
+- Engine qualification update requires all scope and exact `DEPLOY QUALIFICATION`.
+- Stable update requires exact `UPDATE CLUSTER`.
+- The K3s form uses all scope, a stable 32-character-bounded version class, exact `UPDATE K3S`, and one-node outage acknowledgement.
+- Bootstrap endpoints:
+- `POST /api/bootstrap/cluster/join`
+- `GET /api/bootstrap/cluster/join/{id}/events`
+- Public handlers validate canonical UUIDs, dotted-numeric release tags up to 32 characters, DNS hostnames up to 253 characters, node names up to 63 characters, single-line reasons up to 256 characters, authenticated invitation bundles up to 16 KiB, and fixed acknowledgements.
 
-    ### API endpoints
+```
+### Source Map
+- API, store, and controller: `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster*.go`, `cluster_controller.go`
+- Fixed root helper: `Data/Engine/Containers/api-backend/cmd/borealis-node-manager/`
+- Route daemon: `Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/`
+- CRDs, controller, RBAC, and availability: `Data/Engine/K3s/cluster/`
+- WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`
+- Enable dialog uses shared glass overlay, input, and pill-action tokens from `Data/Engine/Containers/webui-frontend/data/web-interface/src/DialogStyles.jsx`.  It contains one `cluster_vip` field and no typed confirmation.
+- WebUI tab keys are `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state.  `operations` appears as Cluster Events, and Engine release controls live under Maintenance.
+- Nodes and Cluster Events use Quartz AG Grid with 44px rows and headers, 20-row default pagination, and `20`, `50`, and `100` selectors.
+- Nodes derives Database text from `leaders.postgres_primary` with `roles.postgres_primary` fallback plus aggregate CloudNativePG readiness.
+- Primary displays linked `Active`.
+- Non-primary active members display `Replica Healthy` only when configured instances equal active membership, every configured instance is Ready, and `fully_ready` is not false.  Otherwise replicas display `Not Ready`.
+- Inactive historical rows display `Not Active`.
+- Aggregate readiness cannot identify one failed replica, so degraded state marks every passive replica `Not Ready`.
+- Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics.
+- Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
+- Release compatibility: `Data/Engine/release-manifest.json`
+- Initial cluster baseline: `Engine.sh` prefers an exact dotted-numeric tag.  A clean untagged checkout emits `dev-<FIRST_12_COMMIT_CHARACTERS>`; API, controller, CRD, and node manager require the identity to match the full SHA.  A dirty checkout emits no baseline.
+- The development commit must be reachable from the configured origin for cross-node fetch and HMR restoration.
+- Release catalog traversal does not assume GitHub publication order matches version order.  It skips drafts, malformed tags, GitHub-channel mismatches, and downgrade-class entries, then continues until the exact current tagged release appears.
+- Development baselines stop after the newest page.
+- Every target uses the GitHub compare API with the full baseline and target SHAs.  Only `ahead` or `identical` remains selectable.
+- The manifest must explicitly allow the target channel.
 
-    - Cluster state/events: `GET /api/server/cluster`, `GET /api/server/cluster/events`. Lightweight `GET /api/server/cluster/banner` includes `hmr_node_name` plus release channel, baseline, last stable identity, and pending schema-finalization state so global shell can show isolation or qualification risk without loading Admin-only snapshot.
-    - Enable/invite/admit/scale: `POST /api/server/cluster/enable`, `/invitations`, `/admissions/{id}/approve`, `/membership/scale`. Enable body permits only `cluster_vip`; API derives node name and host management IPv4 from Downward API environment and architecture from AMD64 Go runtime. Stable, qualification `*-rc.N`, or exact `dev-<12-character SHA prefix>` baseline must pair with full lowercase commit SHA. Current release accepts pair preparation and `desired_size=3` while active size is one, or one replacement while state is exactly `2 active / 3 desired` `Degraded Quorum`; size-five and stale invitation/admission paths fail closed.
-    - Node and database operations: `POST /api/server/cluster/nodes/{id}/maintenance`, `/remove`, `/postgres/switchover`, `/postgres/emergency-failover`. Safe `3 -> 1` remove requires canonical `paired_node_id` plus `REMOVE NODE PAIR`; emergency remove requires `TARGET IS POWERED OFF` plus `EMERGENCY REMOVE NODE`.
-    - Release/HMR/operations: `GET /api/server/cluster/releases`; `POST /api/server/cluster/hmr/start`, `/hmr/exit`, `/updates`, `/operations/{id}/retry`, `/operations/{id}/cancel`. Catalog entries include `channel=stable|qualification`; tag syntax and GitHub prerelease flag must agree. Engine qualification update requires all scope and exact `DEPLOY QUALIFICATION`. Stable update requires exact `UPDATE CLUSTER`. K3s form uses all scope, stable 32-character-bounded version class, exact `UPDATE K3S`, and one-node outage acknowledgement.
-    - Bootstrap: `POST /api/bootstrap/cluster/join`, `GET /api/bootstrap/cluster/join/{id}/events`.
-    - Public handlers validate canonical UUIDs, dotted numeric release tags up to 32 characters, DNS hostnames up to 253 characters, node names up to 63 characters, single-line reasons up to 256 characters, authenticated invitation bundles up to 16 KiB, and fixed acknowledgements.
+### State Ownership
+- `BorealisCluster`, `BorealisNodeAdmission`, `BorealisNodeRuntime`, and `BorealisClusterOperation` hold desired/runtime Kubernetes state.  PostgreSQL remains the durable audit and operation-event source.
+- The controller reconciles cluster size, Cluster Virtual IP, baseline, HMR state, recent admissions, recent operations, and one `BorealisNodeRuntime` per active Engine node.
+- CR specs carry desired state.  Status carries observed phase, approval, operation, Kubernetes node, runtime owner, probe, release, and drain state.
+- `BorealisCluster` accepts active size two only for `2 active / 3 desired` `Degraded Quorum` replacement recovery.
+- PostgreSQL retains legacy `control_plane_vip` and `edge_vip` columns during transition.  New enable operations write the same `cluster_vip` into both, and the controller rejects unequal values.
+- The ten-second repair loop recreates missing resources, patches drift, and avoids unchanged status writes.
+- PostgreSQL tables `cluster_state`, `cluster_nodes`, `cluster_admissions`, `cluster_operations`, `cluster_operation_events`, `cluster_audit_events`, `cluster_invitations`, `realtime_outbox`, `cluster_application_leases`, and `cluster_schema_phases` hold audit data, events, invitations, outbox state, singleton leases, and immutable schema-phase completion.
+- The controller observes CloudNativePG configured and Ready counts, current primary Pod, phase, full-readiness, and synchronous durability quorum.
+- Database observation persists under `cluster_state.config_json.database_runtime`, appears as top-level `database` in the cluster snapshot, and drives recoverable `Degraded Database` status.
+- Transactional mutation gates also read observed database runtime directly, so `Mixed Version` or another higher-priority lifecycle status cannot mask reduced database readiness.
+- Historical failed operations remain immutable.  The snapshot annotates globally superseded cluster-enable and membership failures, and the retry path rejects them transactionally after a later same-kind success.
+- Retry records the failed durable step under `payload_json.retry_resume_step`, increments the attempt, and re-enters normal preflight.
+- A successful preflight jumps to the recorded checkpoint instead of replaying completed drain, update, or membership steps.
+- A preflight failure retains the checkpoint for the next attempt.  A missing or no-longer-valid checkpoint fails closed.
+- This prevents a failed rolling update with one node already drained from restarting at the first node and temporarily draining two application nodes.
+- The first controller claim pins its current immutable node-action image under `payload_json.action_image`.
+- Every later controller holder uses that same image for operation-attempt Jobs, including after target-controller promotion.
+- The source action image already exists on every current Engine node, so later targets do not depend on target-image distribution before their own staging step.
+- Older operations without a pin use the current controller image until the next claim records it.
+- Planned primary movement does not trust Pod Ready alone.
+- The controller queries the current primary's `pg_stat_replication`, matches the exact target Pod `application_name`, requires `state=streaming`, requires `sync_state=sync|quorum`, and requires target `flush_lsn` at or beyond the query-time `pg_current_wal_flush_lsn()`.
+- CloudNativePG manages application-role membership in the built-in read-only `pg_read_all_stats` role so PostgreSQL does not mask these replication fields.  The role does not grant table-data access or database mutation.
+- After CloudNativePG changes primary, the controller requires healthy phase, every configured instance Ready, every expected replica streaming through current flushed WAL, and at least one synchronous replica before application-role eligibility changes.
+- HMR step replay repeats the complete post-switchover gate even when the target already became primary.
+- Safe paired removal resolves one active survivor and completes the same synchronized primary-transfer gate before reducing CloudNativePG membership.
+- Step replay therefore repeats safe-survivor proof instead of allowing CloudNativePG to retain a primary on a removal target.
+- If the survivor has no healthy synchronized replica, the operation fails before changing `spec.instances`.
+- After the target writes the persistent removal fence and K3s stops, retry recognizes NotReady state and skips target-pinned drain/fence Jobs.
+- Fence wait tolerates temporary Kubernetes API errors through the bounded step timeout, then resumes delete and verification from the durable operation plan.
+- Member verification scales the removed node's resident Borealis Operator and WireGuard deployments to zero before the final voter-health soak, preventing unschedulable infrastructure Pods from surviving successful removal.
+- Controller preflight admits only replacement admission, emergency PostgreSQL failover, and maintenance exit while durable membership is temporarily two-of-three.
+- The store also permits externally fenced emergency removal from a failed-operation `Degraded Quorum` state only while three active members remain recorded.  Normal removal and a second removal from replacement state remain rejected.
+- Emergency PostgreSQL failover intentionally omits the pre-change backup so a failed primary cannot block promotion.  Planned switchover retains the mandatory backup.
+- The controller persists `cluster_nodes.application_state` when node drain and exit steps cross their safe boundary.
+- Enter-drain failure records a conservative drained state because the node manager writes the drain label before scaling workloads, preventing the API and UI from presenting a failed update target as active.
+- During steady state, an unexpected Kubernetes `drained` label also records durable `k3s_restart_label_drift` drain and `Degraded Quorum`.  The controller never promotes an observed `active` label into durable active state without explicit verified recovery.
+- The Cluster Virtual IP DaemonSet requires both existing control-plane and edge eligibility labels so the same node owns K3s API, application ingress, and WireGuard address.
+- Before maintenance or HMR changes those labels, fixed node-manager reconciliation initializes both from current Kubernetes application-state labels, applies the combined selector, and waits for rollout.
+- Labels are written before selector migration, preventing a migration-created VIP outage.
+- Joined-node K3s configuration persists both eligibility labels across restart.
+- The maintenance store validates active membership and current application state, permits one drained application node at a time, and accepts exit only for a drained target.
+- Independent store and WebUI application-capacity gates keep normal operations closed while a durable active-member drain exists.
+- HMR exit, emergency PostgreSQL failover, maintenance exit, and externally fenced emergency removal remain available.
+- The store blocks independent maintenance mutation while HMR state is active.
+- The WebUI therefore reroutes drained-node "**Exit Maintenance Mode**" during isolation to `/hmr/exit` after an explicit warning and `EXIT HMR`; the controller restores full pinned-production placement.
+- Completion preserves `2/3` quorum degradation and remaining database degradation.  Verified three-node recovery returns Healthy only when no recorded active node remains drained.
+- The node manager accepts fixed verbs only, including persistent K3s membership fence, exact-version probe conformance, drained application preparation, and `RunSchemaPhase` limited to `expand|finalize` plus the recorded target SHA.
+- Preparation scales named node workloads and waits for rollouts without changing `borealis.io/application-state`.
+- Operation retry also accepts an already-active state because an earlier attempt may have completed activation before a later step failed.  Any other state still fails closed.
+- Only final activation clears drain after controller health gates.
+- Joined-server configuration initially persists drained, role-ineligible labels.
+- Every successful enter/exit drain transition atomically rewrites those runtime labels in `20-borealis-cluster-join.yaml`, preventing a later K3s restart from undoing controller-approved activation or maintenance fencing.
+- The manager never exposes arbitrary command or remote-shell execution and remains active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control-plane recovery without losing the operation process.
+- Systemd `ExecStop` invokes local-only `shutdown-handoff`.  The exact `systemctl is-system-running=stopping` gate makes an ordinary service restart or update a no-op.
+- A real host shutdown with a Ready peer temporarily labels the local node `borealis.io/engine-node=false`, waits up to 25 seconds for the fixed Cluster Virtual IP lease to name an alternate holder, and then allows K3s to stop.
+- Persistent K3s configuration restores the Engine-node label after reboot.
+- The installer precreates the exact `/etc/systemd/system/k3s.service.d` path, and the service sandbox grants only that systemd subtree for the persistent member-removal fence.  `ProtectSystem=strict` remains enabled.
+- This ordering prevents a surviving kube-vip containerd shim from renewing a dead ingress lease after Traefik exits.
+- Rolling schema work runs the target revision's `site-worker` image in a non-root, tokenless, node-pinned Job.
+- Expand follows target-image build/import and precedes the first candidate health gate.
+- Finalize runs only after every active `cluster_nodes.release_sha` equals the target.
+- `cluster_schema_phases` makes both fixed phases restart-safe and idempotent.  Finalize refuses a missing expand record.
+- The Agent-path update probe sends a credential-free `POST /api/agent/heartbeat` and requires exact `401 Unauthorized`.
+- The candidate probe targets the isolated Pod IP.  The active probe targets the shared API Service.
+- The expected authentication rejection proves the Agent route is registered and reachable without mutating Agent/device state or storing test credentials.
+- A missing route returning `404`, accepting unauthenticated traffic, timeout, or any other status fails node health.
+- Blank-node join requires `--peer-cidrs`.
+- The node manager validates and canonicalizes bounded private IPv4 CIDRs, then invokes the fixed `Engine.sh --cluster-prepare-node` workflow before consuming the invitation.
+- Preparation installs K3s installation/firewall and Longhorn iSCSI/NFS prerequisites but does not install or join K3s until membership-admission approval arrives.
+- Expansion-pair approval records the same authenticated approval event for both admission IDs so both waiting joiners proceed.
+- Degraded-quorum replacement records the same compatible approval event for one admission.
+- Join installation replaces the running node-manager executable through atomic rename before enabling the service, avoiding in-place executable overwrite failures.
+- Membership-admit completion reconciles `cluster_nodes` by unique `node_name`.
+- Re-admitting a safely removed hostname revives the retained node row, preserves durable node ID and creation time, refreshes mutable host/release/probe state, clears the removal drain reason, and advances the new admission record to `Admitted` in the same transaction.
+- Do not delete retained node history or replace durable node identity with the admission UUID.
+- The cluster controller exposes distinct `/startup`, `/ready`, and `/live` contracts.
+- Startup proves local initialization completed, readiness depends on PostgreSQL operation-store access, and liveness proves only local HTTP process responsiveness.
+- Long database bootstrap, node redeploy, or Kubernetes reconciliation never makes liveness depend on controller-loop progress or external dependencies.
+- The cluster controller renews its 20-second PostgreSQL ownership lease every five seconds through an independent heartbeat while operation steps run.
+- Each acquisition has a five-second deadline.
+- Timeout evicts the selected driver connection plus every remaining idle connection in the controller-only pool.
+- This bounds reusable stale sockets after the driver returns but cannot interrupt an active `lib/pq` socket read blackholed during CloudNativePG primary failover.
+- Live HMR partition recovery remains tracked in [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466).
+- Explicit ownership loss cancels step context immediately.
+- Transient database errors during primary-Service handoff are retried for at most 15 seconds.  Persistent failure cancels before lease expiry.
+- Claim, advance, failure, and completion transactions lock and verify the same live lease row before changing durable operation state, so a former holder cannot record progress after fencing.
+- Node-action Job names retain operation-attempt identity while human-readable step labels replace illegal separators and hash-truncate values beyond Kubernetes' 63-character limit.
+- The full unsanitized step remains in PostgreSQL and `BorealisClusterOperation` state for audit.
+- Node-action Job creation is idempotent across controller restart and create races.
+- The controller treats `409 AlreadyExists` as a resume candidate only after re-reading the Job and matching namespace, operation label, full step annotation, normalized step label, target node, ServiceAccount boundary, immutable image, command, and arguments.
+- Engine-update replay alone may retain an existing Job's different immutable Borealis action image when the source controller created the exact operation, attempt, and step before the target controller acquired the lease in the middle of rollout.
+- Every other image or identity mismatch fails closed without waiting on or replacing the existing Job.
+- Node-action Job polling treats bounded Kubernetes API `429`, `5xx`, timeout, connection refusal/reset, and wrapped `io.EOF` failures as transient until step context ends.
+- Authorization and TLS trust failures remain terminal.
+- This prevents temporary control-plane restart transport loss from failing an action that remains active or completes successfully.
+- Engine manages explicit `docker.io`, `ghcr.io`, `quay.io`, and `registry.k8s.io` entries in K3s `registries.yaml`.
+- `embedded-registry: true` alone does not activate Spegel exchange.  Each source registry must be enabled on every node.
+- Joined nodes receive mirror configuration before K3s starts.
+- Borealis images are atomically staged under `/var/lib/rancher/k3s/agent/images` and imported by K3s.
+- K3s pins these archives and adds the containerd distribution-source labels required by Spegel.
+- Engine waits for both local image presence and the matching source label.  Direct `ctr images import` is not accepted because imported content can remain invisible to peers.
+- Successful cluster-revision staging retains the current archive plus one rollback predecessor per managed service and deletes older service archives.
+- This bounds restart-time preload work without removing the current or immediate rollback image.  Separately named operation-action and recovery archives remain untouched.
+- The WireGuard route DaemonSet uses initialization-only startup, route-aware readiness, and local-process liveness.
+- Cluster Virtual IP owner routes Agent CIDRs directly through `borealis-wg`.  Standby nodes route the same CIDRs through the fixed Cluster Virtual IP, so VIP movement changes next-hop ownership without rewriting every host route.
+- A missing interface or temporary VIP convergence keeps readiness false while reconciliation remains alive.
+- Full deploys and scoped WireGuard rebuild/reconcile operations apply the same DaemonSet renderer and wait for every Engine node to become ready.
+- The WireGuard control Deployment remains running on every active Engine node.
+- The controller checks the fixed Cluster Virtual IP on the host every second.  A non-owner suppresses validated activation mutations and withdraws any stale interface; the owner bootstraps a missing listener, interface, address, route, and firewall from shared identity and requires the live interface for readiness.
+- The lifecycle withdrawal marker prevents the ownership loop from undoing `preStop` before the Pod exits.
+- API replicas store active tunnel identity, readiness callbacks, transport timestamps, operator association, endpoint, expiry, and allowed ports in PostgreSQL with optimistic generation checks.
+- The Cluster Virtual IP owner replays active session rows plus durable IP/key leases every three seconds, so a newly elected owner rebuilds only live listener peers and any API replica can answer status or scheduler readiness.
+- Short-lived signed tokens remain derived rather than stored.
+- Cluster conversion copies the existing server keypair into `borealis-wireguard-server-keys`.  API and WireGuard Pods mount the same read-only Secret on every node.
+- The control process accepts Kubernetes projected-file symlinks only when the resolved key remains a regular file inside the mounted Secret directory.
+- The API peer manager and Engine deployment both preserve `0770` on shared WireGuard configuration/key directories and `0640` on files so the root control process with only Borealis group membership can perform atomic configuration writes without broad filesystem capabilities.
+- The WireGuard update candidate remains zero-replica to avoid host-port collision while the active owner-aware controller preserves ownership.
+- The node manager reads only local K3s etcd metrics and reports the exact `etcd_server_is_leader` gauge as a node label.
+- The cluster controller combines that report with the fixed Cluster Virtual IP lease, CloudNativePG current-primary Pod, scheduler application lease, and owner-aware WireGuard readiness.
+- It persists observed etcd, Cluster Virtual IP, PostgreSQL, scheduler, and WireGuard owners into node-runtime roles.
+- An update request pins a non-leader-first node ID sequence from these observations.  Later role movement cannot change the remaining sequence.
+- Transfer-away fencing requires the Cluster Virtual IP lease to leave the target and keeps the WireGuard controller scaled without requiring previous-release standby readiness.
+- The controller then accepts an actual eligible owner only after the WireGuard workload becomes Ready.
+- HMR entry requires the Cluster Virtual IP on the exact selected target.
+- HMR exit pins PostgreSQL to the first restored standby but accepts any healthy non-target Cluster Virtual IP owner after target fencing.
+- Drain withdrawal waits only on node-scoped traffic Services scaled or removed by application drain: API/Aegis, scheduler, guacd, Traefik, WebUI, and site workers.
+- Resident operator and database endpoints remain available for control-plane and storage safety and cannot block rolling progress.
+- Isolated candidate Pod endpoints remain available for candidate inspection and Aegis-key delivery but do not count as active traffic during withdrawal.
+- Standalone generic Deployments remain zero-replica templates after cluster enablement.
+- Scoped and full deploys update Secrets, Services, and templates without launching unpinned duplicate Pods.
+- Per-node reconciliation always starts from the canonical generic template, then reapplies node affinity, immutable image, candidate fencing, and cluster-specific mounts while preserving each existing Deployment's immutable selector.
+- Generated per-node Deployments use one authoritative server-side field manager and reclaim conflicting generated fields left by emergency `kubectl set` or patch operations.
+- Existing node clones never remain the source of stale environment values, Secret references, probes, or operator-image allowlists.
+- After promoted active workload passes rollout health, promotion copies immutable container images and the target revision to the matching generic template before deleting the candidate.
+- The patch includes the fetched Kubernetes `resourceVersion`, so concurrent scaling or template mutation returns a conflict instead of overwriting newer state.
+- Promotion validates that the returned Deployment remains zero-replica with the exact revision and images.
+- A missing template, nonzero generic replica count, container mismatch, conflict, invalid response, or failed postcondition stops the operation without launching a generic workload.
+- Baseline reconciliation preserves controller-owned application, edge, scheduler, and PostgreSQL eligibility labels on active and pending cluster members.
+- Lost-HMR-target recovery does not commit durable `Degraded Quorum` state while the former target can still serve application traffic or own edge/WireGuard.
+- If the target rejoins during recovery, the controller runs fixed `EnterApplicationDrain`, reapplies role-ineligible labels, waits for traffic-endpoint withdrawal, and requires the edge lease plus Ready WireGuard ownership on another node before committing the target as `hmr_target_lost`.
+- The Cluster Virtual IP uses one kube-vip leader lease, `/32` ARP advertisement, local-metrics liveness, K3s API readiness on TCP `6443`, and a disruption budget.
+- One owner prevents competing ARP advertisements while the same address serves K3s API, application ingress, and WireGuard.
+- kube-vip `v1.1.0` health listener is intentionally disabled because it keeps the process alive after the manager loses leadership.  Normal process exit allows Kubernetes to restart the manager.
+- Bootstrap does not accept a running Pod as proof.  It waits for DaemonSet rollout, a non-empty lease holder, the local VIP address, and K3s `/readyz` through the Cluster Virtual IP.
+- First-node conversion uses explicit stop-start handoff for generic host-network Traefik and WireGuard Pods.
+- Later Traefik candidate promotion uses the same host-port handoff.  The WireGuard candidate remains stopped while the active owner-aware controller is replaced.
+- WireGuard promotion rewrites copied readiness to an owner-aware compatibility contract: control-reported standby is healthy only while the shared interface is absent, while active ownership still invokes the pinned image's full interface/listener/route health check.
+- This allows HMR to restore a pinned production image from before standby-aware image probes without weakening owner validation.
+- A failed first-node handoff restores the previous standalone host workload replica count.
+- The job-scheduler candidate starts with `BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE=false`.
+- Its health probe can validate process and PostgreSQL without allowing the candidate to acquire the database lease or issue work.
+- Promotion rewrites the flag to `true` before the active Deployment rollout.
+- The cluster-controller candidate serves local probes but cannot acquire the operation lease.
+- The API candidate disables background loops and stays outside public API traffic while remaining in the mTLS-only Aegis peer Service so the current memory key can reach the candidate before promotion.
+- Promotion restores controller eligibility and API loops in the active Pod template.
+- Candidate probes therefore cannot mutate cluster ownership or receive public application traffic before promotion.
+- First-node SQLite-to-etcd conversion temporarily restarts K3s.
+- Cluster-controller Job polling treats bounded Kubernetes API `429`, `5xx`, timeout, and connection failures as transient until the step deadline.
+- Only already-created `EnrollCluster` Job polling permits a two-minute `401`/`403` recovery window while K3s switches datastore.  Persistent authorization failure and authorization errors in every other operation still fail.
+- K3s Plan polling also treats bounded Kubernetes API `429`, `5xx`, timeout, and connection failures during the expected server restart as transient until the step deadline.
+- Kubernetes Job `status.failed` counts retryable Pods, so the controller fails a Plan only when the Job publishes terminal `Failed=True`.
+- A later successful retry can still complete the same Plan.
+- Retry preflight lists exact operation-labeled Plans, verifies ownership, and deletes resources left by previous attempts before creating fresh attempt names.
+- System Upgrade Controller normalizes Plan `status.latestVersion` from `vX.Y.Z+k3sN` to `vX.Y.Z-k3sN` and leaves the completed target cordoned.
+- The controller accepts only the exact requested version or that exact separator normalization, explicitly uncordons the target, and still requires Ready etcd-voter health plus the exact `+k3s` kubelet version from Node status.
+- Operation retry first checks the same Ready/voter/version contract and uncordons an already-upgraded target without submitting another restart Plan.
+- Conversion explicitly restarts the Cluster Virtual IP kube-vip DaemonSet after K3s returns.
+- The existing kube-vip process surrenders its lease during datastore restart, and unchanged server-side apply does not restart it.
+- The controller verifies a fresh rollout, lease holder, local VIP address, and Cluster Virtual IP `/readyz` before continuing.
+- Database cutover records the CloudNativePG Service URL before scaling the retained standalone StatefulSet to zero.
+- Subsequent deploys preserve that URL only when CloudNativePG reports a healthy primary endpoint and standalone replicas remain zero.
+- A failed partial conversion cannot silently revive the stale database.
+- Operator-owned site-worker Pod restoration waits separately for named-Pod recreation and readiness.
+- Cluster-enable and node-redeploy retries pass the recorded immutable baseline SHA through the controller Job and fixed node-manager contract.
+- The node manager gives only the Engine child process command-scoped Git safe-directory trust plus the manager-owned writable build home under `Engine/Deploy/node-manager-home`.
+- The hardened service keeps host `/root` unavailable.
+- Workload initialization resolves the same pinned commit without mutating global Git configuration.
+- Later operator checkout movement cannot change the retry revision.
+- Engine updates split target-image staging from candidate creation.
+- `StageRevisionImages` builds and imports every target image and writes root-owned `Engine/Deploy/cluster-staged-revision` only after imports finish.
+- Expand schema then runs from the staged target image.
+- `RedeployRevision` accepts the matching marker/image manifest before creating the candidate, preventing the target process from starting against pre-expand schema.
+- Node redeploy starts the target release's staged manager as a separate transient activator outside the old service sandbox.
+- The activator validates the pinned worktree and its own staged inode, waits until the node-action Job leaves Running or Pending state, atomically installs the target binary plus systemd unit, restarts the node manager outside the old service cgroup, verifies the running process uses the installed inode plus recreated Unix socket, and then records the target SHA in `/etc/borealis/node-manager-revision`.
+- This allows the first rolling update to cross the old-manager/new-manager boundary without killing the action performing the update.
+- Repeated redeploy skips refresh only when the recorded SHA and running executable already match.
+- CLI operation polling tolerates bounded transient API loss after mutation acceptance.
+- It never resubmits the POST.  Persistent loss reports the operation ID as still running server-side and directs the operator to inspect Cluster Events.
+- Engine persists canonical private `BOREALIS_K3S_PEER_CIDRS` values into the runtime Secret.
+- Node-scoped release deploy hydrates the same allowlist and fails closed when it is missing, preventing rolling updates from silently replacing cluster firewall policy with empty peer access.
+- Shared Agent artifacts use one exact Longhorn RWX PVC.
+- Three-node controller reconciliation raises only that bound volume to at least three replicas, verifies fixed PVC/PV/Longhorn ownership, and requires one healthy running replica on each active Engine before planned disruptive operations or pending-node workload activation.
+- It never changes the global one-replica StorageClass policy and never reduces an operator-configured higher replica count.
+- A `3 -> 1` downscale leaves the existing replica count unchanged to avoid deleting survivor copies.  Later expansion rebuilds missing per-node copies.
+- Longhorn RWX storage requires host NFSv4 mount utilities in addition to iSCSI.
+- `Engine.sh` checks device-mapper maps before storage reconciliation.
+- Dedicated hosts with no genuine multipath maps have `multipathd.service` and `multipathd.socket` disabled.
+- Longhorn-only maps are flushed by exact mapper name.
+- Any genuine multipath map fails closed and directs the operator to configure the [Longhorn device blacklist](https://longhorn.io/kb/troubleshooting-volume-with-multipath/).
+- Seed copies only missing or changed files, byte-compares every source file, and permits bounded time for large existing artifact caches.
+- K3s does not bundle CSI VolumeSnapshot API resources.
+- Cluster bootstrap checksum-pins external-snapshotter `v8.5.0` CRDs, deploys the digest-pinned common snapshot controller with leader election and probes, and then restarts CloudNativePG so daily Longhorn snapshot support is discovered before database migration.
+- Restored `borealis-longhorn-local` volumes carry hard node affinity selected by CSI.
+- Snapshot validation must select any Engine node with `borealis.io/engine-node=true` and allow Kubernetes to match the recovery Pod to the restored PV.
+- Do not pin recovery to the presumed source host.
+- A `VolumeBinding` node-affinity mismatch means the Pod pin conflicts with restored-PV topology, not that the snapshot data failed.
+- Cluster API replicas expose a separate TLS 1.3 mTLS-only Aegis-key receiver from `aegis_cluster_fanout.go`.
+- cert-manager assets and the headless Service live in `Data/Engine/K3s/cluster/aegis-mtls.yaml`.
 
-    ### Source map
-
-    - API/store/controller: `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster*.go`, `cluster_controller.go`.
-    - Fixed root helper: `Data/Engine/Containers/api-backend/cmd/borealis-node-manager/`.
-    - Route daemon: `Data/Engine/Containers/api-backend/cmd/wireguard-route-daemon/`.
-    - CRDs/controller/RBAC/availability: `Data/Engine/K3s/cluster/`.
-    - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`.
-    - Enable dialog uses shared glass overlay, input, and pill-action tokens from `Data/Engine/Containers/webui-frontend/data/web-interface/src/DialogStyles.jsx`; it contains one `cluster_vip` field and no typed confirmation.
-    - WebUI tab keys: `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state. `operations` appears as Cluster Events; Engine release controls live under Maintenance. Nodes and Cluster Events use Quartz AG Grid with 44px rows/headers, 20-row default pagination, and 20/50/100 selectors. Nodes derives Database text from `leaders.postgres_primary` with `roles.postgres_primary` fallback plus aggregate CloudNativePG readiness. Primary displays linked `Active`; non-primary active members display `Replica Healthy` only when configured instances equal active membership, every configured instance is Ready, and `fully_ready` is not false. Otherwise replicas display `Not Ready`; inactive historical rows display `Not Active`. Aggregate readiness cannot identify one failed replica, so degraded state marks every passive replica `Not Ready`. Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics. Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
-    - Release compatibility: `Data/Engine/release-manifest.json`.
-    - Initial cluster baseline: `Engine.sh` prefers exact dotted-numeric tag. Clean untagged checkout emits `dev-<first-12-commit-characters>`; API, controller, CRD, and node-manager require identity to match full SHA. Dirty checkout emits no baseline. Development commit must be reachable from configured origin for cross-node fetch and HMR restoration.
-    - Release catalog traversal does not assume GitHub publication order matches version order. It skips drafts, malformed tags, GitHub-channel mismatches, and downgrade-class entries, then continues until exact current tagged release appears. Development baselines stop after newest page. Every target uses GitHub compare API with full baseline and target SHAs; only `ahead` or `identical` remains selectable. Manifest must explicitly allow target channel.
-
-    ### State ownership
-
-    - `BorealisCluster`, `BorealisNodeAdmission`, `BorealisNodeRuntime`, and `BorealisClusterOperation` hold desired/runtime Kubernetes state. PostgreSQL remains durable audit and operation-event source.
-    - Controller reconciles cluster size/Cluster Virtual IP/baseline/HMR state, recent admissions, recent operations, and one `BorealisNodeRuntime` per active Engine node. CR specs carry desired state; status carries observed phase, approval, operation, Kubernetes node, runtime-owner, probe, release, and drain state. `BorealisCluster` accepts active size two only for `2 active / 3 desired` `Degraded Quorum` replacement recovery. PostgreSQL retains legacy `control_plane_vip` and `edge_vip` columns during transition; new enable operations write same `cluster_vip` into both and controller rejects unequal values. Ten-second repair loop recreates missing resources, patches drift, and avoids unchanged status writes.
-    - PostgreSQL tables `cluster_state`, `cluster_nodes`, `cluster_admissions`, `cluster_operations`, `cluster_operation_events`, `cluster_audit_events`, `cluster_invitations`, `realtime_outbox`, `cluster_application_leases`, and `cluster_schema_phases` hold audit, events, invitations, outbox, singleton leases, and immutable schema-phase completion.
-    - Controller observes CloudNativePG configured/Ready counts, current primary Pod, phase, full-readiness, and synchronous durability quorum. Observation persists under `cluster_state.config_json.database_runtime`, appears as top-level `database` in cluster snapshot, and drives recoverable `Degraded Database` status. Transactional mutation gates also read observed database runtime directly, so `Mixed Version` or another higher-priority lifecycle status cannot mask reduced database readiness. Historical failed operations remain immutable; snapshot annotates globally superseded cluster-enable/membership failures and retry path rejects them transactionally after later same-kind success.
-    - Retry records failed durable step under `payload_json.retry_resume_step`, increments attempt, and re-enters normal preflight. Successful preflight jumps to recorded checkpoint instead of replaying completed drain/update/member steps. Preflight failure retains checkpoint for next attempt; missing or no-longer-valid checkpoint fails closed. This prevents failed rolling update with one node already drained from restarting at first node and temporarily draining two application nodes.
-    - First controller claim pins its current immutable node-action image under `payload_json.action_image`. Every later controller holder uses that same image for operation-attempt Jobs, including after target controller promotion. Source action image already exists on every current Engine node, so later targets do not depend on target image distribution before their own staging step. Older operations without pin use current controller image until next claim records it.
-    - Planned primary movement does not trust Pod Ready alone. Controller queries current primary's `pg_stat_replication`, matches exact target Pod `application_name`, requires `state=streaming`, `sync_state=sync|quorum`, and target `flush_lsn` at or beyond query-time `pg_current_wal_flush_lsn()`. CloudNativePG manages application-role membership in built-in read-only `pg_read_all_stats` so PostgreSQL does not mask these replication fields; role does not grant table-data access or database mutation. After CloudNativePG changes primary, controller requires healthy phase, every configured instance Ready, every expected replica streaming through current flushed WAL, and at least one synchronous replica before application-role eligibility changes. HMR step replay repeats full post-switchover gate even when target already became primary.
-    - Safe paired removal resolves one active survivor and completes same synchronized primary-transfer gate before reducing CloudNativePG membership. Step replay therefore repeats safe survivor proof instead of letting CloudNativePG retain a primary on removal target. If survivor has no healthy synchronized replica, operation fails before changing `spec.instances`. After target writes persistent removal fence and K3s stops, retry recognizes NotReady state and skips target-pinned drain/fence Jobs. Fence wait tolerates temporary Kubernetes API errors through bounded step timeout, then resumes delete and verification from durable operation plan. Member verification scales removed node's resident Borealis Operator and WireGuard deployments to zero before final voter-health soak, preventing unschedulable infrastructure Pods from surviving successful removal.
-    - Controller preflight admits only replacement admission, emergency PostgreSQL failover, and maintenance exit while durable membership is temporarily two-of-three. Store also permits externally fenced emergency removal from a failed-operation `Degraded Quorum` state only while three active members remain recorded; normal removal and second removal from replacement state stay rejected. Emergency PostgreSQL failover intentionally omits pre-change backup so failed primary cannot block promotion; planned switchover retains mandatory backup.
-    - Controller persists `cluster_nodes.application_state` when node drain/exit steps cross their safe boundary. Enter-drain failure records conservative drained state because node manager writes drain label before scaling workloads, preventing API/UI from presenting failed update target as active. During steady state, unexpected Kubernetes `drained` label also records durable `k3s_restart_label_drift` drain and `Degraded Quorum`; controller never promotes observed `active` label into durable active state without explicit verified recovery. Cluster Virtual IP DaemonSet requires both existing control-plane and edge eligibility labels so same node owns K3s API, application ingress, and WireGuard address. Before maintenance or HMR changes those labels, fixed node-manager reconciliation initializes both from current Kubernetes application-state labels, applies combined selector, and waits for rollout. Labels are written before selector migration, preventing migration-created VIP outage. Joined-node K3s configuration persists both eligibility labels across restart.
-    - Maintenance store validates active membership and current application state, permits one drained application node at time, and accepts exit only for drained target. Independent store/WebUI application-capacity gates keep normal operations closed while durable active-member drain exists; HMR exit, emergency PostgreSQL failover, maintenance exit, and externally fenced emergency removal stay available. Store blocks independent maintenance mutation while HMR state is active. WebUI therefore reroutes drained-node **Exit Maintenance Mode** during isolation to `/hmr/exit` after explicit warning and `EXIT HMR`; controller restores full pinned-production placement. Completion preserves `2/3` quorum degradation and remaining database degradation; verified three-node recovery returns Healthy only when no recorded active node remains drained.
-    - Node manager accepts fixed verbs only, including persistent K3s membership fence, exact-version probe conformance, drained application preparation, and `RunSchemaPhase` limited to `expand|finalize` plus recorded target SHA. Preparation scales named node workloads and waits for rollouts without changing `borealis.io/application-state`; operation retry also accepts already-active state because earlier attempt may have completed activation before a later step failed. Any other state still fails closed. Only final activation clears drain after controller health gates. Joined-server config initially persists drained, role-ineligible labels. Every successful enter/exit drain transition atomically rewrites those runtime labels in `20-borealis-cluster-join.yaml`, preventing later K3s restart from undoing controller-approved activation or maintenance fencing. Manager never exposes arbitrary command or remote-shell execution and stays active across controlled K3s restarts so enrollment and one-node-at-a-time K3s upgrades can wait for control plane recovery without losing operation process. Systemd `ExecStop` invokes local-only `shutdown-handoff`; exact `systemctl is-system-running=stopping` gate makes ordinary service restart/update a no-op. Real host shutdown with Ready peer temporarily labels local node `borealis.io/engine-node=false`, waits up to 25 seconds for fixed Cluster Virtual IP lease to name alternate holder, then lets K3s stop. Persistent K3s config restores Engine-node label after reboot. Installer precreates exact `/etc/systemd/system/k3s.service.d` path and service sandbox grants only that systemd subtree for persistent member-removal fence; `ProtectSystem=strict` remains enabled. This ordering prevents surviving kube-vip containerd shim from renewing dead ingress lease after Traefik exits.
-    - Rolling schema work runs target revision's `site-worker` image in non-root, tokenless, node-pinned Job. Expand follows target image build/import and precedes first candidate health gate. Finalize runs only after every active `cluster_nodes.release_sha` equals target. `cluster_schema_phases` makes both fixed phases restart-safe and idempotent; finalize refuses missing expand record.
-    - Agent-path update probe sends credential-free `POST /api/agent/heartbeat` and requires exact `401 Unauthorized`. Candidate probe targets isolated Pod IP; active probe targets shared API Service. Expected auth rejection proves Agent route is registered and reachable without mutating Agent/device state or storing test credentials. Missing route (`404`), accepting unauthenticated traffic, timeout, or other status fails node health.
-    - Blank-node join requires `--peer-cidrs`. Node manager validates and canonicalizes bounded private IPv4 CIDRs, then invokes fixed `Engine.sh --cluster-prepare-node` workflow before consuming invitation. Preparation installs K3s installation/firewall and Longhorn iSCSI/NFS prerequisites, but does not install or join K3s until membership admission approval arrives.
-    - Expansion pair approval records same authenticated approval event for both admission IDs so both waiting joiners proceed. Degraded-quorum replacement records same compatible approval event for one admission. Join installation replaces running node-manager executable through atomic rename before enabling service, avoiding in-place executable overwrite failures.
-    - Membership-admit completion reconciles `cluster_nodes` by unique `node_name`. Re-admitting safely removed hostname revives retained node row, preserves durable node ID and creation time, refreshes mutable host/release/probe state, clears removal drain reason, and advances new admission record to `Admitted` in same transaction. Do not delete retained node history or replace durable node identity with admission UUID.
-    - Cluster controller exposes distinct `/startup`, `/ready`, and `/live` contracts. Startup proves local initialization completed, readiness depends on PostgreSQL operation-store access, and liveness proves only local HTTP process responsiveness. Long database bootstrap, node redeploy, or Kubernetes reconciliation never makes liveness depend on controller-loop progress or external dependencies.
-    - Cluster controller renews its 20-second PostgreSQL ownership lease every five seconds through an independent heartbeat while operation steps run. Each acquisition has a five-second deadline. Timeout evicts the selected driver connection plus every remaining idle connection in the controller-only pool. This bounds reusable stale sockets after the driver returns, but cannot interrupt an active lib/pq socket read blackholed during CloudNativePG primary failover; live HMR partition recovery remains tracked in [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466). Explicit ownership loss cancels step context immediately. Transient database errors during primary-service handoff are retried for at most 15 seconds; persistent failure cancels before lease expiry. Claim, advance, failure, and completion transactions lock and verify the same live lease row before changing durable operation state, so a former holder cannot record progress after fencing.
-    - Node-action Job names retain operation-attempt identity while human-readable step labels replace illegal separators and hash-truncate values beyond Kubernetes' 63-character limit. Full unsanitized step remains in PostgreSQL and `BorealisClusterOperation` state for audit.
-    - Node-action Job creation is idempotent across controller restart and create races. Controller treats `409 AlreadyExists` as resume candidate only after re-reading Job and matching namespace, operation label, full step annotation, normalized step label, target node, ServiceAccount boundary, immutable image, command, and arguments. Engine-update replay alone may retain existing Job's different immutable Borealis action image when source controller created exact operation/attempt/step before target controller acquired lease mid-rollout; every other image or identity mismatch fails closed without waiting on or replacing existing Job.
-    - Node-action Job polling treats bounded Kubernetes API `429`, `5xx`, timeout, connection refusal/reset, and wrapped `io.EOF` failures as transient until step context ends. Authorization and TLS trust failures remain terminal. This prevents temporary control-plane restart transport loss from failing an action that remains active or completes successfully.
-    - Engine manages explicit `docker.io`, `ghcr.io`, `quay.io`, and `registry.k8s.io` entries in K3s `registries.yaml`. `embedded-registry: true` alone does not activate Spegel exchange; each source registry must be enabled on every node. Joined nodes receive mirror configuration before K3s starts.
-    - Borealis images are atomically staged under `/var/lib/rancher/k3s/agent/images` and imported by K3s. K3s pins these archives and adds containerd distribution-source labels required by Spegel. Engine waits for both local image presence and matching source label; direct `ctr images import` is not accepted because imported content can remain invisible to peers. Successful cluster revision staging retains current archive plus one rollback predecessor per managed service and deletes older service archives. This bounds restart-time preload work without removing current or immediate rollback image; separately named operation-action and recovery archives remain untouched.
-    - WireGuard route DaemonSet uses initialization-only startup, route-aware readiness, and local-process liveness. Cluster Virtual IP owner routes Agent CIDRs directly through `borealis-wg`; standby nodes route same CIDRs through fixed Cluster Virtual IP, so VIP movement changes next-hop ownership without rewriting every host route. Missing interface or temporary VIP convergence keeps readiness false while reconciliation remains alive. Full deploys and scoped WireGuard rebuild/reconcile operations apply same DaemonSet renderer and wait for every Engine node to become ready.
-    - WireGuard control Deployment remains running on every active Engine node. Controller checks fixed Cluster Virtual IP on host each second: non-owner suppresses validated activation mutations and withdraws any stale interface; owner bootstraps missing listener/interface/address/route/firewall from shared identity and requires live interface for readiness. Lifecycle withdrawal marker prevents ownership loop from undoing preStop before Pod exits. API replicas store active tunnel identity, readiness callbacks, transport timestamps, operator association, endpoint, expiry, and allowed ports in PostgreSQL with optimistic generation checks. Cluster Virtual IP owner replays active session rows plus durable IP/key leases every three seconds, so newly elected owner rebuilds only live listener peers and any API replica can answer status or scheduler readiness. Short-lived signed tokens remain derived, not stored. Cluster conversion copies existing server keypair into `borealis-wireguard-server-keys`; API and WireGuard pods mount same read-only Secret on every node. Control process accepts Kubernetes projected-file symlinks only when resolved key remains regular file inside mounted secret directory. API peer manager and Engine deployment both preserve `0770` on shared WireGuard config/key directories and `0640` on files so root control process with only Borealis group membership can perform atomic config writes without broad filesystem capabilities. WireGuard update candidate stays zero-replica to avoid host-port collision while active controller preserves ownership.
-    - Node manager reads only local K3s etcd metrics and reports exact `etcd_server_is_leader` gauge as node label. Cluster controller combines that report with fixed Cluster Virtual IP lease, CloudNativePG current primary Pod, scheduler application lease, and owner-aware WireGuard readiness. It persists observed etcd, Cluster Virtual IP, PostgreSQL, scheduler, and WireGuard owners into node runtime roles. Update request pins a non-leader-first node ID sequence from these observations; later role movement cannot change remaining sequence. Transfer-away fencing requires Cluster Virtual IP lease to leave target and keeps WireGuard controller scaled without requiring prior-release standby readiness, then accepts actual eligible owner only after WireGuard workload becomes Ready. HMR entry requires Cluster Virtual IP on exact selected target. HMR exit pins PostgreSQL to first restored standby but accepts any healthy non-target Cluster Virtual IP owner after target fencing.
-    - Drain withdrawal waits only on node-scoped traffic Services scaled or removed by application drain: API/Aegis, scheduler, guacd, Traefik, WebUI, and site workers. Resident operator and database endpoints remain available for control-plane and storage safety and cannot block rolling progress. Isolated candidate Pod endpoints stay available for candidate inspection and Aegis key delivery but do not count as active traffic during withdrawal.
-    - Standalone generic Deployments remain zero-replica templates after cluster enablement. Scoped/full deploys update Secrets, Services, and templates without launching unpinned duplicate Pods. Per-node reconciliation always starts from this canonical generic template, then reapplies node affinity, immutable image, candidate fencing, and cluster-specific mounts while preserving each existing Deployment's immutable selector. Generated per-node Deployments use one authoritative server-side field manager and reclaim conflicting generated fields left by emergency `kubectl set` or patch operations. Existing node clones never remain source of stale environment values, Secret references, probes, or operator image allowlists. After promoted active workload passes rollout health, promotion copies immutable container images and target revision to matching generic template before deleting candidate. Patch includes fetched Kubernetes `resourceVersion`, so concurrent scaling or template mutation returns conflict instead of overwriting newer state. Promotion validates returned Deployment remains zero-replica with exact revision and images. Missing template, nonzero generic replica count, container mismatch, conflict, invalid response, or failed postcondition stops operation without launching generic workload. Baseline reconciliation preserves controller-owned application, edge, scheduler, and PostgreSQL eligibility labels on active/pending cluster members.
-    - Lost-HMR-target recovery does not commit durable `Degraded Quorum` state while former target can still serve application traffic or own edge/WireGuard. If target rejoins during recovery, controller runs fixed `EnterApplicationDrain`, reapplies role-ineligible labels, waits for traffic endpoint withdrawal, and requires edge lease plus ready WireGuard ownership on another node before committing target as `hmr_target_lost`.
-    - Cluster Virtual IP uses one kube-vip leader lease, `/32` ARP advertisement, local metrics liveness, K3s API readiness on TCP `6443`, and disruption budget. One owner prevents competing ARP advertisements while same address serves K3s API, application ingress, and WireGuard. kube-vip `v1.1.0` health listener is intentionally disabled because it keeps process alive after manager loses leadership; normal process exit lets Kubernetes restart manager. Bootstrap does not accept running Pod as proof: it waits for DaemonSet rollout, non-empty lease holder, local VIP address, and K3s `/readyz` through Cluster Virtual IP.
-    - First-node conversion uses explicit stop-start handoff for generic host-network Traefik and WireGuard pods. Later Traefik candidate promotion uses same host-port handoff; WireGuard candidate stays stopped while active owner-aware controller is replaced. WireGuard promotion rewrites copied readiness to an owner-aware compatibility contract: control-reported standby is healthy only while shared interface is absent, while active ownership still invokes pinned image's full interface/listener/route healthcheck. This lets HMR restore a pinned production image from before standby-aware image probes without weakening owner validation. Failed first-node handoff restores prior standalone host workload replica count.
-    - Job-scheduler candidate starts with `BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE=false`. Health probe can validate process and PostgreSQL without candidate acquiring database lease or issuing work. Promotion rewrites flag to `true` before active Deployment rollout.
-    - Cluster-controller candidate serves local probes but cannot acquire operation lease. API candidate disables background loops and stays outside public API traffic while remaining in mTLS-only Aegis peer Service so current memory key can reach candidate before promotion. Promotion restores controller eligibility and API loops in active pod template. Candidate probes therefore cannot mutate cluster ownership or receive public application traffic before promotion.
-    - First-node SQLite-to-etcd conversion temporarily restarts K3s. Cluster controller Job polling treats bounded Kubernetes API `429`, `5xx`, timeout, and connection failures as transient until step deadline. Only already-created `EnrollCluster` Job polling permits a two-minute `401`/`403` recovery window while K3s switches datastore; persistent authorization failure and authorization errors in every other operation still fail.
-    - K3s Plan polling also treats bounded Kubernetes API `429`, `5xx`, timeout, and connection failures during expected server restart as transient until step deadline. Kubernetes Job `status.failed` counts retryable Pods, so controller fails a Plan only when Job publishes terminal `Failed=True`; a later successful retry can still complete same Plan. Retry preflight lists exact operation-labeled Plans, verifies ownership, and deletes resources left by prior attempts before creating fresh attempt names. System Upgrade Controller normalizes Plan `status.latestVersion` from `vX.Y.Z+k3sN` to `vX.Y.Z-k3sN` and leaves completed target cordoned; controller accepts only exact requested version or that exact separator normalization, explicitly uncordons target, then still requires Ready etcd voter health and exact `+k3s` kubelet version from Node status. Operation retry first checks that same Ready/voter/version contract and uncordons already-upgraded target without submitting another restart Plan.
-    - Conversion explicitly restarts Cluster Virtual IP kube-vip DaemonSet after K3s returns. Existing kube-vip process surrenders lease during datastore restart and unchanged server-side apply does not restart it; controller verifies fresh rollout, lease holder, local VIP address, and Cluster Virtual IP `/readyz` before continuing.
-    - Database cutover records CloudNativePG service URL before scaling retained standalone StatefulSet to zero. Subsequent deploys preserve that URL only when CNPG reports healthy primary endpoint and standalone replicas remain zero; failed partial conversion cannot silently revive stale database. Operator-owned site-worker Pod restoration waits separately for named Pod recreation and readiness.
-    - Cluster-enable and node-redeploy retries pass recorded immutable baseline SHA through controller Job and fixed node-manager contract. Node manager gives only Engine child process command-scoped Git safe-directory trust plus manager-owned writable build home under `Engine/Deploy/node-manager-home`; hardened service keeps host `/root` unavailable. Workload initialization resolves same pinned commit without mutating global Git configuration. Later operator checkout movement cannot change retry revision.
-    - Engine updates split target image staging from candidate creation. `StageRevisionImages` builds/imports every target image and writes root-owned `Engine/Deploy/cluster-staged-revision` only after imports finish. Expand schema then runs from staged target image. `RedeployRevision` accepts matching marker/image manifest before creating candidate, preventing target process from starting against pre-expand schema.
-    - Node redeploy starts target release's staged manager as separate transient activator outside old service sandbox. Activator validates pinned worktree and its own staged inode, waits until node-action Job leaves Running/Pending state, atomically installs target binary plus systemd unit, restarts node manager outside old service cgroup, verifies running process uses installed inode plus recreated Unix socket, then records target SHA in `/etc/borealis/node-manager-revision`. This lets first rolling update cross old-manager/new-manager boundary without killing action that performs update. Repeated redeploy skips refresh only when recorded SHA and running executable already match.
-    - CLI operation polling tolerates bounded transient API loss after mutation acceptance. It never resubmits POST; persistent loss reports operation ID as still running server-side and directs operator to inspect Cluster Events.
-    - Engine persists canonical private `BOREALIS_K3S_PEER_CIDRS` values into runtime Secret. Node-scoped release deploy hydrates same allowlist and fails closed when missing, preventing rolling updates from silently replacing cluster firewall policy with empty peer access.
-    - Shared Agent artifacts use one exact Longhorn RWX PVC. Three-node controller reconciliation raises only that bound volume to at least three replicas, verifies fixed PVC/PV/Longhorn ownership, and requires one healthy running replica on each active Engine before planned disruptive operations or pending-node workload activation. It never changes global one-replica StorageClass policy and never reduces an operator-configured higher replica count. A `3 -> 1` downscale leaves existing replica count unchanged to avoid deleting survivor copies; later expansion rebuilds missing per-node copies.
-    - Longhorn RWX storage requires host NFSv4 mount utilities in addition to iSCSI. `Engine.sh` checks device-mapper maps before storage reconciliation. Dedicated hosts with no genuine multipath maps have `multipathd.service` and `multipathd.socket` disabled; Longhorn-only maps are flushed by exact mapper name. Any genuine multipath map fails closed and directs operator to configure [Longhorn device blacklist](https://longhorn.io/kb/troubleshooting-volume-with-multipath/). Seed copies only missing or changed files, byte-compares every source file, and allows bounded time for large existing artifact caches.
-    - K3s does not bundle CSI VolumeSnapshot API resources. Cluster bootstrap checksum-pins external-snapshotter `v8.5.0` CRDs, deploys digest-pinned common snapshot controller with leader election and probes, then restarts CloudNativePG so daily Longhorn snapshot support is discovered before database migration.
-    - Restored `borealis-longhorn-local` volumes carry hard node affinity selected by CSI. Snapshot validation must select any Engine node with `borealis.io/engine-node=true` and let Kubernetes match recovery Pod to restored PV; do not pin recovery to presumed source host. A `VolumeBinding` node-affinity mismatch means Pod pin conflicts with restored PV topology, not failed snapshot data.
-    - Cluster API replicas expose separate TLS 1.3 mTLS-only Aegis key receiver from `aegis_cluster_fanout.go`; cert-manager assets and headless Service live in `Data/Engine/K3s/cluster/aegis-mtls.yaml`.
-
-    ### Qualification
-
-    - Stable K3s must pass `Data/Engine/K3s/cluster/run-probe-conformance.sh` on every Engine node. Test requires ten consecutive clean trials because affected K3s can alternate between correct and broken scheduling. Each trial pins workload to local node, forces liveness failure, waits for replacement container, proves replacement startup executes, and proves startup-budget liveness delay resets so no early replacement liveness runs. One failed trial deletes prior result and blocks cluster mode. Successful exact-version record lives at `/etc/rancher/k3s/borealis-probe-conformance.json`, includes ten-trial evidence, and sits inside node manager's narrow writable configuration path; manager never receives write access to K3s server-state directory. Policy tests also require every Borealis, CloudNativePG, Longhorn CSI, kube-vip, and snapshot-controller liveness delay to exceed corresponding startup failure budget. Full deployment reapplies dependency guards, waits for guarded CloudNativePG instances, and changes site-worker probe-contract hash so existing bare Pods recycle safely. Per-node candidate reconciliation also overwrites copied active probe settings with target release's guarded delay before candidate starts. Pair admission runs this gate before deploying application workloads. This safely contains [Kubernetes issue 141155](https://github.com/kubernetes/kubernetes/issues/141155) without fork, release candidate, fabricated result, or unsafe override. Remove delay shim only after supported stable K3s contains upstream fix and full qualification passes.
-    - K3s membership removal qualification must prove Kubernetes Node deletion removes embedded-etcd membership while fenced host stays disabled. Keep qualification gate until current K3s behavior also excludes regressions tracked by [k3s issue 13623](https://github.com/k3s-io/k3s/issues/13623) and [k3s issue 13498](https://github.com/k3s-io/k3s/issues/13498).
-    - Snapshot-restore qualification creates a unique one-instance CloudNativePG cluster from a completed Ready VolumeSnapshot, validates original system ID plus point-in-time Borealis state, proves primary write capability through rolled-back temporary data, confirms production stays healthy, and deletes only validation cluster/PVC after evidence is retained.
-    - Current merge/release target needs disposable same-L2 Ubuntu qualification for `1 -> 3 -> 1`, replacement, partition, leader death, rolling Engine/K3s update failure, CNPG failover, snapshot restore, and continuous API/UI/Agent traffic. Odd membership changes beyond three nodes remain future roadmap work for separate issue/PR after three-node work closes.
+### Qualification
+- Stable K3s must pass `Data/Engine/K3s/cluster/run-probe-conformance.sh` on every Engine node.
+- The test requires ten consecutive clean trials because affected K3s can alternate between correct and broken scheduling.
+- Each trial pins the workload to the local node, forces a liveness failure, waits for the replacement container, proves replacement startup executes, and proves the startup-budget liveness delay resets so no early replacement liveness runs.
+- One failed trial deletes the previous result and blocks cluster mode.
+- A successful exact-version record lives at `/etc/rancher/k3s/borealis-probe-conformance.json`, includes ten-trial evidence, and sits inside the node manager's narrow writable configuration path.
+- The manager never receives write access to the K3s server-state directory.
+- Policy tests also require every Borealis, CloudNativePG, Longhorn CSI, kube-vip, and snapshot-controller liveness delay to exceed the corresponding startup failure budget.
+- Full deployment reapplies dependency guards, waits for guarded CloudNativePG instances, and changes the site-worker probe-contract hash so existing bare Pods recycle safely.
+- Per-node candidate reconciliation also overwrites copied active-probe settings with the target release's guarded delay before the candidate starts.
+- Pair admission runs this gate before deploying application workloads.
+- This contains [Kubernetes issue 141155](https://github.com/kubernetes/kubernetes/issues/141155) without a fork, release candidate, fabricated result, or unsafe override.
+- Remove the delay shim only after the supported stable K3s release contains the upstream fix and full qualification passes.
+- K3s membership-removal qualification must prove Kubernetes Node deletion removes embedded-etcd membership while the fenced host remains disabled.
+- Keep the qualification gate until current K3s behavior also excludes regressions tracked by [k3s issue 13623](https://github.com/k3s-io/k3s/issues/13623) and [k3s issue 13498](https://github.com/k3s-io/k3s/issues/13498).
+- Snapshot-restore qualification creates a unique one-instance CloudNativePG cluster from a completed Ready VolumeSnapshot, validates the original system ID plus point-in-time Borealis state, proves primary write capability through rolled-back temporary data, confirms production remains healthy, and deletes only the validation cluster/PVC after evidence is retained.
+- The current merge/release target requires disposable same-Layer-2 Ubuntu qualification covering `1 -> 3 -> 1`, replacement, partition, leader death, rolling Engine/K3s update failure, CloudNativePG failover, snapshot restore, and continuous API/UI/Agent traffic.
+- Odd membership changes beyond three nodes remain future roadmap work for a separate issue and pull request after the three-node work closes.
+```
