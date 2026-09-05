@@ -23,49 +23,71 @@ func main() {
 		fmt.Fprintln(os.Stderr, "POSTGRES INVENTORY FAIL: test source directory missing or empty")
 		os.Exit(1)
 	}
-	functions := map[string]*ast.FuncDecl{}
+	// Package functions, methods and external test packages have distinct scopes.
+	// Keep declaration identity so a same-named method cannot replace a helper.
+	packages := map[string]map[string]*ast.FuncDecl{}
+	functions := map[*ast.FuncDecl]string{}
 	for _, path := range files {
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		if packages[file.Name.Name] == nil {
+			packages[file.Name.Name] = map[string]*ast.FuncDecl{}
+		}
 		for _, declaration := range file.Decls {
-			if function, ok := declaration.(*ast.FuncDecl); ok {
-				functions[function.Name.Name] = function
+			if function, ok := declaration.(*ast.FuncDecl); ok && function.Recv == nil {
+				packages[file.Name.Name][function.Name.Name] = function
+				functions[function] = file.Name.Name
 			}
 		}
 	}
-	database := map[string]bool{}
+	database := map[*ast.FuncDecl]bool{}
 	for changed := true; changed; {
 		changed = false
-		for name, function := range functions {
-			if database[name] {
+		for function, packageName := range functions {
+			if database[function] {
 				continue
 			}
-			ast.Inspect(function.Body, func(node ast.Node) bool {
+			var inspect func(ast.Node) bool
+			inspect = func(node ast.Node) bool {
 				switch value := node.(type) {
 				case *ast.BasicLit:
 					if value.Kind == token.STRING {
 						literal, _ := strconv.Unquote(value.Value)
 						if literal == "BOREALIS_TEST_DATABASE_URL" {
-							database[name] = true
+							database[function] = true
 						}
 					}
 				case *ast.Ident:
-					if database[value.Name] {
-						database[name] = true
+					var target *ast.FuncDecl
+					if value.Obj != nil {
+						// Parser resolves local bindings, including shadowing variables.
+						target, _ = value.Obj.Decl.(*ast.FuncDecl)
+					} else {
+						// A package helper may be declared in another test file.
+						target = packages[packageName][value.Name]
 					}
+					if database[target] {
+						database[function] = true
+					}
+				case *ast.SelectorExpr:
+					// Selector names belong to a receiver or imported package, never
+					// to this package's function scope. Still inspect the receiver.
+					ast.Inspect(value.X, inspect)
+					return false
 				}
 				return true
-			})
-			changed = changed || database[name]
+			}
+			ast.Inspect(function.Body, inspect)
+			changed = changed || database[function]
 		}
 	}
 	tests := []string{}
-	for name := range database {
-		if strings.HasPrefix(name, "Test") && functions[name].Recv == nil {
-			tests = append(tests, name)
+	for function := range database {
+		if strings.HasPrefix(function.Name.Name, "Test") {
+			tests = append(tests, function.Name.Name)
 		}
 	}
 	sort.Strings(tests)

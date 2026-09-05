@@ -34,6 +34,29 @@ func TestUnit(t *testing.T) { /* BOREALIS_TEST_DATABASE_URL */ }
 ''')
             self.assertEqual(source_tests(root), ["TestIndirect"])
 
+    def test_source_discovery_resolves_package_helpers_without_name_collisions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "database_test.go").write_text('''package example
+import ("os"; "testing")
+func databaseURL() string { return os.Getenv("BOREALIS_TEST_DATABASE_URL") }
+type fixture struct{}
+func (fixture) databaseURL() string { return "unit" }
+func TestIndirect(t *testing.T) { _ = databaseURL() }
+func TestMethod(t *testing.T) { _ = (fixture{}).databaseURL() }
+func TestShadow(t *testing.T) { databaseURL := func() string { return "unit" }; _ = databaseURL() }
+''')
+            (root / "other_test.go").write_text('''package example
+import "testing"
+func TestCrossFile(t *testing.T) { _ = databaseURL() }
+''')
+            (root / "external_test.go").write_text('''package example_test
+import "testing"
+func databaseURL() string { return "unit" }
+func TestExternal(t *testing.T) { _ = databaseURL() }
+''')
+            self.assertEqual(source_tests(root), ["TestCrossFile", "TestIndirect"])
+
     def test_missing_unregistered_and_empty_source_fail(self):
         for required, discovered in [(["TestGone"], []), ([], ["TestNew"]), ([], [])]:
             with self.subTest(required=required, discovered=discovered), self.assertRaises(ValueError):
