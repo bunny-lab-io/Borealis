@@ -50,7 +50,7 @@ Status means productized support in current Borealis codebase and docs, not long
     | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. |
     | Code Signing | Sign script delivery and enforce trusted execution payloads. |
     | REST/API Surface | Expose authenticated APIs for devices, jobs, files, registry, processes, services, software, filters, sites, logs, and runtime operations. |
-    | Engine Clustering | Coordinate gated one/three-node K3s topology, per-node application workloads, quorum-aware maintenance, cluster-wide HMR isolation, and rolling stable-release updates. Odd membership changes beyond three nodes remain fenced future roadmap work. |
+    | Engine Clustering | Coordinate gated one/three-node K3s topology, per-node application workloads, quorum-aware maintenance, existing HMR isolation recovery, and rolling stable-release updates. Odd membership changes beyond three nodes remain fenced future roadmap work. |
     | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
 
 ## Getting Started

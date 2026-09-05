@@ -371,6 +371,11 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if err != nil || !ok {
 		return err
 	}
+	// Old queued or interrupted entry may predate the API/store gate. Fail it
+	// through normal recovery state before creating intent or running any step.
+	if operation.Kind == "hmr_start" {
+		return c.failOperation(runCtx, operation, errClusterHMREntryDisabled)
+	}
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
 		if err := runner.recordClusterIntent(runCtx, operation, clusterControllerStep{Name: operation.CurrentStep, NodeID: operation.TargetNodeID}); err != nil {
 			// Cluster enablement installs CRDs during foundation step. Until then,
@@ -1722,6 +1727,9 @@ func truncateClusterError(value string, maximum int) string {
 }
 
 func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation clusterControllerOperation, step clusterControllerStep, nodes []clusterControllerNode) error {
+	if operation.Kind == "hmr_start" {
+		return errClusterHMREntryDisabled
+	}
 	if r == nil || r.kube == nil {
 		return errors.New("Kubernetes cluster runner is unavailable")
 	}

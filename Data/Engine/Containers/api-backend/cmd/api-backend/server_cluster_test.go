@@ -151,30 +151,24 @@ func TestClusterMutationsAcceptValidAdminSessionWithoutFreshStepUp(t *testing.T)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token))
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/exit", `{"confirmation":"EXIT HMR"}`, token))
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("expected valid Admin session acceptance without step-up, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.mutation.Kind != "hmr_start" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
+	if store.mutation.Kind != "hmr_exit" {
 		t.Fatalf("unexpected mutation: %+v", store.mutation)
 	}
 }
 
-func TestClusterHMRStartQueuesValidatedTarget(t *testing.T) {
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
-	auth, token := clusterTestAuth(t, store)
-	mux := http.NewServeMux()
-	registerServerClusterRoutes(mux, auth)
-	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token)
-	recorder := httptest.NewRecorder()
-
-	mux.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusAccepted {
-		t.Fatalf("expected accepted HMR operation, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if store.mutation.Kind != "hmr_start" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
-		t.Fatalf("unexpected mutation: %+v", store.mutation)
+func TestClusterHMRStartRejectsEntryBeforeStore(t *testing.T) {
+	for _, size := range []int64{1, 3} {
+		store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"enabled": true, "active_size": size, "hmr": map[string]any{"state": "inactive"}}}
+		auth, token := clusterTestAuth(t, store)
+		recorder := httptest.NewRecorder()
+		clusterHMRStartHandler(auth).ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token))
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "cluster_hmr_entry_disabled") || store.mutation.Kind != "" {
+			t.Fatalf("%d-node HMR entry reached store: %d %s %+v", size, recorder.Code, recorder.Body.String(), store.mutation)
+		}
 	}
 }
 

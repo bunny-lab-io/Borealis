@@ -10255,9 +10255,10 @@ service_action() {
   [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [dev|prod]"
   validate_service "${service}"
   mode="$(normalize_mode "${mode}")"
-  if [[ "${service}" == "webui-frontend" && "${action}" == "rebuild" ]]; then
+  # Any dev service action can rewrite shared runtime mode or WebUI templates.
+  if [[ "${mode}" == "dev" || ( "${service}" == "webui-frontend" && "${action}" == "rebuild" ) ]]; then
     local hmr_guard_status=0
-    cluster_hmr_guard "${mode}" webui-frontend || hmr_guard_status=$?
+    cluster_hmr_guard "${mode}" "${service}" || hmr_guard_status=$?
     if [[ "${hmr_guard_status}" -eq 10 ]]; then
       return 0
     fi
@@ -11533,11 +11534,52 @@ print(next((str(item.get("state") or "unknown") for item in (payload.get("operat
   die "Cluster operation ${operation_id} did not complete within 60 minutes."
 }
 
+# HMR needs a confirmed membership result: 0 clustered, 1 standalone,
+# 2 unavailable. General cluster detection remains separate from this gate.
+cluster_hmr_membership_status() {
+  if ! k3s_cluster_installed; then
+    [[ ! -e "${K3S_KUBECONFIG}" ]] || return 2
+    return 1
+  fi
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 2
+  local resource=""
+  if ! resource="$(k3s_kubectl --request-timeout=10s get crd borealisclusters.borealis.io --ignore-not-found -o name 2>/dev/null)"; then
+    return 2
+  fi
+  if [[ -n "${resource}" ]]; then
+    if ! resource="$(k3s_kubectl --request-timeout=10s -n "${K3S_NAMESPACE}" get borealiscluster/borealis --ignore-not-found -o name 2>/dev/null)"; then
+      return 2
+    fi
+    [[ -z "${resource}" ]] || return 0
+  fi
+  # Conversion records cluster_state before publishing its Kubernetes CR.
+  # Missing CR alone cannot prove standalone, including failed conversion.
+  local recorded_cluster=""
+  if ! recorded_cluster="$(k3s_kubectl --request-timeout=10s -n "${K3S_NAMESPACE}" exec postgres-db-0 -c postgres-db -- sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=5000 -c default_transaction_read_only=on" psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' \
+    sh 'SELECT EXISTS (SELECT 1 FROM engine.cluster_state);' 2>/dev/null)"; then
+    return 2
+  fi
+  case "${recorded_cluster}" in
+    t) return 0 ;;
+    f) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 cluster_hmr_guard() {
   local mode="$1"
-  local service="${2:-all}"
-  cluster_mode_enabled || return 0
   [[ "${mode}" == "dev" || "${mode}" == "prod" ]] || return 0
+  local membership_status=0
+  cluster_hmr_membership_status || membership_status=$?
+  case "${membership_status}" in
+    0) ;;
+    1) return 0 ;;
+    *) die "Cluster membership unavailable; refusing direct dev/prod deployment. Restore cluster access before retrying." ;;
+  esac
+  if [[ "${mode}" == "dev" ]]; then
+    die "New clustered HMR entry is disabled. Restore existing isolation to pinned production through Cluster Management."
+  fi
   local snapshot=""
   if ! snapshot="$(cluster_api_request GET /api/server/cluster)"; then
     die "Cluster API unavailable; HMR state was not changed."
@@ -11549,38 +11591,19 @@ payload=json.load(sys.stdin)
 node_name=sys.argv[1]
 node_id=next((str(node.get("id") or "") for node in (payload.get("nodes") or []) if node.get("node_name") == node_name), "")
 hmr=payload.get("hmr") or {}
-print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_id") or ""))))' "${node_name}" <<< "${snapshot}" 2>/dev/null)"; then
+print("\t".join((node_id,str(hmr.get("state") or "inactive"))))' "${node_name}" <<< "${snapshot}" 2>/dev/null)"; then
     die "Cluster API returned invalid HMR state; HMR state was not changed."
   fi
   local node_id=""
   local hmr_state=""
-  local hmr_node_id=""
-  IFS=$'\t' read -r node_id hmr_state hmr_node_id <<< "${state_line}"
+  IFS=$'\t' read -r node_id hmr_state <<< "${state_line}"
   [[ -n "${node_id}" ]] || die "Current node ${node_name} is not an active Engine cluster node."
-  if [[ "${mode}" == "dev" && "${hmr_state}" == "active" && "${hmr_node_id}" == "${node_id}" ]]; then
-    return 0
-  fi
-  if [[ "${mode}" == "prod" && "${hmr_state}" != "active" ]]; then
+  if [[ "${hmr_state}" != "active" && "${hmr_state}" != "restore_failed" ]]; then
     die "Cluster production deploys require Cluster Management Update Node/Update All. Direct deploy prod is blocked."
   fi
 
-  local confirmation=""
-  local endpoint=""
-  local body=""
-  if [[ "${mode}" == "dev" ]]; then
-    printf '%s\n' "This moves all Borealis application traffic to this node and places every other Engine node in drained standby. Cluster loses application HA until production mode is restored." >&2
-    if [[ -t 0 ]]; then
-      read -r -p "Type ENABLE HMR to continue: " confirmation
-      [[ "${confirmation}" == "ENABLE HMR" ]] || die "HMR activation cancelled."
-    else
-      [[ "${CLUSTER_NON_HA_ACKNOWLEDGED}" -eq 1 ]] || die "Non-interactive clustered DEV mode requires --acknowledge-cluster-non-ha."
-    fi
-    endpoint="/api/server/cluster/hmr/start"
-    body="$(printf '{\"node_id\":\"%s\",\"confirmation\":\"ENABLE HMR\"}' "${node_id}")"
-  else
-    endpoint="/api/server/cluster/hmr/exit"
-    body='{"confirmation":"EXIT HMR"}'
-  fi
+  local endpoint="/api/server/cluster/hmr/exit"
+  local body='{"confirmation":"EXIT HMR"}'
   local response=""
   if ! response="$(cluster_api_request POST "${endpoint}" "${body}")"; then
     die "Cluster HMR request failed; inspect Cluster Management before retrying."
@@ -11591,11 +11614,8 @@ print("\t".join((node_id,str(hmr.get("state") or "inactive"),str(hmr.get("node_i
   fi
   [[ "${operation_id}" =~ ^[0-9a-f-]{36}$ ]] || die "Cluster HMR request did not return operation ID."
   cluster_wait_for_operation "${operation_id}"
-  if [[ "${mode}" == "prod" ]]; then
-    printf 'Pinned production release restored cluster-wide; local HMR source preserved.\n'
-    return 10
-  fi
-  printf 'Cluster entered non-HA HMR mode on %s; starting %s DEV workload.\n' "${node_name}" "${service}"
+  printf 'Pinned production release restored cluster-wide; local HMR source preserved.\n'
+  return 10
 }
 
 cluster_enable_engine() {

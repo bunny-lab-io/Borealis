@@ -7,6 +7,7 @@
     "TestClusterCompletionPostgresPreservesAndClearsRecoveryState",
     "TestClusterControllerClaimPinsOperationActionImage",
     "TestClusterControllerPostgresLeaseSerializesLongStep",
+    "TestClusterHMREntryPostgresRejectsLegacyQueuePreservesRecovery",
     "TestClusterMaintenanceStorePostgresRecoveryGates",
     "TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity",
     "TestClusterMembershipStorePostgresReleaseFences",

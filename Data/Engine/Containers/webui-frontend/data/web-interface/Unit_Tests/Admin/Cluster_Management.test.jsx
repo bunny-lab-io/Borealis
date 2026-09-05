@@ -49,7 +49,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
         release_channel: state.releaseChannel,
         last_stable_release: state.lastStableRelease,
         k3s_version: "v1.36.3+k3s1",
-        hmr: { state: state.hmrState, node_id: state.hmrState === "active" ? "11111111-1111-4111-8111-111111111111" : "" },
+        hmr: { state: state.hmrState, node_id: ["active", "restore_failed"].includes(state.hmrState) ? "11111111-1111-4111-8111-111111111111" : "" },
         leaders: {
           etcd_leader: "11111111-1111-4111-8111-111111111111",
           control_vip_owner: "11111111-1111-4111-8111-111111111111",
@@ -268,16 +268,16 @@ describe("Cluster Management", () => {
     expect(screen.getAllByText("engine-1").length).toBeGreaterThan(1);
   });
 
-  it("labels development isolation and explains monthly revision and hotfix versions", async () => {
+  it("labels isolation recovery and explains monthly revision and hotfix versions", async () => {
     state.hmrState = "inactive";
     renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
 
     expect(screen.getByText("Cluster-Wide Node Isolation")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Isolated Node" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Isolated Node" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Enable Isolation" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Disable Isolation" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Isolated Node" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable Isolation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disable Isolation" })).toBeDisabled();
+    expect(screen.getByText(/New clustered HMR entry is disabled/)).toBeInTheDocument();
     expect(screen.getByText(/published, non-prerelease GitHub releases/)).toBeInTheDocument();
     expect(screen.getByText(/YYYY\.MM\.REVISION for normal monthly releases/)).toBeInTheDocument();
     expect(screen.getByText(/YYYY\.MM\.REVISION\.HOTFIX for focused corrections/)).toBeInTheDocument();
@@ -315,12 +315,35 @@ describe("Cluster Management", () => {
     expect(await screen.findByText("Borealis Cluster Management Not Enabled on this Node")).toBeInTheDocument();
   });
 
-  it("locks isolated-node selection to current target while isolation is active", () => {
+  it.each([1, 3])("offers no new HMR entry on %i-node clusters", (size) => {
+    state.hmrState = "inactive";
+    state.activeSize = size;
+    state.desiredSize = size;
     renderClusterManagement("/cluster-management?tab=maintenance");
+    expect(screen.queryByRole("button", { name: "Enable Isolation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Isolated Node" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disable Isolation" })).toBeDisabled();
+  });
 
-    const isolatedNode = screen.getByRole("combobox", { name: "Isolated Node" });
-    expect(isolatedNode).toHaveAttribute("aria-disabled", "true");
-    expect(isolatedNode).toHaveTextContent("engine-1");
+  it.each(["active", "restore_failed"])("restores existing %s isolation through unchanged exit contract", async (hmrState) => {
+    state.hmrState = hmrState;
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") return { ok: true, status: 202, json: async () => ({ operation_id: "44444444-4444-4444-8444-444444444444" }) };
+      if (String(path).endsWith("/releases")) return { ok: true, json: async () => ({ releases: [] }) };
+      if (String(path).includes("/events")) return { ok: true, json: async () => ({ events: [] }) };
+      return { ok: true, json: async () => ({ enabled: true, hmr: { state: "restoring" }, nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=maintenance");
+    expect(screen.getByText("Isolated node: engine-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Disable Isolation" }));
+    fireEvent.change(screen.getByLabelText("Typed confirmation"), { target: { value: "EXIT HMR" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/hmr/exit",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ confirmation: "EXIT HMR" }) }),
+    ));
+    expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/hmr/start"))).toBe(false);
   });
 
   it("enables clustering with one private Cluster Virtual IP", async () => {

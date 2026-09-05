@@ -355,6 +355,9 @@ func (s *postgresOperatorStore) clusterEvents(ctx context.Context, afterID int64
 }
 
 func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, actor string, mutation clusterMutation) (map[string]any, error) {
+	if mutation.Kind == "hmr_start" {
+		return nil, errClusterHMREntryDisabled
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errClusterUnavailable, err)
@@ -414,29 +417,11 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 	if (clusterStatus == "Degraded Database" || clusterDatabaseRuntimeRequiresRecovery(configJSON)) && !clusterMutationSupportsDatabaseRecovery(mutation) {
 		return nil, fmt.Errorf("%w: %s is blocked until PostgreSQL instances recover", errClusterConflict, mutation.Kind)
 	}
-	if clusterStatus == "Degraded Quorum" && !clusterMutationSupportsQuorumRecovery(mutation) {
+	// Failed HMR entry/exit records retain the pinned restoration target. Permit
+	// that recovery request; controller membership and health gates still apply.
+	failedHMRRecovery := mutation.Kind == "hmr_exit" && hmrState == "restore_failed"
+	if clusterStatus == "Degraded Quorum" && !clusterMutationSupportsQuorumRecovery(mutation) && !failedHMRRecovery {
 		return nil, fmt.Errorf("%w: %s is blocked until three-node membership is restored", errClusterConflict, mutation.Kind)
-	}
-	if mutation.Kind == "hmr_start" {
-		if hmrState != "inactive" {
-			return nil, fmt.Errorf("%w: HMR state is %s", errClusterConflict, hmrState)
-		}
-		if clusterStatus != "Healthy" {
-			return nil, fmt.Errorf("%w: HMR requires Healthy cluster, current status is %s", errClusterConflict, clusterStatus)
-		}
-		var membershipState, applicationState, releaseTag, probesJSON string
-		if err := tx.QueryRowContext(ctx, `SELECT membership_state,application_state,COALESCE(release_tag,''),probe_health_json FROM engine.cluster_nodes WHERE id=$1`, mutation.TargetNodeID).Scan(&membershipState, &applicationState, &releaseTag, &probesJSON); errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: HMR target node is not active", errClusterNotFound)
-		} else if err != nil {
-			return nil, err
-		}
-		if membershipState != "Active" || applicationState != "active" || (baselineRelease != "" && releaseTag != baselineRelease) || !clusterProbeSetHealthy(parseClusterJSON(probesJSON)) {
-			return nil, fmt.Errorf("%w: HMR target lacks healthy pinned production candidate", errClusterConflict)
-		}
-		mutation.Payload["baseline_release"] = baselineRelease
-		mutation.Payload["baseline_sha"] = baselineSHA
-		mutation.Payload["started_at"] = time.Now().UTC().Unix()
-		mutation.Payload["prior_drain_state"] = "active"
 	}
 	if mutation.Kind == "hmr_exit" {
 		if hmrState != "active" && hmrState != "restore_failed" {
@@ -1048,6 +1033,9 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	nextState, step, message := "", "", ""
 	retryResumeStep := ""
 	if action == "retry" {
+		if kind == "hmr_start" {
+			return nil, errClusterHMREntryDisabled
+		}
 		if state != "failed" && !(kind == "membership_admit" && state == "cancelled") {
 			return nil, fmt.Errorf("%w: only failed operation or retained cancelled admission can be retried", errClusterConflict)
 		}
@@ -1133,7 +1121,9 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 			return nil, err
 		}
 		if kind == "hmr_start" || kind == "hmr_exit" {
-			if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='inactive',hmr_node_id=NULL,status='Healthy',updated_at=$1 WHERE id=1`, now); err != nil {
+			// Queued retries may have already changed placement. Cancellation
+			// stops further work; only verified production restore clears isolation.
+			if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='restore_failed',status='HMR Non-HA',updated_at=$1 WHERE id=1`, now); err != nil {
 				return nil, err
 			}
 		}

@@ -14,7 +14,7 @@ sudo bash Engine.sh --network-mode local --service webui-frontend restart
 # Rebuild the WebUI frontend workload in production mode.
 sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
 
-# Rebuild the WebUI frontend workload in development mode.
+# Rebuild development WebUI on a standalone Engine only.
 sudo bash Engine.sh --network-mode local --service webui-frontend rebuild dev
 
 # Reload Traefik edge configuration.
@@ -30,7 +30,7 @@ sudo bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
     Clustered release, node, PostgreSQL, membership, and HMR maintenance belongs in [Cluster Management](managing-engine-clusters.md). Direct production deploy is blocked while cluster mode is active.
 
 !!! tip "WebUI HMR"
-    Use [WebUI HMR Development](webui-hmr-development.md) for frontend-only edit loops. `webui-frontend rebuild dev` syncs staged WebUI source into the runtime HMR copy and reconciles only the WebUI workload when WebUI inputs changed.
+    Use [WebUI HMR Development](webui-hmr-development.md) for standalone frontend edit loops. Enabled clusters reject dev service commands, including restart/reload; existing isolation recovery stays available through Cluster Management. `webui-frontend rebuild dev` syncs staged WebUI source into the runtime HMR copy and reconciles only the WebUI workload when WebUI inputs changed.
 
 ## Rebuild and Publish Agent Binaries
 
