@@ -90,10 +90,24 @@ func TestClusterAdmissionPostgresScopedHistoryAndResume(t *testing.T) {
 	}
 	claimsA, requestA := invite("admission-test-02")
 	claimsB, requestB := invite("admission-test-03")
-	accepted, err := store.consumeClusterInvitation(ctx, requestA)
-	if err != nil {
-		t.Fatal(err)
+	type acceptance struct {
+		result map[string]any
+		err    error
 	}
+	results := make(chan acceptance, 2)
+	for range 2 {
+		go func() {
+			request := copyMap(requestA)
+			request["id"] = newClusterUUID()
+			result, err := (&postgresOperatorStore{db: store.db}).consumeClusterInvitation(ctx, request)
+			results <- acceptance{result, err}
+		}()
+	}
+	first, concurrent := <-results, <-results
+	if first.err != nil || concurrent.err != nil || first.result["admission_id"] != concurrent.result["admission_id"] {
+		t.Fatalf("concurrent acceptance changed identity: %+v %+v", first, concurrent)
+	}
+	accepted := first.result
 	id := cleanText(accepted["admission_id"])
 	retry := copyMap(requestA)
 	retry["id"] = newClusterUUID()

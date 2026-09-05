@@ -275,7 +275,8 @@ func (s *postgresOperatorStore) clusterSnapshot(ctx context.Context) (map[string
 func annotateSupersededClusterOperations(operations []map[string]any) []map[string]any {
 	for _, operation := range operations {
 		kind := cleanText(operation["kind"])
-		if !clusterOperationKindSupportsSupersession(kind) || cleanText(operation["state"]) != "failed" {
+		state := cleanText(operation["state"])
+		if !clusterOperationKindSupportsSupersession(kind) || (state != "failed" && !(kind == "membership_admit" && state == "cancelled")) {
 			continue
 		}
 		failedAt := coerceInt64(operation["finished_at"])
