@@ -11,6 +11,7 @@
     "TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity",
     "TestClusterMembershipStorePostgresReleaseFences",
     "TestClusterOperationRetryPersistsFailedStepCheckpoint",
+    "TestClusterReleaseIdentityPostgresQueueAndRetry",
     "TestClusterRemovalFencePostgresPersistsAndFencesStaleWriters",
     "TestVPNSessionStorePostgresReplicaConvergence"
   ]

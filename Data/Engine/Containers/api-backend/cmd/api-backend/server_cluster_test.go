@@ -282,17 +282,19 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.Contains(r.URL.Path, "/releases/tags/"):
+			_ = json.NewEncoder(w).Encode(clusterGitHubRelease{Immutable: true, TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update"})
 		case strings.Contains(r.URL.Path, "/releases"):
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-				{TagName: "2026.08.12", Name: "Draft", Draft: true, PublishedAt: "2026-08-25T03:00:00Z"},
-				{TagName: "2026.08.11", Name: "Prerelease", Prerelease: true, PublishedAt: "2026-08-25T02:00:00Z"},
-				{TagName: "main", Name: "Branch Head", PublishedAt: "2026-08-25T01:00:00Z"},
+				{Immutable: true, TagName: "2026.08.12", Name: "Draft", Draft: true, PublishedAt: "2026-08-25T03:00:00Z"},
+				{Immutable: true, TagName: "2026.08.11", Name: "Prerelease", Prerelease: true, PublishedAt: "2026-08-25T02:00:00Z"},
+				{Immutable: true, TagName: "main", Name: "Branch Head", PublishedAt: "2026-08-25T01:00:00Z"},
 				// GitHub release ordering is not semantic-version ordering. A
 				// newly published backport must not hide newer rolling targets.
-				{TagName: "2026.08.6", Name: "Out-of-order Backport", PublishedAt: "2026-08-25T00:00:00Z"},
-				{TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update", PublishedAt: "2026-08-24T00:00:00Z"},
-				{TagName: "2026.08.8", Name: "2026.08.8 - Probe Fix", PublishedAt: "2026-08-23T00:00:00Z"},
-				{TagName: "2026.08.7", Name: "2026.08.7 - Current", PublishedAt: "2026-08-21T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.6", Name: "Out-of-order Backport", PublishedAt: "2026-08-25T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update", PublishedAt: "2026-08-24T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.8", Name: "2026.08.8 - Probe Fix", PublishedAt: "2026-08-23T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.7", Name: "2026.08.7 - Current", PublishedAt: "2026-08-21T00:00:00Z"},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
@@ -307,7 +309,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "baseline_sha": commitSHA, "active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "baseline_sha": commitSHA, "active_size": int64(3), "config": map[string]any{"k3s_version": "v1.36.3+k3s1"}}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
@@ -357,8 +359,8 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsApprovedC
 				return
 			}
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-				{TagName: "2026.09.1", Name: "First Stable"},
-				{TagName: "2026.09.1-rc.1", Name: "Qualification", Prerelease: true},
+				{Immutable: true, TagName: "2026.09.1", Name: "First Stable"},
+				{Immutable: true, TagName: "2026.09.1-rc.1", Name: "Qualification", Prerelease: true},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
@@ -381,7 +383,7 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsApprovedC
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA, "v1.36.3+k3s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,6 +404,8 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 	releasePageRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.Contains(r.URL.Path, "/releases/tags/"):
+			_ = json.NewEncoder(w).Encode(clusterGitHubRelease{Immutable: true, TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true})
 		case strings.Contains(r.URL.Path, "/releases"):
 			releasePageRequests++
 			if r.URL.Query().Get("page") != "1" {
@@ -409,9 +413,9 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 				return
 			}
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-				{TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true},
-				{TagName: "2026.09.2", Name: "Mismatched Stable", Prerelease: true},
-				{TagName: "main", Name: "Branch Head"},
+				{Immutable: true, TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true},
+				{Immutable: true, TagName: "2026.09.2", Name: "Mismatched Stable", Prerelease: true},
+				{Immutable: true, TagName: "main", Name: "Branch Head"},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
@@ -429,7 +433,7 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA, "v1.36.3+k3s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +443,7 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1-rc.1" || entries[0]["channel"] != "qualification" || entries[0]["selectable"] != true {
 		t.Fatalf("approved qualification prerelease should be selectable and mismatched metadata rejected: %#v", entries)
 	}
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "dev-fedcba987654", "baseline_sha": baselineSHA, "release_channel": "development", "active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "dev-fedcba987654", "baseline_sha": baselineSHA, "release_channel": "development", "active_size": int64(3), "config": map[string]any{"k3s_version": "v1.36.3+k3s1"}}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
@@ -459,7 +463,7 @@ func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testin
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/releases"):
-			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{{TagName: "2026.09.1", Name: "Unrelated Stable"}})
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{{Immutable: true, TagName: "2026.09.1", Name: "Unrelated Stable"}})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
 		case strings.Contains(r.URL.Path, "/compare/"):
@@ -476,7 +480,7 @@ func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testin
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA, "v1.36.3+k3s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +903,7 @@ func TestClusterK3sUpdateUsesDistinctQualifiedContract(t *testing.T) {
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
 	t.Setenv("BOREALIS_K3S_UPGRADE_IMAGE", "docker.io/rancher/k3s-upgrade@sha256:"+strings.Repeat("a", 64))
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"active_size": int64(3), "config": map[string]any{"k3s_version": "v1.36.3+k3s1"}}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)

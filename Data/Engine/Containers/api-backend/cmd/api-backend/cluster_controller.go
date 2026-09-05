@@ -1737,8 +1737,15 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 				}
 			}
 		}
-		if operation.Kind == "engine_update" && (!validClusterBaselineRelease(operation.TargetRelease, operation.TargetSHA) || clusterDevelopmentReleaseRE.MatchString(operation.TargetRelease)) {
-			return errors.New("update release tag or pinned SHA is invalid")
+		if operation.Kind == "engine_update" {
+			if err := validateClusterEngineUpdateIdentity(operation.TargetRelease, operation.TargetSHA, operation.Payload); err != nil {
+				return err
+			}
+			// Recheck observed versions before any backup, role movement or drain.
+			// Stored compatibility cannot authorize a silently changed cluster.
+			if err := r.verifyEngineUpdateK3s(ctx, operation, nodes); err != nil {
+				return err
+			}
 		}
 		if operation.Kind == "k3s_update" {
 			if err := validateK3sUpgradePath(cleanText(operation.Payload["source_k3s_version"]), operation.TargetRelease); err != nil {

@@ -147,6 +147,7 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 
     - Admission regressions cover 750 unrelated events, authenticated idempotent replay, bounded expiry and renewal, safe pending cancellation, retained failed second joiner, controller restart/lease fencing, and replacement admission. Node-manager HTTP tests reject plaintext/redirect disclosure and require authoritative K3s settings.
     - Aegis integration uses real PostgreSQL verification-token checks and a real TLS listener/fanout to prove a renewed surviving key holder unlocks a joining replica, incorrect keys remain rejected, database connections return to the pool, and all-cold replicas remain locked. Unit TLS tests cover expiry, partial/mixed projections, concurrent reload, CA overlap/retirement, and required client identity. K3s workload tests cover independent required trust projection and create-only initialization preserving operator policy.
+    - Release identity integration rejects a K3s source change between API snapshot and queue transaction, mismatched manifests, and missing immutable proof; it verifies typed-manifest persistence and retry without GitHub reselection. HTTP tests cover cached-picker changes, immutable/channel checks, SHA-addressed manifests, tag movement, and K3s cache invalidation. Real Git tests fence moved stable/qualification tags; stubbed Engine installer coverage proves an existing newer K3s version is preserved. Live exact-release/K3s qualification remains Tier 3 under #493.
 
     ### Python ownership audit
 

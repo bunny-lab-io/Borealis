@@ -388,7 +388,7 @@ Stable releases use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` and must be 
 
 Qualification releases append `-rc.N`, such as `2026.09.2-rc.1`, and must have GitHub prerelease status.  `N` begins at `1` and increases for each candidate of the same intended stable version.
 
-Branch names, draft releases, malformed tags, and tag/GitHub-channel mismatches never become selectable targets.
+Branch names, draft or mutable releases, malformed tags, and tag/GitHub-channel mismatches never become selectable targets. Releases published before repository immutability was enabled require a newly published version.
 
 Maintainers create immutable qualification and stable releases through [Publishing Engine Releases](publishing-engine-releases.md).  Operators select the approved result here; the cluster never creates, retags, or repairs a release.
 
@@ -403,6 +403,13 @@ A commit-backed `dev-*` baseline has no calendar version.  The API therefore sho
 The selected tag resolves once to an immutable commit SHA.  The API verifies that the target is the same commit or a fast-forward descendant of the current pinned SHA.  The node manager independently verifies exact tag-to-SHA resolution, clean checkout, configured origin, and fast-forward ancestry before staging.
 
 Downgrades and unrelated histories fail closed.
+
+Queueing refreshes release verification even when the selector already shows a compatible version. If GitHub is unavailable or publication changed, restore access or select a newly published immutable release before retrying the request.
+
+Engine compatibility follows the cluster's verified K3s version. A completed K3s upgrade changes eligible Engine releases immediately; an old API process environment cannot restore the previous baseline. Unknown or conflicting version observations block updates until cluster state is reconciled. Engine redeploy preserves installed K3s instead of applying the fresh-install default.
+
+!!! info "Operations queued before immutable verification"
+    Older queued Engine updates without immutable-release proof stop at preflight. Cancel queued work at its safe boundary, then select and queue a verified release. If an older operation already failed after changing runtime state, recover that state through the existing maintenance procedure before queueing fresh work. Retrying an old record does not manufacture missing verification.
 
 Every cluster-capable release must include `Data/Engine/release-manifest.json`.  `allowed_release_channels` must explicitly contain `stable`, `qualification`, or both.  The manifest also declares the minimum rolling source, mixed-version window, schema phase, K3s baseline, and required probe conformance.
 
@@ -577,6 +584,14 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Engine release identity
+
+    - `clusterReleaseState` reads the persisted Engine baseline and `config.k3s_version`. Active-node `roles.k3s_version` observations veto known disagreement; missing configuration fails closed. Process environment is not an update authority. K3s operation completion advances configuration only after ordered node conformance succeeds.
+    - Release picker cache includes repository, source release/SHA, API/raw source and authoritative K3s version. `resolveClusterRelease` bypasses cache, verifies current immutable publication, resolves one SHA, and reads `Data/Engine/release-manifest.json` at that SHA. Annotated tag objects are fetched by SHA from the configured repository, never from response-supplied URLs.
+    - Internal operation payload retains `release_immutable`, `source_k3s_version`, source release/SHA and compatibility manifest alongside target release/SHA. Queue transaction rejects configuration/source changes under the cluster-state lock. GitHub calls and manifest processing happen after snapshot connections return to the pool.
+    - Every Engine preflight, including retry, validates persisted proof and reads each active Node's `status.nodeInfo.kubeletVersion` before backups, role movement or drain. Node-manager release actions independently require exact tag-to-SHA identity. Retry keeps original proof and target; it never reselects a release or silently upgrades a legacy payload.
+    - Fresh-install baseline remains `v1.36.3+k3s1`. Historical lab results on `v1.36.4+k3s1` are not interchangeable; Q01 must qualify the exact release manifest and observed version. `install_k3s_if_missing` skips installed K3s, so Engine update cannot implicitly downgrade an upgraded cluster.
 
     ### Aegis TLS runtime behavior
 
