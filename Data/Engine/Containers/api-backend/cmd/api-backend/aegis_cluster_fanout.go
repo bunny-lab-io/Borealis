@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -37,7 +36,7 @@ func startAegisClusterKeyServer(auth *authService) (*http.Server, <-chan error, 
 	if !ok || service == nil {
 		return nil, nil, errors.New("Aegis cluster key installer is unavailable")
 	}
-	tlsConfig, err := aegisClusterTLSConfig(true)
+	tlsConfig, err := auth.clusterTLS().serverConfig()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -49,7 +48,7 @@ func startAegisClusterKeyServer(auth *authService) (*http.Server, <-chan error, 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+aegisClusterKeyPath, aegisClusterKeyHandler(service))
 	server := &http.Server{
-		Addr:              address,
+		Addr:              listener.Addr().String(),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       5 * time.Second,
@@ -57,6 +56,9 @@ func startAegisClusterKeyServer(auth *authService) (*http.Server, <-chan error, 
 		IdleTimeout:       15 * time.Second,
 		TLSConfig:         tlsConfig,
 	}
+	// Every key transfer must authenticate against current trust, including
+	// callers which try to keep a connection open across CA retirement.
+	server.SetKeepAlivesEnabled(false)
 	exited := make(chan error, 1)
 	go func() {
 		log.Printf("Aegis cluster key listener active on %s with required client certificates", address)
@@ -144,12 +146,17 @@ func fanoutAegisClusterKey(ctx context.Context, auth *authService) (int, error) 
 	if len(peers) == 0 {
 		return 0, errors.New("Aegis API peer DNS returned no usable addresses")
 	}
-	tlsConfig, err := aegisClusterTLSConfig(false)
+	tlsConfig, err := auth.clusterTLS().config(false)
 	if err != nil {
 		return 0, err
 	}
 	tlsConfig.ServerName = host
-	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}
+	transport := &http.Transport{TLSClientConfig: tlsConfig, DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Timeout: 5 * time.Second, Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	raw, _ := json.Marshal(map[string]string{"key": base64.StdEncoding.EncodeToString(key)})
 	defer zeroBytes(raw)
 	type fanoutResult struct {
@@ -226,32 +233,6 @@ func runAegisClusterKeyFanoutLoop(ctx context.Context, interval time.Duration, r
 			}
 		}
 	}()
-}
-
-func aegisClusterTLSConfig(server bool) (*tls.Config, error) {
-	certPath := envDefault("BOREALIS_AEGIS_CLUSTER_TLS_CERT", "/var/run/secrets/borealis-aegis-mtls/tls.crt")
-	keyPath := envDefault("BOREALIS_AEGIS_CLUSTER_TLS_KEY", "/var/run/secrets/borealis-aegis-mtls/tls.key")
-	caPath := envDefault("BOREALIS_AEGIS_CLUSTER_TLS_CA", "/var/run/secrets/borealis-aegis-mtls/ca.crt")
-	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("load Aegis cluster certificate: %w", err)
-	}
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, fmt.Errorf("load Aegis cluster CA: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, errors.New("Aegis cluster CA contains no certificate")
-	}
-	config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}
-	if server {
-		config.ClientAuth = tls.RequireAndVerifyClientCert
-		config.ClientCAs = pool
-	} else {
-		config.RootCAs = pool
-	}
-	return config, nil
 }
 
 func zeroBytes(value []byte) {

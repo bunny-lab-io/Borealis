@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import ipaddress
@@ -32,6 +33,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CANDIDATE_LABEL = "borealis.io/update-candidate"
 TRAFFIC_LABEL = "borealis.io/traffic-state"
 WIREGUARD_KEYS_SECRET = "borealis-wireguard-server-keys"
+AEGIS_TRUST_CONFIGMAP = "borealis-aegis-trust"
 WEBUI_DEVELOPMENT_VOLUME_NAMES = frozenset(
     {
         "webui-index",
@@ -71,6 +73,37 @@ def deployment_name(base: str, node: str) -> str:
         return candidate
     digest = hashlib.sha256(node.encode("utf-8")).hexdigest()[:8]
     return f"{base}-{node[: max(1, 63 - len(base) - len(digest) - 2)]}-{digest}"
+
+
+def ensure_aegis_trust_bundle() -> None:
+    """Bootstrap independent public trust once; never overwrite rotation policy."""
+    resource = f"configmap/{AEGIS_TRUST_CONFIGMAP}"
+    if kubectl("-n", NAMESPACE, "get", resource, "--ignore-not-found", "-o", "json").strip():
+        return
+    deployments = json.loads(kubectl("-n", NAMESPACE, "get", "deployments", "-l", "borealis.io/aegis-peer=true", "-o", "json"))
+    for deployment in deployments.get("items", []):
+        volumes = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("volumes", [])
+        for volume in volumes:
+            for source in volume.get("projected", {}).get("sources", []):
+                if source.get("configMap", {}).get("name") == AEGIS_TRUST_CONFIGMAP:
+                    raise RuntimeError("Aegis trust bundle missing after adoption; restore operator-approved CA bundle before redeploy")
+    # Read only the public certificate field, never the Secret's private key.
+    encoded = kubectl("-n", NAMESPACE, "get", "secret/borealis-api-aegis-mtls", "-o", "jsonpath={.data.ca\\.crt}").strip()
+    ca = base64.b64decode(encoded, validate=True).decode("ascii")
+    if not ca.startswith("-----BEGIN CERTIFICATE-----") or len(ca) > 65536:
+        raise RuntimeError("Initial Aegis CA certificate is unavailable or oversized")
+    manifest = {
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": {"name": AEGIS_TRUST_CONFIGMAP, "namespace": NAMESPACE},
+        "data": {"ca-bundle.crt": ca},
+    }
+    try:
+        kubectl("create", "-f", "-", stdin=json.dumps(manifest))
+    except RuntimeError:
+        # Concurrent first-node reconciliation may create the same bundle.
+        # Preserve the winner; authorization/network failures still fail closed.
+        if not kubectl("-n", NAMESPACE, "get", resource, "--ignore-not-found", "-o", "json").strip():
+            raise
 
 
 def candidate_deployment_name(base: str, node: str) -> str:
@@ -295,7 +328,17 @@ def reconcile_one(
         volumes = pod_spec.setdefault("volumes", [])
         volumes[:] = [volume for volume in volumes if volume.get("name") not in {"agent-artifacts", "aegis-mtls"}]
         volumes.append({"name": "agent-artifacts", "persistentVolumeClaim": {"claimName": "borealis-agent-artifacts"}})
-        volumes.append({"name": "aegis-mtls", "secret": {"secretName": "borealis-api-aegis-mtls", "defaultMode": 0o440}})
+        volumes.append({"name": "aegis-mtls", "projected": {
+            "defaultMode": 0o440,
+            "sources": [
+                {"secret": {"name": "borealis-api-aegis-mtls", "items": [
+                    {"key": "tls.crt", "path": "tls.crt"}, {"key": "tls.key", "path": "tls.key"},
+                ]}},
+                {"configMap": {"name": AEGIS_TRUST_CONFIGMAP, "items": [
+                    {"key": "ca-bundle.crt", "path": "trust-bundle.pem"},
+                ]}},
+            ],
+        }})
         mounts = containers[0].setdefault("volumeMounts", [])
         mounts[:] = [mount for mount in mounts if mount.get("name") not in {"agent-artifacts", "aegis-mtls"}]
         mounts.append({"name": "agent-artifacts", "mountPath": "/opt/Borealis/Engine/Services/api-backend/cache/AgentUpdates"})
@@ -308,7 +351,7 @@ def reconcile_one(
             "BOREALIS_AEGIS_CLUSTER_PEER_HOST": "api-backend-aegis.borealis.svc",
             "BOREALIS_AEGIS_CLUSTER_TLS_CERT": "/var/run/secrets/borealis-aegis-mtls/tls.crt",
             "BOREALIS_AEGIS_CLUSTER_TLS_KEY": "/var/run/secrets/borealis-aegis-mtls/tls.key",
-            "BOREALIS_AEGIS_CLUSTER_TLS_CA": "/var/run/secrets/borealis-aegis-mtls/ca.crt",
+            "BOREALIS_AEGIS_CLUSTER_TLS_CA": "/var/run/secrets/borealis-aegis-mtls/trust-bundle.pem",
         }
         environment[:] = [item for item in environment if item.get("name") not in cluster_environment]
         environment.extend({"name": key, "value": value} for key, value in cluster_environment.items())
@@ -560,6 +603,8 @@ def main() -> int:
     reconciled = []
     selected = {value for value in (args.service or DEPLOYMENT_SERVICES.values())}
     selected_bases = [base for base, service in DEPLOYMENT_SERVICES.items() if service in selected]
+    if "api-backend" in selected_bases:
+        ensure_aegis_trust_bundle()
     stopped_generic_host_workloads: list[tuple[str, int]] = []
     try:
         for base in selected_bases:
