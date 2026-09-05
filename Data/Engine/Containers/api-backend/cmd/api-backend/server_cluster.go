@@ -62,6 +62,7 @@ type clusterStore interface {
 	createClusterOperation(ctx context.Context, actor string, mutation clusterMutation) (map[string]any, error)
 	createClusterInvitation(ctx context.Context, actor string, invitation map[string]any) error
 	consumeClusterInvitation(ctx context.Context, admission map[string]any) (map[string]any, error)
+	clusterAdmissionStatus(ctx context.Context, admissionID string, claims map[string]any) (map[string]any, error)
 	approveClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
 	retryClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 	cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
@@ -796,8 +797,12 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		bundle := strings.TrimSpace(r.Header.Get("X-Borealis-Cluster-Invite"))
+		if bundle == "" || len(bundle) > clusterInviteMaxBytes {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
+			return
+		}
 		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
-		if err != nil {
+		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
 		}
@@ -808,18 +813,12 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
-		events, err := store.clusterEvents(ctx, 0)
+		result, err := store.clusterAdmissionStatus(ctx, admissionID, claims)
 		if err != nil {
 			writeClusterError(w, err)
 			return
 		}
-		filtered := make([]map[string]any, 0)
-		for _, event := range events {
-			if cleanText(event["admission_id"]) == admissionID && cleanText(event["cluster_id"]) == cleanText(claims["cluster_id"]) {
-				filtered = append(filtered, event)
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"admission_id": admissionID, "events": filtered})
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 

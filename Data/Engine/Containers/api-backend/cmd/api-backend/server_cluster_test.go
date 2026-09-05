@@ -66,6 +66,12 @@ func (s *clusterTestStore) consumeClusterInvitation(_ context.Context, admission
 	return map[string]any{"admission_id": admission["id"], "state": "Pending Quorum"}, s.mutationErr
 }
 
+func (s *clusterTestStore) clusterAdmissionStatus(_ context.Context, id string, claims map[string]any) (map[string]any, error) {
+	s.admission = copyMap(claims)
+	s.admission["id"] = id
+	return map[string]any{"admission_id": id, "state": "Approved", "events": s.events}, s.mutationErr
+}
+
 func (s *clusterTestStore) approveClusterAdmission(_ context.Context, _ string, admissionID string) (map[string]any, error) {
 	s.approvedID = admissionID
 	return map[string]any{"state": "queued"}, s.mutationErr

@@ -787,23 +787,9 @@ func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, ad
 	defer tx.Rollback()
 	now := time.Now().UTC().Unix()
 	var enabled, activeSize, desiredSize int64
-	var clusterStatus, activeOperationID string
-	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,desired_size,status,COALESCE(active_operation_id,'') FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &desiredSize, &clusterStatus, &activeOperationID); err != nil {
+	var clusterStatus, activeOperationID, currentClusterID string
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,active_size,desired_size,status,COALESCE(active_operation_id,''),cluster_id FROM engine.cluster_state WHERE id=1 FOR UPDATE`).Scan(&enabled, &activeSize, &desiredSize, &clusterStatus, &activeOperationID, &currentClusterID); err != nil {
 		return nil, err
-	}
-	admissionBatchSize, admissionModeErr := currentReleaseAdmissionBatchSize(activeSize, desiredSize, clusterStatus)
-	if enabled != 1 || admissionModeErr != nil {
-		return nil, fmt.Errorf("%w: node invitation cannot be consumed for current membership state", errClusterConflict)
-	}
-	if activeOperationID != "" {
-		return nil, fmt.Errorf("%w: cluster operation %s is active", errClusterConflict, activeOperationID)
-	}
-	var pendingAdmissions int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_admissions WHERE state IN ('Pending Quorum','Approved')`).Scan(&pendingAdmissions); err != nil {
-		return nil, err
-	}
-	if pendingAdmissions >= admissionBatchSize {
-		return nil, fmt.Errorf("%w: current membership recovery already has required pending admissions", errClusterConflict)
 	}
 	var invitationNodeName, invitationClusterID string
 	var expiresAt int64
@@ -819,8 +805,42 @@ func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, ad
 	if err != nil {
 		return nil, err
 	}
-	if consumedAt.Valid || expiresAt < now || invitationClusterID != cleanText(admission["cluster_id"]) || !strings.EqualFold(invitationNodeName, cleanText(admission["node_name"])) {
-		return nil, fmt.Errorf("%w: invitation is expired, consumed, or mismatched", errClusterConflict)
+	if enabled != 1 || currentClusterID != invitationClusterID || expiresAt < now || invitationClusterID != cleanText(admission["cluster_id"]) || !strings.EqualFold(invitationNodeName, cleanText(admission["node_name"])) {
+		return nil, fmt.Errorf("%w: invitation is expired or mismatched", errClusterConflict)
+	}
+	if consumedAt.Valid {
+		accepted, err := existingClusterAdmission(ctx, tx, admission)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return accepted, nil
+	}
+	admissionBatchSize, admissionModeErr := currentReleaseAdmissionBatchSize(activeSize, desiredSize, clusterStatus)
+	if enabled != 1 || admissionModeErr != nil {
+		return nil, fmt.Errorf("%w: node invitation cannot be consumed for current membership state", errClusterConflict)
+	}
+	if activeOperationID != "" {
+		return nil, fmt.Errorf("%w: cluster operation %s is active", errClusterConflict, activeOperationID)
+	}
+	var pendingAdmissions int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM engine.cluster_admissions WHERE state IN ('Pending Quorum','Approved')`).Scan(&pendingAdmissions); err != nil {
+		return nil, err
+	}
+	if pendingAdmissions >= admissionBatchSize {
+		return nil, fmt.Errorf("%w: current membership recovery already has required pending admissions", errClusterConflict)
+	}
+	var duplicate bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM engine.cluster_nodes WHERE membership_state<>'Removed' AND (node_name=$1 OR management_ip=$2)
+		UNION ALL SELECT 1 FROM engine.cluster_admissions WHERE state IN ('Pending Quorum','Approved','Recovery Required') AND (node_name=$1 OR management_ip=$2)
+	)`, cleanText(admission["node_name"]), cleanText(admission["management_ip"])).Scan(&duplicate); err != nil {
+		return nil, err
+	}
+	if duplicate {
+		return nil, fmt.Errorf("%w: node name or management address is already reserved", errClusterConflict)
 	}
 	var activeArchitecture string
 	architectureErr := tx.QueryRowContext(ctx, `SELECT architecture FROM engine.cluster_nodes WHERE membership_state='Active' ORDER BY created_at LIMIT 1`).Scan(&activeArchitecture)
