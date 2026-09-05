@@ -27,8 +27,8 @@ func (s *postgresOperatorStore) clusterAdmissionStatus(ctx context.Context, admi
 	err = tx.QueryRowContext(ctx, `SELECT a.state,i.expires_at,COALESCE(a.approved_at,0),i.created_at
 		FROM engine.cluster_admissions a JOIN engine.cluster_invitations i ON i.id=a.invitation_id
 		JOIN engine.cluster_state c ON c.id=1 AND c.enabled=1 AND c.cluster_id=a.cluster_id
-		WHERE a.id=$1 AND a.invitation_id=$2 AND a.cluster_id=$3 AND a.node_name=$4
-		AND i.cluster_id=a.cluster_id AND i.node_name=a.node_name AND i.token_hash=$5 AND i.consumed_at IS NOT NULL`,
+		WHERE a.id=$1 AND a.invitation_id=$2 AND a.cluster_id=$3 AND LOWER(a.node_name)=LOWER($4)
+		AND i.cluster_id=a.cluster_id AND LOWER(i.node_name)=LOWER(a.node_name) AND i.token_hash=$5 AND i.consumed_at IS NOT NULL`,
 		admissionID, cleanText(claims["invitation_id"]), cleanText(claims["cluster_id"]), cleanText(claims["node_name"]), clusterTokenHash(cleanText(claims["token"]))).Scan(&state, &expiresAt, &approvedAt, &invitationCreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: admission does not match invitation", errClusterNotFound)

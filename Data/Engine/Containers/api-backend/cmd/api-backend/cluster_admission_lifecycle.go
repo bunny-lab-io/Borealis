@@ -53,7 +53,7 @@ func clusterAdmissionCancelHandler(auth *authService) http.HandlerFunc {
 func reconcileClusterAdmissionsTx(ctx context.Context, tx *sql.Tx, now int64) error {
 	rows, err := tx.QueryContext(ctx, `UPDATE engine.cluster_admissions a SET
 		state=CASE WHEN a.approved_at IS NOT NULL OR EXISTS(
-			SELECT 1 FROM engine.cluster_nodes n WHERE n.membership_state<>'Removed' AND (n.node_name=a.node_name OR n.management_ip=a.management_ip)
+			SELECT 1 FROM engine.cluster_nodes n WHERE n.membership_state<>'Removed' AND (LOWER(n.node_name)=LOWER(a.node_name) OR n.management_ip=a.management_ip)
 		) OR EXISTS(SELECT 1 FROM engine.cluster_operations o WHERE o.kind='membership_admit' AND o.payload_json::jsonb->'admission_ids' ? a.id)
 		THEN 'Recovery Required' ELSE 'Expired' END,updated_at=$1
 		FROM engine.cluster_invitations i WHERE i.id=a.invitation_id AND a.state='Pending Quorum' AND i.expires_at<$1
@@ -157,7 +157,7 @@ func (s *postgresOperatorStore) cancelClusterAdmission(ctx context.Context, acto
 	var state string
 	var uncertain bool
 	err = tx.QueryRowContext(ctx, `SELECT a.state,a.approved_at IS NOT NULL OR EXISTS(
-		SELECT 1 FROM engine.cluster_nodes n WHERE n.membership_state<>'Removed' AND (n.node_name=a.node_name OR n.management_ip=a.management_ip)
+		SELECT 1 FROM engine.cluster_nodes n WHERE n.membership_state<>'Removed' AND (LOWER(n.node_name)=LOWER(a.node_name) OR n.management_ip=a.management_ip)
 	) OR EXISTS(SELECT 1 FROM engine.cluster_operations o WHERE o.kind='membership_admit' AND o.payload_json::jsonb->'admission_ids' ? a.id)
 	FROM engine.cluster_admissions a WHERE a.id=$1 AND a.cluster_id=$2 FOR UPDATE`, admissionID, clusterID).Scan(&state, &uncertain)
 	if errors.Is(err, sql.ErrNoRows) {

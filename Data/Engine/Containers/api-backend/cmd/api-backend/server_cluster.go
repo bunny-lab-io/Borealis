@@ -648,7 +648,7 @@ func clusterInvitationHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		errs := rejectUnknownClusterFields(body, map[string]bool{"node_name": true})
-		nodeName := cleanText(body["node_name"])
+		nodeName := strings.ToLower(cleanText(body["node_name"]))
 		errs = append(errs, validateClusterNodeName("node_name", nodeName)...)
 		if len(errs) > 0 {
 			writePublicValidationErrors(w, errs)
@@ -704,7 +704,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 		if bundle == "" || len(bundle) > clusterInviteMaxBytes {
 			errs = append(errs, publicValidationError{Field: "invite_bundle", Message: "must be a non-empty authenticated bundle no larger than 16 KiB"})
 		}
-		nodeName := cleanText(body["node_name"])
+		nodeName := strings.ToLower(cleanText(body["node_name"]))
 		hostname := cleanText(body["hostname"])
 		managementIP := cleanText(body["management_ip"])
 		architecture := strings.ToLower(cleanText(body["architecture"]))

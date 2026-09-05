@@ -106,6 +106,10 @@ func TestClusterAdmissionPostgresScopedHistoryAndResume(t *testing.T) {
 	if _, err := store.consumeClusterInvitation(ctx, changed); !errors.Is(err, errClusterConflict) {
 		t.Fatalf("changed target reused consumed invitation: %v", err)
 	}
+	_, duplicate := invite("ADMISSION-TEST-02")
+	if _, err := store.consumeClusterInvitation(ctx, duplicate); !errors.Is(err, errClusterConflict) || !strings.Contains(err.Error(), "already reserved") {
+		t.Fatalf("case variant bypassed target reservation: %v", err)
+	}
 	if _, err := store.consumeClusterInvitation(ctx, requestB); err != nil {
 		t.Fatal(err)
 	}
@@ -359,5 +363,41 @@ func TestClusterAdmissionPostgresAuthorizationRenewal(t *testing.T) {
 	changed["management_ip"] = "192.168.90.99"
 	if _, err := store.consumeClusterInvitation(ctx, changed); !errors.Is(err, errClusterConflict) {
 		t.Fatalf("renewal authorized replacement target: %v", err)
+	}
+}
+
+func TestClusterJoinSignedAuthorizationAge(t *testing.T) {
+	for _, age := range []time.Duration{time.Hour, 25 * time.Hour} {
+		for _, poll := range []bool{false, true} {
+			store := &clusterTestStore{}
+			auth, _ := clusterTestAuth(t, store)
+			now := time.Now()
+			auth.verifier.now = func() time.Time { return now.Add(-age) }
+			bundle, err := auth.verifier.signPayload(map[string]any{"type": "cluster-invite", "node_name": "ENGINE-02", "invitation_id": newClusterUUID(), "cluster_id": newClusterUUID(), "token": "secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth.verifier.now = func() time.Time { return now }
+			response := httptest.NewRecorder()
+			if poll {
+				request := httptest.NewRequest(http.MethodGet, "/api/bootstrap/cluster/join/"+newClusterUUID()+"/events", nil)
+				request.SetPathValue("id", newClusterUUID())
+				request.Header.Set("X-Borealis-Cluster-Invite", bundle)
+				clusterJoinEventsHandler(auth)(response, request)
+			} else {
+				body := fmt.Sprintf(`{"invite_bundle":%q,"node_name":"ENGINE-02","hostname":"engine-02","management_ip":"192.168.90.11","architecture":"amd64","os_version":"Ubuntu 24.04"}`, bundle)
+				request := httptest.NewRequest(http.MethodPost, "/api/bootstrap/cluster/join", strings.NewReader(body))
+				clusterJoinHandler(auth)(response, request)
+			}
+			if age > clusterAcceptedJoinTTL {
+				if response.Code != http.StatusUnauthorized || store.admission != nil {
+					t.Fatalf("expired signature reached store: HTTP %d poll=%v", response.Code, poll)
+				}
+			} else if response.Code != http.StatusOK && response.Code != http.StatusAccepted {
+				t.Fatalf("accepted-age signature rejected before stored lifecycle check: HTTP %d %s", response.Code, response.Body)
+			} else if !poll && cleanText(store.admission["node_name"]) != "engine-02" {
+				t.Fatal("node identity was not canonicalized")
+			}
+		}
 	}
 }

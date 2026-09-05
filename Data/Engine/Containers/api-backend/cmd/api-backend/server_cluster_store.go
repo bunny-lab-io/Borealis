@@ -767,7 +767,7 @@ func (s *postgresOperatorStore) createClusterInvitation(ctx context.Context, act
 	var reservedID string
 	var reservedCount int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MIN(id),'') FROM engine.cluster_admissions
-		WHERE cluster_id=$1 AND node_name=$2 AND state IN ('Approved','Recovery Required')`, clusterID, cleanText(invitation["node_name"])).Scan(&reservedCount, &reservedID); err != nil {
+		WHERE cluster_id=$1 AND LOWER(node_name)=LOWER($2) AND state IN ('Approved','Recovery Required')`, clusterID, cleanText(invitation["node_name"])).Scan(&reservedCount, &reservedID); err != nil {
 		return err
 	}
 	if reservedCount > 1 {
@@ -871,8 +871,8 @@ func (s *postgresOperatorStore) consumeClusterInvitation(ctx context.Context, ad
 	}
 	var duplicate bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM engine.cluster_nodes WHERE membership_state<>'Removed' AND (node_name=$1 OR management_ip=$2)
-		UNION ALL SELECT 1 FROM engine.cluster_admissions WHERE state IN ('Pending Quorum','Approved','Recovery Required') AND (node_name=$1 OR management_ip=$2)
+		SELECT 1 FROM engine.cluster_nodes WHERE membership_state<>'Removed' AND (LOWER(node_name)=LOWER($1) OR management_ip=$2)
+		UNION ALL SELECT 1 FROM engine.cluster_admissions WHERE state IN ('Pending Quorum','Approved','Recovery Required') AND (LOWER(node_name)=LOWER($1) OR management_ip=$2)
 	)`, cleanText(admission["node_name"]), cleanText(admission["management_ip"])).Scan(&duplicate); err != nil {
 		return nil, err
 	}
