@@ -32,6 +32,19 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CANDIDATE_LABEL = "borealis.io/update-candidate"
 TRAFFIC_LABEL = "borealis.io/traffic-state"
 WIREGUARD_KEYS_SECRET = "borealis-wireguard-server-keys"
+WEBUI_DEVELOPMENT_VOLUME_NAMES = frozenset(
+    {
+        "webui-index",
+        "webui-package",
+        "webui-public",
+        "webui-src",
+        "webui-tsconfig",
+        "webui-unit-tests",
+        "webui-vite-cache",
+        "webui-vite-config",
+        "webui-vite-temp",
+    }
+)
 PROBE_GUARD_DELAYS = {
     "api-backend": 130,
     "borealis-cluster-controller": 70,
@@ -98,6 +111,15 @@ def set_container_environment(container: dict[str, Any], name: str, value: str) 
     environment = container.setdefault("env", [])
     environment[:] = [item for item in environment if item.get("name") != name]
     environment.append({"name": name, "value": value})
+
+
+def enforce_webui_production_candidate(pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
+    """Prevent release candidates from inheriting mutable HMR runtime state."""
+    set_container_environment(container, "BOREALIS_WEBUI_MODE", "prod")
+    mounts = container.setdefault("volumeMounts", [])
+    mounts[:] = [mount for mount in mounts if mount.get("name") not in WEBUI_DEVELOPMENT_VOLUME_NAMES]
+    volumes = pod_spec.setdefault("volumes", [])
+    volumes[:] = [volume for volume in volumes if volume.get("name") not in WEBUI_DEVELOPMENT_VOLUME_NAMES]
 
 
 def enforce_startup_liveness_guard(
@@ -256,6 +278,8 @@ def reconcile_one(
     for container in containers:
         container["image"] = image
         container["imagePullPolicy"] = "IfNotPresent"
+    if base == "webui-frontend" and candidate:
+        enforce_webui_production_candidate(pod_spec, containers[0])
     if base == "job-scheduler":
         set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")
     if base == "borealis-cluster-controller":

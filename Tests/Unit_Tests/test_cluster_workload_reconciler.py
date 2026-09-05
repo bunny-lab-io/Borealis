@@ -199,6 +199,67 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
         }
         self.assertEqual(environment["BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST"], current_image)
 
+    def test_webui_candidate_drops_hmr_development_runtime_state(self) -> None:
+        development_volumes = [
+            {"name": name, "hostPath": {"path": f"/runtime/{name}"}}
+            for name in sorted(MODULE.WEBUI_DEVELOPMENT_VOLUME_NAMES)
+        ]
+        source = {
+            "metadata": {"labels": {"app.kubernetes.io/name": "webui-frontend"}},
+            "spec": {
+                "replicas": 0,
+                "selector": {"matchLabels": {"app.kubernetes.io/name": "webui-frontend"}},
+                "template": {
+                    "metadata": {"labels": {"app.kubernetes.io/name": "webui-frontend"}},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "webui-frontend",
+                                "env": [{"name": "BOREALIS_WEBUI_MODE", "value": "dev"}],
+                                "volumeMounts": [
+                                    {"name": "tmp", "mountPath": "/tmp"},
+                                    *(
+                                        {"name": name, "mountPath": f"/runtime/{name}"}
+                                        for name in sorted(MODULE.WEBUI_DEVELOPMENT_VOLUME_NAMES)
+                                    ),
+                                ],
+                                "startupProbe": {"periodSeconds": 2, "failureThreshold": 30},
+                                "livenessProbe": {"initialDelaySeconds": 0},
+                            }
+                        ],
+                        "volumes": [{"name": "tmp", "emptyDir": {}}, *development_volumes],
+                    },
+                },
+            },
+        }
+        calls: list[tuple[tuple[str, ...], str | None]] = []
+
+        def fake_kubectl(*args: str, stdin: str | None = None) -> str:
+            calls.append((args, stdin))
+            return ""
+
+        target_image = "borealis-engine/webui-frontend:sha-" + "d" * 12
+        with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(
+            MODULE, "kubectl", side_effect=fake_kubectl
+        ):
+            MODULE.reconcile_one(
+                "webui-frontend",
+                "webui-frontend",
+                "engine-01",
+                "c" * 40,
+                {"webui-frontend": target_image},
+                True,
+            )
+
+        manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+        pod_spec = manifest["spec"]["template"]["spec"]
+        container = pod_spec["containers"][0]
+        environment = {item["name"]: item.get("value") for item in container["env"]}
+        self.assertEqual(environment["BOREALIS_WEBUI_MODE"], "prod")
+        self.assertEqual(container["image"], target_image)
+        self.assertEqual([mount["name"] for mount in container["volumeMounts"]], ["tmp"])
+        self.assertEqual([volume["name"] for volume in pod_spec["volumes"]], ["tmp"])
+
     def test_promotion_refreshes_zero_replica_generic_images_after_active_health(self) -> None:
         revision = "a" * 40
         target_image = "borealis-engine/borealis-operator:sha-" + "b" * 12
