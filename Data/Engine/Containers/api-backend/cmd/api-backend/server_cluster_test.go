@@ -77,6 +77,11 @@ func (s *clusterTestStore) approveClusterAdmission(_ context.Context, _ string, 
 	return map[string]any{"state": "queued"}, s.mutationErr
 }
 
+func (s *clusterTestStore) cancelClusterAdmission(_ context.Context, _ string, admissionID string) (map[string]any, error) {
+	s.cancelledID = admissionID
+	return map[string]any{"admission_id": admissionID, "state": "Cancelled"}, s.mutationErr
+}
+
 func (s *clusterTestStore) retryClusterOperation(_ context.Context, _ string, operationID string) (map[string]any, error) {
 	s.retriedID = operationID
 	return map[string]any{"state": "queued"}, s.mutationErr

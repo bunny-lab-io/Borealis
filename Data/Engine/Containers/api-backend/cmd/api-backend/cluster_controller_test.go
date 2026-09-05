@@ -910,7 +910,7 @@ func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO engine.cluster_admissions(id,invitation_id,cluster_id,node_name,hostname,management_ip,architecture,os_version,state,created_at,updated_at)
-		VALUES($1,$2,$5,'engine-3','engine-3','192.0.2.23','amd64','Ubuntu 24.04','Pending Quorum',$6,$6),($3,$4,$5,'engine-4','engine-4','192.0.2.24','amd64','Ubuntu 24.04','Pending Quorum',$6,$6)
+		VALUES($1,$2,$5,'engine-3','engine-3','192.168.91.23','amd64','Ubuntu 24.04','Pending Quorum',$6,$6),($3,$4,$5,'engine-4','engine-4','192.168.91.24','amd64','Ubuntu 24.04','Pending Quorum',$6,$6)
 	`, firstPending, secondInvite, secondPending, thirdInvite, clusterID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -924,6 +924,11 @@ func TestClusterMembershipStorePostgresReleaseFences(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET status='Degraded Quorum',active_size=2,desired_size=3,active_operation_id=NULL WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE engine.cluster_state SET control_plane_vip='192.168.91.248' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	defer seedAdmissionPeer(t, store, ctx, "release-fence-active-01", "192.168.91.21")()
+	defer seedAdmissionPeer(t, store, ctx, "release-fence-active-02", "192.168.91.22")()
 	result, err := store.approveClusterAdmission(ctx, "operator", firstPending)
 	if err != nil {
 		t.Fatalf("degraded-quorum replacement approval failed: %v", err)

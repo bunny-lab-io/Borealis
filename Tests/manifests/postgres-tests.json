@@ -1,5 +1,7 @@
 {
   "tests": [
+    "TestClusterAdmissionPostgresAuthorizationRenewal",
+    "TestClusterAdmissionPostgresCapacityRecovery",
     "TestClusterAdmissionPostgresScopedHistoryAndResume",
     "TestClusterCompletionPostgresPreservesAndClearsRecoveryState",
     "TestClusterControllerClaimPinsOperationActionImage",

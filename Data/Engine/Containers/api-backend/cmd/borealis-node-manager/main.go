@@ -5,8 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -1765,37 +1762,30 @@ func probeHTTPExpectedStatus(ctx context.Context, host string, port int, method,
 
 func join(args []string) {
 	flags := flag.NewFlagSet("join", flag.ExitOnError)
-	endpoint := flags.String("endpoint", "", "Existing Borealis cluster base URL")
-	bundle := flags.String("invite-bundle", "", "One-use invitation bundle")
+	endpoint := flags.String("endpoint", "", "Existing Borealis cluster HTTPS base URL")
+	bundle := flags.String("invite-bundle", "", "Target-bound invitation bundle")
 	nodeName := flags.String("node-name", "", "Cluster node name")
 	managementIP := flags.String("management-ip", "", "Static management IP")
 	osVersion := flags.String("os-version", "Ubuntu 24.04", "Operating system version")
-	k3sServer := flags.String("k3s-server", "", "Existing K3s control-plane HTTPS URL")
+	k3sServer := flags.String("k3s-server", "", "Optional expected K3s URL; must match cluster authority")
 	k3sTokenFile := flags.String("k3s-token-file", "", "Root-readable K3s server token file")
-	k3sVersion := flags.String("k3s-version", defaultK3sVersion, "Pinned K3s version")
-	peerCIDRs := flags.String("peer-cidrs", "", "Comma-separated private Engine node IPv4 CIDRs")
+	k3sVersion := flags.String("k3s-version", "", "Optional expected K3s version; must match cluster authority")
+	peerCIDRs := flags.String("peer-cidrs", "", "Optional expected peer roster; must match cluster authority")
 	caFile := flags.String("ca-file", "", "Optional Borealis API CA certificate")
 	_ = flags.Parse(args)
-	if os.Geteuid() != 0 {
-		fatalf("join requires root")
+	if os.Geteuid() != 0 || runtime.GOARCH != "amd64" {
+		fatalf("join requires root on amd64 Engine host")
 	}
-	if runtime.GOARCH != "amd64" {
-		fatalf("join requires amd64 Engine host")
+	baseURL, err := validateClusterJoinEndpoint(*endpoint)
+	if err != nil {
+		fatalf("join endpoint: %v", err)
 	}
 	managementAddress := net.ParseIP(strings.TrimSpace(*managementIP))
-	if strings.TrimSpace(*endpoint) == "" || strings.TrimSpace(*bundle) == "" || !nodePattern.MatchString(strings.ToLower(strings.TrimSpace(*nodeName))) || managementAddress == nil || managementAddress.To4() == nil {
-		fatalf("join requires endpoint, invite-bundle, valid node-name, and management IPv4")
+	if strings.TrimSpace(*bundle) == "" || len(*bundle) > 16<<10 || !nodePattern.MatchString(strings.ToLower(strings.TrimSpace(*nodeName))) || managementAddress == nil || managementAddress.To4() == nil {
+		fatalf("join requires invite-bundle, valid node-name, and management IPv4")
 	}
-	serverURL, err := url.Parse(strings.TrimSpace(*k3sServer))
-	if err != nil || serverURL.Scheme != "https" || serverURL.Hostname() == "" || serverURL.Port() != "6443" || serverURL.Path != "" {
-		fatalf("join requires --k3s-server https://<cluster-vip>:6443")
-	}
-	if !k3sPattern.MatchString(strings.TrimSpace(*k3sVersion)) {
-		fatalf("join requires pinned K3s version")
-	}
-	normalizedPeers, err := normalizePeerCIDRs(*peerCIDRs)
-	if err != nil {
-		fatalf("join requires --peer-cidrs covering current and planned Engine nodes: %v", err)
+	if _, err := os.Lstat(memberFencePath); !errors.Is(err, os.ErrNotExist) {
+		fatalf("join requires a clean target without retained member-removal fence")
 	}
 	tokenPath := filepath.Clean(strings.TrimSpace(*k3sTokenFile))
 	if !filepath.IsAbs(tokenPath) || tokenPath == "/" {
@@ -1805,49 +1795,48 @@ func join(args []string) {
 	if err != nil || !tokenInfo.Mode().IsRegular() || tokenInfo.Mode().Perm()&0o077 != 0 {
 		fatalf("K3s token file must be regular and inaccessible to group/other")
 	}
-	repoRoot := envDefault("BOREALIS_PROJECT_ROOT", defaultRepoRoot)
-	if err := prepareJoinedNode(repoRoot, normalizedPeers); err != nil {
-		fatalf("prepare cluster node host: %v", err)
+	client, err := clusterJoinHTTPClient(strings.TrimSpace(*caFile))
+	if err != nil {
+		fatalf("create cluster HTTPS client: %v", err)
 	}
 	hostname, _ := os.Hostname()
 	payload := map[string]any{"invite_bundle": strings.TrimSpace(*bundle), "node_name": strings.ToLower(strings.TrimSpace(*nodeName)), "hostname": hostname, "management_ip": strings.TrimSpace(*managementIP), "architecture": runtime.GOARCH, "os_version": strings.TrimSpace(*osVersion)}
-	raw, _ := json.Marshal(payload)
-	request, err := http.NewRequest(http.MethodPost, strings.TrimRight(strings.TrimSpace(*endpoint), "/")+"/api/bootstrap/cluster/join", bytes.NewReader(raw))
-	if err != nil {
-		fatalf("create join request: %v", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 30 * time.Second}
-	if strings.TrimSpace(*caFile) != "" {
-		client, err = clusterJoinHTTPClient(strings.TrimSpace(*caFile))
-		if err != nil {
-			fatalf("load Borealis API CA: %v", err)
-		}
-	}
-	response, err := client.Do(request)
+	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	defer cancel()
+	admission, err := submitClusterAdmission(ctx, client, baseURL, payload)
 	if err != nil {
 		fatalf("join request: %v", err)
 	}
-	defer response.Body.Close()
-	responseRaw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if response.StatusCode != http.StatusAccepted {
-		fatalf("join rejected HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(responseRaw)))
+	approved, err := waitForClusterAdmission(ctx, client, baseURL, strings.TrimSpace(*bundle), admission.ID)
+	if err != nil {
+		fatalf("wait for admission approval: %v", err)
 	}
-	var admission map[string]any
-	if err := json.Unmarshal(responseRaw, &admission); err != nil || !clusterUUIDPattern.MatchString(strings.ToLower(strings.TrimSpace(fmt.Sprint(admission["admission_id"])))) {
-		fatalf("join response lacks canonical admission_id")
+	if approved.State == "Admitted" {
+		fmt.Printf("{\"admission_id\":%q,\"state\":\"admitted\",\"node_name\":%q}\n", admission.ID, strings.ToLower(strings.TrimSpace(*nodeName)))
+		return
 	}
-	admissionID := strings.ToLower(strings.TrimSpace(fmt.Sprint(admission["admission_id"])))
-	if err := waitForClusterAdmission(client, strings.TrimRight(strings.TrimSpace(*endpoint), "/"), strings.TrimSpace(*bundle), admissionID); err != nil {
-		fatalf("wait for paired admission approval: %v", err)
+	if err := validateClusterJoinConfig(approved.Config, strings.TrimSpace(*managementIP), *k3sServer, *k3sVersion, *peerCIDRs); err != nil {
+		fatalf("cluster join configuration: %v", err)
 	}
-	if err := installJoinedK3sServer(strings.ToLower(strings.TrimSpace(*nodeName)), strings.TrimSpace(*managementIP), serverURL.String(), tokenPath, strings.TrimSpace(*k3sVersion)); err != nil {
+	// Host preparation can exceed initial invitation TTL. It must follow
+	// durable approval, and must never consume a pending invitation's lifetime.
+	repoRoot := envDefault("BOREALIS_PROJECT_ROOT", defaultRepoRoot)
+	if err := prepareJoinedNode(repoRoot, approved.Config.PeerCIDRs); err != nil {
+		fatalf("prepare cluster node host: %v", err)
+	}
+	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer verifyCancel()
+	current, err := readClusterAdmission(verifyCtx, client, baseURL, strings.TrimSpace(*bundle), admission.ID)
+	if err != nil || current.State != "Approved" || current.Config != approved.Config {
+		fatalf("join authorization or configuration changed during preparation; resume from Cluster Management")
+	}
+	if err := installJoinedK3sServer(strings.ToLower(strings.TrimSpace(*nodeName)), strings.TrimSpace(*managementIP), current.Config.Server, tokenPath, current.Config.Version); err != nil {
 		fatalf("install joined K3s server: %v", err)
 	}
 	if err := installLocalNodeManagerService(repoRoot); err != nil {
 		fatalf("install local node-manager service: %v", err)
 	}
-	fmt.Printf("{\"admission_id\":%q,\"state\":\"joined\",\"node_name\":%q}\n", admissionID, strings.ToLower(strings.TrimSpace(*nodeName)))
+	fmt.Printf("{\"admission_id\":%q,\"state\":\"joined\",\"node_name\":%q}\n", admission.ID, strings.ToLower(strings.TrimSpace(*nodeName)))
 }
 
 func normalizePeerCIDRs(value string) (string, error) {
@@ -1917,51 +1906,6 @@ func environmentWithValue(environment []string, key, value string) []string {
 		}
 	}
 	return append(result, prefix+value)
-}
-
-func clusterJoinHTTPClient(caFile string) (*http.Client, error) {
-	pem, err := os.ReadFile(filepath.Clean(caFile))
-	if err != nil {
-		return nil, err
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(pem) {
-		return nil, errors.New("CA file has no valid certificate")
-	}
-	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}, nil
-}
-
-func waitForClusterAdmission(client *http.Client, endpoint, bundle, admissionID string) error {
-	deadline := time.Now().Add(14 * time.Minute)
-	for time.Now().Before(deadline) {
-		request, err := http.NewRequest(http.MethodGet, endpoint+"/api/bootstrap/cluster/join/"+admissionID+"/events", nil)
-		if err != nil {
-			return err
-		}
-		request.Header.Set("Accept", "application/json")
-		request.Header.Set("X-Borealis-Cluster-Invite", bundle)
-		response, err := client.Do(request)
-		if err == nil {
-			raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-			response.Body.Close()
-			if response.StatusCode == http.StatusOK {
-				var payload struct {
-					Events []map[string]any `json:"events"`
-				}
-				if json.Unmarshal(raw, &payload) == nil {
-					for _, event := range payload.Events {
-						if strings.TrimSpace(fmt.Sprint(event["event_type"])) == "admission_pair_approved" {
-							return nil
-						}
-					}
-				}
-			} else if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-				return fmt.Errorf("admission authorization expired or was rejected: HTTP %d", response.StatusCode)
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return errors.New("admission approval did not arrive before invitation expiry")
 }
 
 func installJoinedK3sServer(nodeName, managementIP, serverURL, tokenFile, version string) error {

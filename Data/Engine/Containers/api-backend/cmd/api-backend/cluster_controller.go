@@ -347,6 +347,9 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	leaseGuard := startClusterControllerLeaseGuard(ctx, c.leaseRenewInterval, c.acquireLease)
 	defer leaseGuard.Close()
 	runCtx := leaseGuard.Context()
+	if err := c.reconcileAdmissions(runCtx); err != nil {
+		return err
+	}
 	if now := c.now().UTC().Unix(); now-c.lastPrune.Load() >= int64(time.Hour/time.Second) {
 		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
 			if pruneErr := runner.pruneDailyCNPGBackups(runCtx, 14); pruneErr != nil {
@@ -1454,6 +1457,10 @@ func (c *clusterController) failOperation(ctx context.Context, operation cluster
 	if err := c.requireLeaseOwnership(ctx, tx); err != nil {
 		return errors.Join(cause, err)
 	}
+	// Match API recovery/completion lock order before changing operation state.
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM engine.cluster_state WHERE id=1 FOR UPDATE`); err != nil {
+		return errors.Join(cause, err)
+	}
 	now := c.now().UTC().Unix()
 	message := truncateClusterError(cause.Error(), 2048)
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state='failed', error_text=$1, finished_at=$2, updated_at=$2 WHERE id=$3`, message, now, operation.ID); err != nil {
@@ -1584,7 +1591,7 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		probeHealth := `{"startup":"passed","readiness":"passed","liveness":"passed","direct_endpoint":"passed","service":"passed","database":"passed","scheduler":"passed","agent_path":"passed","wireguard":"passed"}`
 		for _, rawID := range anySlice(operation.Payload["admission_ids"]) {
 			var id, nodeName, hostname, managementIP, architecture, osVersion string
-			scanErr := tx.QueryRowContext(ctx, `SELECT id,node_name,hostname,management_ip,architecture,os_version FROM engine.cluster_admissions WHERE id=$1 AND state='Approved'`, cleanText(rawID)).Scan(&id, &nodeName, &hostname, &managementIP, &architecture, &osVersion)
+			scanErr := tx.QueryRowContext(ctx, `SELECT id,node_name,hostname,management_ip,architecture,os_version FROM engine.cluster_admissions WHERE id=$1 AND state IN ('Approved','Recovery Required')`, cleanText(rawID)).Scan(&id, &nodeName, &hostname, &managementIP, &architecture, &osVersion)
 			if scanErr != nil {
 				err = scanErr
 				break

@@ -64,6 +64,7 @@ type clusterStore interface {
 	consumeClusterInvitation(ctx context.Context, admission map[string]any) (map[string]any, error)
 	clusterAdmissionStatus(ctx context.Context, admissionID string, claims map[string]any) (map[string]any, error)
 	approveClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
+	cancelClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
 	retryClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 	cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 }
@@ -115,6 +116,7 @@ func registerServerClusterRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("POST /api/server/cluster/enable", clusterEnableHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/invitations", clusterInvitationHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/admissions/{id}/approve", clusterAdmissionApproveHandler(auth))
+	mux.HandleFunc("POST /api/server/cluster/admissions/{id}/cancel", clusterAdmissionCancelHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/membership/scale", clusterScaleHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/maintenance", clusterNodeMaintenanceHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/remove", clusterNodeRemoveHandler(auth))
@@ -722,7 +724,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 			writePublicValidationErrors(w, errs)
 			return
 		}
-		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
+		claims, err := auth.verifier.signedPayload(bundle, clusterAcceptedJoinTTL)
 		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
@@ -801,7 +803,7 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
 		}
-		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
+		claims, err := auth.verifier.signedPayload(bundle, clusterAcceptedJoinTTL)
 		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
