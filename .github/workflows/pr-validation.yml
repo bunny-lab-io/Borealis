@@ -212,10 +212,12 @@ jobs:
           cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
       - run: ./Tests/run-database-postgres.sh
       - uses: actions/upload-artifact@v7
-        if: failure()
+        if: always()
         with:
           name: database-results
-          path: Unit_Test_Results/
+          path: |
+            Unit_Test_Results/database-postgres-*/*.log
+            Unit_Test_Results/database-postgres-*/postgres-go-results.jsonl
           if-no-files-found: ignore
 
   runtime-policy:

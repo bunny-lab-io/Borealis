@@ -52,7 +52,16 @@
     "Data/Engine/Containers/postgres-db/**",
     "Tests/run-database-postgres.sh",
     "Tests/integration/database/**",
-    ".github/workflows/pr-validation.yml"
+    ".github/workflows/pr-validation.yml",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/*.go",
+    "Data/Engine/Containers/api-backend/internal/**",
+    "Data/Engine/Containers/api-backend/go.mod",
+    "Data/Engine/Containers/api-backend/go.sum",
+    "Tests/manifests/postgres-tests.json",
+    "Tests/policy/check_postgres_inventory.py",
+    "Tests/tools/postgresinventory/**",
+    "Tests/Unit_Tests/test_postgres_inventory.py",
+    "Tests/helpers/changed_paths.py"
   ],
   "runtime-policy": [
     "Engine.sh",

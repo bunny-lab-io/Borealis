@@ -1,0 +1,12 @@
+{
+  "tests": [
+    "TestClusterCompletionPostgresPreservesAndClearsRecoveryState",
+    "TestClusterControllerClaimPinsOperationActionImage",
+    "TestClusterControllerPostgresLeaseSerializesLongStep",
+    "TestClusterMaintenanceStorePostgresRecoveryGates",
+    "TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity",
+    "TestClusterMembershipStorePostgresReleaseFences",
+    "TestClusterOperationRetryPersistsFailedStepCheckpoint",
+    "TestVPNSessionStorePostgresReplicaConvergence"
+  ]
+}

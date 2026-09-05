@@ -11,6 +11,8 @@ source "${SCRIPT_DIR}/lib.sh"
 TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-1200}"
 RESULT_DIR="$(result_dir_for database-postgres)"
 GO_BIN="$(resolve_go 1.25.12)"
+require_command python3
+TEST_PATTERN="$(BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" --run-pattern)"
 CONTAINER_NAME="borealis-ci-postgres-${$}"
 POSTGRES_PASSWORD="borealis-ci-password"
 DOCKER=(docker)
@@ -89,12 +91,15 @@ fi
 if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
-  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test ./cmd/api-backend \
-  -run '^(TestVPNSessionStorePostgresReplicaConvergence|TestClusterControllerPostgresLeaseSerializesLongStep|TestClusterMembershipStorePostgresReleaseFences|TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity)$' -count=1 \
-  >"${RESULT_DIR}/vpn-session-store.log" 2>&1; then
-  tail -n 160 "${RESULT_DIR}/vpn-session-store.log" >&2 || true
+  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json ./cmd/api-backend \
+  -run "${TEST_PATTERN}" -count=1 \
+  >"${RESULT_DIR}/postgres-go-results.jsonl" 2>"${RESULT_DIR}/postgres-go-stderr.log"; then
+  tail -n 160 "${RESULT_DIR}/postgres-go-results.jsonl" "${RESULT_DIR}/postgres-go-stderr.log" >&2 || true
   exit 1
 fi
 
 "${DOCKER[@]}" logs "${CONTAINER_NAME}" >"${RESULT_DIR}/postgres-container.log" 2>&1 || true
+BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" \
+  --results "${RESULT_DIR}/postgres-go-results.jsonl"
+
 printf 'PostgreSQL 17 integration passed. Results: %s\n' "${RESULT_DIR}"
