@@ -961,6 +961,7 @@ finally:
     - Patch install rows store one frozen device target per endpoint so operators can see install success, failure, timeout, and skipped/offline state in Scheduled Job history.
 
     #### `job_scheduler_work_items`
+    - Ownership: current Go scheduler uses `lease_owner` as leadership incarnation and `attempt_count` as claim generation. Existing `payload_json` retains protocol version, per-component execution IDs/acknowledgements, and unknown-outcome evidence; no schema change. Claim/status/dispatch transactions lock current leadership before the work row, then release all connections before remote execution. See [Scheduler Recovery](../../Engine/managing-engine-clusters.md#scheduler-recovery) for the canonical protocol and operator procedure.
     - Status: Active.
     - Purpose: Durable work queue for `job-scheduler` and dynamic site-worker containers or pods.
     - Columns: `id`, `dedupe_key`, `kind`, `site_id`, `lane`, `job_id`, `run_id`, `target_id`, `payload_json`, `status`, `attempt_count`, `priority`, `available_at`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `worker_guid`, `container_name`, `error`, `created_at`, `updated_at`, `started_at`, `finished_at`.

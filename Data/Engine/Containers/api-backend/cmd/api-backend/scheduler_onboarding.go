@@ -14,19 +14,12 @@ import (
 const onboardingGoCutoverRetiredMessage = "Automatic remote onboarding execution was retired from the legacy Python site-worker runtime during the Go api-backend cutover. Use generated Agent install commands until Go-native remote onboarding execution is implemented."
 
 func (m *goSchedulerManager) processOnboardingWork(ctx context.Context) error {
-	leaseSeconds := int64(envInt("BOREALIS_ONBOARDING_MANAGER_LEASE_SECONDS", 300, 60, 86400))
 	for i := 0; i < envInt("BOREALIS_ONBOARDING_MANAGER_BATCH", 4, 1, 32); i++ {
-		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindOnboardingRun}, "job-scheduler", leaseSeconds)
+		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindOnboardingRun})
 		if err != nil || item == nil {
 			return err
 		}
-		status := workStatusSucceeded
-		errorText := ""
-		if err := m.runOnboardingWorkItem(ctx, *item); err != nil {
-			status = workStatusFailed
-			errorText = err.Error()
-		}
-		if err := m.completeWorkItem(ctx, item.ID, status, errorText); err != nil {
+		if err := m.runClaimedWork(ctx, *item, m.runOnboardingWorkItem); err != nil {
 			return err
 		}
 	}
@@ -50,16 +43,11 @@ func (m *goSchedulerManager) runOnboardingWorkItem(ctx context.Context, item sch
 }
 
 func (m *goSchedulerManager) retireOnboardingRun(ctx context.Context, jobID int64, runID int64, scheduledTS int64, siteID int64, targets []any) error {
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, _, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
 		return err
 	}
-	defer rollbackQuietly(tx)
+	defer cleanup()
 	now := time.Now().Unix()
 
 	var rowJobID sql.NullInt64

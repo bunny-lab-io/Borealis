@@ -397,14 +397,21 @@ func TestClusterControllerLeaseGuardBoundsBlockedRenewalAndClose(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	returned := make(chan struct{})
-	guard := startClusterControllerLeaseGuardWithGrace(context.Background(), time.Millisecond, 30*time.Millisecond, func(context.Context) (bool, error) {
+	guard := startClusterControllerLeaseGuardWithGrace(context.Background(), time.Millisecond, 250*time.Millisecond, func(context.Context) (bool, error) {
 		close(entered)
 		<-release // Deliberately ignore cancellation like the recorded driver failure.
 		defer close(returned)
 		return true, nil
 	})
-	defer func() { close(release); <-returned }()
-	<-entered
+	defer func() {
+		guard.Close()
+		close(release)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("renewal did not start before expiry")
+	}
 	select {
 	case <-guard.Context().Done():
 	case <-time.After(time.Second):

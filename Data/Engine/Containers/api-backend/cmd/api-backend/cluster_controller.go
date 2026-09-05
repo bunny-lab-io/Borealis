@@ -192,6 +192,9 @@ func startOwnershipLeaseGuard(parent context.Context, interval, renewalGrace tim
 			case <-heartbeatCtx.Done():
 				return
 			case <-ticker.C:
+				if heartbeatCtx.Err() != nil {
+					return
+				}
 				started := time.Now()
 				owned, err := renew(heartbeatCtx)
 				select {
@@ -285,7 +288,7 @@ func clusterControllerMode() bool {
 }
 
 func runClusterController(ctx context.Context, cfg gatewayConfig) error {
-	operatorStore, closeStore, err := openOperatorStore(cfg)
+	operatorStore, closeStore, err := openControlOperatorStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -2777,7 +2780,7 @@ func (r *kubernetesClusterStepRunner) runtimeRoleOwners(ctx context.Context, db 
 			return nil, queryErr
 		}
 		if queryErr == nil {
-			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, holder)
+			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, schedulerLeadershipPod(holder))
 			if err != nil {
 				return nil, err
 			}

@@ -12,29 +12,20 @@ import (
 )
 
 func (m *goSchedulerManager) processPatchInstallWork(ctx context.Context) error {
-	leaseSeconds := patchInstallWorkLeaseSeconds()
 	for i := 0; i < envInt("BOREALIS_PATCH_INSTALL_MANAGER_BATCH", 2, 1, 16); i++ {
-		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindPatchInstallRun}, "job-scheduler", leaseSeconds)
+		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindPatchInstallRun})
 		if err != nil || item == nil {
 			return err
 		}
-		claimed := *item
-		go func() {
-			status := workStatusSucceeded
-			errorText := ""
-			if err := m.runPatchInstallWorkItem(context.Background(), claimed); err != nil {
-				status = workStatusFailed
-				errorText = err.Error()
-			}
-			if err := m.completeWorkItem(context.Background(), claimed.ID, status, errorText); err != nil {
-				logSchedulerPatchInstall("failed to complete patch install work item id=%d: %v", claimed.ID, err)
-			}
-		}()
+		m.startClaimedWork(ctx, *item, m.runPatchInstallWorkItem)
 	}
 	return nil
 }
 
 func (m *goSchedulerManager) runPatchInstallWorkItem(ctx context.Context, item schedulerWorkItem) error {
+	if acknowledged, err := m.resumeSchedulerExecution(ctx); err != nil || acknowledged {
+		return err
+	}
 	payload := item.Payload
 	runID := firstPositiveInt64(coerceInt64(payload["run_id"]), nullInt(item.RunID))
 	jobID := firstPositiveInt64(coerceInt64(payload["job_id"]), nullInt(item.JobID))
@@ -110,6 +101,9 @@ func (m *goSchedulerManager) runPatchInstallWorkItem(ctx context.Context, item s
 	if err := m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusRunning, waitText, "", ""); err != nil {
 		return err
 	}
+	if err := m.beginSchedulerDispatch(ctx, requestID); err != nil {
+		return err
+	}
 	response, workerState, workerErr := m.callSiteWorkerHostService(ctx, snapshot.Route, map[string]any{
 		"hostname":        firstText(snapshot.Hostname, hostname),
 		"service_mode":    "system",
@@ -122,6 +116,9 @@ func (m *goSchedulerManager) runPatchInstallWorkItem(ctx context.Context, item s
 		_ = m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusFailed, "", errorText, errorText)
 		return errors.New(errorText)
 	}
+	if err := m.acknowledgeSchedulerDispatch(ctx, requestID); err != nil {
+		return err
+	}
 	stdout, stderr, errorText := schedulerPatchInstallOutput(requestID, hostname, componentName, patch, response)
 	if !schedulerPatchInstallResponseOK(response) {
 		if errorText == "" {
@@ -131,10 +128,6 @@ func (m *goSchedulerManager) runPatchInstallWorkItem(ctx context.Context, item s
 		return errors.New(errorText)
 	}
 	return m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusSuccess, stdout, stderr, "")
-}
-
-func patchInstallWorkLeaseSeconds() int64 {
-	return int64(envInt("BOREALIS_PATCH_INSTALL_MANAGER_LEASE_SECONDS", 7200, 300, 86400))
 }
 
 func patchInstallAgentCallTimeout() time.Duration {
@@ -215,11 +208,6 @@ func (m *goSchedulerManager) updateScheduledPatchRunStatus(ctx context.Context, 
 	if runID <= 0 {
 		return nil
 	}
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
 	now := time.Now().Unix()
 	var finished any
 	if scheduledTerminalStatus(status) {
@@ -231,11 +219,27 @@ func (m *goSchedulerManager) updateScheduledPatchRunStatus(ctx context.Context, 
 		targetStatus = schedulerResolutionUnresolved
 		targetReason = truncateString(firstText(errorText, stderr), 512)
 	}
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
 		return err
 	}
-	defer rollbackQuietly(tx)
+	defer cleanup()
+	uncertain, err := schedulerWorkOutcomeUnknown(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	if uncertain && scheduledTerminalStatus(status) {
+		if err := noteScheduledOutcomeUnknown(ctx, tx, runID, item.ID); err != nil {
+			return err
+		}
+		if activityID > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE engine.activity_history SET stderr=$1,updated_at=$2 WHERE id=$3`,
+				fmt.Sprintf("%s: work:%d", errSchedulerOutcomeUnknown, item.ID), now, activityID); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1,

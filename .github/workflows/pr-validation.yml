@@ -211,6 +211,9 @@ jobs:
           cache: pip
           cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
       - run: ./Tests/run-database-postgres.sh
+        env:
+          CGO_ENABLED: "1"
+          GOFLAGS: -race
       - uses: actions/upload-artifact@v7
         if: always()
         with:

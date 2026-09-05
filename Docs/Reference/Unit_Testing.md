@@ -136,6 +136,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 
     ### PostgreSQL inventory contract
 
+    - Transport/ownership coverage uses actual PostgreSQL traffic through a local TCP blackhole proxy, independent blocked-renewal watchdog, transaction-lock release, stale holder/generation rejection, owner-death reconciliation, retained workflow identity, and unknown-outcome execution-state preservation. These tests must stay registered in the required inventory. Database CI sets `CGO_ENABLED=1 GOFLAGS=-race` to exercise concurrent cancellation and heartbeat paths. Locally, `CGO_ENABLED=1 GOFLAGS=-race ./Tests/run-database-postgres.sh` requires a C compiler as well as the documented Go toolchain.
+
     - Every database-backed Go integration test in the API package reads `BOREALIS_TEST_DATABASE_URL` directly or through a package-level test helper function. The Go syntax walker follows helper declarations within each test package, preserving local shadowing and excluding same-named receiver methods and imported selectors. It compares discovered test names with the maintained inventory; register new tests in the same PR.
     - `Tests/run-repository-policy.sh` checks inventory drift. `Tests/run-database-postgres.sh` derives its exact anchored test selection from that inventory and uses uncached `go test -json -count=1` execution.
     - Result audit requires every inventoried top-level test to start and pass plus package completion. Any skipped or failed test/subtest, unexpected package/test, malformed output, or missing result fails. Unit-only Engine Go runs may still skip tests without database configuration; that is not database validation evidence.

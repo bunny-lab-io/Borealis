@@ -6,8 +6,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/lib/pq"
 )
 
 type leaseExecutor interface {
@@ -23,7 +21,7 @@ type postgresLeaseTransport struct {
 }
 
 func (p *postgresLeaseTransport) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	connector, err := pq.NewConnector(p.dsn)
+	connector, err := newBoundedPostgresConnector(p.dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +43,7 @@ func (p *postgresLeaseTransport) ExecContext(ctx context.Context, query string, 
 
 type leaseSocketDialer struct {
 	ctx     context.Context
+	cancel  context.CancelFunc
 	mu      sync.Mutex
 	closed  bool
 	sockets map[net.Conn]struct{}
@@ -61,6 +60,12 @@ func (d *leaseSocketDialer) DialTimeout(network, address string, timeout time.Du
 }
 
 func (d *leaseSocketDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	d.mu.Lock()
+	closed := d.closed
+	d.mu.Unlock()
+	if closed {
+		return nil, context.Canceled
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(d.ctx, cancel)
 	defer stop()
@@ -83,6 +88,9 @@ func (d *leaseSocketDialer) DialContext(ctx context.Context, network, address st
 }
 
 func (d *leaseSocketDialer) close() {
+	if d.cancel != nil {
+		d.cancel()
+	}
 	d.mu.Lock()
 	d.closed = true
 	sockets := d.sockets

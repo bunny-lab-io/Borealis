@@ -8,7 +8,12 @@
     "TestClusterMembershipStorePostgresReleaseFences",
     "TestClusterOperationRetryPersistsFailedStepCheckpoint",
     "TestClusterRemovalFencePostgresPersistsAndFencesStaleWriters",
+    "TestPostgresControlCancellationReleasesTransactionLocks",
     "TestPostgresLeaseTransportBlackholeAndRecovery",
+    "TestSchedulerPostgresDispatchRecovery",
+    "TestSchedulerPostgresOwnershipFences",
+    "TestSchedulerPostgresUnknownOutcomePreservesExecution",
+    "TestSchedulerPostgresWorkflowDispatchRetainsIdentity",
     "TestVPNSessionStorePostgresReplicaConvergence"
   ]
 }

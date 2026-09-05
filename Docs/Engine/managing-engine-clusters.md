@@ -521,9 +521,29 @@ An all-cold cluster restart still requires one operator unlock.
 * Kubernetes VolumeSnapshot data sources are namespace-scoped.  Keep the validation cluster in the same namespace with unique Services and PVCs, verify restored data without changing production, and remove only the validation resources after recording evidence.
 * The Aegis key remains memory-only.  An all-cold restart requires operator unlock.
 
+### Scheduler Recovery
+
+Scheduler ownership expires independently of script, Ansible, patch-install, and Agent-maintenance execution limits. After a scheduler loss, healthy ownership can recover queued work without waiting for a long-running job's execution timeout.
+
+If a run reports `execution outcome unknown`, inspect its retained activity, workflow, or Agent operation result before retrying manually. Borealis does not automatically resend work whose dispatch may already have reached its destination. The queue records the uncertainty while the remote execution keeps its existing result and timeout path.
+
+Before upgrading from a release without this ownership protocol, let active work finish and drain the previous scheduler. A recovered legacy running claim has no dispatch evidence and remains unknown instead of being replayed.
+
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Ownership transport and task recovery
+
+    - `postgres_lease_transport.go` gives each lease request its own lib/pq connection and directly closable sockets, including cancellation traffic. Controller and scheduler acquisition/renewal have five-second deadlines. A separate watchdog cancels ownership after fifteen seconds without confirmation even if renewal never returns; successful confirmation starts its budget at query start. Leadership TTL remains twenty seconds.
+    - `postgres_control_connector.go` applies direct socket cancellation only to controller/scheduler operation pools. Transaction and row-stream watchers live until commit/rollback or close. Both lease and control connectors enforce PostgreSQL 17 `transaction_timeout=5000` per connection: the server releases locks even when the partition also drops TCP disconnects. See [PostgreSQL transaction timeout](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-TRANSACTION-TIMEOUT). Ordinary API/auth pools retain their connection policy.
+    - Scheduler holder is Pod name plus a fresh UUID per leadership acquisition. `scheduler_ownership.go` locks live leadership before the work row and requires holder plus `attempt_count` generation for claims, heartbeats, dispatch admission, status writes, and completion. Context cancellation propagates into task network calls. Work TTL is sixty seconds with ten-second heartbeat and forty-five-second independent expiry; script and patch execution limits are separate.
+    - `scheduler_execution_ownership.go` stores `ownership_version`, per-component execution records, and `recovery_state` in existing `job_scheduler_work_items.payload_json`. Stable identity is `work:<id>:<component-key>`. Prepared activity creation and ledger persistence share one short transaction; all remote calls happen after the connection returns to the pool.
+    - Dispatch admission commits `dispatching` under current ownership before sending. Acknowledgement or a matching successful activity result settles that identity; a single matching workflow run can establish accepted execution. A later claim skips acknowledged components and can send components still proved unsent. A send admitted before ownership loss may finish remotely; no remote exactly-once guarantee is implied.
+    - An unacknowledged send becomes queue failure with `recovery_state=outcome_unknown`, retained identity, and explicit error. Run/activity status and execution deadlines remain intact for actual results. Legacy running claims lack this evidence and also fail closed. Never clear the ledger to manufacture retry eligibility.
+    - Recovery reclaims the previous leadership incarnation's work immediately after healthy takeover, or an expired sixty-second work claim. The five-minute recovery target assumes available PostgreSQL, healthy replacement scheduler, and downstream capacity; portable tests do not qualify live failover timing.
+    - Required PostgreSQL tests cover established-socket blackhole/cancellation/healing, cancellation of idle transactions holding locks while TCP disconnects are also dropped, stale ownership writes, owner death, partial-component replay, workflow identity, and uncertainty without false execution failure. Retain #466 live partition acceptance and #493 exact-release qualification separately.
+
 ### API Endpoints
 - Cluster state and events: `GET /api/server/cluster`, `GET /api/server/cluster/events`
 - Lightweight banner state: `GET /api/server/cluster/banner`

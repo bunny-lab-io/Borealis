@@ -147,12 +147,26 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 }
 
 func openOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
+	return openPostgresOperatorStore(cfg, false)
+}
+
+func openControlOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
+	return openPostgresOperatorStore(cfg, true)
+}
+
+func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, func(), error) {
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return nil, func() {}, fmt.Errorf("BOREALIS_DATABASE_URL is required")
 	}
-	db, err := sql.Open("postgres", normalizePostgresDriverURL(cfg))
-	if err != nil {
-		return nil, func() {}, err
+	var db *sql.DB
+	if control {
+		db = sql.OpenDB(&postgresControlConnector{dsn: normalizePostgresDriverURL(cfg)})
+	} else {
+		var err error
+		db, err = sql.Open("postgres", normalizePostgresDriverURL(cfg))
+		if err != nil {
+			return nil, func() {}, err
+		}
 	}
 	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
