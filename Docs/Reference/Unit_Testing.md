@@ -87,6 +87,12 @@ Runners keep dependencies, compiled output, caches, virtual environments, and re
 
 Missing tools fail clearly. No required lane silently skips.
 
+## PostgreSQL Validation
+
+Run `./Tests/run-database-postgres.sh` when changing cluster membership, controller recovery, operation storage, or scheduler behavior. The runner creates an isolated PostgreSQL 17 container and removes it when validation exits. It never uses the deployed Engine database.
+
+Every required database test must run and pass. Missing tests, skipped tests or subtests, and incomplete results fail the lane. Keep the reported result directory when investigating a failure; CI retains database logs for successful and failed runs.
+
 ## CI Boundary
 
 Normal pull requests validate deterministic repository behavior. Full Engine deploy, live K3s readiness, Longhorn persistence, public DNS, TLS issuance, real Agent enrollment, browser interaction, and remote-device networking remain deployment or Tier 3 qualification responsibilities.
@@ -116,6 +122,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - WebUI Vitest tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
     - WebUI runtime contracts: `Tests/webui/runtime-scripts.test.js`.
     - PostgreSQL integration: `Tests/integration/database/`.
+    - Required PostgreSQL Go test inventory: `Tests/manifests/postgres-tests.json`.
+    - PostgreSQL inventory and result audit: `Tests/policy/check_postgres_inventory.py`; Go syntax discovery: `Tests/tools/postgresinventory/main.go`.
     - Migration helper tests: `Tests/integration/migration_helpers/`.
 
     ### Validation selection
@@ -125,6 +133,15 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Keep workflow YAML thin: checkout, tool setup/cache, repository command invocation, aggregate status, diagnostic artifact upload.
     - Add public API routes to Go source, API docs, and generated route inventory in same change. Generator preserves reviewed route-specific test/exemption choices; new routes remain without evidence and fail policy until author records focused test or reviewed exemption.
     - Add direct dependencies to lockfiles/manifests and `Docs/Reference/SBOM.md` in same change.
+
+    ### PostgreSQL inventory contract
+
+    - Every database-backed Go integration test in the API package reads `BOREALIS_TEST_DATABASE_URL` directly or through a package-level test helper function. The Go syntax walker follows helper declarations within each test package, preserving local shadowing and excluding same-named receiver methods and imported selectors. It compares discovered test names with the maintained inventory; register new tests in the same PR.
+    - `Tests/run-repository-policy.sh` checks inventory drift. `Tests/run-database-postgres.sh` derives its exact anchored test selection from that inventory and uses uncached `go test -json -count=1` execution.
+    - Result audit requires every inventoried top-level test to start and pass plus package completion. Any skipped or failed test/subtest, unexpected package/test, malformed output, or missing result fails. Unit-only Engine Go runs may still skip tests without database configuration; that is not database validation evidence.
+    - Database CI selection covers API package Go source/tests, internal packages and module metadata as well as database fixtures, runner, inventory and auditing tools. This intentionally covers shared store/lease helpers beyond cluster filenames.
+    - Results include `postgres-go-results.jsonl`, `postgres-go-stderr.log`, `postgres-integration.log` and PostgreSQL container diagnostics. CI uploads logs only, excluding temporary credentials, runtime files and virtual environments.
+    - Hosts requiring documented permission-sensitive validation may use existing `BOREALIS_DOCKER_USE_SUDO=1` runner option. It applies only to the runner's uniquely named disposable PostgreSQL container.
 
     ### Python ownership audit
 
