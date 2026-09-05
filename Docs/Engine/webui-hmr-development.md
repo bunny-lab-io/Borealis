@@ -15,7 +15,7 @@ Use a standalone Engine for WebUI development. Dev mode serves JSX/CSS changes t
 Use a scoped WebUI rebuild when the Engine stack already exists and only the frontend needs dev mode.
 
 !!! warning "Clustered Engine"
-    Commands in this section require a standalone Engine. On an enabled cluster, restore existing isolation below and use Cluster Management for release updates.
+    Commands in this section require a standalone Engine. Existing installations need working K3s and standalone PostgreSQL so the command can verify that cluster conversion has not started. If membership is unavailable, restore those services before retrying. On an enabled cluster, restore existing isolation below and use Cluster Management for release updates.
 
 === "Local"
 
@@ -279,7 +279,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     ### Clustered entry gate and recovery
 
-    - `Engine.sh` checks HMR membership before dev deploy or any dev service action, including restart/reload paths that can rewrite shared WebUI runtime mode. Existing K3s needs a readable kubeconfig and successful bounded discovery. Missing cluster CRD or instance is confirmed standalone; API errors and unreadable configuration fail closed. Any BorealisCluster instance blocks dev, including transitional membership. General `cluster_mode_enabled` consumers are unchanged.
+    - `Engine.sh` checks HMR membership before dev deploy or any dev service action, including restart/reload paths that can rewrite shared WebUI runtime mode. Existing K3s needs a readable kubeconfig and successful bounded discovery. When the cluster CRD or instance is absent, a bounded read-only query must independently confirm that standalone PostgreSQL has no cluster-state record. Conversion writes that record before Kubernetes reconciliation, so enabling and failed conversion remain blocked. Unavailable database/schema, API errors and unreadable configuration fail closed. Any BorealisCluster instance blocks dev, including transitional membership. General `cluster_mode_enabled` consumers are unchanged.
     - Public `/api/server/cluster/hmr/start` retains authentication, bounded input and confirmation validation, then returns `409 cluster_hmr_entry_disabled` before store mutation. Store creation and retry reject `hmr_start` independently. There is no acknowledgement or configuration override.
     - Controller claims old queued/interrupted `hmr_start` and fails it before Kubernetes intent or runtime steps. Normal failure handling retains target/baseline and records `restore_failed`; the runner also rejects every entry step. Cancelling queued entry or exit retains `restore_failed` and the isolated target because a retry may have changed runtime already. Only verified production restoration clears isolation. Exit, lost-target recovery, production candidate cleanup and failed-exit retry remain intact.
     - Failed HMR recovery can queue `hmr_exit` despite generic failed-operation quorum status. Controller still verifies supported active membership, fencing and runtime health before restoration. No automatic membership reset, data deletion or drain clearing is introduced.

@@ -11546,12 +11546,25 @@ cluster_hmr_membership_status() {
   if ! resource="$(k3s_kubectl --request-timeout=10s get crd borealisclusters.borealis.io --ignore-not-found -o name 2>/dev/null)"; then
     return 2
   fi
-  [[ -n "${resource}" ]] || return 1
-  if ! resource="$(k3s_kubectl --request-timeout=10s -n "${K3S_NAMESPACE}" get borealiscluster/borealis --ignore-not-found -o name 2>/dev/null)"; then
+  if [[ -n "${resource}" ]]; then
+    if ! resource="$(k3s_kubectl --request-timeout=10s -n "${K3S_NAMESPACE}" get borealiscluster/borealis --ignore-not-found -o name 2>/dev/null)"; then
+      return 2
+    fi
+    [[ -z "${resource}" ]] || return 0
+  fi
+  # Conversion records cluster_state before publishing its Kubernetes CR.
+  # Missing CR alone cannot prove standalone, including failed conversion.
+  local recorded_cluster=""
+  if ! recorded_cluster="$(k3s_kubectl --request-timeout=10s -n "${K3S_NAMESPACE}" exec postgres-db-0 -c postgres-db -- sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=5000 -c default_transaction_read_only=on" psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' \
+    sh 'SELECT EXISTS (SELECT 1 FROM engine.cluster_state);' 2>/dev/null)"; then
     return 2
   fi
-  [[ -n "${resource}" ]] || return 1
-  return 0
+  case "${recorded_cluster}" in
+    t) return 0 ;;
+    f) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 cluster_hmr_guard() {
