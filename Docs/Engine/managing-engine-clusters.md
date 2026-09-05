@@ -353,7 +353,7 @@ New Cluster-Wide Node Isolation / HMR entry is disabled on enabled one-node and 
 
 Existing isolation keeps its recorded target and pinned production baseline. Maintenance shows that target and offers **Disable Isolation** when recovery is available. The cluster banner remains visible until isolation is disabled. Updates, membership changes and normal maintenance stay blocked during isolation.
 
-Old queued or interrupted entry operations halt into failed restoration state before further runtime action. Recover through **Disable Isolation**; retrying the old entry is rejected. Existing failed-exit retry and lost-target recovery remain available.
+Old queued or interrupted entry operations halt into failed restoration state before further runtime action. Recover through **Disable Isolation**; retrying the old entry is rejected. Cancelling queued HMR work retains the isolated target and recovery state until production restoration succeeds. Existing failed-exit retry and lost-target recovery remain available.
 
 ### Disable Isolation
 

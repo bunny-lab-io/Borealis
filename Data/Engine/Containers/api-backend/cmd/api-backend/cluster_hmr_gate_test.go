@@ -79,5 +79,28 @@ func TestClusterHMREntryPostgresRejectsLegacyQueuePreservesRecovery(t *testing.T
 		if _, err := store.cancelClusterOperation(ctx, "admission-test", exitID); err != nil {
 			t.Fatal(err)
 		}
+		// Cancellation is not proof that a queued retry never changed runtime.
+		if err := store.db.QueryRowContext(ctx, `SELECT hmr_state,hmr_node_id FROM engine.cluster_state WHERE id=1`).Scan(&hmrState, &target); err != nil {
+			t.Fatal(err)
+		}
+		if hmrState != "restore_failed" || target != nodeID {
+			t.Fatalf("cancelled exit erased recovery target: %s %s", hmrState, target)
+		}
+		// Reproduce a pre-upgrade queued entry retry and cancel it before claim.
+		if _, err := store.db.ExecContext(ctx, `UPDATE engine.cluster_operations SET state='queued' WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE engine.cluster_state SET active_operation_id=$1,hmr_state='activating' WHERE id=1`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.cancelClusterOperation(ctx, "admission-test", id); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.db.QueryRowContext(ctx, `SELECT hmr_state,hmr_node_id FROM engine.cluster_state WHERE id=1`).Scan(&hmrState, &target); err != nil {
+			t.Fatal(err)
+		}
+		if hmrState != "restore_failed" || target != nodeID {
+			t.Fatalf("cancelled legacy entry erased recovery target: %s %s", hmrState, target)
+		}
 	}
 }

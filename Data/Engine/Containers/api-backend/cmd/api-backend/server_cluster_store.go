@@ -1121,7 +1121,9 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 			return nil, err
 		}
 		if kind == "hmr_start" || kind == "hmr_exit" {
-			if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='inactive',hmr_node_id=NULL,status='Healthy',updated_at=$1 WHERE id=1`, now); err != nil {
+			// Queued retries may have already changed placement. Cancellation
+			// stops further work; only verified production restore clears isolation.
+			if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_state SET hmr_state='restore_failed',status='HMR Non-HA',updated_at=$1 WHERE id=1`, now); err != nil {
 				return nil, err
 			}
 		}

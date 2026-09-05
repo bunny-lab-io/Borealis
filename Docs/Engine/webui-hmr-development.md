@@ -232,6 +232,8 @@ After isolation is disabled, confirm Cluster Management shows:
 - Every node `Active / Active`.
 - CloudNativePG configured count equal to Ready count.
 
+Cancelling queued HMR work stops further steps and retains the isolated target for recovery; it does not mark the cluster restored.
+
 If exit fails, stop. Record operation ID and exact failed step. Do not begin **Update All**, submit second operation, clear drain, patch Deployment, or pull source on standby nodes.
 
 ## Promote Accepted Work
@@ -279,7 +281,7 @@ Close temporary port-forwards. Do not persist these variables in shell profile o
 
     - `Engine.sh` checks HMR membership before dev deploy or any dev service action, including restart/reload paths that can rewrite shared WebUI runtime mode. Existing K3s needs a readable kubeconfig and successful bounded discovery. Missing cluster CRD or instance is confirmed standalone; API errors and unreadable configuration fail closed. Any BorealisCluster instance blocks dev, including transitional membership. General `cluster_mode_enabled` consumers are unchanged.
     - Public `/api/server/cluster/hmr/start` retains authentication, bounded input and confirmation validation, then returns `409 cluster_hmr_entry_disabled` before store mutation. Store creation and retry reject `hmr_start` independently. There is no acknowledgement or configuration override.
-    - Controller claims old queued/interrupted `hmr_start` and fails it before Kubernetes intent or runtime steps. Normal failure handling retains target/baseline and records `restore_failed`; the runner also rejects every entry step. Exit, lost-target recovery, production candidate cleanup and failed-exit retry remain intact.
+    - Controller claims old queued/interrupted `hmr_start` and fails it before Kubernetes intent or runtime steps. Normal failure handling retains target/baseline and records `restore_failed`; the runner also rejects every entry step. Cancelling queued entry or exit retains `restore_failed` and the isolated target because a retry may have changed runtime already. Only verified production restoration clears isolation. Exit, lost-target recovery, production candidate cleanup and failed-exit retry remain intact.
     - Failed HMR recovery can queue `hmr_exit` despite generic failed-operation quorum status. Controller still verifies supported active membership, fencing and runtime health before restoration. No automatic membership reset, data deletion or drain clearing is introduced.
     - Cluster Management removes entry selection/submission and presents the recorded isolated node with **Disable Isolation** for `active` or `restore_failed`. Standby **Exit Maintenance Mode** still submits the same `EXIT HMR` recovery request.
     - Do not deploy U01 disablement until exact-release restoration containing #492 succeeds with existing isolation, production mode, no HMR mounts and fresh UI/API access. Q01 repeats restoration followed by denial on the final immutable release. Portable tests are not live qualification evidence.

@@ -374,6 +374,9 @@ func TestPlannedDisruptionRequiresSharedArtifactHAWhileRecoveryBypassesGate(t *t
 	if err := runner.Run(ctx, clusterControllerOperation{Kind: "node_maintenance", Payload: map[string]any{"action": "enter"}}, clusterControllerStep{Name: "preflight"}, nodes); err == nil || !strings.Contains(err.Error(), "not failure-safe") {
 		t.Fatalf("planned maintenance did not enforce storage gate: %v", err)
 	}
+	// Timeout can return while the HTTP handler still records its request.
+	// Close waits for that handler before reading the fixture's counter.
+	server.Close()
 	requestCount := requests
 	if err := runner.Run(context.Background(), clusterControllerOperation{Kind: "hmr_exit"}, clusterControllerStep{Name: "preflight"}, nodes); err != nil {
 		t.Fatalf("HMR recovery was blocked by storage gate: %v", err)
