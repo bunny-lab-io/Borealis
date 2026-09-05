@@ -1482,7 +1482,7 @@ export default function ClusterManagement() {
                 <Stack key={admission.id} direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
                   <Box>
                     <Typography>{admission.node_name} · {admission.state}</Typography>
-                    {admission.state === "Recovery Required" ? <Typography variant="body2" color="text.secondary">Node identity retained. Retry original admission operation in Operations, then rerun join on original host.</Typography> : null}
+                    {admission.state === "Recovery Required" ? <Typography variant="body2" color="text.secondary">Node identity retained. Retry original admission operation in Cluster Events, then rerun join on original host.</Typography> : null}
                   </Box>
                   <Stack direction="row" spacing={1}>
                     {admission.state === "Pending Quorum" ? <>

@@ -133,7 +133,7 @@ Invitations allow initial acceptance and approval for 15 minutes. An approved ta
 
 Select **Cancel Admission** only for an unapproved pending target. Expired pending admissions release unused capacity automatically. If Borealis finds approval, member, or operation evidence, it retains the slot as **Recovery Required**. Missing or NotReady Kubernetes nodes do not prove that a host never joined.
 
-For a failed admission or an admission operation cancelled by an older release, open **Operations**, select **Retry** on the original operation, and rerun join on the original hosts. Renew expired bundles as needed. Approved admission operations cannot be cancelled because a target may already have joined. Restore the original cohort, then use supported removal and fencing before replacing a joined host. A removed host retaining its local member-removal fence must be rebuilt before joining again.
+For a failed admission or an admission operation cancelled by an older release, open **Cluster Events**, select **Retry** on the original operation, and rerun join on the original hosts. Renew expired bundles as needed. Approved admission operations cannot be cancelled because a target may already have joined. Restore the original cohort, then use supported removal and fencing before replacing a joined host. A removed host retaining its local member-removal fence must be rebuilt before joining again.
 
 Optional `--k3s-server`, `--k3s-version`, and `--peer-cidrs` flags assert expected values. They must match the settings supplied by Borealis; they cannot override cluster configuration.
 
@@ -282,7 +282,7 @@ Each row identifies affected node hostnames, summarizes the latest lifecycle mes
 
 Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
 
-An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried.  Failed records remain diagnostic-only and do not expose inline retry.  Queued or waiting records expose cancellation.
+An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried. The same rule applies to admission operations cancelled by older releases. Unsuperseded failed or cancelled admission operations expose **Retry** for the original cohort; other failed records remain diagnostic-only. Queued or waiting admission operations cannot be cancelled because a target may already have joined. Other queued or waiting operations retain cancellation at their supported safe boundary.
 
 Maintenance explains an empty release catalog when no published stable cluster-compatible release exists at or above the pinned baseline.
 
