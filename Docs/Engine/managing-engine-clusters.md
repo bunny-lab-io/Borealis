@@ -347,20 +347,13 @@ A failed restore leaves the node drained instead of sending work to a partially 
 
 See [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) and [Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) for the upstream behavior.
 
-## Use Cluster-Wide Node Isolation
+## Recover Cluster-Wide Node Isolation { #use-cluster-wide-node-isolation }
 
-Cluster-Wide Node Isolation is the development mode built on the Borealis HMR controller.
+New Cluster-Wide Node Isolation / HMR entry is disabled on enabled one-node and three-node clusters. Use a standalone Engine for mutable development and publish an immutable release for cluster updates. Legacy acknowledgement flags do not enable clustered development.
 
-Starting `deploy dev` or `webui-frontend rebuild dev` on a clustered Engine requires Admin access and the typed confirmation `ENABLE HMR`.  The confirmation phrase and API names retain `HMR` for compatibility.  Non-interactive CLI use also requires `--acknowledge-cluster-non-ha`.
+Existing isolation keeps its recorded target and pinned production baseline. Maintenance shows that target and offers **Disable Isolation** when recovery is available. The cluster banner remains visible until isolation is disabled. Updates, membership changes and normal maintenance stay blocked during isolation.
 
-!!! warning "Cluster-Wide Node Isolation Disables Application HA"
-Isolation drains all Borealis application roles from every cluster node except the selected node.  Use it for backend and frontend development.  Disable Cluster-Wide Node Isolation to restore application HA and failover.
-
-The controller first checks quorum, capacity, target production health, and exclusive-operation state.  It then moves Cluster Virtual IP and WireGuard ownership, scheduler leadership, site workers, application endpoints, and a caught-up PostgreSQL primary to the selected isolated node.
-
-Standby nodes become ineligible for the Cluster Virtual IP lease while K3s, etcd, Longhorn, and PostgreSQL replicas continue running.  Application scheduling is drained without cordoning infrastructure.
-
-The cluster banner names the isolated node and remains visible on every page until dismissed or isolation is disabled.  The Maintenance selector remains locked to the current isolated node while isolation is not fully inactive.  Updates, membership operations, and normal maintenance remain blocked during isolation.
+Old queued or interrupted entry operations halt into failed restoration state before further runtime action. Recover through **Disable Isolation**; retrying the old entry is rejected. Existing failed-exit retry and lost-target recovery remain available.
 
 ### Disable Isolation
 
@@ -374,7 +367,7 @@ This ordering keeps production available while the isolated node returns to the 
 
 If the isolated node is lost, Borealis fences it before recovering pinned-baseline workloads on standby members through the same sequence.
 
-Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hmr-preview) for the manual clustered preview workflow, secure CLI authentication, durable-source mirroring, validation, production restore, and stable-release handoff.
+Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hmr-preview) for existing-isolation recovery, secure CLI authentication and pre-deployment restoration qualification. Mutable development now requires a standalone Engine.
 
 Isolation never distributes mutable source to standby nodes.  Only a Cluster Management stable-release update moves an accepted immutable revision across all nodes.
 
@@ -572,7 +565,7 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 * Host-initiated shutdown or reboot performs bounded Cluster Virtual IP handoff to a Ready Engine peer before K3s stops.  A one-node cluster skips handoff because no peer exists.
 * Sudden power loss still relies on lease expiry and can interrupt ingress until a new owner acquires the Cluster Virtual IP.
 * Three-node clusters keep one healthy shared Agent-artifact volume replica on every Engine.
-* Planned maintenance, HMR entry, node removal, and Engine or K3s updates wait for all three Agent-artifact copies.
+* Planned maintenance, node removal, and Engine or K3s updates wait for all three Agent-artifact copies.
 * Emergency recovery and maintenance/HMR exit remain available when storage is degraded.
 * Safe removal supports `3 -> 1`.
 * Emergency removal from supported three-node membership requires an external power fence plus both exact confirmations and records degraded state.
@@ -584,6 +577,10 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Clustered HMR entry boundary
+
+    Public API, store creation/retry, controller dispatch and step runner reject `hmr_start`. Legacy queued/interrupted entry fails before Kubernetes intent and becomes `restore_failed` with its target retained. Failed HMR exit may queue through the generic quorum failure status; existing controller membership, health and fencing checks still apply. CLI dev commands require confirmed standalone membership; lookup failure never means standalone. WebUI retains recovery controls only. Canonical procedures, test/UI checks and exact-release #492 restoration gate live in [WebUI HMR Development](webui-hmr-development.md).
 
     ### Engine release identity
 
@@ -654,7 +651,7 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - Emergency removal requires `TARGET IS POWERED OFF` plus `EMERGENCY REMOVE NODE`.
 - Release, HMR, and operation endpoints:
 - `GET /api/server/cluster/releases`
-- `POST /api/server/cluster/hmr/start`
+- `POST /api/server/cluster/hmr/start` — legacy bounded contract; returns `409 cluster_hmr_entry_disabled` after Admin/input validation.
 - `POST /api/server/cluster/hmr/exit`
 - `POST /api/server/cluster/updates`
 - `POST /api/server/cluster/operations/{id}/retry`
@@ -826,7 +823,7 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - An update request pins a non-leader-first node ID sequence from these observations.  Later role movement cannot change the remaining sequence.
 - Transfer-away fencing requires the Cluster Virtual IP lease to leave the target and keeps the WireGuard controller scaled without requiring previous-release standby readiness.
 - The controller then accepts an actual eligible owner only after the WireGuard workload becomes Ready.
-- HMR entry requires the Cluster Virtual IP on the exact selected target.
+- New HMR entry is disabled before runtime role movement; existing exit/recovery retains its role and fencing checks.
 - HMR exit pins PostgreSQL to the first restored standby but accepts any healthy non-target Cluster Virtual IP owner after target fencing.
 - Drain withdrawal waits only on node-scoped traffic Services scaled or removed by application drain: API/Aegis, scheduler, guacd, Traefik, WebUI, and site workers.
 - Resident operator and database endpoints remain available for control-plane and storage safety and cannot block rolling progress.

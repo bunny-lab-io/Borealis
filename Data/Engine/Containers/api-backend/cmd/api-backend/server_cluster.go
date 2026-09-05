@@ -43,9 +43,10 @@ var (
 	clusterK3sRE                  = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)\+k3s([0-9]+)$`)
 	clusterUbuntuRE               = regexp.MustCompile(`^Ubuntu[[:space:]]+([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[[:space:]].*)?$`)
 
-	errClusterConflict    = errors.New("cluster operation conflict")
-	errClusterNotFound    = errors.New("cluster resource not found")
-	errClusterUnavailable = errors.New("cluster control unavailable")
+	errClusterConflict         = errors.New("cluster operation conflict")
+	errClusterNotFound         = errors.New("cluster resource not found")
+	errClusterUnavailable      = errors.New("cluster control unavailable")
+	errClusterHMREntryDisabled = fmt.Errorf("%w: new clustered HMR entry is disabled; restore existing isolation to pinned production", errClusterConflict)
 )
 
 type clusterMutation struct {
@@ -601,6 +602,10 @@ func clusterMutationHandler(auth *authService, kind string, parse func(map[strin
 			writePublicValidationErrors(w, errs)
 			return
 		}
+		if kind == "hmr_start" {
+			writeClusterError(w, errClusterHMREntryDisabled)
+			return
+		}
 		store, ok := auth.store.(clusterStore)
 		if !ok {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cluster_control_unavailable"})
@@ -913,6 +918,8 @@ func clusterProbeConformancePayload() map[string]any {
 
 func writeClusterError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errClusterHMREntryDisabled):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "cluster_hmr_entry_disabled", "message": err.Error()})
 	case errors.Is(err, errClusterConflict):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "cluster_operation_conflict", "message": err.Error()})
 	case errors.Is(err, errClusterNotFound):

@@ -72,7 +72,7 @@ import {
 } from "../app/utils/inputValidation.js";
 
 const HMR_WARNING =
-  "This drains all Borealis application roles from every cluster node except specified node. Use isolation for backend and frontend development. Disable Cluster-Wide Node Isolation to restore application HA and failover.";
+  "New clustered HMR entry is disabled. Existing isolation can be disabled to restore pinned production and application HA. Use a standalone Engine for development.";
 const TABS = [
   { key: "overview", label: "Overview", Icon: OverviewIcon },
   { key: "nodes", label: "Nodes", Icon: NodesIcon },
@@ -913,8 +913,7 @@ export default function ClusterManagement() {
   const isolationInactive = hmrState === "inactive";
   const isolationExitAllowed = ["active", "restore_failed"].includes(hmrState);
   const isolatedNodeID = String(cluster?.hmr?.node_id || "");
-  const isolationNodeOptions = isolationInactive ? nodes : nodes.filter((node) => node?.id === isolatedNodeID);
-  const isolationNodeValue = isolationInactive ? selectedNode : isolatedNodeID;
+  const isolatedNodeName = nodes.find((node) => node?.id === isolatedNodeID)?.node_name || "Unknown";
   const databaseRecoveryReady = database?.fully_ready !== false && database?.durability_quorum !== false;
   const applicationCapacityReady = nodes.filter((node) => node?.membership_state === "Active").every((node) => node?.application_state === "active");
   const normalOperationsEnabled = cluster?.status === "Healthy" && databaseRecoveryReady && applicationCapacityReady;
@@ -1029,7 +1028,6 @@ export default function ClusterManagement() {
       const validation = validateInputValue("reason", sanitizedReason, FIELD_CLASS.PLAIN_SINGLE_LINE);
       if (validation) return setError(validation);
     }
-    if (kind === "hmr_start") return mutate("/api/server/cluster/hmr/start", { node_id: selectedNode, confirmation });
     if (kind === "hmr_exit") return mutate("/api/server/cluster/hmr/exit", { confirmation });
     if (kind === "update_all" || kind === "update_node" || kind === "update_qualification") {
       const oneNode = Number(cluster?.active_size || 1) === 1;
@@ -1341,7 +1339,7 @@ export default function ClusterManagement() {
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
     title: "Cluster Management",
-    subtitle: "Quorum, role ownership, development node isolation, node maintenance, and rolling Engine release operations.",
+    subtitle: "Quorum, role ownership, isolation recovery, node maintenance, and rolling Engine release operations.",
     Icon: ClusterIcon,
     actions: pageActions,
   });
@@ -1423,7 +1421,12 @@ export default function ClusterManagement() {
         ) : null}
 
         {tab === "maintenance" ? <Stack spacing={2}>
-          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-Wide Node Isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl disabled={!isolationInactive} sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">Isolated Node</InputLabel><Select labelId="hmr-node-label" label="Isolated Node" value={isolationNodeValue} onChange={(event) => setSelectedNode(event.target.value)}>{isolationNodeOptions.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || !isolationInactive} onClick={() => openAction("hmr_start")}>Enable Isolation</Button><Button variant="outlined" disabled={!isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button></Stack></Paper>
+          <Paper sx={CARD_SX}>
+            <Typography variant="h6">Cluster-Wide Node Isolation</Typography>
+            <Alert severity="info" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert>
+            {!isolationInactive ? <Typography variant="body2" sx={{ mt: 2, color: "#94a3b8" }}>Isolated node: {isolatedNodeName}</Typography> : null}
+            <Button sx={{ mt: 2 }} variant="outlined" disabled={busy || !isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button>
+          </Paper>
           <Paper sx={CARD_SX}>
             <Stack direction="row" spacing={0.5} alignItems="center">
               <Typography variant="h6">Stable Engine Version</Typography>
@@ -1519,7 +1522,6 @@ export default function ClusterManagement() {
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
-          {dialog?.kind === "hmr_start" ? <Alert severity="warning" sx={{ mb: 2 }}>{HMR_WARNING}</Alert> : null}
           {maintenanceExitDisablesIsolation ? <Alert severity="warning" sx={{ mb: 2 }}>Cluster-Wide Node Isolation will be disabled if the node exits maintenance mode.</Alert> : null}
           {dialog?.kind === "remove" ? <Alert severity="warning" sx={{ mb: 2 }}>Safe downscale removes two nodes sequentially. PostgreSQL replicas must vacate both targets before Borealis self-fences K3s and deletes membership.</Alert> : null}
           {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
@@ -1540,7 +1542,7 @@ export default function ClusterManagement() {
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
           {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
           {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
+          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
           {dialog?.kind !== "cluster_enable" ? <Typography variant="body2" sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2 }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography> : null}
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button color={dialog?.kind === "update_qualification" ? "warning" : "primary"} sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
