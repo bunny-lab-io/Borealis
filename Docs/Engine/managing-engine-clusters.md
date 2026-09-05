@@ -501,6 +501,49 @@ The receiver re-verifies the key against the Aegis verification token before ins
 
 An all-cold cluster restart still requires one operator unlock.
 
+### Certificate Renewal and CA Rotation
+
+API processes reload certificate, private key, and CA trust for new TLS handshakes. Normal cert-manager leaf renewal needs no API restart. A partial or malformed projection retains the last valid identity only while its certificate chain remains valid under current trust. Expiry stops key propagation; repair the certificate projection without restarting the surviving unlocked replica.
+
+Node workload reconciliation creates `borealis-aegis-trust` once from the existing public CA certificate. Later deployments preserve this ConfigMap. Updated active and candidate replicas require its `ca-bundle.crt`; cert-manager continues to manage the leaf Secret separately. If this ConfigMap disappears after adoption, restore the approved trust bundle before redeploying.
+
+Check renewal before the leaf or CA expires:
+
+```bash
+sudo k3s kubectl -n borealis get certificate borealis-api-aegis-mtls borealis-cluster-ca \
+  -o custom-columns=NAME:.metadata.name,READY:.status.conditions[-1].status,EXPIRY:.status.notAfter,RENEWAL:.status.renewalTime
+sudo k3s kubectl -n borealis get configmap borealis-aegis-trust
+```
+
+!!! warning "Keep one unlocked holder running"
+    Complete rollout of certificate reload support on every API replica before rotating the CA. Keep at least one unlocked replica running throughout renewal, recovery, and staged CA rotation. Restarting every holder loses the memory-only key and requires operator unlock. Expired certificates never gain an automatic validity extension.
+
+CA rotation requires three ordered stages. Prepare the next CA through the approved PKI procedure before changing the issuer. The files below contain public CA certificates only.
+
+1. Publish both current and next CA certificates. Confirm every API replica has the same mounted bundle and passes fresh mutual-TLS checks before issuing leaves from the next CA.
+2. Change the signing CA and request renewed API leaf certificates through cert-manager. Confirm every running replica serves the new certificate, accepts fresh mutual-TLS connections, and remains unlocked. Updating a CA issuer's Secret alone does not trigger leaf reissuance; follow the [cert-manager CA issuer guidance](https://cert-manager.io/docs/configuration/ca/).
+3. Replace the bundle with the next CA alone after all replicas transition. Verify peers using retired certificates are rejected. Keep the ConfigMap present; deleting it is not a retirement mechanism.
+
+Publish the overlap bundle from approved public certificate files:
+
+```bash
+cat current-ca.crt next-ca.crt > aegis-ca-overlap.pem
+sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
+  --from-file=ca-bundle.crt=aegis-ca-overlap.pem --dry-run=client -o yaml \
+  | sudo k3s kubectl apply -f -
+```
+
+After every replica passes the new-certificate checks, retire the old CA:
+
+```bash
+sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
+  --from-file=ca-bundle.crt=next-ca.crt --dry-run=client -o yaml \
+  | sudo k3s kubectl apply -f -
+```
+
+!!! info "Trust changes are explicit"
+    Removing a CA takes effect for fresh handshakes even when a leaf update is incomplete. A replica still using the removed CA fails closed until its identity is repaired. Malformed trust updates preserve the last valid bundle; inspect API logs and fix the projection. Kubernetes volume updates are asynchronous, so a successful ConfigMap write alone is not proof that every replica has adopted it. See validation commands in the detailed breakdown below.
+
 ## Failure and Recovery Rules
 
 * `Degraded Quorum` records emergency two-of-three membership after an externally fenced removal.  Healthy nodes remain enabled, and single-replacement admission remains available.
@@ -534,6 +577,42 @@ An all-cold cluster restart still requires one operator unlock.
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Aegis TLS runtime behavior
+
+    - `aegis_cluster_tls.go` shares a mutex-protected reloader per `authService`. New listener handshakes and each bounded fanout use immutable snapshots with TLS 1.3 and verified client certificates. Session resumption and key-transfer connection reuse are disabled; redirects never receive the key. In-flight requests remain bounded by existing five-second server/client timeouts.
+    - The reloader double-reads bounded regular PEM files and re-resolves projection symlinks, rejecting changing or mixed generations. It validates the leaf/key match, peer DNS name, server and client EKUs separately, and current chain validity. Well-formed CA removals are accepted independently of leaf readiness; cached credentials must still verify under newest accepted trust. No TLS reload persists, clears, or derives an Aegis key.
+    - `reconcile-node-workloads.py` creates the public trust ConfigMap only before first adoption, using create-only semantics and preserving a concurrent winner. Read errors fail closed. A missing bundle referenced by an existing API Deployment requires operator restoration. Required projected Secret/ConfigMap sources share one `..data` generation; no `subPath` mount prevents refresh. Existing `BOREALIS_AEGIS_CLUSTER_TLS_CA` selects the bundle; the legacy default `ca.crt` remains only for previously rendered workloads.
+    - Cert-manager leaf `ca.crt` is not a durable rotation policy. [Certificate resource guidance](https://cert-manager.io/docs/usage/certificate/#target-secret) explains why consumers need independently distributed trust. Keep the public ConfigMap backed up with the approved CA rotation record; never replace it automatically during renewal.
+
+    ### Aegis TLS validation
+
+    Use host OpenSSL to inspect each mounted public leaf and compare trust digests. These commands do not print private keys or Aegis material:
+
+    ```bash
+    for pod in $(sudo k3s kubectl -n borealis get pods -l borealis.io/aegis-peer=true -o jsonpath='{.items[*].metadata.name}'); do
+      printf '%s\n' "$pod"
+      sudo k3s kubectl -n borealis exec "$pod" -- cat /var/run/secrets/borealis-aegis-mtls/tls.crt \
+        | openssl x509 -noout -serial -issuer -dates
+      sudo k3s kubectl -n borealis exec "$pod" -- sha256sum /var/run/secrets/borealis-aegis-mtls/trust-bundle.pem
+    done
+    ```
+
+    Mounted material alone does not prove serving identity. For every ordered pair of API replicas, run a fresh request from the source Pod to the target Pod IP, preserving the Service DNS name. Set `source_pod` and `target_ip` from the current API Pod inventory. Curl must finish successfully and print `400`: TLS and client authentication succeeded, then the bounded handler rejected an intentionally empty key. Do not use an actual Aegis key for probes.
+
+    ```bash
+    sudo k3s kubectl -n borealis exec "$source_pod" -- curl --silent --show-error \
+      --connect-timeout 2 --max-time 5 --tlsv1.3 --noproxy '*' \
+      --cacert /var/run/secrets/borealis-aegis-mtls/trust-bundle.pem \
+      --cert /var/run/secrets/borealis-aegis-mtls/tls.crt \
+      --key /var/run/secrets/borealis-aegis-mtls/tls.key \
+      --resolve "api-backend-aegis.borealis.svc:9444:$target_ip" \
+      --header 'Content-Type: application/json' --data '{"key":""}' \
+      --output /dev/null --write-out '%{http_code}\n' \
+      https://api-backend-aegis.borealis.svc:9444/internal/cluster/aegis-key
+    ```
+
+    During next-CA-only qualification, use only the new CA as client verification trust and inspect the server's presented certificate; successful full mutual authentication must use the new chain. Retired-client rejection needs a separately retained lab test identity under the old CA. Do not retain or expose production private keys for this probe. Confirm a newly started locked API replica receives the verified key while exactly one other replica remains unlocked. Then prove an all-cold test restart requires operator unlock. Record served serials, trust digests, Pod identities, release SHA, and outcomes in Q01 evidence. Portable TLS tests exercise these boundaries without modifying the deployed cluster.
 ### API Endpoints
 - Cluster state and events: `GET /api/server/cluster`, `GET /api/server/cluster/events`
 - Lightweight banner state: `GET /api/server/cluster/banner`

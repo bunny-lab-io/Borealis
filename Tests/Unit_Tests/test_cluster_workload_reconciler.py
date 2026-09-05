@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -32,6 +33,66 @@ def patched_generic_deployment(container_name: str, image: str, revision: str) -
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_aegis_trust_bootstrap_preserves_existing_policy(self) -> None:
+        with mock.patch.object(MODULE, "kubectl", return_value='{"data":{"ca-bundle.crt":"old+new"}}') as kubectl:
+            MODULE.ensure_aegis_trust_bundle()
+        self.assertEqual(kubectl.call_count, 1)
+        self.assertIn("get", kubectl.call_args.args)
+
+    def test_aegis_trust_bootstrap_creates_only_initial_public_bundle(self) -> None:
+        ca = "-----BEGIN CERTIFICATE-----\ninitial-public-ca\n-----END CERTIFICATE-----\n"
+        with mock.patch.object(MODULE, "kubectl", side_effect=["", '{"items":[]}', base64.b64encode(ca.encode()).decode(), ""]) as kubectl:
+            MODULE.ensure_aegis_trust_bundle()
+        calls = kubectl.call_args_list
+        self.assertEqual(calls[2].args[-1], "jsonpath={.data.ca\\.crt}")
+        self.assertEqual(calls[3].args, ("create", "-f", "-"))
+        manifest = json.loads(calls[3].kwargs["stdin"])
+        self.assertEqual(manifest["data"], {"ca-bundle.crt": ca})
+        self.assertEqual(manifest["metadata"]["name"], "borealis-aegis-trust")
+
+    def test_aegis_trust_bootstrap_refuses_missing_adopted_policy(self) -> None:
+        deployment = {"spec": {"template": {"spec": {"volumes": [{
+            "name": "aegis-mtls", "projected": {"sources": [{"configMap": {"name": "borealis-aegis-trust"}}]},
+        }]}}}}
+        with mock.patch.object(MODULE, "kubectl", side_effect=["", json.dumps({"items": [deployment]})]) as kubectl:
+            with self.assertRaisesRegex(RuntimeError, "restore operator-approved CA bundle"):
+                MODULE.ensure_aegis_trust_bundle()
+        self.assertEqual(kubectl.call_count, 2)
+
+    def test_aegis_trust_bootstrap_fails_on_read_errors_and_preserves_create_race(self) -> None:
+        with mock.patch.object(MODULE, "kubectl", side_effect=RuntimeError("Forbidden")) as kubectl:
+            with self.assertRaisesRegex(RuntimeError, "Forbidden"):
+                MODULE.ensure_aegis_trust_bundle()
+        self.assertEqual(kubectl.call_count, 1)
+        ca = base64.b64encode(b"-----BEGIN CERTIFICATE-----\npublic-ca\n-----END CERTIFICATE-----").decode()
+        for existing in ("", '{"data":{"ca-bundle.crt":"operator-policy"}}'):
+            with mock.patch.object(MODULE, "kubectl", side_effect=["", '{"items":[]}', ca, RuntimeError("create conflict"), existing]) as kubectl:
+                if existing:
+                    MODULE.ensure_aegis_trust_bundle()
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "create conflict"):
+                        MODULE.ensure_aegis_trust_bundle()
+            self.assertFalse(any("apply" in call.args for call in kubectl.call_args_list))
+
+    def test_api_workloads_require_independent_projected_aegis_trust(self) -> None:
+        for candidate in (False, True):
+            source = {"metadata": {}, "spec": {"replicas": 1, "template": {"metadata": {}, "spec": {"containers": [{"name": "api", "startupProbe": {"periodSeconds": 2, "failureThreshold": 30}, "livenessProbe": {"initialDelaySeconds": 0}}]}}}}
+            with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(MODULE, "cluster_virtual_ip", return_value="192.168.3.248"), mock.patch.object(MODULE, "kubectl", return_value="") as kubectl:
+                MODULE.reconcile_one("api-backend", "api-backend", "engine-2", "a" * 40, {"api-backend": "borealis/api-backend@sha256:" + "b" * 64}, candidate)
+            manifest = json.loads(next(call.kwargs["stdin"] for call in kubectl.call_args_list if "apply" in call.args))
+            pod = manifest["spec"]["template"]["spec"]
+            volume = next(item for item in pod["volumes"] if item["name"] == "aegis-mtls")
+            self.assertEqual(volume["projected"]["defaultMode"], 0o440)
+            sources = volume["projected"]["sources"]
+            self.assertEqual(sources[0]["secret"]["items"], [{"key": "tls.crt", "path": "tls.crt"}, {"key": "tls.key", "path": "tls.key"}])
+            self.assertEqual(sources[1], {"configMap": {"name": "borealis-aegis-trust", "items": [{"key": "ca-bundle.crt", "path": "trust-bundle.pem"}]}})
+            container = pod["containers"][0]
+            mount = next(item for item in container["volumeMounts"] if item["name"] == "aegis-mtls")
+            self.assertTrue(mount["readOnly"])
+            self.assertNotIn("subPath", mount)
+            environment = {item["name"]: item.get("value") for item in container["env"]}
+            self.assertEqual(environment["BOREALIS_AEGIS_CLUSTER_TLS_CA"], "/var/run/secrets/borealis-aegis-mtls/trust-bundle.pem")
+
     def test_cluster_workload_probe_guards_exceed_startup_budget(self) -> None:
         for base, delay in MODULE.PROBE_GUARD_DELAYS.items():
             annotations: dict[str, str] = {}

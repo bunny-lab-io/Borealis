@@ -26,7 +26,13 @@ run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" ve
   >"${RESULT_DIR}/engine-go-vet.log" 2>&1
 
 printf '==> Engine Go tests\n'
-run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" test ./... \
+TEST_FLAGS=(-count=1)
+case "${BOREALIS_ENGINE_GO_RACE:-0}" in
+  0) ;;
+  1) TEST_FLAGS+=(-race) ;;
+  *) printf 'ENGINE GO FAIL: BOREALIS_ENGINE_GO_RACE must be 0 or 1.\n' >&2; exit 2 ;;
+esac
+run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" test "${TEST_FLAGS[@]}" ./... \
   >"${RESULT_DIR}/engine-go-test.log" 2>&1
 
 printf '==> Engine Go runtime binary builds\n'
