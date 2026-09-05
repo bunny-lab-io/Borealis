@@ -1273,7 +1273,7 @@ export default function ClusterManagement() {
         const state = String(operation?.state || "unknown").toLowerCase();
         const label = clusterOperationStatusLabel(operation);
         const cancellable = operation.kind !== "membership_admit" && ["queued", "waiting"].includes(state);
-        const retryable = state === "failed" || (operation.kind === "membership_admit" && state === "cancelled");
+        const retryable = operation.kind === "membership_admit" && !operation.superseded_by && ["failed", "cancelled"].includes(state);
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />
