@@ -66,6 +66,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-050 | PostgreSQL coverage and required-result enforcement | `Tests/Unit_Tests/test_postgres_inventory.py` and PostgreSQL inventory/result audit | fixed | Clustering review #493 found four existing maintenance, completion, retry-checkpoint and action-image integration tests omitted from runner, plus ordinary cluster Go changes missing database CI selection. | Discover all database-gated Go tests, compare maintained inventory, select every required test, reject skips and incomplete results, and select database lane for API/store/controller/scheduler source changes. Preserve per-test JSON results in CI. |
 
+| REG-TEST-051 | Identity-bound planned member removal | `cluster_removal_fence_test.go`, `member_removal_test.go`, and `TestManagedEtcdRemovalWaitsForK3sConfirmation` | fixed | H01 review under #493 found NotReady/missing Node treated as fence proof, including retry storage shortcuts. Network partitions can produce those observations before any host fence. | Persist target/operation/Node UID/etcd identity before fixed host action; acknowledge only matching success under live controller lease. Require proof before membership mutation; reject partitions, stale operation replay, hostname reuse and changed member identity. Recover interrupted acknowledgement only from exact completed Job and prior intent. PostgreSQL test is required in H07 inventory. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

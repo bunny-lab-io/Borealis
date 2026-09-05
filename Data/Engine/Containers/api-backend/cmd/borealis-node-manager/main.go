@@ -237,6 +237,11 @@ func client(args []string) {
 	k3sVersion := flags.String("k3s-version", "", "Stable K3s version")
 	reason := flags.String("reason", "", "Single-line drain reason")
 	clusterVIP := flags.String("cluster-vip", "", "Borealis Cluster Virtual IP")
+	operationID := flags.String("operation-id", "", "Removal operation UUID")
+	nodeID := flags.String("node-id", "", "Durable removal target UUID")
+	removalNodeName := flags.String("node-name", "", "Expected removal target node name")
+	nodeUID := flags.String("node-uid", "", "Expected Kubernetes Node UID")
+	etcdMemberName := flags.String("etcd-member-name", "", "Expected K3s etcd member name")
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
@@ -273,6 +278,19 @@ func client(args []string) {
 	if strings.TrimSpace(*clusterVIP) != "" {
 		params["cluster_vip"] = strings.TrimSpace(*clusterVIP)
 	}
+	for key, value := range map[string]string{"operation_id": *operationID, "node_id": *nodeID, "node_name": *removalNodeName, "node_uid": *nodeUID, "etcd_member_name": *etcdMemberName} {
+		if value != "" {
+			params[key] = value
+		}
+	}
+	var removalTarget memberRemovalIdentity
+	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
+		var err error
+		removalTarget, err = removalIdentity(params, *removalNodeName)
+		if err != nil {
+			fatalf("invalid removal identity: %v", err)
+		}
+	}
 	raw, _ := json.Marshal(actionRequest{Verb: strings.TrimSpace(*verb), Params: params})
 	socketPath := envDefault("BOREALIS_NODE_MANAGER_SOCKET", defaultSocketPath)
 	secretPath := envDefault("BOREALIS_NODE_MANAGER_SECRET_PATH", defaultSecretPath)
@@ -299,6 +317,11 @@ func client(args []string) {
 	responseRaw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if response.StatusCode != http.StatusOK {
 		fatalf("node-manager action rejected HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(responseRaw)))
+	}
+	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
+		if err := validateRemovalAcknowledgement(responseRaw, removalTarget); err != nil {
+			fatalf("node-manager removal acknowledgement rejected: %v", err)
+		}
 	}
 	fmt.Println(string(responseRaw))
 }
@@ -511,7 +534,7 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	case "RunSchemaPhase":
 		return m.runSchemaPhase(ctx, requiredSchemaPhase(request.Params), requiredSHA(request.Params))
 	case "PrepareMemberRemoval":
-		return m.prepareMemberRemoval(ctx, requiredReason(request.Params))
+		return m.prepareMemberRemoval(ctx, request.Params)
 	case "RunK3sProbeConformance":
 		return m.runK3sProbeConformance(ctx, requiredK3sVersion(request.Params))
 	case "CreateEtcdSnapshot":
@@ -567,60 +590,6 @@ func (m *manager) runK3sProbeConformance(ctx context.Context, expectedVersion st
 		return nil, errors.New("K3s probe conformance result does not match upgraded version")
 	}
 	return map[string]any{"node_name": m.nodeName, "k3s_version": expectedVersion, "probe_conformance": "passed", "output": truncate(output, 8192)}, nil
-}
-
-func (m *manager) prepareMemberRemoval(ctx context.Context, reason string) (map[string]any, error) {
-	if reason == "" {
-		reason = "cluster membership removal"
-	}
-	loadState, err := run(ctx, "", "systemctl", "show", "--property=LoadState", "--value", "k3s.service")
-	if err != nil || strings.TrimSpace(loadState) != "loaded" {
-		return nil, errors.New("k3s.service is unavailable for controlled membership fence")
-	}
-	if err := os.MkdirAll(filepath.Dir(memberFencePath), 0o750); err != nil {
-		return nil, err
-	}
-	armedAt := time.Now().UTC()
-	marker, err := json.Marshal(map[string]any{
-		"node_name": m.nodeName,
-		"reason":    reason,
-		"armed_at":  armedAt.Format(time.RFC3339Nano),
-		"recovery":  "Remove this marker and member-removal systemd drop-in, run systemctl daemon-reload, then explicitly enable and start k3s.service only after cluster membership recovery approval.",
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(memberFencePath, append(marker, '\n'), 0o600); err != nil {
-		return nil, err
-	}
-	if err := ensureMemberFenceDropInDirectory(); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(memberFenceDropIn, []byte("[Service]\nRestart=no\n"), 0o644); err != nil {
-		return nil, err
-	}
-	if _, err := run(ctx, "", "systemctl", memberRemovalFenceSystemctlArgs()...); err != nil {
-		return nil, err
-	}
-	if _, err := run(ctx, "", "systemctl", "daemon-reload"); err != nil {
-		return nil, err
-	}
-	restartPolicy, err := run(ctx, "", "systemctl", "show", "--property=Restart", "--value", "k3s.service")
-	if err != nil || strings.TrimSpace(restartPolicy) != "no" {
-		return nil, errors.New("k3s.service restart policy was not fenced")
-	}
-	activeState, err := run(ctx, "", "systemctl", "is-active", "k3s.service")
-	if err != nil || strings.TrimSpace(activeState) != "active" {
-		return nil, errors.New("k3s.service stopped before managed etcd membership removal")
-	}
-	return map[string]any{
-		"node_name":        m.nodeName,
-		"fence_marker":     memberFencePath,
-		"fence_drop_in":    memberFenceDropIn,
-		"armed_at":         armedAt.Format(time.RFC3339Nano),
-		"service_disabled": true,
-		"k3s_state":        "active",
-	}, nil
 }
 
 func memberRemovalFenceSystemctlArgs() []string {

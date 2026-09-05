@@ -165,6 +165,7 @@ The controller also refuses fencing unless PostgreSQL has vacated both targets. 
 * Drain the target
 * Write the persistent removal-fence marker
 * Disable future K3s service restarts while leaving the current process active
+* Save the successful fence acknowledgement for this operation and exact target identity
 * Ask K3s to transfer leadership and remove embedded-etcd membership
 * Wait for durable removal confirmation and local K3s exit
 * Delete the Kubernetes Node resource
@@ -172,6 +173,11 @@ The controller also refuses fencing unless PostgreSQL has vacated both targets. 
 Remaining servers must stay `Ready=True` and `EtcdIsVoter=True` through the required soak before the next target starts.
 
 Shared Agent artifact storage must retain a healthy replica on the surviving Engine throughout retry and removal.  The controller reduces the Longhorn replica target to one only after both removed nodes are fenced and deleted.
+
+!!! warning "Unreachable Does Not Prove Fenced"
+    `NotReady` or a missing Node resource can mean a network partition. Planned removal stops unless Borealis has saved a matching successful fence acknowledgement. Restore the same target and retry, or power it off through external management and use **Emergency Remove a Failed Node** below.
+
+    Retry accepts only the original Kubernetes and etcd identity. A reinstalled host using the same name is a different target. Older interrupted operations without recorded proof also stop; do not fabricate acknowledgement records or remove fence files to bypass this check.
 
 ### Emergency Remove a Failed Node
 
@@ -610,7 +616,13 @@ An all-cold cluster restart still requires one operator unlock.
 - Safe paired removal resolves one active survivor and completes the same synchronized primary-transfer gate before reducing CloudNativePG membership.
 - Step replay therefore repeats safe-survivor proof instead of allowing CloudNativePG to retain a primary on a removal target.
 - If the survivor has no healthy synchronized replica, the operation fails before changing `spec.instances`.
-- After the target writes the persistent removal fence and K3s stops, retry recognizes NotReady state and skips target-pinned drain/fence Jobs.
+- Planned removal records `payload_json.removal_fences` intent before creating the fixed `PrepareMemberRemoval` Job. Each record binds operation UUID, durable node UUID/name, Kubernetes UID, K3s etcd member name, action attempt and immutable action image.
+- The node-manager validates expected Node UID/member identity before writing its persistent marker. Marker and restart-policy drop-in are atomically replaced and synced before successful acknowledgement. A marker from another operation or target fails closed. The action client checks the returned identity, fixed fence paths, service state and timestamp before reporting Job success; old helpers returning unbound success cannot establish proof. Upgrade installed node managers before planned removal.
+- Controller acknowledgement requires the exact successful Job contract and matching observed Node identity. Intent/acknowledgement writes verify live PostgreSQL controller lease, active operation, current attempt/step and active target; they preserve existing payload fields and append `member_fence_intent` / `member_fence_acknowledged` events.
+- Retry skips already-completed target drain/fence work only with matching durable acknowledgement. Missing Node is accepted only after acknowledgement exists. A completed exact Job can recover acknowledgement lost before database commit when the original Node identity is still observable; intent alone and NotReady never authorize removal.
+- Both removal targets are checked before relaxing shared-artifact retry readiness. Managed etcd removal keeps the recorded member identity across polling; mutation uses Node UID/resourceVersion, and Node deletion uses the same identity plus UID/resourceVersion preconditions. Hostname reuse and stale confirmation cannot redirect removal.
+- Source: `cluster_removal_fence.go` and `cluster_removal_fence_test.go` beside the controller; fixed host contract: `cmd/borealis-node-manager/member_removal.go` and its tests. H01 child #496 / PR #498 carries current validation; live failure qualification remains #480/#482.
+- Fixed internal node-manager parameters `operation_id`, `node_id`, and `node_uid` are canonical lowercase 36-character UUIDs; `node_name` is a lowercase Kubernetes node identifier capped at 63 characters; `etcd_member_name` is 1-128 lowercase letters, digits or hyphens with alphanumeric first character. Controller constructs arguments from persisted identity; client and manager validate types/formats, and manager validates local identity before host work. These fields have no WebUI text entry or public API input. Focused controller/manager tests cover missing, malformed and stale identity plus unbound legacy acknowledgements; PostgreSQL inventory includes persistence/lease rejection.
 - Fence wait tolerates temporary Kubernetes API errors through the bounded step timeout, then resumes delete and verification from the durable operation plan.
 - Member verification scales the removed node's resident Borealis Operator and WireGuard deployments to zero before the final voter-health soak, preventing unschedulable infrastructure Pods from surviving successful removal.
 - Controller preflight admits only replacement admission, emergency PostgreSQL failover, and maintenance exit while durable membership is temporarily two-of-three.
