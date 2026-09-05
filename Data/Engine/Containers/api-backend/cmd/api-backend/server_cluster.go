@@ -62,7 +62,9 @@ type clusterStore interface {
 	createClusterOperation(ctx context.Context, actor string, mutation clusterMutation) (map[string]any, error)
 	createClusterInvitation(ctx context.Context, actor string, invitation map[string]any) error
 	consumeClusterInvitation(ctx context.Context, admission map[string]any) (map[string]any, error)
+	clusterAdmissionStatus(ctx context.Context, admissionID string, claims map[string]any) (map[string]any, error)
 	approveClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
+	cancelClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
 	retryClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 	cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 }
@@ -114,6 +116,7 @@ func registerServerClusterRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("POST /api/server/cluster/enable", clusterEnableHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/invitations", clusterInvitationHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/admissions/{id}/approve", clusterAdmissionApproveHandler(auth))
+	mux.HandleFunc("POST /api/server/cluster/admissions/{id}/cancel", clusterAdmissionCancelHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/membership/scale", clusterScaleHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/maintenance", clusterNodeMaintenanceHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/remove", clusterNodeRemoveHandler(auth))
@@ -645,7 +648,7 @@ func clusterInvitationHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		errs := rejectUnknownClusterFields(body, map[string]bool{"node_name": true})
-		nodeName := cleanText(body["node_name"])
+		nodeName := strings.ToLower(cleanText(body["node_name"]))
 		errs = append(errs, validateClusterNodeName("node_name", nodeName)...)
 		if len(errs) > 0 {
 			writePublicValidationErrors(w, errs)
@@ -701,7 +704,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 		if bundle == "" || len(bundle) > clusterInviteMaxBytes {
 			errs = append(errs, publicValidationError{Field: "invite_bundle", Message: "must be a non-empty authenticated bundle no larger than 16 KiB"})
 		}
-		nodeName := cleanText(body["node_name"])
+		nodeName := strings.ToLower(cleanText(body["node_name"]))
 		hostname := cleanText(body["hostname"])
 		managementIP := cleanText(body["management_ip"])
 		architecture := strings.ToLower(cleanText(body["architecture"]))
@@ -721,7 +724,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 			writePublicValidationErrors(w, errs)
 			return
 		}
-		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
+		claims, err := auth.verifier.signedPayload(bundle, clusterAcceptedJoinTTL)
 		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
@@ -796,8 +799,12 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		bundle := strings.TrimSpace(r.Header.Get("X-Borealis-Cluster-Invite"))
-		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
-		if err != nil {
+		if bundle == "" || len(bundle) > clusterInviteMaxBytes {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
+			return
+		}
+		claims, err := auth.verifier.signedPayload(bundle, clusterAcceptedJoinTTL)
+		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
 		}
@@ -808,18 +815,12 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
-		events, err := store.clusterEvents(ctx, 0)
+		result, err := store.clusterAdmissionStatus(ctx, admissionID, claims)
 		if err != nil {
 			writeClusterError(w, err)
 			return
 		}
-		filtered := make([]map[string]any, 0)
-		for _, event := range events {
-			if cleanText(event["admission_id"]) == admissionID && cleanText(event["cluster_id"]) == cleanText(claims["cluster_id"]) {
-				filtered = append(filtered, event)
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"admission_id": admissionID, "events": filtered})
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 

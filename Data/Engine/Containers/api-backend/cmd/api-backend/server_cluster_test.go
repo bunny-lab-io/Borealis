@@ -66,9 +66,20 @@ func (s *clusterTestStore) consumeClusterInvitation(_ context.Context, admission
 	return map[string]any{"admission_id": admission["id"], "state": "Pending Quorum"}, s.mutationErr
 }
 
+func (s *clusterTestStore) clusterAdmissionStatus(_ context.Context, id string, claims map[string]any) (map[string]any, error) {
+	s.admission = copyMap(claims)
+	s.admission["id"] = id
+	return map[string]any{"admission_id": id, "state": "Approved", "events": s.events}, s.mutationErr
+}
+
 func (s *clusterTestStore) approveClusterAdmission(_ context.Context, _ string, admissionID string) (map[string]any, error) {
 	s.approvedID = admissionID
 	return map[string]any{"state": "queued"}, s.mutationErr
+}
+
+func (s *clusterTestStore) cancelClusterAdmission(_ context.Context, _ string, admissionID string) (map[string]any, error) {
+	s.cancelledID = admissionID
+	return map[string]any{"admission_id": admissionID, "state": "Cancelled"}, s.mutationErr
 }
 
 func (s *clusterTestStore) retryClusterOperation(_ context.Context, _ string, operationID string) (map[string]any, error) {
@@ -750,6 +761,7 @@ func TestClusterOperationHistoryMarksGlobalFailuresSuperseded(t *testing.T) {
 		{"id": "old-failure", "kind": "membership_admit", "state": "failed", "finished_at": int64(10)},
 		{"id": "node-success", "kind": "node_maintenance", "state": "succeeded", "finished_at": int64(20)},
 		{"id": "node-failure", "kind": "node_maintenance", "state": "failed", "finished_at": int64(10)},
+		{"id": "old-cancellation", "kind": "membership_admit", "state": "cancelled", "finished_at": int64(10)},
 	}
 	annotateSupersededClusterOperations(operations)
 	if operations[1]["superseded_by"] != "new-success" {
@@ -757,6 +769,9 @@ func TestClusterOperationHistoryMarksGlobalFailuresSuperseded(t *testing.T) {
 	}
 	if operations[3]["superseded_by"] != nil {
 		t.Fatalf("target-specific operation incorrectly superseded: %+v", operations[3])
+	}
+	if operations[4]["superseded_by"] != "new-success" {
+		t.Fatalf("legacy admission cancellation not superseded: %+v", operations[4])
 	}
 }
 

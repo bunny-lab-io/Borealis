@@ -1272,10 +1272,17 @@ export default function ClusterManagement() {
         const operation = params?.data || {};
         const state = String(operation?.state || "unknown").toLowerCase();
         const label = clusterOperationStatusLabel(operation);
-        const cancellable = ["queued", "waiting"].includes(state);
+        const cancellable = operation.kind !== "membership_admit" && ["queued", "waiting"].includes(state);
+        const retryable = operation.kind === "membership_admit" && !operation.superseded_by && ["failed", "cancelled"].includes(state);
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />
+            {retryable ? (
+              <Button size="small" disabled={busy} onClick={(event) => {
+                event.stopPropagation();
+                void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" });
+              }}>Retry</Button>
+            ) : null}
             {cancellable ? (
               <>
                 <Typography component="span" sx={{ color: "#64748b" }}>/</Typography>
@@ -1468,9 +1475,28 @@ export default function ClusterManagement() {
             <Button sx={{ mt: 2 }} color="warning" variant="contained" disabled={!rollingUpdateEnabled || !selectedQualificationRelease || !selectableQualificationReleases.length} onClick={() => openAction("update_qualification")}>Deploy Qualification One Node at a Time</Button>
           </Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
-          <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
+          <Paper sx={CARD_SX}>
+            <Typography variant="h6">Node admissions</Typography>
+            <Stack spacing={1} sx={{ mt: 1.5 }}>
+              {admissions.map((admission) => (
+                <Stack key={admission.id} direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
+                  <Box>
+                    <Typography>{admission.node_name} · {admission.state}</Typography>
+                    {admission.state === "Recovery Required" ? <Typography variant="body2" color="text.secondary">Node identity retained. Retry original admission operation in Cluster Events, then rerun join on original host.</Typography> : null}
+                  </Box>
+                  <Stack direction="row" spacing={1}>
+                    {admission.state === "Pending Quorum" ? <>
+                      <Button size="small" disabled={busy || !canPrepareMembership} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button>
+                      <Button size="small" color="warning" disabled={busy} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/cancel`, { confirmation: "CANCEL ADMISSION" })}>Cancel Admission</Button>
+                    </> : null}
+                    {["Approved", "Recovery Required"].includes(admission.state) ? <Button size="small" disabled={busy} onClick={() => void mutate("/api/server/cluster/invitations", { node_name: admission.node_name }).then((payload) => setInviteBundle(payload?.invite_bundle || ""))}>Renew Invitation</Button> : null}
+                  </Stack>
+                </Stack>
+              ))}
+            </Stack>
+          </Paper>
           {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first. Clean development commits can become pinned cluster baseline without GitHub release.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
-          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
+          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="Target-bound invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
 

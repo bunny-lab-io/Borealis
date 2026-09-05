@@ -32,6 +32,7 @@ const state = vi.hoisted(() => ({
   database: { configured_instances: 3, ready_instances: 3, fully_ready: true },
   drainedNodeID: "",
   nodes: null,
+  admissions: null,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -81,7 +82,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
           { id: "33333333-3333-4333-8333-333333333333", node_name: "engine-3", membership_state: "Active", application_state: state.drainedNodeID === "33333333-3333-4333-8333-333333333333" ? "drained" : "active", roles: {}, probe_health: {} },
         ],
         operations: state.operations,
-        admissions: [{ id: "44444444-4444-4444-8444-444444444444", node_name: "engine-4", state: "Pending Quorum" }],
+        admissions: state.admissions ?? [{ id: "44444444-4444-4444-8444-444444444444", node_name: "engine-4", state: "Pending Quorum" }],
       },
       releases: { releases: state.releases },
       releaseError: state.releaseError,
@@ -129,7 +130,43 @@ describe("Cluster Management", () => {
     state.database = { configured_instances: 3, ready_instances: 3, fully_ready: true };
     state.drainedNodeID = "";
     state.nodes = null;
+    state.admissions = null;
     vi.unstubAllGlobals();
+  });
+
+  it("cancels only pending admissions and exposes retained-target renewal", async () => {
+    state.hmrState = "inactive";
+    state.activeSize = 1;
+    state.admissions = [
+      { id: "44444444-4444-4444-8444-444444444444", node_name: "engine-4", state: "Pending Quorum" },
+      { id: "55555555-5555-4555-8555-555555555555", node_name: "engine-5", state: "Recovery Required" },
+    ];
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") return { ok: true, json: async () => ({ state: "Cancelled" }) };
+      if (String(path).endsWith("/releases")) return { ok: true, json: async () => ({ releases: [] }) };
+      if (String(path).includes("/events")) return { ok: true, json: async () => ({ events: [] }) };
+      return { ok: true, json: async () => ({ enabled: true, admissions: state.admissions, nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=maintenance");
+    expect(screen.getAllByRole("button", { name: "Cancel Admission" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Renew Invitation" })).toBeEnabled();
+    expect(screen.getByText(/Node identity retained/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Admission" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/admissions/44444444-4444-4444-8444-444444444444/cancel",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ confirmation: "CANCEL ADMISSION" }) })
+    ));
+  });
+
+  it("offers retry for retained cancelled admission operations without unsafe cancellation", async () => {
+    state.operations = [
+      { id: "44444444-4444-4444-8444-444444444444", kind: "membership_admit", state: "queued", current_step: "preflight", created_at: 1787770000 },
+      { id: "55555555-5555-4555-8555-555555555555", kind: "membership_admit", state: "cancelled", current_step: "cancelled", created_at: 1787770001 },
+    ];
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
   });
 
   it("formats operator-facing node and operation labels", () => {

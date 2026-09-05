@@ -110,22 +110,32 @@ Port `80` remains the HTTP/ACME and redirect entrypoint.  The HTTPS router must 
 
 Create an invitation in "**Admin > Cluster Management**", then copy the K3s server token to a root-only file on each new host through a trusted management channel.
 
-On each joining host, run the node-manager join command using the same private peer allowlist configured on the first node:
+On each joining host, run the node-manager join command. Borealis supplies the Cluster Virtual IP, pinned K3s version, and private peer allowlist after approval:
 
 ```sh
 sudo borealis-node-manager join \
   --endpoint https://engine.example.com \
-  --invite-bundle '<ONE_USE_INVITATION>' \
+  --invite-bundle '<TARGET_BOUND_INVITATION>' \
   --node-name engine-02 \
   --management-ip 192.168.50.22 \
-  --peer-cidrs 192.168.50.21/32,192.168.50.22/32,192.168.50.23/32 \
-  --k3s-server https://192.168.50.10:6443 \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-The node manager first prepares the firewall, iSCSI, NFSv4, and K3s host prerequisites through the fixed Engine workflow.  It does not expose arbitrary shell execution.
+The endpoint must use HTTPS and must not redirect. Use `--ca-file /path/to/engine-ca.pem` when the Engine certificate uses a private CA. The node manager submits its identity and waits for approval before preparing the firewall, iSCSI, NFSv4, and K3s host prerequisites. It checks approval again before joining K3s.
 
 Invitation join creates a `Pending Quorum` admission and waits for Admin approval.  AMD64 architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work begins.
+
+### Resume or Cancel an Interrupted Join
+
+Rerun the same command on the same host after a lost response or process restart. Borealis resumes the original admission and checks the hostname, management address, architecture, and OS version. Keep those values unchanged during recovery.
+
+Invitations allow initial acceptance and approval for 15 minutes. An approved target can resume for up to 24 hours from invitation creation. After that, select **Renew Invitation** beside the retained admission, then rerun the command with the new bundle. Renewal revokes the previous bundle and preserves the original host and operation. Creating another invitation for that same retained node name performs the same renewal.
+
+Select **Cancel Admission** only for an unapproved pending target. Expired pending admissions release unused capacity automatically. If Borealis finds approval, member, or operation evidence, it retains the slot as **Recovery Required**. Missing or NotReady Kubernetes nodes do not prove that a host never joined.
+
+For a failed admission or an admission operation cancelled by an older release, open **Cluster Events**, select **Retry** on the original operation, and rerun join on the original hosts. Renew expired bundles as needed. Approved admission operations cannot be cancelled because a target may already have joined. Restore the original cohort, then use supported removal and fencing before replacing a joined host. A removed host retaining its local member-removal fence must be rebuilt before joining again.
+
+Optional `--k3s-server`, `--k3s-version`, and `--peer-cidrs` flags assert expected values. They must match the settings supplied by Borealis; they cannot override cluster configuration.
 
 ### Expand from One Node to Three
 
@@ -272,7 +282,7 @@ Each row identifies affected node hostnames, summarizes the latest lifecycle mes
 
 Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
 
-An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried.  Failed records remain diagnostic-only and do not expose inline retry.  Queued or waiting records expose cancellation.
+An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried. The same rule applies to admission operations cancelled by older releases. Unsuperseded failed or cancelled admission operations expose **Retry** for the original cohort; other failed records remain diagnostic-only. Queued or waiting admission operations cannot be cancelled because a target may already have joined. Other queued or waiting operations retain cancellation at their supported safe boundary.
 
 Maintenance explains an empty release catalog when no published stable cluster-compatible release exists at or above the pinned baseline.
 
@@ -536,6 +546,7 @@ An all-cold cluster restart still requires one operator unlock.
 - `POST /api/server/cluster/enable`
 - `POST /api/server/cluster/invitations`
 - `POST /api/server/cluster/admissions/{id}/approve`
+- `POST /api/server/cluster/admissions/{id}/cancel` — Admin session, canonical UUID, bounded JSON containing only exact `CANCEL ADMISSION` confirmation. UI sends this fixed enum; server rejects unknown fields and other values. Focused boundary tests live in `cluster_admission_test.go`.
 - `POST /api/server/cluster/membership/scale`
 - The enable body permits only `cluster_vip`.  The API derives node name and host management IPv4 from Downward API environment and architecture from the AMD64 Go runtime.
 - Stable, qualification `*-rc.N`, or exact `dev-<12-character SHA prefix>` baseline must pair with the full lowercase commit SHA.
@@ -661,9 +672,12 @@ An all-cold cluster restart still requires one operator unlock.
 - The candidate probe targets the isolated Pod IP.  The active probe targets the shared API Service.
 - The expected authentication rejection proves the Agent route is registered and reachable without mutating Agent/device state or storing test credentials.
 - A missing route returning `404`, accepting unauthenticated traffic, timeout, or any other status fails node health.
-- Blank-node join requires `--peer-cidrs`.
-- The node manager validates and canonicalizes bounded private IPv4 CIDRs, then invokes the fixed `Engine.sh --cluster-prepare-node` workflow before consuming the invitation.
-- Preparation installs K3s installation/firewall and Longhorn iSCSI/NFS prerequisites but does not install or join K3s until membership-admission approval arrives.
+- Blank-node join requires an HTTPS origin and rejects every redirect for both POST submission and invitation-header polling. TLS verification remains enabled with system roots or an explicit private CA.
+- Admission polling reads authoritative state and the latest 500 events scoped to the exact admission, consumed invitation, cluster, node and bearer hash. Approval does not depend on event presence or global history length.
+- Initial unconsumed/pending invitation expiry remains 15 minutes; signed accepted-join access and stored creation timestamp impose a 24-hour bound for approved/admitted/recovery targets. Admin renewal swaps only the original admission's invitation binding and revokes previous access.
+- Approval and original-operation retry pin `join_config` from `cluster_state.control_plane_vip`, `config_json.k3s_version`, active member addresses and the selected admission cohort. Exactly three private IPv4 peers are required. Client flags can assert those settings but cannot override them.
+- The node manager validates settings, runs fixed `Engine.sh --cluster-prepare-node` only after approval, then rechecks approval/configuration before installing K3s. Preparation may outlast initial invitation lifetime without consuming an unapproved invitation.
+- Controller reconciliation requires current lease ownership. Expired pending records release capacity only without approval, operation or non-removed member evidence. Failed/cancelled membership operations mark approved admissions `Recovery Required`; retry retains the original cohort and operation. No schema or automatic member deletion is involved.
 - Expansion-pair approval records the same authenticated approval event for both admission IDs so both waiting joiners proceed.
 - Degraded-quorum replacement records the same compatible approval event for one admission.
 - Join installation replaces the running node-manager executable through atomic rename before enabling the service, avoiding in-place executable overwrite failures.

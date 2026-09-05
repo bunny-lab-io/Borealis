@@ -143,6 +143,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Results include `postgres-go-results.jsonl`, `postgres-go-stderr.log`, `postgres-integration.log` and PostgreSQL container diagnostics. CI uploads logs only, excluding temporary credentials, runtime files and virtual environments.
     - Hosts requiring documented permission-sensitive validation may use existing `BOREALIS_DOCKER_USE_SUDO=1` runner option. It applies only to the runner's uniquely named disposable PostgreSQL container.
 
+    - Admission regressions cover 750 unrelated events, authenticated idempotent replay, bounded expiry and renewal, safe pending cancellation, retained failed second joiner, controller restart/lease fencing, and replacement admission. Node-manager HTTP tests reject plaintext/redirect disclosure and require authoritative K3s settings.
+
     ### Python ownership audit
 
     - Engine Python inventory contains 10 files across five domains. Every file exercises current site-worker execution, worker transport, remote access, or schema bootstrap reused by site-worker image.
