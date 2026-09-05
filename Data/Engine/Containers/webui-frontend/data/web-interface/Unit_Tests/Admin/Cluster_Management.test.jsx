@@ -31,6 +31,7 @@ const state = vi.hoisted(() => ({
   events: [],
   database: { configured_instances: 3, ready_instances: 3, fully_ready: true },
   drainedNodeID: "",
+  nodes: null,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -57,7 +58,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
           wireguard_owner: "11111111-1111-4111-8111-111111111111",
         },
         database: state.database,
-        nodes: [
+        nodes: state.nodes ?? [
           {
             id: "11111111-1111-4111-8111-111111111111",
             node_name: "engine-1",
@@ -127,6 +128,7 @@ describe("Cluster Management", () => {
     state.events = [];
     state.database = { configured_instances: 3, ready_instances: 3, fully_ready: true };
     state.drainedNodeID = "";
+    state.nodes = null;
     vi.unstubAllGlobals();
   });
 
@@ -267,6 +269,13 @@ describe("Cluster Management", () => {
 
     fireEvent.click(activeDatabaseLink);
     expect(screen.getByRole("tab", { name: "Database" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("explains empty node inventory when Cluster Management is not enabled", async () => {
+    state.nodes = [];
+    renderClusterManagement("/cluster-management?tab=nodes");
+
+    expect(await screen.findByText("Borealis Cluster Management Not Enabled on this Node")).toBeInTheDocument();
   });
 
   it("locks isolated-node selection to current target while isolation is active", () => {

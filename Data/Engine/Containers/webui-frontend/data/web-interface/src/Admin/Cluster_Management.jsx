@@ -804,7 +804,7 @@ function OperationDetailsCell({ data }) {
   );
 }
 
-function ClusterGrid({ rowData, columnDefs, autoSizeColumnIds, getRowId, onCellContextMenu, rowSelection }) {
+function ClusterGrid({ rowData, columnDefs, autoSizeColumnIds, getRowId, onCellContextMenu, rowSelection, emptyMessage = "No cluster records" }) {
   const gridApiRef = useRef(null);
   const autoSizeColumns = useCallback(() => {
     if (!gridApiRef.current || !rowData.length || !autoSizeColumnIds.length) return;
@@ -853,7 +853,7 @@ function ClusterGrid({ rowData, columnDefs, autoSizeColumnIds, getRowId, onCellC
         onRowDataUpdated={autoSizeColumns}
         onCellContextMenu={onCellContextMenu}
         getRowId={getRowId}
-        overlayNoRowsTemplate="No cluster records"
+        overlayNoRowsTemplate={emptyMessage}
         theme={clusterGridTheme}
       />
     </Box>
@@ -1392,6 +1392,7 @@ export default function ClusterManagement() {
             getRowId={(params) => params?.data?.id || params?.data?.node_name}
             rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
             onCellContextMenu={(params) => openNodeActionMenu(params?.event, params?.data, params?.node)}
+            emptyMessage="Borealis Cluster Management Not Enabled on this Node"
           />
         ) : null}
 
