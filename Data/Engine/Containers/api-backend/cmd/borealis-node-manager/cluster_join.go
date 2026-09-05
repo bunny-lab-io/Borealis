@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -183,7 +184,14 @@ func validateClusterJoinConfig(config clusterJoinConfig, managementIP, expectedS
 	}
 	if strings.TrimSpace(expectedPeers) != "" {
 		normalized, err := normalizePeerCIDRs(expectedPeers)
-		if err != nil || normalized != peers {
+		if err != nil {
+			return errors.New("caller peer assertion differs from authoritative cluster roster")
+		}
+		expected := strings.Split(normalized, ",")
+		actual := strings.Split(peers, ",")
+		sort.Strings(expected)
+		sort.Strings(actual)
+		if strings.Join(expected, ",") != strings.Join(actual, ",") {
 			return errors.New("caller peer assertion differs from authoritative cluster roster")
 		}
 	}

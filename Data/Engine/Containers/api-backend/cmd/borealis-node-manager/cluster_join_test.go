@@ -115,6 +115,9 @@ func TestClusterJoinUsesAuthoritativeConfig(t *testing.T) {
 	if err := validateClusterJoinConfig(valid, "192.168.90.11", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := validateClusterJoinConfig(valid, "192.168.90.11", valid.Server, valid.Version, "192.168.90.12/32,192.168.90.10/32,192.168.90.11/32"); err != nil {
+		t.Fatalf("equivalent reordered peer assertion rejected: %v", err)
+	}
 	for _, field := range []string{"server", "version", "peers", "target", "assert-server", "assert-version", "assert-peers"} {
 		config := valid
 		target := "192.168.90.11"
