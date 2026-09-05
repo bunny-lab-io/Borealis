@@ -1,12 +1,9 @@
 ---
-
 tags:
-
-* Borealis
-* K3s
-* Clustering
-* Kubernetes
-
+  - Borealis
+  - K3s
+  - Clustering
+  - Kubernetes
 ---
 
 ## Purpose
