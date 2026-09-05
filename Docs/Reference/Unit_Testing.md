@@ -141,6 +141,7 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Result audit requires every inventoried top-level test to start and pass plus package completion. Any skipped or failed test/subtest, unexpected package/test, malformed output, or missing result fails. Unit-only Engine Go runs may still skip tests without database configuration; that is not database validation evidence.
     - Database CI selection covers API package Go source/tests, internal packages and module metadata as well as database fixtures, runner, inventory and auditing tools. This intentionally covers shared store/lease helpers beyond cluster filenames.
     - Results include `postgres-go-results.jsonl`, `postgres-go-stderr.log`, `postgres-integration.log` and PostgreSQL container diagnostics. CI uploads logs only, excluding temporary credentials, runtime files and virtual environments.
+    - `TestPostgresLeaseTransportBlackholeAndRecovery` forwards real PostgreSQL traffic through a local TCP proxy, drops both directions after confirming an active query, verifies direct socket cancellation and bounded startup, and proves reconnection after healing. `TestClusterControllerLeaseGuardBoundsBlockedRenewalAndClose` deliberately ignores cancellation inside renewal to verify the independent watchdog.
     - Hosts requiring documented permission-sensitive validation may use existing `BOREALIS_DOCKER_USE_SUDO=1` runner option. It applies only to the runner's uniquely named disposable PostgreSQL container.
 
     ### Python ownership audit

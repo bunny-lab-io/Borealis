@@ -675,8 +675,9 @@ An all-cold cluster restart still requires one operator unlock.
 - Long database bootstrap, node redeploy, or Kubernetes reconciliation never makes liveness depend on controller-loop progress or external dependencies.
 - The cluster controller renews its 20-second PostgreSQL ownership lease every five seconds through an independent heartbeat while operation steps run.
 - Each acquisition has a five-second deadline.
-- Timeout evicts the selected driver connection plus every remaining idle connection in the controller-only pool.
-- This bounds reusable stale sockets after the driver returns but cannot interrupt an active `lib/pq` socket read blackholed during CloudNativePG primary failover.
+- Lease requests use dedicated PostgreSQL connections. Cancellation directly closes each request's active socket and any `lib/pq` cancellation socket, including blackholed authentication or query reads; ordinary application pools keep their existing transport.
+- Lease expiry has its own watchdog goroutine. A blocked renewal cannot delay step cancellation or guard shutdown; late renewal responses cannot revive expired ownership. Successful renewal extends the deadline from request start, not response arrival.
+- Before beginning operation work after acquisition, the controller discards idle operation-store connections to the former primary.
 - Live HMR partition recovery remains tracked in [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466).
 - Explicit ownership loss cancels step context immediately.
 - Transient database errors during primary-Service handoff are retried for at most 15 seconds.  Persistent failure cancels before lease expiry.
