@@ -141,6 +141,8 @@ Optional `--k3s-server`, `--k3s-version`, and `--peer-cidrs` flags assert expect
 
 Normal `1 -> 3` expansion requires a complete pair of joining nodes.  Temporary even K3s membership during pair admission does not disable healthy existing nodes.
 
+Joining hosts may use a restrictive administrator umask. The node-manager installer preserves its existing authentication token and restores the group access required by cluster action Jobs.
+
 After approval, members remain application-drained and role-ineligible while Borealis:
 
 * Runs probe conformance pinned to each joining node
@@ -758,6 +760,7 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - The WebUI therefore reroutes drained-node "**Exit Maintenance Mode**" during isolation to `/hmr/exit` after an explicit warning and `EXIT HMR`; the controller restores full pinned-production placement.
 - Completion preserves `2/3` quorum degradation and remaining database degradation.  Verified three-node recovery returns Healthy only when no recorded active node remains drained.
 - The node manager accepts fixed verbs only, including persistent K3s membership fence, exact-version probe conformance, drained application preparation, and `RunSchemaPhase` limited to `expand|finalize` plus the recorded target SHA.
+- `installLocalNodeManagerService` retains the authentication token at `/etc/borealis/node-manager.token`, normalizes mode `0640` through `ensureNodeManagerToken`, and assigns owner/group `root:64646`. Explicit chmod is required because `os.WriteFile` creation mode is filtered by caller umask and does not repair existing modes. Action Jobs remain UID/GID `64646`; root-only `0600` breaks their read-only token mount. Linux filesystem regression covers fresh creation and retained tokens under umask `077`, exact group-read permissions, removal of world access, and no rotation on rerun. For an older affected lab installation, verify root ownership and group `64646`, restore mode `0640` on that file only, then retry the same failed admission through Cluster Management; do not run action Jobs as root or grant world access. Tracked in #509.
 - Preparation scales named node workloads and waits for rollouts without changing `borealis.io/application-state`.
 - Operation retry also accepts an already-active state because an earlier attempt may have completed activation before a later step failed.  Any other state still fails closed.
 - Only final activation clears drain after controller health gates.
