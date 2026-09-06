@@ -28,7 +28,7 @@ type fileRecord struct {
 type installationJournal struct {
 	Version  int                   `json:"version"`
 	Binding  Binding               `json:"binding"`
-	Target   string                `json:"target_node_uid"`
+	Target   TargetBinding         `json:"target"`
 	Incoming string                `json:"incoming_digest"`
 	State    string                `json:"state"`
 	Files    map[string]fileRecord `json:"files"`
@@ -39,14 +39,14 @@ type installationJournal struct {
 // verify target quiescence and unchanged authority at each boundary. Callers
 // hold a host-wide lock and stop all consumers/writers for the whole call.
 type Installation struct {
-	Root      string
-	Journal   string
-	Binding   Binding
-	TargetUID string
-	UID       int
-	GID       int
-	Check     func() error
-	// Quiesced verifies target UID and stopped consumers even when the broader
+	Root    string
+	Journal string
+	Binding Binding
+	Target  TargetBinding
+	UID     int
+	GID     int
+	Check   func() error
+	// Quiesced verifies target identity and stopped consumers even when the broader
 	// operation/authority check fails. Rollback cannot write through a lost fence.
 	Quiesced func() error
 }
@@ -248,9 +248,8 @@ func removePrivateTemporary(root *os.Root, name string) error {
 // Live authority selection, immutable release proof and maintenance belong in
 // the calling workflow and must be supplied through Check, never inferred here.
 func (install Installation) Install(material *Material) (state string, resultErr error) {
-	if !material.valid() || !validBinding(install.Binding) || !canonicalUUID.MatchString(install.TargetUID) ||
-		install.TargetUID == "00000000-0000-0000-0000-000000000000" ||
-		install.TargetUID == install.Binding.SourceUID || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
+	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
+		install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
 		return "", errors.New("identity installation contract invalid")
 	}
 	if err := install.Check(); err != nil {
@@ -287,17 +286,21 @@ func (install Installation) Install(material *Material) (state string, resultErr
 	if err != nil {
 		return "", err
 	}
-	journal := installationJournal{Version: 1, Binding: install.Binding, Target: install.TargetUID,
+	journal := installationJournal{Version: 2, Binding: install.Binding, Target: install.Target,
 		Incoming: material.Digest(), State: "prepared", Files: map[string]fileRecord{}}
 	previous, _, err := readIdentityFile(backup, "journal.json")
 	if err != nil {
 		return "", err
 	}
 	if len(previous) > 0 {
-		if json.Unmarshal(previous, &journal) != nil || journal.Version != 1 || journal.Binding != install.Binding ||
-			journal.Target != install.TargetUID || journal.Incoming != material.Digest() || len(journal.Files) != 4 {
+		// Decode into zero state. In particular an omitted fresh-node UID must
+		// not inherit the joined UID from the current request during unmarshal.
+		var retained installationJournal
+		if json.Unmarshal(previous, &retained) != nil || retained.Version != 2 || retained.Binding != install.Binding ||
+			retained.Target != install.Target || retained.Incoming != material.Digest() || len(retained.Files) != 4 {
 			return "", errors.New("identity journal belongs to a different request or is invalid")
 		}
+		journal = retained
 		switch journal.State {
 		case "committed":
 			current, err := Load(install.Root)

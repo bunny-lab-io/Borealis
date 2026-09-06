@@ -1,6 +1,8 @@
 package engineidentity
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -34,8 +36,14 @@ func installationFixture(t *testing.T, fresh bool) (Installation, *Material, *Ma
 			}
 		}
 	}
+	fingerprint := sha256.Sum256([]byte("test-only SSH host identity"))
+	target := TargetBinding{ProvisioningID: "50000000-0000-4000-8000-000000000005",
+		SSHFingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(fingerprint[:])}
+	if !fresh {
+		target.NodeUID = "40000000-0000-4000-8000-000000000004"
+	}
 	return Installation{Root: root, Journal: filepath.Join(base, "journal"), Binding: binding,
-		TargetUID: "40000000-0000-4000-8000-000000000004", UID: os.Geteuid(), GID: os.Getegid(),
+		Target: target, UID: os.Geteuid(), GID: os.Getegid(),
 		Check: func() error { return nil }, Quiesced: func() error { return nil }}, before, after
 }
 
@@ -101,6 +109,62 @@ func TestInstallCommitsAndRetainsPrivateBackup(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+		})
+	}
+}
+
+func TestInstallBindsFreshSSHHostBeforeKubernetesUIDExists(t *testing.T) {
+	install, _, material := installationFixture(t, true)
+	if install.Target.NodeUID != "" {
+		t.Fatal("fresh fixture must not invent a Kubernetes UID")
+	}
+	if state, err := install.Install(material); err != nil || state != "committed" {
+		t.Fatalf("fresh pre-staging failed: %s %v", state, err)
+	}
+	inventory := fileInventory(t, install.Root)
+	original := install.Target
+	for name, mutate := range map[string]func(*TargetBinding){
+		"different provisioning target": func(target *TargetBinding) { target.ProvisioningID = "60000000-0000-4000-8000-000000000006" },
+		"different SSH host": func(target *TargetBinding) {
+			digest := sha256.Sum256([]byte("different test SSH identity"))
+			target.SSHFingerprint = "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:])
+		},
+		"later joined UID": func(target *TargetBinding) { target.NodeUID = "40000000-0000-4000-8000-000000000004" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			install.Target = original
+			mutate(&install.Target)
+			if _, err := install.Install(material); err == nil {
+				t.Fatal("private journal rebound to another target or lifecycle phase")
+			}
+			requireInventory(t, install.Root, inventory)
+		})
+	}
+}
+
+func TestInstallRejectsInvalidSSHBindingBeforeFilesystemWork(t *testing.T) {
+	for name, mutate := range map[string]func(*Installation){
+		"missing provisioning ID": func(i *Installation) { i.Target.ProvisioningID = "" },
+		"zero provisioning ID":    func(i *Installation) { i.Target.ProvisioningID = "00000000-0000-0000-0000-000000000000" },
+		"missing host key":        func(i *Installation) { i.Target.SSHFingerprint = "" },
+		"wrong hash kind":         func(i *Installation) { i.Target.SSHFingerprint = "MD5:invalid" },
+		"zero node UID":           func(i *Installation) { i.Target.NodeUID = "00000000-0000-0000-0000-000000000000" },
+		"source node UID":         func(i *Installation) { i.Target.NodeUID = i.Binding.SourceUID },
+		"padded fingerprint":      func(i *Installation) { i.Target.SSHFingerprint += "=" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			install, _, material := installationFixture(t, false)
+			inventory := fileInventory(t, install.Root)
+			mutate(&install)
+			checked := false
+			install.Check = func() error { checked = true; return nil }
+			if _, err := install.Install(material); err == nil || checked {
+				t.Fatal("invalid target reached operation or filesystem work")
+			}
+			if _, err := os.Stat(install.Journal); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid target created a journal")
+			}
+			requireInventory(t, install.Root, inventory)
 		})
 	}
 }
