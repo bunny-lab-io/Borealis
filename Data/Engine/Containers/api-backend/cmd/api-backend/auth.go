@@ -177,7 +177,9 @@ func openPostgresPool(cfg gatewayConfig, control bool) (*sql.DB, error) {
 }
 
 func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, func(), error) {
-	db, err := openPostgresPool(cfg, control)
+	// Bootstrap DDL can wait longer than an ownership transaction. Finish it
+	// through the ordinary pool before exposing a bounded controller store.
+	db, err := openPostgresPool(cfg, false)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -199,6 +201,16 @@ func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, 
 	if err := store.ensureClusterSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, func() {}, fmt.Errorf("failed to ensure cluster control tables: %w", err)
+	}
+	if control {
+		bounded, err := openPostgresPool(cfg, true)
+		if err != nil {
+			_ = db.Close()
+			return nil, func() {}, err
+		}
+		_ = db.Close()
+		db = bounded
+		store.db = bounded
 	}
 	return store, func() { _ = db.Close() }, nil
 }

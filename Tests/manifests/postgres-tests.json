@@ -14,6 +14,7 @@
     "TestClusterOperationRetryPersistsFailedStepCheckpoint",
     "TestClusterReleaseIdentityPostgresQueueAndRetry",
     "TestClusterRemovalFencePostgresPersistsAndFencesStaleWriters",
+    "TestPostgresControlBootstrapOutlivesOwnershipTransactionBudget",
     "TestPostgresControlCancellationReleasesTransactionLocks",
     "TestPostgresLeaseTransportBlackholeAndRecovery",
     "TestSchedulerPostgresDispatchRecovery",
