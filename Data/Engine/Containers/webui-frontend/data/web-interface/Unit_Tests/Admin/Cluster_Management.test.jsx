@@ -346,6 +346,34 @@ describe("Cluster Management", () => {
     expect(screen.getByText("2026.09.1")).toBeInTheDocument();
   });
 
+  it("accepts independent catalog/history completions while newer snapshots fail", async () => {
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.hmrState = "inactive";
+    const operationID = "11111111-1111-4111-8111-111111111199";
+    state.operations = [{ id: operationID, kind: "engine_update", current_step: "preflight", state: "running", created_at: 1_787_770_000 }];
+    const catalogs = [];
+    const histories = [];
+    vi.stubGlobal("fetch", vi.fn((path) => {
+      if (path === "/api/server/cluster") return Promise.reject(new Error("snapshot offline"));
+      return new Promise((resolve) => (String(path).includes("/releases") ? catalogs : histories).push(resolve));
+    }));
+    renderClusterManagement("/cluster-management?tab=operations");
+    await act(async () => { poll(); });
+    await act(async () => { poll(); });
+    // Generation 2 snapshot failed; generation 1 history still completes independently.
+    await act(async () => { histories[0]({ ok: true, json: async () => ({ events: [{ id: 42, operation_id: operationID, event_type: "operation_step_passed", message: "History arrived while snapshots were offline", state: "running", created_at: 1_787_770_010 }] }) }); });
+    expect(await screen.findByText("History arrived while snapshots were offline")).toBeInTheDocument();
+    await act(async () => { catalogs[0]({ ok: true, json: async () => ({ releases: [{ tag: "2026.09.2", channel: "stable", selectable: true }] }) }); });
+    fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Target Engine Version" }));
+    expect(await screen.findByRole("option", { name: /2026\.09\.2 is compatible/ })).toBeInTheDocument();
+  });
+
   it("cancels only pending admissions and exposes retained-target renewal", async () => {
     state.hmrState = "inactive";
     state.activeSize = 1;

@@ -917,7 +917,8 @@ export default function ClusterManagement() {
   const [snapshotUnavailable, setSnapshotUnavailable] = useState(false);
   const refreshGeneration = useRef(0);
   const snapshotCompletedGeneration = useRef(0);
-  const auxiliaryCompletedGeneration = useRef(0);
+  const releaseCompletedGeneration = useRef(0);
+  const eventsCompletedGeneration = useRef(0);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
@@ -980,74 +981,71 @@ export default function ClusterManagement() {
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     const generation = ++refreshGeneration.current;
-    try {
-      // Snapshot freshness follows its own body receipt, not catalog/history work.
-      const snapshotRequest = (async () => {
-        try {
-          const response = await fetch("/api/server/cluster", { credentials: "include", cache: "no-store" });
-          const payload = await response.json();
-          if (!response.ok) throw new Error(payload?.message || "Cluster state request failed.");
-          if (generation < snapshotCompletedGeneration.current) return;
-          snapshotCompletedGeneration.current = generation;
-          const receivedAt = Date.now();
-          setCluster(payload);
-          setSnapshotReceivedAt(receivedAt);
-          setVersionClock(receivedAt);
-          setSnapshotUnavailable(false);
-        } catch (requestError) {
-          if (generation < snapshotCompletedGeneration.current) return;
-          snapshotCompletedGeneration.current = generation;
-          setSnapshotUnavailable(true);
-          throw requestError;
-        }
-      })();
-      const eventRequest = loadClusterEventHistory(async (path) => {
-        const response = await fetch(path, { credentials: "include", cache: "no-store" });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
-        return payload;
-      }, eventCursorRef.current)
-        .then((items) => ({ items, error: "" }))
-        .catch((requestError) => ({ items: null, error: requestError?.message || "Cluster event details could not be loaded." }));
-      const [, releaseResponse, eventResult] = await Promise.all([
-        snapshotRequest,
-        fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" }),
-        eventRequest,
-      ]);
-      const releasePayload = await releaseResponse.json().catch(() => ({}));
-      if (generation < auxiliaryCompletedGeneration.current) return;
-      auxiliaryCompletedGeneration.current = generation;
-      if (releaseResponse.ok) {
-        setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
-        setReleaseError("");
-      } else {
-        setReleaseError(releasePayload?.message || "Engine release catalog could not be loaded.");
+    const acceptCompletion = (completedGeneration) => {
+      if (generation < completedGeneration.current) return false;
+      completedGeneration.current = generation;
+      return true;
+    };
+    // Each stream accepts its own newest completion, independent of other waits.
+    const snapshotRequest = (async () => {
+      try {
+        const response = await fetch("/api/server/cluster", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Cluster state request failed.");
+        if (!acceptCompletion(snapshotCompletedGeneration)) return;
+        const receivedAt = Date.now();
+        setCluster(payload);
+        setSnapshotReceivedAt(receivedAt);
+        setVersionClock(receivedAt);
+        setSnapshotUnavailable(false);
+        setError("");
+        if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
+      } catch (requestError) {
+        if (!acceptCompletion(snapshotCompletedGeneration)) return;
+        setSnapshotUnavailable(true);
+        if (!quiet) setError(requestError?.message || "Cluster state request failed.");
       }
-      if (eventResult.items) {
-        if (eventResult.items.length) {
+    })();
+    const releaseRequest = (async () => {
+      try {
+        const response = await fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Engine release catalog could not be loaded.");
+        if (!acceptCompletion(releaseCompletedGeneration)) return;
+        setReleases(Array.isArray(payload?.releases) ? payload.releases : []);
+        setReleaseError("");
+      } catch (requestError) {
+        if (!acceptCompletion(releaseCompletedGeneration)) return;
+        setReleaseError(requestError?.message || "Engine release catalog could not be loaded.");
+      }
+    })();
+    const eventRequest = (async () => {
+      try {
+        const items = await loadClusterEventHistory(async (path) => {
+          const response = await fetch(path, { credentials: "include", cache: "no-store" });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
+          return payload;
+        }, eventCursorRef.current);
+        if (!acceptCompletion(eventsCompletedGeneration)) return;
+        if (items.length) {
           setEvents((current) => {
             const merged = new Map(current.map((event) => [Number(event?.id || 0), event]));
-            eventResult.items.forEach((event) => merged.set(Number(event?.id || 0), event));
+            items.forEach((event) => merged.set(Number(event?.id || 0), event));
             return [...merged.values()].sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0));
           });
-          eventCursorRef.current = eventResult.items.reduce(
+          eventCursorRef.current = items.reduce(
             (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
             eventCursorRef.current
           );
         }
         setEventError("");
-      } else {
-        setEventError(eventResult.error);
+      } catch (requestError) {
+        if (!acceptCompletion(eventsCompletedGeneration)) return;
+        setEventError(requestError?.message || "Cluster event details could not be loaded.");
       }
-      if (generation >= snapshotCompletedGeneration.current) {
-        setError("");
-        if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
-      }
-    } catch (requestError) {
-      if (generation < Math.max(snapshotCompletedGeneration.current, auxiliaryCompletedGeneration.current)) return;
-      auxiliaryCompletedGeneration.current = generation;
-      if (!quiet) setError(requestError?.message || "Cluster state request failed.");
-    }
+    })();
+    await Promise.all([snapshotRequest, releaseRequest, eventRequest]);
   }, [notify]);
 
   useEffect(() => {
