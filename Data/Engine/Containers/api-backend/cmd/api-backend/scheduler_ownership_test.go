@@ -289,9 +289,12 @@ func TestSchedulerPostgresWorkflowDispatchRetainsIdentity(t *testing.T) {
 	t.Run("outgoing identity", testSchedulerPostgresWorkflowDispatchIdentity)
 	for _, status := range []string{workflowStatusPending, workflowStatusRunning, workflowStatusSuccess, workflowStatusSkipped, workflowStatusWarning, workflowStatusFailed, workflowStatusTimedOut} {
 		t.Run("recovery/"+status, func(t *testing.T) {
-			testSchedulerPostgresWorkflowDispatchRecovery(t, status, "matching", 1)
+			testSchedulerPostgresWorkflowDispatchRecovery(t, status, "matching", 1, false)
 		})
 	}
+	t.Run("recovery/acknowledged Pending", func(t *testing.T) {
+		testSchedulerPostgresWorkflowDispatchRecovery(t, workflowStatusPending, "matching", 1, true)
+	})
 	for _, tc := range []struct {
 		name     string
 		identity string
@@ -303,7 +306,7 @@ func TestSchedulerPostgresWorkflowDispatchRetainsIdentity(t *testing.T) {
 		{"duplicate identity", "matching", 2},
 	} {
 		t.Run("recovery/"+tc.name, func(t *testing.T) {
-			testSchedulerPostgresWorkflowDispatchRecovery(t, workflowStatusFailed, tc.identity, tc.rows)
+			testSchedulerPostgresWorkflowDispatchRecovery(t, workflowStatusFailed, tc.identity, tc.rows, false)
 		})
 	}
 }
@@ -337,7 +340,7 @@ func testSchedulerPostgresWorkflowDispatchIdentity(t *testing.T) {
 	}
 }
 
-func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identity string, rows int) {
+func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identity string, rows int, acknowledged bool) {
 	t.Helper()
 	m, ctx, insert := schedulerOwnershipFixture(t)
 	owner := schedulerTestOwner(t, m, ctx, "scheduler-workflow-recovery/"+newClusterUUID())
@@ -369,8 +372,8 @@ func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identit
 	if err := m.beginSchedulerDispatch(oldCtx, "response-not-received"); err != nil {
 		t.Fatal(err)
 	}
-	// API acceptance can persist Pending, a skipped run, or a completed result
-	// before the scheduler records the response. Retain the real mirrored result.
+	// Pending can persist before executor launch. A skipped run or execution
+	// progress can also precede acknowledgement. Retain the real mirrored result.
 	metadata := map[string]any{"scheduled_job_id": jobID, "scheduled_job_run_id": scheduledRunID}
 	if identity == "matching" {
 		metadata["scheduler_execution_id"] = fmt.Sprintf("work:%d:work", id)
@@ -379,18 +382,31 @@ func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identit
 	}
 	var workflowRunID int64
 	for i := 0; i < rows; i++ {
+		rowStatus := status
+		if i > 0 {
+			// A duplicate Pending row must not disappear behind a status filter.
+			rowStatus = workflowStatusPending
+		}
 		err := m.store.withWorkflowConn(ctx, func(conn *sql.Conn) error {
 			var err error
-			workflowRunID, err = workflowInsertRun(ctx, conn, "wf-recovery", "Recovery test", "scheduled_job", metadata, map[string]any{}, status, "scheduler", time.Now().Unix(), "retained skip reason")
+			workflowRunID, err = workflowInsertRun(ctx, conn, "wf-recovery", "Recovery test", "scheduled_job", metadata, map[string]any{}, rowStatus, "scheduler", time.Now().Unix(), "retained skip reason")
 			if err != nil {
 				return err
 			}
 			if _, err := conn.ExecContext(ctx, `UPDATE engine.workflow_runs SET error='retained workflow diagnostic' WHERE id=$1`, workflowRunID); err != nil {
 				return err
 			}
-			return workflowMirrorScheduledRun(ctx, conn, workflowRunID, metadata, status, "retained workflow diagnostic")
+			if rowStatus == workflowStatusPending {
+				return nil
+			}
+			return workflowMirrorScheduledRun(ctx, conn, workflowRunID, metadata, rowStatus, "retained workflow diagnostic")
 		})
 		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if acknowledged {
+		if err := m.acknowledgeSchedulerDispatch(oldCtx, fmt.Sprint(workflowRunID)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -405,7 +421,7 @@ func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identit
 		return result
 	}
 	before := snapshot()
-	// Lose ownership after API acceptance but before scheduler acknowledgement.
+	// Lose ownership after API persistence, with or without acknowledgement.
 	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.job_scheduler_work_items SET lease_expires_at=$1 WHERE id=$2`, time.Now().Unix()-1, id); err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +433,7 @@ func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identit
 		t.Fatalf("workflow reclaim=%+v err=%v", reclaimed, err)
 	}
 	newCtx := context.WithValue(owner, schedulerWorkContextKey{}, *reclaimed)
-	accepted := identity == "matching" && rows == 1
+	accepted := acknowledged || (identity == "matching" && rows == 1 && status != workflowStatusPending)
 	skipped, resumeErr := m.resumeSchedulerExecution(newCtx)
 	if accepted {
 		if resumeErr != nil || !skipped {
@@ -452,6 +468,17 @@ func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identit
 		}
 	} else if workStatus != workStatusFailed || executionState != "dispatching" || resultID != "response-not-received" {
 		t.Fatalf("ambiguous workflow lost uncertainty: status=%s execution=%s result=%s", workStatus, executionState, resultID)
+	}
+	if !accepted && status == workflowStatusPending {
+		var runStatus, runError, workflowStatus, workflowError string
+		if err := m.store.db.QueryRowContext(ctx, `SELECT r.status,r.error,w.status,w.error
+			FROM engine.scheduled_job_runs r,engine.workflow_runs w WHERE r.id=$1 AND w.id=$2`, scheduledRunID, workflowRunID).
+			Scan(&runStatus, &runError, &workflowStatus, &workflowError); err != nil {
+			t.Fatal(err)
+		}
+		if runStatus != "Running" || !strings.Contains(runError, "execution outcome unknown") || workflowStatus != workflowStatusPending || workflowError != "retained workflow diagnostic" {
+			t.Fatalf("pending launch uncertainty hidden or result changed: scheduled=%s/%s workflow=%s/%s", runStatus, runError, workflowStatus, workflowError)
+		}
 	}
 }
 

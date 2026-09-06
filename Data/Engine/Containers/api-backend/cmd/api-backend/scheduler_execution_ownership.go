@@ -115,8 +115,8 @@ func storeSchedulerExecution(ctx context.Context, tx *sql.Tx, item schedulerWork
 
 // Replaying a claim may revisit already acknowledged components. Their durable
 // execution identity wins: skip dispatch rather than create a second activity.
-// Without acknowledgement, a terminal activity result or a persisted workflow
-// run can settle uncertainty; absence of evidence is never permission to resend.
+// Without acknowledgement, a terminal activity result or workflow execution
+// evidence can settle uncertainty; absence of evidence never permits a resend.
 func (m *goSchedulerManager) resumeSchedulerExecution(ctx context.Context) (bool, error) {
 	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
@@ -144,12 +144,14 @@ func (m *goSchedulerManager) resumeSchedulerExecution(ctx context.Context) (bool
 	if record.State == "dispatching" && item.Kind == schedulerKindScheduledWorkflowRun {
 		var count int
 		var runID sql.NullInt64
-		// Workflow start persists its run before replying and executes asynchronously.
-		// Any status proves acceptance; multiple matching rows remain ambiguous.
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),MIN(id) FROM engine.workflow_runs WHERE source_metadata_json::jsonb->>'scheduler_execution_id'=$1`, record.ID).Scan(&count, &runID); err != nil {
+		var state sql.NullString
+		// Pending is persisted before executor launch and may outlive an API crash.
+		// Require progress or a terminal result; multiple matching rows, regardless
+		// of their status, remain ambiguous.
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),MIN(id),MIN(LOWER(status)) FROM engine.workflow_runs WHERE source_metadata_json::jsonb->>'scheduler_execution_id'=$1`, record.ID).Scan(&count, &runID, &state); err != nil {
 			return false, err
 		}
-		if count == 1 && runID.Valid {
+		if count == 1 && runID.Valid && stringInSet(state.String, "running", "success", "completed", "succeeded", "skipped", "warning", "failed", "timed out") {
 			record.State, record.ResultID = "acknowledged", fmt.Sprint(runID.Int64)
 			if err := storeSchedulerExecution(ctx, tx, item, record); err != nil {
 				return false, err
