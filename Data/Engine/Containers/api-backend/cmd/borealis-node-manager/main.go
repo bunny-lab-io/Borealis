@@ -2018,15 +2018,7 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if err := os.Chown(filepath.Dir(defaultSecretPath), 0, 0); err != nil {
 		return err
 	}
-	if _, err := os.Stat(defaultSecretPath); errors.Is(err, os.ErrNotExist) {
-		token := make([]byte, 32)
-		if _, err := rand.Read(token); err != nil {
-			return err
-		}
-		if err := os.WriteFile(defaultSecretPath, []byte(hex.EncodeToString(token)+"\n"), 0o640); err != nil {
-			return err
-		}
-	} else if err != nil {
+	if err := ensureNodeManagerToken(defaultSecretPath); err != nil {
 		return err
 	}
 	if err := os.Chown(defaultSecretPath, 0, actionRuntimeID); err != nil {
@@ -2091,6 +2083,23 @@ func replaceExecutable(destination string, content []byte) error {
 		return err
 	}
 	return os.Rename(temporaryPath, destination)
+}
+
+func ensureNodeManagerToken(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		token := make([]byte, 32)
+		if _, err := rand.Read(token); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(hex.EncodeToString(token)+"\n"), 0o640); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	// Creation modes are filtered by umask. Action Jobs need group read even
+	// when installation runs with umask 077 or repairs an existing token.
+	return os.Chmod(path, 0o640)
 }
 
 func ensureSecureDirectory(path string) error {
