@@ -81,6 +81,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-059 | Immutable legacy admission configuration recovery | `test_legacy_admission_recovery.py` and retained `test_engine_cluster_recovery.py` preparation tests | live qualification open | Failed legacy admission pins pre-F03 Engine source while quorum state blocks normal update (#517). | Verify immutable repair source, original operation/cohort/node identity, drained roles, healthy K3s/CNPG and idle action state before target-local configuration repair. Reuse F03 transaction without runtime staging. Preserve prior bytes/metadata, stop writing children on timeout, restore target node-manager, reject symlinks and changed observations, retain private journal and resume through original controller gates. |
 
+| REG-TEST-061 | Fresh SSH identity journal binding | `TestInstallBindsFreshSSHHostBeforeKubernetesUIDExists` and `TestInstallRejectsInvalidSSHBindingBeforeFilesystemWork` | fixed | S01 integration exposed that decoding a retained fresh-host journal over a prefilled request could inherit a later Kubernetes UID from the request and accept a different lifecycle binding. | Decode retained journals into zero state; bind provisioning UUID and approved SSH fingerprint before Kubernetes assigns a UID. Reject changed host, target or lifecycle identity without rewriting fixed files. Keep independent source authority and stopped-consumer checks; library tests do not qualify live delivery. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
