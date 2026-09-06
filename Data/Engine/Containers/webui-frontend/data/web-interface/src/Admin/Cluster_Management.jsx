@@ -72,7 +72,7 @@ import {
 } from "../app/utils/inputValidation.js";
 
 const HMR_WARNING =
-  "This drains all Borealis application roles from every cluster node except specified node. Use isolation for backend and frontend development. Disable Cluster-Wide Node Isolation to restore application HA and failover.";
+  "New clustered HMR entry is disabled. Existing isolation can be disabled to restore pinned production and application HA. Use a standalone Engine for development.";
 const TABS = [
   { key: "overview", label: "Overview", Icon: OverviewIcon },
   { key: "nodes", label: "Nodes", Icon: NodesIcon },
@@ -259,9 +259,11 @@ const GRID_INLINE_STYLE = {
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
   "--ag-border-radius": "8px",
 };
-const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "database", "probes"];
+const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "engine-version", "ip-address", "database", "probes"];
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
 const CLUSTER_EVENT_PAGE_SIZE = 500;
+const NODE_REPORT_STALE_MS = 300_000;
+const CLUSTER_SNAPSHOT_STALE_MS = 15_000;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
 
 function borealisVersionParts(value) {
@@ -339,6 +341,7 @@ export async function loadClusterManagementPageData(request) {
   try {
     await requireAdminRequest(request, progress);
     const cluster = await progress.fetchJson("/api/server/cluster");
+    const snapshotReceivedAt = Date.now();
     let releases = { releases: [] };
     let releaseError = "";
     let events = [];
@@ -361,7 +364,7 @@ export async function loadClusterManagementPageData(request) {
         }
       })(),
     ]);
-    return { cluster, releases, releaseError, events, eventError, initialError: "" };
+    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return { cluster: null, releases: { releases: [] }, events: [], initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
@@ -618,6 +621,51 @@ export function friendlyClusterOperationName(operation) {
   return labels[kind] || titleCase(kind || "Cluster Operation");
 }
 
+export function clusterNodeVersionPresentation(node, operations = [], now = Date.now(), snapshotStale = false) {
+  const release = String(node?.release_tag || "").trim();
+  const sha = String(node?.release_sha || "").trim();
+  const shaKnown = /^[a-f0-9]{40}$/i.test(sha);
+  const reportTime = Number(node?.last_seen_at) * 1000;
+  const reportKnown = Number.isFinite(reportTime) && reportTime > 0 && reportTime <= now;
+  const reportStatus = !reportKnown ? "Report time unknown" : now - reportTime > NODE_REPORT_STALE_MS ? "Stale report" : "Recent report";
+  const status = snapshotStale ? "Snapshot stale" : reportStatus;
+  const target = operations.find((operation) => {
+    if (operation?.kind !== "engine_update" || !["queued", "running", "waiting"].includes(operation?.state)) return false;
+    if (node?.membership_state !== "Active" || !node?.id) return false;
+    const payload = operation?.payload || {};
+    if (Array.isArray(payload.update_node_ids) && payload.update_node_ids.length) return payload.update_node_ids.includes(node.id);
+    if (payload.scope === "node") return Array.isArray(payload.node_ids) && payload.node_ids.includes(node.id);
+    return payload.scope === "all";
+  });
+  const targetRelease = String(target?.target_release || "").trim();
+  const targetSHA = String(target?.target_sha || "").trim();
+  const targetRecorded = Boolean(release && shaKnown && release === targetRelease && sha === targetSHA);
+  const targetLabel = target ? `${targetRecorded ? "Target recorded" : "Pending"} ${targetRelease || "Unknown"}` : "";
+  const detail = [
+    `Recorded Engine release: ${release || "Unknown"}`,
+    `Recorded commit SHA: ${shaKnown ? sha : "Unknown"}`,
+    "Runtime release identity: not freshly measured. Recorded metadata is not a live version probe.",
+    `${reportStatus}. Last node report: ${reportKnown ? formatClusterTimestamp(node.last_seen_at) : "Unknown"}.`,
+    "Node report time may reflect another lifecycle action; it does not verify the running Engine release.",
+    snapshotStale ? "Snapshot is stale or unavailable. Display retains the last received records; pending target may have changed." : "Snapshot received recently; node record can still be old.",
+    target ? `Update target: ${targetRelease || "Unknown"}\nTarget commit SHA: ${targetSHA || "Unknown"}\nOperation: ${target.state}${targetRecorded ? "; recorded identity matches target" : "; target is not the recorded version"}.` : "",
+  ].filter(Boolean).join("\n");
+  const summary = `${release ? "Recorded" : "Unknown"}${shaKnown ? "" : " · SHA unknown"} · ${status}${targetLabel ? ` · ${targetLabel}` : ""}`;
+  return { release: release || "Unknown", summary, detail, label: `${release || "Unknown"} ${summary}`, stale: snapshotStale || reportStatus !== "Recent report" };
+}
+
+function ClusterNodeVersionCell({ version }) {
+  if (!version) return "Unknown";
+  return (
+    <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{version.detail}</Box>} placement="top-start" arrow>
+      <Box component="span" tabIndex={0} sx={{ display: "flex", flexDirection: "column", lineHeight: "14px", whiteSpace: "nowrap" }}>
+        <Box component="span" sx={{ color: "#e2e8f0" }}>{version.release}</Box>
+        <Box component="span" sx={{ fontSize: 11, color: version.stale ? "#fbbf24" : "#94a3b8" }}>{version.summary}</Box>
+      </Box>
+    </Tooltip>
+  );
+}
+
 export function formatClusterTimestamp(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return "—";
@@ -864,6 +912,13 @@ export default function ClusterManagement() {
   const loaderData = useLoaderData();
   const notify = useAppNotifications({ title: "Cluster Management", icon: "cluster" });
   const [cluster, setCluster] = useState(loaderData?.cluster || null);
+  const [versionClock, setVersionClock] = useState(Date.now);
+  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState(() => Number(loaderData?.snapshotReceivedAt) || 0);
+  const [snapshotUnavailable, setSnapshotUnavailable] = useState(false);
+  const refreshGeneration = useRef(0);
+  const snapshotCompletedGeneration = useRef(0);
+  const releaseCompletedGeneration = useRef(0);
+  const eventsCompletedGeneration = useRef(0);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
@@ -913,8 +968,7 @@ export default function ClusterManagement() {
   const isolationInactive = hmrState === "inactive";
   const isolationExitAllowed = ["active", "restore_failed"].includes(hmrState);
   const isolatedNodeID = String(cluster?.hmr?.node_id || "");
-  const isolationNodeOptions = isolationInactive ? nodes : nodes.filter((node) => node?.id === isolatedNodeID);
-  const isolationNodeValue = isolationInactive ? selectedNode : isolatedNodeID;
+  const isolatedNodeName = nodes.find((node) => node?.id === isolatedNodeID)?.node_name || "Unknown";
   const databaseRecoveryReady = database?.fully_ready !== false && database?.durability_quorum !== false;
   const applicationCapacityReady = nodes.filter((node) => node?.membership_state === "Active").every((node) => node?.application_state === "active");
   const normalOperationsEnabled = cluster?.status === "Healthy" && databaseRecoveryReady && applicationCapacityReady;
@@ -926,55 +980,79 @@ export default function ClusterManagement() {
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
-    try {
-      const eventRequest = loadClusterEventHistory(async (path) => {
-        const response = await fetch(path, { credentials: "include", cache: "no-store" });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
-        return payload;
-      }, eventCursorRef.current)
-        .then((items) => ({ items, error: "" }))
-        .catch((requestError) => ({ items: null, error: requestError?.message || "Cluster event details could not be loaded." }));
-      const [clusterResponse, releaseResponse, eventResult] = await Promise.all([
-        fetch("/api/server/cluster", { credentials: "include", cache: "no-store" }),
-        fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" }),
-        eventRequest,
-      ]);
-      const clusterPayload = await clusterResponse.json().catch(() => ({}));
-      const releasePayload = await releaseResponse.json().catch(() => ({}));
-      if (!clusterResponse.ok) throw new Error(clusterPayload?.message || "Cluster state request failed.");
-      setCluster(clusterPayload);
-      if (releaseResponse.ok) {
-        setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
-        setReleaseError("");
-      } else {
-        setReleaseError(releasePayload?.message || "Engine release catalog could not be loaded.");
+    const generation = ++refreshGeneration.current;
+    const acceptCompletion = (completedGeneration) => {
+      if (generation < completedGeneration.current) return false;
+      completedGeneration.current = generation;
+      return true;
+    };
+    // Each stream accepts its own newest completion, independent of other waits.
+    const snapshotRequest = (async () => {
+      try {
+        const response = await fetch("/api/server/cluster", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Cluster state request failed.");
+        if (!acceptCompletion(snapshotCompletedGeneration)) return;
+        const receivedAt = Date.now();
+        setCluster(payload);
+        setSnapshotReceivedAt(receivedAt);
+        setVersionClock(receivedAt);
+        setSnapshotUnavailable(false);
+        setError("");
+        if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
+      } catch (requestError) {
+        if (!acceptCompletion(snapshotCompletedGeneration)) return;
+        setSnapshotUnavailable(true);
+        if (!quiet) setError(requestError?.message || "Cluster state request failed.");
       }
-      if (eventResult.items) {
-        if (eventResult.items.length) {
+    })();
+    const releaseRequest = (async () => {
+      try {
+        const response = await fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Engine release catalog could not be loaded.");
+        if (!acceptCompletion(releaseCompletedGeneration)) return;
+        setReleases(Array.isArray(payload?.releases) ? payload.releases : []);
+        setReleaseError("");
+      } catch (requestError) {
+        if (!acceptCompletion(releaseCompletedGeneration)) return;
+        setReleaseError(requestError?.message || "Engine release catalog could not be loaded.");
+      }
+    })();
+    const eventRequest = (async () => {
+      try {
+        const items = await loadClusterEventHistory(async (path) => {
+          const response = await fetch(path, { credentials: "include", cache: "no-store" });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
+          return payload;
+        }, eventCursorRef.current);
+        if (!acceptCompletion(eventsCompletedGeneration)) return;
+        if (items.length) {
           setEvents((current) => {
             const merged = new Map(current.map((event) => [Number(event?.id || 0), event]));
-            eventResult.items.forEach((event) => merged.set(Number(event?.id || 0), event));
+            items.forEach((event) => merged.set(Number(event?.id || 0), event));
             return [...merged.values()].sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0));
           });
-          eventCursorRef.current = eventResult.items.reduce(
+          eventCursorRef.current = items.reduce(
             (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
             eventCursorRef.current
           );
         }
         setEventError("");
-      } else {
-        setEventError(eventResult.error);
+      } catch (requestError) {
+        if (!acceptCompletion(eventsCompletedGeneration)) return;
+        setEventError(requestError?.message || "Cluster event details could not be loaded.");
       }
-      setError("");
-      if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
-    } catch (requestError) {
-      if (!quiet) setError(requestError?.message || "Cluster state request failed.");
-    }
+    })();
+    await Promise.all([snapshotRequest, releaseRequest, eventRequest]);
   }, [notify]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void refresh({ quiet: true }), 5000);
+    const timer = window.setInterval(() => {
+      setVersionClock(Date.now());
+      void refresh({ quiet: true });
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -1029,7 +1107,6 @@ export default function ClusterManagement() {
       const validation = validateInputValue("reason", sanitizedReason, FIELD_CLASS.PLAIN_SINGLE_LINE);
       if (validation) return setError(validation);
     }
-    if (kind === "hmr_start") return mutate("/api/server/cluster/hmr/start", { node_id: selectedNode, confirmation });
     if (kind === "hmr_exit") return mutate("/api/server/cluster/hmr/exit", { confirmation });
     if (kind === "update_all" || kind === "update_node" || kind === "update_qualification") {
       const oneNode = Number(cluster?.active_size || 1) === 1;
@@ -1089,10 +1166,11 @@ export default function ClusterManagement() {
           databaseStatus: clusterNodeDatabaseStatus(node, cluster?.leaders?.postgres_primary, database, activeMemberCount),
           rolesLabel: rolesPresentation.label,
           probeSummary: clusterNodeProbeSummary(node),
+          engineVersion: clusterNodeVersionPresentation(node, operations, versionClock, snapshotUnavailable || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS),
         };
       });
     },
-    [cluster?.leaders?.postgres_primary, database, nodes]
+    [cluster?.leaders?.postgres_primary, database, nodes, operations, snapshotReceivedAt, snapshotUnavailable, versionClock]
   );
 
   const operationRows = useMemo(
@@ -1208,6 +1286,18 @@ export default function ClusterManagement() {
       cellClass: "auto-col-tight",
     },
     {
+      colId: "engine-version",
+      field: "engineVersion",
+      headerName: "Engine Version",
+      minWidth: 230,
+      cellClass: "auto-col-tight",
+      // A SHA/report/target-only change must refresh the tooltip as well.
+      valueFormatter: (params) => params.value?.label || "Unknown",
+      filterValueGetter: (params) => params.data?.engineVersion?.label || "Unknown",
+      comparator: (left, right) => compareBorealisVersions(left?.release, right?.release) ?? String(left?.release || "").localeCompare(String(right?.release || "")),
+      cellRenderer: (params) => <ClusterNodeVersionCell version={params?.data?.engineVersion} />,
+    },
+    {
       colId: "ip-address",
       field: "management_ip",
       headerName: "IP Address",
@@ -1272,10 +1362,17 @@ export default function ClusterManagement() {
         const operation = params?.data || {};
         const state = String(operation?.state || "unknown").toLowerCase();
         const label = clusterOperationStatusLabel(operation);
-        const cancellable = ["queued", "waiting"].includes(state);
+        const cancellable = operation.kind !== "membership_admit" && ["queued", "waiting"].includes(state);
+        const retryable = operation.kind === "membership_admit" && !operation.superseded_by && ["failed", "cancelled"].includes(state);
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />
+            {retryable ? (
+              <Button size="small" disabled={busy} onClick={(event) => {
+                event.stopPropagation();
+                void mutate(`/api/server/cluster/operations/${operation.id}/retry`, { confirmation: "RETRY OPERATION" });
+              }}>Retry</Button>
+            ) : null}
             {cancellable ? (
               <>
                 <Typography component="span" sx={{ color: "#64748b" }}>/</Typography>
@@ -1334,7 +1431,7 @@ export default function ClusterManagement() {
   const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
   useRoutePageChrome({
     title: "Cluster Management",
-    subtitle: "Quorum, role ownership, development node isolation, node maintenance, and rolling Engine release operations.",
+    subtitle: "Quorum, role ownership, isolation recovery, node maintenance, and rolling Engine release operations.",
     Icon: ClusterIcon,
     actions: pageActions,
   });
@@ -1416,7 +1513,12 @@ export default function ClusterManagement() {
         ) : null}
 
         {tab === "maintenance" ? <Stack spacing={2}>
-          <Paper sx={CARD_SX}><Typography variant="h6">Cluster-Wide Node Isolation</Typography><Alert severity="warning" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert><Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><FormControl disabled={!isolationInactive} sx={{ minWidth: 220 }}><InputLabel id="hmr-node-label">Isolated Node</InputLabel><Select labelId="hmr-node-label" label="Isolated Node" value={isolationNodeValue} onChange={(event) => setSelectedNode(event.target.value)}>{isolationNodeOptions.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select></FormControl><Button color="warning" variant="contained" disabled={!normalOperationsEnabled || !selectedNode || !isolationInactive} onClick={() => openAction("hmr_start")}>Enable Isolation</Button><Button variant="outlined" disabled={!isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button></Stack></Paper>
+          <Paper sx={CARD_SX}>
+            <Typography variant="h6">Cluster-Wide Node Isolation</Typography>
+            <Alert severity="info" sx={{ mt: 1.5 }}>{HMR_WARNING}</Alert>
+            {!isolationInactive ? <Typography variant="body2" sx={{ mt: 2, color: "#94a3b8" }}>Isolated node: {isolatedNodeName}</Typography> : null}
+            <Button sx={{ mt: 2 }} variant="outlined" disabled={busy || !isolationExitAllowed} onClick={() => openAction("hmr_exit")}>Disable Isolation</Button>
+          </Paper>
           <Paper sx={CARD_SX}>
             <Stack direction="row" spacing={0.5} alignItems="center">
               <Typography variant="h6">Stable Engine Version</Typography>
@@ -1468,9 +1570,28 @@ export default function ClusterManagement() {
             <Button sx={{ mt: 2 }} color="warning" variant="contained" disabled={!rollingUpdateEnabled || !selectedQualificationRelease || !selectableQualificationReleases.length} onClick={() => openAction("update_qualification")}>Deploy Qualification One Node at a Time</Button>
           </Paper>
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
-          <Paper sx={CARD_SX}><Typography variant="h6">Pending quorum admissions</Typography><Stack spacing={1} sx={{ mt: 1.5 }}>{(cluster?.admissions || []).map((admission) => <Stack key={admission.id} direction="row" justifyContent="space-between" alignItems="center"><Typography>{admission.node_name} · {admission.state}</Typography><Button size="small" disabled={busy || !canPrepareMembership || admission.state !== "Pending Quorum"} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button></Stack>)}</Stack></Paper>
+          <Paper sx={CARD_SX}>
+            <Typography variant="h6">Node admissions</Typography>
+            <Stack spacing={1} sx={{ mt: 1.5 }}>
+              {admissions.map((admission) => (
+                <Stack key={admission.id} direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
+                  <Box>
+                    <Typography>{admission.node_name} · {admission.state}</Typography>
+                    {admission.state === "Recovery Required" ? <Typography variant="body2" color="text.secondary">Node identity retained. Retry original admission operation in Cluster Events, then rerun join on original host.</Typography> : null}
+                  </Box>
+                  <Stack direction="row" spacing={1}>
+                    {admission.state === "Pending Quorum" ? <>
+                      <Button size="small" disabled={busy || !canPrepareMembership} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/approve`, { confirmation: "APPROVE NODE" })}>{replacementRecovery ? "Approve Replacement" : "Approve Pair"}</Button>
+                      <Button size="small" color="warning" disabled={busy} onClick={() => void mutate(`/api/server/cluster/admissions/${admission.id}/cancel`, { confirmation: "CANCEL ADMISSION" })}>Cancel Admission</Button>
+                    </> : null}
+                    {["Approved", "Recovery Required"].includes(admission.state) ? <Button size="small" disabled={busy} onClick={() => void mutate("/api/server/cluster/invitations", { node_name: admission.node_name }).then((payload) => setInviteBundle(payload?.invite_bundle || ""))}>Renew Invitation</Button> : null}
+                  </Stack>
+                </Stack>
+              ))}
+            </Stack>
+          </Paper>
           {!cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Enable cluster mode</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>One-way PostgreSQL migration. Stable K3s probe conformance must pass first. Clean development commits can become pinned cluster baseline without GitHub release.</Typography><Button sx={{ mt: 2 }} variant="contained" color="warning" onClick={() => openAction("cluster_enable")}>Enable Cluster</Button></Paper> : null}
-          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="One-use invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
+          {cluster?.enabled ? <Paper sx={CARD_SX}><Typography variant="h6">Membership</Typography>{replacementRecovery ? <Alert severity="warning" sx={{ mt: 1.5 }}>Cluster is running on two surviving members after externally fenced emergency removal. Create and approve one replacement invitation to restore three-node membership.</Alert> : !canExpandToThree ? <Alert severity="info" sx={{ mt: 1.5 }}>Three-node release limit reached. Odd-numbered expansion or shrinking beyond three nodes remains future roadmap work.</Alert> : null}<Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}><Button variant="outlined" disabled={!canPrepareMembership} onClick={() => openAction("invite")}>Create Node Invitation</Button>{canExpandToThree ? <><FormControl sx={{ minWidth: 140 }}><InputLabel id="desired-size-label">Desired size</InputLabel><Select labelId="desired-size-label" label="Desired size" value={expansionSizes.includes(Number(desiredSize)) ? desiredSize : ""} onChange={(event) => setDesiredSize(event.target.value)}>{expansionSizes.map((size) => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select></FormControl><Button variant="outlined" onClick={() => openAction("scale")}>Request Pair Expansion</Button></> : null}</Stack>{inviteBundle ? <TextField sx={{ mt: 2 }} fullWidth multiline minRows={3} label="Target-bound invitation bundle" value={inviteBundle} InputProps={{ readOnly: true }} /> : null}</Paper> : null}
         </Stack> : null}
       </Stack>
 
@@ -1493,7 +1614,6 @@ export default function ClusterManagement() {
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
-          {dialog?.kind === "hmr_start" ? <Alert severity="warning" sx={{ mb: 2 }}>{HMR_WARNING}</Alert> : null}
           {maintenanceExitDisablesIsolation ? <Alert severity="warning" sx={{ mb: 2 }}>Cluster-Wide Node Isolation will be disabled if the node exits maintenance mode.</Alert> : null}
           {dialog?.kind === "remove" ? <Alert severity="warning" sx={{ mb: 2 }}>Safe downscale removes two nodes sequentially. PostgreSQL replicas must vacate both targets before Borealis self-fences K3s and deletes membership.</Alert> : null}
           {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
@@ -1514,7 +1634,7 @@ export default function ClusterManagement() {
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
           {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
           {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_start" ? "Type ENABLE HMR to enable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
+          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
           {dialog?.kind !== "cluster_enable" ? <Typography variant="body2" sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2 }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography> : null}
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button color={dialog?.kind === "update_qualification" ? "warning" : "primary"} sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>

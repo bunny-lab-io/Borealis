@@ -29,6 +29,27 @@ class EngineClusterRecoveryTests(unittest.TestCase):
             check=False,
         )
 
+    def test_engine_redeploy_preserves_newer_installed_k3s(self):
+        result = self.run_engine_library(
+            r'''
+K3S_INSTALL_VERSION="v1.36.3+k3s1"
+k3s_cluster_installed() { return 0; }
+k3s() { printf 'k3s version v1.36.4+k3s1\n'; }
+log_status() { :; }
+run_privileged() { printf 'UNEXPECTED INSTALLER\n'; return 99; }
+if install_k3s_if_missing; then
+    exit 88
+else
+    result=$?
+    [[ "$result" -eq 1 ]] || exit "$result"
+fi
+k3s --version
+'''
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("v1.36.4+k3s1", result.stdout)
+        self.assertNotIn("UNEXPECTED INSTALLER", result.stdout)
+
     def test_longhorn_multipath_guard_fails_closed_for_genuine_map(self):
         result = self.run_engine_library(
             r'''
@@ -387,9 +408,9 @@ cluster_wait_for_operation "$BOREALIS_TEST_OPERATION_ID"
     def test_hmr_guard_reports_cluster_api_failure_without_json_traceback(self):
         result = self.run_engine_library(
             r'''
-cluster_mode_enabled() { return 0; }
+cluster_hmr_membership_status() { return 0; }
 cluster_api_request() { return 22; }
-cluster_hmr_guard dev
+cluster_hmr_guard prod
 '''
         )
         self.assertNotEqual(result.returncode, 0)
@@ -402,19 +423,19 @@ cluster_hmr_guard dev
             counter.write_text("0\n", encoding="utf-8")
             result = self.run_engine_library(
                 r'''
-cluster_mode_enabled() { return 0; }
+cluster_hmr_membership_status() { return 0; }
 CLUSTER_NON_HA_ACKNOWLEDGED=1
 cluster_api_request() {
   count="$(cat "$BOREALIS_TEST_COUNTER")"
   count=$((count + 1))
   printf '%s\n' "$count" >"$BOREALIS_TEST_COUNTER"
   if [[ "$count" -eq 1 ]]; then
-    printf '%s\n' '{"nodes":[{"id":"11111111-1111-4111-8111-111111111111","node_name":"test-node"}],"hmr":{"state":"inactive"}}'
+    printf '%s\n' '{"nodes":[{"id":"11111111-1111-4111-8111-111111111111","node_name":"test-node"}],"hmr":{"state":"active"}}'
     return 0
   fi
   return 22
 }
-cluster_hmr_guard dev all
+cluster_hmr_guard prod all
 ''',
                 extra_env={
                     "BOREALIS_TEST_COUNTER": str(counter),
@@ -427,6 +448,136 @@ cluster_hmr_guard dev all
                 result.stderr,
             )
             self.assertNotIn("Traceback", result.stderr)
+
+    def test_clustered_dev_gate_rejects_membership_and_unknown_state(self):
+        for case in ("one", "three", "transitional", "lookup_failure", "instance_failure", "missing_config"):
+            for service in ("all", "webui-frontend"):
+                with self.subTest(case=case, service=service), tempfile.TemporaryDirectory() as temp_dir:
+                    config = pathlib.Path(temp_dir) / "kubeconfig"
+                    if case != "missing_config":
+                        config.write_text("test-only\n", encoding="utf-8")
+                    result = self.run_engine_library(
+                        r'''
+K3S_KUBECONFIG="$BOREALIS_TEST_CONFIG"
+k3s_cluster_installed() { return 0; }
+k3s_kubectl() {
+  [[ "$BOREALIS_TEST_CASE" != lookup_failure ]] || return 1
+  case "$*" in
+    *"get crd"*) printf 'customresourcedefinition.apiextensions.k8s.io/borealisclusters.borealis.io\n' ;;
+    *) [[ "$BOREALIS_TEST_CASE" != instance_failure ]] || return 1
+       printf 'borealiscluster.borealis.io/borealis\n' ;;
+  esac
+}
+cluster_api_request() { printf 'UNEXPECTED API MUTATION\n' >&2; return 99; }
+CLUSTER_NON_HA_ACKNOWLEDGED=1
+cluster_hmr_guard dev "$BOREALIS_TEST_SERVICE"
+''',
+                        extra_env={"BOREALIS_TEST_CONFIG": str(config), "BOREALIS_TEST_CASE": case, "BOREALIS_TEST_SERVICE": service},
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertRegex(result.stderr, "New clustered HMR entry is disabled|Cluster membership unavailable")
+                    self.assertNotIn("UNEXPECTED API MUTATION", result.stderr)
+
+    def test_dev_dispatch_blocks_before_runtime_preparation(self):
+        for command in ("deploy_engine dev", "service_action webui-frontend rebuild dev", "service_action webui-frontend restart dev", "service_action api-backend rebuild dev", "service_action remote-desktop-guacd restart dev", "service_action traefik-edge reload dev"):
+            with self.subTest(command=command):
+                result = self.run_engine_library(
+                    r'''
+cluster_hmr_membership_status() { return 0; }
+ensure_engine_dependencies() { printf 'UNEXPECTED RUNTIME\n' >&2; exit 99; }
+prepare_runtime() { printf 'UNEXPECTED RUNTIME\n' >&2; exit 99; }
+''' + command
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("New clustered HMR entry is disabled", result.stderr)
+                self.assertNotIn("UNEXPECTED RUNTIME", result.stderr)
+
+    def test_standalone_dev_gate_accepts_confirmed_absence(self):
+        for case in ("fresh", "no_crd", "no_cluster"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp_dir:
+                config = pathlib.Path(temp_dir) / "kubeconfig"
+                if case != "fresh":
+                    config.write_text("test-only\n", encoding="utf-8")
+                result = self.run_engine_library(
+                    r'''
+K3S_KUBECONFIG="$BOREALIS_TEST_CONFIG"
+k3s_cluster_installed() { [[ "$BOREALIS_TEST_CASE" != fresh ]]; }
+k3s_kubectl() {
+  if [[ "$*" == *"exec postgres-db-0"* ]]; then
+    printf 'f\n'
+    return 0
+  fi
+  if [[ "$BOREALIS_TEST_CASE" == no_cluster && "$*" == *"get crd"* ]]; then
+    printf 'customresourcedefinition.apiextensions.k8s.io/borealisclusters.borealis.io\n'
+  fi
+  return 0
+}
+cluster_api_request() { printf 'UNEXPECTED API CALL\n' >&2; return 99; }
+cluster_hmr_guard dev all || exit "$?"
+cluster_hmr_guard dev webui-frontend
+''',
+                    extra_env={"BOREALIS_TEST_CONFIG": str(config), "BOREALIS_TEST_CASE": case},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("UNEXPECTED API CALL", result.stderr)
+
+    def test_missing_cluster_resource_requires_standalone_database_proof(self):
+        for resource in ("no_crd", "no_cluster"):
+            for state in ("enabling", "failed_conversion", "unavailable", "invalid"):
+                with self.subTest(resource=resource, state=state), tempfile.TemporaryDirectory() as temp_dir:
+                    config = pathlib.Path(temp_dir) / "kubeconfig"
+                    config.write_text("test-only\n", encoding="utf-8")
+                    result = self.run_engine_library(
+                        r'''
+K3S_KUBECONFIG="$BOREALIS_TEST_CONFIG"
+k3s_cluster_installed() { return 0; }
+k3s_kubectl() {
+  if [[ "$*" == *"exec postgres-db-0"* ]]; then
+    [[ "$*" == *"--request-timeout=10s"* && "$*" == *"statement_timeout=5000"* && "$*" == *"default_transaction_read_only=on"* ]] || return 99
+    [[ "${!#}" == 'SELECT EXISTS (SELECT 1 FROM engine.cluster_state);' ]] || return 99
+    case "$BOREALIS_TEST_STATE" in
+      enabling|failed_conversion) printf 't\n' ;;
+      unavailable) return 1 ;;
+      invalid) printf 'unexpected\n' ;;
+    esac
+  elif [[ "$BOREALIS_TEST_RESOURCE" == no_cluster && "$*" == *"get crd"* ]]; then
+    printf 'customresourcedefinition.apiextensions.k8s.io/borealisclusters.borealis.io\n'
+  fi
+  return 0
+}
+cluster_api_request() { printf 'UNEXPECTED API CALL\n' >&2; return 99; }
+prepare_runtime() { printf 'UNEXPECTED RUNTIME\n' >&2; exit 99; }
+CLUSTER_NON_HA_ACKNOWLEDGED=1
+deploy_engine dev
+''',
+                        extra_env={"BOREALIS_TEST_CONFIG": str(config), "BOREALIS_TEST_RESOURCE": resource, "BOREALIS_TEST_STATE": state},
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    expected = "New clustered HMR entry is disabled" if state in ("enabling", "failed_conversion") else "Cluster membership unavailable"
+                    self.assertIn(expected, result.stderr)
+                    self.assertNotIn("UNEXPECTED", result.stderr)
+
+    def test_existing_hmr_production_restore_survives_entry_gate(self):
+        for state in ("active", "restore_failed"):
+            with self.subTest(state=state):
+                result = self.run_engine_library(
+                    r'''
+cluster_hmr_membership_status() { return 0; }
+cluster_api_request() {
+  if [[ "$1" == GET ]]; then
+    printf '{"nodes":[{"id":"11111111-1111-4111-8111-111111111111","node_name":"test-node"}],"hmr":{"state":"%s","node_id":"11111111-1111-4111-8111-111111111111"}}\n' "$BOREALIS_TEST_HMR_STATE"
+  else
+    [[ "$2" == /api/server/cluster/hmr/exit && "$3" == '{"confirmation":"EXIT HMR"}' ]] || return 99
+    printf '{"operation_id":"22222222-2222-4222-8222-222222222222"}\n'
+  fi
+}
+cluster_wait_for_operation() { [[ "$1" == 22222222-2222-4222-8222-222222222222 ]]; }
+cluster_hmr_guard prod webui-frontend
+''',
+                    extra_env={"BOREALIS_TEST_HMR_STATE": state, "BOREALIS_CLUSTER_NODE_NAME": "test-node"},
+                )
+                self.assertEqual(result.returncode, 10, result.stderr)
+                self.assertIn("Pinned production release restored", result.stdout)
 
     def run_wireguard_healthcheck(self, ip_script: str):
         with tempfile.TemporaryDirectory() as temp_dir:

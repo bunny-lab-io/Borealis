@@ -66,9 +66,20 @@ func (s *clusterTestStore) consumeClusterInvitation(_ context.Context, admission
 	return map[string]any{"admission_id": admission["id"], "state": "Pending Quorum"}, s.mutationErr
 }
 
+func (s *clusterTestStore) clusterAdmissionStatus(_ context.Context, id string, claims map[string]any) (map[string]any, error) {
+	s.admission = copyMap(claims)
+	s.admission["id"] = id
+	return map[string]any{"admission_id": id, "state": "Approved", "events": s.events}, s.mutationErr
+}
+
 func (s *clusterTestStore) approveClusterAdmission(_ context.Context, _ string, admissionID string) (map[string]any, error) {
 	s.approvedID = admissionID
 	return map[string]any{"state": "queued"}, s.mutationErr
+}
+
+func (s *clusterTestStore) cancelClusterAdmission(_ context.Context, _ string, admissionID string) (map[string]any, error) {
+	s.cancelledID = admissionID
+	return map[string]any{"admission_id": admissionID, "state": "Cancelled"}, s.mutationErr
 }
 
 func (s *clusterTestStore) retryClusterOperation(_ context.Context, _ string, operationID string) (map[string]any, error) {
@@ -140,30 +151,24 @@ func TestClusterMutationsAcceptValidAdminSessionWithoutFreshStepUp(t *testing.T)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token))
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/exit", `{"confirmation":"EXIT HMR"}`, token))
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("expected valid Admin session acceptance without step-up, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.mutation.Kind != "hmr_start" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
+	if store.mutation.Kind != "hmr_exit" {
 		t.Fatalf("unexpected mutation: %+v", store.mutation)
 	}
 }
 
-func TestClusterHMRStartQueuesValidatedTarget(t *testing.T) {
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
-	auth, token := clusterTestAuth(t, store)
-	mux := http.NewServeMux()
-	registerServerClusterRoutes(mux, auth)
-	request := clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token)
-	recorder := httptest.NewRecorder()
-
-	mux.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusAccepted {
-		t.Fatalf("expected accepted HMR operation, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if store.mutation.Kind != "hmr_start" || store.mutation.TargetNodeID != "11111111-1111-4111-8111-111111111111" {
-		t.Fatalf("unexpected mutation: %+v", store.mutation)
+func TestClusterHMRStartRejectsEntryBeforeStore(t *testing.T) {
+	for _, size := range []int64{1, 3} {
+		store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"enabled": true, "active_size": size, "hmr": map[string]any{"state": "inactive"}}}
+		auth, token := clusterTestAuth(t, store)
+		recorder := httptest.NewRecorder()
+		clusterHMRStartHandler(auth).ServeHTTP(recorder, clusterTestRequest(t, http.MethodPost, "/api/server/cluster/hmr/start", `{"node_id":"11111111-1111-4111-8111-111111111111","confirmation":"ENABLE HMR"}`, token))
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "cluster_hmr_entry_disabled") || store.mutation.Kind != "" {
+			t.Fatalf("%d-node HMR entry reached store: %d %s %+v", size, recorder.Code, recorder.Body.String(), store.mutation)
+		}
 	}
 }
 
@@ -271,17 +276,19 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.Contains(r.URL.Path, "/releases/tags/"):
+			_ = json.NewEncoder(w).Encode(clusterGitHubRelease{Immutable: true, TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update"})
 		case strings.Contains(r.URL.Path, "/releases"):
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-				{TagName: "2026.08.12", Name: "Draft", Draft: true, PublishedAt: "2026-08-25T03:00:00Z"},
-				{TagName: "2026.08.11", Name: "Prerelease", Prerelease: true, PublishedAt: "2026-08-25T02:00:00Z"},
-				{TagName: "main", Name: "Branch Head", PublishedAt: "2026-08-25T01:00:00Z"},
+				{Immutable: true, TagName: "2026.08.12", Name: "Draft", Draft: true, PublishedAt: "2026-08-25T03:00:00Z"},
+				{Immutable: true, TagName: "2026.08.11", Name: "Prerelease", Prerelease: true, PublishedAt: "2026-08-25T02:00:00Z"},
+				{Immutable: true, TagName: "main", Name: "Branch Head", PublishedAt: "2026-08-25T01:00:00Z"},
 				// GitHub release ordering is not semantic-version ordering. A
 				// newly published backport must not hide newer rolling targets.
-				{TagName: "2026.08.6", Name: "Out-of-order Backport", PublishedAt: "2026-08-25T00:00:00Z"},
-				{TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update", PublishedAt: "2026-08-24T00:00:00Z"},
-				{TagName: "2026.08.8", Name: "2026.08.8 - Probe Fix", PublishedAt: "2026-08-23T00:00:00Z"},
-				{TagName: "2026.08.7", Name: "2026.08.7 - Current", PublishedAt: "2026-08-21T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.6", Name: "Out-of-order Backport", PublishedAt: "2026-08-25T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.9", Name: "2026.08.9 - Cluster Update", PublishedAt: "2026-08-24T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.8", Name: "2026.08.8 - Probe Fix", PublishedAt: "2026-08-23T00:00:00Z"},
+				{Immutable: true, TagName: "2026.08.7", Name: "2026.08.7 - Current", PublishedAt: "2026-08-21T00:00:00Z"},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
@@ -296,7 +303,7 @@ func TestClusterStableReleaseCatalogStopsAtCurrentAndPinsCommit(t *testing.T) {
 	t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "baseline_sha": commitSHA, "active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.08.7", "baseline_sha": commitSHA, "active_size": int64(3), "config": map[string]any{"k3s_version": "v1.36.3+k3s1"}}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
@@ -346,8 +353,8 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsApprovedC
 				return
 			}
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-				{TagName: "2026.09.1", Name: "First Stable"},
-				{TagName: "2026.09.1-rc.1", Name: "Qualification", Prerelease: true},
+				{Immutable: true, TagName: "2026.09.1", Name: "First Stable"},
+				{Immutable: true, TagName: "2026.09.1-rc.1", Name: "Qualification", Prerelease: true},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": commitSHA, "type": "commit"}})
@@ -370,7 +377,7 @@ func TestClusterDevelopmentBaselineCatalogStopsAfterFirstPageAndSelectsApprovedC
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA, "v1.36.3+k3s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,6 +398,8 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 	releasePageRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.Contains(r.URL.Path, "/releases/tags/"):
+			_ = json.NewEncoder(w).Encode(clusterGitHubRelease{Immutable: true, TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true})
 		case strings.Contains(r.URL.Path, "/releases"):
 			releasePageRequests++
 			if r.URL.Query().Get("page") != "1" {
@@ -398,9 +407,9 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 				return
 			}
 			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{
-				{TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true},
-				{TagName: "2026.09.2", Name: "Mismatched Stable", Prerelease: true},
-				{TagName: "main", Name: "Branch Head"},
+				{Immutable: true, TagName: "2026.09.1-rc.1", Name: "Cluster Qualification", Prerelease: true},
+				{Immutable: true, TagName: "2026.09.2", Name: "Mismatched Stable", Prerelease: true},
+				{Immutable: true, TagName: "main", Name: "Branch Head"},
 			})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
@@ -418,7 +427,7 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA, "v1.36.3+k3s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +437,7 @@ func TestClusterDevelopmentBaselineAcceptsApprovedQualificationPrerelease(t *tes
 	if len(entries) != 1 || entries[0]["tag"] != "2026.09.1-rc.1" || entries[0]["channel"] != "qualification" || entries[0]["selectable"] != true {
 		t.Fatalf("approved qualification prerelease should be selectable and mismatched metadata rejected: %#v", entries)
 	}
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "dev-fedcba987654", "baseline_sha": baselineSHA, "release_channel": "development", "active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "dev-fedcba987654", "baseline_sha": baselineSHA, "release_channel": "development", "active_size": int64(3), "config": map[string]any{"k3s_version": "v1.36.3+k3s1"}}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)
@@ -448,7 +457,7 @@ func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testin
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/releases"):
-			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{{TagName: "2026.09.1", Name: "Unrelated Stable"}})
+			_ = json.NewEncoder(w).Encode([]clusterGitHubRelease{{Immutable: true, TagName: "2026.09.1", Name: "Unrelated Stable"}})
 		case strings.Contains(r.URL.Path, "/git/ref/tags/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": targetSHA, "type": "commit"}})
 		case strings.Contains(r.URL.Path, "/compare/"):
@@ -465,7 +474,7 @@ func TestClusterDevelopmentBaselineRejectsStableReleaseOutsideAncestry(t *testin
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	serverClusterReleaseCache = clusterReleaseCache{}
 
-	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA)
+	entries, err := fetchClusterReleaseCatalog(context.Background(), "dev-fedcba987654", baselineSHA, "v1.36.3+k3s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,6 +609,60 @@ func TestClusterMembershipScaleAcceptsThreeNodeTarget(t *testing.T) {
 	}
 	if store.mutation.Kind != "membership_scale" || coerceInt64(store.mutation.Payload["desired_size"]) != 3 {
 		t.Fatalf("unexpected membership mutation: %+v", store.mutation)
+	}
+}
+
+func TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget(t *testing.T) {
+	oldSHA, newSHA := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	store := &clusterTestStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: map[string]any{
+			"baseline_release": "2026.09.1", "baseline_sha": oldSHA,
+			"nodes": []map[string]any{
+				{"id": "one", "release_tag": "2026.09.1", "release_sha": oldSHA, "last_seen_at": int64(1787770000)},
+				{"id": "two", "release_tag": "2026.09.2", "release_sha": newSHA, "last_seen_at": int64(1787770010)},
+				{"id": "three", "release_tag": nil, "release_sha": nil, "last_seen_at": nil},
+			},
+			"operations": []map[string]any{{"kind": "engine_update", "state": "running", "target_release": "2026.09.2", "target_sha": newSHA, "payload": map[string]any{"scope": "all", "update_node_ids": []string{"one", "two", "three"}}}},
+		},
+	}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodGet, "/api/server/cluster", "", token))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Nodes []struct {
+			ReleaseTag *string `json:"release_tag"`
+			ReleaseSHA *string `json:"release_sha"`
+			LastSeenAt *int64  `json:"last_seen_at"`
+		} `json:"nodes"`
+		Operations []struct {
+			TargetRelease string `json:"target_release"`
+			TargetSHA     string `json:"target_sha"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Nodes) != 3 || len(payload.Operations) != 1 {
+		t.Fatalf("snapshot lost node/update records: %+v", payload)
+	}
+	for i, expected := range []struct{ tag, sha string }{{"2026.09.1", oldSHA}, {"2026.09.2", newSHA}} {
+		node := payload.Nodes[i]
+		if node.ReleaseTag == nil || *node.ReleaseTag != expected.tag || node.ReleaseSHA == nil || *node.ReleaseSHA != expected.sha || node.LastSeenAt == nil || *node.LastSeenAt != 1787770000+int64(i)*10 {
+			t.Fatalf("node %d recorded identity changed: %+v", i, node)
+		}
+	}
+	unknown := payload.Nodes[2]
+	if unknown.ReleaseTag != nil || unknown.ReleaseSHA != nil || unknown.LastSeenAt != nil {
+		t.Fatalf("unknown node inherited baseline or pending target: %+v", unknown)
+	}
+	if payload.Operations[0].TargetRelease != "2026.09.2" || payload.Operations[0].TargetSHA != newSHA {
+		t.Fatalf("pending target identity lost: %+v", payload.Operations[0])
 	}
 }
 
@@ -750,6 +813,7 @@ func TestClusterOperationHistoryMarksGlobalFailuresSuperseded(t *testing.T) {
 		{"id": "old-failure", "kind": "membership_admit", "state": "failed", "finished_at": int64(10)},
 		{"id": "node-success", "kind": "node_maintenance", "state": "succeeded", "finished_at": int64(20)},
 		{"id": "node-failure", "kind": "node_maintenance", "state": "failed", "finished_at": int64(10)},
+		{"id": "old-cancellation", "kind": "membership_admit", "state": "cancelled", "finished_at": int64(10)},
 	}
 	annotateSupersededClusterOperations(operations)
 	if operations[1]["superseded_by"] != "new-success" {
@@ -757,6 +821,9 @@ func TestClusterOperationHistoryMarksGlobalFailuresSuperseded(t *testing.T) {
 	}
 	if operations[3]["superseded_by"] != nil {
 		t.Fatalf("target-specific operation incorrectly superseded: %+v", operations[3])
+	}
+	if operations[4]["superseded_by"] != "new-success" {
+		t.Fatalf("legacy admission cancellation not superseded: %+v", operations[4])
 	}
 }
 
@@ -884,7 +951,7 @@ func TestClusterK3sUpdateUsesDistinctQualifiedContract(t *testing.T) {
 	t.Setenv("BOREALIS_K3S_VERSION", "v1.36.3+k3s1")
 	t.Setenv("BOREALIS_K3S_PROBE_CONFORMANCE", "passed")
 	t.Setenv("BOREALIS_K3S_UPGRADE_IMAGE", "docker.io/rancher/k3s-upgrade@sha256:"+strings.Repeat("a", 64))
-	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"active_size": int64(3)}}
+	store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"active_size": int64(3), "config": map[string]any{"k3s_version": "v1.36.3+k3s1"}}}
 	auth, token := clusterTestAuth(t, store)
 	mux := http.NewServeMux()
 	registerServerClusterRoutes(mux, auth)

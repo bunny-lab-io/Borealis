@@ -1,12 +1,18 @@
 {
   "tests": [
+    "TestAegisClusterPostgresRenewedHolderUnlocksJoiningReplica",
+    "TestClusterAdmissionPostgresAuthorizationRenewal",
+    "TestClusterAdmissionPostgresCapacityRecovery",
+    "TestClusterAdmissionPostgresScopedHistoryAndResume",
     "TestClusterCompletionPostgresPreservesAndClearsRecoveryState",
     "TestClusterControllerClaimPinsOperationActionImage",
     "TestClusterControllerPostgresLeaseSerializesLongStep",
+    "TestClusterHMREntryPostgresRejectsLegacyQueuePreservesRecovery",
     "TestClusterMaintenanceStorePostgresRecoveryGates",
     "TestClusterMembershipAdmissionReactivatesRetainedNodeIdentity",
     "TestClusterMembershipStorePostgresReleaseFences",
     "TestClusterOperationRetryPersistsFailedStepCheckpoint",
+    "TestClusterReleaseIdentityPostgresQueueAndRetry",
     "TestClusterRemovalFencePostgresPersistsAndFencesStaleWriters",
     "TestPostgresControlCancellationReleasesTransactionLocks",
     "TestPostgresLeaseTransportBlackholeAndRecovery",

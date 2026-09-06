@@ -80,6 +80,8 @@ type authService struct {
 	store         operatorStore
 	bootstrapGate operatorAuthGate
 	aegis         authSecretService
+	aegisTLSMu    sync.Mutex
+	aegisTLS      *aegisClusterTLSReloader
 	devMode       *goDevModeManager
 	timeout       time.Duration
 }

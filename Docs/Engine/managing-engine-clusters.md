@@ -110,22 +110,32 @@ Port `80` remains the HTTP/ACME and redirect entrypoint.  The HTTPS router must 
 
 Create an invitation in "**Admin > Cluster Management**", then copy the K3s server token to a root-only file on each new host through a trusted management channel.
 
-On each joining host, run the node-manager join command using the same private peer allowlist configured on the first node:
+On each joining host, run the node-manager join command. Borealis supplies the Cluster Virtual IP, pinned K3s version, and private peer allowlist after approval:
 
 ```sh
 sudo borealis-node-manager join \
   --endpoint https://engine.example.com \
-  --invite-bundle '<ONE_USE_INVITATION>' \
+  --invite-bundle '<TARGET_BOUND_INVITATION>' \
   --node-name engine-02 \
   --management-ip 192.168.50.22 \
-  --peer-cidrs 192.168.50.21/32,192.168.50.22/32,192.168.50.23/32 \
-  --k3s-server https://192.168.50.10:6443 \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-The node manager first prepares the firewall, iSCSI, NFSv4, and K3s host prerequisites through the fixed Engine workflow.  It does not expose arbitrary shell execution.
+The endpoint must use HTTPS and must not redirect. Use `--ca-file /path/to/engine-ca.pem` when the Engine certificate uses a private CA. The node manager submits its identity and waits for approval before preparing the firewall, iSCSI, NFSv4, and K3s host prerequisites. It checks approval again before joining K3s.
 
 Invitation join creates a `Pending Quorum` admission and waits for Admin approval.  AMD64 architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work begins.
+
+### Resume or Cancel an Interrupted Join
+
+Rerun the same command on the same host after a lost response or process restart. Borealis resumes the original admission and checks the hostname, management address, architecture, and OS version. Keep those values unchanged during recovery.
+
+Invitations allow initial acceptance and approval for 15 minutes. An approved target can resume for up to 24 hours from invitation creation. After that, select **Renew Invitation** beside the retained admission, then rerun the command with the new bundle. Renewal revokes the previous bundle and preserves the original host and operation. Creating another invitation for that same retained node name performs the same renewal.
+
+Select **Cancel Admission** only for an unapproved pending target. Expired pending admissions release unused capacity automatically. If Borealis finds approval, member, or operation evidence, it retains the slot as **Recovery Required**. Missing or NotReady Kubernetes nodes do not prove that a host never joined.
+
+For a failed admission or an admission operation cancelled by an older release, open **Cluster Events**, select **Retry** on the original operation, and rerun join on the original hosts. Renew expired bundles as needed. Approved admission operations cannot be cancelled because a target may already have joined. Restore the original cohort, then use supported removal and fencing before replacing a joined host. A removed host retaining its local member-removal fence must be rebuilt before joining again.
+
+Optional `--k3s-server`, `--k3s-version`, and `--peer-cidrs` flags assert expected values. They must match the settings supplied by Borealis; they cannot override cluster configuration.
 
 ### Expand from One Node to Three
 
@@ -272,7 +282,7 @@ Each row identifies affected node hostnames, summarizes the latest lifecycle mes
 
 Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
 
-An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried.  Failed records remain diagnostic-only and do not expose inline retry.  Queued or waiting records expose cancellation.
+An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried. The same rule applies to admission operations cancelled by older releases. Unsuperseded failed or cancelled admission operations expose **Retry** for the original cohort; other failed records remain diagnostic-only. Queued or waiting admission operations cannot be cancelled because a target may already have joined. Other queued or waiting operations retain cancellation at their supported safe boundary.
 
 Maintenance explains an empty release catalog when no published stable cluster-compatible release exists at or above the pinned baseline.
 
@@ -337,20 +347,13 @@ A failed restore leaves the node drained instead of sending work to a partially 
 
 See [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) and [Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) for the upstream behavior.
 
-## Use Cluster-Wide Node Isolation
+## Recover Cluster-Wide Node Isolation { #use-cluster-wide-node-isolation }
 
-Cluster-Wide Node Isolation is the development mode built on the Borealis HMR controller.
+New Cluster-Wide Node Isolation / HMR entry is disabled on enabled one-node and three-node clusters. Use a standalone Engine for mutable development and publish an immutable release for cluster updates. Legacy acknowledgement flags do not enable clustered development.
 
-Starting `deploy dev` or `webui-frontend rebuild dev` on a clustered Engine requires Admin access and the typed confirmation `ENABLE HMR`.  The confirmation phrase and API names retain `HMR` for compatibility.  Non-interactive CLI use also requires `--acknowledge-cluster-non-ha`.
+Existing isolation keeps its recorded target and pinned production baseline. Maintenance shows that target and offers **Disable Isolation** when recovery is available. The cluster banner remains visible until isolation is disabled. Updates, membership changes and normal maintenance stay blocked during isolation.
 
-!!! warning "Cluster-Wide Node Isolation Disables Application HA"
-Isolation drains all Borealis application roles from every cluster node except the selected node.  Use it for backend and frontend development.  Disable Cluster-Wide Node Isolation to restore application HA and failover.
-
-The controller first checks quorum, capacity, target production health, and exclusive-operation state.  It then moves Cluster Virtual IP and WireGuard ownership, scheduler leadership, site workers, application endpoints, and a caught-up PostgreSQL primary to the selected isolated node.
-
-Standby nodes become ineligible for the Cluster Virtual IP lease while K3s, etcd, Longhorn, and PostgreSQL replicas continue running.  Application scheduling is drained without cordoning infrastructure.
-
-The cluster banner names the isolated node and remains visible on every page until dismissed or isolation is disabled.  The Maintenance selector remains locked to the current isolated node while isolation is not fully inactive.  Updates, membership operations, and normal maintenance remain blocked during isolation.
+Old queued or interrupted entry operations halt into failed restoration state before further runtime action. Recover through **Disable Isolation**; retrying the old entry is rejected. Cancelling queued HMR work retains the isolated target and recovery state until production restoration succeeds. Existing failed-exit retry and lost-target recovery remain available.
 
 ### Disable Isolation
 
@@ -364,9 +367,19 @@ This ordering keeps production available while the isolated node returns to the 
 
 If the isolated node is lost, Borealis fences it before recovering pinned-baseline workloads on standby members through the same sequence.
 
-Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hmr-preview) for the manual clustered preview workflow, secure CLI authentication, durable-source mirroring, validation, production restore, and stable-release handoff.
+Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hmr-preview) for existing-isolation recovery, secure CLI authentication and pre-deployment restoration qualification. Mutable development now requires a standalone Engine.
 
 Isolation never distributes mutable source to standby nodes.  Only a Cluster Management stable-release update moves an accepted immutable revision across all nodes.
+
+## Compare Engine Versions
+
+Open **Admin > Cluster Management > Nodes** and compare the **Engine Version** column before updating. Each row shows that node's recorded release. Hover or focus the version to read its full commit SHA and report time. Missing release or SHA appears as **Unknown**; Borealis does not substitute the cluster baseline.
+
+The second line distinguishes **Recent report**, **Stale report**, and **Report time unknown**. Reports older than five minutes are stale. These labels describe stored reports, not a fresh measurement of the running Engine version or a node-health verdict. A recent report can come from another lifecycle action.
+
+During an Engine update, affected rows show **Pending** with the requested release. **Target recorded** means the stored release and SHA already match that operation's target. The tooltip keeps the target SHA separate from the recorded SHA. Failed, cancelled, or completed operations stop showing a pending target.
+
+If refresh fails or no successful snapshot arrives for more than 15 seconds, rows show **Snapshot stale** while retaining the last records. Pending targets may also be outdated until refresh recovers. Restore API access and use **Refresh** before relying on that view for another operation.
 
 ## Perform Cluster-Aware Engine Updates
 
@@ -378,7 +391,7 @@ Stable releases use `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` and must be 
 
 Qualification releases append `-rc.N`, such as `2026.09.2-rc.1`, and must have GitHub prerelease status.  `N` begins at `1` and increases for each candidate of the same intended stable version.
 
-Branch names, draft releases, malformed tags, and tag/GitHub-channel mismatches never become selectable targets.
+Branch names, draft or mutable releases, malformed tags, and tag/GitHub-channel mismatches never become selectable targets. Releases published before repository immutability was enabled require a newly published version.
 
 Maintainers create immutable qualification and stable releases through [Publishing Engine Releases](publishing-engine-releases.md).  Operators select the approved result here; the cluster never creates, retags, or repairs a release.
 
@@ -393,6 +406,13 @@ A commit-backed `dev-*` baseline has no calendar version.  The API therefore sho
 The selected tag resolves once to an immutable commit SHA.  The API verifies that the target is the same commit or a fast-forward descendant of the current pinned SHA.  The node manager independently verifies exact tag-to-SHA resolution, clean checkout, configured origin, and fast-forward ancestry before staging.
 
 Downgrades and unrelated histories fail closed.
+
+Queueing refreshes release verification even when the selector already shows a compatible version. If GitHub is unavailable or publication changed, restore access or select a newly published immutable release before retrying the request.
+
+Engine compatibility follows the cluster's verified K3s version. A completed K3s upgrade changes eligible Engine releases immediately; an old API process environment cannot restore the previous baseline. Unknown or conflicting version observations block updates until cluster state is reconciled. Engine redeploy preserves installed K3s instead of applying the fresh-install default.
+
+!!! info "Operations queued before immutable verification"
+    Older queued Engine updates without immutable-release proof stop at preflight. Cancel queued work at its safe boundary, then select and queue a verified release. If an older operation already failed after changing runtime state, recover that state through the existing maintenance procedure before queueing fresh work. Retrying an old record does not manufacture missing verification.
 
 Every cluster-capable release must include `Data/Engine/release-manifest.json`.  `allowed_release_channels` must explicitly contain `stable`, `qualification`, or both.  The manifest also declares the minimum rolling source, mixed-version window, schema phase, K3s baseline, and required probe conformance.
 
@@ -491,6 +511,49 @@ The receiver re-verifies the key against the Aegis verification token before ins
 
 An all-cold cluster restart still requires one operator unlock.
 
+### Certificate Renewal and CA Rotation
+
+API processes reload certificate, private key, and CA trust for new TLS handshakes. Normal cert-manager leaf renewal needs no API restart. A partial or malformed projection retains the last valid identity only while its certificate chain remains valid under current trust. Expiry stops key propagation; repair the certificate projection without restarting the surviving unlocked replica.
+
+Node workload reconciliation creates `borealis-aegis-trust` once from the existing public CA certificate. Later deployments preserve this ConfigMap. Updated active and candidate replicas require its `ca-bundle.crt`; cert-manager continues to manage the leaf Secret separately. If this ConfigMap disappears after adoption, restore the approved trust bundle before redeploying.
+
+Check renewal before the leaf or CA expires:
+
+```bash
+sudo k3s kubectl -n borealis get certificate borealis-api-aegis-mtls borealis-cluster-ca \
+  -o custom-columns=NAME:.metadata.name,READY:.status.conditions[-1].status,EXPIRY:.status.notAfter,RENEWAL:.status.renewalTime
+sudo k3s kubectl -n borealis get configmap borealis-aegis-trust
+```
+
+!!! warning "Keep one unlocked holder running"
+    Complete rollout of certificate reload support on every API replica before rotating the CA. Keep at least one unlocked replica running throughout renewal, recovery, and staged CA rotation. Restarting every holder loses the memory-only key and requires operator unlock. Expired certificates never gain an automatic validity extension.
+
+CA rotation requires three ordered stages. Prepare the next CA through the approved PKI procedure before changing the issuer. The files below contain public CA certificates only.
+
+1. Publish both current and next CA certificates. Confirm every API replica has the same mounted bundle and passes fresh mutual-TLS checks before issuing leaves from the next CA.
+2. Change the signing CA and request renewed API leaf certificates through cert-manager. Confirm every running replica serves the new certificate, accepts fresh mutual-TLS connections, and remains unlocked. Updating a CA issuer's Secret alone does not trigger leaf reissuance; follow the [cert-manager CA issuer guidance](https://cert-manager.io/docs/configuration/ca/).
+3. Replace the bundle with the next CA alone after all replicas transition. Verify peers using retired certificates are rejected. Keep the ConfigMap present; deleting it is not a retirement mechanism.
+
+Publish the overlap bundle from approved public certificate files:
+
+```bash
+cat current-ca.crt next-ca.crt > aegis-ca-overlap.pem
+sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
+  --from-file=ca-bundle.crt=aegis-ca-overlap.pem --dry-run=client -o yaml \
+  | sudo k3s kubectl apply -f -
+```
+
+After every replica passes the new-certificate checks, retire the old CA:
+
+```bash
+sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
+  --from-file=ca-bundle.crt=next-ca.crt --dry-run=client -o yaml \
+  | sudo k3s kubectl apply -f -
+```
+
+!!! info "Trust changes are explicit"
+    Removing a CA takes effect for fresh handshakes even when a leaf update is incomplete. A replica still using the removed CA fails closed until its identity is repaired. Malformed trust updates preserve the last valid bundle; inspect API logs and fix the projection. Kubernetes volume updates are asynchronous, so a successful ConfigMap write alone is not proof that every replica has adopted it. See validation commands in the detailed breakdown below.
+
 ## Failure and Recovery Rules
 
 * `Degraded Quorum` records emergency two-of-three membership after an externally fenced removal.  Healthy nodes remain enabled, and single-replacement admission remains available.
@@ -512,7 +575,7 @@ An all-cold cluster restart still requires one operator unlock.
 * Host-initiated shutdown or reboot performs bounded Cluster Virtual IP handoff to a Ready Engine peer before K3s stops.  A one-node cluster skips handoff because no peer exists.
 * Sudden power loss still relies on lease expiry and can interrupt ingress until a new owner acquires the Cluster Virtual IP.
 * Three-node clusters keep one healthy shared Agent-artifact volume replica on every Engine.
-* Planned maintenance, HMR entry, node removal, and Engine or K3s updates wait for all three Agent-artifact copies.
+* Planned maintenance, node removal, and Engine or K3s updates wait for all three Agent-artifact copies.
 * Emergency recovery and maintenance/HMR exit remain available when storage is degraded.
 * Safe removal supports `3 -> 1`.
 * Emergency removal from supported three-node membership requires an external power fence plus both exact confirmations and records degraded state.
@@ -544,6 +607,57 @@ Before upgrading from a release without this ownership protocol, let active work
     - Recovery reclaims the previous leadership incarnation's work immediately after healthy takeover, or an expired sixty-second work claim. The five-minute recovery target assumes available PostgreSQL, healthy replacement scheduler, and downstream capacity; portable tests do not qualify live failover timing.
     - Required PostgreSQL tests cover established-socket blackhole/cancellation/healing, cancellation of idle transactions holding locks while TCP disconnects are also dropped, stale ownership writes, owner death, partial-component replay, workflow identity, and uncertainty without false execution failure. Retain #466 live partition acceptance and #493 exact-release qualification separately.
 
+    ### Clustered HMR entry boundary
+
+    Public API, store creation/retry, controller dispatch and step runner reject `hmr_start`. Legacy queued/interrupted entry fails before Kubernetes intent and becomes `restore_failed` with its target retained. Failed HMR exit may queue through the generic quorum failure status; existing controller membership, health and fencing checks still apply. CLI dev commands require confirmed standalone membership; lookup failure never means standalone. WebUI retains recovery controls only. Canonical procedures, test/UI checks and exact-release #492 restoration gate live in [WebUI HMR Development](webui-hmr-development.md).
+
+    ### Engine release identity
+
+    - Nodes grid uses existing `nodes[].release_tag`, `release_sha`, and `last_seen_at`. It never fills missing node identity from `baseline_release`, probes, or K3s observations. These fields are lifecycle records; no fresh runtime Engine identity field exists in this snapshot contract.
+    - `clusterNodeVersionPresentation` keeps recorded identity, report age and pending target separate. Only queued/running/waiting `engine_update` operations apply; `payload.update_node_ids` takes precedence, then node scope uses `payload.node_ids`, or all scope applies to active members. Removed nodes and K3s targets are excluded. Equal recorded tag/SHA shows target recorded without claiming a new runtime measurement.
+    - Node report timestamps are Unix seconds. Missing, invalid or future timestamps have unknown age. A browser clock tick ages reports and snapshot freshness even when fetch remains unresolved. A failed refresh immediately marks the snapshot stale; a successful response clears that flag. Loader and polling paths preserve actual snapshot body receipt time across release-catalog/history waits. Snapshot, release catalog and event history each compare against their own newest completed request, allowing responses slower than the five-second poll interval while rejecting late results superseded by newer completions. Failure or delay in one stream does not advance another stream's completion counter. Fresh snapshot delivery does not refresh the node's stored report timestamp.
+    - Browser verification after an approved qualified deployment: open `/cluster-management?tab=nodes`, compare all three rows, hover or keyboard-focus each version for the full SHA, inspect a rolling update's affected/unaffected rows, then interrupt browser API access and verify retained rows become stale and recover after reconnect. Portable tests cover the same presentation with three-node fixtures; Q01 retains live exact-release verification.
+    - `clusterReleaseState` reads the persisted Engine baseline and `config.k3s_version`. Active-node `roles.k3s_version` observations veto known disagreement; missing configuration fails closed. Process environment is not an update authority. K3s operation completion advances configuration only after ordered node conformance succeeds.
+    - Release picker cache includes repository, source release/SHA, API/raw source and authoritative K3s version. `resolveClusterRelease` bypasses cache, verifies current immutable publication, resolves one SHA, and reads `Data/Engine/release-manifest.json` at that SHA. Annotated tag objects are fetched by SHA from the configured repository, never from response-supplied URLs.
+    - Internal operation payload retains `release_immutable`, `source_k3s_version`, source release/SHA and compatibility manifest alongside target release/SHA. Queue transaction rejects configuration/source changes under the cluster-state lock. GitHub calls and manifest processing happen after snapshot connections return to the pool.
+    - Every Engine preflight, including retry, validates persisted proof and reads each active Node's `status.nodeInfo.kubeletVersion` before backups, role movement or drain. Node-manager release actions independently require exact tag-to-SHA identity. Retry keeps original proof and target; it never reselects a release or silently upgrades a legacy payload.
+    - Fresh-install baseline remains `v1.36.3+k3s1`. Historical lab results on `v1.36.4+k3s1` are not interchangeable; Q01 must qualify the exact release manifest and observed version. `install_k3s_if_missing` skips installed K3s, so Engine update cannot implicitly downgrade an upgraded cluster.
+
+    ### Aegis TLS runtime behavior
+
+    - `aegis_cluster_tls.go` shares a mutex-protected reloader per `authService`. New listener handshakes and each bounded fanout use immutable snapshots with TLS 1.3 and verified client certificates. Session resumption and key-transfer connection reuse are disabled; redirects never receive the key. In-flight requests remain bounded by existing five-second server/client timeouts.
+    - The reloader double-reads bounded regular PEM files and re-resolves projection symlinks, rejecting changing or mixed generations. It validates the leaf/key match, peer DNS name, server and client EKUs separately, and current chain validity. Well-formed CA removals are accepted independently of leaf readiness; cached credentials must still verify under newest accepted trust. No TLS reload persists, clears, or derives an Aegis key.
+    - `reconcile-node-workloads.py` creates the public trust ConfigMap only before first adoption, using create-only semantics and preserving a concurrent winner. Read errors fail closed. A missing bundle referenced by an existing API Deployment requires operator restoration. Required projected Secret/ConfigMap sources share one `..data` generation; no `subPath` mount prevents refresh. Existing `BOREALIS_AEGIS_CLUSTER_TLS_CA` selects the bundle; the legacy default `ca.crt` remains only for previously rendered workloads.
+    - Cert-manager leaf `ca.crt` is not a durable rotation policy. [Certificate resource guidance](https://cert-manager.io/docs/usage/certificate/#target-secret) explains why consumers need independently distributed trust. Keep the public ConfigMap backed up with the approved CA rotation record; never replace it automatically during renewal.
+
+    ### Aegis TLS validation
+
+    Use host OpenSSL to inspect each mounted public leaf and compare trust digests. These commands do not print private keys or Aegis material:
+
+    ```bash
+    for pod in $(sudo k3s kubectl -n borealis get pods -l borealis.io/aegis-peer=true -o jsonpath='{.items[*].metadata.name}'); do
+      printf '%s\n' "$pod"
+      sudo k3s kubectl -n borealis exec "$pod" -- cat /var/run/secrets/borealis-aegis-mtls/tls.crt \
+        | openssl x509 -noout -serial -issuer -dates
+      sudo k3s kubectl -n borealis exec "$pod" -- sha256sum /var/run/secrets/borealis-aegis-mtls/trust-bundle.pem
+    done
+    ```
+
+    Mounted material alone does not prove serving identity. For every ordered pair of API replicas, run a fresh request from the source Pod to the target Pod IP, preserving the Service DNS name. Set `source_pod` and `target_ip` from the current API Pod inventory. Curl must finish successfully and print `400`: TLS and client authentication succeeded, then the bounded handler rejected an intentionally empty key. Do not use an actual Aegis key for probes.
+
+    ```bash
+    sudo k3s kubectl -n borealis exec "$source_pod" -- curl --silent --show-error \
+      --connect-timeout 2 --max-time 5 --tlsv1.3 --noproxy '*' \
+      --cacert /var/run/secrets/borealis-aegis-mtls/trust-bundle.pem \
+      --cert /var/run/secrets/borealis-aegis-mtls/tls.crt \
+      --key /var/run/secrets/borealis-aegis-mtls/tls.key \
+      --resolve "api-backend-aegis.borealis.svc:9444:$target_ip" \
+      --header 'Content-Type: application/json' --data '{"key":""}' \
+      --output /dev/null --write-out '%{http_code}\n' \
+      https://api-backend-aegis.borealis.svc:9444/internal/cluster/aegis-key
+    ```
+
+    During next-CA-only qualification, use only the new CA as client verification trust and inspect the server's presented certificate; successful full mutual authentication must use the new chain. Retired-client rejection needs a separately retained lab test identity under the old CA. Do not retain or expose production private keys for this probe. Confirm a newly started locked API replica receives the verified key while exactly one other replica remains unlocked. Then prove an all-cold test restart requires operator unlock. Record served serials, trust digests, Pod identities, release SHA, and outcomes in Q01 evidence. Portable TLS tests exercise these boundaries without modifying the deployed cluster.
 ### API Endpoints
 - Cluster state and events: `GET /api/server/cluster`, `GET /api/server/cluster/events`
 - Lightweight banner state: `GET /api/server/cluster/banner`
@@ -556,6 +670,7 @@ Before upgrading from a release without this ownership protocol, let active work
 - `POST /api/server/cluster/enable`
 - `POST /api/server/cluster/invitations`
 - `POST /api/server/cluster/admissions/{id}/approve`
+- `POST /api/server/cluster/admissions/{id}/cancel` — Admin session, canonical UUID, bounded JSON containing only exact `CANCEL ADMISSION` confirmation. UI sends this fixed enum; server rejects unknown fields and other values. Focused boundary tests live in `cluster_admission_test.go`.
 - `POST /api/server/cluster/membership/scale`
 - The enable body permits only `cluster_vip`.  The API derives node name and host management IPv4 from Downward API environment and architecture from the AMD64 Go runtime.
 - Stable, qualification `*-rc.N`, or exact `dev-<12-character SHA prefix>` baseline must pair with the full lowercase commit SHA.
@@ -569,7 +684,7 @@ Before upgrading from a release without this ownership protocol, let active work
 - Emergency removal requires `TARGET IS POWERED OFF` plus `EMERGENCY REMOVE NODE`.
 - Release, HMR, and operation endpoints:
 - `GET /api/server/cluster/releases`
-- `POST /api/server/cluster/hmr/start`
+- `POST /api/server/cluster/hmr/start` — legacy bounded contract; returns `409 cluster_hmr_entry_disabled` after Admin/input validation.
 - `POST /api/server/cluster/hmr/exit`
 - `POST /api/server/cluster/updates`
 - `POST /api/server/cluster/operations/{id}/retry`
@@ -681,9 +796,12 @@ Before upgrading from a release without this ownership protocol, let active work
 - The candidate probe targets the isolated Pod IP.  The active probe targets the shared API Service.
 - The expected authentication rejection proves the Agent route is registered and reachable without mutating Agent/device state or storing test credentials.
 - A missing route returning `404`, accepting unauthenticated traffic, timeout, or any other status fails node health.
-- Blank-node join requires `--peer-cidrs`.
-- The node manager validates and canonicalizes bounded private IPv4 CIDRs, then invokes the fixed `Engine.sh --cluster-prepare-node` workflow before consuming the invitation.
-- Preparation installs K3s installation/firewall and Longhorn iSCSI/NFS prerequisites but does not install or join K3s until membership-admission approval arrives.
+- Blank-node join requires an HTTPS origin and rejects every redirect for both POST submission and invitation-header polling. TLS verification remains enabled with system roots or an explicit private CA.
+- Admission polling reads authoritative state and the latest 500 events scoped to the exact admission, consumed invitation, cluster, node and bearer hash. Approval does not depend on event presence or global history length.
+- Initial unconsumed/pending invitation expiry remains 15 minutes; signed accepted-join access and stored creation timestamp impose a 24-hour bound for approved/admitted/recovery targets. Admin renewal swaps only the original admission's invitation binding and revokes previous access.
+- Approval and original-operation retry pin `join_config` from `cluster_state.control_plane_vip`, `config_json.k3s_version`, active member addresses and the selected admission cohort. Exactly three private IPv4 peers are required. Client flags can assert those settings but cannot override them.
+- The node manager validates settings, runs fixed `Engine.sh --cluster-prepare-node` only after approval, then rechecks approval/configuration before installing K3s. Preparation may outlast initial invitation lifetime without consuming an unapproved invitation.
+- Controller reconciliation requires current lease ownership. Expired pending records release capacity only without approval, operation or non-removed member evidence. Failed/cancelled membership operations mark approved admissions `Recovery Required`; retry retains the original cohort and operation. No schema or automatic member deletion is involved.
 - Expansion-pair approval records the same authenticated approval event for both admission IDs so both waiting joiners proceed.
 - Degraded-quorum replacement records the same compatible approval event for one admission.
 - Join installation replaces the running node-manager executable through atomic rename before enabling the service, avoiding in-place executable overwrite failures.
@@ -739,7 +857,7 @@ Before upgrading from a release without this ownership protocol, let active work
 - An update request pins a non-leader-first node ID sequence from these observations.  Later role movement cannot change the remaining sequence.
 - Transfer-away fencing requires the Cluster Virtual IP lease to leave the target and keeps the WireGuard controller scaled without requiring previous-release standby readiness.
 - The controller then accepts an actual eligible owner only after the WireGuard workload becomes Ready.
-- HMR entry requires the Cluster Virtual IP on the exact selected target.
+- New HMR entry is disabled before runtime role movement; existing exit/recovery retains its role and fencing checks.
 - HMR exit pins PostgreSQL to the first restored standby but accepts any healthy non-target Cluster Virtual IP owner after target fencing.
 - Drain withdrawal waits only on node-scoped traffic Services scaled or removed by application drain: API/Aegis, scheduler, guacd, Traefik, WebUI, and site workers.
 - Resident operator and database endpoints remain available for control-plane and storage safety and cannot block rolling progress.

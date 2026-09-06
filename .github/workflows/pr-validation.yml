@@ -144,6 +144,9 @@ jobs:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
       - run: ./Tests/run-engine-go.sh
+        env:
+          CGO_ENABLED: "1"
+          BOREALIS_ENGINE_GO_RACE: "1"
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

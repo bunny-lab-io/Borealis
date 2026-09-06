@@ -41,6 +41,8 @@ Compatibility entrypoints remain supported:
 
 `Engine_Unit_Tests.sh` aggregates Engine Go, site-worker Python, and WebUI lanes. Agent wrappers run Go format, module, vet, test, and cross-platform build checks.
 
+Engine Go CI runs uncached tests with the race detector, including concurrent Aegis TLS reload. Reproduce on hosts with a C compiler using `CGO_ENABLED=1 BOREALIS_ENGINE_GO_RACE=1 ./Tests/run-engine-go.sh`. Runtime binary builds retain their documented `CGO_ENABLED=0` configuration. A normal local run without this flag is not race-detector evidence.
+
 ## Engine Domains
 
 Use inventory-backed site-worker Python domains while iterating:
@@ -140,6 +142,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 
     - Transport/ownership coverage uses actual PostgreSQL traffic through a local TCP blackhole proxy, independent blocked-renewal watchdog, transaction-lock release, stale holder/generation rejection, owner-death reconciliation, retained workflow identity, and unknown-outcome execution-state preservation. These tests must stay registered in the required inventory. Database CI sets `CGO_ENABLED=1 GOFLAGS=-race` to exercise concurrent cancellation and heartbeat paths. Locally, `CGO_ENABLED=1 GOFLAGS=-race ./Tests/run-database-postgres.sh` requires a C compiler as well as the documented Go toolchain.
 
+    U02 Engine Version coverage lives in `Cluster_Management.test.jsx` and Go `TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget`. It checks three-node mixed/unknown records, exact SHA tooltips, pending operation scope, recorded-versus-runtime identity, stale/future report times, failed/hanging polling and recovery. WebUI runner uses temporary workspace; live three-node browser verification remains Q01 qualification.
+
     - Every database-backed Go integration test in the API package reads `BOREALIS_TEST_DATABASE_URL` directly or through a package-level test helper function. The Go syntax walker follows helper declarations within each test package, preserving local shadowing and excluding same-named receiver methods and imported selectors. It compares discovered test names with the maintained inventory; register new tests in the same PR.
     - `Tests/run-repository-policy.sh` checks inventory drift. `Tests/run-database-postgres.sh` derives its exact anchored test selection from that inventory and uses uncached `go test -json -count=1` execution.
     - Result audit requires every inventoried top-level test to start and pass plus package completion. Any skipped or failed test/subtest, unexpected package/test, malformed output, or missing result fails. Unit-only Engine Go runs may still skip tests without database configuration; that is not database validation evidence.
@@ -149,6 +153,12 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - `TestSchedulerPostgresPatchResultAcknowledgementAtomic` and `TestSchedulerPostgresMaintenanceAcknowledgementAtomic` cover synchronous success/failure and maintenance Running/Skipped/Failed response persistence, rollback on blocked final write, takeover without replay, stale result rejection and an Agent completion arriving before acceptance acknowledgement. `TestSchedulerPostgresSnapshotOutlivesOwnershipTransactionBudget` blocks an actual fleet snapshot beyond five seconds and verifies all targets commit while the separate ownership pool retains its five-second server limit.
     - `TestPostgresLeaseTransportBlackholeAndRecovery` forwards real PostgreSQL traffic through a local TCP proxy, drops both directions after confirming an active query, verifies direct socket cancellation and bounded startup, and proves reconnection after healing. `TestClusterControllerLeaseGuardBoundsBlockedRenewalAndClose` deliberately ignores cancellation inside renewal to verify the independent watchdog.
     - Hosts requiring documented permission-sensitive validation may use existing `BOREALIS_DOCKER_USE_SUDO=1` runner option. It applies only to the runner's uniquely named disposable PostgreSQL container.
+
+    - Admission regressions cover 750 unrelated events, authenticated idempotent replay, bounded expiry and renewal, safe pending cancellation, retained failed second joiner, controller restart/lease fencing, and replacement admission. Node-manager HTTP tests reject plaintext/redirect disclosure and require authoritative K3s settings.
+    - Aegis integration uses real PostgreSQL verification-token checks and a real TLS listener/fanout to prove a renewed surviving key holder unlocks a joining replica, incorrect keys remain rejected, database connections return to the pool, and all-cold replicas remain locked. Unit TLS tests cover expiry, partial/mixed projections, concurrent reload, CA overlap/retirement, and required client identity. K3s workload tests cover independent required trust projection and create-only initialization preserving operator policy.
+    - Release identity integration rejects a K3s source change between API snapshot and queue transaction, mismatched manifests, and missing immutable proof; it verifies typed-manifest persistence and retry without GitHub reselection. HTTP tests cover cached-picker changes, immutable/channel checks, SHA-addressed manifests, tag movement, and K3s cache invalidation. Real Git tests fence moved stable/qualification tags; stubbed Engine installer coverage proves an existing newer K3s version is preserved. Live exact-release/K3s qualification remains Tier 3 under #493.
+
+    - Clustered HMR entry regressions cover authenticated API denial, direct store/runner denial, legacy queued entry becoming recoverable without runtime calls, rejected entry retry, allowed failed-exit recovery/retry, and real PostgreSQL persistence. CLI tests cover confirmed standalone versus unknown/transitional membership and dev dispatch before runtime preparation. WebUI tests retain disabled-entry messaging, recorded target and active/failed exit controls; #492 production-candidate tests remain required. Exact-release live restoration must pass before U01 deployment and again during Q01.
 
     ### Python ownership audit
 

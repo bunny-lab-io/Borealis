@@ -43,9 +43,10 @@ var (
 	clusterK3sRE                  = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)\+k3s([0-9]+)$`)
 	clusterUbuntuRE               = regexp.MustCompile(`^Ubuntu[[:space:]]+([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[[:space:]].*)?$`)
 
-	errClusterConflict    = errors.New("cluster operation conflict")
-	errClusterNotFound    = errors.New("cluster resource not found")
-	errClusterUnavailable = errors.New("cluster control unavailable")
+	errClusterConflict         = errors.New("cluster operation conflict")
+	errClusterNotFound         = errors.New("cluster resource not found")
+	errClusterUnavailable      = errors.New("cluster control unavailable")
+	errClusterHMREntryDisabled = fmt.Errorf("%w: new clustered HMR entry is disabled; restore existing isolation to pinned production", errClusterConflict)
 )
 
 type clusterMutation struct {
@@ -62,7 +63,9 @@ type clusterStore interface {
 	createClusterOperation(ctx context.Context, actor string, mutation clusterMutation) (map[string]any, error)
 	createClusterInvitation(ctx context.Context, actor string, invitation map[string]any) error
 	consumeClusterInvitation(ctx context.Context, admission map[string]any) (map[string]any, error)
+	clusterAdmissionStatus(ctx context.Context, admissionID string, claims map[string]any) (map[string]any, error)
 	approveClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
+	cancelClusterAdmission(ctx context.Context, actor string, admissionID string) (map[string]any, error)
 	retryClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 	cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error)
 }
@@ -83,6 +86,7 @@ type clusterGitHubRelease struct {
 	Name            string `json:"name"`
 	Draft           bool   `json:"draft"`
 	Prerelease      bool   `json:"prerelease"`
+	Immutable       bool   `json:"immutable"`
 	PublishedAt     string `json:"published_at"`
 	TargetCommitish string `json:"target_commitish"`
 }
@@ -114,6 +118,7 @@ func registerServerClusterRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("POST /api/server/cluster/enable", clusterEnableHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/invitations", clusterInvitationHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/admissions/{id}/approve", clusterAdmissionApproveHandler(auth))
+	mux.HandleFunc("POST /api/server/cluster/admissions/{id}/cancel", clusterAdmissionCancelHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/membership/scale", clusterScaleHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/maintenance", clusterNodeMaintenanceHandler(auth))
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/remove", clusterNodeRemoveHandler(auth))
@@ -194,7 +199,7 @@ func clusterSnapshotHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		payload["probe_conformance"] = clusterProbeConformancePayload()
-		payload["k3s_version"] = firstText(cleanText(mapStringAny(payload["config"])["k3s_version"]), strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION")))
+		payload["k3s_version"], _ = clusterConfiguredK3sVersion(payload)
 		writeJSON(w, http.StatusOK, payload)
 	}
 }
@@ -239,8 +244,22 @@ func clusterReleasesHandler(auth *authService) http.HandlerFunc {
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
 		ctx = clusterContextWithGitHubToken(ctx, auth)
-		current, currentSHA := clusterCurrentRelease(auth, ctx)
-		items, err := fetchClusterReleaseCatalog(ctx, current, currentSHA)
+		store, ok := auth.store.(clusterStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cluster_control_unavailable"})
+			return
+		}
+		snapshot, err := store.clusterSnapshot(ctx)
+		if err != nil {
+			writeClusterError(w, err)
+			return
+		}
+		current, currentSHA, k3sVersion, err := clusterReleaseState(snapshot)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "release_catalog_unavailable", "message": err.Error()})
+			return
+		}
+		items, err := fetchClusterReleaseCatalog(ctx, current, currentSHA, k3sVersion)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "release_catalog_unavailable", "message": err.Error()})
 			return
@@ -474,7 +493,11 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		if updateType == "k3s" {
-			sourceVersion := firstText(cleanText(mapStringAny(snapshot["config"])["k3s_version"]), strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION")))
+			sourceVersion, sourceErr := clusterConfiguredK3sVersion(snapshot)
+			if sourceErr != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "k3s_source_not_qualified", "message": sourceErr.Error()})
+				return
+			}
 			if !clusterProbeConformancePassed() {
 				writeJSON(w, http.StatusConflict, map[string]any{"error": "k3s_source_not_qualified", "message": "Current stable K3s source has not passed Borealis probe conformance."})
 				return
@@ -498,8 +521,12 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		ctx = clusterContextWithGitHubToken(ctx, auth)
-		current, currentSHA := clusterCurrentRelease(auth, ctx)
-		release, err := resolveClusterRelease(ctx, releaseTag, current, currentSHA)
+		current, currentSHA, k3sVersion, stateErr := clusterReleaseState(snapshot)
+		if stateErr != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "release_not_selectable", "message": stateErr.Error()})
+			return
+		}
+		release, err := resolveClusterRelease(ctx, releaseTag, current, currentSHA, k3sVersion)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "release_not_selectable", "message": err.Error()})
 			return
@@ -508,7 +535,7 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "release_channel_mismatch", "message": "release tag and GitHub publication channel do not match"})
 			return
 		}
-		payload := map[string]any{"scope": scope, "node_ids": nodeIDs, "release_title": release["title"], "source_release": current, "source_sha": currentSHA, "source_channel": clusterReleaseChannel(current), "release_channel": releaseChannel, "compatibility": release["compatibility"], "maintenance_outage_acknowledgement": outageAcknowledgement}
+		payload := map[string]any{"scope": scope, "node_ids": nodeIDs, "release_title": release["title"], "source_release": current, "source_sha": currentSHA, "source_channel": clusterReleaseChannel(current), "release_channel": releaseChannel, "compatibility": release["compatibility"], "source_k3s_version": k3sVersion, "release_immutable": true, "maintenance_outage_acknowledgement": outageAcknowledgement}
 		targetNodeID := ""
 		if scope == "node" {
 			targetNodeID = nodeIDs[0]
@@ -573,6 +600,10 @@ func clusterMutationHandler(auth *authService, kind string, parse func(map[strin
 		mutation.Kind = kind
 		if len(errs) > 0 {
 			writePublicValidationErrors(w, errs)
+			return
+		}
+		if kind == "hmr_start" {
+			writeClusterError(w, errClusterHMREntryDisabled)
 			return
 		}
 		store, ok := auth.store.(clusterStore)
@@ -645,7 +676,7 @@ func clusterInvitationHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		errs := rejectUnknownClusterFields(body, map[string]bool{"node_name": true})
-		nodeName := cleanText(body["node_name"])
+		nodeName := strings.ToLower(cleanText(body["node_name"]))
 		errs = append(errs, validateClusterNodeName("node_name", nodeName)...)
 		if len(errs) > 0 {
 			writePublicValidationErrors(w, errs)
@@ -701,7 +732,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 		if bundle == "" || len(bundle) > clusterInviteMaxBytes {
 			errs = append(errs, publicValidationError{Field: "invite_bundle", Message: "must be a non-empty authenticated bundle no larger than 16 KiB"})
 		}
-		nodeName := cleanText(body["node_name"])
+		nodeName := strings.ToLower(cleanText(body["node_name"]))
 		hostname := cleanText(body["hostname"])
 		managementIP := cleanText(body["management_ip"])
 		architecture := strings.ToLower(cleanText(body["architecture"]))
@@ -721,7 +752,7 @@ func clusterJoinHandler(auth *authService) http.HandlerFunc {
 			writePublicValidationErrors(w, errs)
 			return
 		}
-		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
+		claims, err := auth.verifier.signedPayload(bundle, clusterAcceptedJoinTTL)
 		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
@@ -796,8 +827,12 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		bundle := strings.TrimSpace(r.Header.Get("X-Borealis-Cluster-Invite"))
-		claims, err := auth.verifier.signedPayload(bundle, clusterInviteTTL)
-		if err != nil {
+		if bundle == "" || len(bundle) > clusterInviteMaxBytes {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
+			return
+		}
+		claims, err := auth.verifier.signedPayload(bundle, clusterAcceptedJoinTTL)
+		if err != nil || cleanText(claims["type"]) != "cluster-invite" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_invite_bundle"})
 			return
 		}
@@ -808,18 +843,12 @@ func clusterJoinEventsHandler(auth *authService) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
-		events, err := store.clusterEvents(ctx, 0)
+		result, err := store.clusterAdmissionStatus(ctx, admissionID, claims)
 		if err != nil {
 			writeClusterError(w, err)
 			return
 		}
-		filtered := make([]map[string]any, 0)
-		for _, event := range events {
-			if cleanText(event["admission_id"]) == admissionID && cleanText(event["cluster_id"]) == cleanText(claims["cluster_id"]) {
-				filtered = append(filtered, event)
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"admission_id": admissionID, "events": filtered})
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 
@@ -889,6 +918,8 @@ func clusterProbeConformancePayload() map[string]any {
 
 func writeClusterError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errClusterHMREntryDisabled):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "cluster_hmr_entry_disabled", "message": err.Error()})
 	case errors.Is(err, errClusterConflict):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "cluster_operation_conflict", "message": err.Error()})
 	case errors.Is(err, errClusterNotFound):
@@ -1065,26 +1096,6 @@ func clusterTokenHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func clusterCurrentRelease(auth *authService, ctx context.Context) (string, string) {
-	if auth != nil {
-		if store, ok := auth.store.(clusterStore); ok {
-			if payload, err := store.clusterSnapshot(ctx); err == nil {
-				current := cleanText(payload["baseline_release"])
-				currentSHA := strings.ToLower(cleanText(payload["baseline_sha"]))
-				if clusterReleaseChannel(current) != "" && validClusterBaselineRelease(current, currentSHA) {
-					return current, currentSHA
-				}
-			}
-		}
-	}
-	release := firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_RELEASE_VERSION")), strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_SOURCE_RELEASE")))
-	sha := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_SOURCE_SHA")))
-	if validClusterBaselineRelease(release, sha) {
-		return release, sha
-	}
-	return "", ""
-}
-
 func clusterGitHubRepo() string {
 	if configured := strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_GITHUB_REPOSITORY")); clusterRepoRE.MatchString(configured) {
 		return configured
@@ -1096,9 +1107,9 @@ func clusterGitHubAPIBase() string {
 	return strings.TrimRight(firstText(strings.TrimSpace(os.Getenv("BOREALIS_GITHUB_API_BASE_URL")), "https://api.github.com"), "/")
 }
 
-func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA string) ([]map[string]any, error) {
+func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA, runningK3s string) ([]map[string]any, error) {
 	repo := clusterGitHubRepo()
-	cacheKey := repo + "|" + current + "|" + currentSHA + "|" + clusterGitHubAPIBase()
+	cacheKey := repo + "|" + current + "|" + currentSHA + "|" + runningK3s + "|" + clusterGitHubAPIBase() + "|" + os.Getenv("BOREALIS_GITHUB_RAW_BASE_URL")
 	serverClusterReleaseCache.mu.Lock()
 	if serverClusterReleaseCache.key == cacheKey && time.Now().Before(serverClusterReleaseCache.expiresAt) {
 		items := copyClusterReleaseItems(serverClusterReleaseCache.items)
@@ -1135,7 +1146,7 @@ func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA string)
 				// eligible release later in the same page or a later page.
 				continue
 			}
-			entry, err := hydrateClusterRelease(ctx, release, current, currentSHA)
+			entry, err := hydrateClusterRelease(ctx, release, current, currentSHA, runningK3s)
 			if err != nil {
 				entry = map[string]any{"tag": tag, "title": firstText(strings.TrimSpace(release.Name), tag), "published_at": release.PublishedAt, "channel": channel, "selectable": false, "reason": err.Error()}
 			}
@@ -1163,20 +1174,22 @@ func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA string)
 	return items, nil
 }
 
-func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, current, currentSHA string) (map[string]any, error) {
+func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, current, currentSHA, runningK3s string) (map[string]any, error) {
 	tag := strings.TrimSpace(release.TagName)
 	channel := clusterReleaseChannel(tag)
+	if release.Draft || !release.Immutable || !textInSet(channel, "stable", "qualification") || (channel == "qualification") != release.Prerelease {
+		return nil, errors.New("release must be published, immutable, and match its stable or qualification channel")
+	}
 	sha, err := resolveClusterGitHubTagSHA(ctx, tag)
 	if err != nil {
 		return nil, err
 	}
-	manifestURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/Data/Engine/release-manifest.json", clusterGitHubRepo(), url.PathEscape(tag))
+	manifestURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/Data/Engine/release-manifest.json", clusterGitHubRepo(), sha)
 	if override := strings.TrimSpace(os.Getenv("BOREALIS_GITHUB_RAW_BASE_URL")); override != "" {
-		manifestURL = strings.TrimRight(override, "/") + "/" + url.PathEscape(tag) + "/Data/Engine/release-manifest.json"
+		manifestURL = strings.TrimRight(override, "/") + "/" + sha + "/Data/Engine/release-manifest.json"
 	}
 	var manifest clusterReleaseManifest
 	manifestErr := clusterGitHubJSON(ctx, manifestURL, &manifest)
-	runningK3s := strings.TrimSpace(os.Getenv("BOREALIS_K3S_VERSION"))
 	selectable := manifestErr == nil && manifest.SchemaVersion == 1 && manifest.ClusterCompatible && clusterManifestAllowsChannel(manifest, channel) && clusterReleaseRE.MatchString(manifest.MinimumRollingVersion) && textInSet(manifest.DatabaseMigration, "none", "expand-contract") && clusterK3sRE.MatchString(manifest.RequiredK3sBaseline) && manifest.RequiredK3sConformance == "pod-restart-policy-liveness-delay-guard-v1"
 	reason := ""
 	if manifestErr != nil {
@@ -1192,7 +1205,7 @@ func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, cu
 	} else if clusterReleaseBase(current) != "" && compareClusterReleases(clusterReleaseBase(current), manifest.MinimumRollingVersion) < 0 {
 		selectable = false
 		reason = "current release is older than minimum rolling source"
-	} else if runningK3s != "" && runningK3s != manifest.RequiredK3sBaseline {
+	} else if !clusterK3sRE.MatchString(runningK3s) || runningK3s != manifest.RequiredK3sBaseline {
 		selectable = false
 		reason = "running K3s baseline does not match release manifest"
 	} else if clusterControllerSHARegex.MatchString(strings.ToLower(strings.TrimSpace(currentSHA))) {
@@ -1208,20 +1221,25 @@ func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, cu
 	return map[string]any{"tag": tag, "title": firstText(strings.TrimSpace(release.Name), tag), "published_at": release.PublishedAt, "commit_sha": sha, "channel": channel, "current": tag == current, "selectable": selectable, "reason": reason, "compatibility": manifest}, nil
 }
 
-func resolveClusterRelease(ctx context.Context, tag, current, currentSHA string) (map[string]any, error) {
-	items, err := fetchClusterReleaseCatalog(ctx, current, currentSHA)
+func resolveClusterRelease(ctx context.Context, tag, current, currentSHA, runningK3s string) (map[string]any, error) {
+	// Picker cache is display-only. Queueing work requires current publication
+	// metadata and one freshly resolved SHA; never authorize from cached entries.
+	endpoint := fmt.Sprintf("%s/repos/%s/releases/tags/%s", clusterGitHubAPIBase(), clusterGitHubRepo(), url.PathEscape(tag))
+	var published clusterGitHubRelease
+	if err := clusterGitHubJSON(ctx, endpoint, &published); err != nil {
+		return nil, err
+	}
+	if published.TagName != tag {
+		return nil, errors.New("GitHub release identity does not match requested tag")
+	}
+	item, err := hydrateClusterRelease(ctx, published, current, currentSHA, runningK3s)
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range items {
-		if cleanText(item["tag"]) == tag {
-			if selectable, _ := item["selectable"].(bool); !selectable {
-				return nil, errors.New(firstText(cleanText(item["reason"]), "release is not selectable"))
-			}
-			return item, nil
-		}
+	if selectable, _ := item["selectable"].(bool); !selectable {
+		return nil, errors.New(firstText(cleanText(item["reason"]), "release is not selectable"))
 	}
-	return nil, errors.New("release is not present in approved stable or qualification catalog")
+	return item, nil
 }
 
 func clusterReleaseDescendsFromBaseline(ctx context.Context, baselineSHA, targetSHA string) (bool, error) {
@@ -1256,7 +1274,6 @@ func resolveClusterGitHubTagSHA(ctx context.Context, tag string) (string, error)
 		Object struct {
 			SHA  string `json:"sha"`
 			Type string `json:"type"`
-			URL  string `json:"url"`
 		} `json:"object"`
 	}
 	if err := clusterGitHubJSON(ctx, endpoint, &ref); err != nil {
@@ -1265,19 +1282,21 @@ func resolveClusterGitHubTagSHA(ctx context.Context, tag string) (string, error)
 	sha := strings.ToLower(strings.TrimSpace(ref.Object.SHA))
 	objectType := strings.ToLower(strings.TrimSpace(ref.Object.Type))
 	for depth := 0; depth < 3 && objectType == "tag"; depth++ {
+		if !clusterControllerSHARegex.MatchString(sha) {
+			return "", errors.New("release tag returned invalid object SHA")
+		}
 		var annotated struct {
 			Object struct {
 				SHA  string `json:"sha"`
 				Type string `json:"type"`
-				URL  string `json:"url"`
 			} `json:"object"`
 		}
-		if err := clusterGitHubJSON(ctx, ref.Object.URL, &annotated); err != nil {
+		objectURL := fmt.Sprintf("%s/repos/%s/git/tags/%s", clusterGitHubAPIBase(), clusterGitHubRepo(), sha)
+		if err := clusterGitHubJSON(ctx, objectURL, &annotated); err != nil {
 			return "", err
 		}
 		sha = strings.ToLower(strings.TrimSpace(annotated.Object.SHA))
 		objectType = strings.ToLower(strings.TrimSpace(annotated.Object.Type))
-		ref.Object.URL = annotated.Object.URL
 	}
 	if objectType != "commit" || len(sha) != 40 {
 		return "", errors.New("release tag does not resolve to commit")
@@ -1298,7 +1317,9 @@ func clusterGitHubJSON(ctx context.Context, endpoint string, output any) error {
 	if token, _ := ctx.Value(clusterGitHubTokenContextKey{}).(string); token != "" && clusterGitHubAPIEndpoint(endpoint) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	response, err := http.DefaultClient.Do(req)
+	client := *http.DefaultClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1307,11 +1328,14 @@ func clusterGitHubJSON(ctx context.Context, endpoint string, output any) error {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 		return fmt.Errorf("GitHub returned HTTP %d", response.StatusCode)
 	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 2<<20))
-	if err := decoder.Decode(output); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
+	if err != nil {
 		return err
 	}
-	return nil
+	if len(raw) > 2<<20 {
+		return errors.New("GitHub response exceeds 2 MiB")
+	}
+	return json.Unmarshal(raw, output)
 }
 
 func clusterContextWithGitHubToken(ctx context.Context, auth *authService) context.Context {

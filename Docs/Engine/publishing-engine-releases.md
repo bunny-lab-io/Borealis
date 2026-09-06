@@ -24,7 +24,7 @@ Repository immutable releases setting applies when draft becomes published relea
 
 GitHub still permits edits to release title, release notes, latest designation, and pre-release designation. Borealis requires tag shape and GitHub pre-release status to agree, so do not turn `*-rc.N` into normal release or stable dotted tag into pre-release.
 
-Setting is not retroactive. Releases published before enablement remain mutable and cannot satisfy stable `Install-Engine.sh` immutable-release check. New version must be published for verified curl deployment.
+Setting is not retroactive. Releases published before enablement remain mutable and cannot satisfy stable `Install-Engine.sh` or Cluster Management immutable-release checks. Publish a new version for verified installation or cluster update.
 
 GitHub documents locked fields, generated attestation, and draft-first publication under [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 
@@ -55,6 +55,8 @@ git show HEAD:Data/Engine/release-manifest.json
 ```
 
 `Data/Engine/release-manifest.json` must declare `cluster_compatible: true` and include intended channel under `allowed_release_channels`. Review minimum rolling version, version-skew window, database migration phase, K3s baseline, and required probe conformance for every release.
+
+Qualify the exact K3s baseline declared by that source commit. Fresh installs currently default to `v1.36.3+k3s1`; earlier lab evidence on `v1.36.4+k3s1` does not qualify a release declaring `v1.36.3+k3s1`. An upgraded cluster requires a manifest matching its verified current version. Engine redeploy preserves installed K3s and never downgrades it to the fresh-install default.
 
 ## Publish Qualification Candidate
 
@@ -179,7 +181,8 @@ Do not use deletion as version rollback. Clusters reject older or unrelated targ
     - `Tests/tools/build_engine_release_assets.py` copies exact tag's `Install-Engine.sh` and `Engine.sh`, writes installer manifest, and generates `SHA256SUMS`.
     - `Install-Engine.sh` accepts only published, non-prerelease, immutable stable release and validates GitHub plus manifest identities before invoking `Engine.sh`.
     - `Data/Engine/release-manifest.json` controls cluster release compatibility independently from standalone installer manifest.
-    - `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go` classifies stable versus qualification tags, checks GitHub release metadata, resolves exact SHA, verifies ancestry, and evaluates cluster manifest.
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go` requires published `immutable: true` metadata and matching channel, resolves the tag once, reads the compatibility manifest through that full SHA, and verifies ancestry. Queue requests refresh publication metadata independently of the picker cache. Redirects, oversized or trailing JSON, unavailable metadata, and missing/mismatched manifests fail closed.
+    - `cluster_release_identity.go`, `server_cluster_store.go`, and `cluster_controller.go` bind the verified manifest to durable K3s configuration, recheck configuration while queueing under the cluster-state lock, persist the proof for retries, and observe every active Kubernetes node before mutation. The node manager independently rejects moved tags against the recorded SHA.
 
     ### Immutable boundary
 
