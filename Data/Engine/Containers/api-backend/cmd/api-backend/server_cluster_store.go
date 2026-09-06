@@ -147,6 +147,7 @@ func (s *postgresOperatorStore) ensureClusterSchema(ctx context.Context) error {
 			PRIMARY KEY (release_sha, phase)
 		)`,
 	}
+	statements = append(statements, clusterSSHSchemaStatements...)
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return errors.Join(errClusterUnavailable, err)

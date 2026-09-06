@@ -301,7 +301,17 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	log.Printf("borealis-cluster-controller started holder=%s", holder)
+	nextSSHCleanup := time.Time{}
 	for {
+		if !time.Now().Before(nextSSHCleanup) {
+			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 5*time.Second)
+			cleanupErr := store.cleanupClusterSSHCredentials(cleanupCtx)
+			cleanupCancel()
+			if cleanupErr != nil {
+				log.Printf("cluster SSH credential cleanup unavailable")
+			}
+			nextSSHCleanup = time.Now().Add(30 * time.Second)
+		}
 		if err := controller.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("cluster controller reconcile failed: %v", err)
 		}

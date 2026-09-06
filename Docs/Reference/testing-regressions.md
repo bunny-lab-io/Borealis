@@ -85,6 +85,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-061 | Fresh SSH identity journal binding | `TestInstallBindsFreshSSHHostBeforeKubernetesUIDExists` and `TestInstallRejectsInvalidSSHBindingBeforeFilesystemWork` | fixed | S01 integration exposed that decoding a retained fresh-host journal over a prefilled request could inherit a later Kubernetes UID from the request and accept a different lifecycle binding. | Decode retained journals into zero state; bind provisioning UUID and approved SSH fingerprint before Kubernetes assigns a UID. Reject changed host, target or lifecycle identity without rewriting fixed files. Keep independent source authority and stopped-consumer checks; library tests do not qualify live delivery. |
 
+| REG-TEST-062 | Temporary SSH credentials and operation/target authority | Four required `TestClusterSSHCredentialsPostgres*` cases | fixed | S01 storage review found that a target-only lease could survive changed controller/operation authority, and credential cleanup could overwrite preparation state. | Bind encrypted credentials to operation/target/approved SSH identity and current Aegis generation. Enforce two-hour expiry; reject stale target holders/generations, expired/replaced controllers and changed parent operation/attempt/step. Cleanup separates credential availability from retained target outcome, deletes active secret records and fences old workers. Keep actual isolated PostgreSQL, concurrent claims and one-connection crypto checks; qualify remote execution separately. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
