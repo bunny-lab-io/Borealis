@@ -263,7 +263,13 @@ jobs:
         with:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
-      - run: ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+      - name: Build selected images
+        run: |
+          if [[ "$BOREALIS_CI_FORCE_ALL" == "true" ]]; then
+            ./Tests/run-containers.sh --all
+          else
+            ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+          fi
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

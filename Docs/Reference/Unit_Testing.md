@@ -97,6 +97,8 @@ Every required database test must run and pass. Missing tests, skipped tests or 
 
 Normal pull requests validate deterministic repository behavior. Full Engine deploy, live K3s readiness, Longhorn persistence, public DNS, TLS issuance, real Agent enrollment, browser interaction, and remote-device networking remain deployment or Tier 3 qualification responsibilities.
 
+Manual Pull Request Validation runs select every portable lane and build every production image through `Tests/run-containers.sh --all`. Pull-request events retain affected-image selection from their base and head revisions.
+
 ## Regression Tracking
 
 Do not delete regression coverage silently. Update [Testing Regressions](testing-regressions.md) when test protects known production, operator, or review regression.
