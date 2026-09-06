@@ -327,6 +327,14 @@ func TestSchedulerLeadershipPodIncarnation(t *testing.T) {
 }
 
 func TestSchedulerPostgresUnknownOutcomePreservesExecution(t *testing.T) {
+	for _, status := range []string{"Success", "Failed"} {
+		t.Run(status, func(t *testing.T) {
+			testSchedulerPostgresUnknownOutcomePreservesExecution(t, status)
+		})
+	}
+}
+
+func testSchedulerPostgresUnknownOutcomePreservesExecution(t *testing.T, terminalStatus string) {
 	m, ctx, insert := schedulerOwnershipFixture(t)
 	owner := schedulerTestOwner(t, m, ctx, "scheduler-results/"+newClusterUUID())
 	var jobID, runID, activityID int64
@@ -404,16 +412,31 @@ func TestSchedulerPostgresUnknownOutcomePreservesExecution(t *testing.T) {
 		t.Fatalf("result reconciliation claim=%+v err=%v", reclaimed, err)
 	}
 	newCtx := context.WithValue(owner, schedulerWorkContextKey{}, *reclaimed)
-	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.activity_history SET status='Success',metadata_json='{}' WHERE id=$1`, activityID); err != nil {
+	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.activity_history SET status=$2,metadata_json='{}',stderr='definitive result' WHERE id=$1`, activityID, terminalStatus); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.scheduled_job_runs SET status=$2,error='definitive result' WHERE id=$1`, runID, terminalStatus); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.resumeSchedulerExecution(newCtx); !errors.Is(err, errSchedulerOutcomeUnknown) {
-		t.Fatalf("unrelated success settled execution: %v", err)
+		t.Fatalf("unrelated terminal result settled execution: %v", err)
 	}
 	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.activity_history SET metadata_json=jsonb_build_object('scheduler_execution_id',$1::text)::text WHERE id=$2`, fmt.Sprintf("work:%d:work", id), activityID); err != nil {
 		t.Fatal(err)
 	}
 	if skipped, err := m.resumeSchedulerExecution(newCtx); err != nil || !skipped {
 		t.Fatalf("retained execution result did not reconcile: skip=%v err=%v", skipped, err)
+	}
+	if err := m.completeWorkItem(newCtx, *reclaimed, workStatusSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	var runStatus, activityStatus, runError, activityError string
+	if err := m.store.db.QueryRowContext(ctx, `SELECT r.status,a.status,r.error,a.stderr
+		FROM engine.scheduled_job_runs r,engine.activity_history a WHERE r.id=$1 AND a.id=$2`, runID, activityID).
+		Scan(&runStatus, &activityStatus, &runError, &activityError); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != terminalStatus || activityStatus != terminalStatus || runError != "definitive result" || activityError != "definitive result" {
+		t.Fatalf("reconciliation changed definitive result: run=%s/%s activity=%s/%s", runStatus, runError, activityStatus, activityError)
 	}
 }

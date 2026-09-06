@@ -115,7 +115,7 @@ func storeSchedulerExecution(ctx context.Context, tx *sql.Tx, item schedulerWork
 
 // Replaying a claim may revisit already acknowledged components. Their durable
 // execution identity wins: skip dispatch rather than create a second activity.
-// Without acknowledgement, only an actual successful execution result can
+// Without acknowledgement, only an actual terminal execution result can
 // settle uncertainty; absence of a result is never permission to resend.
 func (m *goSchedulerManager) resumeSchedulerExecution(ctx context.Context) (bool, error) {
 	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
@@ -134,7 +134,7 @@ func (m *goSchedulerManager) resumeSchedulerExecution(ctx context.Context) (bool
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return false, err
 		}
-		if err == nil && stringInSet(strings.ToLower(state), "success", "completed", "succeeded") {
+		if err == nil && stringInSet(strings.ToLower(state), "success", "completed", "succeeded", "failed") {
 			record.State = "acknowledged"
 			if err := storeSchedulerExecution(ctx, tx, item, record); err != nil {
 				return false, err
