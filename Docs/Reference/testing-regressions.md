@@ -77,6 +77,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-057 | Agent enrollment binary validation | `TestAgentEnrollmentRequestHandlerCreatesPendingResponse` and `TestEnrollmentBase64InputPreservesEncodingAndRejectsMalformedValues` | fixed | H03 CI rejected a valid random Ed25519 SPKI as executable markup when base64 matched an event-attribute suffix. Deterministic key/nonce fixture reproduces failure. | Preserve bounded base64 protocol fields and existing decoding semantics; reject malformed, oversized and control-bearing values while retaining ordinary text markup checks. Keep deterministic fixture; do not retry flaky enrollment tests until green. |
 
+| REG-TEST-058 | Fresh cluster node preparation | `test_join_preparation_provisions_identity_and_build_dependencies` and `test_cluster_runtime_hydration_precedes_fresh_preparation` | fixed | Admission on fresh hosts exposed absent runtime identity/build dependencies, Python bootstrap ordering and runtime preparation before authoritative configuration hydration (#511/#513). | Prepare account and OS dependencies before sandboxed deployment, then resolve FQDN/shared credentials and the CloudNativePG endpoint from cluster configuration in both environment files. Retain node-local paths, private file modes, literal secret syntax and failure cleanup; restore previous compose/runtime bytes and metadata after early or partial-render failure; verify complete live admission separately. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

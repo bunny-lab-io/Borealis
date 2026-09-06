@@ -11692,9 +11692,34 @@ validate_cluster_node_revision() {
   cluster_mode_enabled || die "Cluster node ${action} requires enabled Borealis cluster."
 }
 
-stage_cluster_node_revision_images() {
-  local cluster_runtime_env=""
-  cluster_runtime_env="$(mktemp)"
+prepare_cluster_node_runtime() (
+  # Keep downloaded and previous configuration private until preparation commits.
+  umask 077
+  local preparation_dir=""
+  preparation_dir="$(mktemp -d)"
+  local cluster_runtime_env="${preparation_dir}/cluster.env"
+  local restore_previous=0
+  cleanup_cluster_runtime_preparation() {
+    local result=$? path name
+    trap - EXIT
+    if (( restore_previous )); then
+      for name in compose runtime; do
+        path="${COMPOSE_ENV}"
+        [[ "${name}" != runtime ]] || path="${RUNTIME_ENV}"
+        if [[ -f "${preparation_dir}/${name}.previous" ]]; then
+          run_privileged cp -p -- "${preparation_dir}/${name}.previous" "${path}" || {
+            printf 'Cluster environment restore failed; private backup retained at %s\n' "${preparation_dir}" >&2
+            exit 1
+          }
+        else
+          run_privileged rm -f -- "${path}" || exit 1
+        fi
+      done
+    fi
+    run_privileged rm -rf -- "${preparation_dir}" || exit 1
+    exit "${result}"
+  }
+  trap cleanup_cluster_runtime_preparation EXIT
   k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json \
     | python3 -c 'import base64,json,re,sys
 payload=json.load(sys.stdin)
@@ -11713,9 +11738,27 @@ for key,value in sorted((payload.get("data") or {}).items()):
   validate_k3s_baseline_settings
   ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "${network_mode}")"
   export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  # Preserve bytes and metadata before either destination can be overwritten.
+  [[ ! -e "${COMPOSE_ENV}" ]] || run_privileged cp -p -- "${COMPOSE_ENV}" "${preparation_dir}/compose.previous"
+  [[ ! -e "${RUNTIME_ENV}" ]] || run_privileged cp -p -- "${RUNTIME_ENV}" "${preparation_dir}/runtime.previous"
+  restore_previous=1
+  # Resolvers read compose.env for FQDN/credentials and runtime.env for CNPG.
+  # Seed both before preparation, which then renders this node's local paths.
+  run_privileged install -m 0600 -D "${cluster_runtime_env}" "${COMPOSE_ENV}"
+  run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
   prepare_runtime prod
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
-  find "$(dirname -- "${cluster_runtime_env}")" -maxdepth 1 -type f -name "$(basename -- "${cluster_runtime_env}")" -delete
+  restore_previous=0
+)
+
+stage_cluster_node_revision_images() {
+  prepare_cluster_node_runtime
+  K3S_PEER_CIDRS="$(read_env_value BOREALIS_K3S_PEER_CIDRS "${RUNTIME_ENV}")"
+  ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "$(read_env_value BOREALIS_ENGINE_NETWORK_MODE "${RUNTIME_ENV}")")"
+  ENGINE_DEPLOYMENT_PROFILE="$(engine_deployment_profile_from_network_mode "${ENGINE_NETWORK_MODE}")"
+  export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
+  load_existing_image_tags
   build_images prod
   export_image_manifest_env
   write_image_manifest prod

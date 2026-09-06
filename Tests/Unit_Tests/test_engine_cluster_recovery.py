@@ -1,4 +1,6 @@
 import os
+import base64
+import json
 import pathlib
 import socket
 import subprocess
@@ -123,6 +125,97 @@ printf 'HOST READY\n'
                         self.assertEqual(result.returncode, 73)
                     else:
                         self.assertIn("Docker daemon unreachable", result.stderr)
+
+    def test_cluster_runtime_hydration_precedes_fresh_preparation(self):
+        for case in ("fresh", "stale", "invalid_key", "multiline", "missing_peer", "missing_hostname", "prepare_failure", "missing_hostname_existing", "prepare_failure_existing", "render_failure_existing"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp_dir:
+                root = pathlib.Path(temp_dir)
+                temporary = root / "temporary"
+                temporary.mkdir()
+                # Synthetic input only; emulate Kubernetes' JSON response stream.
+                literal_value = "test-only-$(touch SHOULD_NOT_EXIST)-`false`-$literal=tail"
+                values = {
+                    "BOREALIS_ENGINE_NETWORK_MODE": "public",
+                    "BOREALIS_K3S_PEER_CIDRS": "192.168.50.0/24",
+                    "BOREALIS_PUBLIC_HOSTNAME": "cluster.example.test",
+                    "BOREALIS_DATABASE_URL": "postgresql://borealis@borealis-postgres-rw.borealis.svc:5432/borealis",
+                    "POSTGRES_PASSWORD": literal_value,
+                    "BOREALIS_PROJECT_ROOT": "/original-node",
+                }
+                if case == "invalid_key":
+                    values["not-a-valid-key"] = "value"
+                elif case == "multiline":
+                    values["POSTGRES_PASSWORD"] = "first\nsecond"
+                elif case == "missing_peer":
+                    del values["BOREALIS_K3S_PEER_CIDRS"]
+                elif case.startswith("missing_hostname"):
+                    del values["BOREALIS_PUBLIC_HOSTNAME"]
+                response_payload = json.dumps({
+                    "data": {key: base64.b64encode(value.encode()).decode() for key, value in values.items()}
+                })
+                compose = root / "compose.env"
+                runtime = root / "runtime.env"
+                previous = {}
+                if case == "stale" or case.endswith("_existing"):
+                    compose.write_text("BOREALIS_PUBLIC_HOSTNAME=stale.example.test\nPOSTGRES_PASSWORD=stale\n")
+                    runtime.write_text("BOREALIS_PROJECT_ROOT=/previous-node\nBOREALIS_DATABASE_URL=postgresql://borealis@obsolete.example.test/borealis\n")
+                    for path, mode in ((compose, 0o640), (runtime, 0o600)):
+                        path.chmod(mode)
+                        previous[path] = (path.read_bytes(), mode, path.stat().st_uid, path.stat().st_gid)
+                result = self.run_engine_library(
+                    r'''
+COMPOSE_ENV="$BOREALIS_TEST_STATE/compose.env"
+RUNTIME_ENV="$BOREALIS_TEST_STATE/runtime.env"
+BUILD_LOG="$BOREALIS_TEST_STATE/build.log"
+unset BOREALIS_PUBLIC_HOSTNAME BOREALIS_ENGINE_NETWORK_MODE
+k3s_kubectl() { printf '%s\n' "$BOREALIS_TEST_RUNTIME_PAYLOAD"; }
+run_privileged() { "$@"; }
+ensure_engine_runtime_identity() { :; }
+ensure_service_tree() { [[ "$BOREALIS_TEST_CASE" != prepare_failure* ]] || return 71; }
+seed_webui_runtime_source() { :; }
+prune_empty_legacy_runtime_paths() { :; }
+load_existing_image_tags() { :; }
+resolve_acme_email() { printf 'admin@example.test\n'; }
+resolve_traefik_trusted_proxy_ips() { printf '192.168.50.0/24\n'; }
+write_compose_env() {
+  [[ "$1" == prod && "$2" == cluster.example.test ]] || return 72
+  if [[ "$BOREALIS_TEST_CASE" == render_failure_existing ]]; then
+    printf 'partial runtime\n' >"$RUNTIME_ENV"
+    printf 'partial compose\n' >"$COMPOSE_ENV"
+    chmod 0600 "$COMPOSE_ENV"
+    return 73
+  fi
+  local password="$(read_env_value POSTGRES_PASSWORD)"
+  local database_url
+  database_url="$(runtime_cnpg_database_url || true)"
+  database_url="${database_url:-postgresql://borealis@postgres-db.borealis.svc:5432/borealis}"
+  printf 'BOREALIS_PROJECT_ROOT=/joining-node\nPOSTGRES_PASSWORD=%s\nBOREALIS_DATABASE_URL=%s\n' "$password" "$database_url" >"$RUNTIME_ENV"
+  cp "$RUNTIME_ENV" "$COMPOSE_ENV"
+  chmod 0600 "$RUNTIME_ENV" "$COMPOSE_ENV"
+}
+prepare_cluster_node_runtime
+''',
+                    extra_env={"BOREALIS_TEST_STATE": str(root), "BOREALIS_TEST_CASE": case, "TMPDIR": str(temporary), "BOREALIS_TEST_RUNTIME_PAYLOAD": response_payload},
+                )
+                self.assertEqual(list(temporary.iterdir()), [], "temporary Secret leaked")
+                self.assertFalse((REPO_ROOT / "SHOULD_NOT_EXIST").exists())
+                if case in ("fresh", "stale"):
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("BOREALIS_PROJECT_ROOT=/joining-node", compose.read_text())
+                    self.assertIn("POSTGRES_PASSWORD=" + literal_value, compose.read_text())
+                    self.assertIn("BOREALIS_PROJECT_ROOT=/original-node", runtime.read_text())
+                    self.assertIn("BOREALIS_PUBLIC_HOSTNAME=cluster.example.test", runtime.read_text())
+                    for path in (compose, runtime):
+                        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                        self.assertIn("BOREALIS_DATABASE_URL=" + values["BOREALIS_DATABASE_URL"], path.read_text())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    for path in (compose, runtime):
+                        if path in previous:
+                            metadata = path.stat()
+                            self.assertEqual((path.read_bytes(), metadata.st_mode & 0o777, metadata.st_uid, metadata.st_gid), previous[path])
+                        else:
+                            self.assertFalse(path.exists())
 
     def test_engine_redeploy_preserves_newer_installed_k3s(self):
         result = self.run_engine_library(
