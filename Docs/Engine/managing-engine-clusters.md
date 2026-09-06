@@ -35,6 +35,19 @@ Cluster conversion remains disabled until the exact installed stable K3s version
 
 ## Enable the First Cluster Node
 
+### Check a Joining Host from the Existing Engine
+
+Install the first Engine normally. Additional Engine hosts are intended to be prepared and joined remotely over SSH from that Engine; operators should not install Borealis or run joining scripts locally on each target.
+
+In Cluster Management, select **Connect Joining Host**, enter its private IPv4 address and SSH port, then select **Discover host key**. Verify the displayed SHA256 fingerprint against your host inventory before approving it. Discovery does not send login credentials.
+
+After approval, provide the target's Linux administration username and password or SSH private key, then select **Check SSH access**. The Engine verifies the same host key before authentication and reports the hostname, kernel, architecture and remote user ID. Changing the address or port discards the previous approval. Closing the dialog cancels its connection check; submitted credentials are cleared from the form and are not saved for this check.
+
+!!! info "Onboarding implementation status"
+    This connection check is the first part of central onboarding. Automated prerequisite inspection, remote installation, protected operation credentials and cluster joining are still tracked by [S01](https://github.com/bunny-lab-io/Borealis/issues/521). A successful SSH connection does not qualify or admit a node. Existing invitation commands below remain internal and recovery primitives while that integration is completed.
+
+### Convert the First Engine
+
 Run probe conformance against the installed stable K3s release before requesting cluster conversion.
 
 On the first Engine node, run:
@@ -658,6 +671,24 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
     - Internal operation payload retains `release_immutable`, `source_k3s_version`, source release/SHA and compatibility manifest alongside target release/SHA. Queue transaction rejects configuration/source changes under the cluster-state lock. GitHub calls and manifest processing happen after snapshot connections return to the pool.
     - Every Engine preflight, including retry, validates persisted proof and reads each active Node's `status.nodeInfo.kubeletVersion` before backups, role movement or drain. Node-manager release actions independently require exact tag-to-SHA identity. Retry keeps original proof and target; it never reselects a release or silently upgrades a legacy payload.
     - Fresh-install baseline remains `v1.36.3+k3s1`. Historical lab results on `v1.36.4+k3s1` are not interchangeable; Q01 must qualify the exact release manifest and observed version. `install_k3s_if_missing` skips installed K3s, so Engine update cannot implicitly downgrade an upgraded cluster.
+
+    ### Central SSH onboarding direction
+
+    Admin preflight routes in `cmd/api-backend/cluster_ssh_preflight.go`:
+
+    - `POST /api/server/cluster/onboarding/host-key`: private `address` and integer `port`; performs key exchange only, returning public algorithm, SHA256 fingerprint and canonical base64 wire key. Credential fields are rejected before dialing.
+    - `POST /api/server/cluster/onboarding/inspect`: same target plus `host_key_algorithm`, `host_key_fingerprint`, `host_key_base64`, explicit boolean `host_key_approved=true`, `username`, `auth_method` (`password` or `private_key`) and only the corresponding credential fields. Reject missing approval, mismatched algorithm/fingerprint, mixed authentication fields, unknown or duplicate JSON fields and all query parameters. Both routes require an Admin session before parsing or networking and return `Cache-Control: no-store`.
+    - Request contract: UTF-8 JSON object, `application/json`, at most128KiB. Address is canonical RFC1918 IPv4 (host class,15bytes); SSH port is integer1-65535. Username is Linux identifier class,64ASCII bytes with `[A-Za-z_][A-Za-z0-9_.-]*`. Algorithm and fingerprint are public protocol identifiers,64bytes each. Wire key is opaque protocol/base64 class,5500encoded bytes maximum and4096decoded bytes maximum, parsed as an SSH key and checked against algorithm/fingerprint. Frontend treats that field as opaque content so random base64 never triggers markup detection.
+    - Password and optional key passphrase are secret class,4096UTF-8 bytes each; private key is secret class,64KiB, parsed by existing `x/crypto/ssh` support. Preserve whitespace and operational punctuation. Password must be nonempty; NUL is rejected. Frontend uses shared secret validation plus byte limits and private-key envelope check; backend validates exact credential shape and key/passphrase before remote work. Shared frontend validation classifies passphrase as secret.
+    - `internal/clusterremote` owns native SSH transport. Host-key callback aborts discovery before user authentication; authenticated connections compare the approved wire key before any password or key signature. Bound connect/handshake/inspection and cancellation; cap both output streams at16KiB and return parsed fixed fields only. No request-supplied command, environment or stdin is accepted. Admin database lookup returns its connection before SSH work. At most four preflight requests execute concurrently per API process; overall request limit30seconds.
+    - `Cluster_SSH_Inspection.jsx` invalidates key approval when target changes, requests explicit approval before showing credential fields, disallows fetch redirects, clears submitted credentials and aborts on close/unmount. No credential enters page state outside that mounted dialog, browser storage, events or notifications. Initial checks retain credentials only in bounded request memory; Go/JavaScript immutable strings cannot guarantee complete memory zeroization. Durable onboarding credentials, approval records and admission workers are separate unfinished S01 integration.
+    - Tests: real in-process SSH server in `internal/clusterremote/ssh_test.go`, focused Admin boundaries in `cluster_ssh_preflight_test.go`, and `Cluster_SSH_Inspection.test.jsx` cover discovery-before-auth, pin changes, password/key authentication, malformed input, cancellation, output limits, redaction and frontend credential/approval lifecycle. These portable checks do not qualify target OS, sizing, sudo, installation or membership.
+
+    - S01 [#521](https://github.com/bunny-lab-io/Borealis/issues/521) implements the required normal operator flow: install the first Engine, then use its WebUI to supply target hosts and one-time Linux administration credentials. The existing Engine opens SSH, inspects and prepares targets, transfers shared identity, invokes fixed joining commands remotely and monitors controller admission. Additional Engine nodes require no operator-local CLI setup or downloads. Future Worker Nodes under #486 use the same central interaction model.
+    - This flow remains under implementation. Existing invitation/node-manager commands are lower-level execution primitives and legacy recovery tools; do not treat them as the final onboarding user experience. No separate membership controller, standalone target database, target-local Borealis administrator or separate Aegis setup is permitted.
+    - Probe and display SSH host key before authentication, then pin the operator-approved key for every authenticated connection. Scope encrypted temporary SSH/sudo credentials to the provisioning operation and target; expire and remove them after terminal completion. Credentials, identity envelopes and private command streams must never enter ordinary event/diagnostic output or command arguments.
+    - F06 [#519](https://github.com/bunny-lab-io/Borealis/issues/519) supplies shared session/JWT/script material validation and private rollback primitives. Central SSH orchestration transfers and verifies identity before candidate startup; bind initial target through approved SSH key and provisioning identity, then add observed Kubernetes Node UID after join. Keep Aegis data-key fanout separate. Missing/mismatched identity blocks admission readiness rather than generating a new cluster identity.
+    - Preserve immutable release/bootstrap verification, original operation ownership, paired pre-staging, resumable checkpoints, safe cancellation/removal and continuous final health soak. First standalone deployment remains operator-managed; all subsequent host execution is remote work owned by the existing Engine.
 
     ### Aegis TLS runtime behavior
 

@@ -46,6 +46,14 @@ REVIEWED_ROUTE_TESTS[(
     "POST /api/server/cluster/admissions/{id}/cancel",
     "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
 )] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_admission_test.go"
+REVIEWED_ROUTE_TESTS.update({
+    (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preflight.go"):
+        "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preflight_test.go"
+    for pattern in (
+        "POST /api/server/cluster/onboarding/host-key",
+        "POST /api/server/cluster/onboarding/inspect",
+    )
+})
 REVIEWED_ROUTE_TESTS.update(
     {
         (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/main.go"): PROBE_TEST

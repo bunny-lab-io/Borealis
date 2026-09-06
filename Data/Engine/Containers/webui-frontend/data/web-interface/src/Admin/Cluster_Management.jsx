@@ -41,6 +41,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import ClusterSSHInspection from "./Cluster_SSH_Inspection.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -934,6 +935,7 @@ export default function ClusterManagement() {
   const [error, setError] = useState(loaderData?.initialError || "");
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(null);
+  const [sshInspectionOpen, setSSHInspectionOpen] = useState(false);
   const [nodeActionMenu, setNodeActionMenu] = useState({ open: false, top: 0, left: 0, node: null });
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
@@ -1428,7 +1430,10 @@ export default function ClusterManagement() {
     },
   ], [busy, mutate]);
 
-  const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
+  const pageActions = useMemo(() => [
+    { id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() },
+    { id: "cluster-inspect-host", label: "Connect Joining Host", icon: <NodesIcon />, tone: "secondary", onClick: () => setSSHInspectionOpen(true) },
+  ], [refresh]);
   useRoutePageChrome({
     title: "Cluster Management",
     subtitle: "Quorum, role ownership, isolation recovery, node maintenance, and rolling Engine release operations.",
@@ -1448,6 +1453,7 @@ export default function ClusterManagement() {
   const owner = (value) => operatorNodeLabel(value, nodes);
   return (
     <PageBodyFrame>
+      {sshInspectionOpen ? <ClusterSSHInspection onClose={() => setSSHInspectionOpen(false)} /> : null}
       <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 }, flexGrow: 1, minHeight: 0 }}>
         {error ? <Alert severity="error" onClose={() => setError("")}>{error}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}
