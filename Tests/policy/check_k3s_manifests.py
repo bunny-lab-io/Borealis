@@ -767,6 +767,7 @@ def validate_k3s_peer_allowlist_contract() -> None:
         'Cluster runtime environment is missing BOREALIS_K3S_PEER_CIDRS.': "fail-closed cluster node redeploy",
         'networks.append(str(network))': "canonical private CIDR normalization",
         'cluster_prepare_node()': "fixed blank-node preparation entrypoint",
+        '  touch "${BUILD_LOG}"\n  ensure_cluster_node_host_dependencies': "dependency bootstrap before Python-backed CIDR validation",
         '  ensure_cluster_node_host_dependencies\n  write_k3s_borealis_config >/dev/null || true\n  write_k3s_registries_config >/dev/null || true\n  ensure_k3s_api_firewall\n  printf \'Cluster node host preparation complete.': "blank-node dependencies, Spegel, and firewall preparation",
         'Engine.sh --cluster-prepare-node': "documented fixed node preparation command",
     }

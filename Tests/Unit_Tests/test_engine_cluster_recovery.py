@@ -30,11 +30,13 @@ class EngineClusterRecoveryTests(unittest.TestCase):
         )
 
     def test_join_preparation_provisions_identity_and_build_dependencies(self):
-        for case in ("fresh", "existing", "joined_group", "uid_collision", "package_failure", "docker_unreachable"):
+        for case in ("fresh", "existing", "joined_group", "missing_python", "uid_collision", "package_failure", "docker_unreachable"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temp_dir:
                 root = pathlib.Path(temp_dir)
                 for name in ("passwd", "group", "calls"):
                     (root / name).touch()
+                if case != "missing_python":
+                    (root / "python3").touch()
                 if case in ("existing", "joined_group"):
                     (root / "group").write_text("borealis-engine:x:64646:\n")
                 if case == "existing":
@@ -48,6 +50,7 @@ ENGINE_RUNTIME_USER=borealis-engine
 ENGINE_RUNTIME_GROUP=borealis-engine
 ENGINE_RUNTIME_UID=64646
 ENGINE_RUNTIME_GID=64646
+K3S_PEER_CIDRS=192.168.50.0/24
 getent() {
   local db="$1" name="${2:-}"
   awk -F: -v name="$name" 'name == "" || $1 == name' "$BOREALIS_TEST_STATE/$db"
@@ -65,7 +68,8 @@ run_privileged() {
 }
 command_exists() {
   case "$1" in
-    systemctl|python3) return 0 ;;
+    systemctl) return 0 ;;
+    python3) [[ -e "$BOREALIS_TEST_STATE/python3" ]] ;;
     docker) [[ -e "$BOREALIS_TEST_STATE/docker" ]] ;;
     *) return 92 ;;
   esac
@@ -75,6 +79,11 @@ install_engine_apt_dependencies() {
   printf 'INSTALL PACKAGES\n' >>"$BOREALIS_TEST_STATE/calls"
   [[ "$BOREALIS_TEST_CASE" != package_failure ]] || return 73
   : >"$BOREALIS_TEST_STATE/docker"
+  : >"$BOREALIS_TEST_STATE/python3"
+}
+python3() {
+  [[ -e "$BOREALIS_TEST_STATE/python3" ]] || return 127
+  command python3 "$@"
 }
 docker() {
   [[ "$1" == info && -e "$BOREALIS_TEST_STATE/docker" && "$BOREALIS_TEST_CASE" != docker_unreachable ]]
@@ -88,7 +97,7 @@ printf 'HOST READY\n'
                     extra_env={"BOREALIS_TEST_STATE": str(root), "BOREALIS_TEST_CASE": case},
                 )
                 calls = (root / "calls").read_text()
-                if case in ("fresh", "existing", "joined_group"):
+                if case in ("fresh", "existing", "joined_group", "missing_python"):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn("HOST READY", result.stdout)
                     self.assertIn("borealis-engine:x:64646:64646:", (root / "passwd").read_text())
