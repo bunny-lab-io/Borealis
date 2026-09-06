@@ -286,7 +286,62 @@ type HostFacts struct {
 	Architecture string
 	UID          uint32
 	Hostname     string
+	OSID         string
+	OSVersion    string
+	CPUCount     uint32
+	MemoryKiB    uint64
+	DiskTotalKiB uint64
+	DiskFreeKiB  uint64
+	DiskScope    string
+	BorealisPath string
+	K3sUnit      string
 }
+
+// SupportedPlatform covers OS/architecture only. It does not prove sizing,
+// storage, network, privilege, clean-host state or membership eligibility.
+func (facts HostFacts) SupportedPlatform() bool {
+	if facts.Kernel != "Linux" || facts.Architecture != "x86_64" || facts.OSID != "ubuntu" {
+		return false
+	}
+	majorText, minorText, ok := strings.Cut(facts.OSVersion, ".")
+	major, majorErr := strconv.ParseUint(majorText, 10, 16)
+	minor, minorErr := strconv.ParseUint(minorText, 10, 8)
+	return ok && majorErr == nil && minorErr == nil && len(majorText) == 2 && len(minorText) == 2 &&
+		(major > 24 || (major == 24 && minor >= 4))
+}
+
+// Fixed script contains no target, credentials or caller-provided shell text.
+// Missing inventory is reported as unknown or fails parsing; it never establishes
+// that an inaccessible path or unavailable service manager is a clean target.
+const inspectionCommand = `LC_ALL=C /bin/sh -s <<'BOREALIS_SSH_INSPECT'
+set -eu
+printf 'kernel='; uname -s
+printf 'architecture='; uname -m
+printf 'uid='; id -u
+printf 'hostname='; hostname -s
+if [ -r /etc/os-release ]; then
+  awk -F= '$1=="ID" || $1=="VERSION_ID" { value=substr($0,index($0,"=")+1); sub(/^"/,"",value); sub(/"$/,"",value); if ($1=="ID") print "os_id=" value; else print "os_version=" value }' /etc/os-release
+else
+  printf 'os_id=unknown\nos_version=unknown\n'
+fi
+printf 'cpu_count='; getconf _NPROCESSORS_ONLN
+awk '$1=="MemTotal:" { print "memory_kib=" $2 }' /proc/meminfo
+disk_path=/
+disk_scope=root
+if [ -d /opt ] && [ -x /opt ]; then disk_path=/opt; disk_scope=opt; fi
+printf 'disk_scope=%s\n' "$disk_scope"
+df -Pk "$disk_path" | awk 'NR==2 { print "disk_total_kib=" $2; print "disk_free_kib=" $4 }'
+if [ ! -x /opt ]; then
+  printf 'borealis_path=unknown\n'
+elif [ -e /opt/Borealis ] || [ -L /opt/Borealis ]; then
+  printf 'borealis_path=present\n'
+else
+  printf 'borealis_path=absent\n'
+fi
+k3s_unit=$(systemctl show k3s.service --property=LoadState --value 2>/dev/null) || k3s_unit=unknown
+case "$k3s_unit" in loaded|not-found|masked|error|bad-setting) ;; *) k3s_unit=unknown ;; esac
+printf 'k3s_unit=%s\n' "$k3s_unit"
+BOREALIS_SSH_INSPECT`
 
 func parseFacts(raw []byte) (HostFacts, error) {
 	if !utf8.Valid(raw) {
@@ -299,17 +354,41 @@ func parseFacts(raw []byte) (HostFacts, error) {
 			return HostFacts{}, ErrInspection
 		}
 		switch key {
-		case "kernel", "architecture", "uid", "hostname":
+		case "kernel", "architecture", "uid", "hostname", "os_id", "os_version", "cpu_count", "memory_kib", "disk_total_kib", "disk_free_kib", "disk_scope", "borealis_path", "k3s_unit":
 			values[key] = value
 		default:
 			return HostFacts{}, ErrInspection
 		}
 	}
 	uid, err := strconv.ParseUint(values["uid"], 10, 32)
-	if err != nil || len(values) != 4 {
+	if err != nil || len(values) != 13 {
 		return HostFacts{}, ErrInspection
 	}
-	return HostFacts{Kernel: values["kernel"], Architecture: values["architecture"], UID: uint32(uid), Hostname: values["hostname"]}, nil
+	cpu, cpuErr := strconv.ParseUint(values["cpu_count"], 10, 32)
+	memory, memoryErr := strconv.ParseUint(values["memory_kib"], 10, 64)
+	disk, diskErr := strconv.ParseUint(values["disk_total_kib"], 10, 64)
+	free, freeErr := strconv.ParseUint(values["disk_free_kib"], 10, 64)
+	const maxJSONInteger = 1<<53 - 1
+	if cpuErr != nil || cpu == 0 || memoryErr != nil || memory == 0 || memory > maxJSONInteger ||
+		diskErr != nil || disk == 0 || disk > maxJSONInteger || freeErr != nil || free > disk {
+		return HostFacts{}, ErrInspection
+	}
+	if !oneOf(values["disk_scope"], "root", "opt") || !oneOf(values["borealis_path"], "present", "absent", "unknown") ||
+		!oneOf(values["k3s_unit"], "loaded", "not-found", "masked", "error", "bad-setting", "unknown") {
+		return HostFacts{}, ErrInspection
+	}
+	return HostFacts{Kernel: values["kernel"], Architecture: values["architecture"], UID: uint32(uid), Hostname: values["hostname"],
+		OSID: values["os_id"], OSVersion: values["os_version"], CPUCount: uint32(cpu), MemoryKiB: memory,
+		DiskTotalKiB: disk, DiskFreeKiB: free, DiskScope: values["disk_scope"], BorealisPath: values["borealis_path"], K3sUnit: values["k3s_unit"]}, nil
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // Inspect executes one fixed read-only command. No caller-provided shell text,
@@ -331,7 +410,7 @@ func (client *Client) Inspect(ctx context.Context) (HostFacts, error) {
 	diagnostics := boundedOutput{close: func() { client.Close() }}
 	session.Stdout = &output
 	session.Stderr = &diagnostics
-	err = session.Run("LC_ALL=C /bin/sh -c 'printf \"kernel=\"; uname -s; printf \"architecture=\"; uname -m; printf \"uid=\"; id -u; printf \"hostname=\"; hostname -s'")
+	err = session.Run(inspectionCommand)
 	if output.overflow || diagnostics.overflow {
 		return HostFacts{}, ErrOutputLimit
 	}

@@ -33,7 +33,9 @@ func (remote *clusterSSHTestInspector) Inspect(ctx context.Context, target clust
 	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 30*time.Second {
 		panic("inspection requires a bounded context")
 	}
-	return clusterremote.HostFacts{Kernel: "Linux", Architecture: "x86_64", UID: 1000, Hostname: "joining-engine"}, remote.err
+	return clusterremote.HostFacts{Kernel: "Linux", Architecture: "x86_64", UID: 1000, Hostname: "joining-engine",
+		OSID: "ubuntu", OSVersion: "24.04", CPUCount: 16, MemoryKiB: 33554432, DiskTotalKiB: 524288000,
+		DiskFreeKiB: 314572800, DiskScope: "opt", BorealisPath: "absent", K3sUnit: "not-found"}, remote.err
 }
 
 func clusterSSHTestService(t *testing.T) (*clusterSSHPreflight, *clusterSSHTestInspector, string, map[string]any) {

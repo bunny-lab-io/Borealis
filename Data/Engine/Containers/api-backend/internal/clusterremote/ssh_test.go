@@ -36,6 +36,8 @@ type fakeSSH struct {
 	execCalls atomic.Int64
 }
 
+const inspectedHostFixture = "kernel=Linux\narchitecture=x86_64\nuid=1000\nhostname=new-engine\nos_id=ubuntu\nos_version=24.04\ncpu_count=16\nmemory_kib=33554432\ndisk_total_kib=524288000\ndisk_free_kib=314572800\ndisk_scope=opt\nborealis_path=absent\nk3s_unit=not-found\n"
+
 func newFakeSSH(t *testing.T, mode string) *fakeSSH {
 	t.Helper()
 	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
@@ -144,7 +146,7 @@ func newFakeSSH(t *testing.T, mode string) *fakeSSH {
 						case "malformed":
 							channel.Write([]byte("credential=" + string(server.password) + "\n"))
 						default:
-							channel.Write([]byte("kernel=Linux\narchitecture=x86_64\nuid=1000\nhostname=new-engine\n"))
+							channel.Write([]byte(inspectedHostFixture))
 						}
 						channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
 						channel.Close()
@@ -222,13 +224,65 @@ func TestPinnedPasswordAndKeyAuthenticationAndFixedInspection(t *testing.T) {
 			}
 			defer client.Close()
 			facts, err := client.Inspect(context.Background())
-			if err != nil || facts.Kernel != "Linux" || facts.Architecture != "x86_64" || facts.UID != 1000 || facts.Hostname != "new-engine" {
+			if err != nil || facts.Kernel != "Linux" || facts.Architecture != "x86_64" || facts.UID != 1000 || facts.Hostname != "new-engine" ||
+				facts.OSID != "ubuntu" || facts.OSVersion != "24.04" || facts.CPUCount != 16 || facts.MemoryKiB != 33554432 ||
+				facts.DiskFreeKiB != 314572800 || facts.DiskScope != "opt" || facts.BorealisPath != "absent" || facts.K3sUnit != "not-found" {
 				t.Fatalf("fixed inspection failed: %v", err)
 			}
 			if server.authCalls.Load() == 0 || server.execCalls.Load() != 1 {
 				t.Fatal("actual SSH authentication and exec required")
 			}
 		})
+	}
+}
+
+func TestInspectionInventoryRejectsMissingAmbiguousAndImpossibleFacts(t *testing.T) {
+	for name, raw := range map[string]string{
+		"missing OS":             strings.ReplaceAll(inspectedHostFixture, "os_id=ubuntu\n", ""),
+		"duplicate CPU":          inspectedHostFixture + "cpu_count=8\n",
+		"zero CPU":               strings.ReplaceAll(inspectedHostFixture, "cpu_count=16", "cpu_count=0"),
+		"negative memory":        strings.ReplaceAll(inspectedHostFixture, "memory_kib=33554432", "memory_kib=-1"),
+		"invalid disk":           strings.ReplaceAll(inspectedHostFixture, "disk_free_kib=314572800", "disk_free_kib=999999999"),
+		"unbounded disk":         strings.ReplaceAll(inspectedHostFixture, "disk_total_kib=524288000", "disk_total_kib=18446744073709551615"),
+		"unknown field":          inspectedHostFixture + "private=withheld\n",
+		"invented service proof": strings.ReplaceAll(inspectedHostFixture, "k3s_unit=not-found", "k3s_unit=clean"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseFacts([]byte(raw)); !errors.Is(err, ErrInspection) {
+				t.Fatal("invalid inventory accepted")
+			}
+		})
+	}
+	unknown := strings.ReplaceAll(strings.ReplaceAll(inspectedHostFixture, "borealis_path=absent", "borealis_path=unknown"), "k3s_unit=not-found", "k3s_unit=unknown")
+	facts, err := parseFacts([]byte(unknown))
+	if err != nil || facts.BorealisPath != "unknown" || facts.K3sUnit != "unknown" {
+		t.Fatal("unknown inventory became clean-host proof")
+	}
+}
+
+func TestInspectionPlatformScope(t *testing.T) {
+	facts, err := parseFacts([]byte(inspectedHostFixture))
+	if err != nil || !facts.SupportedPlatform() {
+		t.Fatal("Ubuntu24.04 AMD64 not recognized")
+	}
+	for _, version := range []string{"22.04", "24.00", "unknown", "24.04.extra", "24.4", "-1.04"} {
+		facts.OSVersion = version
+		if facts.SupportedPlatform() {
+			t.Fatal("unsupported OS accepted")
+		}
+	}
+	facts.OSVersion = "26.04"
+	if !facts.SupportedPlatform() {
+		t.Fatal("newer Ubuntu rejected")
+	}
+	facts.Architecture = "aarch64"
+	if facts.SupportedPlatform() {
+		t.Fatal("ARM accepted")
+	}
+	facts.Architecture = "x86_64"
+	facts.OSID = "debian"
+	if facts.SupportedPlatform() {
+		t.Fatal("non-Ubuntu accepted")
 	}
 }
 

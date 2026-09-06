@@ -248,7 +248,10 @@ func (service *clusterSSHPreflight) handler(inspect bool) http.HandlerFunc {
 			writeClusterSSHError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"address": target.Address, "port": target.Port, "hostname": facts.Hostname, "kernel": facts.Kernel, "architecture": facts.Architecture, "uid": facts.UID, "host_key_fingerprint": approved.Fingerprint})
+		writeJSON(w, http.StatusOK, map[string]any{"address": target.Address, "port": target.Port, "hostname": facts.Hostname, "kernel": facts.Kernel, "architecture": facts.Architecture, "uid": facts.UID, "host_key_fingerprint": approved.Fingerprint,
+			"os_id": facts.OSID, "os_version": facts.OSVersion, "cpu_count": facts.CPUCount, "memory_kib": facts.MemoryKiB,
+			"disk_total_kib": facts.DiskTotalKiB, "disk_free_kib": facts.DiskFreeKiB, "disk_scope": facts.DiskScope,
+			"borealis_path": facts.BorealisPath, "k3s_unit": facts.K3sUnit, "supported_platform": facts.SupportedPlatform()})
 	}
 }
 

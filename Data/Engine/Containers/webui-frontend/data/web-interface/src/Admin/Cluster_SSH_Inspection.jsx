@@ -108,8 +108,13 @@ export default function ClusterSSHInspection({ onClose }) {
         setKey(payload);
       } else {
         if (payload?.address !== address || payload?.port !== Number(port) || payload?.host_key_fingerprint !== key.host_key_fingerprint
-          || ![payload?.hostname, payload?.kernel, payload?.architecture].every((value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/.test(value))
-          || !Number.isInteger(payload?.uid) || payload.uid < 0 || payload.uid > 4294967295) throw new Error("invalid inspection response");
+          || ![payload?.hostname, payload?.kernel, payload?.architecture, payload?.os_id, payload?.os_version].every((value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/.test(value))
+          || !Number.isInteger(payload?.uid) || payload.uid < 0 || payload.uid > 4294967295
+          || ![payload?.cpu_count, payload?.memory_kib, payload?.disk_total_kib].every((value) => Number.isSafeInteger(value) && value > 0)
+          || !Number.isSafeInteger(payload?.disk_free_kib) || payload.disk_free_kib < 0 || payload.disk_free_kib > payload.disk_total_kib
+          || !["root", "opt"].includes(payload?.disk_scope) || !["present", "absent", "unknown"].includes(payload?.borealis_path)
+          || !["loaded", "not-found", "masked", "error", "bad-setting", "unknown"].includes(payload?.k3s_unit)
+          || typeof payload?.supported_platform !== "boolean") throw new Error("invalid inspection response");
         setFacts(payload);
       }
     } catch {
@@ -147,7 +152,15 @@ export default function ClusterSSHInspection({ onClose }) {
             <TextField sx={DIALOG_INPUT_SX} type="password" label="Key passphrase (if encrypted)" autoComplete="new-password" value={secrets.passphrase} disabled={busy} inputProps={{ maxLength: 4096 }} onChange={(event) => setSecrets({ ...secrets, passphrase: event.target.value })} />
           </>}
         </> : null}
-        {facts ? <Alert severity="success">SSH connected to {facts.hostname} ({facts.kernel}, {facts.architecture}), user ID {facts.uid}. Connection check complete; host has not been joined.</Alert> : null}
+        {facts ? <>
+          <Alert severity="success">SSH connected to {facts.hostname} ({facts.kernel}, {facts.architecture}), user ID {facts.uid}. Connection check complete; host has not been joined.</Alert>
+          <Typography>{facts.os_id} {facts.os_version} · {facts.cpu_count} CPUs · {(facts.memory_kib / 1048576).toFixed(1)} GiB RAM<br />
+            {(facts.disk_free_kib / 1048576).toFixed(1)} GiB free of {(facts.disk_total_kib / 1048576).toFixed(1)} GiB on {facts.disk_scope === "opt" ? "/opt filesystem" : "root filesystem"}<br />
+            Borealis installation: {({ present: "detected", absent: "not observed", unknown: "unknown" })[facts.borealis_path]} · K3s service: {facts.k3s_unit}
+          </Typography>
+          {!facts.supported_platform ? <Alert severity="warning">Engine nodes require Ubuntu 24.04 or newer on AMD64. This host does not match that platform requirement.</Alert> : null}
+          {facts.borealis_path !== "absent" || facts.k3s_unit !== "not-found" ? <Alert severity="info">Existing or unknown installation state requires further inspection before preparation.</Alert> : null}
+        </> : null}
       </Stack>
     </DialogContent>
     <DialogActions sx={DIALOG_ACTIONS_SX}>

@@ -9,6 +9,7 @@ const observed = {
   host_key_fingerprint: `SHA256:${"a".repeat(43)}`, host_key_base64: "AAAA",
 };
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload });
+const inventory = { ...observed, hostname: "engine-2", kernel: "Linux", architecture: "x86_64", uid: 1000, os_id: "ubuntu", os_version: "24.04", cpu_count: 16, memory_kib: 33554432, disk_total_kib: 524288000, disk_free_kib: 314572800, disk_scope: "opt", borealis_path: "absent", k3s_unit: "not-found", supported_platform: true };
 const secrets = { password: "  <punctuation> $ intact  ", private_key: "", passphrase: "" };
 
 async function discover() {
@@ -30,7 +31,7 @@ describe("central SSH inspection", () => {
   it("keeps discovery credential-free, then sends only explicitly approved identity and clears the password", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(response(observed))
-      .mockResolvedValueOnce(response({ ...observed, hostname: "engine-2", kernel: "Linux", architecture: "x86_64", uid: 1000 }));
+      .mockResolvedValueOnce(response(inventory));
     vi.stubGlobal("fetch", fetch);
     render(<ClusterSSHInspection onClose={vi.fn()} />);
     await discover();
@@ -61,6 +62,25 @@ describe("central SSH inspection", () => {
     expect(screen.queryByLabelText("I verified and approve this host key")).toBeNull();
     expect(screen.getByRole("button", { name: "Discover host key" })).toBeEnabled();
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows unsupported platform and unknown installation state without treating the host as clean", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(observed)).mockResolvedValueOnce(response({ ...inventory, os_id: "debian", supported_platform: false, borealis_path: "unknown", k3s_unit: "unknown" })));
+    render(<ClusterSSHInspection onClose={vi.fn()} />);
+    await approveAndFill();
+    fireEvent.click(screen.getByRole("button", { name: "Check SSH access" }));
+    await screen.findByText(/This host does not match that platform requirement/);
+    expect(screen.getByText(/Existing or unknown installation state requires further inspection/)).toBeInTheDocument();
+    expect(screen.getByText(/16 CPUs/)).toBeInTheDocument();
+  });
+
+  it("rejects impossible capacity returned by inspection", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(observed)).mockResolvedValueOnce(response({ ...inventory, disk_free_kib: inventory.disk_total_kib + 1 })));
+    render(<ClusterSSHInspection onClose={vi.fn()} />);
+    await approveAndFill();
+    fireEvent.click(screen.getByRole("button", { name: "Check SSH access" }));
+    await screen.findByText(/SSH check failed/);
+    expect(screen.queryByText(/SSH connected to/)).toBeNull();
   });
 
   it("requires new discovery after a changed key and withholds server diagnostics", async () => {
