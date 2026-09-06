@@ -221,6 +221,13 @@ describe("Cluster Management", () => {
     expect(screen.queryByText(/Snapshot stale/)).not.toBeInTheDocument();
     fireEvent.mouseOver(screen.getByText(nextRelease));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(`Recorded commit SHA: ${"b".repeat(40)}`);
+    // Same tag, report time and visible status: only the tooltip SHA changes.
+    vi.stubGlobal("fetch", vi.fn(async (path) => ({ ok: true, json: async () => String(path) === "/api/server/cluster" ? {
+      enabled: true, nodes: [{ ...state.nodes[0], release_tag: nextRelease, release_sha: "c".repeat(40) }], operations: [],
+    } : { releases: [], events: [] } })));
+    await act(async () => { now += 5000; poll(); });
+    fireEvent.mouseOver(screen.getByText(nextRelease));
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(`Recorded commit SHA: ${"c".repeat(40)}`));
   });
 
   it("cancels only pending admissions and exposes retained-target renewal", async () => {
