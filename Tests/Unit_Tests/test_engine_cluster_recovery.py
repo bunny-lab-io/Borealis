@@ -29,6 +29,101 @@ class EngineClusterRecoveryTests(unittest.TestCase):
             check=False,
         )
 
+    def test_join_preparation_provisions_identity_and_build_dependencies(self):
+        for case in ("fresh", "existing", "joined_group", "missing_python", "uid_collision", "package_failure", "docker_unreachable"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp_dir:
+                root = pathlib.Path(temp_dir)
+                for name in ("passwd", "group", "calls"):
+                    (root / name).touch()
+                if case != "missing_python":
+                    (root / "python3").touch()
+                if case in ("existing", "joined_group"):
+                    (root / "group").write_text("borealis-engine:x:64646:\n")
+                if case == "existing":
+                    (root / "passwd").write_text("borealis-engine:x:64646:64646::/nonexistent:/usr/sbin/nologin\n")
+                    (root / "docker").touch()
+                if case == "uid_collision":
+                    (root / "passwd").write_text("foreign-user:x:64646:1000::/home/foreign:/bin/bash\n")
+                result = self.run_engine_library(
+                    r'''
+ENGINE_RUNTIME_USER=borealis-engine
+ENGINE_RUNTIME_GROUP=borealis-engine
+ENGINE_RUNTIME_UID=64646
+ENGINE_RUNTIME_GID=64646
+K3S_PEER_CIDRS=192.168.50.0/24
+getent() {
+  local db="$1" name="${2:-}"
+  awk -F: -v name="$name" 'name == "" || $1 == name' "$BOREALIS_TEST_STATE/$db"
+}
+groupadd() { printf '%s\n' '--key'; }
+useradd() { printf '%s\n' '--key'; }
+run_privileged() {
+  printf '%s\n' "$*" >>"$BOREALIS_TEST_STATE/calls"
+  case "$1" in
+    groupadd) printf 'borealis-engine:x:64646:\n' >>"$BOREALIS_TEST_STATE/group" ;;
+    useradd) printf 'borealis-engine:x:64646:64646::/nonexistent:/usr/sbin/nologin\n' >>"$BOREALIS_TEST_STATE/passwd" ;;
+    systemctl) return 0 ;;
+    *) return 91 ;;
+  esac
+}
+command_exists() {
+  case "$1" in
+    systemctl) return 0 ;;
+    python3) [[ -e "$BOREALIS_TEST_STATE/python3" ]] ;;
+    docker) [[ -e "$BOREALIS_TEST_STATE/docker" ]] ;;
+    *) return 92 ;;
+  esac
+}
+detect_distro() { DISTRO_ID=ubuntu; }
+install_engine_apt_dependencies() {
+  printf 'INSTALL PACKAGES\n' >>"$BOREALIS_TEST_STATE/calls"
+  [[ "$BOREALIS_TEST_CASE" != package_failure ]] || return 73
+  : >"$BOREALIS_TEST_STATE/docker"
+  : >"$BOREALIS_TEST_STATE/python3"
+}
+python3() {
+  [[ -e "$BOREALIS_TEST_STATE/python3" ]] || return 127
+  command python3 "$@"
+}
+docker() {
+  [[ "$1" == info && -e "$BOREALIS_TEST_STATE/docker" && "$BOREALIS_TEST_CASE" != docker_unreachable ]]
+}
+systemctl() { return 1; }
+ensure_k3s_install_dependencies() { printf 'K3S PREREQUISITES\n'; }
+ensure_longhorn_node_dependencies() { printf 'STORAGE PREREQUISITES\n'; }
+ensure_cluster_node_host_dependencies
+printf 'HOST READY\n'
+''',
+                    extra_env={"BOREALIS_TEST_STATE": str(root), "BOREALIS_TEST_CASE": case},
+                )
+                calls = (root / "calls").read_text()
+                if case in ("fresh", "existing", "joined_group", "missing_python"):
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("HOST READY", result.stdout)
+                    self.assertIn("borealis-engine:x:64646:64646:", (root / "passwd").read_text())
+                    if case == "existing":
+                        self.assertNotIn("useradd", calls)
+                        self.assertNotIn("groupadd", calls)
+                        self.assertNotIn("INSTALL PACKAGES", calls)
+                    else:
+                        self.assertIn("--no-create-home", calls)
+                        self.assertIn("INSTALL PACKAGES", calls)
+                        if case == "joined_group":
+                            self.assertNotIn("groupadd", calls)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("HOST READY", result.stdout)
+                    self.assertNotIn("K3S PREREQUISITES", result.stdout)
+                    self.assertNotIn("STORAGE PREREQUISITES", result.stdout)
+                    if case == "uid_collision":
+                        self.assertIn("already belongs to foreign-user", result.stderr)
+                        self.assertNotIn("useradd", calls)
+                        self.assertNotIn("INSTALL PACKAGES", calls)
+                    elif case == "package_failure":
+                        self.assertEqual(result.returncode, 73)
+                    else:
+                        self.assertIn("Docker daemon unreachable", result.stderr)
+
     def test_engine_redeploy_preserves_newer_installed_k3s(self):
         result = self.run_engine_library(
             r'''
