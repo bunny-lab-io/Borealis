@@ -1264,10 +1264,14 @@ export default function ClusterManagement() {
     },
     {
       colId: "engine-version",
-      field: "engineVersion.label",
+      field: "engineVersion",
       headerName: "Engine Version",
       minWidth: 230,
       cellClass: "auto-col-tight",
+      // A SHA/report/target-only change must refresh the tooltip as well.
+      valueFormatter: (params) => params.value?.label || "Unknown",
+      filterValueGetter: (params) => params.data?.engineVersion?.label || "Unknown",
+      comparator: (left, right) => compareBorealisVersions(left?.release, right?.release) ?? String(left?.release || "").localeCompare(String(right?.release || "")),
       cellRenderer: (params) => <ClusterNodeVersionCell version={params?.data?.engineVersion} />,
     },
     {

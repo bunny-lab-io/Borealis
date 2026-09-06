@@ -211,13 +211,16 @@ describe("Cluster Management", () => {
     await act(async () => { now += failure === "failed" ? 5000 : 20_000; poll(); });
     expect(await screen.findByText(/Snapshot stale/)).toBeInTheDocument();
     expect(screen.getByText("2026.09.1")).toBeInTheDocument();
+    const nextRelease = failure === "hanging" ? "2026.09.1" : "2026.09.2";
     vi.stubGlobal("fetch", vi.fn(async (path) => ({ ok: true, json: async () => String(path) === "/api/server/cluster" ? {
-      enabled: true, nodes: [{ ...state.nodes[0], release_tag: "2026.09.2", release_sha: "b".repeat(40) }], operations: [],
+      enabled: true, nodes: [{ ...state.nodes[0], release_tag: nextRelease, release_sha: "b".repeat(40) }], operations: [],
     } : { releases: [], events: [] } })));
     await act(async () => { now += 5000; poll(); });
-    expect(await screen.findByText("2026.09.2")).toBeInTheDocument();
+    expect(await screen.findByText(nextRelease)).toBeInTheDocument();
     expect(screen.getByText(/Recorded · Recent report/)).toBeInTheDocument();
     expect(screen.queryByText(/Snapshot stale/)).not.toBeInTheDocument();
+    fireEvent.mouseOver(screen.getByText(nextRelease));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(`Recorded commit SHA: ${"b".repeat(40)}`);
   });
 
   it("cancels only pending admissions and exposes retained-target renewal", async () => {
