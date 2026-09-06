@@ -43,6 +43,7 @@ class EngineClusterRecoveryTests(unittest.TestCase):
                     "BOREALIS_ENGINE_NETWORK_MODE": "public",
                     "BOREALIS_K3S_PEER_CIDRS": "192.168.50.0/24",
                     "BOREALIS_PUBLIC_HOSTNAME": "cluster.example.test",
+                    "BOREALIS_DATABASE_URL": "postgresql://borealis@borealis-postgres-rw.borealis.svc:5432/borealis",
                     "POSTGRES_PASSWORD": literal_value,
                     "BOREALIS_PROJECT_ROOT": "/original-node",
                 }
@@ -62,7 +63,7 @@ class EngineClusterRecoveryTests(unittest.TestCase):
                 previous = {}
                 if case == "stale" or case.endswith("_existing"):
                     compose.write_text("BOREALIS_PUBLIC_HOSTNAME=stale.example.test\nPOSTGRES_PASSWORD=stale\n")
-                    runtime.write_text("BOREALIS_PROJECT_ROOT=/previous-node\n")
+                    runtime.write_text("BOREALIS_PROJECT_ROOT=/previous-node\nBOREALIS_DATABASE_URL=postgresql://borealis@obsolete.example.test/borealis\n")
                     for path, mode in ((compose, 0o640), (runtime, 0o600)):
                         path.chmod(mode)
                         previous[path] = (path.read_bytes(), mode, path.stat().st_uid, path.stat().st_gid)
@@ -90,7 +91,10 @@ write_compose_env() {
     return 73
   fi
   local password="$(read_env_value POSTGRES_PASSWORD)"
-  printf 'BOREALIS_PROJECT_ROOT=/joining-node\nPOSTGRES_PASSWORD=%s\n' "$password" >"$RUNTIME_ENV"
+  local database_url
+  database_url="$(runtime_cnpg_database_url || true)"
+  database_url="${database_url:-postgresql://borealis@postgres-db.borealis.svc:5432/borealis}"
+  printf 'BOREALIS_PROJECT_ROOT=/joining-node\nPOSTGRES_PASSWORD=%s\nBOREALIS_DATABASE_URL=%s\n' "$password" "$database_url" >"$RUNTIME_ENV"
   cp "$RUNTIME_ENV" "$COMPOSE_ENV"
   chmod 0600 "$RUNTIME_ENV" "$COMPOSE_ENV"
 }
@@ -108,6 +112,7 @@ prepare_cluster_node_runtime
                     self.assertIn("BOREALIS_PUBLIC_HOSTNAME=cluster.example.test", runtime.read_text())
                     for path in (compose, runtime):
                         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                        self.assertIn("BOREALIS_DATABASE_URL=" + values["BOREALIS_DATABASE_URL"], path.read_text())
                 else:
                     self.assertNotEqual(result.returncode, 0)
                     for path in (compose, runtime):

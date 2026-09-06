@@ -11735,9 +11735,10 @@ for key,value in sorted((payload.get("data") or {}).items()):
   [[ ! -e "${COMPOSE_ENV}" ]] || run_privileged cp -p -- "${COMPOSE_ENV}" "${preparation_dir}/compose.previous"
   [[ ! -e "${RUNTIME_ENV}" ]] || run_privileged cp -p -- "${RUNTIME_ENV}" "${preparation_dir}/runtime.previous"
   restore_previous=1
-  # Runtime preparation reads compose.env for FQDN and shared credentials.
-  # Seed it before preparation, which then renders this node's local paths.
+  # Resolvers read compose.env for FQDN/credentials and runtime.env for CNPG.
+  # Seed both before preparation, which then renders this node's local paths.
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${COMPOSE_ENV}"
+  run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
   prepare_runtime prod
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
   restore_previous=0
