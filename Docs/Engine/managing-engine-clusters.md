@@ -139,6 +139,44 @@ For a failed admission or an admission operation cancelled by an older release, 
 
 Optional `--k3s-server`, `--k3s-version`, and `--peer-cidrs` flags assert expected values. They must match the settings supplied by Borealis; they cannot override cluster configuration.
 
+??? note "Recover configuration preparation on a legacy admission"
+    Use this recovery only when a maintainer confirms the original admission is stranded on the supported pre-hydration revision. Normal admissions use the fixed preparation automatically. The original operation must be failed at application admission, both joining nodes must remain approved and drained, and K3s plus PostgreSQL must be healthy on all three hosts.
+
+    Schedule an exclusive recovery window. Keep the original operation stopped while repairing both targets. The helper briefly stops each target's node-manager service, seeds its two private environment files from verified cluster configuration, then restores that service. K3s keeps running. Application source, images, database state and drain labels remain unchanged.
+
+    Obtain an approved immutable repair release and full SHA using [Publishing Engine Releases](publishing-engine-releases.md). Run from a separate source checkout on each joining host. Keep the deployed checkout pinned:
+
+    ```bash
+    REPAIR_RELEASE="YYYY.MM.REVISION-rc.N"
+    REPAIR_SHA="<approved-full-repair-commit-sha>"
+    RECOVERY_SOURCE="/var/lib/borealis/recovery-source/${REPAIR_SHA}"
+    sudo git clone --filter=blob:none --no-checkout --branch "${REPAIR_RELEASE}" \
+      https://github.com/bunny-lab-io/Borealis.git "${RECOVERY_SOURCE}"
+    sudo git -C "${RECOVERY_SOURCE}" checkout --detach "${REPAIR_SHA}"
+
+    # Keep Admin token in a regular mode0600 file, never in arguments or history.
+    REPAIR_ARGS=(
+      --endpoint "https://engine.example.com"
+      --admin-token-file "/home/operator/.borealis-admin-token"
+      --operation "<original-admission-uuid>"
+      --node-name "engine-02"
+      --node-uid "<current-kubernetes-node-uuid>"
+      --baseline-sha "d94708b7220e79c223fa74fe17db2e3470b42d69"
+      --repair-release "${REPAIR_RELEASE}"
+      --repair-sha "${REPAIR_SHA}"
+    )
+    # First command verifies identity and prerequisites without preparing runtime.
+    sudo python3 "${RECOVERY_SOURCE}/Data/Engine/K3s/cluster/repair-legacy-admission.py" \
+      "${REPAIR_ARGS[@]}"
+    # Apply only after the check reports state=verified.
+    sudo python3 "${RECOVERY_SOURCE}/Data/Engine/K3s/cluster/repair-legacy-admission.py" \
+      "${REPAIR_ARGS[@]}" --apply --confirmation "REPAIR ADMISSION"
+    ```
+
+    Expect `state=committed` and a private journal path. Repeat for the other original target with its own node name and UID. Only after both repairs commit, retry the original admission through Cluster Events. Existing conformance, candidate, promotion and health soaks remain required.
+
+    Failure restores previous environment bytes and metadata. Keep the journal and private backups; they can contain credentials and must not be copied into issue comments. Rerunning an interrupted repair restores its backup first and reports `rolled_back`; inspect that result, then run check/apply again. If restoration or node-manager startup fails, keep the target drained and report the journal path to the maintainer. Do not delete the journal, force a new operation, clear drain or restart K3s.
+
 ### Expand from One Node to Three
 
 Normal `1 -> 3` expansion requires a complete pair of joining nodes.  Temporary even K3s membership during pair admission does not disable healthy existing nodes.
@@ -591,6 +629,19 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Legacy admission preparation recovery
+
+    - `Data/Engine/K3s/cluster/repair-legacy-admission.py` is an explicit root-run compatibility command for baseline `d94708b7220e79c223fa74fe17db2e3470b42d69`, tracked in #517. It verifies clean application/repair checkouts and origin, published immutable release/tag/SHA/channel/manifest and baseline ancestry. It checks the endpoint against local runtime configuration before reading or sending the Admin token. Peer allowlists use Engine's private IPv4 CIDR rules and must cover all observed cohort addresses; retain configured subnet or host-CIDR representation unchanged.
+    - Read-only Admin snapshot and Kubernetes observations bind failed original operation/cohort, cluster ID, node UID/name/address, exact K3s version, three-instance database health, drained application state and every role-eligibility fence. The helper requires idle operation/HMR state and no live node-action Pod on the target. It does not acquire a database connection or write cluster state; keep an exclusive operator recovery window.
+    - Local flock lives outside the node-manager's systemd RuntimeDirectory. The helper pauses only that target service, rechecks identity/configuration, invokes `prepare_cluster_node_runtime configuration-only` with a private verified Secret snapshot, rechecks state, and restores the same service. This mode shares F03 decode/seed/rollback code but skips `prepare_runtime`, so it cannot stage application source, build images, create credentials or deploy workloads.
+    - Root-private journals under `/var/lib/borealis/admission-recovery/` retain original configuration bytes/metadata plus redacted identities. Same operation/node/release identity can recover an interrupted transaction despite a later observation version; a different target or source cannot consume its journal. Completed recovery is idempotent and does not reseed after a later controller failure. Rollback failure retains private backups and requires repair before retry. Command timeouts kill the preparation process group, preventing a child from writing after rollback.
+    - CLI input classes: HTTPS origin (2048 characters, hostname 253, no credentials/path/query/fragment), node name (63 lowercase DNS-label characters), canonical UUID (36), full SHA (40 lowercase hexadecimal; legacy source is allowlisted), release identifier (32), fixed confirmation `REPAIR ADMISSION`, and private token-file path. There is no WebUI or new API field. Token contents are bounded to 16 KiB, ASCII, mode0600 and owned by root or invoking operator; they never enter arguments, child environment, journal or diagnostics. HTTP responses are bounded to 4 MiB and redirects are rejected.
+    - `Tests/Unit_Tests/test_legacy_admission_recovery.py` covers identity/role/configuration rejection, immutable publication, credential-file/redirect boundaries, real configuration-only writes, partial failure, service-start failure, observation changes, symlink refusal and interrupted-journal recovery. Existing F03 full-preparation tests remain unchanged. Repository policy discovers these tests; no runtime Python dependency is added.
+
+    ### H03 qualification after clustered HMR disablement
+
+    Operator-approved sequencing under #493 retains exact-release #492 restoration before U01 deployment. H03 then qualifies production controller/scheduler partition recovery on its exact immutable candidate, including recovery before heal, stale-owner/generation rejection, target fencing, no duplicate non-idempotent dispatch and healthy3/3 restoration. This explicitly replaces the original HMR-entry setup in #466; it does not infer H03 recovery from pre-U01 restoration or portable tests. Keep PR499 unmerged until its revised live gate passes; Q01 still qualifies the final complete release.
 
     ### Clustered HMR entry boundary
 

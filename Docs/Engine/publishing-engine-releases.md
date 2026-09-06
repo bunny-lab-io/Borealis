@@ -42,7 +42,12 @@ Expected output is `true`.
 
 ## Prepare Source
 
-Release only reviewed commit reachable from `main`. Confirm clean checkout, current source SHA, release manifest, and successful required checks before tagging.
+Stable releases require a reviewed commit reachable from `main`. Qualification releases normally use the same source path. Confirm clean checkout, current source SHA, release manifest, and successful required checks before tagging.
+
+??? note "Qualification before merge"
+    When an issue requires live acceptance before merge, an operator may approve an immutable qualification release from that issue's unmerged PR. Record approval, the PR, exact full commit SHA, successful required checks, completed review and live acceptance criteria in the tracking issue before creating the draft. Verify the candidate descends from the cluster baseline. Use a separate implementation checkout; do not move the deployed checkout to the PR branch.
+
+    This exception permits lab qualification only. Keep the PR open until its live acceptance passes. Tag and assets remain immutable, rollout still uses Cluster Management, and stable publication still requires `main` ancestry. A source change requires checks and review appropriate to that change plus a new candidate tag. Never borrow validation from another commit or merge early to make a release eligible.
 
 ```sh
 REPOSITORY="bunny-lab-io/Borealis"

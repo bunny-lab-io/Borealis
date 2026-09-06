@@ -103,6 +103,8 @@ Normal pull requests validate deterministic repository behavior. Full Engine dep
 
 Do not delete regression coverage silently. Update [Testing Regressions](testing-regressions.md) when test protects known production, operator, or review regression.
 
+Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_legacy_admission_recovery Tests.Unit_Tests.test_engine_cluster_recovery`. These repository tests use temporary files and mock host service/cluster observations; they never operate on deployed PostgreSQL or K3s. Runtime recovery still requires the immutable-release check and original controller admission gates.
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

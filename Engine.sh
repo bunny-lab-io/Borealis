@@ -11695,6 +11695,16 @@ validate_cluster_node_revision() {
 prepare_cluster_node_runtime() (
   # Keep downloaded and previous configuration private until preparation commits.
   umask 077
+  local preparation_mode="${1:-full}"
+  local runtime_secret_file="${2:-}"
+  case "${preparation_mode}" in
+    full) [[ "$#" -eq 0 ]] || die "Full preparation does not accept external configuration." ;;
+    configuration-only)
+      [[ "$#" -eq 2 && -f "${runtime_secret_file}" && ! -L "${runtime_secret_file}" ]] \
+        || die "Configuration recovery requires its verified private Secret snapshot."
+      ;;
+    *) die "Unknown cluster preparation mode." ;;
+  esac
   local preparation_dir=""
   preparation_dir="$(mktemp -d)"
   local cluster_runtime_env="${preparation_dir}/cluster.env"
@@ -11720,8 +11730,13 @@ prepare_cluster_node_runtime() (
     exit "${result}"
   }
   trap cleanup_cluster_runtime_preparation EXIT
-  k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json \
-    | python3 -c 'import base64,json,re,sys
+  {
+    if [[ "${preparation_mode}" == configuration-only ]]; then
+      cat -- "${runtime_secret_file}"
+    else
+      k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json
+    fi
+  } | python3 -c 'import base64,json,re,sys
 payload=json.load(sys.stdin)
 for key,value in sorted((payload.get("data") or {}).items()):
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", key):
@@ -11746,8 +11761,10 @@ for key,value in sorted((payload.get("data") or {}).items()):
   # Seed both before preparation, which then renders this node's local paths.
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${COMPOSE_ENV}"
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
-  prepare_runtime prod
-  run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
+  if [[ "${preparation_mode}" == full ]]; then
+    prepare_runtime prod
+    run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
+  fi
   restore_previous=0
 )
 

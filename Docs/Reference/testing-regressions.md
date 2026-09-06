@@ -79,6 +79,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-058 | Fresh cluster node preparation | `test_join_preparation_provisions_identity_and_build_dependencies` and `test_cluster_runtime_hydration_precedes_fresh_preparation` | fixed | Admission on fresh hosts exposed absent runtime identity/build dependencies, Python bootstrap ordering and runtime preparation before authoritative configuration hydration (#511/#513). | Prepare account and OS dependencies before sandboxed deployment, then resolve FQDN/shared credentials and the CloudNativePG endpoint from cluster configuration in both environment files. Retain node-local paths, private file modes, literal secret syntax and failure cleanup; restore previous compose/runtime bytes and metadata after early or partial-render failure; verify complete live admission separately. |
 
+| REG-TEST-059 | Immutable legacy admission configuration recovery | `test_legacy_admission_recovery.py` and retained `test_engine_cluster_recovery.py` preparation tests | live qualification open | Failed legacy admission pins pre-F03 Engine source while quorum state blocks normal update (#517). | Verify immutable repair source, original operation/cohort/node identity, drained roles, healthy K3s/CNPG and idle action state before target-local configuration repair. Reuse F03 transaction without runtime staging. Preserve prior bytes/metadata, stop writing children on timeout, restore target node-manager, reject symlinks and changed observations, retain private journal and resume through original controller gates. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
