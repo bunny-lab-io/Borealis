@@ -230,6 +230,64 @@ describe("Cluster Management", () => {
     await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(`Recorded commit SHA: ${"c".repeat(40)}`));
   });
 
+  it("receives node snapshots before slow catalog/history and does not redate them later", async () => {
+    let now = 1_787_770_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.nodes = [{ id: "node-1", node_name: "version-one", membership_state: "Active", release_tag: "2026.09.1", release_sha: "a".repeat(40), last_seen_at: now / 1000 }];
+    let requests = 0;
+    const auxiliary = [];
+    vi.stubGlobal("fetch", vi.fn((path) => {
+      if (path === "/api/server/cluster") {
+        requests += 1;
+        if (requests > 1) return new Promise(() => {});
+        return Promise.resolve({ ok: true, json: async () => ({ enabled: true, nodes: [{ ...state.nodes[0], release_tag: "2026.09.2" }], operations: [] }) });
+      }
+      return new Promise((resolve) => auxiliary.push(resolve));
+    }));
+    renderClusterManagement("/cluster-management?tab=nodes");
+    expect(await screen.findByText("2026.09.1")).toBeInTheDocument();
+    await act(async () => { now += 5000; poll(); });
+    expect(await screen.findByText("2026.09.2")).toBeInTheDocument();
+    expect(screen.getByText(/Recorded · Recent report/)).toBeInTheDocument();
+    await act(async () => { now += 20_000; poll(); });
+    expect(await screen.findByText(/Snapshot stale/)).toBeInTheDocument();
+    await act(async () => { auxiliary.forEach((resolve) => resolve({ ok: true, json: async () => ({ releases: [], events: [] }) })); });
+    expect(screen.getByText(/Snapshot stale/)).toBeInTheDocument();
+  });
+
+  it.each(["failure", "success"])("ignores older polling %s after newer snapshot arrives", async (completion) => {
+    let now = 1_787_770_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.nodes = [{ id: "node-1", node_name: "version-one", membership_state: "Active", release_tag: "2026.09.1", release_sha: "a".repeat(40), last_seen_at: now / 1000 }];
+    const pending = [];
+    const response = (release) => ({ ok: true, json: async () => ({ enabled: true, nodes: [{ ...state.nodes[0], release_tag: release }], operations: [] }) });
+    vi.stubGlobal("fetch", vi.fn((path) => path === "/api/server/cluster"
+      ? new Promise((resolve, reject) => pending.push({ resolve, reject }))
+      : Promise.resolve({ ok: true, json: async () => ({ releases: [], events: [] }) })));
+    renderClusterManagement("/cluster-management?tab=nodes");
+    expect(await screen.findByText("2026.09.1")).toBeInTheDocument();
+    await act(async () => { now += 5000; poll(); });
+    await act(async () => { now += 5000; poll(); });
+    await act(async () => { pending[1].resolve(response("2026.09.2")); });
+    expect(await screen.findByText("2026.09.2")).toBeInTheDocument();
+    await act(async () => { completion === "failure" ? pending[0].reject(new Error("old failure")) : pending[0].resolve(response("2026.09.1")); });
+    expect(screen.getByText("2026.09.2")).toBeInTheDocument();
+    expect(screen.getByText(/Recorded · Recent report/)).toBeInTheDocument();
+    expect(screen.queryByText(/Snapshot stale/)).not.toBeInTheDocument();
+  });
+
   it("cancels only pending admissions and exposes retained-target renewal", async () => {
     state.hmrState = "inactive";
     state.activeSize = 1;

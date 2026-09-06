@@ -914,6 +914,7 @@ export default function ClusterManagement() {
   const [versionClock, setVersionClock] = useState(Date.now);
   const [snapshotReceivedAt, setSnapshotReceivedAt] = useState(() => loaderData?.cluster ? Date.now() : 0);
   const [snapshotUnavailable, setSnapshotUnavailable] = useState(false);
+  const refreshGeneration = useRef(0);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
@@ -975,7 +976,25 @@ export default function ClusterManagement() {
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
+    const generation = ++refreshGeneration.current;
     try {
+      // Snapshot freshness follows its own body receipt, not catalog/history work.
+      const snapshotRequest = (async () => {
+        try {
+          const response = await fetch("/api/server/cluster", { credentials: "include", cache: "no-store" });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload?.message || "Cluster state request failed.");
+          if (generation !== refreshGeneration.current) return;
+          const receivedAt = Date.now();
+          setCluster(payload);
+          setSnapshotReceivedAt(receivedAt);
+          setVersionClock(receivedAt);
+          setSnapshotUnavailable(false);
+        } catch (requestError) {
+          if (generation === refreshGeneration.current) setSnapshotUnavailable(true);
+          throw requestError;
+        }
+      })();
       const eventRequest = loadClusterEventHistory(async (path) => {
         const response = await fetch(path, { credentials: "include", cache: "no-store" });
         const payload = await response.json().catch(() => ({}));
@@ -984,17 +1003,13 @@ export default function ClusterManagement() {
       }, eventCursorRef.current)
         .then((items) => ({ items, error: "" }))
         .catch((requestError) => ({ items: null, error: requestError?.message || "Cluster event details could not be loaded." }));
-      const [clusterResponse, releaseResponse, eventResult] = await Promise.all([
-        fetch("/api/server/cluster", { credentials: "include", cache: "no-store" }),
+      const [, releaseResponse, eventResult] = await Promise.all([
+        snapshotRequest,
         fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" }),
         eventRequest,
       ]);
-      const clusterPayload = await clusterResponse.json().catch(() => ({}));
       const releasePayload = await releaseResponse.json().catch(() => ({}));
-      if (!clusterResponse.ok) throw new Error(clusterPayload?.message || "Cluster state request failed.");
-      setCluster(clusterPayload);
-      setSnapshotReceivedAt(Date.now());
-      setSnapshotUnavailable(false);
+      if (generation !== refreshGeneration.current) return;
       if (releaseResponse.ok) {
         setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
         setReleaseError("");
@@ -1020,7 +1035,7 @@ export default function ClusterManagement() {
       setError("");
       if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
     } catch (requestError) {
-      setSnapshotUnavailable(true);
+      if (generation !== refreshGeneration.current) return;
       if (!quiet) setError(requestError?.message || "Cluster state request failed.");
     }
   }, [notify]);
