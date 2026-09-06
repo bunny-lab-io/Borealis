@@ -1,11 +1,49 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestEnrollmentBase64InputPreservesEncodingAndRejectsMalformedValues(t *testing.T) {
+	const valid = "MCowBQYDK2VwAyEAZ7y25wZ806ry8XZHh0bRAdSR2tOnfsxQGgQOmMHEQpI="
+	for _, field := range []string{"agent_pubkey", "client_nonce"} {
+		for _, tc := range []struct {
+			name  string
+			value string
+			valid bool
+		}{
+			{"attribute_like_suffix", valid, true},
+			{"legacy_whitespace", " \n" + valid + "\t", true},
+			{"legacy_url_alphabet", "-___", true},
+			{"malformed", "%%%", false},
+			{"markup", "<script>alert(1)</script>", false},
+			{"oversized", strings.Repeat("A", maxInputPlainTextLength+4), false},
+			{"nul", valid + "\x00", false},
+		} {
+			t.Run(field+"/"+tc.name, func(t *testing.T) {
+				raw, err := json.Marshal(map[string]string{field: tc.value})
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest(http.MethodPost, "/api/agent/enroll/request", strings.NewReader(string(raw)))
+				body, err := readJSONMap(req)
+				if (err == nil) != tc.valid {
+					t.Fatalf("valid=%t err=%v", tc.valid, err)
+				}
+				if tc.valid && body[field] != tc.value {
+					t.Fatal("encoded binary input changed")
+				}
+			})
+		}
+	}
+	if errs := sanitizeJSONInputMap(map[string]any{"name": "<img onload=alert(1)>"}); len(errs) == 0 {
+		t.Fatal("plain text executable markup accepted")
+	}
+}
 
 func TestPublicInputValidationRejectsUnsafeQuery(t *testing.T) {
 	handler := withPublicInputValidation(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
