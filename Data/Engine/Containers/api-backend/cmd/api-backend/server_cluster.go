@@ -111,6 +111,7 @@ func clusterRemovalNodeIDs(targetNodeID string, payload map[string]any) []string
 }
 
 func registerServerClusterRoutes(mux *http.ServeMux, auth *authService) {
+	registerClusterSSHPreflightRoutes(mux, auth)
 	mux.HandleFunc("GET /api/server/cluster", clusterSnapshotHandler(auth))
 	mux.HandleFunc("GET /api/server/cluster/banner", clusterBannerHandler(auth))
 	mux.HandleFunc("GET /api/server/cluster/events", clusterEventsHandler(auth))
