@@ -250,9 +250,15 @@ def validate_secret(secret, proof, endpoint):
     require(values.get("BOREALIS_ENGINE_NETWORK_MODE") in ("public", "local")
             and values.get("BOREALIS_PUBLIC_HOSTNAME") == urllib.parse.urlsplit(endpoint).hostname,
             "Runtime network mode or hostname mismatch")
-    peers = values.get("BOREALIS_K3S_PEER_CIDRS", "").split(",")
-    require(set(peers) == {address + "/32" for address in proof["peer_addresses"]}
-            and len(peers) == 3, "Runtime peer allowlist differs from original cohort")
+    try:
+        peers = [ipaddress.ip_network(raw.strip(), strict=False)
+                 for raw in values.get("BOREALIS_K3S_PEER_CIDRS", "").split(",")]
+    except ValueError:
+        raise RecoveryError("Runtime peer allowlist contains invalid CIDR") from None
+    require(all(peer.version == 4 and peer.is_private for peer in peers)
+            and all(any(ipaddress.IPv4Address(address) in peer for peer in peers)
+                    for address in proof["peer_addresses"]),
+            "Runtime private IPv4 allowlist must cover original cohort")
     database = urllib.parse.urlsplit(values.get("BOREALIS_DATABASE_URL", ""))
     require(database.scheme in ("postgres", "postgresql")
             and database.hostname in ("borealis-postgres-rw", "borealis-postgres-rw.borealis",

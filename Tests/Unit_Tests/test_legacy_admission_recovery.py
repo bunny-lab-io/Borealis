@@ -199,7 +199,7 @@ class LegacyAdmissionIdentityTests(unittest.TestCase):
         for key, value in (
             ("bad-key", "value"), ("POSTGRES_PASSWORD", "line\nsecond"),
             ("BOREALIS_ENGINE_NETWORK_MODE", "unknown"), ("BOREALIS_PUBLIC_HOSTNAME", "wrong.test"),
-            ("BOREALIS_K3S_PEER_CIDRS", "192.168.50.0/24"),
+            ("BOREALIS_K3S_PEER_CIDRS", "192.168.60.0/24"),
             ("BOREALIS_DATABASE_URL", "postgresql://borealis@postgres-db.borealis.svc/borealis"),
         ):
             with self.subTest(key=key):
@@ -207,6 +207,27 @@ class LegacyAdmissionIdentityTests(unittest.TestCase):
                 changed["data"][key] = base64.b64encode(value.encode()).decode()
                 with self.assertRaises(RECOVERY.RecoveryError):
                     RECOVERY.validate_secret(changed, proof, ENDPOINT)
+
+    def test_peer_allowlist_accepts_subnets_without_losing_coverage_guards(self):
+        proof = RECOVERY.validate_snapshot(snapshot(), OPERATION, "engine-02")
+        for cidrs, accepted in (
+            ("192.168.50.0/24", True),
+            ("192.168.50.21/31, 192.168.50.22/31", True),
+            ("192.168.50.0/24,192.168.60.0/24", True),
+            ("192.168.50.21/32,192.168.50.22/32", False),
+            ("192.168.60.0/24", False), ("0.0.0.0/0", False),
+            ("192.168.50.0/24,203.0.114.0/24", False),
+            ("fd00::/64", False), ("192.168.50.0/24,invalid", False), ("", False),
+        ):
+            with self.subTest(cidrs=cidrs):
+                runtime = secret()
+                runtime["data"]["BOREALIS_K3S_PEER_CIDRS"] = base64.b64encode(cidrs.encode()).decode()
+                if accepted:
+                    RECOVERY.validate_secret(runtime, proof, ENDPOINT)
+                    self.assertEqual(base64.b64decode(runtime["data"]["BOREALIS_K3S_PEER_CIDRS"]).decode(), cidrs)
+                else:
+                    with self.assertRaises(RECOVERY.RecoveryError):
+                        RECOVERY.validate_secret(runtime, proof, ENDPOINT)
 
     def test_https_origin_and_credential_file_boundary(self):
         self.assertEqual(RECOVERY.https_origin(ENDPOINT + "/"), ENDPOINT)
@@ -311,17 +332,20 @@ class LegacyAdmissionTransactionTests(unittest.TestCase):
                     '\nrun_privileged() { "$@"; }\nprepare_cluster_node_runtime')
             return real_run(command, **kwargs)
 
-        observations = [(proof, secret()), (dict(proof, attempt=5) if case == "changed_operation" else proof, secret())]
+        runtime = secret()
+        if case == "subnet":
+            runtime["data"]["BOREALIS_K3S_PEER_CIDRS"] = base64.b64encode(b"192.168.50.0/24").decode()
+        observations = [(proof, runtime), (dict(proof, attempt=5) if case == "changed_operation" else proof, runtime)]
         with mock.patch.object(repair, "service", side_effect=service), \
                 mock.patch.object(repair, "observe", side_effect=observations), \
                 mock.patch.object(RECOVERY, "run", side_effect=runner):
             if case in ("write_failure", "changed_operation", "start_failure"):
                 with self.assertRaises(RECOVERY.RecoveryError):
-                    repair.apply(proof, secret())
+                    repair.apply(proof, runtime)
             else:
-                result = repair.apply(proof, secret())
+                result = repair.apply(proof, runtime)
                 self.assertEqual(result["state"], "committed")
-                self.assertEqual(repair.apply(proof, secret())["state"], "already_committed")
+                self.assertEqual(repair.apply(proof, runtime)["state"], "already_committed")
         directory = root / "journal" / (OPERATION + "-" + NODE_UID)
         journal = json.loads((directory / "journal.json").read_text())
         self.assertFalse((directory / "runtime-secret.json").exists())
@@ -342,10 +366,12 @@ class LegacyAdmissionTransactionTests(unittest.TestCase):
                 self.assertIn("BOREALIS_PUBLIC_HOSTNAME=cluster.example.test\n", path.read_text())
                 self.assertIn(LITERAL, path.read_text())
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                if case == "subnet":
+                    self.assertIn("BOREALIS_K3S_PEER_CIDRS=192.168.50.0/24\n", path.read_text())
         return repair, proof, deploy, directory, services
 
     def test_real_configuration_only_seed_and_transaction_failures(self):
-        for case in ("fresh", "existing", "write_failure", "changed_operation", "start_failure"):
+        for case in ("fresh", "existing", "subnet", "write_failure", "changed_operation", "start_failure"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
                 self.exercise(Path(temporary), case)
 
