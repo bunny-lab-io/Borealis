@@ -11686,11 +11686,33 @@ validate_cluster_node_revision() {
 }
 
 prepare_cluster_node_runtime() (
-  # Keep the downloaded Secret private and remove it on every exit path.
+  # Keep downloaded and previous configuration private until preparation commits.
   umask 077
-  local cluster_runtime_env=""
-  cluster_runtime_env="$(mktemp)"
-  trap 'rm -f -- "${cluster_runtime_env}"' EXIT
+  local preparation_dir=""
+  preparation_dir="$(mktemp -d)"
+  local cluster_runtime_env="${preparation_dir}/cluster.env"
+  local restore_previous=0
+  cleanup_cluster_runtime_preparation() {
+    local result=$? path name
+    trap - EXIT
+    if (( restore_previous )); then
+      for name in compose runtime; do
+        path="${COMPOSE_ENV}"
+        [[ "${name}" != runtime ]] || path="${RUNTIME_ENV}"
+        if [[ -f "${preparation_dir}/${name}.previous" ]]; then
+          run_privileged cp -p -- "${preparation_dir}/${name}.previous" "${path}" || {
+            printf 'Cluster environment restore failed; private backup retained at %s\n' "${preparation_dir}" >&2
+            exit 1
+          }
+        else
+          run_privileged rm -f -- "${path}" || exit 1
+        fi
+      done
+    fi
+    run_privileged rm -rf -- "${preparation_dir}" || exit 1
+    exit "${result}"
+  }
+  trap cleanup_cluster_runtime_preparation EXIT
   k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json \
     | python3 -c 'import base64,json,re,sys
 payload=json.load(sys.stdin)
@@ -11709,11 +11731,16 @@ for key,value in sorted((payload.get("data") or {}).items()):
   validate_k3s_baseline_settings
   ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "${network_mode}")"
   export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  # Preserve bytes and metadata before either destination can be overwritten.
+  [[ ! -e "${COMPOSE_ENV}" ]] || run_privileged cp -p -- "${COMPOSE_ENV}" "${preparation_dir}/compose.previous"
+  [[ ! -e "${RUNTIME_ENV}" ]] || run_privileged cp -p -- "${RUNTIME_ENV}" "${preparation_dir}/runtime.previous"
+  restore_previous=1
   # Runtime preparation reads compose.env for FQDN and shared credentials.
   # Seed it before preparation, which then renders this node's local paths.
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${COMPOSE_ENV}"
   prepare_runtime prod
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
+  restore_previous=0
 )
 
 stage_cluster_node_revision_images() {
