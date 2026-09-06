@@ -75,6 +75,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-055 | Per-node Engine version visibility and honest freshness | `Cluster_Management.test.jsx` and `TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget` | fixed | #476 and U02 review found Nodes grid omitted individual releases; recorded metadata could be confused with live runtime identity, and quiet failed polling retained apparently current data. | Show recorded release and full SHA, unknown identity, report age and stale snapshot. Keep pending target separate and scoped to active Engine-update targets. Preserve mixed records and refresh full-SHA tooltips even when release text stays unchanged. Recover after failed/hanging polls, preserve loader/poll snapshot receipt before auxiliary waits, accept sustained slow responses and independent catalog/history completions during snapshot failure, and reject superseded completions without claiming runtime version verification. Q01 verifies all three live nodes. |
 
+| REG-TEST-058 | Fresh cluster node preparation | `test_join_preparation_provisions_identity_and_build_dependencies` and `test_cluster_runtime_hydration_precedes_fresh_preparation` | fixed | Admission on fresh hosts exposed absent runtime identity/build dependencies, Python bootstrap ordering and runtime preparation before authoritative configuration hydration (#511/#513). | Prepare account and OS dependencies before sandboxed deployment, then resolve FQDN/shared credentials from cluster configuration. Retain node-local paths, private file modes, literal secret syntax and failure cleanup; verify complete live admission separately. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
