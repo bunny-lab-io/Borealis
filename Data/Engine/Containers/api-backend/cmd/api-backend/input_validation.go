@@ -54,6 +54,7 @@ const (
 	inputClassRegex           inputFieldClass = "regex"
 	inputClassSecret          inputFieldClass = "secret"
 	inputClassCode            inputFieldClass = "code"
+	inputClassBase64          inputFieldClass = "base64"
 )
 
 func withPublicInputValidation(next http.Handler) http.Handler {
@@ -242,6 +243,14 @@ func sanitizeInputValueByClass(value string, class inputFieldClass) (string, boo
 
 func validateInputValue(field string, value string, class inputFieldClass) error {
 	switch class {
+	case inputClassBase64:
+		if err := validateInputUTF8AndControls(field, value, maxInputPlainTextLength, true); err != nil {
+			return err
+		}
+		if _, err := decodeStandardBase64(value); err != nil {
+			return fmt.Errorf("%s must be valid base64", field)
+		}
+		return nil
 	case inputClassSecret, inputClassCode:
 		return validateInputUTF8AndControls(field, value, 16<<20, true)
 	case inputClassPath:
@@ -486,6 +495,8 @@ func classifyInputField(field string) inputFieldClass {
 	key := strings.ToLower(strings.TrimSpace(field))
 	key = strings.Trim(key, "[]")
 	switch {
+	case key == "agent_pubkey" || key == "client_nonce":
+		return inputClassBase64
 	case strings.Contains(key, "password"), strings.Contains(key, "cipher"), strings.Contains(key, "secret"),
 		strings.Contains(key, "token"), strings.Contains(key, "pem"), strings.Contains(key, "private_key"),
 		strings.Contains(key, "backup"), key == "invite_bundle":

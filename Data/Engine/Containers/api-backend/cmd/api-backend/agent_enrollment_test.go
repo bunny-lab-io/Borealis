@@ -73,12 +73,14 @@ func (s *enrollmentTestStore) finalizeAgentEnrollment(_ context.Context, request
 }
 
 func TestAgentEnrollmentRequestHandlerCreatesPendingResponse(t *testing.T) {
-	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	// Fixed test-only Ed25519 SPKI has an On...= base64 suffix. Generic HTML
+	// event-attribute detection previously rejected such randomly generated keys.
+	const encodedKey = "MCowBQYDK2VwAyEAZ7y25wZ806ry8XZHh0bRAdSR2tOnfsxQGgQOmMHEQpI="
+	publicDER, err := base64.StdEncoding.DecodeString(encodedKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicDER, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
+	if _, err := x509.ParsePKIXPublicKey(publicDER); err != nil {
 		t.Fatal(err)
 	}
 	store := &enrollmentTestStore{
@@ -93,7 +95,7 @@ func TestAgentEnrollmentRequestHandlerCreatesPendingResponse(t *testing.T) {
 	auth := &authService{store: store, timeout: time.Second}
 	body := `{"hostname":"agent-node-01","enrollment_code":"INSTALL-CODE","agent_pubkey":"` +
 		base64.StdEncoding.EncodeToString(publicDER) +
-		`","client_nonce":"` + base64.StdEncoding.EncodeToString([]byte("client-nonce-01234567890123456789")) + `"}`
+		`","client_nonce":"` + encodedKey + `"}`
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/agent/enroll/request", strings.NewReader(body))

@@ -75,6 +75,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-055 | Per-node Engine version visibility and honest freshness | `Cluster_Management.test.jsx` and `TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget` | fixed | #476 and U02 review found Nodes grid omitted individual releases; recorded metadata could be confused with live runtime identity, and quiet failed polling retained apparently current data. | Show recorded release and full SHA, unknown identity, report age and stale snapshot. Keep pending target separate and scoped to active Engine-update targets. Preserve mixed records and refresh full-SHA tooltips even when release text stays unchanged. Recover after failed/hanging polls, preserve loader/poll snapshot receipt before auxiliary waits, accept sustained slow responses and independent catalog/history completions during snapshot failure, and reject superseded completions without claiming runtime version verification. Q01 verifies all three live nodes. |
 
+| REG-TEST-057 | Agent enrollment binary validation | `TestAgentEnrollmentRequestHandlerCreatesPendingResponse` and `TestEnrollmentBase64InputPreservesEncodingAndRejectsMalformedValues` | fixed | H03 CI rejected a valid random Ed25519 SPKI as executable markup when base64 matched an event-attribute suffix. Deterministic key/nonce fixture reproduces failure. | Preserve bounded base64 protocol fields and existing decoding semantics; reject malformed, oversized and control-bearing values while retaining ordinary text markup checks. Keep deterministic fixture; do not retry flaky enrollment tests until green. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
