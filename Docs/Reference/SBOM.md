@@ -175,7 +175,8 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | NFS client utilities (`nfs-common`, `nfs-utils`, or `nfs-client`) host dependency for Longhorn RWX volumes (installed by `Engine.sh` when missing) | [GPL-2.0-or-later with BSD components](https://github.com/linux-nfs/nfs-utils/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
-| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing; release workflow builds exact-source node-manager SSH bootstrap binary) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go standard library/runtime (compiled into `borealis-node-manager` in central SSH bootstrap release assets) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | PyYAML 6.0.3 (repository validation manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | Zensical 0.0.55 (documentation validation and Pages build) | [MIT](https://github.com/zensical/zensical/blob/main/LICENSE) |
 | shared-engine | actionlint v1.7.7 (GitHub Actions workflow validation) | [MIT](https://github.com/rhysd/actionlint/blob/main/LICENSE.txt) |
