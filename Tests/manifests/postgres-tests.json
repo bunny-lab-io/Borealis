@@ -12,6 +12,8 @@
     "TestPostgresLeaseTransportBlackholeAndRecovery",
     "TestSchedulerPostgresDispatchRecovery",
     "TestSchedulerPostgresOwnershipFences",
+    "TestSchedulerPostgresPatchResultAcknowledgementAtomic",
+    "TestSchedulerPostgresSnapshotOutlivesOwnershipTransactionBudget",
     "TestSchedulerPostgresUnknownOutcomePreservesExecution",
     "TestSchedulerPostgresWorkflowDispatchRetainsIdentity",
     "TestVPNSessionStorePostgresReplicaConvergence"

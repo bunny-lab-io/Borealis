@@ -50,6 +50,7 @@ const (
 
 type goSchedulerManager struct {
 	leaseTransport leaseExecutor
+	ownershipDB    *sql.DB
 	cfg            gatewayConfig
 	store          *postgresOperatorStore
 	secret         []byte
@@ -87,21 +88,18 @@ type schedulerRoute struct {
 }
 
 func runGoJobSchedulerManager(ctx context.Context, cfg gatewayConfig) error {
-	store, closeStore, err := openControlOperatorStore(cfg)
+	pgStore, ownershipDB, closeStore, err := openSchedulerStores(cfg)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	pgStore, ok := store.(*postgresOperatorStore)
-	if !ok {
-		return errors.New("postgres store required")
-	}
 	secret, err := loadOrCreateEngineSecret(cfg.EngineSecretPath)
 	if err != nil {
 		return err
 	}
 	manager := &goSchedulerManager{
 		leaseTransport: &postgresLeaseTransport{dsn: normalizePostgresDriverURL(cfg)},
+		ownershipDB:    ownershipDB,
 		cfg:            cfg,
 		store:          pgStore,
 		secret:         []byte(secret),
@@ -118,7 +116,7 @@ func runGoJobSchedulerHealthcheck(ctx context.Context, cfg gatewayConfig) error 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect scheduler drain marker: %w", err)
 	}
-	store, closeStore, err := openControlOperatorStore(cfg)
+	store, closeStore, err := openOperatorStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -171,6 +169,8 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 			})
 			m.store.db.SetMaxIdleConns(0)
 			m.store.db.SetMaxIdleConns(m.cfg.DBMaxIdleConns)
+			m.ownershipPool().SetMaxIdleConns(0)
+			m.ownershipPool().SetMaxIdleConns(m.cfg.DBMaxIdleConns)
 			ownerCtx := context.WithValue(guard.Context(), schedulerOwnerContextKey{}, holder)
 			log.Printf("Go job-scheduler manager acquired active leadership holder=%s", holder)
 			_ = m.runLeader(ownerCtx)
@@ -1324,7 +1324,9 @@ func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64
 	if len(lanes) == 0 {
 		return nil, nil
 	}
-	conn, err := m.store.db.Conn(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
@@ -1408,7 +1410,9 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 	if len(normalizedKinds) == 0 {
 		return nil, nil
 	}
-	conn, err := m.store.db.Conn(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
@@ -1482,7 +1486,9 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 }
 
 func (m *goSchedulerManager) expireStaleLeases(ctx context.Context) error {
-	conn, err := m.store.db.Conn(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		return err
 	}

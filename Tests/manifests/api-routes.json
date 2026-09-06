@@ -56,7 +56,7 @@
   {
     "pattern": "/api/auth/me",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 320,
+    "line": 328,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -65,7 +65,7 @@
   {
     "pattern": "/api/auth/mfa/reset",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 321,
+    "line": 329,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -74,7 +74,7 @@
   {
     "pattern": "/api/auth/passkeys",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 323,
+    "line": 331,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -83,7 +83,7 @@
   {
     "pattern": "/api/auth/passkeys/",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 328,
+    "line": 336,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -722,7 +722,7 @@
   {
     "pattern": "GET /api/bootstrap/state",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 311,
+    "line": 319,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1181,7 +1181,7 @@
   {
     "pattern": "POST /api/auth/login",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 317,
+    "line": 325,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1190,7 +1190,7 @@
   {
     "pattern": "POST /api/auth/logout",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 318,
+    "line": 326,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1199,7 +1199,7 @@
   {
     "pattern": "POST /api/auth/mfa/verify",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 319,
+    "line": 327,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1208,7 +1208,7 @@
   {
     "pattern": "POST /api/auth/passkeys/authenticate/options",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 326,
+    "line": 334,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1217,7 +1217,7 @@
   {
     "pattern": "POST /api/auth/passkeys/authenticate/verify",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 327,
+    "line": 335,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1226,7 +1226,7 @@
   {
     "pattern": "POST /api/auth/passkeys/register/options",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 324,
+    "line": 332,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1235,7 +1235,7 @@
   {
     "pattern": "POST /api/auth/passkeys/register/verify",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 325,
+    "line": 333,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1244,7 +1244,7 @@
   {
     "pattern": "POST /api/auth/password/reset",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 322,
+    "line": 330,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1253,7 +1253,7 @@
   {
     "pattern": "POST /api/bootstrap/admin/mfa/verify",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 316,
+    "line": 324,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1262,7 +1262,7 @@
   {
     "pattern": "POST /api/bootstrap/admin/recover",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 315,
+    "line": 323,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1271,7 +1271,7 @@
   {
     "pattern": "POST /api/bootstrap/admin/setup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 314,
+    "line": 322,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1280,7 +1280,7 @@
   {
     "pattern": "POST /api/bootstrap/aegis/setup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 312,
+    "line": 320,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -1289,7 +1289,7 @@
   {
     "pattern": "POST /api/bootstrap/aegis/unlock",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/auth.go",
-    "line": 313,
+    "line": 321,
     "class": "public-bootstrap",
     "authentication": "bootstrap-contract",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",

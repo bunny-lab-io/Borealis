@@ -20,11 +20,18 @@ func schedulerOwnershipFixture(t *testing.T) (*goSchedulerManager, context.Conte
 	if dsn == "" {
 		t.Skip("BOREALIS_TEST_DATABASE_URL not configured")
 	}
-	db := sql.OpenDB(&postgresControlConnector{dsn: dsn})
-	t.Cleanup(func() { db.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	store, ownershipDB, closeStore, err := openSchedulerStores(gatewayConfig{
+		DatabaseURL: dsn, DBSSLMode: "disable", DBConnectTimeout: 2 * time.Second,
+		DBMaxOpenConns: 5, DBMaxIdleConns: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(closeStore)
+	db := store.db
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-	m := &goSchedulerManager{store: &postgresOperatorStore{db: db}, leaseTransport: &postgresLeaseTransport{dsn: dsn}}
+	m := &goSchedulerManager{store: store, ownershipDB: ownershipDB, leaseTransport: &postgresLeaseTransport{dsn: dsn}}
 	if err := m.store.ensureClusterSchema(ctx); err != nil {
 		t.Fatal(err)
 	}

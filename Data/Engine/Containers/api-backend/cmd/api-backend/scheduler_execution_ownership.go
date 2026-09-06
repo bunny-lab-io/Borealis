@@ -38,7 +38,7 @@ func (m *goSchedulerManager) beginOwnedWorkTx(ctx context.Context) (*sql.Tx, sch
 		return nil, item, func() {}, errSchedulerOwnershipLost
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	conn, err := m.store.db.Conn(ctx)
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		cancel()
 		return nil, item, func() {}, err
@@ -192,6 +192,13 @@ func (m *goSchedulerManager) acknowledgeSchedulerDispatch(ctx context.Context, r
 		return err
 	}
 	defer cleanup()
+	if err := acknowledgeSchedulerDispatchTx(ctx, tx, item, resultID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func acknowledgeSchedulerDispatchTx(ctx context.Context, tx *sql.Tx, item schedulerWorkItem, resultID string) error {
 	record, err := loadSchedulerExecution(ctx, tx, item)
 	if err != nil {
 		return err
@@ -203,8 +210,5 @@ func (m *goSchedulerManager) acknowledgeSchedulerDispatch(ctx context.Context, r
 	if resultID != "" {
 		record.ResultID = resultID
 	}
-	if err := storeSchedulerExecution(ctx, tx, item, record); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return storeSchedulerExecution(ctx, tx, item, record)
 }

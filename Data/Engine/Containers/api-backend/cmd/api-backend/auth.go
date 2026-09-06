@@ -154,9 +154,9 @@ func openControlOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) 
 	return openPostgresOperatorStore(cfg, true)
 }
 
-func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, func(), error) {
+func openPostgresPool(cfg gatewayConfig, control bool) (*sql.DB, error) {
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
-		return nil, func() {}, fmt.Errorf("BOREALIS_DATABASE_URL is required")
+		return nil, fmt.Errorf("BOREALIS_DATABASE_URL is required")
 	}
 	var db *sql.DB
 	if control {
@@ -165,12 +165,20 @@ func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, 
 		var err error
 		db, err = sql.Open("postgres", normalizePostgresDriverURL(cfg))
 		if err != nil {
-			return nil, func() {}, err
+			return nil, err
 		}
 	}
 	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxIdleTime(5 * time.Minute)
+	return db, nil
+}
+
+func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, func(), error) {
+	db, err := openPostgresPool(cfg, control)
+	if err != nil {
+		return nil, func() {}, err
+	}
 	store := &postgresOperatorStore{db: db}
 	bootstrapTimeout := cfg.DBConnectTimeout + 15*time.Second
 	if bootstrapTimeout < 15*time.Second {

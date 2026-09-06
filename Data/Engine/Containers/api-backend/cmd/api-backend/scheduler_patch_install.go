@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,18 +117,43 @@ func (m *goSchedulerManager) runPatchInstallWorkItem(ctx context.Context, item s
 		_ = m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusFailed, "", errorText, errorText)
 		return errors.New(errorText)
 	}
-	if err := m.acknowledgeSchedulerDispatch(ctx, requestID); err != nil {
-		return err
-	}
 	stdout, stderr, errorText := schedulerPatchInstallOutput(requestID, hostname, componentName, patch, response)
 	if !schedulerPatchInstallResponseOK(response) {
 		if errorText == "" {
 			errorText = "Patch install failed."
 		}
-		_ = m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusFailed, stdout, stderr, errorText)
+		if err := m.finishScheduledPatchDispatch(ctx, requestID, runID, activityID, scheduledStatusFailed, stdout, stderr, errorText); err != nil {
+			return err
+		}
 		return errors.New(errorText)
 	}
-	return m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusSuccess, stdout, stderr, "")
+	return m.finishScheduledPatchDispatch(ctx, requestID, runID, activityID, scheduledStatusSuccess, stdout, stderr, "")
+}
+
+// A synchronous response is safe to skip on takeover only after its terminal
+// result and execution acknowledgement commit together. Any write failure rolls
+// back both, retaining dispatch uncertainty rather than losing the result.
+func (m *goSchedulerManager) finishScheduledPatchDispatch(ctx context.Context, requestID string, runID, activityID int64, status, stdout, stderr, errorText string) error {
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	record, err := loadSchedulerExecution(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	if item.Kind != schedulerKindPatchInstallRun || !item.RunID.Valid || item.RunID.Int64 != runID ||
+		activityID <= 0 || record.ActivityID != activityID || record.ResultID != requestID || !scheduledTerminalStatus(status) {
+		return errors.New("patch result does not match owned execution")
+	}
+	if err := acknowledgeSchedulerDispatchTx(ctx, tx, item, requestID); err != nil {
+		return err
+	}
+	if err := updateScheduledPatchRunStatusTx(ctx, tx, item, runID, activityID, status, stdout, stderr, errorText); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func patchInstallAgentCallTimeout() time.Duration {
@@ -208,6 +234,18 @@ func (m *goSchedulerManager) updateScheduledPatchRunStatus(ctx context.Context, 
 	if runID <= 0 {
 		return nil
 	}
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := updateScheduledPatchRunStatusTx(ctx, tx, item, runID, activityID, status, stdout, stderr, errorText); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func updateScheduledPatchRunStatusTx(ctx context.Context, tx *sql.Tx, item schedulerWorkItem, runID, activityID int64, status, stdout, stderr, errorText string) error {
 	now := time.Now().Unix()
 	var finished any
 	if scheduledTerminalStatus(status) {
@@ -219,11 +257,6 @@ func (m *goSchedulerManager) updateScheduledPatchRunStatus(ctx context.Context, 
 		targetStatus = schedulerResolutionUnresolved
 		targetReason = truncateString(firstText(errorText, stderr), 512)
 	}
-	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
 	uncertain, err := schedulerWorkOutcomeUnknown(ctx, tx, item)
 	if err != nil {
 		return err
@@ -238,7 +271,7 @@ func (m *goSchedulerManager) updateScheduledPatchRunStatus(ctx context.Context, 
 				return err
 			}
 		}
-		return tx.Commit()
+		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.scheduled_job_runs
@@ -273,7 +306,7 @@ func (m *goSchedulerManager) updateScheduledPatchRunStatus(ctx context.Context, 
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func logSchedulerPatchInstall(format string, args ...any) {

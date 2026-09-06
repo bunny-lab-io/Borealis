@@ -17,6 +17,33 @@ var errSchedulerOwnershipLost = errors.New("scheduler ownership lost")
 type schedulerOwnerContextKey struct{}
 type schedulerWorkContextKey struct{}
 
+// Fleet snapshots use the ordinary store. Only short ownership transactions
+// use the independently cancellable pool with a server transaction deadline.
+func openSchedulerStores(cfg gatewayConfig) (*postgresOperatorStore, *sql.DB, func(), error) {
+	store, closeStore, err := openOperatorStore(cfg)
+	if err != nil {
+		return nil, nil, func() {}, err
+	}
+	ownershipDB, err := openPostgresPool(cfg, true)
+	if err != nil {
+		closeStore()
+		return nil, nil, func() {}, err
+	}
+	return store.(*postgresOperatorStore), ownershipDB, func() {
+		_ = ownershipDB.Close()
+		closeStore()
+	}, nil
+}
+
+func (m *goSchedulerManager) ownershipPool() *sql.DB {
+	if m.ownershipDB != nil {
+		return m.ownershipDB
+	}
+	// In-memory/fake-driver test managers supply their store directly. Runtime
+	// construction always supplies the separate pool through openSchedulerStores.
+	return m.store.db
+}
+
 func schedulerLeadershipPod(holder string) string {
 	pod, generation, found := strings.Cut(holder, "/")
 	if found && !clusterUUIDRE.MatchString(generation) {
@@ -123,7 +150,7 @@ func (m *goSchedulerManager) completeWorkItem(ctx context.Context, item schedule
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	conn, err := m.store.db.Conn(ctx)
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		return err
 	}
