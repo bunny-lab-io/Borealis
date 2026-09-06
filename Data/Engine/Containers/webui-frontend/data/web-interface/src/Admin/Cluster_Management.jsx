@@ -341,6 +341,7 @@ export async function loadClusterManagementPageData(request) {
   try {
     await requireAdminRequest(request, progress);
     const cluster = await progress.fetchJson("/api/server/cluster");
+    const snapshotReceivedAt = Date.now();
     let releases = { releases: [] };
     let releaseError = "";
     let events = [];
@@ -363,7 +364,7 @@ export async function loadClusterManagementPageData(request) {
         }
       })(),
     ]);
-    return { cluster, releases, releaseError, events, eventError, initialError: "" };
+    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return { cluster: null, releases: { releases: [] }, events: [], initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
@@ -912,9 +913,11 @@ export default function ClusterManagement() {
   const notify = useAppNotifications({ title: "Cluster Management", icon: "cluster" });
   const [cluster, setCluster] = useState(loaderData?.cluster || null);
   const [versionClock, setVersionClock] = useState(Date.now);
-  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState(() => loaderData?.cluster ? Date.now() : 0);
+  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState(() => Number(loaderData?.snapshotReceivedAt) || 0);
   const [snapshotUnavailable, setSnapshotUnavailable] = useState(false);
   const refreshGeneration = useRef(0);
+  const snapshotCompletedGeneration = useRef(0);
+  const auxiliaryCompletedGeneration = useRef(0);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
@@ -984,14 +987,17 @@ export default function ClusterManagement() {
           const response = await fetch("/api/server/cluster", { credentials: "include", cache: "no-store" });
           const payload = await response.json();
           if (!response.ok) throw new Error(payload?.message || "Cluster state request failed.");
-          if (generation !== refreshGeneration.current) return;
+          if (generation < snapshotCompletedGeneration.current) return;
+          snapshotCompletedGeneration.current = generation;
           const receivedAt = Date.now();
           setCluster(payload);
           setSnapshotReceivedAt(receivedAt);
           setVersionClock(receivedAt);
           setSnapshotUnavailable(false);
         } catch (requestError) {
-          if (generation === refreshGeneration.current) setSnapshotUnavailable(true);
+          if (generation < snapshotCompletedGeneration.current) return;
+          snapshotCompletedGeneration.current = generation;
+          setSnapshotUnavailable(true);
           throw requestError;
         }
       })();
@@ -1009,7 +1015,8 @@ export default function ClusterManagement() {
         eventRequest,
       ]);
       const releasePayload = await releaseResponse.json().catch(() => ({}));
-      if (generation !== refreshGeneration.current) return;
+      if (generation < auxiliaryCompletedGeneration.current) return;
+      auxiliaryCompletedGeneration.current = generation;
       if (releaseResponse.ok) {
         setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
         setReleaseError("");
@@ -1032,10 +1039,13 @@ export default function ClusterManagement() {
       } else {
         setEventError(eventResult.error);
       }
-      setError("");
-      if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
+      if (generation >= snapshotCompletedGeneration.current) {
+        setError("");
+        if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
+      }
     } catch (requestError) {
-      if (generation !== refreshGeneration.current) return;
+      if (generation < Math.max(snapshotCompletedGeneration.current, auxiliaryCompletedGeneration.current)) return;
+      auxiliaryCompletedGeneration.current = generation;
       if (!quiet) setError(requestError?.message || "Cluster state request failed.");
     }
   }, [notify]);

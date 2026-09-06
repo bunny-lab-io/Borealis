@@ -16,6 +16,7 @@ import ClusterManagement, {
   compareBorealisVersions,
   formatClusterTimestamp,
   friendlyClusterOperationName,
+  loadClusterManagementPageData,
 } from "@/Admin/Cluster_Management.jsx";
 
 const state = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ const state = vi.hoisted(() => ({
   drainedNodeID: "",
   nodes: null,
   admissions: null,
+  snapshotReceivedAt: null,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -41,6 +43,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
   return {
     ...actual,
     useLoaderData: () => ({
+      snapshotReceivedAt: state.snapshotReceivedAt ?? Date.now(),
       cluster: {
         enabled: state.enabled,
         status: state.clusterStatus,
@@ -132,6 +135,7 @@ describe("Cluster Management", () => {
     state.drainedNodeID = "";
     state.nodes = null;
     state.admissions = null;
+    state.snapshotReceivedAt = null;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -286,6 +290,60 @@ describe("Cluster Management", () => {
     expect(screen.getByText("2026.09.2")).toBeInTheDocument();
     expect(screen.getByText(/Recorded · Recent report/)).toBeInTheDocument();
     expect(screen.queryByText(/Snapshot stale/)).not.toBeInTheDocument();
+  });
+
+  it("advances snapshots when responses consistently exceed polling interval", async () => {
+    let now = 1_787_770_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.nodes = [{ id: "node-1", node_name: "version-one", membership_state: "Active", release_tag: "2026.09.1", release_sha: "a".repeat(40), last_seen_at: now / 1000 }];
+    const pending = [];
+    const response = (release) => ({ ok: true, json: async () => ({ enabled: true, nodes: [{ ...state.nodes[0], release_tag: release }], operations: [] }) });
+    vi.stubGlobal("fetch", vi.fn((path) => path === "/api/server/cluster"
+      ? new Promise((resolve) => pending.push(resolve))
+      : Promise.resolve({ ok: true, json: async () => ({ releases: [], events: [] }) })));
+    renderClusterManagement("/cluster-management?tab=nodes");
+    expect(await screen.findByText("2026.09.1")).toBeInTheDocument();
+    await act(async () => { now += 5000; poll(); });
+    await act(async () => { now += 5000; poll(); });
+    await act(async () => { now += 1000; pending[0](response("2026.09.2")); });
+    expect(await screen.findByText("2026.09.2")).toBeInTheDocument();
+    await act(async () => { now += 4000; poll(); });
+    await act(async () => { now += 1000; pending[1](response("2026.09.3")); });
+    expect(await screen.findByText("2026.09.3")).toBeInTheDocument();
+    expect(screen.getByText(/Recorded · Recent report/)).toBeInTheDocument();
+  });
+
+  it("preserves loader snapshot receipt time across delayed auxiliary hydration", async () => {
+    const receivedAt = 1_787_770_000_000;
+    let now = receivedAt;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const node = { id: "node-1", node_name: "version-one", membership_state: "Active", release_tag: "2026.09.1", release_sha: "a".repeat(40), last_seen_at: receivedAt / 1000 };
+    const auxiliary = [];
+    const jsonResponse = (body) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal("fetch", vi.fn((input) => {
+      const path = new URL(String(input), "http://borealis.local").pathname;
+      if (path === "/api/bootstrap/state") return Promise.resolve(jsonResponse({ phase: "login_required" }));
+      if (path === "/api/auth/me") return Promise.resolve(jsonResponse({ username: "operator", role: "Admin" }));
+      if (path === "/api/server/cluster") return Promise.resolve(jsonResponse({ enabled: true, nodes: [node], operations: [] }));
+      return new Promise((resolve) => auxiliary.push(resolve));
+    }));
+    const loading = loadClusterManagementPageData(new Request("http://borealis.local/cluster-management?tab=nodes"));
+    await waitFor(() => expect(auxiliary).toHaveLength(2));
+    now += 60_000;
+    auxiliary.forEach((resolve) => resolve(jsonResponse({ releases: [], events: [] })));
+    const data = await loading;
+    expect(data.snapshotReceivedAt).toBe(receivedAt);
+    state.nodes = data.cluster.nodes;
+    state.snapshotReceivedAt = data.snapshotReceivedAt;
+    renderClusterManagement("/cluster-management?tab=nodes");
+    expect(await screen.findByText(/Snapshot stale/)).toBeInTheDocument();
+    expect(screen.getByText("2026.09.1")).toBeInTheDocument();
   });
 
   it("cancels only pending admissions and exposes retained-target renewal", async () => {
