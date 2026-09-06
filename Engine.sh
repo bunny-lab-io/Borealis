@@ -11685,9 +11685,12 @@ validate_cluster_node_revision() {
   cluster_mode_enabled || die "Cluster node ${action} requires enabled Borealis cluster."
 }
 
-stage_cluster_node_revision_images() {
+prepare_cluster_node_runtime() (
+  # Keep the downloaded Secret private and remove it on every exit path.
+  umask 077
   local cluster_runtime_env=""
   cluster_runtime_env="$(mktemp)"
+  trap 'rm -f -- "${cluster_runtime_env}"' EXIT
   k3s_kubectl -n "${K3S_NAMESPACE}" get "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" -o json \
     | python3 -c 'import base64,json,re,sys
 payload=json.load(sys.stdin)
@@ -11706,9 +11709,21 @@ for key,value in sorted((payload.get("data") or {}).items()):
   validate_k3s_baseline_settings
   ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "${network_mode}")"
   export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  # Runtime preparation reads compose.env for FQDN and shared credentials.
+  # Seed it before preparation, which then renders this node's local paths.
+  run_privileged install -m 0600 -D "${cluster_runtime_env}" "${COMPOSE_ENV}"
   prepare_runtime prod
   run_privileged install -m 0600 -D "${cluster_runtime_env}" "${RUNTIME_ENV}"
-  find "$(dirname -- "${cluster_runtime_env}")" -maxdepth 1 -type f -name "$(basename -- "${cluster_runtime_env}")" -delete
+)
+
+stage_cluster_node_revision_images() {
+  prepare_cluster_node_runtime
+  K3S_PEER_CIDRS="$(read_env_value BOREALIS_K3S_PEER_CIDRS "${RUNTIME_ENV}")"
+  ENGINE_NETWORK_MODE="$(normalize_engine_network_mode "$(read_env_value BOREALIS_ENGINE_NETWORK_MODE "${RUNTIME_ENV}")")"
+  ENGINE_DEPLOYMENT_PROFILE="$(engine_deployment_profile_from_network_mode "${ENGINE_NETWORK_MODE}")"
+  export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
+  load_existing_image_tags
   build_images prod
   export_image_manifest_env
   write_image_manifest prod

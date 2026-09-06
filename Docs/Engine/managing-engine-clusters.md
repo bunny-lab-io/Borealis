@@ -907,6 +907,7 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - It never resubmits the POST.  Persistent loss reports the operation ID as still running server-side and directs the operator to inspect Cluster Events.
 - Engine persists canonical private `BOREALIS_K3S_PEER_CIDRS` values into the runtime Secret.
 - Node-scoped release deploy hydrates the same allowlist and fails closed when it is missing, preventing rolling updates from silently replacing cluster firewall policy with empty peer access.
+- Fresh candidate preparation seeds `compose.env` from the validated cluster runtime Secret before resolving FQDN and shared credentials. Preparation renders node-local paths; `runtime.env` retains the authoritative cluster payload used by existing node deployment. Secret text is decoded as data, never shell-sourced. A private subshell removes the temporary Secret on success or failure; staging reloads network settings and existing image tags afterward. Tests exercise absent/stale local configuration, literal secret syntax, invalid input, preparation failure and temporary-file cleanup.
 - Shared Agent artifacts use one exact Longhorn RWX PVC.
 - Three-node controller reconciliation raises only that bound volume to at least three replicas, verifies fixed PVC/PV/Longhorn ownership, and requires one healthy running replica on each active Engine before planned disruptive operations or pending-node workload activation.
 - It never changes the global one-replica StorageClass policy and never reduces an operator-configured higher replica count.
