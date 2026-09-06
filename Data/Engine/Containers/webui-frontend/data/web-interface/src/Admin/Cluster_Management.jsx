@@ -259,9 +259,11 @@ const GRID_INLINE_STYLE = {
   "--ag-row-border-color": "rgba(125,183,255,0.14)",
   "--ag-border-radius": "8px",
 };
-const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "ip-address", "database", "probes"];
+const NODE_AUTO_SIZE_COLUMNS = ["node-status", "node", "engine-version", "ip-address", "database", "probes"];
 const OPERATION_AUTO_SIZE_COLUMNS = ["operation-node", "operation-status", "operation", "timestamp"];
 const CLUSTER_EVENT_PAGE_SIZE = 500;
+const NODE_REPORT_STALE_MS = 300_000;
+const CLUSTER_SNAPSHOT_STALE_MS = 15_000;
 const SENSITIVE_CLUSTER_DETAIL_KEY = /(?:authorization|cookie|password|secret|token|invite[_-]?bundle|api[_-]?key)/i;
 
 function borealisVersionParts(value) {
@@ -339,6 +341,7 @@ export async function loadClusterManagementPageData(request) {
   try {
     await requireAdminRequest(request, progress);
     const cluster = await progress.fetchJson("/api/server/cluster");
+    const snapshotReceivedAt = Date.now();
     let releases = { releases: [] };
     let releaseError = "";
     let events = [];
@@ -361,7 +364,7 @@ export async function loadClusterManagementPageData(request) {
         }
       })(),
     ]);
-    return { cluster, releases, releaseError, events, eventError, initialError: "" };
+    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return { cluster: null, releases: { releases: [] }, events: [], initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
@@ -618,6 +621,51 @@ export function friendlyClusterOperationName(operation) {
   return labels[kind] || titleCase(kind || "Cluster Operation");
 }
 
+export function clusterNodeVersionPresentation(node, operations = [], now = Date.now(), snapshotStale = false) {
+  const release = String(node?.release_tag || "").trim();
+  const sha = String(node?.release_sha || "").trim();
+  const shaKnown = /^[a-f0-9]{40}$/i.test(sha);
+  const reportTime = Number(node?.last_seen_at) * 1000;
+  const reportKnown = Number.isFinite(reportTime) && reportTime > 0 && reportTime <= now;
+  const reportStatus = !reportKnown ? "Report time unknown" : now - reportTime > NODE_REPORT_STALE_MS ? "Stale report" : "Recent report";
+  const status = snapshotStale ? "Snapshot stale" : reportStatus;
+  const target = operations.find((operation) => {
+    if (operation?.kind !== "engine_update" || !["queued", "running", "waiting"].includes(operation?.state)) return false;
+    if (node?.membership_state !== "Active" || !node?.id) return false;
+    const payload = operation?.payload || {};
+    if (Array.isArray(payload.update_node_ids) && payload.update_node_ids.length) return payload.update_node_ids.includes(node.id);
+    if (payload.scope === "node") return Array.isArray(payload.node_ids) && payload.node_ids.includes(node.id);
+    return payload.scope === "all";
+  });
+  const targetRelease = String(target?.target_release || "").trim();
+  const targetSHA = String(target?.target_sha || "").trim();
+  const targetRecorded = Boolean(release && shaKnown && release === targetRelease && sha === targetSHA);
+  const targetLabel = target ? `${targetRecorded ? "Target recorded" : "Pending"} ${targetRelease || "Unknown"}` : "";
+  const detail = [
+    `Recorded Engine release: ${release || "Unknown"}`,
+    `Recorded commit SHA: ${shaKnown ? sha : "Unknown"}`,
+    "Runtime release identity: not freshly measured. Recorded metadata is not a live version probe.",
+    `${reportStatus}. Last node report: ${reportKnown ? formatClusterTimestamp(node.last_seen_at) : "Unknown"}.`,
+    "Node report time may reflect another lifecycle action; it does not verify the running Engine release.",
+    snapshotStale ? "Snapshot is stale or unavailable. Display retains the last received records; pending target may have changed." : "Snapshot received recently; node record can still be old.",
+    target ? `Update target: ${targetRelease || "Unknown"}\nTarget commit SHA: ${targetSHA || "Unknown"}\nOperation: ${target.state}${targetRecorded ? "; recorded identity matches target" : "; target is not the recorded version"}.` : "",
+  ].filter(Boolean).join("\n");
+  const summary = `${release ? "Recorded" : "Unknown"}${shaKnown ? "" : " · SHA unknown"} · ${status}${targetLabel ? ` · ${targetLabel}` : ""}`;
+  return { release: release || "Unknown", summary, detail, label: `${release || "Unknown"} ${summary}`, stale: snapshotStale || reportStatus !== "Recent report" };
+}
+
+function ClusterNodeVersionCell({ version }) {
+  if (!version) return "Unknown";
+  return (
+    <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{version.detail}</Box>} placement="top-start" arrow>
+      <Box component="span" tabIndex={0} sx={{ display: "flex", flexDirection: "column", lineHeight: "14px", whiteSpace: "nowrap" }}>
+        <Box component="span" sx={{ color: "#e2e8f0" }}>{version.release}</Box>
+        <Box component="span" sx={{ fontSize: 11, color: version.stale ? "#fbbf24" : "#94a3b8" }}>{version.summary}</Box>
+      </Box>
+    </Tooltip>
+  );
+}
+
 export function formatClusterTimestamp(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return "—";
@@ -864,6 +912,13 @@ export default function ClusterManagement() {
   const loaderData = useLoaderData();
   const notify = useAppNotifications({ title: "Cluster Management", icon: "cluster" });
   const [cluster, setCluster] = useState(loaderData?.cluster || null);
+  const [versionClock, setVersionClock] = useState(Date.now);
+  const [snapshotReceivedAt, setSnapshotReceivedAt] = useState(() => Number(loaderData?.snapshotReceivedAt) || 0);
+  const [snapshotUnavailable, setSnapshotUnavailable] = useState(false);
+  const refreshGeneration = useRef(0);
+  const snapshotCompletedGeneration = useRef(0);
+  const releaseCompletedGeneration = useRef(0);
+  const eventsCompletedGeneration = useRef(0);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
@@ -925,55 +980,79 @@ export default function ClusterManagement() {
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
-    try {
-      const eventRequest = loadClusterEventHistory(async (path) => {
-        const response = await fetch(path, { credentials: "include", cache: "no-store" });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
-        return payload;
-      }, eventCursorRef.current)
-        .then((items) => ({ items, error: "" }))
-        .catch((requestError) => ({ items: null, error: requestError?.message || "Cluster event details could not be loaded." }));
-      const [clusterResponse, releaseResponse, eventResult] = await Promise.all([
-        fetch("/api/server/cluster", { credentials: "include", cache: "no-store" }),
-        fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" }),
-        eventRequest,
-      ]);
-      const clusterPayload = await clusterResponse.json().catch(() => ({}));
-      const releasePayload = await releaseResponse.json().catch(() => ({}));
-      if (!clusterResponse.ok) throw new Error(clusterPayload?.message || "Cluster state request failed.");
-      setCluster(clusterPayload);
-      if (releaseResponse.ok) {
-        setReleases(Array.isArray(releasePayload?.releases) ? releasePayload.releases : []);
-        setReleaseError("");
-      } else {
-        setReleaseError(releasePayload?.message || "Engine release catalog could not be loaded.");
+    const generation = ++refreshGeneration.current;
+    const acceptCompletion = (completedGeneration) => {
+      if (generation < completedGeneration.current) return false;
+      completedGeneration.current = generation;
+      return true;
+    };
+    // Each stream accepts its own newest completion, independent of other waits.
+    const snapshotRequest = (async () => {
+      try {
+        const response = await fetch("/api/server/cluster", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Cluster state request failed.");
+        if (!acceptCompletion(snapshotCompletedGeneration)) return;
+        const receivedAt = Date.now();
+        setCluster(payload);
+        setSnapshotReceivedAt(receivedAt);
+        setVersionClock(receivedAt);
+        setSnapshotUnavailable(false);
+        setError("");
+        if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
+      } catch (requestError) {
+        if (!acceptCompletion(snapshotCompletedGeneration)) return;
+        setSnapshotUnavailable(true);
+        if (!quiet) setError(requestError?.message || "Cluster state request failed.");
       }
-      if (eventResult.items) {
-        if (eventResult.items.length) {
+    })();
+    const releaseRequest = (async () => {
+      try {
+        const response = await fetch("/api/server/cluster/releases", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Engine release catalog could not be loaded.");
+        if (!acceptCompletion(releaseCompletedGeneration)) return;
+        setReleases(Array.isArray(payload?.releases) ? payload.releases : []);
+        setReleaseError("");
+      } catch (requestError) {
+        if (!acceptCompletion(releaseCompletedGeneration)) return;
+        setReleaseError(requestError?.message || "Engine release catalog could not be loaded.");
+      }
+    })();
+    const eventRequest = (async () => {
+      try {
+        const items = await loadClusterEventHistory(async (path) => {
+          const response = await fetch(path, { credentials: "include", cache: "no-store" });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload?.message || "Cluster event details request failed.");
+          return payload;
+        }, eventCursorRef.current);
+        if (!acceptCompletion(eventsCompletedGeneration)) return;
+        if (items.length) {
           setEvents((current) => {
             const merged = new Map(current.map((event) => [Number(event?.id || 0), event]));
-            eventResult.items.forEach((event) => merged.set(Number(event?.id || 0), event));
+            items.forEach((event) => merged.set(Number(event?.id || 0), event));
             return [...merged.values()].sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0));
           });
-          eventCursorRef.current = eventResult.items.reduce(
+          eventCursorRef.current = items.reduce(
             (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
             eventCursorRef.current
           );
         }
         setEventError("");
-      } else {
-        setEventError(eventResult.error);
+      } catch (requestError) {
+        if (!acceptCompletion(eventsCompletedGeneration)) return;
+        setEventError(requestError?.message || "Cluster event details could not be loaded.");
       }
-      setError("");
-      if (!quiet) void notify("Cluster state refreshed.", { variant: "success" });
-    } catch (requestError) {
-      if (!quiet) setError(requestError?.message || "Cluster state request failed.");
-    }
+    })();
+    await Promise.all([snapshotRequest, releaseRequest, eventRequest]);
   }, [notify]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void refresh({ quiet: true }), 5000);
+    const timer = window.setInterval(() => {
+      setVersionClock(Date.now());
+      void refresh({ quiet: true });
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -1087,10 +1166,11 @@ export default function ClusterManagement() {
           databaseStatus: clusterNodeDatabaseStatus(node, cluster?.leaders?.postgres_primary, database, activeMemberCount),
           rolesLabel: rolesPresentation.label,
           probeSummary: clusterNodeProbeSummary(node),
+          engineVersion: clusterNodeVersionPresentation(node, operations, versionClock, snapshotUnavailable || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS),
         };
       });
     },
-    [cluster?.leaders?.postgres_primary, database, nodes]
+    [cluster?.leaders?.postgres_primary, database, nodes, operations, snapshotReceivedAt, snapshotUnavailable, versionClock]
   );
 
   const operationRows = useMemo(
@@ -1204,6 +1284,18 @@ export default function ClusterManagement() {
       headerName: "Node",
       minWidth: 180,
       cellClass: "auto-col-tight",
+    },
+    {
+      colId: "engine-version",
+      field: "engineVersion",
+      headerName: "Engine Version",
+      minWidth: 230,
+      cellClass: "auto-col-tight",
+      // A SHA/report/target-only change must refresh the tooltip as well.
+      valueFormatter: (params) => params.value?.label || "Unknown",
+      filterValueGetter: (params) => params.data?.engineVersion?.label || "Unknown",
+      comparator: (left, right) => compareBorealisVersions(left?.release, right?.release) ?? String(left?.release || "").localeCompare(String(right?.release || "")),
+      cellRenderer: (params) => <ClusterNodeVersionCell version={params?.data?.engineVersion} />,
     },
     {
       colId: "ip-address",

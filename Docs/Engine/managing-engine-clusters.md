@@ -371,6 +371,16 @@ Use [WebUI HMR Development](webui-hmr-development.md#clustered-node-isolation-hm
 
 Isolation never distributes mutable source to standby nodes.  Only a Cluster Management stable-release update moves an accepted immutable revision across all nodes.
 
+## Compare Engine Versions
+
+Open **Admin > Cluster Management > Nodes** and compare the **Engine Version** column before updating. Each row shows that node's recorded release. Hover or focus the version to read its full commit SHA and report time. Missing release or SHA appears as **Unknown**; Borealis does not substitute the cluster baseline.
+
+The second line distinguishes **Recent report**, **Stale report**, and **Report time unknown**. Reports older than five minutes are stale. These labels describe stored reports, not a fresh measurement of the running Engine version or a node-health verdict. A recent report can come from another lifecycle action.
+
+During an Engine update, affected rows show **Pending** with the requested release. **Target recorded** means the stored release and SHA already match that operation's target. The tooltip keeps the target SHA separate from the recorded SHA. Failed, cancelled, or completed operations stop showing a pending target.
+
+If refresh fails or no successful snapshot arrives for more than 15 seconds, rows show **Snapshot stale** while retaining the last records. Pending targets may also be outdated until refresh recovers. Restore API access and use **Refresh** before relying on that view for another operation.
+
 ## Perform Cluster-Aware Engine Updates
 
 Use Maintenance instead of `git pull` on clustered Engines.  Cluster Management exposes separate stable and qualification selectors backed by the configured Borealis GitHub repository.  The cluster does not generate versions.
@@ -584,6 +594,10 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 
     ### Engine release identity
 
+    - Nodes grid uses existing `nodes[].release_tag`, `release_sha`, and `last_seen_at`. It never fills missing node identity from `baseline_release`, probes, or K3s observations. These fields are lifecycle records; no fresh runtime Engine identity field exists in this snapshot contract.
+    - `clusterNodeVersionPresentation` keeps recorded identity, report age and pending target separate. Only queued/running/waiting `engine_update` operations apply; `payload.update_node_ids` takes precedence, then node scope uses `payload.node_ids`, or all scope applies to active members. Removed nodes and K3s targets are excluded. Equal recorded tag/SHA shows target recorded without claiming a new runtime measurement.
+    - Node report timestamps are Unix seconds. Missing, invalid or future timestamps have unknown age. A browser clock tick ages reports and snapshot freshness even when fetch remains unresolved. A failed refresh immediately marks the snapshot stale; a successful response clears that flag. Loader and polling paths preserve actual snapshot body receipt time across release-catalog/history waits. Snapshot, release catalog and event history each compare against their own newest completed request, allowing responses slower than the five-second poll interval while rejecting late results superseded by newer completions. Failure or delay in one stream does not advance another stream's completion counter. Fresh snapshot delivery does not refresh the node's stored report timestamp.
+    - Browser verification after an approved qualified deployment: open `/cluster-management?tab=nodes`, compare all three rows, hover or keyboard-focus each version for the full SHA, inspect a rolling update's affected/unaffected rows, then interrupt browser API access and verify retained rows become stale and recover after reconnect. Portable tests cover the same presentation with three-node fixtures; Q01 retains live exact-release verification.
     - `clusterReleaseState` reads the persisted Engine baseline and `config.k3s_version`. Active-node `roles.k3s_version` observations veto known disagreement; missing configuration fails closed. Process environment is not an update authority. K3s operation completion advances configuration only after ordered node conformance succeeds.
     - Release picker cache includes repository, source release/SHA, API/raw source and authoritative K3s version. `resolveClusterRelease` bypasses cache, verifies current immutable publication, resolves one SHA, and reads `Data/Engine/release-manifest.json` at that SHA. Annotated tag objects are fetched by SHA from the configured repository, never from response-supplied URLs.
     - Internal operation payload retains `release_immutable`, `source_k3s_version`, source release/SHA and compatibility manifest alongside target release/SHA. Queue transaction rejects configuration/source changes under the cluster-state lock. GitHub calls and manifest processing happen after snapshot connections return to the pool.

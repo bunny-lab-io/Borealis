@@ -612,6 +612,60 @@ func TestClusterMembershipScaleAcceptsThreeNodeTarget(t *testing.T) {
 	}
 }
 
+func TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget(t *testing.T) {
+	oldSHA, newSHA := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	store := &clusterTestStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: map[string]any{
+			"baseline_release": "2026.09.1", "baseline_sha": oldSHA,
+			"nodes": []map[string]any{
+				{"id": "one", "release_tag": "2026.09.1", "release_sha": oldSHA, "last_seen_at": int64(1787770000)},
+				{"id": "two", "release_tag": "2026.09.2", "release_sha": newSHA, "last_seen_at": int64(1787770010)},
+				{"id": "three", "release_tag": nil, "release_sha": nil, "last_seen_at": nil},
+			},
+			"operations": []map[string]any{{"kind": "engine_update", "state": "running", "target_release": "2026.09.2", "target_sha": newSHA, "payload": map[string]any{"scope": "all", "update_node_ids": []string{"one", "two", "three"}}}},
+		},
+	}
+	auth, token := clusterTestAuth(t, store)
+	mux := http.NewServeMux()
+	registerServerClusterRoutes(mux, auth)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, clusterTestRequest(t, http.MethodGet, "/api/server/cluster", "", token))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Nodes []struct {
+			ReleaseTag *string `json:"release_tag"`
+			ReleaseSHA *string `json:"release_sha"`
+			LastSeenAt *int64  `json:"last_seen_at"`
+		} `json:"nodes"`
+		Operations []struct {
+			TargetRelease string `json:"target_release"`
+			TargetSHA     string `json:"target_sha"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Nodes) != 3 || len(payload.Operations) != 1 {
+		t.Fatalf("snapshot lost node/update records: %+v", payload)
+	}
+	for i, expected := range []struct{ tag, sha string }{{"2026.09.1", oldSHA}, {"2026.09.2", newSHA}} {
+		node := payload.Nodes[i]
+		if node.ReleaseTag == nil || *node.ReleaseTag != expected.tag || node.ReleaseSHA == nil || *node.ReleaseSHA != expected.sha || node.LastSeenAt == nil || *node.LastSeenAt != 1787770000+int64(i)*10 {
+			t.Fatalf("node %d recorded identity changed: %+v", i, node)
+		}
+	}
+	unknown := payload.Nodes[2]
+	if unknown.ReleaseTag != nil || unknown.ReleaseSHA != nil || unknown.LastSeenAt != nil {
+		t.Fatalf("unknown node inherited baseline or pending target: %+v", unknown)
+	}
+	if payload.Operations[0].TargetRelease != "2026.09.2" || payload.Operations[0].TargetSHA != newSHA {
+		t.Fatalf("pending target identity lost: %+v", payload.Operations[0])
+	}
+}
+
 func TestClusterInvitationRejectsExpansionAfterThreeNodes(t *testing.T) {
 	store := &clusterTestStore{
 		profile:  operatorProfile{Username: "operator", Role: "Admin"},
