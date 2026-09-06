@@ -115,8 +115,8 @@ func storeSchedulerExecution(ctx context.Context, tx *sql.Tx, item schedulerWork
 
 // Replaying a claim may revisit already acknowledged components. Their durable
 // execution identity wins: skip dispatch rather than create a second activity.
-// Without acknowledgement, only an actual terminal execution result can
-// settle uncertainty; absence of a result is never permission to resend.
+// Without acknowledgement, a terminal activity result or a persisted workflow
+// run can settle uncertainty; absence of evidence is never permission to resend.
 func (m *goSchedulerManager) resumeSchedulerExecution(ctx context.Context) (bool, error) {
 	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
@@ -144,7 +144,9 @@ func (m *goSchedulerManager) resumeSchedulerExecution(ctx context.Context) (bool
 	if record.State == "dispatching" && item.Kind == schedulerKindScheduledWorkflowRun {
 		var count int
 		var runID sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),MIN(id) FROM engine.workflow_runs WHERE source_metadata_json::jsonb->>'scheduler_execution_id'=$1 AND LOWER(status) IN ('running','success','completed','succeeded')`, record.ID).Scan(&count, &runID); err != nil {
+		// Workflow start persists its run before replying and executes asynchronously.
+		// Any status proves acceptance; multiple matching rows remain ambiguous.
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),MIN(id) FROM engine.workflow_runs WHERE source_metadata_json::jsonb->>'scheduler_execution_id'=$1`, record.ID).Scan(&count, &runID); err != nil {
 			return false, err
 		}
 		if count == 1 && runID.Valid {

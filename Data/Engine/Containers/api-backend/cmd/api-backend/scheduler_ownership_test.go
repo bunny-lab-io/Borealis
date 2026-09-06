@@ -286,6 +286,29 @@ func TestSchedulerPostgresDispatchRecovery(t *testing.T) {
 }
 
 func TestSchedulerPostgresWorkflowDispatchRetainsIdentity(t *testing.T) {
+	t.Run("outgoing identity", testSchedulerPostgresWorkflowDispatchIdentity)
+	for _, status := range []string{workflowStatusPending, workflowStatusRunning, workflowStatusSuccess, workflowStatusSkipped, workflowStatusWarning, workflowStatusFailed, workflowStatusTimedOut} {
+		t.Run("recovery/"+status, func(t *testing.T) {
+			testSchedulerPostgresWorkflowDispatchRecovery(t, status, "matching", 1)
+		})
+	}
+	for _, tc := range []struct {
+		name     string
+		identity string
+		rows     int
+	}{
+		{"no run", "matching", 0},
+		{"missing identity", "", 1},
+		{"unrelated identity", "unrelated-execution", 1},
+		{"duplicate identity", "matching", 2},
+	} {
+		t.Run("recovery/"+tc.name, func(t *testing.T) {
+			testSchedulerPostgresWorkflowDispatchRecovery(t, workflowStatusFailed, tc.identity, tc.rows)
+		})
+	}
+}
+
+func testSchedulerPostgresWorkflowDispatchIdentity(t *testing.T) {
 	m, ctx, insert := schedulerOwnershipFixture(t)
 	owner := schedulerTestOwner(t, m, ctx, "scheduler-workflow/"+newClusterUUID())
 	var received map[string]any
@@ -311,6 +334,124 @@ func TestSchedulerPostgresWorkflowDispatchRetainsIdentity(t *testing.T) {
 	metadata := mapStringAny(received["source_metadata"])
 	if received["workflow_guid"] != "wf-123" || metadata["scheduler_execution_id"] != fmt.Sprintf("work:%d:work", id) {
 		t.Fatalf("workflow lost durable identity: %#v", received)
+	}
+}
+
+func testSchedulerPostgresWorkflowDispatchRecovery(t *testing.T, status, identity string, rows int) {
+	t.Helper()
+	m, ctx, insert := schedulerOwnershipFixture(t)
+	owner := schedulerTestOwner(t, m, ctx, "scheduler-workflow-recovery/"+newClusterUUID())
+	var jobID, scheduledRunID int64
+	if err := m.store.db.QueryRowContext(ctx, `INSERT INTO engine.scheduled_jobs
+		(name,components_json,targets_json,schedule_type,execution_context)
+		VALUES('workflow-recovery-test','[]','[]','immediate','system') RETURNING id`).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = m.store.db.ExecContext(cleanupCtx, `DELETE FROM engine.workflow_runs WHERE scheduled_job_id=$1`, jobID)
+		_, _ = m.store.db.ExecContext(cleanupCtx, `DELETE FROM engine.scheduled_jobs WHERE id=$1`, jobID)
+	})
+	if err := m.store.db.QueryRowContext(ctx, `INSERT INTO engine.scheduled_job_runs
+		(job_id,status,started_ts) VALUES($1,'Running',$2) RETURNING id`, jobID, time.Now().Unix()).Scan(&scheduledRunID); err != nil {
+		t.Fatal(err)
+	}
+	id := insert(schedulerKindScheduledWorkflowRun, `{"workflow_component":{"assembly_guid":"wf-recovery"}}`)
+	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.job_scheduler_work_items SET run_id=$1,job_id=$2 WHERE id=$3`, scheduledRunID, jobID, id); err != nil {
+		t.Fatal(err)
+	}
+	item, err := m.claimNextKindWorkItem(owner, []string{schedulerKindScheduledWorkflowRun})
+	if err != nil || item == nil || item.ID != id {
+		t.Fatalf("workflow recovery claim=%+v err=%v", item, err)
+	}
+	oldCtx := context.WithValue(owner, schedulerWorkContextKey{}, *item)
+	if err := m.beginSchedulerDispatch(oldCtx, "response-not-received"); err != nil {
+		t.Fatal(err)
+	}
+	// API acceptance can persist Pending, a skipped run, or a completed result
+	// before the scheduler records the response. Retain the real mirrored result.
+	metadata := map[string]any{"scheduled_job_id": jobID, "scheduled_job_run_id": scheduledRunID}
+	if identity == "matching" {
+		metadata["scheduler_execution_id"] = fmt.Sprintf("work:%d:work", id)
+	} else if identity != "" {
+		metadata["scheduler_execution_id"] = identity
+	}
+	var workflowRunID int64
+	for i := 0; i < rows; i++ {
+		err := m.store.withWorkflowConn(ctx, func(conn *sql.Conn) error {
+			var err error
+			workflowRunID, err = workflowInsertRun(ctx, conn, "wf-recovery", "Recovery test", "scheduled_job", metadata, map[string]any{}, status, "scheduler", time.Now().Unix(), "retained skip reason")
+			if err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, `UPDATE engine.workflow_runs SET error='retained workflow diagnostic' WHERE id=$1`, workflowRunID); err != nil {
+				return err
+			}
+			return workflowMirrorScheduledRun(ctx, conn, workflowRunID, metadata, status, "retained workflow diagnostic")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Capture complete result rows, including timestamps and diagnostic fields.
+	snapshot := func() string {
+		t.Helper()
+		var result string
+		if err := m.store.db.QueryRowContext(ctx, `SELECT jsonb_build_object('scheduled',to_jsonb(r),'workflow',to_jsonb(w))::text
+			FROM engine.scheduled_job_runs r LEFT JOIN engine.workflow_runs w ON w.id=$2 WHERE r.id=$1`, scheduledRunID, workflowRunID).Scan(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	before := snapshot()
+	// Lose ownership after API acceptance but before scheduler acknowledgement.
+	if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.job_scheduler_work_items SET lease_expires_at=$1 WHERE id=$2`, time.Now().Unix()-1, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.expireStaleLeases(owner); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := m.claimNextKindWorkItem(owner, []string{schedulerKindScheduledWorkflowRun})
+	if err != nil || reclaimed == nil || reclaimed.ID != id || reclaimed.AttemptCount != 2 {
+		t.Fatalf("workflow reclaim=%+v err=%v", reclaimed, err)
+	}
+	newCtx := context.WithValue(owner, schedulerWorkContextKey{}, *reclaimed)
+	accepted := identity == "matching" && rows == 1
+	skipped, resumeErr := m.resumeSchedulerExecution(newCtx)
+	if accepted {
+		if resumeErr != nil || !skipped {
+			t.Fatalf("persisted %s workflow was not accepted: skipped=%v err=%v", status, skipped, resumeErr)
+		}
+		if err := m.runGlobalWorkItem(newCtx, *reclaimed); err != nil {
+			t.Fatalf("accepted workflow attempted dispatch again: %v", err)
+		}
+	} else if skipped || !errors.Is(resumeErr, errSchedulerOutcomeUnknown) {
+		t.Fatalf("ambiguous workflow accepted: skipped=%v err=%v", skipped, resumeErr)
+	}
+	if err := m.beginSchedulerDispatch(newCtx, "duplicate"); !errors.Is(err, errSchedulerOutcomeUnknown) {
+		t.Fatalf("workflow replay admitted: %v", err)
+	}
+	if err := m.acknowledgeSchedulerDispatch(oldCtx, "late-ack"); !errors.Is(err, errSchedulerOwnershipLost) {
+		t.Fatalf("former workflow claim acknowledged: %v", err)
+	}
+	if err := m.completeWorkItem(newCtx, *reclaimed, workStatusSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	var workStatus, executionState, resultID string
+	if err := m.store.db.QueryRowContext(ctx, `SELECT status,payload_json::jsonb->'executions'->'work'->>'state',payload_json::jsonb->'executions'->'work'->>'result_id'
+		FROM engine.job_scheduler_work_items WHERE id=$1`, id).Scan(&workStatus, &executionState, &resultID); err != nil {
+		t.Fatal(err)
+	}
+	if accepted {
+		if workStatus != workStatusSucceeded || executionState != "acknowledged" || resultID != fmt.Sprint(workflowRunID) {
+			t.Fatalf("workflow identity not retained: status=%s execution=%s result=%s", workStatus, executionState, resultID)
+		}
+		if after := snapshot(); after != before {
+			t.Fatalf("workflow recovery changed saved results: before=%s after=%s", before, after)
+		}
+	} else if workStatus != workStatusFailed || executionState != "dispatching" || resultID != "response-not-received" {
+		t.Fatalf("ambiguous workflow lost uncertainty: status=%s execution=%s result=%s", workStatus, executionState, resultID)
 	}
 }
 
