@@ -3,9 +3,12 @@ package clusterremote
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
@@ -48,6 +51,20 @@ func newFakeSSH(t *testing.T, mode string) *fakeSSH {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if mode == "rsa-host-key" {
+		private, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hostSigner, err = ssh.NewSignerFromKey(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hostSigner, err = ssh.NewSignerWithAlgorithms(hostSigner.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSASHA512})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +97,19 @@ func newFakeSSH(t *testing.T, mode string) *fakeSSH {
 		},
 	}
 	config.AddHostKey(hostSigner)
+	if mode != "rsa-host-key" {
+		// Go defaults prefer ECDSA. Real hosts offer multiple keys; the approved
+		// Ed25519 pin must govern algorithm negotiation before authentication.
+		alternate, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signer, err := ssh.NewSignerFromKey(alternate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.AddHostKey(signer)
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +220,24 @@ func TestProbeAndChangedPinNeverSendAuthentication(t *testing.T) {
 	if !errors.Is(err, ErrHostKeyChanged) || server.authCalls.Load() != 0 {
 		t.Fatalf("changed pin reached authentication: err=%v calls=%d", err, server.authCalls.Load())
 	}
+}
+
+func TestPinnedRSAUsesSHA2HostSignature(t *testing.T) {
+	server := newFakeSSH(t, "rsa-host-key")
+	key, err := server.transport.ProbeHostKey(context.Background(), server.target)
+	if err != nil || key.Algorithm != ssh.KeyAlgoRSA || key.Fingerprint != server.key.Fingerprint {
+		t.Fatalf("RSA SHA2 discovery failed: %v", err)
+	}
+	credential, err := PasswordCredential("operator", server.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credential.Destroy()
+	client, err := server.transport.Connect(context.Background(), server.target, key, credential)
+	if err != nil {
+		t.Fatalf("approved RSA SHA2 connection failed: %v", err)
+	}
+	client.Close()
 }
 
 func TestPinnedPasswordAndKeyAuthenticationAndFixedInspection(t *testing.T) {

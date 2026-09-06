@@ -5,6 +5,7 @@ package clusterremote
 import (
 	"bytes"
 	"context"
+	"crypto/rsa"
 	"errors"
 	"net"
 	"net/netip"
@@ -72,7 +73,27 @@ func (key HostKey) Validate() error {
 	if err != nil || ssh.FingerprintSHA256(parsed) != key.Fingerprint || parsed.Type() != key.Algorithm {
 		return ErrHostKeyChanged
 	}
+	if len(hostKeyAlgorithms(parsed.Type())) == 0 {
+		return ErrHostKeyChanged
+	}
+	if cryptoKey, ok := parsed.(ssh.CryptoPublicKey); ok {
+		if rsaKey, ok := cryptoKey.CryptoPublicKey().(*rsa.PublicKey); ok && rsaKey.N.BitLen() < 2048 {
+			return ErrHostKeyChanged
+		}
+	}
 	return nil
+}
+
+func hostKeyAlgorithms(kind string) []string {
+	switch kind {
+	case ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521:
+		return []string{kind}
+	case ssh.KeyAlgoRSA:
+		// An RSA wire key does not require legacy SHA1 signatures.
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+	default:
+		return nil
+	}
 }
 
 // Credential has one owning goroutine. Destroy only after its Connect call
@@ -212,10 +233,15 @@ func (transport Transport) handshake(ctx context.Context, target Target, config 
 // authentication. It cannot accept or send an operator credential.
 func (transport Transport) ProbeHostKey(ctx context.Context, target Target) (HostKey, error) {
 	var observed HostKey
-	config := &ssh.ClientConfig{User: "borealis-host-key-probe", HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		observed = HostKey{Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), PublicKey: bytes.Clone(key.Marshal())}
-		return errKeyObserved
-	}}
+	config := &ssh.ClientConfig{User: "borealis-host-key-probe",
+		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256},
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			observed = HostKey{Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), PublicKey: bytes.Clone(key.Marshal())}
+			if err := observed.Validate(); err != nil {
+				return err
+			}
+			return errKeyObserved
+		}}
 	client, err := transport.handshake(ctx, target, config)
 	if client != nil {
 		client.Close()
@@ -243,6 +269,7 @@ func (transport Transport) Connect(ctx context.Context, target Target, approved 
 		return nil, err
 	}
 	config := &ssh.ClientConfig{User: credential.username, Auth: []ssh.AuthMethod{method},
+		HostKeyAlgorithms: hostKeyAlgorithms(approved.Algorithm),
 		HostKeyCallback: func(_ string, _ net.Addr, presented ssh.PublicKey) error {
 			if !bytes.Equal(presented.Marshal(), key.Marshal()) {
 				return ErrHostKeyChanged
