@@ -27,7 +27,16 @@ func schedulerReviewJob(t *testing.T, m *goSchedulerManager, ctx context.Context
 }
 
 func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
-	for _, resultStatus := range []string{scheduledStatusSuccess, scheduledStatusFailed} {
+	testSchedulerResultAcknowledgementAtomic(t, schedulerKindPatchInstallRun, []string{scheduledStatusSuccess, scheduledStatusFailed})
+}
+
+func TestSchedulerPostgresMaintenanceAcknowledgementAtomic(t *testing.T) {
+	testSchedulerResultAcknowledgementAtomic(t, schedulerKindAgentMaintenanceRun, []string{"Running", "Skipped"})
+}
+
+func testSchedulerResultAcknowledgementAtomic(t *testing.T, kind string, statuses []string) {
+	t.Helper()
+	for _, resultStatus := range statuses {
 		t.Run(resultStatus, func(t *testing.T) {
 			m, ctx, insert := schedulerOwnershipFixture(t)
 			owner := schedulerTestOwner(t, m, ctx, "patch-results/"+newClusterUUID())
@@ -37,11 +46,11 @@ func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
 				(job_id,status,started_ts) VALUES($1,'Running',$2) RETURNING id`, jobID, time.Now().Unix()).Scan(&runID); err != nil {
 				t.Fatal(err)
 			}
-			id := insert(schedulerKindPatchInstallRun, `{}`)
+			id := insert(kind, `{}`)
 			if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.job_scheduler_work_items SET run_id=$1 WHERE id=$2`, runID, id); err != nil {
 				t.Fatal(err)
 			}
-			item, err := m.claimNextKindWorkItem(owner, []string{schedulerKindPatchInstallRun})
+			item, err := m.claimNextKindWorkItem(owner, []string{kind})
 			if err != nil || item == nil || item.ID != id {
 				t.Fatalf("claim=%+v err=%v", item, err)
 			}
@@ -56,6 +65,16 @@ func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
 				_, _ = m.store.db.ExecContext(context.Background(), `DELETE FROM engine.activity_history WHERE id=$1`, activityID)
 			})
 			requestID := fmt.Sprintf("patch-job-%d-run-%d", jobID, runID)
+			finish := func(resultCtx context.Context, status, stdout string) error {
+				if kind == schedulerKindAgentMaintenanceRun {
+					return m.finishAgentMaintenanceDispatch(resultCtx, requestID, runID, status, stdout)
+				}
+				return m.finishScheduledPatchDispatch(resultCtx, requestID, runID, activityID, status, stdout, "patch diagnostics", "")
+			}
+			runner := m.runPatchInstallWorkItem
+			if kind == schedulerKindAgentMaintenanceRun {
+				runner = m.runAgentMaintenanceWorkItem
+			}
 			if err := m.beginSchedulerDispatch(workCtx, requestID); err != nil {
 				t.Fatal(err)
 			}
@@ -73,7 +92,7 @@ func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
 			defer cancel()
 			finished := make(chan error, 1)
 			go func() {
-				finished <- m.finishScheduledPatchDispatch(shortCtx, requestID, runID, activityID, resultStatus, "terminal response\n", "patch diagnostics", "")
+				finished <- finish(shortCtx, resultStatus, "terminal response\n")
 			}()
 			for {
 				var waiting bool
@@ -123,7 +142,7 @@ func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
 				}
 			}
 			assertResult("dispatching", scheduledStatusRunning, "")
-			if err := m.finishScheduledPatchDispatch(workCtx, requestID, runID, activityID, resultStatus, "terminal response\n", "patch diagnostics", ""); err != nil {
+			if err := finish(workCtx, resultStatus, "terminal response\n"); err != nil {
 				t.Fatal(err)
 			}
 			assertResult("acknowledged", resultStatus, "terminal response\n")
@@ -134,17 +153,17 @@ func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
 			if err := m.expireStaleLeases(owner); err != nil {
 				t.Fatal(err)
 			}
-			reclaimed, err := m.claimNextKindWorkItem(owner, []string{schedulerKindPatchInstallRun})
+			reclaimed, err := m.claimNextKindWorkItem(owner, []string{kind})
 			if err != nil || reclaimed == nil || reclaimed.AttemptCount != 2 {
 				t.Fatalf("reclaim=%+v err=%v", reclaimed, err)
 			}
 			// Empty dispatch payload cannot execute: successful replay proves the
 			// acknowledged component was skipped and its result retained.
-			if err := m.runClaimedWork(owner, *reclaimed, m.runPatchInstallWorkItem); err != nil {
+			if err := m.runClaimedWork(owner, *reclaimed, runner); err != nil {
 				t.Fatal(err)
 			}
 			assertResult("acknowledged", resultStatus, "terminal response\n")
-			if err := m.finishScheduledPatchDispatch(workCtx, requestID, runID, activityID, scheduledStatusSuccess, "late overwrite", "", ""); !errors.Is(err, errSchedulerOwnershipLost) {
+			if err := finish(workCtx, resultStatus, "late overwrite"); !errors.Is(err, errSchedulerOwnershipLost) {
 				t.Fatalf("stale patch result=%v", err)
 			}
 		})

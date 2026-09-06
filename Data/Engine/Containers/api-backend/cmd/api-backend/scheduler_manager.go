@@ -969,9 +969,6 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 			}
 			response, lastState, lastErr = m.callSiteWorkerHostService(ctx, snapshot.Route, body, callTimeout+2*time.Second)
 			if lastErr == nil {
-				if err := m.acknowledgeSchedulerDispatch(ctx, operationID); err != nil {
-					return err
-				}
 				break
 			}
 			return fmt.Errorf("%w: %s: %v", errSchedulerOutcomeUnknown, operationID, lastErr)
@@ -1003,9 +1000,32 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	if responseStatus == "active" {
 		activeOperationID := cleanText(response["operation_id"])
 		stdout += fmt.Sprintf("Request coalesced with active operation_id=%s.\n", firstText(activeOperationID, "unknown"))
-		return m.updateAgentMaintenanceRunStatus(ctx, runID, "Skipped", stdout, "")
+		return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Skipped", stdout)
 	}
-	return m.updateAgentMaintenanceRunStatus(ctx, runID, "Running", stdout, "")
+	return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Running", stdout)
+}
+
+func (m *goSchedulerManager) finishAgentMaintenanceDispatch(ctx context.Context, operationID string, runID int64, status, stdout string) error {
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	record, err := loadSchedulerExecution(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	if item.Kind != schedulerKindAgentMaintenanceRun || !item.RunID.Valid || item.RunID.Int64 != runID ||
+		record.ResultID != operationID || !stringInSet(status, "Running", "Skipped") {
+		return errors.New("maintenance response does not match owned execution")
+	}
+	if err := acknowledgeSchedulerDispatchTx(ctx, tx, item, operationID); err != nil {
+		return err
+	}
+	if err := updateAgentMaintenanceRunStatusTx(ctx, tx, runID, status, stdout, ""); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) expireTimedOutAgentMaintenanceRuns(ctx context.Context) error {
@@ -1176,17 +1196,24 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 	if runID <= 0 {
 		return nil
 	}
+	tx, _, cleanup, err := m.beginOwnedWorkTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := updateAgentMaintenanceRunStatusTx(ctx, tx, runID, status, stdout, stderr); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func updateAgentMaintenanceRunStatusTx(ctx context.Context, tx *sql.Tx, runID int64, status, stdout, stderr string) error {
 	now := time.Now().Unix()
 	var finished any
 	if stringInSet(status, "Success", "Failed", "Timed Out", "Skipped") {
 		finished = now
 	}
 	errorText := truncateString(stderr, 512)
-	tx, _, cleanup, err := m.beginOwnedWorkTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1, updated_at=$2, finished_ts=COALESCE($3, finished_ts), error=$4
@@ -1206,7 +1233,7 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 		return err
 	}
 	var activityID sql.NullInt64
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT activity_id
 		  FROM engine.scheduled_job_run_activity
 		 WHERE run_id=$1
@@ -1229,7 +1256,7 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (m *goSchedulerManager) processServiceAction(ctx context.Context) error {
