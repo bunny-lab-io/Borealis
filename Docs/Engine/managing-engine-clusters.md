@@ -121,7 +121,9 @@ sudo borealis-node-manager join \
   --k3s-token-file /root/borealis-k3s-server.token
 ```
 
-The endpoint must use HTTPS and must not redirect. Use `--ca-file /path/to/engine-ca.pem` when the Engine certificate uses a private CA. The node manager submits its identity and waits for approval before preparing the firewall, iSCSI, NFSv4, and K3s host prerequisites. It checks approval again before joining K3s.
+The endpoint must use HTTPS and must not redirect. Use `--ca-file /path/to/engine-ca.pem` when the Engine certificate uses a private CA. The node manager submits its identity and waits for approval before preparing the host. Preparation creates the Borealis runtime account, installs missing Python and Docker build dependencies, verifies Docker access, and prepares the firewall, iSCSI, NFSv4, and K3s prerequisites. It checks approval again before joining K3s.
+
+Preparation can take several minutes on a fresh host. If account creation, package installation, or Docker checks fail, repair the reported host prerequisite and resume the same join command. Preparation does not create a standalone Engine or database.
 
 Invitation join creates a `Pending Quorum` admission and waits for Admin approval.  AMD64 architecture, Ubuntu version, hostname, node name, management IPv4, invitation lifetime, and invitation authentication are validated before membership work begins.
 
@@ -785,6 +787,7 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - Initial unconsumed/pending invitation expiry remains 15 minutes; signed accepted-join access and stored creation timestamp impose a 24-hour bound for approved/admitted/recovery targets. Admin renewal swaps only the original admission's invitation binding and revokes previous access.
 - Approval and original-operation retry pin `join_config` from `cluster_state.control_plane_vip`, `config_json.k3s_version`, active member addresses and the selected admission cohort. Exactly three private IPv4 peers are required. Client flags can assert those settings but cannot override them.
 - The node manager validates settings, runs fixed `Engine.sh --cluster-prepare-node` only after approval, then rechecks approval/configuration before installing K3s. Preparation may outlast initial invitation lifetime without consuming an unapproved invitation.
+- The root-only preparation entrypoint runs `ensure_cluster_node_host_dependencies` before writing join configuration or firewall state. It reuses the normal deployment identity and dependency helpers, including UID/GID collision checks and Docker daemon verification. Required account/package changes finish before the installed node-manager service runs with `ProtectSystem=strict`; do not grant that service write access to `/etc/passwd` or package-manager paths. Existing prepared hosts retain their identity and skip unnecessary package installation. See [Engine launch mechanics](deploying-the-engine.md#launch-mechanics) for the shared deployment contract.
 - Controller reconciliation requires current lease ownership. Expired pending records release capacity only without approval, operation or non-removed member evidence. Failed/cancelled membership operations mark approved admissions `Recovery Required`; retry retains the original cohort and operation. No schema or automatic member deletion is involved.
 - Expansion-pair approval records the same authenticated approval event for both admission IDs so both waiting joiners proceed.
 - Degraded-quorum replacement records the same compatible approval event for one admission.

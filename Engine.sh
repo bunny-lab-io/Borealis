@@ -11647,15 +11647,22 @@ PY
   ensure_cluster_controller_baseline
 }
 
+ensure_cluster_node_host_dependencies() {
+  ensure_systemctl_for_k3s
+  # Account and package changes must finish outside the node-manager sandbox.
+  ensure_engine_runtime_identity
+  ensure_engine_dependencies
+  validate_k3s_baseline_settings
+  ensure_k3s_install_dependencies
+  ensure_longhorn_node_dependencies
+}
+
 cluster_prepare_node() {
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Cluster node preparation requires root."
   [[ -n "${K3S_PEER_CIDRS}" ]] || die "Cluster node preparation requires BOREALIS_K3S_PEER_CIDRS covering every current and planned Engine node."
   mkdir -p "${DEPLOY_DIR}"
   touch "${BUILD_LOG}"
-  validate_k3s_baseline_settings
-  ensure_systemctl_for_k3s
-  ensure_k3s_install_dependencies
-  ensure_longhorn_node_dependencies
+  ensure_cluster_node_host_dependencies
   write_k3s_borealis_config >/dev/null || true
   write_k3s_registries_config >/dev/null || true
   ensure_k3s_api_firewall
