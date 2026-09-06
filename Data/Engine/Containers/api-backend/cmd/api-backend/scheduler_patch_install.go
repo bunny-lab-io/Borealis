@@ -114,6 +114,13 @@ func (m *goSchedulerManager) runPatchInstallWorkItem(ctx context.Context, item s
 	}, callTimeout+10*time.Second)
 	if workerErr != nil {
 		errorText := schedulerPatchInstallWorkerError(hostname, workerState, workerErr)
+		if schedulerAgentRejectedResponse(response, workerState) {
+			stdout, stderr, _ := schedulerPatchInstallOutput(requestID, hostname, componentName, patch, response)
+			if err := m.finishScheduledPatchDispatch(ctx, requestID, runID, activityID, scheduledStatusFailed, stdout, stderr, errorText); err != nil {
+				return err
+			}
+			return errors.New(errorText)
+		}
 		_ = m.updateScheduledPatchRunStatus(ctx, runID, activityID, scheduledStatusFailed, "", errorText, errorText)
 		return errors.New(errorText)
 	}

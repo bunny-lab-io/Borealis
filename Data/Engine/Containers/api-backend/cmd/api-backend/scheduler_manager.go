@@ -968,7 +968,7 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 				return err
 			}
 			response, lastState, lastErr = m.callSiteWorkerHostService(ctx, snapshot.Route, body, callTimeout+2*time.Second)
-			if lastErr == nil {
+			if lastErr == nil || schedulerAgentRejectedResponse(response, lastState) {
 				break
 			}
 			return fmt.Errorf("%w: %s: %v", errSchedulerOutcomeUnknown, operationID, lastErr)
@@ -984,6 +984,12 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	}
 	if lastErr != nil {
 		errorText := schedulerAgentMaintenanceError(hostname, lastState, lastErr)
+		if schedulerAgentRejectedResponse(response, lastState) {
+			if err := m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Failed", "", errorText); err != nil {
+				return err
+			}
+			return errors.New(errorText)
+		}
 		_ = m.updateAgentMaintenanceRunStatus(ctx, runID, "Failed", "", errorText)
 		return errors.New(errorText)
 	}
@@ -1000,12 +1006,12 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	if responseStatus == "active" {
 		activeOperationID := cleanText(response["operation_id"])
 		stdout += fmt.Sprintf("Request coalesced with active operation_id=%s.\n", firstText(activeOperationID, "unknown"))
-		return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Skipped", stdout)
+		return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Skipped", stdout, "")
 	}
-	return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Running", stdout)
+	return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Running", stdout, "")
 }
 
-func (m *goSchedulerManager) finishAgentMaintenanceDispatch(ctx context.Context, operationID string, runID int64, status, stdout string) error {
+func (m *goSchedulerManager) finishAgentMaintenanceDispatch(ctx context.Context, operationID string, runID int64, status, stdout, stderr string) error {
 	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
 		return err
@@ -1016,13 +1022,22 @@ func (m *goSchedulerManager) finishAgentMaintenanceDispatch(ctx context.Context,
 		return err
 	}
 	if item.Kind != schedulerKindAgentMaintenanceRun || !item.RunID.Valid || item.RunID.Int64 != runID ||
-		record.ResultID != operationID || !stringInSet(status, "Running", "Skipped") {
+		record.ResultID != operationID || !stringInSet(status, "Running", "Skipped", "Failed") {
 		return errors.New("maintenance response does not match owned execution")
+	}
+	var currentStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM engine.scheduled_job_runs WHERE id=$1 FOR UPDATE`, runID).Scan(&currentStatus); err != nil {
+		return err
 	}
 	if err := acknowledgeSchedulerDispatchTx(ctx, tx, item, operationID); err != nil {
 		return err
 	}
-	if err := updateAgentMaintenanceRunStatusTx(ctx, tx, runID, status, stdout, ""); err != nil {
+	// An asynchronous completion may beat the acceptance response. Its actual
+	// terminal result already exists; acknowledgement must not reset it to Running.
+	if status == "Running" && scheduledTerminalStatus(currentStatus) {
+		return tx.Commit()
+	}
+	if err := updateAgentMaintenanceRunStatusTx(ctx, tx, runID, status, stdout, stderr); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1134,6 +1149,12 @@ func schedulerAgentMaintenanceError(hostname string, state string, err error) st
 	default:
 		return fmt.Sprintf("Job scheduler could not dispatch agent maintenance for host %s: %s", hostname, firstText(detail, state))
 	}
+}
+
+// Only an actual Agent response proves rejection. A worker/HTTP error carrying
+// the same state label without that response leaves dispatch outcome unknown.
+func schedulerAgentRejectedResponse(response map[string]any, state string) bool {
+	return state == "agent_error" && strings.EqualFold(cleanText(response["status"]), "error")
 }
 
 func (m *goSchedulerManager) callSiteWorkerHostService(ctx context.Context, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, string, error) {

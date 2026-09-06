@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -26,18 +28,53 @@ func schedulerReviewJob(t *testing.T, m *goSchedulerManager, ctx context.Context
 	return id
 }
 
+func TestSchedulerHostServiceDistinguishesAgentRejection(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		status   int
+		body     string
+		rejected bool
+	}{
+		{"Agent rejection", 200, `{"called":true,"response":{"status":"error","detail":"could not persist update operation"}}`, true},
+		{"worker error label", 502, `{"error":"agent_error","message":"worker unavailable"}`, false},
+		{"missing reply", 200, `{"called":false}`, false},
+		{"invalid reply", 200, `{"called":true,"response":{}}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			m := &goSchedulerManager{httpClient: server.Client()}
+			response, state, err := m.callSiteWorkerHostService(context.Background(), routeForTestWorker(t, server.URL), map[string]any{}, time.Second)
+			if err == nil || schedulerAgentRejectedResponse(response, state) != test.rejected {
+				t.Fatalf("response=%v state=%s err=%v rejected=%v", response, state, err, test.rejected)
+			}
+			if test.rejected && !strings.Contains(err.Error(), "could not persist update operation") {
+				t.Fatalf("Agent rejection diagnostic lost: %v", err)
+			}
+		})
+	}
+}
+
 func TestSchedulerPostgresPatchResultAcknowledgementAtomic(t *testing.T) {
 	testSchedulerResultAcknowledgementAtomic(t, schedulerKindPatchInstallRun, []string{scheduledStatusSuccess, scheduledStatusFailed})
 }
 
 func TestSchedulerPostgresMaintenanceAcknowledgementAtomic(t *testing.T) {
-	testSchedulerResultAcknowledgementAtomic(t, schedulerKindAgentMaintenanceRun, []string{"Running", "Skipped"})
+	testSchedulerResultAcknowledgementAtomic(t, schedulerKindAgentMaintenanceRun, []string{"Running", "Skipped", "Failed", "completion before acknowledgement"})
 }
 
 func testSchedulerResultAcknowledgementAtomic(t *testing.T, kind string, statuses []string) {
 	t.Helper()
 	for _, resultStatus := range statuses {
 		t.Run(resultStatus, func(t *testing.T) {
+			earlyCompletion := resultStatus == "completion before acknowledgement"
+			if earlyCompletion {
+				resultStatus = "Running"
+			}
 			m, ctx, insert := schedulerOwnershipFixture(t)
 			owner := schedulerTestOwner(t, m, ctx, "patch-results/"+newClusterUUID())
 			jobID := schedulerReviewJob(t, m, ctx)
@@ -66,10 +103,14 @@ func testSchedulerResultAcknowledgementAtomic(t *testing.T, kind string, statuse
 			})
 			requestID := fmt.Sprintf("patch-job-%d-run-%d", jobID, runID)
 			finish := func(resultCtx context.Context, status, stdout string) error {
-				if kind == schedulerKindAgentMaintenanceRun {
-					return m.finishAgentMaintenanceDispatch(resultCtx, requestID, runID, status, stdout)
+				errorText := ""
+				if status == scheduledStatusFailed {
+					errorText = "could not persist update operation"
 				}
-				return m.finishScheduledPatchDispatch(resultCtx, requestID, runID, activityID, status, stdout, "patch diagnostics", "")
+				if kind == schedulerKindAgentMaintenanceRun {
+					return m.finishAgentMaintenanceDispatch(resultCtx, requestID, runID, status, stdout, errorText)
+				}
+				return m.finishScheduledPatchDispatch(resultCtx, requestID, runID, activityID, status, stdout, "patch diagnostics", errorText)
 			}
 			runner := m.runPatchInstallWorkItem
 			if kind == schedulerKindAgentMaintenanceRun {
@@ -126,13 +167,13 @@ func testSchedulerResultAcknowledgementAtomic(t *testing.T, kind string, statuse
 			}
 			assertResult := func(wantState, wantStatus, wantOutput string) {
 				t.Helper()
-				var state, runStatus, activityStatus, output string
+				var state, runStatus, activityStatus, output, runError string
 				var runFinished, activityFinished sql.NullInt64
 				if err := m.store.db.QueryRowContext(ctx, `SELECT w.payload_json::jsonb->'executions'->'work'->>'state',
-					r.status,r.finished_ts,a.status,a.finished_at,COALESCE(a.stdout,'')
+					r.status,r.finished_ts,a.status,a.finished_at,COALESCE(a.stdout,''),COALESCE(r.error,'')
 					FROM engine.job_scheduler_work_items w,engine.scheduled_job_runs r,engine.activity_history a
 					WHERE w.id=$1 AND r.id=$2 AND a.id=$3`, id, runID, activityID).
-					Scan(&state, &runStatus, &runFinished, &activityStatus, &activityFinished, &output); err != nil {
+					Scan(&state, &runStatus, &runFinished, &activityStatus, &activityFinished, &output, &runError); err != nil {
 					t.Fatal(err)
 				}
 				terminal := scheduledTerminalStatus(wantStatus)
@@ -140,12 +181,35 @@ func testSchedulerResultAcknowledgementAtomic(t *testing.T, kind string, statuse
 					runFinished.Valid != terminal || activityFinished.Valid != terminal {
 					t.Fatalf("result state=%s run=%s/%v activity=%s/%v output=%q", state, runStatus, runFinished, activityStatus, activityFinished, output)
 				}
+				if wantStatus == scheduledStatusFailed && runError != "could not persist update operation" {
+					t.Fatalf("rejection diagnostic lost: %q", runError)
+				}
 			}
 			assertResult("dispatching", scheduledStatusRunning, "")
+			wantStatus, wantOutput := resultStatus, "terminal response\n"
+			if earlyCompletion {
+				// Simulate an independent Agent result callback committing before
+				// the scheduler receives acceptance of the same operation.
+				tx, err := m.store.db.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				if _, err := tx.ExecContext(ctx, `UPDATE engine.scheduled_job_runs SET status='Success',finished_ts=$1 WHERE id=$2`, time.Now().Unix(), runID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE engine.activity_history SET status='Success',finished_at=$1,stdout='actual completion' WHERE id=$2`, time.Now().Unix(), activityID); err != nil {
+					t.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				wantStatus, wantOutput = "Success", "actual completion"
+			}
 			if err := finish(workCtx, resultStatus, "terminal response\n"); err != nil {
 				t.Fatal(err)
 			}
-			assertResult("acknowledged", resultStatus, "terminal response\n")
+			assertResult("acknowledged", wantStatus, wantOutput)
 			// Simulate death after the result transaction but before queue completion.
 			if _, err := m.store.db.ExecContext(ctx, `UPDATE engine.job_scheduler_work_items SET lease_expires_at=$1 WHERE id=$2`, time.Now().Unix()-1, id); err != nil {
 				t.Fatal(err)
@@ -162,7 +226,7 @@ func testSchedulerResultAcknowledgementAtomic(t *testing.T, kind string, statuse
 			if err := m.runClaimedWork(owner, *reclaimed, runner); err != nil {
 				t.Fatal(err)
 			}
-			assertResult("acknowledged", resultStatus, "terminal response\n")
+			assertResult("acknowledged", wantStatus, wantOutput)
 			if err := finish(workCtx, resultStatus, "late overwrite"); !errors.Is(err, errSchedulerOwnershipLost) {
 				t.Fatalf("stale patch result=%v", err)
 			}
