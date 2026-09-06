@@ -706,7 +706,7 @@ func TestSchedulerManagerAgentMaintenanceErrorText(t *testing.T) {
 	}
 }
 
-func TestSchedulerManagerRunsScheduledWorkflowWorkItem(t *testing.T) {
+func TestSchedulerManagerRejectsUnownedScheduledWorkflowWorkItem(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/internal/job-scheduler/workflow/start" {
@@ -742,15 +742,11 @@ func TestSchedulerManagerRunsScheduledWorkflowWorkItem(t *testing.T) {
 		},
 	}
 
-	if err := manager.runGlobalWorkItem(context.Background(), item); err != nil {
-		t.Fatalf("run global workflow item: %v", err)
+	if err := manager.runGlobalWorkItem(context.Background(), item); !errors.Is(err, errSchedulerOwnershipLost) {
+		t.Fatalf("unowned workflow dispatch error=%v", err)
 	}
-	if received["workflow_guid"] != "wf-123" || received["source_type"] != "scheduled_job" {
-		t.Fatalf("unexpected workflow payload %#v", received)
-	}
-	metadata, ok := received["source_metadata"].(map[string]any)
-	if !ok || metadata["scheduled_job_id"] == nil || metadata["scheduled_job_run_id"] == nil {
-		t.Fatalf("missing source metadata %#v", received)
+	if received != nil {
+		t.Fatalf("unowned workflow reached API: %#v", received)
 	}
 }
 

@@ -588,9 +588,28 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 * Kubernetes VolumeSnapshot data sources are namespace-scoped.  Keep the validation cluster in the same namespace with unique Services and PVCs, verify restored data without changing production, and remove only the validation resources after recording evidence.
 * The Aegis key remains memory-only.  An all-cold restart requires operator unlock.
 
+### Scheduler Recovery
+
+Scheduler ownership expires independently of script, Ansible, patch-install, and Agent-maintenance execution limits. After a scheduler loss, healthy ownership can recover queued work without waiting for a long-running job's execution timeout.
+
+If a run reports `execution outcome unknown`, inspect its retained activity, workflow, or Agent operation result before retrying manually. Borealis does not automatically resend work whose dispatch may already have reached its destination. The queue records the uncertainty while the remote execution keeps its existing result and timeout path.
+
+Before upgrading from a release without this ownership protocol, let active work finish and drain the previous scheduler. A recovered legacy running claim has no dispatch evidence and remains unknown instead of being replayed.
+
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Ownership transport and task recovery
+
+    - `postgres_lease_transport.go` gives each lease request its own lib/pq connection and directly closable sockets, including cancellation traffic. Controller and scheduler acquisition/renewal have five-second deadlines. A separate watchdog cancels ownership after fifteen seconds without confirmation even if renewal never returns; successful confirmation starts its budget at query start. Leadership TTL remains twenty seconds.
+    - `postgres_control_connector.go` applies direct socket cancellation to controller operations and a separate scheduler ownership pool. Scheduler fleet snapshots, ordinary scheduling reads/writes, and health/bootstrap use the ordinary store; they do not inherit the five-second ownership transaction limit. Transaction and row-stream watchers live until commit/rollback or close. Both lease and control connectors enforce PostgreSQL 17 `transaction_timeout=5000` per connection: the server releases locks even when the partition also drops TCP disconnects. See [PostgreSQL transaction timeout](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-TRANSACTION-TIMEOUT). Ordinary API/auth pools retain their connection policy.
+    - Scheduler holder is Pod name plus a fresh UUID per leadership acquisition. `scheduler_ownership.go` locks live leadership before the work row and requires holder plus `attempt_count` generation for claims, heartbeats, dispatch admission, status writes, and completion. Context cancellation propagates into task network calls. Work TTL is sixty seconds with ten-second heartbeat and forty-five-second independent expiry; script and patch execution limits are separate.
+    - `scheduler_execution_ownership.go` stores `ownership_version`, per-component execution records, and `recovery_state` in existing `job_scheduler_work_items.payload_json`. Stable identity is `work:<id>:<component-key>`. Prepared activity creation and ledger persistence share one short transaction; all remote calls happen after the connection returns to the pool.
+    - Dispatch admission commits `dispatching` under current ownership before sending. Acknowledgement or a matching terminal activity result (including Failed) settles dispatch without changing the actual run/activity status or diagnostics; exactly one workflow run with the matching execution identity establishes accepted execution when Running or terminal (Success, Skipped, Warning, Failed or Timed Out). An unacknowledged Pending run retains uncertainty because the API saves it before executor launch and a crash can leave it without an executor. Explicitly acknowledged dispatch remains accepted even while its workflow is Pending. Missing, unrelated or duplicate workflow identities retain uncertainty; count all matching rows before checking status so a duplicate Pending row cannot hide ambiguity. A later claim skips acknowledged components and can send components still proved unsent. Synchronous patch results persist terminal run/activity status and returned output in the same transaction as dispatch acknowledgement. Agent maintenance similarly commits response-derived Running, coalesced Skipped or explicit Failed status and diagnostic output with its acknowledgement, so takeover cannot mislabel a coalesced or rejected request as timed out. An actual Agent status=error response is definitive rejection for maintenance and patch dispatch; a worker error label without an Agent response or a missing/transport-lost reply remains uncertain. A terminal Agent callback that commits before acceptance is acknowledged keeps its existing result instead of returning to Running. A failed result write rolls back acknowledgement, so takeover cannot skip a result that was never saved. A send admitted before ownership loss may finish remotely; no remote exactly-once guarantee is implied.
+    - An unacknowledged send becomes queue failure with `recovery_state=outcome_unknown`, retained identity, and explicit error. Run/activity status and execution deadlines remain intact for actual results. Legacy running claims lack this evidence and also fail closed. Never clear the ledger to manufacture retry eligibility.
+    - Recovery reclaims the previous leadership incarnation's work immediately after healthy takeover, or an expired sixty-second work claim. The five-minute recovery target assumes available PostgreSQL, healthy replacement scheduler, and downstream capacity; portable tests do not qualify live failover timing.
+    - Required PostgreSQL tests cover established-socket blackhole/cancellation/healing, cancellation of idle transactions holding locks while TCP disconnects are also dropped, stale ownership writes, owner death, partial-component replay, workflow identity, and uncertainty without false execution failure. Retain #466 live partition acceptance and #493 exact-release qualification separately.
 
     ### Clustered HMR entry boundary
 
@@ -800,8 +819,9 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - Long database bootstrap, node redeploy, or Kubernetes reconciliation never makes liveness depend on controller-loop progress or external dependencies.
 - The cluster controller renews its 20-second PostgreSQL ownership lease every five seconds through an independent heartbeat while operation steps run.
 - Each acquisition has a five-second deadline.
-- Timeout evicts the selected driver connection plus every remaining idle connection in the controller-only pool.
-- This bounds reusable stale sockets after the driver returns but cannot interrupt an active `lib/pq` socket read blackholed during CloudNativePG primary failover.
+- Lease requests use dedicated PostgreSQL connections. Cancellation directly closes each request's active socket and any `lib/pq` cancellation socket, including blackholed authentication or query reads; ordinary application pools keep their existing transport.
+- Lease expiry has its own watchdog goroutine. A blocked renewal cannot delay step cancellation or guard shutdown; late renewal responses cannot revive expired ownership. Successful renewal extends the deadline from request start, not response arrival.
+- Before beginning operation work after acquisition, the controller discards idle operation-store connections to the former primary.
 - Live HMR partition recovery remains tracked in [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466).
 - Explicit ownership loss cancels step context immediately.
 - Transient database errors during primary-Service handoff are retried for at most 15 seconds.  Persistent failure cancels before lease expiry.

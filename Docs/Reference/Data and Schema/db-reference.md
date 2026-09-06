@@ -307,6 +307,8 @@ finally:
 
     ### Cluster control tables
 
+    Controller startup completes assembly, Agent install-link, and cluster schema bootstrap through an ordinary pool using the existing bootstrap deadline. It then closes that pool and retains initialized schema state while switching to the bounded control pool. The five-second ownership transaction limit applies only after bootstrap; a contended DDL lock must not inherit that limit. `TestPostgresControlBootstrapOutlivesOwnershipTransactionBudget` holds a real assembly-table lock beyond five seconds, proves startup succeeds after release, verifies the returned control pool remains bounded, and checks the ordinary bootstrap connection closes.
+
     - `engine.cluster_state` stores singleton topology, VIPs, baseline release/SHA, HMR state, and active operation.
     - `engine.cluster_nodes` stores membership/application state, management identity, Engine release, role/K3s-version state, drain reason, and probe health.
     - `engine.cluster_invitations` and `engine.cluster_admissions` store bounded one-use invite metadata and paired approvals. Admission polling joins exact admission, invitation, cluster, node name and bearer hash before selecting recent admission-scoped events. Repeated accepted join requests reuse original admission only when target identity matches, including after approval starts an operation. Initial pending access expires after 15 minutes; approved target resumption is bounded to 24 hours from invitation creation. Admin renewal changes only invitation binding, preserving original target and operation while revoking old bearer access. Pending cancellation/expiry releases capacity only without approval, operation or retained-member evidence; uncertain records become `Recovery Required`. Controller reconciliation holds current lease and cluster-state locks; membership retry preserves the cohort.
@@ -961,6 +963,7 @@ finally:
     - Patch install rows store one frozen device target per endpoint so operators can see install success, failure, timeout, and skipped/offline state in Scheduled Job history.
 
     #### `job_scheduler_work_items`
+    - Ownership: current Go scheduler uses `lease_owner` as leadership incarnation and `attempt_count` as claim generation. Existing `payload_json` retains protocol version, per-component execution IDs/acknowledgements, and unknown-outcome evidence; no schema change. Claim/status/dispatch transactions lock current leadership before the work row, then release all connections before remote execution. See [Scheduler Recovery](../../Engine/managing-engine-clusters.md#scheduler-recovery) for the canonical protocol and operator procedure.
     - Status: Active.
     - Purpose: Durable work queue for `job-scheduler` and dynamic site-worker containers or pods.
     - Columns: `id`, `dedupe_key`, `kind`, `site_id`, `lane`, `job_id`, `run_id`, `target_id`, `payload_json`, `status`, `attempt_count`, `priority`, `available_at`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `worker_guid`, `container_name`, `error`, `created_at`, `updated_at`, `started_at`, `finished_at`.

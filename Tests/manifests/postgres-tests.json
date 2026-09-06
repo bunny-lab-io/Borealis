@@ -14,6 +14,16 @@
     "TestClusterOperationRetryPersistsFailedStepCheckpoint",
     "TestClusterReleaseIdentityPostgresQueueAndRetry",
     "TestClusterRemovalFencePostgresPersistsAndFencesStaleWriters",
+    "TestPostgresControlBootstrapOutlivesOwnershipTransactionBudget",
+    "TestPostgresControlCancellationReleasesTransactionLocks",
+    "TestPostgresLeaseTransportBlackholeAndRecovery",
+    "TestSchedulerPostgresDispatchRecovery",
+    "TestSchedulerPostgresMaintenanceAcknowledgementAtomic",
+    "TestSchedulerPostgresOwnershipFences",
+    "TestSchedulerPostgresPatchResultAcknowledgementAtomic",
+    "TestSchedulerPostgresSnapshotOutlivesOwnershipTransactionBudget",
+    "TestSchedulerPostgresUnknownOutcomePreservesExecution",
+    "TestSchedulerPostgresWorkflowDispatchRetainsIdentity",
     "TestVPNSessionStorePostgresReplicaConvergence"
   ]
 }

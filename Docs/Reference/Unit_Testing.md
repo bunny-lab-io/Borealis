@@ -99,6 +99,8 @@ Every required database test must run and pass. Missing tests, skipped tests or 
 
 Normal pull requests validate deterministic repository behavior. Full Engine deploy, live K3s readiness, Longhorn persistence, public DNS, TLS issuance, real Agent enrollment, browser interaction, and remote-device networking remain deployment or Tier 3 qualification responsibilities.
 
+Manual Pull Request Validation runs select every portable lane and build every production image through `Tests/run-containers.sh --all`. Pull-request events retain affected-image selection from their base and head revisions.
+
 ## Regression Tracking
 
 Do not delete regression coverage silently. Update [Testing Regressions](testing-regressions.md) when test protects known production, operator, or review regression.
@@ -138,6 +140,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 
     ### PostgreSQL inventory contract
 
+    - Transport/ownership coverage uses actual PostgreSQL traffic through a local TCP blackhole proxy, independent blocked-renewal watchdog, transaction-lock release, stale holder/generation rejection, owner-death reconciliation, retained workflow identity, and unknown-outcome execution-state preservation. These tests must stay registered in the required inventory. Database CI sets `CGO_ENABLED=1 GOFLAGS=-race` to exercise concurrent cancellation and heartbeat paths. Locally, `CGO_ENABLED=1 GOFLAGS=-race ./Tests/run-database-postgres.sh` requires a C compiler as well as the documented Go toolchain.
+
     U02 Engine Version coverage lives in `Cluster_Management.test.jsx` and Go `TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget`. It checks three-node mixed/unknown records, exact SHA tooltips, pending operation scope, recorded-versus-runtime identity, stale/future report times, failed/hanging polling and recovery. WebUI runner uses temporary workspace; live three-node browser verification remains Q01 qualification.
 
     - Every database-backed Go integration test in the API package reads `BOREALIS_TEST_DATABASE_URL` directly or through a package-level test helper function. The Go syntax walker follows helper declarations within each test package, preserving local shadowing and excluding same-named receiver methods and imported selectors. It compares discovered test names with the maintained inventory; register new tests in the same PR.
@@ -145,6 +149,9 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
     - Result audit requires every inventoried top-level test to start and pass plus package completion. Any skipped or failed test/subtest, unexpected package/test, malformed output, or missing result fails. Unit-only Engine Go runs may still skip tests without database configuration; that is not database validation evidence.
     - Database CI selection covers API package Go source/tests, internal packages and module metadata as well as database fixtures, runner, inventory and auditing tools. This intentionally covers shared store/lease helpers beyond cluster filenames.
     - Results include `postgres-go-results.jsonl`, `postgres-go-stderr.log`, `postgres-integration.log` and PostgreSQL container diagnostics. CI uploads logs only, excluding temporary credentials, runtime files and virtual environments.
+    - `TestSchedulerHostServiceDistinguishesAgentRejection` checks actual Agent error responses versus worker errors and missing replies through HTTP.
+    - `TestSchedulerPostgresPatchResultAcknowledgementAtomic` and `TestSchedulerPostgresMaintenanceAcknowledgementAtomic` cover synchronous success/failure and maintenance Running/Skipped/Failed response persistence, rollback on blocked final write, takeover without replay, stale result rejection and an Agent completion arriving before acceptance acknowledgement. `TestSchedulerPostgresSnapshotOutlivesOwnershipTransactionBudget` blocks an actual fleet snapshot beyond five seconds and verifies all targets commit while the separate ownership pool retains its five-second server limit.
+    - `TestPostgresLeaseTransportBlackholeAndRecovery` forwards real PostgreSQL traffic through a local TCP proxy, drops both directions after confirming an active query, verifies direct socket cancellation and bounded startup, and proves reconnection after healing. `TestClusterControllerLeaseGuardBoundsBlockedRenewalAndClose` deliberately ignores cancellation inside renewal to verify the independent watchdog.
     - Hosts requiring documented permission-sensitive validation may use existing `BOREALIS_DOCKER_USE_SUDO=1` runner option. It applies only to the runner's uniquely named disposable PostgreSQL container.
 
     - Admission regressions cover 750 unrelated events, authenticated idempotent replay, bounded expiry and renewal, safe pending cancellation, retained failed second joiner, controller restart/lease fencing, and replacement admission. Node-manager HTTP tests reject plaintext/redirect disclosure and require authoritative K3s settings.
