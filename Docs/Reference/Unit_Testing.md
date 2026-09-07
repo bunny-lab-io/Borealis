@@ -159,6 +159,8 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
 
     ### Python ownership audit
 
+    - S01 receiver tests: `internal/clusterbootstrap/archive_test.go` builds real Git/tag objects and a Go executable, verifies successful isolated extraction and rejects mismatched identities, content, modes, unsafe paths/Git metadata, compressed corruption and cancellation. `cluster_ssh_bootstrap_test.go` checks fresh publication/asset metadata, manifest rejection before archive download, redirect destination pinning and absence of GitHub credentials/cookies/Referer on CDN requests. These are local receiver proofs; immutable publication, SSH execution and admission require separate live qualification. `test_affected_services.py` preserves image selection for shared Go receiver, SSH and identity packages.
+
     - Engine Python inventory contains 10 files across five domains. Every file exercises current site-worker execution, worker transport, remote access, or schema bootstrap reused by site-worker image.
     - Go Agent wrapper coverage lives in `Data/Agent/internal/scripts/scripts_test.go`.
     - Go auth, Assembly, metadata, workflow, Engine launcher, Traefik-entrypoint, and WebUI cookie-boundary coverage lives under `Data/Engine/Containers/api-backend/cmd/api-backend/`.

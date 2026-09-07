@@ -87,6 +87,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-062 | Temporary SSH credentials and operation/target authority | Four required `TestClusterSSHCredentialsPostgres*` cases | fixed | S01 storage review found that a target-only lease could survive changed controller/operation authority, and credential cleanup could overwrite preparation state. | Bind encrypted credentials to operation/target/approved SSH identity and current Aegis generation. Enforce two-hour expiry; reject stale target holders/generations, expired/replaced controllers and changed parent operation/attempt/step. Cleanup separates credential availability from retained target outcome, deletes active secret records and fences old workers. Keep actual isolated PostgreSQL, concurrent claims and one-connection crypto checks; qualify remote execution separately. |
 
+| REG-TEST-063 | Shared Engine Go image build selection | `test_engine_shared_packages_rebuild_multi_role_consumers` | fixed | S01 receiver integration found build manifest selected command-package changes but omitted shared internal packages from API/operator/scheduler image inputs. An internal-only SSH or identity fix could miss affected-image validation. | Include Engine internal packages in all three multi-role binary consumers and retain receiver/SSH/identity selection cases. Artifact selection does not imply runtime deployment or live qualification. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
