@@ -68,7 +68,7 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
 	switch os.Args[1] {
 	case "serve":
@@ -85,6 +85,8 @@ func main() {
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":
 		shutdownHandoff()
+	case "bootstrap-session":
+		bootstrapSession(os.Args[2:])
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}

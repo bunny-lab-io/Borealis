@@ -42,7 +42,7 @@ type fakeSSH struct {
 
 const inspectedHostFixture = "kernel=Linux\narchitecture=x86_64\nuid=1000\nhostname=new-engine\nos_id=ubuntu\nos_version=24.04\ncpu_count=16\nmemory_kib=33554432\ndisk_total_kib=524288000\ndisk_free_kib=314572800\ndisk_scope=opt\nborealis_path=absent\nk3s_unit=not-found\n"
 
-func newFakeSSH(t *testing.T, mode string) *fakeSSH {
+func newFakeSSH(t *testing.T, mode string, execute ...func(string, ssh.Channel) uint32) *fakeSSH {
 	t.Helper()
 	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -155,13 +155,19 @@ func newFakeSSH(t *testing.T, mode string) *fakeSSH {
 							continue
 						}
 						var command struct{ Command string }
-						if ssh.Unmarshal(request.Payload, &command) != nil || !(command.Command == inspectionCommand || strings.HasPrefix(mode, "privileged") && command.Command == privilegedInspectionCommand) || strings.Contains(command.Command, string(server.password)) {
+						if ssh.Unmarshal(request.Payload, &command) != nil || !(len(execute) == 1 || command.Command == inspectionCommand || strings.HasPrefix(mode, "privileged") && command.Command == privilegedInspectionCommand) || strings.Contains(command.Command, string(server.password)) {
 							request.Reply(false, nil)
 							channel.Close()
 							continue
 						}
 						server.execCalls.Add(1)
 						request.Reply(true, nil)
+						if len(execute) == 1 {
+							status := execute[0](command.Command, channel)
+							channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+							channel.Close()
+							continue
+						}
 						if strings.HasPrefix(mode, "privileged") && mode != "privileged nopasswd" {
 							input, err := io.ReadAll(channel)
 							if err != nil || !bytes.Equal(input, append(bytes.Clone(server.password), '\n')) {

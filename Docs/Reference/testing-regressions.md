@@ -91,6 +91,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-064 | NOPASSWD SSH inspection completion | `TestPinnedSSHPrivilegedInspectionKeepsSudoSecretOffCommand` and `TestPrivilegedShellStdinNeverBecomesCommands` | fixed | S01 privileged inspection tests exposed a race: root/NOPASSWD could finish before SSH stdin copier wrote unused sudo password, turning valid inspection into a false transport failure. | Use bounded explicit stdin pipe; successful remote exit plus strict UID0 inventory governs completion when unused password write sees EOF. Keep password-only stdin inert with fixed shell `-c` text, reject CR/LF before encryption, and preserve error/output/cancellation bounds. |
 
+| REG-TEST-065 | SSH bootstrap executable copy and authority boundaries | `TestBootstrapRootCopyChecksBeforeExecutingAndCleansScratch`, `TestBootstrapSSHDeliveryAndAuthorityFences` and `TestBootstrapSessionStopsOnExpiredReplayedAndDisconnectedAuthority` | fixed | S01 implementation review identified that hashing a login-user writable helper before sudo leaves a substitution window, and reusable buffered heartbeats can outlive current worker authority. | Copy into private privileged scratch and hash after copying; require fresh unpredictable challenges with expiry measured from issue time. Reject changed ownership/identity, stale replies and unsuccessful remote completion. Current protocol permits read-only verification only; mutation journals and live admission need separate implementation and qualification. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

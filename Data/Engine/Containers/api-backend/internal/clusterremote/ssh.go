@@ -255,7 +255,11 @@ func (transport Transport) ProbeHostKey(ctx context.Context, target Target) (Hos
 	return HostKey{}, ErrTransport
 }
 
-type Client struct{ ssh *ssh.Client }
+type Client struct {
+	ssh      *ssh.Client
+	target   Target
+	approved HostKey
+}
 
 func (client *Client) Close() error { return client.ssh.Close() }
 
@@ -285,7 +289,7 @@ func (transport Transport) Connect(ctx context.Context, target Target, approved 
 		}
 		return nil, ErrTransport
 	}
-	return &Client{ssh: client}, nil
+	return &Client{ssh: client, target: target, approved: HostKey{Algorithm: approved.Algorithm, Fingerprint: approved.Fingerprint, PublicKey: bytes.Clone(approved.PublicKey)}}, nil
 }
 
 type boundedOutput struct {

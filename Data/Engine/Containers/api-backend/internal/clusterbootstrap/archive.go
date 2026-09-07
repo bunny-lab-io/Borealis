@@ -25,12 +25,25 @@ import (
 // Bundle is isolated scratch owned by this call, never an installed runtime.
 // Caller must Close after SSH transfer. Paths remain private to trusted caller;
 // mutation of scratch after verification invalidates its proof.
-type Bundle struct{ root string }
+type Bundle struct {
+	root     string
+	identity identity
+}
 
 func (b *Bundle) ArchivePath() string { return filepath.Join(b.root, BundleName) }
 func (b *Bundle) SourcePath() string  { return filepath.Join(b.root, "unpacked", "source") }
 func (b *Bundle) ManagerPath() string { return filepath.Join(b.root, "unpacked", ManagerPath) }
 func (b *Bundle) Close() error        { return os.RemoveAll(b.root) }
+
+// ManagerProof exposes only public verified executable identity for fixed SSH
+// transport. Receiver must recheck copied bytes immediately before execution.
+func (b *Bundle) ManagerProof() (Expected, string, int64, error) {
+	if b == nil || b.root == "" || !filepath.IsAbs(b.root) || !digestPattern.MatchString(b.identity.NodeManager.SHA256) {
+		return Expected{}, "", 0, errors.New("verified node bootstrap bundle required")
+	}
+	i := b.identity
+	return Expected{Repository: i.Repository, Release: i.Release, SourceSHA: i.SourceSHA, AllowQualification: strings.Contains(i.Release, "-rc.")}, i.NodeManager.SHA256, i.NodeManager.Size, nil
+}
 
 type sourceFile struct {
 	mode int64
@@ -52,7 +65,7 @@ func Stage(ctx context.Context, parent string, m *Manifest, input io.Reader, git
 	if err != nil {
 		return nil, errors.New("node bootstrap scratch unavailable")
 	}
-	b := &Bundle{root: root}
+	b := &Bundle{root: root, identity: m.identity}
 	defer func() {
 		if err != nil {
 			_ = b.Close()
