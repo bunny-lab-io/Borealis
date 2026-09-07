@@ -29,6 +29,8 @@ var clusterSSHSchemaStatements = []string{
 		state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','running','prepared','joined','recovery_required','completed','failed','cancelled')),
 		credential_state TEXT NOT NULL DEFAULT 'available' CHECK (credential_state IN ('available','required')),
 		current_step TEXT NOT NULL DEFAULT 'inspect',
+		inspection_json TEXT NOT NULL DEFAULT '{}',
+		inspected_at BIGINT NOT NULL DEFAULT 0,
 		operation_attempt BIGINT NOT NULL DEFAULT 1,
 		lease_holder TEXT NOT NULL DEFAULT '',
 		lease_generation BIGINT NOT NULL DEFAULT 0,
@@ -121,6 +123,7 @@ type clusterSSHTargetLease struct {
 	ControllerHolder string
 	OperationAttempt int64
 	OperationStep    string
+	OperationKind    string
 }
 
 // claimClusterSSHTarget uses the database clock. It never renews or overwrites an
@@ -139,8 +142,8 @@ func (s *postgresOperatorStore) claimClusterSSHTarget(ctx context.Context, opera
 		  AND l.name=$5 AND l.holder<>'' AND l.expires_at>moment.now
 		  AND t.state IN ('queued','running','recovery_required') AND t.credential_state='available' AND t.lease_expires_at<=moment.now
 		  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
-		RETURNING t.id,t.operation_id,t.lease_holder,t.lease_generation,t.current_step,l.holder,o.attempt,o.current_step`, operationID, targetID, holder, clusterSSHTargetLeaseSeconds, clusterControllerLeaseName).
-		Scan(&lease.TargetID, &lease.OperationID, &lease.Holder, &lease.Generation, &lease.Step, &lease.ControllerHolder, &lease.OperationAttempt, &lease.OperationStep)
+		RETURNING t.id,t.operation_id,t.lease_holder,t.lease_generation,t.current_step,l.holder,o.attempt,o.current_step,o.kind`, operationID, targetID, holder, clusterSSHTargetLeaseSeconds, clusterControllerLeaseName).
+		Scan(&lease.TargetID, &lease.OperationID, &lease.Holder, &lease.Generation, &lease.Step, &lease.ControllerHolder, &lease.OperationAttempt, &lease.OperationStep, &lease.OperationKind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return clusterSSHTargetLease{}, errClusterConflict
 	}
@@ -151,6 +154,12 @@ func (s *postgresOperatorStore) claimClusterSSHTarget(ctx context.Context, opera
 }
 
 func (s *postgresOperatorStore) renewClusterSSHTarget(ctx context.Context, lease clusterSSHTargetLease) error {
+	return s.renewClusterSSHTargetGeneration(ctx, lease, "")
+}
+
+// Active workers also bind the exact generation they decrypted. A concurrent
+// replacement of both Aegis state and credential record must not renew them.
+func (s *postgresOperatorStore) renewClusterSSHTargetGeneration(ctx context.Context, lease clusterSSHTargetLease, generation string) error {
 	result, err := s.db.ExecContext(ctx, `WITH moment AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS now)
 		UPDATE engine.cluster_onboarding_targets t SET lease_expires_at=moment.now+$6,updated_at=moment.now
 		FROM moment,engine.cluster_operations o,engine.cluster_state c,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a,engine.cluster_application_leases l
@@ -159,8 +168,9 @@ func (s *postgresOperatorStore) renewClusterSSHTarget(ctx context.Context, lease
 		  AND c.active_operation_id=o.id AND c.cluster_id=t.cluster_id
 		  AND l.name=$10 AND l.holder=$7 AND l.expires_at>moment.now
 		  AND o.attempt=$8 AND t.operation_attempt=o.attempt AND o.current_step=$9
-		  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token`,
-		lease.TargetID, lease.OperationID, lease.Holder, lease.Generation, lease.Step, clusterSSHTargetLeaseSeconds, lease.ControllerHolder, lease.OperationAttempt, lease.OperationStep, clusterControllerLeaseName)
+		  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
+		  AND ($11='' OR p.aegis_generation=$11) AND o.kind=$12`,
+		lease.TargetID, lease.OperationID, lease.Holder, lease.Generation, lease.Step, clusterSSHTargetLeaseSeconds, lease.ControllerHolder, lease.OperationAttempt, lease.OperationStep, clusterControllerLeaseName, generation, lease.OperationKind)
 	if err != nil {
 		return errClusterUnavailable
 	}
@@ -181,7 +191,7 @@ func (s *postgresOperatorStore) loadClusterSSHTargetCredentials(ctx context.Cont
 		WHERE t.id=$1 AND t.operation_id=$2 AND t.lease_holder=$3 AND t.lease_generation=$4 AND t.current_step=$5
 		  AND t.state='running' AND t.credential_state='available' AND t.lease_expires_at>extract(epoch FROM clock_timestamp())
 		  AND o.attempt=$7 AND t.operation_attempt=o.attempt AND o.current_step=$8
-		  AND p.expires_at>extract(epoch FROM clock_timestamp())`, lease.TargetID, lease.OperationID, lease.Holder, lease.Generation, lease.Step, lease.ControllerHolder, lease.OperationAttempt, lease.OperationStep, clusterControllerLeaseName).
+		  AND p.expires_at>extract(epoch FROM clock_timestamp()) AND o.kind=$10`, lease.TargetID, lease.OperationID, lease.Holder, lease.Generation, lease.Step, lease.ControllerHolder, lease.OperationAttempt, lease.OperationStep, clusterControllerLeaseName, lease.OperationKind).
 		Scan(&sealed.binding.ClusterID, &sealed.binding.OperationID, &sealed.binding.TargetID, &sealed.binding.Address, &sealed.binding.Port, &sealed.binding.Fingerprint, &sealed.generation, &sealed.ciphertext)
 	if err != nil {
 		return sealedClusterSSHCredentials{}, errClusterSSHCredentials

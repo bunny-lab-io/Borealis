@@ -18,6 +18,9 @@
     "TestClusterSSHCredentialsPostgresExpiryRotationResetAndTerminalCleanup",
     "TestClusterSSHCredentialsPostgresOperationFences",
     "TestClusterSSHCredentialsPostgresRejectsDuplicateHostsAndAegisChangeBeforeCommit",
+    "TestClusterSSHWorkerPostgresInspectionCompletionFences",
+    "TestClusterSSHWorkerPostgresOwnedInspection",
+    "TestClusterSSHWorkerPostgresRuntimeClaimsOnlyExplicitInspection",
     "TestVPNSessionStorePostgresReplicaConvergence"
   ]
 }

@@ -93,6 +93,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-065 | SSH bootstrap executable copy and authority boundaries | `TestBootstrapRootCopyChecksBeforeExecutingAndCleansScratch`, `TestBootstrapSSHDeliveryAndAuthorityFences` and `TestBootstrapSessionStopsOnExpiredReplayedAndDisconnectedAuthority` | fixed | S01 implementation review identified that hashing a login-user writable helper before sudo leaves a substitution window, and reusable buffered heartbeats can outlive current worker authority. | Copy into private privileged scratch and hash after copying; require fresh unpredictable challenges with expiry measured from issue time. Reject changed ownership/identity, stale replies and unsuccessful remote completion. Current protocol permits read-only verification only; mutation journals and live admission need separate implementation and qualification. |
 
+| REG-TEST-066 | SSH worker credential-generation and result commit | `TestClusterSSHWorkerPostgresInspectionCompletionFences` and `TestClusterSSHWorkerPostgresRuntimeClaimsOnlyExplicitInspection` | fixed | Inspection-worker integration showed that comparing only current credential generation to current Aegis state could accept a worker that decrypted an earlier generation when both rows were replaced. | Bind active renewal and result commit to the exact decrypted generation and operation kind as well as existing lease/step fences. Hold parent authority through outcome commit; reject stale replay, preserve public evidence after credential cleanup and keep membership advancement with the controller. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

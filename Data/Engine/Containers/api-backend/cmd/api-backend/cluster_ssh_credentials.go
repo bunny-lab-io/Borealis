@@ -90,6 +90,28 @@ type sealedClusterSSHCredentials struct {
 	ciphertext string
 }
 
+// Database state is read and released before verifying the memory-only key.
+// A matching stored generation alone cannot keep a locked API worker running.
+func (s *goAegisService) verifyClusterSSHGeneration(ctx context.Context, generation string) error {
+	if s == nil || generation == "" {
+		return errClusterSSHCredentials
+	}
+	state, err := s.state(ctx)
+	if err != nil || !state.Configured || state.VerificationToken != generation {
+		return errClusterSSHCredentials
+	}
+	key, err := s.activeKey()
+	if err != nil {
+		return errClusterSSHCredentials
+	}
+	defer clear(key)
+	value, err := aegisDecryptText(state.VerificationToken, key)
+	if err != nil || value != aegisVerificationPlaintext || ctx.Err() != nil {
+		return errClusterSSHCredentials
+	}
+	return nil
+}
+
 func (sealedClusterSSHCredentials) String() string {
 	return "sealed cluster SSH credentials [redacted]"
 }
