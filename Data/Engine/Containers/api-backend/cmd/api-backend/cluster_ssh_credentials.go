@@ -55,8 +55,7 @@ func (clusterSSHCredentialEnvelope) String() string   { return "cluster SSH cred
 func (clusterSSHCredentialEnvelope) GoString() string { return "cluster SSH credentials [redacted]" }
 
 func (envelope clusterSSHCredentialEnvelope) validate() error {
-	if envelope.Version != 1 || !envelope.Binding.valid() || len(envelope.SudoPassword) > clusterremote.MaxPasswordBytes ||
-		!utf8.ValidString(envelope.SudoPassword) || strings.ContainsRune(envelope.SudoPassword, 0) {
+	if envelope.Version != 1 || !envelope.Binding.valid() || clusterremote.ValidateSudoPassword([]byte(envelope.SudoPassword)) != nil {
 		return errClusterSSHCredentials
 	}
 	var credential *clusterremote.Credential

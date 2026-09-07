@@ -159,6 +159,8 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
 
     ### Python ownership audit
 
+    - Privileged SSH coverage in `internal/clusterremote/privileged_inspection_test.go` uses real in-process SSH, isolated shell/sudo fixtures and real filesystem directory probes. It checks password/NOPASSWD/root stdin safety, untouched caller secrets, output limits, cancellation, failed/unknown versus absent installation state, existing Kubernetes identities, current permanent direct-network requirements and strict JSON. `TestClusterSSHCredentialSudoFramingPreservesSyntaxAndRejectsLines` keeps durable encryption aligned with sudo input framing without changing SSH login syntax. Live inspection must still verify approved target host key before authenticating.
+
     - S01 receiver tests: `internal/clusterbootstrap/archive_test.go` builds real Git/tag objects and a Go executable, verifies successful isolated extraction and rejects mismatched identities, content, modes, unsafe paths/Git metadata, compressed corruption and cancellation. `cluster_ssh_bootstrap_test.go` checks fresh publication/asset metadata, manifest rejection before archive download, redirect destination pinning and absence of GitHub credentials/cookies/Referer on CDN requests. These are local receiver proofs; immutable publication, SSH execution and admission require separate live qualification. `test_affected_services.py` preserves image selection for shared Go receiver, SSH and identity packages.
 
     - Engine Python inventory contains 10 files across five domains. Every file exercises current site-worker execution, worker transport, remote access, or schema bootstrap reused by site-worker image.

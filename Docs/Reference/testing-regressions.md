@@ -89,6 +89,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-063 | Shared Engine Go image build selection | `test_engine_shared_packages_rebuild_multi_role_consumers` | fixed | S01 receiver integration found build manifest selected command-package changes but omitted shared internal packages from API/operator/scheduler image inputs. An internal-only SSH or identity fix could miss affected-image validation. | Include Engine internal packages in all three multi-role binary consumers and retain receiver/SSH/identity selection cases. Artifact selection does not imply runtime deployment or live qualification. |
 
+| REG-TEST-064 | NOPASSWD SSH inspection completion | `TestPinnedSSHPrivilegedInspectionKeepsSudoSecretOffCommand` and `TestPrivilegedShellStdinNeverBecomesCommands` | fixed | S01 privileged inspection tests exposed a race: root/NOPASSWD could finish before SSH stdin copier wrote unused sudo password, turning valid inspection into a false transport failure. | Use bounded explicit stdin pipe; successful remote exit plus strict UID0 inventory governs completion when unused password write sees EOF. Keep password-only stdin inert with fixed shell `-c` text, reject CR/LF before encryption, and preserve error/output/cancellation bounds. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
