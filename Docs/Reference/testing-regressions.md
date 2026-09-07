@@ -97,6 +97,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-067 | SSH cohort historical evidence and subnet endpoints | `TestClusterSSHCohortPostgresRejectsStaleOrPartialInspection`, `TestClusterSSHCohortPostgresReconcilesSourceOutsideConnection`, `TestPrivilegedNetworkRejectsSubnetEndpoints` and `TestManagementSubnetStaysInsidePrivateAddressSpace` | fixed | Cohort integration exposed that retained inspection reports lacked producing attempt/generation, while prefix containment admitted network/broadcast addresses. An inner credential join could also hide an ineligible cohort member. | Preserve historical evidence with original ownership; require every planned target and current source/controller state before assessment. Reject unusable subnet endpoints and prefixes crossing public space. Keep preparation/admission behind their remaining controller gates. |
 
+| REG-TEST-068 | Joining-node sizing inheritance | `test_cluster_sizing_preserves_source_tuning_on_larger_target`, `test_cluster_sizing_rejects_partial_invalid_or_insufficient_contract` and `test_cluster_sizing_contract_survives_hydration_and_redeploy` | fixed | Source01 uses Homelab while stronger joining hosts auto-select a larger profile. Recomputing after configuration hydration silently replaced the shared tuning contract. | Preserve source rank/reference memory separately from actual host telemetry. Require supported target capacity and fitting PostgreSQL memory cap, reject partial contracts, retain standalone automatic sizing, and qualify source delivery plus aggregate capacity separately. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

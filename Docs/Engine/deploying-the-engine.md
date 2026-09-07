@@ -23,7 +23,9 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
 ## Engine Deployment Profiles
-The Engine container deployment system auto-detects host CPU and RAM specs on every engine deployment or redeployment. Borealis scores CPU and RAM separately, selects the lower sizing profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker scheduled task-slot settings through K3s workload manifests. This sizing profile is separate from the network mode selected during install.
+Standalone deployments detect host CPU and RAM, score them separately, and select the lower sizing profile. Cluster preparation retains the source Engine's profile and memory tuning so stronger joining hosts do not silently choose another profile. Each host still reports its own CPU and RAM. Preparation fails when a target falls below the inherited profile or cannot fit its PostgreSQL memory cap. Storage and aggregate workload capacity need separate qualification.
+
+Borealis writes profile tuning into `Engine/Deploy/compose.env` and applies database plus site-worker scheduled task-slot settings through K3s workload manifests. This sizing profile is separate from the network mode selected during install.
 
 === "Homelab"
     | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
@@ -345,6 +347,14 @@ After deployment finishes:
     - Production (`Engine.sh --network-mode public|local deploy prod`) runs the Engine API behind the K3s `api-backend` Service, serves the static WebUI from the K3s `webui-frontend` workload, and publishes the app through K3s Traefik.
     - Engine and Agent dependency checks live in their domain launchers.
     - `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose/env hashes, service image hashes, changed services, and whether Compose ran or was skipped.
+
+    ### Cluster sizing inheritance
+
+    - `load_deployment_profile_tuning` reads controller-hydrated or retained private environment fields `BOREALIS_CLUSTER_SIZING_RANK` and `BOREALIS_CLUSTER_SIZING_MEMORY_MIB`. Ambient process variables cannot override these fields. Rank is exactly0through3; reference memory is a canonical positive integer with at most9digits. Missing halves or invalid values fail before environment rendering.
+    - An enabled legacy cluster without explicit sizing fields derives them once from its hydrated `BOREALIS_DEPLOYMENT_PROFILE_RANK` and `BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB`; missing source fields fail closed. Fresh standalone deployment with no inherited contract keeps automatic sizing. A fresh joining workflow must deliver the verified source contract before calling preparation, even before K3s exists locally; no target-local profile selection is permitted.
+    - `load_profile_tuning` keeps actual host observations separate from the reference memory used for PostgreSQL buffers/cache and profile defaults. Target CPU/memory ranks must support inherited rank, reference memory must support that rank, and inherited PostgreSQL memory cap must fit actual target RAM. A CPU-limited source can have more RAM than necessary; a smaller target may retain exact capped tuning when these checks pass.
+    - Both sizing fields persist through generated runtime/compose environments and existing runtime Secret mirroring. Local host telemetry cannot replace the retained memory reference during subsequent redeploys. Existing explicit service-limit settings keep their documented precedence; full aggregate capacity/storage checks remain separate prerequisites. This runtime consumer does not publish a release, deliver SSH configuration, authorize preparation or qualify enrollment by itself.
+    - `Tests/Unit_Tests/test_engine_cluster_recovery.py` exercises actual Bash library functions for all profiles, larger targets, capped memory, unchanged standalone detection, missing/malformed/insufficient contracts, inherited prejoin configuration and subsequent host telemetry changes. No lab runtime is modified.
 
     ### Configuration precedence
 
