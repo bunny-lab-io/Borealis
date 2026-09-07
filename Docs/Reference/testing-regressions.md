@@ -95,6 +95,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-066 | SSH worker credential-generation and result commit | `TestClusterSSHWorkerPostgresInspectionCompletionFences` and `TestClusterSSHWorkerPostgresRuntimeClaimsOnlyExplicitInspection` | fixed | Inspection-worker integration showed that comparing only current credential generation to current Aegis state could accept a worker that decrypted an earlier generation when both rows were replaced. | Bind active renewal and result commit to the exact decrypted generation and operation kind as well as existing lease/step fences. Hold parent authority through outcome commit; reject stale replay, preserve public evidence after credential cleanup and keep membership advancement with the controller. |
 
+| REG-TEST-067 | SSH cohort historical evidence and subnet endpoints | `TestClusterSSHCohortPostgresRejectsStaleOrPartialInspection`, `TestClusterSSHCohortPostgresReconcilesSourceOutsideConnection`, `TestPrivilegedNetworkRejectsSubnetEndpoints` and `TestManagementSubnetStaysInsidePrivateAddressSpace` | fixed | Cohort integration exposed that retained inspection reports lacked producing attempt/generation, while prefix containment admitted network/broadcast addresses. An inner credential join could also hide an ineligible cohort member. | Preserve historical evidence with original ownership; require every planned target and current source/controller state before assessment. Reject unusable subnet endpoints and prefixes crossing public space. Keep preparation/admission behind their remaining controller gates. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

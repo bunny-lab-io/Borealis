@@ -56,7 +56,8 @@ func (s *postgresOperatorStore) completeClusterSSHInspection(ctx context.Context
 		FOR SHARE OF o,c,p,a,l
 	), moment AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS now)
 		UPDATE engine.cluster_onboarding_targets t
-		SET inspection_json=$10,inspected_at=moment.now,current_step='inspection_complete',state='queued',
+		SET inspection_json=$10,inspected_at=moment.now,inspected_attempt=$7,inspected_generation=$4,
+		    current_step='inspection_complete',state='queued',
 		    lease_holder='',lease_expires_at=0,updated_at=moment.now
 		FROM moment,authority
 		WHERE t.id=$1 AND t.operation_id=$2 AND t.lease_holder=$3 AND t.lease_generation=$4 AND t.current_step=$5

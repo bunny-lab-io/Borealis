@@ -14,6 +14,8 @@
     "TestClusterOperationRetryPersistsFailedStepCheckpoint",
     "TestClusterReleaseIdentityPostgresQueueAndRetry",
     "TestClusterRemovalFencePostgresPersistsAndFencesStaleWriters",
+    "TestClusterSSHCohortPostgresReconcilesSourceOutsideConnection",
+    "TestClusterSSHCohortPostgresRejectsStaleOrPartialInspection",
     "TestClusterSSHCredentialsPostgresBoundEncryptionAndOwnership",
     "TestClusterSSHCredentialsPostgresExpiryRotationResetAndTerminalCleanup",
     "TestClusterSSHCredentialsPostgresOperationFences",

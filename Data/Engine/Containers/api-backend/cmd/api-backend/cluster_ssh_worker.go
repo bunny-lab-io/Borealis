@@ -62,7 +62,7 @@ func (r clusterSSHInspectionReport) valid() error {
 	}
 	if r.ConnectedPrefix != "" {
 		prefix, err := netip.ParsePrefix(r.ConnectedPrefix)
-		if err != nil || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() || prefix != prefix.Masked() || prefix.String() != r.ConnectedPrefix || prefix.Bits() > 30 {
+		if err != nil || prefix.String() != r.ConnectedPrefix || !clusterremote.UsableManagementAddress(prefix, prefix.Addr().Next()) {
 			return errClusterSSHInspectionWorker
 		}
 	}

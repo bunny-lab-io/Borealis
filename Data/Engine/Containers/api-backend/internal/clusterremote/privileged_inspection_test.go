@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,5 +234,43 @@ func TestPrivilegedDirectoryProbePreservesAbsenceAndUnexpectedTypes(t *testing.T
 		if err != nil || string(out) != expected {
 			t.Fatalf("path %s: %q %v", name, out, err)
 		}
+	}
+}
+
+func TestPrivilegedNetworkRejectsSubnetEndpoints(t *testing.T) {
+	for _, address := range []string{"192.168.3.0", "192.168.3.255"} {
+		t.Run(address, func(t *testing.T) {
+			facts, err := parsePrivilegedFacts([]byte(privilegedHostFixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := facts.ConnectedManagementNetwork("192.168.3.251", []string{address}); err == nil {
+				t.Fatal("subnet endpoint accepted as peer/VIP")
+			}
+			facts, err = parsePrivilegedFacts([]byte(strings.Replace(privilegedHostFixture, `"local":"192.168.3.251"`, `"local":"`+address+`"`, 1)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := facts.ConnectedManagementNetwork(address, nil); err == nil {
+				t.Fatal("subnet endpoint accepted as management IP")
+			}
+		})
+	}
+}
+
+func TestManagementSubnetStaysInsidePrivateAddressSpace(t *testing.T) {
+	for _, item := range []struct {
+		prefix, address string
+		valid           bool
+	}{
+		{"10.0.0.0/8", "10.0.0.1", true}, {"172.16.0.0/12", "172.16.0.1", true}, {"192.168.0.0/16", "192.168.0.1", true},
+		{"10.0.0.0/7", "10.0.0.1", false}, {"172.16.0.0/11", "172.16.0.1", false}, {"192.168.0.0/15", "192.168.0.1", false},
+		{"192.168.3.248/30", "192.168.3.249", true}, {"192.168.3.248/30", "192.168.3.251", false},
+	} {
+		t.Run(item.prefix, func(t *testing.T) {
+			if UsableManagementAddress(netip.MustParsePrefix(item.prefix), netip.MustParseAddr(item.address)) != item.valid {
+				t.Fatal("management subnet escaped private/usable address contract")
+			}
+		})
 	}
 }

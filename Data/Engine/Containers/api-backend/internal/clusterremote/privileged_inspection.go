@@ -98,9 +98,12 @@ func (facts PrivilegedFacts) ConnectedManagementNetwork(management string, peers
 		return netip.Prefix{}, invalid
 	}
 	prefix := selected.Prefix.Masked()
+	if !UsableManagementAddress(prefix, ip) {
+		return netip.Prefix{}, invalid
+	}
 	for _, text := range peers {
 		peer, err := netip.ParseAddr(text)
-		if err != nil || !peer.Is4() || !peer.IsPrivate() || peer.String() != text || !prefix.Contains(peer) {
+		if err != nil || peer.String() != text || !UsableManagementAddress(prefix, peer) {
 			return netip.Prefix{}, invalid
 		}
 	}
@@ -111,6 +114,23 @@ func (facts PrivilegedFacts) ConnectedManagementNetwork(management string, peers
 		}
 	}
 	return netip.Prefix{}, invalid
+}
+
+// UsableManagementAddress excludes subnet network/broadcast addresses. The
+// supported management network is private IPv4 with room for VIP and peers.
+func UsableManagementAddress(prefix netip.Prefix, address netip.Addr) bool {
+	if !address.Is4() || !address.IsPrivate() {
+		return false
+	}
+	minimumBits := 16
+	switch address.As4()[0] {
+	case 10:
+		minimumBits = 8
+	case 172:
+		minimumBits = 12
+	}
+	return prefix.IsValid() && prefix == prefix.Masked() && prefix.Addr().Is4() && prefix.Bits() <= 30 &&
+		prefix.Bits() >= minimumBits && prefix.Contains(address) && address != prefix.Addr() && prefix.Contains(address.Next())
 }
 
 const inspectPathScript = `inspect_path() {

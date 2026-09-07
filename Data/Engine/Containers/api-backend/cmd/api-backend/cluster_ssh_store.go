@@ -31,6 +31,8 @@ var clusterSSHSchemaStatements = []string{
 		current_step TEXT NOT NULL DEFAULT 'inspect',
 		inspection_json TEXT NOT NULL DEFAULT '{}',
 		inspected_at BIGINT NOT NULL DEFAULT 0,
+		inspected_attempt BIGINT NOT NULL DEFAULT 0,
+		inspected_generation BIGINT NOT NULL DEFAULT 0,
 		operation_attempt BIGINT NOT NULL DEFAULT 1,
 		lease_holder TEXT NOT NULL DEFAULT '',
 		lease_generation BIGINT NOT NULL DEFAULT 0,
