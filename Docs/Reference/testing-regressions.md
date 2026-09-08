@@ -99,6 +99,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-068 | Joining-node sizing inheritance | `test_cluster_sizing_preserves_source_tuning_on_larger_target`, `test_cluster_sizing_rejects_partial_invalid_or_insufficient_contract` and `test_cluster_sizing_contract_survives_hydration_and_redeploy` | fixed | Source01 uses Homelab while stronger joining hosts auto-select a larger profile. Recomputing after configuration hydration silently replaced the shared tuning contract. | Preserve source rank/reference memory separately from actual host telemetry. Require supported target capacity and fitting PostgreSQL memory cap, reject partial contracts, retain standalone automatic sizing, and qualify source delivery plus aggregate capacity separately. |
 
+| REG-TEST-069 | SSH mutation ownership after process loss | `TestMutationJournalProcessCrash`, `TestMutationJournalChildRetainsHostLock`, `TestMutationJournalStorageFailureCannotLaunchOrAcknowledge` and `TestMutationJournalRetryHistoryCannotBeDiscardedAtLimit` | fixed | S01 execution design exposed that a parent-only host lock can release while its child still writes, and an unacknowledged launch or failed receipt cannot establish whether the mutation occurred. | Persist exact bound intent before execution, inherit the same lock into children, and retain uncertainty across process loss or persistence failure. Require read-only effect/absence proof and independent executor quiescence; absence permits only same-input retry under a fresh claim, preserving bounded history. Keep fixed remote mutation dispatch disabled until its domain proofs and child cleanup are implemented. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
