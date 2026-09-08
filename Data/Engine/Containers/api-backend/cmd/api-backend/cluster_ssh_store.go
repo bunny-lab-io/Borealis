@@ -271,12 +271,15 @@ func (s *postgresOperatorStore) cleanupClusterSSHCredentials(ctx context.Context
 		return errClusterUnavailable
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM engine.cluster_onboarding_credentials p
-		USING engine.cluster_onboarding_targets t,engine.cluster_operations o
-		WHERE p.target_id=t.id AND o.id=t.operation_id AND
+	if _, err := tx.ExecContext(ctx, `WITH expired AS MATERIALIZED (
+		SELECT p.target_id FROM engine.cluster_onboarding_credentials p
+		JOIN engine.cluster_onboarding_targets t ON p.target_id=t.id
+		JOIN engine.cluster_operations o ON o.id=t.operation_id WHERE
 		(p.expires_at<=extract(epoch FROM clock_timestamp()) OR o.state IN ('succeeded','failed','cancelled')
 		 OR t.state IN ('completed','failed','cancelled') OR NOT EXISTS
-		 (SELECT 1 FROM engine.aegis_cipher_state a WHERE a.id=1 AND a.verification_token=p.aegis_generation))`); err != nil {
+		 (SELECT 1 FROM engine.aegis_cipher_state a WHERE a.id=1 AND a.verification_token=p.aegis_generation))
+		ORDER BY p.target_id FOR UPDATE OF p)
+		DELETE FROM engine.cluster_onboarding_credentials p USING expired WHERE p.target_id=expired.target_id`); err != nil {
 		return errClusterUnavailable
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_onboarding_targets t

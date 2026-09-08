@@ -47,7 +47,10 @@ func (s *postgresOperatorStore) loadClusterSSHSourceCohort(ctx context.Context, 
 // from one API snapshot; reject extra/unrecorded nodes before provisioning.
 // A machine ID or Node UID is never inferred from a hostname or address.
 func observeClusterSSHSourceCohort(ctx context.Context, getJSON func(context.Context, string, any) error, source clusterSSHSourceCohort) (clusterSSHSourceCohort, error) {
-	if getJSON == nil || len(source.Members) < 1 || len(source.Members) > 2 {
+	if getJSON == nil {
+		return clusterSSHSourceCohort{}, errClusterUnavailable
+	}
+	if len(source.Members) < 1 || len(source.Members) > 2 {
 		return clusterSSHSourceCohort{}, errClusterSSHCohort
 	}
 	var namespace struct {
@@ -55,7 +58,10 @@ func observeClusterSSHSourceCohort(ctx context.Context, getJSON func(context.Con
 			UID string `json:"uid"`
 		} `json:"metadata"`
 	}
-	if err := getJSON(ctx, "/api/v1/namespaces/kube-system", &namespace); err != nil || !clusterUUIDRE.MatchString(namespace.Metadata.UID) {
+	if err := getJSON(ctx, "/api/v1/namespaces/kube-system", &namespace); err != nil {
+		return clusterSSHSourceCohort{}, errClusterUnavailable
+	}
+	if !clusterUUIDRE.MatchString(namespace.Metadata.UID) {
 		return clusterSSHSourceCohort{}, errClusterSSHCohort
 	}
 	var nodes struct {
@@ -81,7 +87,10 @@ func observeClusterSSHSourceCohort(ctx context.Context, getJSON func(context.Con
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := getJSON(ctx, "/api/v1/nodes", &nodes); err != nil || len(nodes.Items) != len(source.Members) {
+	if err := getJSON(ctx, "/api/v1/nodes", &nodes); err != nil {
+		return clusterSSHSourceCohort{}, errClusterUnavailable
+	}
+	if len(nodes.Items) != len(source.Members) {
 		return clusterSSHSourceCohort{}, errClusterSSHCohort
 	}
 	source.Members = append([]clusterSSHSourceMember(nil), source.Members...)

@@ -395,6 +395,13 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 			}
 		}
 	}
+	if operation.Kind == "ssh_onboarding" {
+		var observe func(context.Context, string, any) error
+		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok && runner.kube != nil {
+			observe = runner.kube.getJSON
+		}
+		return c.runSSHInspectionParent(runCtx, operation, observe)
+	}
 	nodes, err := c.activeNodes(runCtx)
 	if err != nil {
 		if cause := context.Cause(runCtx); cause != nil {
@@ -986,6 +993,8 @@ func clusterControllerStepTimeout(step string) time.Duration {
 func clusterOperationSteps(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerStep, error) {
 	base := []clusterControllerStep{{Name: "preflight"}}
 	switch operation.Kind {
+	case "ssh_onboarding":
+		return append(base, clusterControllerStep{Name: clusterSSHInspectionOperationStep}, clusterControllerStep{Name: clusterSSHQualificationStep}), nil
 	case "engine_update":
 		ordered, err := clusterUpdateNodes(operation, nodes)
 		if err != nil {
@@ -1344,6 +1353,7 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		  FROM engine.cluster_operations o
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
+		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting')
 		 FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
