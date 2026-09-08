@@ -128,19 +128,55 @@ type clusterSSHTargetLease struct {
 	OperationKind    string
 }
 
+// Lock parent authority before touching a target, in the same order used by
+// controller transitions: controller lease, cluster state, operation, Aegis,
+// credential, then target. The caller's following SQL statement rechecks every
+// identity/expiry against a fresh snapshot while these rows remain locked.
+// Keep this transaction SQL-only; release it before crypto, SSH or shaping.
+func lockClusterSSHWorkerAuthority(ctx context.Context, tx *sql.Tx, operationID, targetID string) error {
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{
+		{`SELECT 1 FROM engine.cluster_application_leases WHERE name=$1 FOR SHARE`, []any{clusterControllerLeaseName}},
+		{`SELECT 1 FROM engine.cluster_state WHERE id=1 FOR SHARE`, nil},
+		{`SELECT 1 FROM engine.cluster_operations WHERE id=$1 FOR SHARE`, []any{operationID}},
+		{`SELECT 1 FROM engine.aegis_cipher_state WHERE id=1 FOR SHARE`, nil},
+		{`SELECT 1 FROM engine.cluster_onboarding_credentials WHERE target_id=$1 FOR SHARE`, []any{targetID}},
+	} {
+		var present int
+		if err := tx.QueryRowContext(ctx, query.sql, query.args...).Scan(&present); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errClusterConflict
+			}
+			return errClusterUnavailable
+		}
+	}
+	return nil
+}
+
 // claimClusterSSHTarget uses the database clock. It never renews or overwrites an
 // unexpired owner and cannot claim outside the sole active controller operation.
 func (s *postgresOperatorStore) claimClusterSSHTarget(ctx context.Context, operationID, targetID, holder string) (clusterSSHTargetLease, error) {
 	if !clusterUUIDRE.MatchString(operationID) || !clusterUUIDRE.MatchString(targetID) || !clusterUUIDRE.MatchString(holder) {
 		return clusterSSHTargetLease{}, errClusterConflict
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return clusterSSHTargetLease{}, errClusterUnavailable
+	}
+	defer tx.Rollback()
+	if err := lockClusterSSHWorkerAuthority(ctx, tx, operationID, targetID); err != nil {
+		return clusterSSHTargetLease{}, err
+	}
 	var lease clusterSSHTargetLease
-	err := s.db.QueryRowContext(ctx, `WITH moment AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS now)
+	err = tx.QueryRowContext(ctx, `WITH moment AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS now)
 		UPDATE engine.cluster_onboarding_targets t
 		SET lease_holder=$3,lease_generation=t.lease_generation+1,lease_expires_at=moment.now+$4,state='running',updated_at=moment.now
 		FROM moment,engine.cluster_operations o,engine.cluster_state c,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a,engine.cluster_application_leases l
 		WHERE t.id=$2 AND t.operation_id=$1 AND o.id=t.operation_id AND c.active_operation_id=o.id
 		  AND c.cluster_id=t.cluster_id AND o.state='running' AND o.attempt=t.operation_attempt
+		  AND o.kind='ssh_onboarding' AND o.current_step='inspect_ssh_targets' AND t.current_step='inspect'
 		  AND l.name=$5 AND l.holder<>'' AND l.expires_at>moment.now
 		  AND t.state IN ('queued','running','recovery_required') AND t.credential_state='available' AND t.lease_expires_at<=moment.now
 		  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
@@ -150,6 +186,9 @@ func (s *postgresOperatorStore) claimClusterSSHTarget(ctx context.Context, opera
 		return clusterSSHTargetLease{}, errClusterConflict
 	}
 	if err != nil {
+		return clusterSSHTargetLease{}, errClusterUnavailable
+	}
+	if tx.Commit() != nil {
 		return clusterSSHTargetLease{}, errClusterUnavailable
 	}
 	return lease, nil
@@ -162,7 +201,15 @@ func (s *postgresOperatorStore) renewClusterSSHTarget(ctx context.Context, lease
 // Active workers also bind the exact generation they decrypted. A concurrent
 // replacement of both Aegis state and credential record must not renew them.
 func (s *postgresOperatorStore) renewClusterSSHTargetGeneration(ctx context.Context, lease clusterSSHTargetLease, generation string) error {
-	result, err := s.db.ExecContext(ctx, `WITH moment AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return errClusterUnavailable
+	}
+	defer tx.Rollback()
+	if err := lockClusterSSHWorkerAuthority(ctx, tx, lease.OperationID, lease.TargetID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `WITH moment AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS now)
 		UPDATE engine.cluster_onboarding_targets t SET lease_expires_at=moment.now+$6,updated_at=moment.now
 		FROM moment,engine.cluster_operations o,engine.cluster_state c,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a,engine.cluster_application_leases l
 		WHERE t.id=$1 AND t.operation_id=$2 AND t.lease_holder=$3 AND t.lease_generation=$4 AND t.current_step=$5
@@ -179,12 +226,23 @@ func (s *postgresOperatorStore) renewClusterSSHTargetGeneration(ctx context.Cont
 	if changed, _ := result.RowsAffected(); changed != 1 {
 		return errClusterConflict
 	}
+	if tx.Commit() != nil {
+		return errClusterUnavailable
+	}
 	return nil
 }
 
 func (s *postgresOperatorStore) loadClusterSSHTargetCredentials(ctx context.Context, lease clusterSSHTargetLease) (sealedClusterSSHCredentials, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return sealedClusterSSHCredentials{}, errClusterSSHCredentials
+	}
+	defer tx.Rollback()
+	if lockClusterSSHWorkerAuthority(ctx, tx, lease.OperationID, lease.TargetID) != nil {
+		return sealedClusterSSHCredentials{}, errClusterSSHCredentials
+	}
 	var sealed sealedClusterSSHCredentials
-	err := s.db.QueryRowContext(ctx, `SELECT t.cluster_id,t.operation_id,t.id,t.management_ip,t.ssh_port,t.host_key_fingerprint,p.aegis_generation,p.ciphertext
+	err = tx.QueryRowContext(ctx, `SELECT t.cluster_id,t.operation_id,t.id,t.management_ip,t.ssh_port,t.host_key_fingerprint,p.aegis_generation,p.ciphertext
 		FROM engine.cluster_onboarding_targets t JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
 		JOIN engine.aegis_cipher_state a ON a.id=1 AND a.verification_token=p.aegis_generation
 		JOIN engine.cluster_operations o ON o.id=t.operation_id AND o.state='running'
@@ -198,7 +256,10 @@ func (s *postgresOperatorStore) loadClusterSSHTargetCredentials(ctx context.Cont
 	if err != nil {
 		return sealedClusterSSHCredentials{}, errClusterSSHCredentials
 	}
-	// QueryRow.Scan releases its connection before the caller performs crypto/SSH.
+	if tx.Commit() != nil {
+		return sealedClusterSSHCredentials{}, errClusterSSHCredentials
+	}
+	// Commit releases the connection before the caller performs crypto/SSH.
 	return sealed, nil
 }
 

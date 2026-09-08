@@ -55,7 +55,7 @@ func clusterSSHCredentialsFixture(t *testing.T) (*postgresOperatorStore, *goAegi
 		}
 	})
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO engine.cluster_operations
-		(id,kind,state,current_step,requested_by,created_at,updated_at) VALUES($1,'ssh_onboarding','running','preflight','ssh-test',$2,$2)`, operationID, now); err != nil {
+		(id,kind,state,current_step,requested_by,created_at,updated_at) VALUES($1,'ssh_onboarding','running','inspect_ssh_targets','ssh-test',$2,$2)`, operationID, now); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -220,11 +220,18 @@ func TestClusterSSHCredentialsPostgresBoundEncryptionAndOwnership(t *testing.T) 
 			t.Fatal(err)
 		}
 		next, err = store.claimClusterSSHTarget(ctx, operationID, target.Binding.TargetID, newClusterUUID())
+		if err == nil {
+			t.Fatal("unimplemented preparation step accepted a target claim")
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE engine.cluster_onboarding_targets SET current_step='inspect' WHERE id=$1`, target.Binding.TargetID); err != nil {
+			t.Fatal(err)
+		}
+		next, err = store.claimClusterSSHTarget(ctx, operationID, target.Binding.TargetID, newClusterUUID())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := store.renewClusterSSHTarget(ctx, next); err != nil {
-			t.Fatal("new step not authorized under current controller")
+			t.Fatal("new inspection claim not authorized under current controller")
 		}
 		if _, err := store.db.ExecContext(ctx, `UPDATE engine.cluster_application_leases SET expires_at=1 WHERE name=$1`, clusterControllerLeaseName); err != nil {
 			t.Fatal(err)

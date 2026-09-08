@@ -41,6 +41,9 @@ func (s *postgresOperatorStore) completeClusterSSHInspection(ctx context.Context
 		return errClusterUnavailable
 	}
 	defer tx.Rollback()
+	if err := lockClusterSSHWorkerAuthority(ctx, tx, lease.OperationID, lease.TargetID); err != nil {
+		return err
+	}
 	var clusterID string
 	var now int64
 	err = tx.QueryRowContext(ctx, `WITH authority AS MATERIALIZED (

@@ -214,8 +214,14 @@ func TestClusterSSHWorkerPostgresInspectionCompletionFences(t *testing.T) {
 func TestClusterSSHWorkerPostgresRuntimeClaimsOnlyExplicitInspection(t *testing.T) {
 	store, aegis, ctx, operationID, targets, _ := clusterSSHCredentialsFixture(t)
 	insertSSHFixtureTargets(t, store, ctx, operationID, targets)
+	if _, err := store.db.ExecContext(ctx, `UPDATE engine.cluster_operations SET current_step='preflight' WHERE id=$1`, operationID); err != nil {
+		t.Fatal(err)
+	}
 	if pending, err := store.pendingClusterSSHInspections(ctx); err != nil || len(pending) != 0 {
 		t.Fatal("ordinary preflight exposed SSH work")
+	}
+	if _, err := store.claimClusterSSHTarget(ctx, operationID, targets[0].Binding.TargetID, newClusterUUID()); err != errClusterConflict {
+		t.Fatal("direct claim bypassed inspection phase")
 	}
 	if _, err := store.db.ExecContext(ctx, `UPDATE engine.cluster_operations SET current_step=$1 WHERE id=$2`, clusterSSHInspectionOperationStep, operationID); err != nil {
 		t.Fatal(err)
@@ -268,6 +274,20 @@ func TestClusterSSHWorkerPostgresRuntimeClaimsOnlyExplicitInspection(t *testing.
 	}
 	if complete != 2 || events != 2 {
 		t.Fatal("cohort public outcomes missing or duplicated")
+	}
+	for _, target := range targets {
+		var generation int64
+		if err := store.db.QueryRowContext(ctx, `SELECT lease_generation FROM engine.cluster_onboarding_targets WHERE id=$1`, target.Binding.TargetID).Scan(&generation); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.claimClusterSSHTarget(ctx, operationID, target.Binding.TargetID, newClusterUUID()); err != errClusterConflict {
+			t.Fatal("stale pending list reclaimed a completed inspection")
+		}
+		var unchanged bool
+		if err := store.db.QueryRowContext(ctx, `SELECT lease_generation=$2 AND lease_holder='' AND state='queued' AND current_step='inspection_complete'
+ FROM engine.cluster_onboarding_targets WHERE id=$1`, target.Binding.TargetID, generation).Scan(&unchanged); err != nil || !unchanged {
+			t.Fatal("rejected stale claim changed inspection ownership")
+		}
 	}
 	var state, step string
 	if err := store.db.QueryRowContext(ctx, `SELECT state,current_step FROM engine.cluster_operations WHERE id=$1`, operationID).Scan(&state, &step); err != nil || state != "running" || step != clusterSSHInspectionOperationStep {
