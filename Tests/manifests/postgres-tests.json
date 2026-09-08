@@ -23,6 +23,8 @@
     "TestClusterSSHParentPostgresCancellationAndRetryFences",
     "TestClusterSSHParentPostgresInspectionLifecycle",
     "TestClusterSSHParentPostgresProofCommitFences",
+    "TestClusterSSHQueuePostgresAtomicSourceAndCredentialFences",
+    "TestClusterSSHQueuePostgresPublicProgressRetainsEvidence",
     "TestClusterSSHWorkerPostgresAuthorityLocksAndPhaseClaims",
     "TestClusterSSHWorkerPostgresInspectionCompletionFences",
     "TestClusterSSHWorkerPostgresOwnedInspection",
