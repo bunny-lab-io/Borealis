@@ -8,7 +8,7 @@ import (
 )
 
 func TestClusterSSHCohortPostgresRejectsStaleOrPartialInspection(t *testing.T) {
-	for _, mode := range []string{"success", "prior attempt", "reclaimed generation", "missing proof", "expired report", "future report", "missing credential", "expired credential", "Aegis rotation", "cleanup retained report", "wrong target cluster", "wrong step", "active target", "controller replaced", "operation replaced", "operation kind", "operation step", "operation state", "target state", "unknown report field"} {
+	for _, mode := range []string{"success", "prior attempt", "reclaimed generation", "missing proof", "expired report", "future report", "missing credential", "expired credential", "Aegis rotation", "cleanup retained report", "wrong target cluster", "wrong step", "active target", "controller replaced", "holder suffix only", "holder prefix changed", "operation replaced", "operation kind", "operation step", "operation state", "target state", "unknown report field"} {
 		t.Run(mode, func(t *testing.T) {
 			store, _, ctx, operationID, targets, _ := clusterSSHCredentialsFixture(t)
 			insertSSHFixtureTargets(t, store, ctx, operationID, targets)
@@ -69,6 +69,10 @@ func TestClusterSSHCohortPostgresRejectsStaleOrPartialInspection(t *testing.T) {
 			case "controller replaced":
 				query = `UPDATE engine.cluster_application_leases SET holder=$1 WHERE name=$2`
 				args = []any{newClusterUUID(), clusterControllerLeaseName}
+			case "holder suffix only":
+				holder = strings.TrimPrefix(holder, "borealis-controller-01-")
+			case "holder prefix changed":
+				holder = strings.Replace(holder, "borealis-controller-01-", "standby-controller-02-", 1)
 			case "operation replaced":
 				query = `UPDATE engine.cluster_state SET active_operation_id=NULL WHERE id=1`
 				args = nil

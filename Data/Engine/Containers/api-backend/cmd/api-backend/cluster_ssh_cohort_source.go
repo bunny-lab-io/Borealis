@@ -9,7 +9,7 @@ import (
 // Load controller-owned topology before contacting Kubernetes. The source is
 // read-only; any later approval must compare it again under controller authority.
 func (s *postgresOperatorStore) loadClusterSSHSourceCohort(ctx context.Context, operationID, holder string, attempt int64) (clusterSSHSourceCohort, error) {
-	if !clusterUUIDRE.MatchString(operationID) || !clusterUUIDRE.MatchString(holder) || attempt < 1 {
+	if !clusterUUIDRE.MatchString(operationID) || holder == "" || attempt < 1 {
 		return clusterSSHSourceCohort{}, errClusterSSHCohort
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.cluster_id,c.active_size,c.desired_size,c.status,c.hmr_state,

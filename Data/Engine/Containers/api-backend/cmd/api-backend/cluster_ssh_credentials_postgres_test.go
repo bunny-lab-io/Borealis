@@ -44,7 +44,9 @@ func clusterSSHCredentialsFixture(t *testing.T) (*postgresOperatorStore, *goAegi
 	}
 	operationID := newClusterUUID()
 	now := time.Now().Unix()
-	if _, err := store.db.ExecContext(ctx, `INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at) VALUES($1,$2,$3,$4)`, clusterControllerLeaseName, newClusterUUID(), now+300, now); err != nil {
+	// Match runClusterController's hostname-plus-UUID default. Target worker
+	// holders are UUIDs, but the existing controller holder is an opaque identity.
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at) VALUES($1,$2,$3,$4)`, clusterControllerLeaseName, "borealis-controller-01-"+newClusterUUID(), now+300, now); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

@@ -11,7 +11,9 @@ import (
 // This read grants no preparation authority and never advances the operation.
 // Consumers must recheck the snapshot when committing a later controller step.
 func (s *postgresOperatorStore) loadClusterSSHInspectionCohort(ctx context.Context, operationID, controllerHolder string, attempt int64) (clusterSSHInspectionCohort, error) {
-	if !clusterUUIDRE.MatchString(operationID) || !clusterUUIDRE.MatchString(controllerHolder) || attempt < 1 {
+	// Existing controller identity is opaque (normally hostname-UUID), unlike
+	// target worker UUIDs. Compare the complete lease holder without normalization.
+	if !clusterUUIDRE.MatchString(operationID) || controllerHolder == "" || attempt < 1 {
 		return clusterSSHInspectionCohort{}, errClusterSSHCohort
 	}
 	type storedTarget struct {

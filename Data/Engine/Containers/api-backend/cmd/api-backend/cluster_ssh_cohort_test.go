@@ -12,7 +12,7 @@ import (
 
 func sshInspectionCohortFixture(t *testing.T) (clusterSSHInspectionCohort, clusterSSHSourceCohort) {
 	t.Helper()
-	cohort := clusterSSHInspectionCohort{ClusterID: newClusterUUID(), OperationID: newClusterUUID(), ControllerHolder: newClusterUUID(), Attempt: 1, ObservedAt: 1000}
+	cohort := clusterSSHInspectionCohort{ClusterID: newClusterUUID(), OperationID: newClusterUUID(), ControllerHolder: "borealis-controller-01-" + newClusterUUID(), Attempt: 1, ObservedAt: 1000}
 	source := clusterSSHSourceCohort{ClusterID: cohort.ClusterID, KubeSystemUID: newClusterUUID(), ActiveSize: 1, DesiredSize: 3, Status: "Healthy", HMRState: "inactive", ControlPlaneVIP: "192.168.90.10", EdgeVIP: "192.168.90.10",
 		Members: []clusterSSHSourceMember{{NodeID: newClusterUUID(), NodeUID: newClusterUUID(), Name: "engine-01", Address: "192.168.90.20", MachineID: strings.Repeat("b", 32), BootID: newClusterUUID()}}}
 	for n := 0; n < 2; n++ {
@@ -64,6 +64,7 @@ func TestClusterSSHInspectionCohortExpansionAndReplacement(t *testing.T) {
 
 func TestClusterSSHInspectionCohortRejectsUnsafeObservations(t *testing.T) {
 	cases := map[string]func(*clusterSSHInspectionCohort, *clusterSSHSourceCohort){
+		"empty controller holder": func(c *clusterSSHInspectionCohort, s *clusterSSHSourceCohort) { c.ControllerHolder = "" },
 		"partial expansion":       func(c *clusterSSHInspectionCohort, s *clusterSSHSourceCohort) { c.Targets = c.Targets[:1] },
 		"unrecorded replacement":  func(c *clusterSSHInspectionCohort, s *clusterSSHSourceCohort) { s.ActiveSize = 2 },
 		"HMR":                     func(c *clusterSSHInspectionCohort, s *clusterSSHSourceCohort) { s.HMRState = "isolated" },

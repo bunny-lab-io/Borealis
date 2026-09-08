@@ -68,7 +68,7 @@ type clusterSSHSourceCohort struct {
 func validateClusterSSHInspectionCohort(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort) error {
 	expected, err := currentReleaseAdmissionBatchSize(source.ActiveSize, source.DesiredSize, source.Status)
 	if err != nil || !clusterUUIDRE.MatchString(cohort.ClusterID) || cohort.ClusterID != source.ClusterID ||
-		!clusterUUIDRE.MatchString(cohort.OperationID) || !clusterUUIDRE.MatchString(cohort.ControllerHolder) || cohort.Attempt < 1 || cohort.ObservedAt < 1 ||
+		!clusterUUIDRE.MatchString(cohort.OperationID) || cohort.ControllerHolder == "" || cohort.Attempt < 1 || cohort.ObservedAt < 1 ||
 		!clusterUUIDRE.MatchString(source.KubeSystemUID) || source.HMRState != "inactive" || len(source.Members) != int(source.ActiveSize) || len(cohort.Targets) != expected {
 		return errClusterSSHCohort
 	}
