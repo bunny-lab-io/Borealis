@@ -3,7 +3,7 @@ import { Alert, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTi
 import { DIALOG_ACTIONS_SX, DIALOG_BUTTON_SX, DIALOG_CONTENT_SX, DIALOG_INPUT_SX, DIALOG_PAPER_SX, DIALOG_PRIMARY_BUTTON_SX, DIALOG_TITLE_SX } from "../DialogStyles.jsx";
 import { FIELD_CLASS, validateInputValue } from "../app/utils/inputValidation.js";
 
-const emptySecrets = () => ({ password: "", private_key: "", passphrase: "" });
+const emptySecrets = () => ({ password: "", private_key: "", passphrase: "", sudo_password: "" });
 const byteLength = (value) => new TextEncoder().encode(value).length;
 
 export function validateSSHInspectionTarget(address, port) {
@@ -36,7 +36,7 @@ export function validObservedKey(payload, address, port) {
 
 // Mounted only while open. No credentials enter storage, URLs, notifications or
 // parent page state; unmount aborts the request and drops the complete form.
-export default function ClusterSSHInspection({ onClose }) {
+export default function ClusterSSHInspection({ onClose, onApprovedTarget, title = "Connect joining host", submitLabel = "Check SSH access", onBack }) {
   const [address, setAddress] = useState("");
   const [port, setPort] = useState("22");
   const [key, setKey] = useState(null);
@@ -69,6 +69,28 @@ export default function ClusterSSHInspection({ onClose }) {
       || (inspect && (!key || !approved) ? "Approve the host key before authenticating." : "")
       || (inspect ? validateSSHInspectionCredential(username, method, secrets) : "");
     if (validation) { setError(validation); return; }
+    if (inspect && onApprovedTarget) {
+      if (byteLength(secrets.sudo_password) > 4096 || /[\r\n]/.test(secrets.sudo_password) || validateInputValue("sudo_password", secrets.sudo_password, FIELD_CLASS.SECRET)) {
+        setError("Sudo password must be one line within 4096 bytes."); return;
+      }
+      const submitted = {
+        address, port: Number(port), username, auth_method: method, host_key_approved: true,
+        host_key_algorithm: key.host_key_algorithm, host_key_fingerprint: key.host_key_fingerprint, host_key_base64: key.host_key_base64,
+        ...(method === "password" ? { password: secrets.password } : { private_key: secrets.private_key, passphrase: secrets.passphrase }),
+        sudo_password: secrets.sudo_password,
+      };
+      setBusy(true); setError("");
+      try {
+        const issue = await onApprovedTarget({ ...submitted });
+        if (issue) setError(issue);
+        else setSecrets(emptySecrets());
+      } catch { setError("Inspection request could not be prepared. Check the target details."); }
+      finally {
+        for (const name of ["password", "private_key", "passphrase", "sudo_password"]) delete submitted[name];
+        setBusy(false);
+      }
+      return;
+    }
     const controller = new AbortController();
     pending.current = controller;
     const timeout = setTimeout(() => controller.abort(), 35000);
@@ -131,10 +153,10 @@ export default function ClusterSSHInspection({ onClose }) {
   };
 
   return <Dialog open onClose={close} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
-    <DialogTitle sx={DIALOG_TITLE_SX}>Connect joining host</DialogTitle>
-    <DialogContent sx={DIALOG_CONTENT_SX}>
+    <DialogTitle sx={DIALOG_TITLE_SX}>{title}</DialogTitle>
+    <DialogContent sx={{ ...DIALOG_CONTENT_SX, overflowY: "auto" }}>
       <Stack spacing={2} sx={{ pt: 1.25 }}>
-        <Typography>Check SSH access from this Engine before preparing a joining host.</Typography>
+        <Typography>{onApprovedTarget ? "Approve this host's SSH identity and provide one-time Linux credentials for inspection from this Engine." : "Check SSH access from this Engine before preparing a joining host."}</Typography>
         {error ? <Alert severity="error">{error}</Alert> : null}
         <TextField sx={DIALOG_INPUT_SX} label="Private IPv4 address" value={address} disabled={busy} inputProps={{ maxLength: 15 }} onChange={(event) => { invalidateTarget(); setAddress(event.target.value); }} />
         <TextField sx={DIALOG_INPUT_SX} label="SSH port" value={port} disabled={busy} inputProps={{ maxLength: 5, inputMode: "numeric" }} onChange={(event) => { invalidateTarget(); setPort(event.target.value); }} />
@@ -151,6 +173,7 @@ export default function ClusterSSHInspection({ onClose }) {
             <TextField sx={DIALOG_INPUT_SX} multiline minRows={4} label="SSH private key" autoComplete="off" value={secrets.private_key} disabled={busy} inputProps={{ maxLength: 65536, spellCheck: false }} onChange={(event) => setSecrets({ ...secrets, private_key: event.target.value })} />
             <TextField sx={DIALOG_INPUT_SX} type="password" label="Key passphrase (if encrypted)" autoComplete="new-password" value={secrets.passphrase} disabled={busy} inputProps={{ maxLength: 4096 }} onChange={(event) => setSecrets({ ...secrets, passphrase: event.target.value })} />
           </>}
+          {onApprovedTarget ? <TextField sx={DIALOG_INPUT_SX} type="password" label="Sudo password (if required)" autoComplete="new-password" value={secrets.sudo_password} disabled={busy} inputProps={{ maxLength: 4096 }} onChange={(event) => setSecrets({ ...secrets, sudo_password: event.target.value })} /> : null}
         </> : null}
         {facts ? <>
           <Alert severity="success">SSH connected to {facts.hostname} ({facts.kernel}, {facts.architecture}), user ID {facts.uid}. Connection check complete; host has not been joined.</Alert>
@@ -165,7 +188,8 @@ export default function ClusterSSHInspection({ onClose }) {
     </DialogContent>
     <DialogActions sx={DIALOG_ACTIONS_SX}>
       <Button sx={DIALOG_BUTTON_SX} onClick={close}>{busy ? "Cancel check" : "Close"}</Button>
-      {!key ? <Button sx={DIALOG_PRIMARY_BUTTON_SX} disabled={busy} onClick={() => void request(false)}>Discover host key</Button> : <Button sx={DIALOG_PRIMARY_BUTTON_SX} disabled={busy || !approved} onClick={() => void request(true)}>Check SSH access</Button>}
+      {onBack ? <Button sx={DIALOG_BUTTON_SX} disabled={busy} onClick={onBack}>Start over</Button> : null}
+      {!key ? <Button sx={DIALOG_PRIMARY_BUTTON_SX} disabled={busy} onClick={() => void request(false)}>Discover host key</Button> : <Button sx={DIALOG_PRIMARY_BUTTON_SX} disabled={busy || !approved} onClick={() => void request(true)}>{submitLabel}</Button>}
     </DialogActions>
   </Dialog>;
 }

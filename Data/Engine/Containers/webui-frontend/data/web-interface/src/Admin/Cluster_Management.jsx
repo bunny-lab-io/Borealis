@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData } from "react-router-dom";
+import { useLoaderData, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -42,6 +42,7 @@ import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import ClusterSSHInspection from "./Cluster_SSH_Inspection.jsx";
+import ClusterSSHOnboarding, { validSSHInspectionID } from "./Cluster_SSH_Onboarding.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -603,6 +604,7 @@ export function friendlyClusterOperationName(operation) {
     cluster_enable: "Cluster Mode Enabled",
     membership_scale: "Cluster Nodes Added",
     membership_admit: "Cluster Node Added",
+    ssh_onboarding: "SSH Host Inspection",
     postgres_switchover: "PostgreSQL Primary Switched",
     postgres_emergency_failover: "PostgreSQL Emergency Failover",
     hmr_start: "Cluster-Wide Node Isolation Enabled",
@@ -936,6 +938,12 @@ export default function ClusterManagement() {
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(null);
   const [sshInspectionOpen, setSSHInspectionOpen] = useState(false);
+  const [sshCohort, setSSHCohort] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sshOperationID = searchParams.get("inspection") || "";
+  const showSSHOperation = useCallback((id) => {
+    setSearchParams((current) => { const next = new URLSearchParams(current); next.set("inspection", id); return next; }, { replace: true });
+  }, [setSearchParams]);
   const [nodeActionMenu, setNodeActionMenu] = useState({ open: false, top: 0, left: 0, node: null });
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
@@ -979,6 +987,13 @@ export default function ClusterManagement() {
   const replacementRecovery = activeSize === 2 && desiredMembershipSize === 3 && cluster?.status === "Degraded Quorum";
   const canPrepareMembership = (activeSize === 1 || replacementRecovery) && applicationCapacityReady;
   const canExpandToThree = activeSize === 1;
+  const activeSSHOperation = operations.find((operation) => operation.id === cluster?.active_operation_id && operation.kind === "ssh_onboarding");
+  const snapshotFresh = !snapshotUnavailable && snapshotReceivedAt > 0 && versionClock >= snapshotReceivedAt && versionClock - snapshotReceivedAt <= CLUSTER_SNAPSHOT_STALE_MS;
+  const canInspectCohort = snapshotFresh && cluster?.enabled === true && !cluster?.active_operation_id && !busy
+    && isolationInactive && databaseRecoveryReady && applicationCapacityReady
+    && ((activeSize === 1 && [1, 3].includes(desiredMembershipSize) && cluster?.status === "Healthy") || replacementRecovery)
+    && nodes.filter((node) => node.membership_state === "Active").length === activeSize
+    && !admissions.some((admission) => ["Pending Quorum", "Approved", "Recovery Required"].includes(admission.state));
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
@@ -1364,11 +1379,13 @@ export default function ClusterManagement() {
         const operation = params?.data || {};
         const state = String(operation?.state || "unknown").toLowerCase();
         const label = clusterOperationStatusLabel(operation);
-        const cancellable = operation.kind !== "membership_admit" && ["queued", "waiting"].includes(state);
+        const sshInspection = operation.kind === "ssh_onboarding" && validSSHInspectionID(operation.id);
+        const cancellable = !["ssh_onboarding", "membership_admit"].includes(operation.kind) && ["queued", "waiting"].includes(state);
         const retryable = operation.kind === "membership_admit" && !operation.superseded_by && ["failed", "cancelled"].includes(state);
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />
+            {sshInspection ? <Button size="small" onClick={(event) => { event.stopPropagation(); showSSHOperation(operation.id); }}>View inspection</Button> : null}
             {retryable ? (
               <Button size="small" disabled={busy} onClick={(event) => {
                 event.stopPropagation();
@@ -1428,12 +1445,15 @@ export default function ClusterManagement() {
       comparator: (left, right) => Number(left || 0) - Number(right || 0),
       sort: "desc",
     },
-  ], [busy, mutate]);
+  ], [busy, mutate, showSSHOperation]);
 
   const pageActions = useMemo(() => [
     { id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() },
     { id: "cluster-inspect-host", label: "Connect Joining Host", icon: <NodesIcon />, tone: "secondary", onClick: () => setSSHInspectionOpen(true) },
-  ], [refresh]);
+    activeSSHOperation && validSSHInspectionID(activeSSHOperation.id)
+      ? { id: "cluster-inspect-cohort", label: "View Host Inspection", icon: <NodesIcon />, tone: "secondary", onClick: () => showSSHOperation(activeSSHOperation.id) }
+      : { id: "cluster-inspect-cohort", label: "Inspect Engine Hosts", icon: <NodesIcon />, tone: "secondary", disabled: !canInspectCohort, onClick: () => { if (canInspectCohort) setSSHCohort({ targetCount: replacementRecovery ? 1 : 2 }); } },
+  ], [activeSSHOperation, canInspectCohort, refresh, replacementRecovery, showSSHOperation]);
   useRoutePageChrome({
     title: "Cluster Management",
     subtitle: "Quorum, role ownership, isolation recovery, node maintenance, and rolling Engine release operations.",
@@ -1454,6 +1474,13 @@ export default function ClusterManagement() {
   return (
     <PageBodyFrame>
       {sshInspectionOpen ? <ClusterSSHInspection onClose={() => setSSHInspectionOpen(false)} /> : null}
+      {sshCohort || sshOperationID ? <ClusterSSHOnboarding targetCount={sshCohort?.targetCount || 2} initialOperationID={sshOperationID}
+        onOperation={showSSHOperation} onChanged={() => void refresh({ quiet: true })}
+        onClose={() => {
+          setSSHCohort(null);
+          setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("inspection"); return next; }, { replace: true });
+          void refresh({ quiet: true });
+        }} /> : null}
       <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 }, flexGrow: 1, minHeight: 0 }}>
         {error ? <Alert severity="error" onClose={() => setError("")}>{error}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}

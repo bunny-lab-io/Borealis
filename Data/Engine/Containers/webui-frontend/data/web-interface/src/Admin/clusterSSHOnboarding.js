@@ -6,7 +6,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const byteLength = (value) => new TextEncoder().encode(value).length;
 const targetFields = new Set(["address", "port", "host_key_algorithm", "host_key_fingerprint", "host_key_base64", "host_key_approved", "username", "auth_method", "password", "private_key", "passphrase", "sudo_password"]);
 
-// Shared request contract for the upcoming cohort dialog. Validation preserves
+// Shared request contract for the cohort dialog. Validation preserves
 // secret and public-key bytes; no storage, network call or preparation occurs.
 export function validateSSHInspectionSubmission(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)
