@@ -1,7 +1,7 @@
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt
 -r engine-requirements.txt
 
-ansible-core==2.21.2
+ansible-core==2.21.3
 ansible-runner==2.4.3
 jmespath==1.1.0
 pywinrm[credssp]==0.5.0
