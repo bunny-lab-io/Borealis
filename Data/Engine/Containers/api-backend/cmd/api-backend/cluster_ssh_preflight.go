@@ -69,6 +69,12 @@ func readClusterSSHBody(r *http.Request, inspect bool) (map[string]json.RawMessa
 			allowed[name] = true
 		}
 	}
+	return decodeClusterSSHObject(raw, allowed)
+}
+
+// Shared exact-object decoder for public SSH contracts. Callers own their
+// bounded UTF-8 buffer and clear both it and returned secret field copies.
+func decodeClusterSSHObject(raw []byte, allowed map[string]bool) (map[string]json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	first, err := decoder.Token()
 	if err != nil || first != json.Delim('{') {

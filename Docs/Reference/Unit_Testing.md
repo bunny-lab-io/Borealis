@@ -138,6 +138,8 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
     - Add public API routes to Go source, API docs, and generated route inventory in same change. Generator preserves reviewed route-specific test/exemption choices; new routes remain without evidence and fail policy until author records focused test or reviewed exemption.
     - Add direct dependencies to lockfiles/manifests and `Docs/Reference/SBOM.md` in same change.
 
+    - S01 `cluster_ssh_onboarding_test.go` validates Admin submission/progress routes before source/encryption/store work, complete request shape and byte limits, encrypted-key syntax, exact operation/target binding, lost receipt recovery and private error boundaries. `Cluster_SSH_Onboarding.test.jsx` validates frontend cohort requests and preservation of nested key/passphrase/sudo fields through the shared fetch guard. WebUI CI executes that contract in a temporary workspace; it does not imply completed cohort wizard or live qualification.
+
     ### PostgreSQL inventory contract
 
     U02 Engine Version coverage lives in `Cluster_Management.test.jsx` and Go `TestClusterSnapshotPreservesNodeVersionRecordsAndPendingTarget`. It checks three-node mixed/unknown records, exact SHA tooltips, pending operation scope, recorded-versus-runtime identity, stale/future report times, failed/hanging polling and recovery. WebUI runner uses temporary workspace; live three-node browser verification remains Q01 qualification.

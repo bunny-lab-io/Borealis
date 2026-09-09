@@ -27,7 +27,7 @@ export function validateSSHInspectionCredential(username, method, secrets) {
   return "";
 }
 
-function validObservedKey(payload, address, port) {
+export function validObservedKey(payload, address, port) {
   return payload?.address === address && payload?.port === Number(port)
     && typeof payload?.host_key_algorithm === "string" && /^[A-Za-z0-9@._+-]{1,64}$/.test(payload.host_key_algorithm)
     && typeof payload?.host_key_fingerprint === "string" && /^SHA256:[A-Za-z0-9+/]{43}$/.test(payload.host_key_fingerprint)
