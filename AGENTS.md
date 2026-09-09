@@ -227,6 +227,8 @@ When asked to work on Gitea or GitHub issue:
 
 Every issue has corresponding pull request. No exceptions, no matter how small request is.
 
+For clustering MVP work, use [#493](https://github.com/bunny-lab-io/Borealis/issues/493) as persistent umbrella tracker. Read its body, work-register index, latest checkpoint, subsequent operator comments, and linked active issue/PR before resuming; verify current checkout, GitHub, validation, and runtime state. Append progress/handover checkpoints and update index links using issue's tracking contract. Identify uncommitted files, unpushed commits, evidence, and cleanup obligations explicitly. Initial review/design PR is first deliverable; implementation children retain their own issue, branch, and PR and reference umbrella without auto-closing it. Keep canonical procedures in `Docs/`; #493 stays open through implementation and exact-release qualification.
+
 Before implementation, post or retain working understanding:
 
 ```md
