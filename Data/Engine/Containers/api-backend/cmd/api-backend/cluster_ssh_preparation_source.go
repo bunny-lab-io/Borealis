@@ -38,13 +38,33 @@ type clusterSSHSourceNetworkRead func(context.Context, clusterSSHSourceMember) (
 // verification/export. Production assembly uses the fenced DB/Aegis adapter;
 // its controller transport supplies fresh InspectSourceNetwork receipts.
 // Current claims and bootstrap receiver still cannot enter a mutating phase.
+type clusterSSHPreparationSnapshot struct {
+	Expected    clusterbootstrap.PreparationExpected `json:"expected"`
+	Settings    map[string]string                    `json:"settings"`
+	Observation string                               `json:"observation_sha256"`
+}
+
+func (clusterSSHPreparationSnapshot) String() string   { return "preparation snapshot [redacted]" }
+func (clusterSSHPreparationSnapshot) GoString() string { return "preparation snapshot [redacted]" }
+
+type clusterSSHPreparationSnapshotRead func(context.Context) (clusterSSHPreparationSnapshot, error)
+
 func newClusterSSHPreparationSourceRead(authority clusterSSHPreparationAuthorityRead,
 	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead) clusterSSHPreparationRead {
+	read := newClusterSSHPreparationSnapshotRead(authority, getJSON, network)
+	return func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
+		value, err := read(ctx)
+		return value.Expected, value.Settings, err
+	}
+}
+
+func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthorityRead,
+	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead) clusterSSHPreparationSnapshotRead {
 	gate := make(chan struct{}, 1)
 	var retained *clusterbootstrap.PreparationRuntimeSecret
-	return func(parent context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
-		fail := func() (clusterbootstrap.PreparationExpected, map[string]string, error) {
-			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
+	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
+		fail := func() (clusterSSHPreparationSnapshot, error) {
+			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		if authority == nil || getJSON == nil || network == nil || parent.Err() != nil {
 			return fail()
@@ -118,18 +138,18 @@ func newClusterSSHPreparationSourceRead(authority clusterSSHPreparationAuthority
 		if retained == nil {
 			retained = &secret
 		}
-		return expected, settings, nil
+		return clusterSSHPreparationSnapshot{Expected: expected, Settings: settings, Observation: secret.ObservationSHA256()}, nil
 	}
 }
 
 func prepareClusterSSHTargetFromSource(ctx context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
-	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	runner *kubernetesClusterStepRunner) (*clusterbootstrap.PreparationInputs, error) {
-	if runner == nil || runner.controllerHolder != lease.ControllerHolder {
+	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) (*clusterbootstrap.PreparationInputs, error) {
+	client, err := newClusterSSHSourceBrokerClientFromEnv()
+	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
-	read := newClusterSSHPreparationSourceRead(authority, runner.kube.getClusterSSHPreparationJSON, runner.newSSHSourceNetworkRead(authority))
+	read := client.preparationRead(authority, lease, baseline, sealed)
 	expected, settings, err := read(ctx)
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig

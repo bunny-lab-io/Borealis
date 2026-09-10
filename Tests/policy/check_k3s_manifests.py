@@ -200,6 +200,14 @@ def validate_cluster_controller_contract() -> None:
     binding = source_bindings[0]
     if binding.get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or binding.get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-source-settings"} or binding.get("subjects") != [{"kind": "ServiceAccount", "name": "borealis-cluster-controller", "namespace": "borealis"}]:
         fail("cluster source settings must bind only existing controller ServiceAccount")
+    source_services = [item for item in objects if item.get("kind") == "Service"]
+    expected_source_service = {
+        "type": "ClusterIP", "clusterIP": "None",
+        "selector": {"app.kubernetes.io/name": "borealis-cluster-controller"},
+        "ports": [{"name": "source", "port": 8090, "targetPort": "health", "protocol": "TCP"}],
+    }
+    if len(source_services) != 1 or source_services[0].get("spec") != expected_source_service or (source_services[0].get("metadata") or {}).get("name") != "borealis-cluster-source" or (source_services[0].get("metadata") or {}).get("namespace") != "borealis":
+        fail("source broker discovery must remain fixed headless internal controller Service")
     lease_rule = next(
         (
             rule

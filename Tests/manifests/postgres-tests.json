@@ -28,6 +28,7 @@
     "TestClusterSSHPreparationAuthorityPostgresRejectsChangedCohort",
     "TestClusterSSHQueuePostgresAtomicSourceAndCredentialFences",
     "TestClusterSSHQueuePostgresPublicProgressRetainsEvidence",
+    "TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer",
     "TestClusterSSHWorkerPostgresAuthorityLocksAndPhaseClaims",
     "TestClusterSSHWorkerPostgresInspectionCompletionFences",
     "TestClusterSSHWorkerPostgresOwnedInspection",

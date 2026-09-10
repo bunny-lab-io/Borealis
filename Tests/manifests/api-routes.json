@@ -992,7 +992,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 339,
+    "line": 343,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1001,7 +1001,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 342,
+    "line": 346,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1010,7 +1010,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 336,
+    "line": 340,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1851,6 +1851,15 @@
     "class": "internal-cluster",
     "authentication": "mutual-tls",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /internal/cluster/ssh-preparation-source",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+    "line": 339,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-target-lease",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_source_broker_test.go",
     "test_exemption": null
   },
   {

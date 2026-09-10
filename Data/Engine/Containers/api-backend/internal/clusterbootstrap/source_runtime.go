@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"unicode/utf8"
 )
@@ -27,6 +28,17 @@ func (s PreparationRuntimeSecret) Settings() map[string]string { return maps.Clo
 
 func (s PreparationRuntimeSecret) SameObservation(other PreparationRuntimeSecret) bool {
 	return s.uid != "" && s.uid == other.uid && s.revision == other.revision && s.digest == other.digest
+}
+
+// ObservationSHA256 binds UID, revision and complete Secret data for encrypted
+// controller/worker transfers. It is private evidence, never an event or grant.
+func (s PreparationRuntimeSecret) ObservationSHA256() string {
+	if s.uid == "" || s.revision == "" {
+		return ""
+	}
+	raw, _ := json.Marshal([]any{s.uid, s.revision, s.digest})
+	digest := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", digest)
 }
 
 func ParsePreparationRuntimeSecret(raw []byte) (PreparationRuntimeSecret, error) {

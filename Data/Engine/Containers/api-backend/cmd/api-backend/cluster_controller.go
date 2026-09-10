@@ -278,6 +278,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
 	runner.persistRemovalFence = controller.persistRemovalFence
 	healthServer := controller.healthServer()
+	healthServer.BaseContext = func(net.Listener) context.Context { return ctx }
 	healthExited := make(chan error, 1)
 	go func() {
 		err := healthServer.ListenAndServe()
@@ -333,6 +334,9 @@ func clusterControllerEligible() bool {
 
 func (c *clusterController) healthServer() *http.Server {
 	mux := http.NewServeMux()
+	runner, _ := c.runner.(*kubernetesClusterStepRunner)
+	sourceBroker := newClusterSSHSourceBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHSourceBrokerPath, sourceBroker.handle)
 	mux.HandleFunc("GET /startup", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
@@ -348,7 +352,8 @@ func (c *clusterController) healthServer() *http.Server {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	return &http.Server{Addr: net.JoinHostPort("0.0.0.0", envDefault("BOREALIS_CLUSTER_CONTROLLER_PORT", "8090")), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	return &http.Server{Addr: net.JoinHostPort("0.0.0.0", envDefault("BOREALIS_CLUSTER_CONTROLLER_PORT", "8090")), Handler: mux,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
 }
 
 func (c *clusterController) runOnce(ctx context.Context) error {

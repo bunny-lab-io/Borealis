@@ -188,3 +188,19 @@ spec:
   minAvailable: 1
   selector:
     matchLabels: {app.kubernetes.io/name: borealis-cluster-controller}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: borealis-cluster-source
+  namespace: borealis
+  labels:
+    app.kubernetes.io/name: borealis-cluster-controller
+    app.kubernetes.io/part-of: borealis
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: borealis-cluster-controller
+  ports:
+    - {name: source, port: 8090, targetPort: health, protocol: TCP}
