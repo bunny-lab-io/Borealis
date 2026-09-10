@@ -225,8 +225,17 @@ func ValidateSudoPassword(value []byte) error {
 // line-oriented, so CR/LF/NUL are rejected without changing otherwise meaningful
 // password syntax. Caller retains/destroys its own secret; no persistence here.
 func (client *Client) InspectPrivileged(ctx context.Context, sudoPassword []byte) (PrivilegedFacts, error) {
+	raw, err := client.inspectPrivilegedOutput(ctx, sudoPassword, privilegedInspectionCommand)
+	if err != nil {
+		return PrivilegedFacts{}, err
+	}
+	return parsePrivilegedFacts(raw)
+}
+
+// command is a compile-time internal protocol; callers never supply shell text.
+func (client *Client) inspectPrivilegedOutput(ctx context.Context, sudoPassword []byte, command string) ([]byte, error) {
 	if ValidateSudoPassword(sudoPassword) != nil {
-		return PrivilegedFacts{}, ErrInvalidAuth
+		return nil, ErrInvalidAuth
 	}
 	input := append(bytes.Clone(sudoPassword), '\n')
 	defer clear(input)
@@ -237,9 +246,9 @@ func (client *Client) InspectPrivileged(ctx context.Context, sudoPassword []byte
 	session, err := client.ssh.NewSession()
 	if err != nil {
 		if ctx.Err() != nil {
-			return PrivilegedFacts{}, ErrCancelled
+			return nil, ErrCancelled
 		}
-		return PrivilegedFacts{}, ErrTransport
+		return nil, ErrTransport
 	}
 	defer session.Close()
 	output := boundedOutput{close: func() { client.Close() }}
@@ -247,9 +256,9 @@ func (client *Client) InspectPrivileged(ctx context.Context, sudoPassword []byte
 	session.Stdout, session.Stderr = &output, &diagnostics
 	stdin, err := session.StdinPipe()
 	if err != nil {
-		return PrivilegedFacts{}, ErrTransport
+		return nil, ErrTransport
 	}
-	if err = session.Start(privilegedInspectionCommand); err == nil {
+	if err = session.Start(command); err == nil {
 		// Root/NOPASSWD may finish before reading any stdin. Its successful
 		// exit and validated UID0 inventory are authoritative even if this
 		// bounded password write sees EOF. Session.Stdin's copier otherwise
@@ -259,15 +268,15 @@ func (client *Client) InspectPrivileged(ctx context.Context, sudoPassword []byte
 		err = session.Wait()
 	}
 	if output.overflow || diagnostics.overflow {
-		return PrivilegedFacts{}, ErrOutputLimit
+		return nil, ErrOutputLimit
 	}
 	if ctx.Err() != nil {
-		return PrivilegedFacts{}, ErrCancelled
+		return nil, ErrCancelled
 	}
 	if err != nil {
-		return PrivilegedFacts{}, ErrPrivilegeInspection
+		return nil, ErrPrivilegeInspection
 	}
-	return parsePrivilegedFacts(output.buffer.Bytes())
+	return bytes.Clone(output.buffer.Bytes()), nil
 }
 
 func parsePrivilegedFacts(raw []byte) (PrivilegedFacts, error) {
