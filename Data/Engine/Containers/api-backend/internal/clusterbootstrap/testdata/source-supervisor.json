@@ -1,0 +1,19 @@
+{
+  "ServerNodeName": "engine-01",
+  "ClusterIPRange": {"IP": "10.42.0.0", "Mask": "//8AAA=="},
+  "ClusterIPRanges": [{"IP": "10.42.0.0", "Mask": "//8AAA=="}],
+  "ServiceIPRange": {"IP": "10.43.0.0", "Mask": "//8AAA=="},
+  "ServiceIPRanges": [{"IP": "10.43.0.0", "Mask": "//8AAA=="}],
+  "ClusterDNS": "10.43.0.10", "ClusterDNSs": ["10.43.0.10"],
+  "ClusterDomain": "cluster.local", "FlannelBackend": "vxlan", "EgressSelectorMode": "agent",
+  "EncryptProvider": "aescbc", "EncryptSecrets": true, "EmbeddedRegistry": true,
+  "DisableCCM": false, "DisableHelmController": false, "DisableNPC": false,
+  "DisableServiceLB": true, "FlannelIPv6Masq": false, "FlannelExternalIP": false,
+  "DisableKubeProxy": false, "DisableAgent": false, "DisableAPIServer": false,
+  "DisableControllerManager": false, "DisableETCD": false, "DisableScheduler": false, "Rootless": false,
+  "HTTPSPort": 6443, "SupervisorPort": 6443,
+  "ExtraAPIArgs": null, "ExtraControllerArgs": [], "ExtraCloudControllerArgs": null,
+  "ExtraEtcdArgs": null, "ExtraSchedulerArgs": null,
+  "Disables": {"traefik": true, "servicelb": true},
+  "IPSECPSK": "synthetic-private-supervisor-value"
+}
