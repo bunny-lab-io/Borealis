@@ -17,6 +17,10 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["kube-system"]
+    verbs: ["get"]
+  - apiGroups: [""]
     resources: ["persistentvolumeclaims", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["discovery.k8s.io"]
@@ -62,6 +66,31 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: borealis-cluster-controller
+subjects:
+  - kind: ServiceAccount
+    name: borealis-cluster-controller
+    namespace: borealis
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: borealis-cluster-source-settings
+  namespace: borealis
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["borealis-api-backend-runtime-env"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: borealis-cluster-source-settings
+  namespace: borealis
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: borealis-cluster-source-settings
 subjects:
   - kind: ServiceAccount
     name: borealis-cluster-controller

@@ -82,6 +82,10 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "source-network-client":
+		if sourceNetworkClient(os.Args[2:]) != nil {
+			fatalf("source network observation unavailable")
+		}
 	case "activate-update":
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":

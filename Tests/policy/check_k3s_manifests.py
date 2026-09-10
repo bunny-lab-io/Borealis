@@ -185,6 +185,21 @@ def validate_cluster_controller_contract() -> None:
     if len(roles) != 1:
         fail("cluster controller manifest must contain one dedicated ClusterRole")
     rules = (roles[0].get("rules") or [])
+    namespace_rules = [rule for rule in rules if "namespaces" in (rule.get("resources") or [])]
+    if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}]:
+        fail("cluster controller namespace read must stay limited to kube-system identity")
+    if any(set(rule.get("resources") or []) & {"secrets", "pods/log", "*"} for rule in rules):
+        fail("cluster controller must not gain cluster-wide Secret or Pod-log access")
+    source_roles = [item for item in objects if item.get("kind") == "Role"]
+    expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env"], "verbs": ["get"]}
+    if len(source_roles) != 1 or source_roles[0].get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or source_roles[0].get("rules") != [expected_source_rule]:
+        fail("cluster source settings Role must permit only named runtime Secret get in borealis")
+    source_bindings = [item for item in objects if item.get("kind") == "RoleBinding"]
+    if len(source_bindings) != 1:
+        fail("cluster source settings requires one namespaced RoleBinding")
+    binding = source_bindings[0]
+    if binding.get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or binding.get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-source-settings"} or binding.get("subjects") != [{"kind": "ServiceAccount", "name": "borealis-cluster-controller", "namespace": "borealis"}]:
+        fail("cluster source settings must bind only existing controller ServiceAccount")
     lease_rule = next(
         (
             rule

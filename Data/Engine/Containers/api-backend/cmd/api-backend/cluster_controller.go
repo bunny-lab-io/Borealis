@@ -233,6 +233,7 @@ func (g *clusterControllerLeaseGuard) Close() {
 
 type kubernetesClusterStepRunner struct {
 	kube                          *kubernetesAPIClient
+	controllerHolder              string
 	db                            *sql.DB
 	namespace                     string
 	actionImage                   string
@@ -267,11 +268,12 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	hostname, _ := os.Hostname()
 	holder := firstText(strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_CONTROLLER_ID")), strings.TrimSpace(hostname)+"-"+newClusterUUID())
 	runner := &kubernetesClusterStepRunner{
-		kube:        kube,
-		db:          store.db,
-		namespace:   borealisOperatorNamespace(),
-		actionImage: strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
-		soak:        envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
+		controllerHolder: holder,
+		kube:             kube,
+		db:               store.db,
+		namespace:        borealisOperatorNamespace(),
+		actionImage:      strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
+		soak:             envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
 	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
 	runner.persistRemovalFence = controller.persistRemovalFence

@@ -2,16 +2,21 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"reflect"
+	"regexp"
+	"strings"
 	"time"
 )
 
 const clusterSSHRuntimeSecretPath = "/api/v1/namespaces/borealis/secrets/borealis-api-backend-runtime-env"
+
+var clusterSSHSourceJobPathRE = regexp.MustCompile(`^/apis/batch/v1/namespaces/borealis/jobs/borealis-source-[0-9a-f]{32}$`)
 
 // Each authority read must freshly validate sole-controller ownership, exact
 // target claim, complete cohort, immutable recorded baseline and Aegis before
@@ -31,8 +36,7 @@ type clusterSSHSourceNetworkRead func(context.Context, clusterSSHSourceMember) (
 // One reader belongs to one preparation attempt. It freezes the first complete
 // Secret receipt, then rejects UID/revision/content drift across every bundle
 // verification/export. Production assembly uses the fenced DB/Aegis adapter;
-// the future guarded dispatcher supplies live InspectSourceNetwork results,
-// never historical Job output.
+// its controller transport supplies fresh InspectSourceNetwork receipts.
 // Current claims and bootstrap receiver still cannot enter a mutating phase.
 func newClusterSSHPreparationSourceRead(authority clusterSSHPreparationAuthorityRead,
 	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead) clusterSSHPreparationRead {
@@ -120,9 +124,12 @@ func newClusterSSHPreparationSourceRead(authority clusterSSHPreparationAuthority
 
 func prepareClusterSSHTargetFromSource(ctx context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	kube *kubernetesAPIClient, network clusterSSHSourceNetworkRead) (*clusterbootstrap.PreparationInputs, error) {
+	runner *kubernetesClusterStepRunner) (*clusterbootstrap.PreparationInputs, error) {
+	if runner == nil || runner.controllerHolder != lease.ControllerHolder {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
-	read := newClusterSSHPreparationSourceRead(authority, kube.getClusterSSHPreparationJSON, network)
+	read := newClusterSSHPreparationSourceRead(authority, runner.kube.getClusterSSHPreparationJSON, runner.newSSHSourceNetworkRead(authority))
 	expected, settings, err := read(ctx)
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
@@ -135,7 +142,34 @@ func prepareClusterSSHTargetFromSource(ctx context.Context, scratchParent string
 // appropriate for a Secret. Keep the existing TLS/token authority, permit only
 // these fixed reads and return static errors without response bodies/URLs.
 func (c *kubernetesAPIClient) getClusterSSHPreparationJSON(ctx context.Context, path string, out any) error {
-	if c == nil || c.httpClient == nil || (path != clusterSSHRuntimeSecretPath && path != "/api/v1/namespaces/kube-system" && path != "/api/v1/nodes") {
+	if path != clusterSSHRuntimeSecretPath && path != "/api/v1/namespaces/kube-system" && path != "/api/v1/nodes" {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return c.clusterSSHPrivateJSON(ctx, http.MethodGet, path, nil, out)
+}
+
+func (c *kubernetesAPIClient) doClusterSSHSourceJSON(ctx context.Context, method, path string, body, out any) error {
+	const jobs = "/apis/batch/v1/namespaces/borealis/jobs"
+	valid := method == http.MethodPost && path == jobs
+	if method == http.MethodGet {
+		if strings.HasPrefix(path, jobs+"/borealis-source-") {
+			valid = clusterSSHSourceJobPathRE.MatchString(path)
+		} else if u, err := url.Parse(path); err == nil && u.Path == "/api/v1/namespaces/borealis/pods" && len(u.Query()) == 1 {
+			values := u.Query()["labelSelector"]
+			if len(values) == 1 {
+				uid := strings.TrimPrefix(values[0], "batch.kubernetes.io/controller-uid=")
+				valid = values[0] == "batch.kubernetes.io/controller-uid="+uid && clusterUUIDRE.MatchString(uid)
+			}
+		}
+	}
+	if !valid {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return c.clusterSSHPrivateJSON(ctx, method, path, body, out)
+}
+
+func (c *kubernetesAPIClient) clusterSSHPrivateJSON(ctx context.Context, method, path string, body, out any) error {
+	if c == nil || c.httpClient == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	base, err := url.Parse(c.baseURL)
@@ -146,19 +180,34 @@ func (c *kubernetesAPIClient) getClusterSSHPreparationJSON(ctx context.Context, 
 	defer cancel()
 	client := *c.httpClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	base.Path = path
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+	u, err := url.Parse(path)
+	if err != nil || u.IsAbs() || u.Host != "" || u.Fragment != "" {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	base.Path, base.RawQuery = u.Path, u.RawQuery
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		reader = bytes.NewReader(raw)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, base.String(), reader)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Accept", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	if (method == http.MethodGet && response.StatusCode != http.StatusOK) || (method == http.MethodPost && response.StatusCode != http.StatusCreated) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
