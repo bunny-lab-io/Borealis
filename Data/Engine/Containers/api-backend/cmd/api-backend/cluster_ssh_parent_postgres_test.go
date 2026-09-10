@@ -13,6 +13,7 @@ import (
 
 type sshParentFixture struct {
 	c       *clusterController
+	aegis   *goAegisService
 	ctx     context.Context
 	op      clusterControllerOperation
 	targets []clusterSSHPlannedTarget
@@ -22,7 +23,7 @@ type sshParentFixture struct {
 
 func newSSHParentFixture(t *testing.T) sshParentFixture {
 	t.Helper()
-	store, _, ctx, id, targets, _ := clusterSSHCredentialsFixture(t)
+	store, aegis, ctx, id, targets, _ := clusterSSHCredentialsFixture(t)
 	insertSSHFixtureTargets(t, store, ctx, id, targets)
 	var holder string
 	if err := store.db.QueryRowContext(ctx, `SELECT holder FROM engine.cluster_application_leases WHERE name=$1`, clusterControllerLeaseName).Scan(&holder); err != nil {
@@ -38,7 +39,7 @@ func newSSHParentFixture(t *testing.T) sshParentFixture {
 	member := source.Members[0]
 	member.NodeUID, member.BootID, member.MachineID = newClusterUUID(), newClusterUUID(), strings.Repeat("b", 32)
 	namespace := newClusterUUID()
-	f := sshParentFixture{c: &clusterController{store: store, holder: holder, now: time.Now}, ctx: ctx,
+	f := sshParentFixture{c: &clusterController{store: store, holder: holder, now: time.Now}, aegis: aegis, ctx: ctx,
 		op: clusterControllerOperation{ID: id, Kind: "ssh_onboarding", State: "running", CurrentStep: clusterSSHInspectionOperationStep, Attempt: 1, Payload: map[string]any{}}, targets: targets}
 	sample, _ := sshInspectionCohortFixture(t)
 	for _, target := range sample.Targets {

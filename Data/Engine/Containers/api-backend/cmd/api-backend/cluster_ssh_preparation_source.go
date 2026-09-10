@@ -30,8 +30,9 @@ type clusterSSHSourceNetworkRead func(context.Context, clusterSSHSourceMember) (
 
 // One reader belongs to one preparation attempt. It freezes the first complete
 // Secret receipt, then rejects UID/revision/content drift across every bundle
-// verification/export. The future guarded dispatcher supplies freshly fenced
-// DB reads and live InspectSourceNetwork results, never historical Job output.
+// verification/export. Production assembly uses the fenced DB/Aegis adapter;
+// the future guarded dispatcher supplies live InspectSourceNetwork results,
+// never historical Job output.
 // Current claims and bootstrap receiver still cannot enter a mutating phase.
 func newClusterSSHPreparationSourceRead(authority clusterSSHPreparationAuthorityRead,
 	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead) clusterSSHPreparationRead {
@@ -117,8 +118,10 @@ func newClusterSSHPreparationSourceRead(authority clusterSSHPreparationAuthority
 	}
 }
 
-func prepareClusterSSHTargetFromSource(ctx context.Context, scratchParent string, authority clusterSSHPreparationAuthorityRead,
+func prepareClusterSSHTargetFromSource(ctx context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
+	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
 	kube *kubernetesAPIClient, network clusterSSHSourceNetworkRead) (*clusterbootstrap.PreparationInputs, error) {
+	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
 	read := newClusterSSHPreparationSourceRead(authority, kube.getClusterSSHPreparationJSON, network)
 	expected, settings, err := read(ctx)
 	if err != nil {
