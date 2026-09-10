@@ -95,22 +95,7 @@ func prepareClusterSSHTargetInputsWith(parent context.Context, expected clusterb
 	if err != nil {
 		return nil, err
 	}
-	originalDigest, _ := config.Digest()
-	check := func(ctx context.Context) error {
-		current, settings, err := read(ctx)
-		if err != nil || ctx.Err() != nil {
-			return clusterbootstrap.ErrSessionAuthority
-		}
-		observed, err := clusterbootstrap.NewPreparationConfiguration(current, settings)
-		if err != nil {
-			return clusterbootstrap.ErrPreparationConfig
-		}
-		digest, err := observed.Digest()
-		if err != nil || digest != originalDigest {
-			return clusterbootstrap.ErrPreparationConfig
-		}
-		return nil
-	}
+	check := newClusterSSHPreparationInputCheck(config, read)
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
@@ -137,4 +122,26 @@ func prepareClusterSSHTargetInputsWith(parent context.Context, expected clusterb
 		return nil, err
 	}
 	return inputs, nil
+}
+
+func newClusterSSHPreparationInputCheck(config *clusterbootstrap.PreparationConfiguration, read clusterSSHPreparationRead) func(context.Context) error {
+	originalDigest, originalErr := config.Digest()
+	return func(ctx context.Context) error {
+		if originalErr != nil || read == nil || ctx.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		current, settings, err := read(ctx)
+		if err != nil || ctx.Err() != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		observed, err := clusterbootstrap.NewPreparationConfiguration(current, settings)
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		digest, err := observed.Digest()
+		if err != nil || digest != originalDigest {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
+	}
 }

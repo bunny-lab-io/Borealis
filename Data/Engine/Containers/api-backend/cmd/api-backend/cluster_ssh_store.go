@@ -201,6 +201,29 @@ func (s *postgresOperatorStore) renewClusterSSHTarget(ctx context.Context, lease
 // Active workers also bind the exact generation they decrypted. A concurrent
 // replacement of both Aegis state and credential record must not renew them.
 func (s *postgresOperatorStore) renewClusterSSHTargetGeneration(ctx context.Context, lease clusterSSHTargetLease, generation string) error {
+	return s.renewClusterSSHTargetEnvelope(ctx, lease, generation, "")
+}
+
+// Preparation renews only the exact envelope with which its bounded scope
+// started. Replacing ciphertext under an unchanged Aegis generation must fence
+// that scope too. This neither claims a target nor advances an operation.
+func (s *postgresOperatorStore) renewClusterSSHPreparationTarget(ctx context.Context, lease clusterSSHTargetLease, sealed sealedClusterSSHCredentials) error {
+	if !validClusterSSHPreparationLease(lease) || !sealed.binding.valid() || sealed.binding.OperationID != lease.OperationID || sealed.binding.TargetID != lease.TargetID ||
+		sealed.generation == "" || len(sealed.generation) > 16<<10 || !strings.HasPrefix(sealed.ciphertext, aegisEnvelopePrefix) || len(sealed.ciphertext) > 256<<10 {
+		return errClusterSSHCredentials
+	}
+	return s.renewClusterSSHTargetEnvelope(ctx, lease, sealed.generation, sealed.ciphertext)
+}
+
+func (s *postgresOperatorStore) renewClusterSSHTargetEnvelope(ctx context.Context, lease clusterSSHTargetLease, generation, ciphertext string) error {
+	if s == nil || s.db == nil {
+		return errClusterUnavailable
+	}
+	// Legacy inspection entrypoints cannot bypass preparation's envelope fence.
+	if (lease.OperationStep == clusterSSHPreparationOperationStep || lease.Step == "stage_source") &&
+		(!validClusterSSHPreparationLease(lease) || generation == "" || ciphertext == "") {
+		return errClusterConflict
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errClusterUnavailable
@@ -218,8 +241,8 @@ func (s *postgresOperatorStore) renewClusterSSHTargetGeneration(ctx context.Cont
 		  AND l.name=$10 AND l.holder=$7 AND l.expires_at>moment.now
 		  AND o.attempt=$8 AND t.operation_attempt=o.attempt AND o.current_step=$9
 		  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
-		  AND ($11='' OR p.aegis_generation=$11) AND o.kind=$12`,
-		lease.TargetID, lease.OperationID, lease.Holder, lease.Generation, lease.Step, clusterSSHTargetLeaseSeconds, lease.ControllerHolder, lease.OperationAttempt, lease.OperationStep, clusterControllerLeaseName, generation, lease.OperationKind)
+		  AND ($11='' OR p.aegis_generation=$11) AND o.kind=$12 AND ($13='' OR p.ciphertext=$13)`,
+		lease.TargetID, lease.OperationID, lease.Holder, lease.Generation, lease.Step, clusterSSHTargetLeaseSeconds, lease.ControllerHolder, lease.OperationAttempt, lease.OperationStep, clusterControllerLeaseName, generation, lease.OperationKind, ciphertext)
 	if err != nil {
 		return errClusterUnavailable
 	}

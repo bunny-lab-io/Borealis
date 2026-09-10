@@ -142,19 +142,53 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 	}
 }
 
-func prepareClusterSSHTargetFromSource(ctx context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
-	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) (*clusterbootstrap.PreparationInputs, error) {
+// Keep inputs inside a joined lease scope. The fixed consumer must honor ctx,
+// use Inputs for exports and Authority for session heartbeats, and join children.
+// Operation completion belongs after this scope succeeds, under its own SQL
+// fence; changing the target phase inside consume invalidates this scope.
+func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
+	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
+		return clusterbootstrap.ErrPreparationConfig
+	}
 	client, err := newClusterSSHSourceBrokerClientFromEnv()
 	if err != nil {
-		return nil, clusterbootstrap.ErrPreparationConfig
+		return clusterbootstrap.ErrPreparationConfig
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
-	read := client.preparationRead(authority, lease, baseline, sealed)
-	expected, settings, err := read(ctx)
-	if err != nil {
-		return nil, clusterbootstrap.ErrPreparationConfig
-	}
-	return prepareClusterSSHTargetInputs(ctx, expected, settings, scratchParent, read)
+	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
+	return runClusterSSHPreparationScope(parent, 5*time.Second, leaseCheck, func(ctx context.Context) (result error) {
+		read := client.preparationRead(authority, lease, baseline, sealed)
+		expected, settings, err := read(ctx)
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		config, err := clusterbootstrap.NewPreparationConfiguration(expected, settings)
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		inputCheck := newClusterSSHPreparationInputCheck(config, read)
+		inputs, err := prepareClusterSSHTargetInputs(ctx, expected, settings, scratchParent, read)
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		defer func() {
+			if inputs.Close() != nil {
+				result = clusterbootstrap.ErrPreparationConfig
+			}
+		}()
+		checks := clusterSSHPreparationChecks{
+			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
+			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
+		}
+		if err := consume(ctx, inputs, expected, checks); err != nil {
+			return err
+		}
+		// A short session heartbeat must not spawn source Jobs. Revalidate full
+		// source/configuration after consumption before acknowledging success.
+		return checks.Inputs(ctx)
+	})
 }
 
 // Separate bounded private GET path: ordinary Kubernetes errors can retain

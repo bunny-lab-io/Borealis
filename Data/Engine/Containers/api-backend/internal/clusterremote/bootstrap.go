@@ -184,15 +184,10 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 func refreshBootstrapAuthority(ctx context.Context, check func(context.Context) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- check(ctx) }()
-	select {
-	case err := <-result:
-		if err != nil || ctx.Err() != nil {
-			return ErrBootstrapVerification
-		}
-		return nil
-	case <-ctx.Done():
+	// The callback owns short DB/crypto checks and must honor ctx. Do not leave
+	// it renewing authority after this session has returned and closed inputs.
+	if check == nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
 		return ErrBootstrapVerification
 	}
+	return nil
 }

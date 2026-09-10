@@ -22,6 +22,57 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestBootstrapAuthorityTimeoutJoinsCallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	cleaning := make(chan struct{})
+	joined := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- refreshBootstrapAuthority(ctx, func(checkCtx context.Context) error {
+			defer close(joined)
+			close(started)
+			<-checkCtx.Done()
+			close(cleaning)
+			<-release
+			return nil // A late successful result cannot restore expired authority.
+		})
+	}()
+	<-started
+	cancel()
+	select {
+	case <-cleaning:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("callback did not see cancellation")
+	}
+	select {
+	case <-done:
+		close(release)
+		t.Fatal("authority callback outlived session refresh")
+	default:
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != ErrBootstrapVerification {
+			t.Fatal("late authority accepted")
+		}
+		select {
+		case <-joined:
+		default:
+			t.Fatal("callback was not joined")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("callback cleanup did not finish")
+	}
+	if refreshBootstrapAuthority(ctx, func(context.Context) error { t.Error("canceled context invoked authority"); return nil }) != ErrBootstrapVerification {
+		t.Fatal("canceled refresh accepted")
+	}
+}
+
 func bootstrapBinding(server *fakeSSH) clusterbootstrap.SessionBinding {
 	return clusterbootstrap.SessionBinding{ClusterID: "11111111-1111-4111-8111-111111111111", OperationID: "22222222-2222-4222-8222-222222222222", TargetID: "33333333-3333-4333-8333-333333333333", HolderID: "44444444-4444-4444-8444-444444444444", Generation: 7, OperationAttempt: 2,
 		Address: server.target.Address, Port: server.target.Port, Hostname: "engine-02", MachineID: strings.Repeat("a", 32), HostKeyAlgorithm: server.key.Algorithm, HostKeyFingerprint: server.key.Fingerprint}
