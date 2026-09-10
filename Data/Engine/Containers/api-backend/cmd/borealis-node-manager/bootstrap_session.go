@@ -10,11 +10,13 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -22,15 +24,53 @@ import (
 var errBootstrapHostVerification = errors.New("bootstrap executable or observed host identity differs from authorized target")
 
 func bootstrapSession(args []string) {
+	nonce := bootstrapSessionNonce(args)
+	executable, err := os.Executable()
+	if err != nil {
+		fatalf("bootstrap executable unavailable")
+	}
+	file, err := openBootstrapPublicFile(executable, clusterbootstrap.MaxBundleBytes)
+	if err != nil {
+		fatalf("bootstrap executable ownership invalid")
+	}
+	_ = file.Close()
+	arguments, err := clusterbootstrap.ExecutorArguments(executable, nonce)
+	if err != nil {
+		fatalf("bootstrap executor arguments invalid")
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	ctx, timeout := context.WithTimeout(ctx, 6*time.Minute+5*time.Second)
+	defer timeout()
+	command := exec.CommandContext(ctx, "/usr/bin/systemd-run", arguments...)
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	command.WaitDelay = 2 * time.Second
+	if command.Run() != nil {
+		fatalf("bootstrap executor stopped or failed; outcome requires verification")
+	}
+}
+
+func bootstrapSessionNonce(args []string) string {
 	if len(args) != 2 || args[0] != "--nonce" || os.Geteuid() != 0 || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		fatalf("bootstrap-session requires root LinuxAMD64 and exact session nonce argument")
 	}
 	if _, err := clusterbootstrap.SessionPreamble(args[1]); err != nil {
 		fatalf("bootstrap-session nonce invalid")
 	}
+	return args[1]
+}
+
+func bootstrapSessionContained(args []string) {
+	nonce := bootstrapSessionNonce(args)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if err := clusterbootstrap.ServeSession(ctx, os.Stdin, os.Stdout, args[1], verifyBootstrapSessionHost); err != nil {
+	guard, _, err := clusterbootstrap.NewExecutorGuard(ctx, nonce)
+	if err != nil {
+		fatalf("bootstrap executor context invalid")
+	}
+	defer guard.Close()
+	if err := clusterbootstrap.ServeSupervisedSession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionHost, guard.ObserveDeadline); err != nil {
 		fatalf("bootstrap-session verification failed; session data withheld")
 	}
 }

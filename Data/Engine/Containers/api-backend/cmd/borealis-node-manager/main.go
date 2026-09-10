@@ -87,6 +87,8 @@ func main() {
 		shutdownHandoff()
 	case "bootstrap-session":
 		bootstrapSession(os.Args[2:])
+	case "bootstrap-session-contained":
+		bootstrapSessionContained(os.Args[2:])
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}

@@ -220,3 +220,92 @@ func TestBootstrapSessionRejectsInvalidFramingAndWriteActions(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisedSessionRejectsObserverBeforeVerification(t *testing.T) {
+	for _, rejectAt := range []int{1, 2, 3} {
+		t.Run(string(rune('0'+rejectAt)), func(t *testing.T) {
+			in, writer := io.Pipe()
+			reader, out := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			defer writer.Close()
+			defer reader.Close()
+			var called atomic.Bool
+			done := make(chan error, 1)
+			calls := 0
+			go func() {
+				done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { called.Store(true); return nil }, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error {
+					calls++
+					if !time.Now().Before(deadline) || time.Until(deadline) > 150*time.Millisecond {
+						return errors.New("invalid deadline")
+					}
+					if calls == rejectAt {
+						return errors.New("supervisor rejected")
+					}
+					return nil
+				})
+			}()
+			if rejectAt > 1 {
+				preamble, _ := SessionPreamble(sessionFixture().Nonce)
+				if _, err := io.WriteString(writer, preamble); err != nil {
+					t.Fatal(err)
+				}
+				var ready SessionMessage
+				if ReadSessionFrame(reader, &ready) != nil || ready.State != "ready" {
+					t.Fatal("ready unavailable")
+				}
+				if WriteSessionFrame(writer, sessionFixture()) != nil {
+					t.Fatal("request unavailable")
+				}
+			}
+			if rejectAt > 2 {
+				var challenge SessionMessage
+				if ReadSessionFrame(reader, &challenge) != nil || challenge.State != "challenge" {
+					t.Fatal("challenge unavailable")
+				}
+				if WriteSessionFrame(writer, SessionMessage{Protocol: 1, State: "heartbeat", Nonce: challenge.Nonce}) != nil {
+					t.Fatal("heartbeat unavailable")
+				}
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrSessionAuthority) || called.Load() {
+					t.Fatal("observer refusal still dispatched work")
+				}
+			case <-ctx.Done():
+				t.Fatal("supervised session did not stop")
+			}
+		})
+	}
+}
+
+func TestSupervisedSessionSharesIssuedChallengeDeadline(t *testing.T) {
+	in, writer := io.Pipe()
+	reader, out := io.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	defer writer.Close()
+	defer reader.Close()
+	deadlines := make(chan time.Time, 4)
+	done := make(chan error, 1)
+	go func() {
+		done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { return nil }, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error { deadlines <- deadline; return nil })
+	}()
+	c := &sessionFixtureClient{in: writer, out: reader}
+	challenge := c.start(t, "")
+	challengeObserved := time.Now()
+	initial, waiting := <-deadlines, <-deadlines
+	time.Sleep(20 * time.Millisecond) // Receipt must not move expiry by this delay.
+	c.heartbeat(t, challenge)
+	confirmed := <-deadlines
+	if confirmed.Before(waiting) || confirmed.After(challengeObserved.Add(150*time.Millisecond)) || !waiting.After(initial) {
+		t.Fatal("supervisor deadline was extended from delayed receipt")
+	}
+	var result SessionMessage
+	if ReadSessionFrame(reader, &result) != nil || result.State != "verified" {
+		t.Fatal("supervised verification did not complete")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

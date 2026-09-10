@@ -222,7 +222,23 @@ func ServeSession(ctx context.Context, input io.ReadCloser, output io.WriteClose
 	return serveSession(ctx, input, output, nonce, verify, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second})
 }
 
+// ServeSupervisedSession shares the exact challenge protocol while publishing
+// only locally derived authority deadlines to an independent executor guard.
+// An observer cannot grant work; rejection aborts the session before dispatch.
+func ServeSupervisedSession(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, observe func(time.Time) error) error {
+	if observe == nil {
+		return ErrSessionAuthority
+	}
+	ctx, cancel := context.WithTimeout(ctx, SessionLifetime)
+	defer cancel()
+	return serveSessionObserved(ctx, input, output, nonce, verify, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, observe)
+}
+
 func serveSession(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, timing sessionTiming) error {
+	return serveSessionObserved(ctx, input, output, nonce, verify, timing, nil)
+}
+
+func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, timing sessionTiming, observe func(time.Time) error) error {
 	if input == nil || output == nil {
 		return ErrSessionProtocol
 	}
@@ -239,7 +255,11 @@ func serveSession(ctx context.Context, input io.ReadCloser, output io.WriteClose
 	}
 	reader := bufio.NewReaderSize(input, 4098)
 	// Initial framing cannot wait forever before the authority guard starts.
-	initial := time.AfterFunc(timing.window, cancel)
+	initialDeadline := time.Now().Add(timing.window)
+	if observe != nil && observe(initialDeadline) != nil {
+		return ErrSessionAuthority
+	}
+	initial := time.AfterFunc(time.Until(initialDeadline), cancel)
 	defer initial.Stop()
 	if err := readSessionPreamble(reader, nonce); err != nil {
 		return err
@@ -283,6 +303,9 @@ func serveSession(ctx context.Context, input io.ReadCloser, output io.WriteClose
 	}()
 	challenge := ""
 	issued, deadline := time.Time{}, time.Now().Add(timing.window)
+	if observe != nil && observe(deadline) != nil {
+		return ErrSessionAuthority
+	}
 	pending := false
 	issue := func() error {
 		var random [32]byte
@@ -313,6 +336,9 @@ func serveSession(ctx context.Context, input io.ReadCloser, output io.WriteClose
 			pending = false
 			deadline = issued.Add(timing.window)
 			expiry.Reset(time.Until(deadline))
+			if observe != nil && observe(deadline) != nil {
+				return ErrSessionAuthority
+			}
 			if !started {
 				started = true
 				go func() { finished <- verify(workCtx, request) }()
