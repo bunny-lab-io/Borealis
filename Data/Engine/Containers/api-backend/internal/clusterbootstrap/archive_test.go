@@ -160,6 +160,7 @@ func archiveFixture(t *testing.T) (Expected, map[string]any, []member) {
 	write(filepath.Join(manager, "main.go"), "package main\nfunc main() {}\n")
 	write(filepath.Join(original, "Data/Engine/Containers/api-backend/go.mod"), "module borealis/api-backend\n\ngo 1.25.0\n")
 	write(filepath.Join(original, "Engine.sh"), "#!/bin/sh\nexit 0\n")
+	write(filepath.Join(original, "Data/Engine/release-manifest.json"), `{"cluster_compatible":true,"required_k3s_baseline":"v1.36.3+k3s1","allowed_release_channels":["stable","qualification"]}`)
 	git := func(args ...string) string { return command(t, original, "git", args...) }
 	git("init", "--quiet", "--template=")
 	git("add", ".")

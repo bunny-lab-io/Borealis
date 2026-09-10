@@ -28,6 +28,7 @@ import (
 type Bundle struct {
 	root     string
 	identity identity
+	asset    assetIdentity
 }
 
 func (b *Bundle) ArchivePath() string { return filepath.Join(b.root, BundleName) }
@@ -65,7 +66,7 @@ func Stage(ctx context.Context, parent string, m *Manifest, input io.Reader, git
 	if err != nil {
 		return nil, errors.New("node bootstrap scratch unavailable")
 	}
-	b := &Bundle{root: root, identity: m.identity}
+	b := &Bundle{root: root, identity: m.identity, asset: m.asset}
 	defer func() {
 		if err != nil {
 			_ = b.Close()
