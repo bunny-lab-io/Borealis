@@ -25,10 +25,11 @@ const mutationJournalName = "mutation.json"
 const maxMutationJournalBytes = 32 << 10
 
 type mutationRecord struct {
-	Binding      SessionBinding `json:"binding"`
-	InputSHA256  string         `json:"input_sha256"`
-	ResultSHA256 string         `json:"result_sha256"`
-	State        string         `json:"state"`
+	Binding      SessionBinding   `json:"binding"`
+	Executor     ExecutorIdentity `json:"executor"`
+	InputSHA256  string           `json:"input_sha256"`
+	ResultSHA256 string           `json:"result_sha256"`
+	State        string           `json:"state"`
 }
 
 type mutationPastAttempt struct {
@@ -47,18 +48,20 @@ type mutationState struct {
 // MutationJournal is a private, host-wide serialization and intent ledger.
 // It does not select commands, approve takeover, or grant operation authority.
 // Caller supplies a pre-existing private root and verifies live controller/
-// target authority, actual host identity and quiescence through Check at every
-// boundary. Quiescence includes proving no prior executor can still write;
-// the lock alone does not prove this after process loss.
+// target authority and actual host identity through Check at every boundary.
+// The journal independently verifies actual supervision and prior executor
+// quiescence; the lock alone does not prove this after process loss.
 // The bootstrap CLI must not expose mutations until its fixed dispatcher and
-// quiescence/reconciliation contracts are implemented.
+// domain-specific reconciliation contracts are implemented.
 type MutationJournal struct {
-	mu     sync.Mutex
-	root   *os.Root
-	lock   *os.File
-	state  mutationState
-	check  func(context.Context) error
-	failed bool
+	mu        sync.Mutex
+	root      *os.Root
+	lock      *os.File
+	state     mutationState
+	check     func(context.Context) error
+	failed    bool
+	executor  ExecutorIdentity
+	quiescent func(context.Context, ExecutorIdentity) error
 }
 
 func stableMutationBinding(b SessionBinding) SessionBinding {
@@ -75,12 +78,12 @@ func validMutationStep(step string) bool {
 }
 
 func (s mutationState) valid() bool {
-	if s.Version != 1 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 4 || len(s.History) > 16 {
+	if s.Version != 2 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 4 || len(s.History) > 16 {
 		return false
 	}
 	pending := 0
 	for step, r := range s.Steps {
-		if !validMutationStep(step) || r.Binding.Validate() != nil || stableMutationBinding(r.Binding) != stableMutationBinding(s.Owner) ||
+		if !validMutationStep(step) || !r.Executor.valid() || r.Binding.Validate() != nil || stableMutationBinding(r.Binding) != stableMutationBinding(s.Owner) ||
 			r.Binding.Generation > s.Owner.Generation || r.Binding.OperationAttempt > s.Owner.OperationAttempt || !digestPattern.MatchString(r.InputSHA256) {
 			return false
 		}
@@ -103,7 +106,7 @@ func (s mutationState) valid() bool {
 		if !validMutationStep(prior.Step) {
 			return false
 		}
-		if r.State != "not_applied" || r.Binding.Validate() != nil || stableMutationBinding(r.Binding) != stableMutationBinding(s.Owner) ||
+		if r.State != "not_applied" || !r.Executor.valid() || r.Binding.Validate() != nil || stableMutationBinding(r.Binding) != stableMutationBinding(s.Owner) ||
 			r.Binding.Generation >= s.Owner.Generation || r.Binding.OperationAttempt > s.Owner.OperationAttempt || !digestPattern.MatchString(r.InputSHA256) || !digestPattern.MatchString(r.ResultSHA256) {
 			return false
 		}
@@ -123,9 +126,35 @@ func mutationFileValid(file *os.File, maxSize int64) bool {
 // OpenMutationJournal never creates the root or follows symlinks. Production
 // caller must supply its fixed root-owned mode0700 host journal directory.
 // Tests use an isolated directory owned by the test process.
-func OpenMutationJournal(ctx context.Context, path string, owner SessionBinding, source Expected, check func(context.Context) error) (*MutationJournal, error) {
+func OpenMutationJournal(ctx context.Context, path string, owner SessionBinding, source Expected, nonce string, check func(context.Context) error) (*MutationJournal, error) {
+	return openMutationJournal(ctx, path, owner, source, check, func(ctx context.Context) (ExecutorIdentity, error) {
+		return currentExecutor(ctx, nonce)
+	}, observeExecutorQuiescent)
+}
+
+// Injectable observers stay package-private for isolated portable fixtures.
+// Production always verifies actual supervision and kernel/manager quiescence.
+func openMutationJournal(ctx context.Context, path string, owner SessionBinding, source Expected, check func(context.Context) error,
+	current func(context.Context) (ExecutorIdentity, error), quiescent func(context.Context, ExecutorIdentity) error) (*MutationJournal, error) {
 	if owner.Validate() != nil || source.Validate() != nil || check == nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
 		return nil, ErrSessionAuthority
+	}
+	if current == nil || quiescent == nil {
+		return nil, ErrExecutorContainment
+	}
+	executor, err := current(ctx)
+	if err != nil || !executor.valid() || ctx.Err() != nil {
+		return nil, ErrExecutorContainment
+	}
+	checked := func(ctx context.Context) error {
+		if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
+			return ErrSessionAuthority
+		}
+		actual, err := current(ctx)
+		if err != nil || actual != executor || ctx.Err() != nil {
+			return ErrExecutorContainment
+		}
+		return nil
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -175,11 +204,11 @@ func OpenMutationJournal(ctx context.Context, path string, owner SessionBinding,
 		root.Close()
 		return nil, ErrMutationBusy
 	}
-	j := &MutationJournal{root: root, lock: lock, check: check}
+	j := &MutationJournal{root: root, lock: lock, check: checked, executor: executor, quiescent: quiescent}
 	fail := func(err error) (*MutationJournal, error) { j.Close(); return nil, err }
 	file, err := root.OpenFile(mutationJournalName, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		j.state = mutationState{Version: 1, Owner: owner, Source: source, Steps: map[string]mutationRecord{}, History: []mutationPastAttempt{}}
+		j.state = mutationState{Version: 2, Owner: owner, Source: source, Steps: map[string]mutationRecord{}, History: []mutationPastAttempt{}}
 	} else {
 		if err != nil {
 			return fail(ErrMutationJournal)
@@ -316,10 +345,29 @@ func (j *MutationJournal) Apply(ctx context.Context, step, inputSHA256 string, m
 			return "", ErrMutationUnknown
 		}
 	}
+	// Earlier successful callbacks in this same executor are synchronous and
+	// must have joined their children. Every distinct prior executor, including
+	// retained absence history, must independently be observed stopped.
+	seen := map[ExecutorIdentity]bool{j.executor: true}
+	prior := make([]mutationRecord, 0, len(j.state.Steps)+len(j.state.History))
+	for _, record := range j.state.Steps {
+		prior = append(prior, record)
+	}
+	for _, attempt := range j.state.History {
+		prior = append(prior, attempt.Record)
+	}
+	for _, record := range prior {
+		if !seen[record.Executor] {
+			if j.quiescent(ctx, record.Executor) != nil || j.authority(ctx) != nil {
+				return "", ErrMutationUnknown
+			}
+			seen[record.Executor] = true
+		}
+	}
 	if previous, ok := j.state.Steps[step]; ok {
 		j.state.History = append(j.state.History, mutationPastAttempt{Step: step, Record: previous})
 	}
-	j.state.Steps[step] = mutationRecord{Binding: j.state.Owner, InputSHA256: inputSHA256, State: "intent"}
+	j.state.Steps[step] = mutationRecord{Binding: j.state.Owner, Executor: j.executor, InputSHA256: inputSHA256, State: "intent"}
 	if err := j.persist(ctx); err != nil {
 		j.failed = true
 		return "", err
@@ -379,8 +427,16 @@ func (j *MutationJournal) reconcile(ctx context.Context, step, inputSHA256 strin
 	if !ok || record.InputSHA256 != inputSHA256 || prove == nil {
 		return "", ErrMutationJournal
 	}
+	if record.State != "intent" && record.State != resolution {
+		return "", ErrMutationJournal
+	}
+	// A running receiver cannot prove its own whole cgroup quiescent, even
+	// after its main callback returned. Reconnect with a fresh executor first.
+	if record.Executor == j.executor || j.quiescent(ctx, record.Executor) != nil || j.authority(ctx) != nil {
+		return "", ErrMutationUnknown
+	}
 	result, err := prove(ctx)
-	if err != nil || !digestPattern.MatchString(result) || j.authority(ctx) != nil {
+	if err != nil || !digestPattern.MatchString(result) || j.quiescent(ctx, record.Executor) != nil || j.authority(ctx) != nil {
 		return "", ErrMutationUnknown
 	}
 	if record.State != "intent" {

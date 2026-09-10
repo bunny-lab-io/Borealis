@@ -29,6 +29,16 @@ func mutationFixture() (SessionBinding, Expected) {
 	r := sessionFixture()
 	return r.Binding, Expected{Repository: r.Repository, Release: r.Release, SourceSHA: r.SourceSHA, AllowQualification: true}
 }
+
+// Portable ledger tests inject executor observations. Production has no observer override.
+func openTestMutationJournal(ctx context.Context, root string, owner SessionBinding, source Expected, check func(context.Context) error) (*MutationJournal, error) {
+	identity := testMutationExecutor(mutationDigest(root + time.Now().String()))
+	return openMutationJournal(ctx, root, owner, source, check, func(context.Context) (ExecutorIdentity, error) { return identity, nil }, func(context.Context, ExecutorIdentity) error { return nil })
+}
+func testMutationExecutor(nonce string) ExecutorIdentity {
+	unit, _ := ExecutorUnit(nonce)
+	return ExecutorIdentity{Unit: unit, InvocationID: nonce[:32], BootID: "11111111-1111-4111-8111-111111111111", ControlGroup: "/system.slice/" + unit}
+}
 func mutationAuthority(context.Context) error { return nil }
 func mutationDigest(text string) string {
 	sum := sha256.Sum256([]byte(text))
@@ -56,7 +66,7 @@ func TestMutationJournalPersistsIntentAndNeverReplays(t *testing.T) {
 	root := mutationTempDir(t)
 	owner, source := mutationFixture()
 	ctx := context.Background()
-	j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+	j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,13 +86,18 @@ func TestMutationJournalPersistsIntentAndNeverReplays(t *testing.T) {
 	if _, err := j.Apply(ctx, "stage_source", input, mutate); err != ErrMutationApplied || calls != 1 {
 		t.Fatal("definitive step replayed")
 	}
+	j.Close()
+	j, err = openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := j.Reconcile(ctx, "stage_source", input, func(context.Context) (string, error) { return mutationDigest("different effect"), nil }); err != ErrMutationJournal {
 		t.Fatal("definitive outcome overwritten")
 	}
 	if j.Close() != nil {
 		t.Fatal("journal close failed")
 	}
-	j, err = OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
+	j, err = openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +127,7 @@ func TestMutationJournalUnknownRequiresProofAcrossHandoff(t *testing.T) {
 				}
 				return nil
 			}
-			j, err := OpenMutationJournal(ctx, root, owner, source, check)
+			j, err := openTestMutationJournal(ctx, root, owner, source, check)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +156,7 @@ func TestMutationJournalUnknownRequiresProofAcrossHandoff(t *testing.T) {
 			j.Close()
 			current := nextMutationOwner(owner)
 			current.OperationAttempt++
-			j, err = OpenMutationJournal(context.Background(), root, current, source, mutationAuthority)
+			j, err = openTestMutationJournal(context.Background(), root, current, source, mutationAuthority)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -170,11 +185,11 @@ func TestMutationJournalLocksThroughCallbackAndRejectsStaleOwners(t *testing.T) 
 	root := mutationTempDir(t)
 	owner, source := mutationFixture()
 	ctx := context.Background()
-	j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+	j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if other, err := OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority); err != ErrMutationBusy {
+	if other, err := openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority); err != ErrMutationBusy {
 		if other != nil {
 			other.Close()
 		}
@@ -197,7 +212,7 @@ func TestMutationJournalLocksThroughCallbackAndRejectsStaleOwners(t *testing.T) 
 		t.Fatal("Close released lock with active mutation")
 	case <-time.After(20 * time.Millisecond):
 	}
-	if other, err := OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority); err != ErrMutationBusy {
+	if other, err := openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority); err != ErrMutationBusy {
 		if other != nil {
 			other.Close()
 		}
@@ -211,7 +226,7 @@ func TestMutationJournalLocksThroughCallbackAndRejectsStaleOwners(t *testing.T) 
 		t.Fatal(err)
 	}
 	current := nextMutationOwner(owner)
-	j, err = OpenMutationJournal(ctx, root, current, source, mutationAuthority)
+	j, err = openTestMutationJournal(ctx, root, current, source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +256,7 @@ func TestMutationJournalLocksThroughCallbackAndRejectsStaleOwners(t *testing.T) 
 				stale.HostKeyAlgorithm = "ssh-rsa"
 			}
 			previous, _ := os.ReadFile(filepath.Join(root, mutationJournalName))
-			other, err := OpenMutationJournal(ctx, root, stale, changedSource, mutationAuthority)
+			other, err := openTestMutationJournal(ctx, root, stale, changedSource, mutationAuthority)
 			if err != ErrSessionAuthority {
 				if other != nil {
 					other.Close()
@@ -262,7 +277,7 @@ func TestMutationJournalRejectsUnsafeStorage(t *testing.T) {
 			root := mutationTempDir(t)
 			owner, source := mutationFixture()
 			ctx := context.Background()
-			j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+			j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -302,16 +317,16 @@ func TestMutationJournalRejectsUnsafeStorage(t *testing.T) {
 			case "oversized":
 				err = os.WriteFile(journal, []byte(strings.Repeat("x", maxMutationJournalBytes+1)), 0o600)
 			case "unknown field":
-				err = os.WriteFile(journal, []byte(strings.Replace(string(raw), `"version":1`, `"extra":true,"version":1`, 1)), 0o600)
+				err = os.WriteFile(journal, []byte(strings.Replace(string(raw), `"version":2`, `"extra":true,"version":2`, 1)), 0o600)
 			case "duplicate field":
-				err = os.WriteFile(journal, []byte(strings.Replace(string(raw), `"version":1`, `"version":1,"version":1`, 1)), 0o600)
+				err = os.WriteFile(journal, []byte(strings.Replace(string(raw), `"version":2`, `"version":2,"version":2`, 1)), 0o600)
 			case "malformed":
 				err = os.WriteFile(journal, []byte(`{"version":`), 0o600)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			other, err := OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
+			other, err := openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
 			if err == nil {
 				other.Close()
 				t.Fatal("unsafe journal path/data accepted")
@@ -325,7 +340,7 @@ func TestMutationJournalProcessCrash(t *testing.T) {
 	input := mutationDigest("input")
 	effect := []byte("verified source stage")
 	if root := os.Getenv("BOREALIS_TEST_MUTATION_CRASH_ROOT"); root != "" {
-		j, err := OpenMutationJournal(context.Background(), root, owner, source, mutationAuthority)
+		j, err := openTestMutationJournal(context.Background(), root, owner, source, mutationAuthority)
 		if err != nil {
 			os.Exit(90)
 		}
@@ -352,7 +367,7 @@ func TestMutationJournalProcessCrash(t *testing.T) {
 	if !errors.As(err, &exited) || exited.ExitCode() != 44 {
 		t.Fatalf("crash fixture failed: %v", err)
 	}
-	j, err := OpenMutationJournal(context.Background(), root, nextMutationOwner(owner), source, mutationAuthority)
+	j, err := openTestMutationJournal(context.Background(), root, nextMutationOwner(owner), source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +395,7 @@ func TestMutationJournalProvenAbsenceNeedsFreshClaimAndRetainsHistory(t *testing
 	root := mutationTempDir(t)
 	owner, source := mutationFixture()
 	ctx := context.Background()
-	j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+	j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,6 +417,11 @@ func TestMutationJournalProvenAbsenceNeedsFreshClaimAndRetainsHistory(t *testing
 	if _, err := j.Apply(ctx, "stage_source", input, mutate); err != ErrMutationUnknown || calls != 1 {
 		t.Fatal("failed proof enabled replay")
 	}
+	j.Close()
+	j, err = openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := j.ReconcileAbsent(ctx, "stage_source", input, func(context.Context) (string, error) { return absent, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +432,7 @@ func TestMutationJournalProvenAbsenceNeedsFreshClaimAndRetainsHistory(t *testing
 		t.Fatal("known missing effect skipped")
 	}
 	j.Close()
-	j, err = OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
+	j, err = openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +464,7 @@ func TestMutationJournalAuthorityCancellationDuringCheckStopsBeforeMutation(t *t
 		}
 		return nil
 	}
-	j, err := OpenMutationJournal(ctx, root, owner, source, check)
+	j, err := openTestMutationJournal(ctx, root, owner, source, check)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +484,7 @@ func TestMutationJournalChildRetainsHostLock(t *testing.T) {
 	owner, source := mutationFixture()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+	j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +516,7 @@ func TestMutationJournalChildRetainsHostLock(t *testing.T) {
 		t.Fatal("child lock fixture failed")
 	}
 	j.Close()
-	if other, err := OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority); err != ErrMutationBusy {
+	if other, err := openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority); err != ErrMutationBusy {
 		if other != nil {
 			other.Close()
 		}
@@ -505,7 +525,7 @@ func TestMutationJournalChildRetainsHostLock(t *testing.T) {
 	input.Close()
 	_ = command.Wait()
 	started = false
-	replacement, err := OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
+	replacement, err := openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +542,7 @@ func TestMutationJournalRestrictiveUmask(t *testing.T) {
 	owner, source := mutationFixture()
 	if root := os.Getenv("BOREALIS_TEST_MUTATION_UMASK_ROOT"); root != "" {
 		syscall.Umask(0o777)
-		j, err := OpenMutationJournal(context.Background(), root, owner, source, mutationAuthority)
+		j, err := openTestMutationJournal(context.Background(), root, owner, source, mutationAuthority)
 		if err != nil {
 			os.Exit(90)
 		}
@@ -551,7 +571,7 @@ func TestMutationJournalRestrictiveUmask(t *testing.T) {
 			t.Fatal("umask changed required private file permissions")
 		}
 	}
-	j, err := OpenMutationJournal(context.Background(), root, nextMutationOwner(owner), source, mutationAuthority)
+	j, err := openTestMutationJournal(context.Background(), root, nextMutationOwner(owner), source, mutationAuthority)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +588,7 @@ func TestMutationJournalStorageFailureCannotLaunchOrAcknowledge(t *testing.T) {
 			root := mutationTempDir(t)
 			owner, source := mutationFixture()
 			ctx := context.Background()
-			j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+			j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -609,7 +629,7 @@ func TestMutationJournalStorageFailureCannotLaunchOrAcknowledge(t *testing.T) {
 			} else if len(state.Steps) != 0 {
 				t.Fatal("failed intent was recorded as committed")
 			}
-			replacement, err := OpenMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
+			replacement, err := openTestMutationJournal(ctx, root, nextMutationOwner(owner), source, mutationAuthority)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -630,7 +650,7 @@ func TestMutationJournalRetryHistoryCannotBeDiscardedAtLimit(t *testing.T) {
 	input, absent := mutationDigest("input"), mutationDigest("verified absence")
 	calls := 0
 	for attempt := 0; attempt < 18; attempt++ {
-		j, err := OpenMutationJournal(ctx, root, owner, source, mutationAuthority)
+		j, err := openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -653,6 +673,11 @@ func TestMutationJournalRetryHistoryCannotBeDiscardedAtLimit(t *testing.T) {
 			}
 		} else {
 			if err != ErrMutationUnknown {
+				t.Fatal(err)
+			}
+			j.Close()
+			j, err = openTestMutationJournal(ctx, root, owner, source, mutationAuthority)
+			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := j.ReconcileAbsent(ctx, "join_cluster", input, func(context.Context) (string, error) { return absent, nil }); err != nil {

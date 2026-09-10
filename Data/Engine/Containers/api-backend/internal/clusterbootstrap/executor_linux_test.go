@@ -177,6 +177,20 @@ func TestExecutorServiceFixture(t *testing.T) {
 	if !filepath.IsAbs(root) || !strings.Contains(root, "s01-executor-containment-") {
 		t.Fatal("fixture path invalid")
 	}
+	if mode == "probe" {
+		raw, err := os.ReadFile(filepath.Join(root, "started.json"))
+		var started struct {
+			Identity ExecutorIdentity `json:"identity"`
+		}
+		if err != nil || json.Unmarshal(raw, &started) != nil || !started.Identity.valid() {
+			t.Fatal("fixture identity missing")
+		}
+		quiescent := observeExecutorQuiescent(context.Background(), started.Identity) == nil
+		if json.NewEncoder(os.Stdout).Encode(map[string]bool{"quiescent": quiescent}) != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if mode == "descendant" {
 		if os.Getenv("BOREALIS_EXECUTOR_IGNORE_TERM") == "1" {
 			signal.Ignore(syscall.SIGTERM)
@@ -211,12 +225,26 @@ func TestExecutorServiceFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer guard.Close()
-	window := SessionLeaseWindow
-	if mode == "lease-expiry" {
-		window = time.Second
-	}
-	if err := guard.ObserveDeadline(time.Now().Add(window)); err != nil {
+	if err := guard.ObserveDeadline(time.Now().Add(SessionLeaseWindow)); err != nil {
 		t.Fatal(err)
+	}
+	journalRoot := filepath.Join(root, "journal")
+	if os.Mkdir(journalRoot, 0o700) != nil {
+		t.Fatal("fixture journal root failed")
+	}
+	owner, source := mutationFixture()
+	journal, err := OpenMutationJournal(context.Background(), journalRoot, owner, source, os.Getenv("BOREALIS_EXECUTOR_NONCE"), mutationAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = journal.Apply(context.Background(), "stage_source", mutationDigest("fixture only"), func(context.Context, *os.File) (string, error) {
+		if readMutationFixture(t, journalRoot).Steps["stage_source"].Executor != identity {
+			t.Fatal("actual executor missing before fixture effect")
+		}
+		return "", ErrMutationUnknown
+	})
+	if err != ErrMutationUnknown || journal.Close() != nil {
+		t.Fatal("fixture intent retention failed")
 	}
 	lock, err := os.OpenFile(filepath.Join(root, "fixture.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil || syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
@@ -247,7 +275,24 @@ func TestExecutorServiceFixture(t *testing.T) {
 	if os.WriteFile(filepath.Join(root, "started.json"), raw, 0o600) != nil {
 		t.Fatal("fixture evidence failed")
 	}
-	time.Sleep(100 * time.Millisecond)
+	// The outer observer must reject quiescence even though the journal lock
+	// was released above. Coordinate via public fixture files, never sleeps
+	// that can make a slow runner confuse active and already-stopped states.
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(root, "observer-release")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fixture observer did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if mode == "lease-expiry" {
+		if err := guard.ObserveDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	switch mode {
 	case "normal", "orphan-timeout":
 		return

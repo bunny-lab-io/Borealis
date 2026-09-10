@@ -41,15 +41,33 @@ def run_fixture(binary, directory, mode):
     unit = "borealis-bootstrap-" + nonce + ".service"
     (directory / "launch-arguments.json").write_text(json.dumps(arguments, indent=2) + "\n")
     start = time.monotonic()
+    probe_environment = dict(os.environ, BOREALIS_EXECUTOR_FIXTURE="probe",
+                             BOREALIS_EXECUTOR_FIXTURE_DIR=str(directory))
+
+    def probe():
+        return json.loads(subprocess.check_output(
+            [str(binary), "-test.run=^TestExecutorServiceFixture$"],
+            env=probe_environment, text=True, timeout=7))["quiescent"]
+
     with (directory / "unit.log").open("w") as log:
         process = subprocess.Popen(["sudo", "-n", "/usr/bin/systemd-run", *arguments],
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         try:
-            code = process.wait(timeout=20)
-            elapsed = time.monotonic() - start
             started = directory / "started.json"
+            while not started.exists() and process.poll() is None:
+                if time.monotonic() - start > 8:
+                    raise RuntimeError(f"Fixture did not become observable; inspect {directory}")
+                time.sleep(0.02)
             if not started.exists():
                 raise RuntimeError(f"Fixture failed before start; inspect {directory}")
+            # Releasing the private mutation lock cannot establish quiescence.
+            with (directory / "journal" / "mutation.lock").open("r+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            active_rejected = not probe()
+            (directory / "observer-release").touch(mode=0o600)
+            code = process.wait(timeout=20)
+            elapsed = time.monotonic() - start
+            stopped_verified = probe()
             record = json.loads(started.read_text())
             stat = pathlib.Path("/proc") / str(record["descendant_pid"]) / "stat"
             try:
@@ -69,10 +87,13 @@ def run_fixture(binary, directory, mode):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             passed = (code == 0 if mode == "normal" else code != 0)
             passed = passed and state in ("absent", "Z") and no_writes and elapsed < 10
+            passed = passed and active_rejected and stopped_verified
             passed = passed and (events == "removed" or "populated 0\n" in events)
             result = {"mode": mode, "unit": unit, "exit": code, "elapsed_seconds": round(elapsed, 3),
                       "descendant_state": state, "cgroup_events": events, "no_late_writes": no_writes,
                       "lock_released": True, "passed": passed, "evidence": str(directory)}
+            result.update(active_executor_rejected_with_free_journal_lock=active_rejected,
+                          stopped_executor_independently_verified=stopped_verified)
             (directory / "result.json").write_text(json.dumps(result, indent=2) + "\n")
             print(mode, "PASS" if passed else "FAIL", round(elapsed, 2), "seconds", flush=True)
             if not passed:

@@ -20,8 +20,8 @@ var ErrExecutorContainment = errors.New("bootstrap executor supervision unavaila
 const ExecutorWatchdogWindow = 2 * time.Second
 
 // ExecutorIdentity is public process ownership, not permission to mutate or
-// proof that a previous executor has stopped. Future journal dispatch must
-// persist this identity before effects and independently observe quiescence.
+// proof that a previous executor has stopped. The journal persists this
+// identity before effects and independently observes prior quiescence.
 type ExecutorIdentity struct {
 	Unit         string `json:"unit"`
 	InvocationID string `json:"invocation_id"`
@@ -58,6 +58,10 @@ var executorProperties = []string{"Id", "InvocationID", "MainPID", "ControlGroup
 	"Type", "NotifyAccess", "KillMode", "SendSIGKILL", "FinalKillSignal", "WatchdogSignal", "WatchdogUSec", "TimeoutStopUSec", "RuntimeMaxUSec", "Restart", "Delegate", "ProtectControlGroups"}
 
 func executorPropertyMap(raw []byte) (map[string]string, error) {
+	return executorPropertyMapFor(raw, executorProperties)
+}
+
+func executorPropertyMapFor(raw []byte, properties []string) (map[string]string, error) {
 	if len(raw) > 16<<10 || bytes.ContainsRune(raw, '\x00') {
 		return nil, ErrExecutorContainment
 	}
@@ -72,10 +76,10 @@ func executorPropertyMap(raw []byte) (map[string]string, error) {
 		}
 		values[key] = value
 	}
-	if len(values) != len(executorProperties) {
+	if len(values) != len(properties) {
 		return nil, ErrExecutorContainment
 	}
-	for _, name := range executorProperties {
+	for _, name := range properties {
 		if _, exists := values[name]; !exists {
 			return nil, ErrExecutorContainment
 		}
