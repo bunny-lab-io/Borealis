@@ -107,7 +107,12 @@ func (client *Client) InspectPersistentNetwork(ctx context.Context, sudoPassword
 // Python runs on the Ubuntu target, not in an Engine container. Netplan owns
 // YAML semantics; this adapter only selects immutable input files and a narrow
 // public projection. memfd avoids writing either snapshots or generated config.
-const persistentNetworkScript = `import io, json, os, re, resource, stat, sys
+const persistentNetworkScript = persistentNetworkLibraryScript + `
+if __name__ == "__main__":
+    main()
+`
+
+const persistentNetworkLibraryScript = `import io, json, os, re, resource, stat, sys
 
 ROOT = "/"
 EXPECTED_UID = 0
@@ -274,18 +279,16 @@ def observe():
     finally:
         os.close(root)
 
-def main():
+def main(observation=observe):
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_AS, (268435456, 268435456))
         resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        result = json.dumps(observe(), separators=(",", ":"), ensure_ascii=True)
+        result = json.dumps(observation(), separators=(",", ":"), ensure_ascii=True)
         if len(result) > 16384:
             raise ValueError()
         print(result)
     except BaseException:
         sys.exit(1)
 
-if __name__ == "__main__":
-    main()
 `

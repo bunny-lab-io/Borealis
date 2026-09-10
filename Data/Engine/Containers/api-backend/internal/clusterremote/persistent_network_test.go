@@ -69,6 +69,7 @@ func TestPersistentNetworkBindsCurrentHostAndAddress(t *testing.T) {
 func TestPersistentNetworkPinnedSSHBoundaries(t *testing.T) {
 	for _, mode := range []string{"password", "nopasswd", "malformed", "stdout overflow", "stderr overflow", "failure", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
+			release := make(chan struct{})
 			server := newFakeSSH(t, "persistent network", func(command string, channel ssh.Channel) uint32 {
 				if command != persistentNetworkCommand {
 					return 1
@@ -90,8 +91,8 @@ func TestPersistentNetworkPinnedSSHBoundaries(t *testing.T) {
 					channel.Stderr().Write([]byte("private network YAML"))
 					return 1
 				case "cancel":
-					// Waiting for transport shutdown keeps fixture joined.
-					_, _ = io.Copy(io.Discard, channel.Stderr())
+					// Keep remote command unfinished until caller observes cancellation.
+					<-release
 				default:
 					channel.Write([]byte(persistentNetworkFixture))
 				}
@@ -114,6 +115,10 @@ func TestPersistentNetworkPinnedSSHBoundaries(t *testing.T) {
 				password = nil
 			}
 			value, err := client.InspectPersistentNetwork(ctx, password)
+			close(release)
+			if mode == "cancel" && err != ErrCancelled {
+				t.Fatal("cancellation lost", err)
+			}
 			if mode == "password" || mode == "nopasswd" {
 				if err != nil || len(value.Interfaces) != 1 {
 					t.Fatal("valid pinned observer rejected", err)

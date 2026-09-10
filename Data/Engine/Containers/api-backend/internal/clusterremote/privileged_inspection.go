@@ -21,6 +21,7 @@ var (
 )
 
 type IPv4Address struct {
+	Index     int // Zero only for older/unavailable inventory; active ownership needs an exact index.
 	Interface string
 	Prefix    netip.Prefix
 	Up        bool
@@ -350,6 +351,7 @@ func validPublicUUID(value string) bool {
 
 func parseIPv4Inventory(addressJSON, routeJSON []byte) ([]IPv4Address, []IPv4Route, error) {
 	var interfaces []struct {
+		Index     int      `json:"ifindex"`
 		Name      string   `json:"ifname"`
 		Flags     []string `json:"flags"`
 		OperState string   `json:"operstate"`
@@ -378,7 +380,7 @@ func parseIPv4Inventory(addressJSON, routeJSON []byte) ([]IPv4Address, []IPv4Rou
 	}
 	var addresses []IPv4Address
 	for _, iface := range interfaces {
-		if !interfacePattern.MatchString(iface.Name) || len(iface.Info) > 128 {
+		if !interfacePattern.MatchString(iface.Name) || iface.Index < 0 || iface.Index > 2147483647 || len(iface.Info) > 128 {
 			return nil, nil, ErrPrivilegeInspection
 		}
 		up, carrier := false, false
@@ -391,7 +393,7 @@ func parseIPv4Inventory(addressJSON, routeJSON []byte) ([]IPv4Address, []IPv4Rou
 			if err != nil || !address.Is4() || address.String() != info.Local || info.Family != "inet" || info.PrefixLen == nil || *info.PrefixLen < 0 || *info.PrefixLen > 32 || info.Valid == nil || info.Preferred == nil || len(addresses) >= 256 {
 				return nil, nil, ErrPrivilegeInspection
 			}
-			addresses = append(addresses, IPv4Address{Interface: iface.Name, Prefix: netip.PrefixFrom(address, *info.PrefixLen), Up: up && carrier && iface.OperState == "UP", Dynamic: info.Dynamic, Permanent: !info.Deprecated && info.Scope == "global" && *info.Valid == 4294967295 && *info.Preferred == 4294967295})
+			addresses = append(addresses, IPv4Address{Index: iface.Index, Interface: iface.Name, Prefix: netip.PrefixFrom(address, *info.PrefixLen), Up: up && carrier && iface.OperState == "UP", Dynamic: info.Dynamic, Permanent: !info.Deprecated && info.Scope == "global" && *info.Valid == 4294967295 && *info.Preferred == 4294967295})
 		}
 	}
 	var observedRoutes []IPv4Route
