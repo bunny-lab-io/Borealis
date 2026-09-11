@@ -14,7 +14,7 @@ func sourceNetworkFixture(t *testing.T) ([]byte, SourceNetwork) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return raw, SourceNetwork{NodeUID: "33333333-3333-4333-8333-333333333333", Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: "22222222-2222-4222-8222-222222222222", K3sVersion: "v1.36.3+k3s1"}
+	return raw, SourceNetwork{NodeUID: "33333333-3333-4333-8333-333333333333", Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: "22222222-2222-4222-8222-222222222222", K3sVersion: "v1.36.3+k3s1", ManagementLink: ManagementLink{Interface: "ens18", Index: 2, Address: "192.168.90.20/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
 }
 
 func TestSourceNetworkUsesSupervisorRangeAndCurrentNode(t *testing.T) {

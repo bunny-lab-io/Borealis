@@ -33,8 +33,12 @@ func sourceExactObject(raw []byte, keys ...string) (map[string]json.RawMessage, 
 
 func parsePublicSourceNetwork(raw []byte) (SourceNetwork, error) {
 	var network SourceNetwork
-	if _, err := sourceExactObject(raw, "node_uid", "hostname", "machine_id", "boot_id", "k3s_version", "pod_cidr", "service_cidr"); err != nil ||
+	object, err := sourceExactObject(raw, "node_uid", "hostname", "machine_id", "boot_id", "k3s_version", "pod_cidr", "service_cidr", "management_link")
+	if err != nil ||
 		json.Unmarshal(raw, &network) != nil || network.Validate() != nil {
+		return SourceNetwork{}, ErrPreparationConfig
+	}
+	if _, err := sourceExactObject(object["management_link"], "interface", "index", "address", "mac", "network_namespace"); err != nil {
 		return SourceNetwork{}, ErrPreparationConfig
 	}
 	return network, nil
@@ -60,7 +64,7 @@ func NewSourceNetworkReceipt(raw []byte, nonce, jobUID, podUID string) ([]byte, 
 	if err != nil {
 		return nil, ErrPreparationConfig
 	}
-	receipt, err := json.Marshal(sourceNetworkReceipt{1, nonce, jobUID, podUID, network})
+	receipt, err := json.Marshal(sourceNetworkReceipt{2, nonce, jobUID, podUID, network})
 	if err != nil || len(receipt) > SourceNetworkReceiptLimit {
 		return nil, ErrPreparationConfig
 	}
@@ -74,7 +78,7 @@ func ParseSourceNetworkReceipt(raw []byte, nonce, jobUID, podUID string) (Source
 	}
 	object, err := sourceExactObject(raw, "version", "nonce", "job_uid", "pod_uid", "source_network")
 	var receipt sourceNetworkReceipt
-	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Version != 1 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID {
+	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Version != 2 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID {
 		return fail()
 	}
 	return parsePublicSourceNetwork(object["source_network"])

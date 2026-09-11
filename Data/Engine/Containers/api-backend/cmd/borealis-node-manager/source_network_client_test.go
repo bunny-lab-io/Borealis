@@ -18,7 +18,7 @@ func (f sourceClientRoundTrip) RoundTrip(r *http.Request) (*http.Response, error
 
 func TestSourceNetworkClientFixedRequestAndStaticFailures(t *testing.T) {
 	nonce, job, pod := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
-	network := clusterbootstrap.SourceNetwork{NodeUID: pod, Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: job, K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16"}
+	network := clusterbootstrap.SourceNetwork{NodeUID: pod, Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: job, K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: "192.168.90.20/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
 	for _, mode := range []string{"success", "bad status", "redirect", "oversize", "private field", "cancel", "bad identity"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)

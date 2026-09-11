@@ -102,7 +102,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 							if member.Name != node {
 								continue
 							}
-							network := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: current.K3sVersion, PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16"}
+							network := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: current.K3sVersion, PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: member.Address + "/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
 							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sourceActionPod(t, job, network, podUID)}})
 							return
 						}

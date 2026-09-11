@@ -106,7 +106,7 @@ func (r *kubernetesClusterStepRunner) newSSHSourceNetworkRead(authority clusterS
 				}
 				if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
 					if network.NodeUID != member.NodeUID || network.Hostname != member.Name || network.MachineID != member.MachineID ||
-						network.BootID != member.BootID || network.K3sVersion != before.K3sVersion || !check() {
+						network.BootID != member.BootID || !network.ManagementLink.MatchesAddress(member.Address) || network.K3sVersion != before.K3sVersion || !check() {
 						return fail()
 					}
 					return network, nil

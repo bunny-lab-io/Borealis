@@ -32,11 +32,11 @@ func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"success", "boot drift", "machine drift", "network drift", "stale Node version", "upgrade during read", "not ready", "wrong Node", "transport", "cancel", "path injection"} {
+	for _, mode := range []string{"success", "boot drift", "machine drift", "network drift", "stale Node version", "upgrade during read", "not ready", "wrong Node", "transport", "cancel", "path injection", "link failure", "wrong link IP", "MAC drift", "interface drift", "index drift", "namespace drift", "prefix drift", "Node drift", "Node IP drift"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			identities, configs, versions, reads := 0, 0, 0, 0
+			identities, configs, versions, reads, nodes, links := 0, 0, 0, 0, 0, 0
 			identity := func() (string, string, error) {
 				identities++
 				machine, boot := strings.Repeat("b", 32), "22222222-2222-4222-8222-222222222222"
@@ -66,6 +66,13 @@ func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
 					}
 					return config, nil
 				case "/api/v1/nodes/engine-01":
+					nodes++
+					if nodes > 1 && mode == "Node drift" {
+						return []byte(strings.ReplaceAll(string(node), `"True"`, `"False"`)), nil
+					}
+					if nodes > 1 && mode == "Node IP drift" {
+						return []byte(strings.ReplaceAll(string(node), "192.168.90.20", "192.168.90.21")), nil
+					}
 					if mode == "not ready" {
 						return []byte(strings.ReplaceAll(string(node), `"True"`, `"False"`)), nil
 					}
@@ -88,9 +95,37 @@ func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
 			if mode == "path injection" {
 				name = "../secrets"
 			}
-			observed, err := observeSourceNetwork(ctx, name, identity, get)
+			linkRead := func(ctx context.Context, address string) (clusterbootstrap.ManagementLink, error) {
+				links++
+				if address != "192.168.90.20" {
+					t.Fatal("unexpected link target")
+				}
+				value := clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: address + "/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}
+				if mode == "link failure" {
+					return value, errors.New("private link diagnostic")
+				}
+				if mode == "wrong link IP" {
+					value.Address = "192.168.90.21/24"
+				}
+				if links > 1 {
+					switch mode {
+					case "MAC drift":
+						value.MAC = "02:00:00:00:00:02"
+					case "interface drift":
+						value.Interface = "ens19"
+					case "index drift":
+						value.Index++
+					case "namespace drift":
+						value.NetworkNamespace++
+					case "prefix drift":
+						value.Address = address + "/25"
+					}
+				}
+				return value, nil
+			}
+			observed, err := observeSourceNetwork(ctx, name, identity, get, linkRead)
 			if mode == "success" {
-				if err != nil || observed.Validate() != nil || observed.PodCIDR != "10.42.0.0/16" || identities != 2 || configs != 2 || versions != 2 {
+				if err != nil || observed.Validate() != nil || observed.PodCIDR != "10.42.0.0/16" || identities != 2 || configs != 2 || versions != 2 || links != 2 || nodes != 2 {
 					t.Fatalf("incomplete observation: %v", err)
 				}
 			} else {

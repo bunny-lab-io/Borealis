@@ -51,12 +51,12 @@ func sourceActionPod(t *testing.T, job map[string]any, network clusterbootstrap.
 }
 
 func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
-	for _, mode := range []string{"success", "source reader", "lost authority", "wrong controller", "foreign member", "mutable image", "collision", "lost POST", "job replaced", "job missing metadata", "job altered", "job image", "job failed", "duplicate conditions", "two pods", "paginated pods", "pod replaced", "wrong owner", "pod deleting", "wrong nonce", "wrong receipt pod", "private receipt", "wrong source", "sidecar", "token mounted", "privileged", "logs fallback", "changed mounts", "pod retry", "pod failed", "cancel", "deadline"} {
+	for _, mode := range []string{"success", "source reader", "lost authority", "wrong controller", "foreign member", "mutable image", "collision", "lost POST", "job replaced", "job missing metadata", "job altered", "job image", "job failed", "duplicate conditions", "two pods", "paginated pods", "pod replaced", "wrong owner", "pod deleting", "wrong nonce", "wrong receipt pod", "private receipt", "wrong source", "wrong management link", "sidecar", "token mounted", "privileged", "logs fallback", "changed mounts", "pod retry", "pod failed", "cancel", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			cohort, source, lease, baseline := sshPreparationFixture(t)
 			current := clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}
 			member := source.Members[0]
-			network := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: current.K3sVersion, PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16"}
+			network := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: current.K3sVersion, PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: member.Address + "/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			if mode == "deadline" {
@@ -170,6 +170,9 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 				if mode == "wrong source" {
 					n.BootID = newClusterUUID()
 				}
+				if mode == "wrong management link" {
+					n.ManagementLink.Address = "192.168.90.99/24"
+				}
 				p := sourceActionPod(t, job, n, podUID)
 				meta, spec, status := sourceActionMap(p, "metadata"), sourceActionMap(p, "spec"), sourceActionMap(p, "status")
 				c := anySlice(status["containerStatuses"])[0].(map[string]any)
@@ -191,7 +194,7 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 				case "wrong receipt pod":
 					terminated["message"] = strings.ReplaceAll(terminated["message"].(string), podUID, newClusterUUID())
 				case "private receipt":
-					terminated["message"] = strings.Replace(terminated["message"].(string), `"version":1`, `"version":1,"private":"never publish"`, 1)
+					terminated["message"] = strings.Replace(terminated["message"].(string), `"version":2`, `"version":2,"private":"never publish"`, 1)
 				case "sidecar":
 					spec["containers"] = append(anySlice(spec["containers"]), map[string]any{"name": "sidecar"})
 				case "token mounted":

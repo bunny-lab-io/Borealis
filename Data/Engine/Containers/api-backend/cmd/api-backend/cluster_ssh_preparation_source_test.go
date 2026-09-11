@@ -28,7 +28,7 @@ func sshPreparationSecretFixture() map[string]any {
 }
 
 func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "replacement", "inconsistent source networks", "authority lost", "claim drift", "source release drift", "source boot drift", "network UID", "network version", "missing network", "Secret changed during read", "Secret replaced later", "Secret revision later", "Secret content later", "secret missing setting", "secret error", "cancel"} {
+	for _, mode := range []string{"success", "replacement", "inconsistent source networks", "authority lost", "claim drift", "source release drift", "source boot drift", "network UID", "wrong management link", "network version", "missing network", "Secret changed during read", "Secret replaced later", "Secret revision later", "Secret content later", "secret missing setting", "secret error", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			cohort, source, lease, baseline := sshPreparationFixture(t)
 			if mode == "replacement" || mode == "inconsistent source networks" {
@@ -98,7 +98,10 @@ func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T
 				return json.Unmarshal(raw, out)
 			}
 			network := func(ctx context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
-				value := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16"}
+				value := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: member.Address + "/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
+				if mode == "wrong management link" {
+					value.ManagementLink.Address = "192.168.90.99/24"
+				}
 				if mode == "network UID" {
 					value.NodeUID = newClusterUUID()
 				}

@@ -89,7 +89,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		for _, member := range observed.Members {
 			value, err := network(ctx, member)
 			if err != nil || value.Validate() != nil || value.NodeUID != member.NodeUID || value.Hostname != member.Name ||
-				value.MachineID != member.MachineID || value.BootID != member.BootID || value.K3sVersion != before.K3sVersion {
+				value.MachineID != member.MachineID || !value.ManagementLink.MatchesAddress(member.Address) || value.BootID != member.BootID || value.K3sVersion != before.K3sVersion {
 				return fail()
 			}
 			if pods != "" && (pods != value.PodCIDR || services != value.ServiceCIDR) {

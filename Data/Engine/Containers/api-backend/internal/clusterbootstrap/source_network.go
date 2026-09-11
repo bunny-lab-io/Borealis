@@ -15,13 +15,14 @@ import (
 // its own Kubernetes Node. Never publish the original supervisor response: it
 // includes unrelated operational configuration, paths and private fields.
 type SourceNetwork struct {
-	NodeUID     string `json:"node_uid"`
-	Hostname    string `json:"hostname"`
-	MachineID   string `json:"machine_id"`
-	BootID      string `json:"boot_id"`
-	K3sVersion  string `json:"k3s_version"`
-	PodCIDR     string `json:"pod_cidr"`
-	ServiceCIDR string `json:"service_cidr"`
+	NodeUID        string         `json:"node_uid"`
+	Hostname       string         `json:"hostname"`
+	MachineID      string         `json:"machine_id"`
+	BootID         string         `json:"boot_id"`
+	K3sVersion     string         `json:"k3s_version"`
+	PodCIDR        string         `json:"pod_cidr"`
+	ServiceCIDR    string         `json:"service_cidr"`
+	ManagementLink ManagementLink `json:"management_link"`
 }
 
 func ValidateSourceVersion(raw []byte, version string) error {
@@ -36,7 +37,7 @@ func ValidateSourceVersion(raw []byte, version string) error {
 func (n SourceNetwork) Validate() error {
 	pods, podOK := preparationPrefix(n.PodCIDR)
 	services, serviceOK := preparationPrefix(n.ServiceCIDR)
-	if !nonzeroPreparationUUID(n.NodeUID) || !nonzeroPreparationUUID(n.BootID) || !sessionHostname.MatchString(n.Hostname) ||
+	if n.ManagementLink.Validate() != nil || !nonzeroPreparationUUID(n.NodeUID) || !nonzeroPreparationUUID(n.BootID) || !sessionHostname.MatchString(n.Hostname) ||
 		!sessionMachineID.MatchString(n.MachineID) || n.MachineID == strings.Repeat("0", 32) ||
 		len(n.K3sVersion) > 32 || !preparationK3s.MatchString(n.K3sVersion) || !podOK || !serviceOK || pods.Overlaps(services) {
 		return ErrPreparationConfig
@@ -153,7 +154,7 @@ func sourceSupervisorPrefix(raw []byte) (netip.Prefix, error) {
 // boot and management address. Node allocations only corroborate the observed
 // global range; they never select that range.
 func ValidateSourceNode(raw []byte, network SourceNetwork, address string) error {
-	if network.Validate() != nil {
+	if network.Validate() != nil || !network.ManagementLink.MatchesAddress(address) {
 		return ErrPreparationConfig
 	}
 	var node struct {
