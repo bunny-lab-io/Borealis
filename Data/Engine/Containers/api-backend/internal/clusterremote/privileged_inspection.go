@@ -195,13 +195,15 @@ fi
 printf 'kube_system_uid=%s\nnodes=%s\n' "$kube_uid" "$nodes"
 `
 
-// Both shells use -c with compile-time text. Stdin contains only one bounded
+// Both shells use -c with fixed protocol text and validated public data arguments.
+// Stdin contains only one bounded
 // sudo password line: NOPASSWD/root execution leaves it unread, never shell
 // source. Root command has its own timeout even if SSH disconnects.
 var privilegedInspectionCommand = buildPrivilegedInspectionCommand("/usr/sbin:/usr/bin:/sbin:/bin", privilegedInspectionScript)
 
-// Parameters are compile-time production constants; tests substitute isolated
-// command fixtures to exercise real shell/sudo stdin behavior without privilege.
+// Production scripts are fixed protocol text. The routed-network adapter may
+// append its strictly validated public address data as one quoted argument;
+// caller shell text is never accepted. Tests substitute isolated fixtures.
 func buildPrivilegedInspectionCommand(toolPath, script string) string {
 	return "PATH=" + shellConstant(toolPath) + " LC_ALL=C /bin/sh -c " + shellConstant(
 		"export PATH="+shellConstant(toolPath)+` LC_ALL=C
@@ -233,7 +235,8 @@ func (client *Client) InspectPrivileged(ctx context.Context, sudoPassword []byte
 	return parsePrivilegedFacts(raw)
 }
 
-// command is a compile-time internal protocol; callers never supply shell text.
+// command is a fixed internal protocol with only validated public data arguments
+// where documented; callers never supply shell text. Stdin remains password-only.
 func (client *Client) inspectPrivilegedOutput(ctx context.Context, sudoPassword []byte, command string) ([]byte, error) {
 	if ValidateSudoPassword(sudoPassword) != nil {
 		return nil, ErrInvalidAuth

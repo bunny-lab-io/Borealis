@@ -297,7 +297,7 @@ def runtime_files(root, interfaces):
     finally:
         os.close(fd)
 
-def observe_active():
+def observe_active(extra_snapshot=None):
     if os.geteuid() != EXPECTED_UID:
         raise ValueError()
     root = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -310,11 +310,15 @@ def observe_active():
         namespace = network_namespace(ROOT, owner)
         first = active_projection(declarations, describe(owner), kernel_addresses())
         generated = runtime_files(root, first)
+        extra = extra_snapshot(first) if extra_snapshot is not None else None
         second = active_projection(declarations, describe(owner), kernel_addresses())
+        if extra_snapshot is not None and extra != extra_snapshot(second):
+            raise ValueError()
         if first != second or generated != runtime_files(root, second) or namespace != network_namespace(ROOT, owner) or (bus, owner) != bus_identity() or files != snapshot(root) or host != identity(root):
             raise ValueError()
-        return {"version": 1, "declarations": {"version": 1, "machine_id": host[0], "boot_id": host[1], "interfaces": declarations},
-                "bus_id": bus, "owner": owner, "network_namespace": namespace, "interfaces": second}
+        active = {"version": 1, "declarations": {"version": 1, "machine_id": host[0], "boot_id": host[1], "interfaces": declarations},
+                  "bus_id": bus, "owner": owner, "network_namespace": namespace, "interfaces": second}
+        return active if extra_snapshot is None else (active, extra)
     finally:
         os.close(root)
 `

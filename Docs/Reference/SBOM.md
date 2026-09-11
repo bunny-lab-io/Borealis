@@ -178,7 +178,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing; release workflow builds exact-source node-manager SSH bootstrap binary) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | Go standard library/runtime (compiled into `borealis-node-manager` in central SSH bootstrap release assets) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | Host systemd manager, `systemd-run`, `systemctl` and `busctl` (Ubuntu-provided; systemd255 baseline for central SSH supervision/watchdogs and read-only networkd ownership queries) | [LGPL-2.1-or-later](https://github.com/systemd/systemd/blob/v255/LICENSE.LGPL2.1) |
-| shared-engine | iproute2 `ip` (Ubuntu host-provided; read-only SSH IPv4 address/route observations) | [GPL-2.0-or-later](https://github.com/iproute2/iproute2/blob/main/COPYING) |
+| shared-engine | iproute2 `ip` (Ubuntu host-provided; read-only SSH IPv4 address/route/rule observations) | [GPL-2.0-or-later](https://github.com/iproute2/iproute2/blob/main/COPYING) |
 | shared-engine | Netplan / libnetplan / python3-netplan (Ubuntu host-provided bindings; read-only SSH network declaration observer and isolated CI fixtures) | [GPL-3.0-only](https://github.com/canonical/netplan/blob/1.0/COPYING) |
 | shared-engine | PyYAML / python3-yaml (Ubuntu host-provided parser for Netplan's rendered in-memory state; SSH observer and CI fixtures) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | PyYAML 6.0.3 (repository validation manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
