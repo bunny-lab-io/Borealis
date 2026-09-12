@@ -28,7 +28,7 @@ func sshPreparationSecretFixture() map[string]any {
 }
 
 func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "replacement", "inconsistent source networks", "authority lost", "claim drift", "source release drift", "source boot drift", "network UID", "wrong management link", "network version", "missing network", "Secret changed during read", "Secret replaced later", "Secret revision later", "Secret content later", "secret missing setting", "secret error", "cancel"} {
+	for _, mode := range []string{"success", "replacement", "inconsistent source networks", "authority lost", "claim drift", "source release drift", "source boot drift", "network UID", "wrong management link", "network version", "missing network", "link drift during read", "link changed later", "Secret changed during read", "Secret replaced later", "Secret revision later", "Secret content later", "secret missing setting", "secret error", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			cohort, source, lease, baseline := sshPreparationFixture(t)
 			if mode == "replacement" || mode == "inconsistent source networks" {
@@ -40,7 +40,7 @@ func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T
 			current := clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			authorityCalls, secretCalls := 0, 0
+			authorityCalls, secretCalls, networkCalls := 0, 0, 0
 			authority := func(context.Context) (clusterSSHPreparationAuthority, error) {
 				authorityCalls++
 				raw, _ := json.Marshal(current)
@@ -98,7 +98,11 @@ func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T
 				return json.Unmarshal(raw, out)
 			}
 			network := func(ctx context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
-				value := clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID, K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: member.Address + "/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
+				networkCalls++
+				value := sshSourceNetworkFixture(member, "v1.36.3+k3s1")
+				if (mode == "link drift during read" && networkCalls > len(source.Members)) || (mode == "link changed later" && networkCalls > 2*len(source.Members)) {
+					value.ManagementLink.NetworkNamespace++
+				}
 				if mode == "wrong management link" {
 					value.ManagementLink.Address = "192.168.90.99/24"
 				}
@@ -116,13 +120,20 @@ func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T
 				}
 				return value, nil
 			}
-			read := newClusterSSHPreparationSourceRead(authority, get, network)
-			expected, settings, err := read(ctx)
+			read := newClusterSSHPreparationSnapshotRead(authority, get, network)
+			started := time.Now()
+			value, err := read(ctx)
+			expected, settings := value.Expected, value.Settings
 			later := strings.HasSuffix(mode, "later")
 			if mode == "success" || mode == "replacement" || later {
 				if err != nil || expected.Validate() != nil || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) || authorityCalls != 2 || secretCalls != 2 {
 					t.Fatalf("source read failed: %v", err)
 				}
+				if networkCalls != 2*len(source.Members) || validateClusterSSHSourceNetworks(current, value.Sources) != nil || value.started.Before(started) {
+					t.Fatal("source links not freshly observed twice")
+				}
+				// A consumer cannot change the retained peer expectation through aliases.
+				value.Sources[0].ManagementLink.MAC = "02:00:00:00:00:ff"
 				if mode == "Secret replaced later" {
 					secret["metadata"].(map[string]any)["uid"] = newClusterUUID()
 				}
@@ -132,7 +143,8 @@ func TestClusterSSHPreparationSourceFreshAuthorityAndPrivateReceipt(t *testing.T
 				if mode == "Secret content later" {
 					secret["data"].(map[string]string)["BOREALIS_REPO_ROOT"] = base64.StdEncoding.EncodeToString([]byte("/changed"))
 				}
-				next, nextSettings, nextErr := read(ctx)
+				nextValue, nextErr := read(ctx)
+				next, nextSettings := nextValue.Expected, nextValue.Settings
 				if later {
 					if nextErr == nil || nextSettings != nil {
 						t.Fatal("changed source receipt retained")

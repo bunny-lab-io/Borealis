@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -75,11 +76,24 @@ func clusterSSHSourceBrokerPeers(ctx context.Context) ([]string, error) {
 // acquisition, never recover a private snapshot from an operation payload.
 func (c *clusterSSHSourceBrokerClient) preparationRead(authority clusterSSHPreparationAuthorityRead, lease clusterSSHTargetLease,
 	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) clusterSSHPreparationRead {
+	read := c.snapshotRead(authority, lease, baseline, sealed)
+	return func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
+		value, err := read(ctx)
+		return value.Expected, value.Settings, err
+	}
+}
+
+// Keep the source observations available to the peer consumer. A successful
+// old configuration response cannot stand in for fresh source link identity.
+func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparationAuthorityRead, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) clusterSSHPreparationSnapshotRead {
 	gate := make(chan struct{}, 1)
 	retained := ""
-	return func(parent context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
-		fail := func() (clusterbootstrap.PreparationExpected, map[string]string, error) {
-			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
+	var retainedSources []clusterbootstrap.SourceNetwork
+	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
+		started := time.Now()
+		fail := func() (clusterSSHPreparationSnapshot, error) {
+			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		if c == nil || c.peers == nil || c.httpClient == nil || authority == nil || parent.Err() != nil {
 			return fail()
@@ -103,11 +117,12 @@ func (c *clusterSSHSourceBrokerClient) preparationRead(authority clusterSSHPrepa
 		}
 		value, err := c.fetch(ctx, request)
 		if err != nil || value.Expected.Validate() != nil || !clusterSSHSourceObservationRE.MatchString(value.Observation) ||
-			(retained != "" && retained != value.Observation) {
+			validateClusterSSHSourceNetworks(before, value.Sources) != nil ||
+			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources))) {
 			return fail()
 		}
 		expected, err := buildClusterSSHPreparationExpected(before.Cohort, before.Source, lease, baseline, before.K3sVersion, value.Expected.PodCIDR, value.Expected.ServiceCIDR)
-		if err != nil || !reflect.DeepEqual(expected, value.Expected) {
+		if err != nil || !reflect.DeepEqual(expected, value.Expected) || value.Sources[0].PodCIDR != expected.PodCIDR || value.Sources[0].ServiceCIDR != expected.ServiceCIDR {
 			return fail()
 		}
 		if _, err := clusterbootstrap.NewPreparationConfiguration(expected, value.Settings); err != nil {
@@ -122,7 +137,9 @@ func (c *clusterSSHSourceBrokerClient) preparationRead(authority clusterSSHPrepa
 			return fail()
 		}
 		retained = value.Observation
-		return expected, value.Settings, nil
+		retainedSources = slices.Clone(value.Sources)
+		value.started = started
+		return value, nil
 	}
 }
 
@@ -161,7 +178,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 1 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 2 || value.ID != request.ID || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

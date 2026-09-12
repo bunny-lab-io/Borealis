@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,7 +30,7 @@ func sshBrokerFixture(t *testing.T) (clusterSSHSourceBrokerRequest, clusterSSHPr
 	r := clusterSSHSourceBrokerRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
 		Lease: lease, Baseline: baseline, Binding: cohort.Targets[0].Binding, Generation: "private-generation", Ciphertext: aegisEnvelopePrefix + "private-credential"}
 	a := clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}
-	s := clusterSSHPreparationSnapshot{Expected: expected, Settings: sshPreparationRuntimeFixture(), Observation: strings.Repeat("a", 64)}
+	s := clusterSSHPreparationSnapshot{Expected: expected, Settings: sshPreparationRuntimeFixture(), Observation: strings.Repeat("a", 64), Sources: []clusterbootstrap.SourceNetwork{sshSourceNetworkFixture(source.Members[0], a.K3sVersion)}}
 	return r, a, s
 }
 
@@ -42,7 +43,7 @@ func sshBrokerClient(t *testing.T, peers ...string) *clusterSSHSourceBrokerClien
 }
 
 func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T) {
-	for _, mode := range []string{"fresh repeated", "secret changed", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
+	for _, mode := range []string{"fresh repeated", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
 		t.Run(mode, func(t *testing.T) {
 			r, current, snapshot := sshBrokerFixture(t)
 			b := newClusterSSHSourceBroker(nil, nil, r.Lease.ControllerHolder, sshBrokerTestSecret)
@@ -53,6 +54,23 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				}
 				n := calls.Add(1)
 				value := snapshot
+				value.Sources = slices.Clone(snapshot.Sources)
+				switch mode {
+				case "link changed":
+					if n > 1 {
+						value.Sources[0].ManagementLink.MAC = "02:00:00:00:00:ff"
+					}
+				case "missing sources":
+					value.Sources = nil
+				case "extra source":
+					value.Sources = append(value.Sources, value.Sources[0])
+				case "wrong source Node":
+					value.Sources[0].NodeUID = newClusterUUID()
+				case "wrong source address":
+					value.Sources[0].ManagementLink.Address = "192.168.90.99/24"
+				case "wrong source ranges":
+					value.Sources[0].PodCIDR = "10.44.0.0/16"
+				}
 				if mode == "secret changed" && n > 1 {
 					value.Observation = strings.Repeat("b", 64)
 				}
@@ -90,14 +108,17 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				}
 				return copy, nil
 			}
-			read := client.preparationRead(authority, r.Lease, r.Baseline, r.sealed())
+			read := client.snapshotRead(authority, r.Lease, r.Baseline, r.sealed())
 			for i := 0; i < 2; i++ {
-				expected, settings, err := read(context.Background())
-				wantOK := mode == "fresh repeated" || (mode == "secret changed" && i == 0)
+				started := time.Now()
+				value, err := read(context.Background())
+				expected, settings := value.Expected, value.Settings
+				wantOK := mode == "fresh repeated" || ((mode == "secret changed" || mode == "link changed") && i == 0)
 				if wantOK {
-					if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) || !reflect.DeepEqual(settings, snapshot.Settings) {
+					if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) || !reflect.DeepEqual(settings, snapshot.Settings) || !slices.Equal(value.Sources, snapshot.Sources) || value.started.Before(started) {
 						t.Fatal("valid broker source rejected")
 					}
+					value.Sources[0].ManagementLink.MAC = "02:00:00:00:00:ff"
 				} else if err != clusterbootstrap.ErrPreparationConfig || settings != nil || expected.Target.TargetID != "" {
 					t.Fatal("unsafe/private source returned")
 				}
@@ -236,7 +257,7 @@ func TestClusterSSHSourceBrokerReplayCapacityAndCancellation(t *testing.T) {
 }
 
 func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T) {
-	for _, mode := range []string{"redirect", "lost POST", "status", "plaintext", "oversize", "wrong nonce", "response duplicate", "wrong direction", "unknown status", "missing snapshot", "expired while reading"} {
+	for _, mode := range []string{"redirect", "lost POST", "status", "plaintext", "oversize", "wrong nonce", "response duplicate", "legacy response", "wrong direction", "unknown status", "missing snapshot", "expired while reading"} {
 		t.Run(mode, func(t *testing.T) {
 			r, _, snapshot := sshBrokerFixture(t)
 			client := sshBrokerClient(t, "http://10.42.0.1:8090", "http://10.42.0.2:8090")
@@ -255,7 +276,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 1, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 2, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -265,9 +286,12 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "missing snapshot" {
 					value.Snapshot = nil
 				}
+				if mode == "legacy response" {
+					value.Version = 1
+				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					raw = bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1)
+					raw = bytes.Replace(raw, []byte(`"version":2`), []byte(`"version":2,"version":2`), 1)
 				}
 				aead := client.responseCipher
 				if mode == "wrong direction" {

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -42,6 +43,8 @@ type clusterSSHPreparationSnapshot struct {
 	Expected    clusterbootstrap.PreparationExpected `json:"expected"`
 	Settings    map[string]string                    `json:"settings"`
 	Observation string                               `json:"observation_sha256"`
+	Sources     []clusterbootstrap.SourceNetwork     `json:"sources"`
+	started     time.Time                            // Local acquisition start; never imported from wire or storage.
 }
 
 func (clusterSSHPreparationSnapshot) String() string   { return "preparation snapshot [redacted]" }
@@ -62,7 +65,9 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead) clusterSSHPreparationSnapshotRead {
 	gate := make(chan struct{}, 1)
 	var retained *clusterbootstrap.PreparationRuntimeSecret
+	var retainedSources []clusterbootstrap.SourceNetwork
 	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
+		started := time.Now()
 		fail := func() (clusterSSHPreparationSnapshot, error) {
 			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
@@ -85,19 +90,11 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		if err != nil || !reflect.DeepEqual(observed, before.Source) {
 			return fail()
 		}
-		pods, services := "", ""
-		for _, member := range observed.Members {
-			value, err := network(ctx, member)
-			if err != nil || value.Validate() != nil || value.NodeUID != member.NodeUID || value.Hostname != member.Name ||
-				value.MachineID != member.MachineID || !value.ManagementLink.MatchesAddress(member.Address) || value.BootID != member.BootID || value.K3sVersion != before.K3sVersion {
-				return fail()
-			}
-			if pods != "" && (pods != value.PodCIDR || services != value.ServiceCIDR) {
-				return fail()
-			}
-			pods, services = value.PodCIDR, value.ServiceCIDR
+		sources, err := observeClusterSSHSourceNetworks(ctx, before, network)
+		if err != nil || (retainedSources != nil && !slices.Equal(retainedSources, sources)) {
+			return fail()
 		}
-		expected, err := buildClusterSSHPreparationExpected(before.Cohort, observed, before.Lease, before.Baseline, before.K3sVersion, pods, services)
+		expected, err := buildClusterSSHPreparationExpected(before.Cohort, observed, before.Lease, before.Baseline, before.K3sVersion, sources[0].PodCIDR, sources[0].ServiceCIDR)
 		if err != nil {
 			return fail()
 		}
@@ -115,6 +112,12 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		}
 		settings := secret.Settings()
 		if _, err := clusterbootstrap.NewPreparationConfiguration(expected, settings); err != nil {
+			return fail()
+		}
+		// Reobserve every source link, including changes while another source
+		// or the private Secret was read. Job/Pod receipts cannot be reused.
+		currentSources, err := observeClusterSSHSourceNetworks(ctx, before, network)
+		if err != nil || !slices.Equal(sources, currentSources) {
 			return fail()
 		}
 		// Finish with fresh public source, private Secret and short DB reads. No
@@ -137,8 +140,9 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		}
 		if retained == nil {
 			retained = &secret
+			retainedSources = slices.Clone(sources)
 		}
-		return clusterSSHPreparationSnapshot{Expected: expected, Settings: settings, Observation: secret.ObservationSHA256()}, nil
+		return clusterSSHPreparationSnapshot{Expected: expected, Settings: settings, Observation: secret.ObservationSHA256(), Sources: sources, started: started}, nil
 	}
 }
 
