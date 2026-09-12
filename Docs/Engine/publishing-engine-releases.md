@@ -6,7 +6,7 @@ Borealis maintainers use this runbook to publish qualification builds for cluste
 | Channel | Tag format | GitHub status | Intended use | Engine installer assets |
 | --- | --- | --- | --- | --- |
 | Stable | `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` | Normal release | Supported standalone installs and cluster updates | Required |
-| Qualification | `YYYY.MM.REVISION-rc.N` or `YYYY.MM.REVISION.HOTFIX-rc.N` | Pre-release | Unsupported cluster testing before stable publication | Not required |
+| Qualification | `YYYY.MM.REVISION-rc.N` or `YYYY.MM.REVISION.HOTFIX-rc.N` | Pre-release | Unsupported cluster testing before stable publication | No standalone installer; node bootstrap required for SSH onboarding |
 | Development | `dev-<first-12-commit-characters>` | Not a GitHub release | Initial cluster baseline and HMR restoration | Not applicable |
 
 `REVISION` counts normal releases published during calendar month. `HOTFIX` counts focused corrections based on one normal release. `N` starts at `1` and increases for each qualification candidate built for same intended stable version. These values express publication order, not semantic major, minor, or patch scope. See [Security Policy](https://github.com/bunny-lab-io/Borealis/blob/main/SECURITY.md).
@@ -82,6 +82,13 @@ gh release create "${RELEASE}" --repo "${REPOSITORY}" \
 gh release view "${RELEASE}" --repo "${REPOSITORY}" \
   --json tagName,isDraft,isPrerelease,targetCommitish,url
 
+# Current-source SSH qualification needs its source/binary bundle before publication.
+gh workflow run publish-engine-release-assets.yml \
+  --repo "${REPOSITORY}" --ref "${RELEASE}" -f "release=${RELEASE}"
+gh run list --repo "${REPOSITORY}" \
+  --workflow publish-engine-release-assets.yml \
+  --event workflow_dispatch --branch "${RELEASE}" --limit 5
+
 # Publication locks tag. Do this only after draft review.
 gh release edit "${RELEASE}" --repo "${REPOSITORY}" \
   --draft=false --prerelease
@@ -90,6 +97,11 @@ gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
 ```
 
 Expected final values are exact tag, `draft: false`, `prerelease: true`, and `immutable: true`. Cluster Management then lists candidate only when it is same or newer than pinned baseline, descends from pinned commit, and passes release-manifest compatibility checks.
+
+Before publication, wait for packaging to pass and inspect both `borealis-node-bootstrap-linux-amd64.tar.gz` and `borealis-node-bootstrap-linux-amd64.json`. Verify GitHub asset digests and manifest release/source identity. These assets are delivered by the existing Engine; operators do not download or execute them on joining hosts. Packaging alone does not qualify SSH enrollment.
+
+??? note "Older qualification source"
+    Source predating central SSH packaging can still use the existing source-only rolling-update qualification path. Omit the packaging commands for that source; it cannot supply the node bootstrap required by SSH onboarding. Never substitute a bundle from another source commit.
 
 Deploy through **Admin > Cluster Management > Updates > Qualification Engine Version**. Qualification action updates whole cluster one node at time, requires `DEPLOY QUALIFICATION`, preserves unsupported warning, and defers contract-phase schema finalization until stable promotion.
 
@@ -122,14 +134,16 @@ gh run list --repo "${REPOSITORY}" \
   --event workflow_dispatch --limit 5
 ```
 
-Wait for matching workflow run to pass. Draft must contain exactly these generated assets:
+Wait for matching workflow run to pass. Current-source draft must contain these generated assets:
 
 - `Install-Engine.sh`
 - `Engine.sh`
 - `borealis-engine-install-manifest.json`
 - `SHA256SUMS`
+- `borealis-node-bootstrap-linux-amd64.tar.gz`
+- `borealis-node-bootstrap-linux-amd64.json`
 
-Inspect GitHub digests, download assets, verify checksums, and confirm manifest binds repository, release name, source SHA, platform list, asset URLs, sizes, and hashes.
+Inspect GitHub digests, download assets, verify installer checksums, and confirm both manifests bind repository, release name, source SHA, platform, asset URLs, sizes, and hashes. The node bootstrap manifest records its archive and node-manager hashes separately from installer `SHA256SUMS`. Older source without the node packager retains the four-file standalone installer bundle; it cannot supply SSH onboarding assets.
 
 ```sh
 gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
@@ -152,7 +166,7 @@ gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
   --jq '{tag_name,draft,prerelease,immutable,assets:[.assets[]|{name,size,digest}]}'
 ```
 
-Expected final values are exact tag, `draft: false`, `prerelease: false`, `immutable: true`, and four assets with `sha256:` digests. Stable `Install-Engine.sh` rejects release when any identity, immutability, digest, manifest, platform, size, URL, or tag-to-commit check fails.
+Expected final values are exact tag, `draft: false`, `prerelease: false`, `immutable: true`, and all expected assets with `sha256:` digests. Stable `Install-Engine.sh` rejects release when any identity, immutability, digest, manifest, platform, size, URL, or tag-to-commit check fails.
 
 After publication, validate exact release on fresh host using [Deploying Engine](deploying-the-engine.md). Promote qualification cluster through stable whole-cluster action even when stable and qualification tags resolve to same commit; promotion records supported channel and completes pending schema contract phase.
 
@@ -182,8 +196,14 @@ Do not use deletion as version rollback. Clusters reject older or unrelated targ
 
     ### Source map
 
-    - `.github/workflows/publish-engine-release-assets.yml` packages stable draft only and refuses non-stable tag, published release, or GitHub pre-release. GitHub's workflow token cannot query immutable-release setting because endpoint requires repository Administration permission; maintainer performs that check before dispatch.
+    - `.github/workflows/publish-engine-release-assets.yml` requires an unpublished draft and matching stable/qualification tag channel. Stable source retains installer packaging; source containing the node packager also builds SSH bootstrap assets. Qualification packaging requires the node packager and omits standalone installer assets. GitHub's workflow token cannot query immutable-release setting because endpoint requires repository Administration permission; maintainer performs that check before dispatch. Qualification from a reviewed unmerged PR dispatches the existing workflow at its exact release tag before publication.
     - `Tests/tools/build_engine_release_assets.py` copies exact tag's `Install-Engine.sh` and `Engine.sh`, writes installer manifest, and generates `SHA256SUMS`.
+    - `Tests/tools/build_node_bootstrap_assets.py` verifies the local tag resolves to the requested full SHA, makes a separate shallow Git clone through Git's protocol, and builds that clone's node manager using Go1.25.12 with Linux/AMD64, CGO disabled, readonly modules and trimmed build paths. Bundle contains clean `source/`, `bin/borealis-node-manager` and `identity.json`; the outer manifest binds archive hash/size and inner source-tree/binary identity. No operator runtime, untracked file, local Git configuration, credential helper, historical revision or working-tree edit is included. Current contract rejects tracked symlinks/submodules before checkout/build. Normalized archive metadata and zero-stat Git index make repeated packaging reproducible. Existing assets are never overwritten; compressed bundle limit256MiB. SBOM records compiler/runtime use.
+    - `cluster_ssh_bootstrap.go` refreshes published immutable GitHub release/channel/tag/source identity independently of picker cache. It requires unique uploaded manifest/archive asset IDs, exact repository URLs, positive bounded sizes and GitHub SHA256 digests. Strict metadata rejects duplicate keys, case aliases and null authorization fields; strict manifests additionally reject unknown/missing fields, invalid UTF-8 and trailing JSON. Qualification requires explicit operation opt-in. Release compatibility/ancestry and controller authority remain caller requirements.
+    - [GitHub release asset API](https://docs.github.com/en/rest/releases/assets) returns binary200 or302. Bootstrap downloads use authenticated API asset IDs, then at most one fresh unauthenticated request to the exact HTTPS `release-assets.githubusercontent.com/github-production-release-asset/` destination. No Authorization, cookie or Referer reaches CDN; signed URL and remote error text stay out of diagnostics. Redirects from metadata endpoints, second asset redirects, content encoding, changed Content-Length, sizes or digests fail closed. Existing API-base override remains trusted deployment/test configuration; manifest URLs never choose download authority.
+    - `internal/clusterbootstrap` hashes compressed input before scanning. It bounds manifests16KiB, archive256MiB, expansion1GiB and entries20000, rejects links/special files, unsafe paths, duplicates, unsupported Git metadata, gzip concatenation/trailing bytes and checksum errors. Complete scan verifies inner identity and node-manager digest before any extraction. New private0700 scratch contains regular files only; failed scratch is removed and successful caller must close it after transfer.
+    - Source verification checks fixed Git config and exact HEAD/shallow boundaries before invoking trusted host Git with inherited `GIT_*` settings removed, hooks/fsmonitor disabled, network protocols disabled, bounded output and45second command deadlines. `fsck`, original tag, source tree and single commit must match; every tracked regular file/mode/blob is compared without executing source filters. ELF/Go build metadata must match LinuxAMD64/CGO0/Go1.25.12 and node-manager module path. Archive and source verification run under the download caller's five-minute context. Git already ships in API runtime; callers in other runtime images must supply it before enabling this path.
+    - The packaging tool does not attest publication or authorize a host mutation. Download/verification functions are available for the unfinished S01 worker; no queue or SSH preparation caller is enabled yet. Archive availability does not enable the current connection-check dialog to join nodes. [S01](https://github.com/bunny-lab-io/Borealis/issues/521) still owns fixed remote transfer/execution, lease fencing, identity delivery and admission.
     - `Install-Engine.sh` accepts only published, non-prerelease, immutable stable release and validates GitHub plus manifest identities before invoking `Engine.sh`.
     - `Data/Engine/release-manifest.json` controls cluster release compatibility independently from standalone installer manifest.
     - `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go` requires published `immutable: true` metadata and matching channel, resolves the tag once, reads the compatibility manifest through that full SHA, and verifies ancestry. Queue requests refresh publication metadata independently of the picker cache. Redirects, oversized or trailing JSON, unavailable metadata, and missing/mismatched manifests fail closed.

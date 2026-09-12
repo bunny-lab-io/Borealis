@@ -36,6 +36,8 @@ const state = vi.hoisted(() => ({
   nodes: null,
   admissions: null,
   snapshotReceivedAt: null,
+  activeOperationID: "",
+  pageChrome: null,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -48,6 +50,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
         enabled: state.enabled,
         status: state.clusterStatus,
         active_size: state.activeSize,
+        active_operation_id: state.activeOperationID,
         desired_size: state.desiredSize,
         baseline_release: "2026.08.1",
         release_channel: state.releaseChannel,
@@ -102,7 +105,7 @@ vi.mock("@/app/hooks/useAppNotifications.js", () => ({
 }));
 
 vi.mock("@/app/hooks/useRoutePageChrome.js", () => ({
-  useRoutePageChrome: vi.fn(),
+  useRoutePageChrome: (value) => { state.pageChrome = value; },
 }));
 
 function renderClusterManagement(initialEntry = "/cluster-management") {
@@ -136,8 +139,66 @@ describe("Cluster Management", () => {
     state.nodes = null;
     state.admissions = null;
     state.snapshotReceivedAt = null;
+    state.activeOperationID = "";
+    state.pageChrome = null;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each(["pair", "replacement"])("opens complete %s inspection from current cluster topology", async (mode) => {
+    state.activeSize = mode === "pair" ? 1 : 2;
+    state.clusterStatus = mode === "pair" ? "Healthy" : "Degraded Quorum";
+    state.hmrState = "inactive"; state.admissions = [];
+    state.nodes = Array.from({ length: state.activeSize }, (_, i) => ({ id: `source-${i}`, membership_state: "Active", application_state: "active" }));
+    renderClusterManagement();
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.disabled).toBe(false);
+    act(() => action.onClick());
+    expect(await screen.findByText(`Inspect Engine host 1 of ${mode === "pair" ? 2 : 1}`)).toBeInTheDocument();
+  });
+
+  it.each(["stale", "future timestamp", "isolation", "active operation", "drain", "admission", "database", "three members"])("blocks new inspection with %s", (mode) => {
+    state.activeSize = 1; state.desiredSize = 1; state.hmrState = "inactive"; state.admissions = [];
+    state.nodes = [{ id: "source", membership_state: "Active", application_state: "active" }];
+    if (mode === "stale") state.snapshotReceivedAt = Date.now() - 16000;
+    if (mode === "future timestamp") state.snapshotReceivedAt = Date.now() + 16000;
+    if (mode === "isolation") state.hmrState = "active";
+    if (mode === "active operation") state.activeOperationID = "11111111-1111-4111-8111-111111111111";
+    if (mode === "drain") state.nodes[0].application_state = "drained";
+    if (mode === "admission") state.admissions = [{ state: "Recovery Required" }];
+    if (mode === "database") state.database.fully_ready = false;
+    if (mode === "three members") { state.activeSize = 3; state.desiredSize = 3; }
+    renderClusterManagement();
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.disabled).toBe(true);
+    act(() => action.onClick());
+    expect(screen.queryByText(/Inspect Engine host 1 of/)).toBeNull();
+  });
+
+  it("resumes public inspection UUID from URL without credential submission", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const fetch = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: "ssh_onboarding_not_found" }) });
+    vi.stubGlobal("fetch", fetch);
+    renderClusterManagement(`/cluster-management?tab=overview&inspection=${id}`);
+    await screen.findByText(/Submission is not recorded yet/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe(`/api/server/cluster/onboarding/operations/${id}`);
+    expect(fetch.mock.calls[0][1].method).toBeUndefined();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
+  });
+
+  it("opens active inspection from header while keeping admission and generic cancellation separate", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    state.activeOperationID = id;
+    state.operations = [{ id, kind: "ssh_onboarding", state: "waiting", current_step: "qualify_ssh_targets" }];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    renderClusterManagement("/cluster-management?tab=events");
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.label).toBe("View Host Inspection");
+    expect(friendlyClusterOperationName(state.operations[0])).toBe("SSH Host Inspection");
+    act(() => action.onClick());
+    expect(await screen.findByText("Engine host inspection")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
   });
 
   it("keeps recorded release identity separate from report freshness and runtime verification", () => {

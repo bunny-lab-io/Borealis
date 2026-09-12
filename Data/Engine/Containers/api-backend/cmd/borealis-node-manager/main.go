@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -68,7 +69,7 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
 	switch os.Args[1] {
 	case "serve":
@@ -81,10 +82,18 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "source-network-client":
+		if sourceNetworkClient(os.Args[2:]) != nil {
+			fatalf("source network observation unavailable")
+		}
 	case "activate-update":
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":
 		shutdownHandoff()
+	case "bootstrap-session":
+		bootstrapSession(os.Args[2:])
+	case "bootstrap-session-contained":
+		bootstrapSessionContained(os.Args[2:])
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}
@@ -247,7 +256,7 @@ func client(args []string) {
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"StageRevisionImages": true,
-		"InspectHealth":       true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"InspectHealth":       true, "InspectSourceNetwork": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
 		"RunSchemaPhase":         true,
 		"PrepareMemberRemoval":   true,
 		"RunK3sProbeConformance": true,
@@ -480,6 +489,8 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
+	case "InspectSourceNetwork":
+		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
 	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
@@ -524,6 +535,11 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
 		return m.inspectHealth(ctx)
+	case "InspectSourceNetwork":
+		if len(request.Params) != 0 {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceNetwork(ctx)
 	case "InspectCandidateHealth":
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":

@@ -56,8 +56,12 @@ export function sanitizeNotificationMessage(value) {
 
 export function classifyInputField(field) {
   const key = String(field || "").toLowerCase().trim().replace(/^\[|\]$/g, "");
+  // Public SSH wire key is opaque protocol content. Its route validates bounded
+  // base64 and parses the key; random encoding must not trigger markup rules.
+  if (key === "host_key_base64") return FIELD_CLASS.CODE;
   if (
     key.includes("password") ||
+    key.includes("passphrase") ||
     key.includes("cipher") ||
     key.includes("secret") ||
     key.includes("token") ||

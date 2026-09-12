@@ -233,6 +233,7 @@ func (g *clusterControllerLeaseGuard) Close() {
 
 type kubernetesClusterStepRunner struct {
 	kube                          *kubernetesAPIClient
+	controllerHolder              string
 	db                            *sql.DB
 	namespace                     string
 	actionImage                   string
@@ -267,15 +268,17 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	hostname, _ := os.Hostname()
 	holder := firstText(strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_CONTROLLER_ID")), strings.TrimSpace(hostname)+"-"+newClusterUUID())
 	runner := &kubernetesClusterStepRunner{
-		kube:        kube,
-		db:          store.db,
-		namespace:   borealisOperatorNamespace(),
-		actionImage: strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
-		soak:        envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
+		controllerHolder: holder,
+		kube:             kube,
+		db:               store.db,
+		namespace:        borealisOperatorNamespace(),
+		actionImage:      strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
+		soak:             envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
 	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
 	runner.persistRemovalFence = controller.persistRemovalFence
 	healthServer := controller.healthServer()
+	healthServer.BaseContext = func(net.Listener) context.Context { return ctx }
 	healthExited := make(chan error, 1)
 	go func() {
 		err := healthServer.ListenAndServe()
@@ -301,7 +304,17 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	log.Printf("borealis-cluster-controller started holder=%s", holder)
+	nextSSHCleanup := time.Time{}
 	for {
+		if !time.Now().Before(nextSSHCleanup) {
+			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 5*time.Second)
+			cleanupErr := store.cleanupClusterSSHCredentials(cleanupCtx)
+			cleanupCancel()
+			if cleanupErr != nil {
+				log.Printf("cluster SSH credential cleanup unavailable")
+			}
+			nextSSHCleanup = time.Now().Add(30 * time.Second)
+		}
 		if err := controller.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("cluster controller reconcile failed: %v", err)
 		}
@@ -321,6 +334,9 @@ func clusterControllerEligible() bool {
 
 func (c *clusterController) healthServer() *http.Server {
 	mux := http.NewServeMux()
+	runner, _ := c.runner.(*kubernetesClusterStepRunner)
+	sourceBroker := newClusterSSHSourceBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHSourceBrokerPath, sourceBroker.handle)
 	mux.HandleFunc("GET /startup", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
@@ -336,7 +352,8 @@ func (c *clusterController) healthServer() *http.Server {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	return &http.Server{Addr: net.JoinHostPort("0.0.0.0", envDefault("BOREALIS_CLUSTER_CONTROLLER_PORT", "8090")), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	return &http.Server{Addr: net.JoinHostPort("0.0.0.0", envDefault("BOREALIS_CLUSTER_CONTROLLER_PORT", "8090")), Handler: mux,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
 }
 
 func (c *clusterController) runOnce(ctx context.Context) error {
@@ -384,6 +401,13 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if operation.Kind == "ssh_onboarding" {
+		var observe func(context.Context, string, any) error
+		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok && runner.kube != nil {
+			observe = runner.kube.getJSON
+		}
+		return c.runSSHInspectionParent(runCtx, operation, observe)
 	}
 	nodes, err := c.activeNodes(runCtx)
 	if err != nil {
@@ -976,6 +1000,8 @@ func clusterControllerStepTimeout(step string) time.Duration {
 func clusterOperationSteps(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerStep, error) {
 	base := []clusterControllerStep{{Name: "preflight"}}
 	switch operation.Kind {
+	case "ssh_onboarding":
+		return append(base, clusterControllerStep{Name: clusterSSHInspectionOperationStep}, clusterControllerStep{Name: clusterSSHQualificationStep}), nil
 	case "engine_update":
 		ordered, err := clusterUpdateNodes(operation, nodes)
 		if err != nil {
@@ -1334,6 +1360,7 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		  FROM engine.cluster_operations o
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
+		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting')
 		 FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
