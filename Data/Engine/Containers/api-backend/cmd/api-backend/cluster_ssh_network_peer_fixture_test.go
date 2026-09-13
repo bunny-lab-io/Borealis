@@ -48,6 +48,17 @@ func sshNetworkFixtureKeys(t *testing.T, cohort *clusterSSHInspectionCohort) map
 // Only synthetic protocol observations are served; no host commands execute.
 func sshNetworkFixturePeer(t *testing.T, ctx context.Context, item clusterSSHInspectedTarget, signer ssh.Signer,
 	link clusterbootstrap.ManagementLink, peers []string) (clusterremote.TargetManagementPeer, error) {
+	var result clusterremote.TargetManagementPeer
+	err := sshNetworkFixtureObserve(t, ctx, item, signer, link, peers, nil, func(client *clusterremote.Client) error {
+		var err error
+		result, err = readClusterSSHTargetNetwork(ctx, client, []byte("fixture-sudo"), item, peers, func(ctx context.Context) error { return ctx.Err() })
+		return err
+	})
+	return result, err
+}
+
+func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSHInspectedTarget, signer ssh.Signer,
+	link clusterbootstrap.ManagementLink, peers []string, arpWire []byte, consume func(*clusterremote.Client) error) error {
 	t.Helper()
 	prefix := netip.MustParsePrefix(link.Address)
 	routing := clusterremote.RoutedNetworkOwnership{Version: 1, Targets: clusterremote.RouteTargets{Management: item.Binding.Address, Peers: peers}, Resolved: peers,
@@ -112,6 +123,8 @@ func sshNetworkFixturePeer(t *testing.T, ctx context.Context, item clusterSSHIns
 					stdin, err := io.ReadAll(channel)
 					if err != nil || !bytes.Equal(stdin, []byte("fixture-sudo\n")) {
 						status = 1
+					} else if arpWire != nil && strings.Contains(command.Command, "observe_arp") {
+						_, _ = channel.Write(arpWire)
 					} else if strings.Contains(command.Command, "observe_management_link") {
 						_, _ = channel.Write(wire)
 					} else if strings.Contains(command.Command, "machine_id") {
@@ -136,8 +149,8 @@ func sshNetworkFixturePeer(t *testing.T, ctx context.Context, item clusterSSHIns
 	if err != nil {
 		listener.Close()
 		<-done
-		return clusterremote.TargetManagementPeer{}, err
+		return err
 	}
 	defer func() { client.Close(); <-done }()
-	return readClusterSSHTargetNetwork(ctx, client, []byte("fixture-sudo"), item, peers, func(ctx context.Context) error { return ctx.Err() })
+	return consume(client)
 }

@@ -168,9 +168,9 @@ def management_link(wire, namespace, address):
         raise ValueError()
     return {"interface": iface["ifname"], "index": iface["ifindex"], "address": str(prefix), "mac": mac, "network_namespace": namespace}
 
-def read_management_link(address):
+def read_management_link(address, timeout=2.5):
     namespace = management_namespace()
-    wire = management_json(bounded_command(["/usr/sbin/ip", "-j", "-d", "-4", "address", "show"]))
+    wire = management_json(bounded_command(["/usr/sbin/ip", "-j", "-d", "-4", "address", "show"], timeout))
     link = management_link(wire, namespace, address)
     if namespace != management_namespace():
         raise ValueError()

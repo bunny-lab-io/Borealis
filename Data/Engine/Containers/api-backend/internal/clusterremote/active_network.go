@@ -119,13 +119,15 @@ if __name__ == "__main__":
 const activeNetworkLibraryScript = `
 import ipaddress, selectors, subprocess, time
 
-def bounded_command(arguments):
+def bounded_command(arguments, timeout=2.5):
     # Only the fixed busctl/ip calls below reach this function. No inherited
     # bus address, pager, proxy, Python path, caller environment or stdin.
+    if not 0 < timeout <= 2.5:
+        raise ValueError()
+    deadline = time.monotonic() + timeout
     child = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, close_fds=True,
                              env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
-    deadline = time.monotonic() + 2.5
     result = bytearray()
     try:
         with selectors.DefaultSelector() as ready:
