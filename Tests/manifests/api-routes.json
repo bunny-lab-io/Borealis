@@ -992,7 +992,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 343,
+    "line": 346,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1001,7 +1001,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 346,
+    "line": 349,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1010,7 +1010,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 340,
+    "line": 343,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1860,6 +1860,24 @@
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_source_broker_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /internal/cluster/ssh-vip-check",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+    "line": 342,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-target-lease",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /internal/cluster/ssh-vip-scope",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+    "line": 341,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-target-lease",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",
     "test_exemption": null
   },
   {

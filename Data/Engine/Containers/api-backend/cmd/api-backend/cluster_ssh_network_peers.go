@@ -64,6 +64,17 @@ func readClusterSSHTargetNetwork(ctx context.Context, client *clusterremote.Clie
 func withClusterSSHNetworkPeers(parent context.Context, authority clusterSSHPreparationAuthorityRead,
 	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
 	consume func(context.Context, []clusterSSHManagementPeer, clusterSSHPreparationChecks) error) error {
+	if consume == nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return withClusterSSHNetworkInputs(parent, authority, source, target, refresh, func(ctx context.Context, peers []clusterSSHManagementPeer, _ []clusterbootstrap.SourceNetwork, checks clusterSSHPreparationChecks) error {
+		return consume(ctx, peers, checks)
+	})
+}
+
+func withClusterSSHNetworkInputs(parent context.Context, authority clusterSSHPreparationAuthorityRead,
+	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
+	consume func(context.Context, []clusterSSHManagementPeer, []clusterbootstrap.SourceNetwork, clusterSSHPreparationChecks) error) error {
 	if authority == nil || source == nil || target == nil || refresh == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -171,7 +182,7 @@ func withClusterSSHNetworkPeers(parent context.Context, authority clusterSSHPrep
 			Inputs:    clusterSSHPreparationBoundary(ctx, check, read),
 			Authority: clusterSSHPreparationBoundary(ctx, check, func(context.Context) error { return nil }),
 		}
-		if consume(ctx, slices.Clone(retained), checks) != nil {
+		if consume(ctx, slices.Clone(retained), slices.Clone(retainedSources), checks) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		return checks.Inputs(ctx)

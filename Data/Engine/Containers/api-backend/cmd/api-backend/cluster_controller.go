@@ -337,6 +337,9 @@ func (c *clusterController) healthServer() *http.Server {
 	runner, _ := c.runner.(*kubernetesClusterStepRunner)
 	sourceBroker := newClusterSSHSourceBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
 	mux.HandleFunc("POST "+clusterSSHSourceBrokerPath, sourceBroker.handle)
+	vipBroker := newClusterSSHVIPBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHVIPStartPath, vipBroker.start)
+	mux.HandleFunc("POST "+clusterSSHVIPCheckPath, vipBroker.check)
 	mux.HandleFunc("GET /startup", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})

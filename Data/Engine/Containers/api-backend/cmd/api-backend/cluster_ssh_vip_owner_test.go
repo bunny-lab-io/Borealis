@@ -325,13 +325,15 @@ func TestClusterSSHVIPLeaseFixedHTTPBoundary(t *testing.T) {
 	}
 }
 
-func TestClusterSSHVIPOwnerThroughFreshTLSJobs(t *testing.T) {
-	a, networks, lease := sshVIPFixture(t, true)
-	authority := func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }
+func sshVIPKubernetesFixture(t *testing.T, a clusterSSHPreparationAuthority, networks []clusterbootstrap.SourceNetwork, lease clusterbootstrap.VIPLease, observe func(context.Context)) (*kubernetesAPIClient, *atomic.Int64) {
+	t.Helper()
 	var mu sync.Mutex
 	jobs := map[string]map[string]any{}
-	var renewals, posts, consumed atomic.Int64
+	var renewals, posts atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if observe != nil {
+			observe(r.Context())
+		}
 		if r.Header.Get("Authorization") != "Bearer private-fixture" {
 			t.Error("missing controller credential")
 		}
@@ -411,8 +413,16 @@ func TestClusterSSHVIPOwnerThroughFreshTLSJobs(t *testing.T) {
 		t.Error("unexpected request", r.Method, r.URL.Path)
 		w.WriteHeader(400)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	kube := &kubernetesAPIClient{baseURL: server.URL, token: "private-fixture", httpClient: server.Client()}
+	return kube, &posts
+}
+
+func TestClusterSSHVIPOwnerThroughFreshTLSJobs(t *testing.T) {
+	a, networks, lease := sshVIPFixture(t, true)
+	authority := func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }
+	kube, posts := sshVIPKubernetesFixture(t, a, networks, lease, nil)
+	var consumed atomic.Int64
 	runner := &kubernetesClusterStepRunner{kube: kube, namespace: "borealis", controllerHolder: a.Lease.ControllerHolder, actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}
 	consume := func(ctx context.Context, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
 		consumed.Add(1)
