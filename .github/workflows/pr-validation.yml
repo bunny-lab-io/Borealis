@@ -146,7 +146,7 @@ jobs:
       - name: Install isolated Netplan fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes python3-netplan python3-yaml
+          sudo apt-get install --yes netplan.io python3-netplan python3-yaml
       - run: ./Tests/run-engine-go.sh
         env:
           CGO_ENABLED: "1"

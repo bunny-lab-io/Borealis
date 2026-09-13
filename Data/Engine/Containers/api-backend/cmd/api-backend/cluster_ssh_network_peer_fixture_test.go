@@ -58,7 +58,7 @@ func sshNetworkFixturePeer(t *testing.T, ctx context.Context, item clusterSSHIns
 }
 
 func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSHInspectedTarget, signer ssh.Signer,
-	link clusterbootstrap.ManagementLink, peers []string, arpWire []byte, consume func(*clusterremote.Client) error) error {
+	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, consume func(*clusterremote.Client) error) error {
 	t.Helper()
 	prefix := netip.MustParsePrefix(link.Address)
 	routing := clusterremote.RoutedNetworkOwnership{Version: 1, Targets: clusterremote.RouteTargets{Management: item.Binding.Address, Peers: peers}, Resolved: peers,
@@ -123,8 +123,14 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 					stdin, err := io.ReadAll(channel)
 					if err != nil || !bytes.Equal(stdin, []byte("fixture-sudo\n")) {
 						status = 1
-					} else if arpWire != nil && strings.Contains(command.Command, "observe_arp") {
-						_, _ = channel.Write(arpWire)
+					} else if observationWire != nil && (strings.Contains(command.Command, "observe_arp") || strings.Contains(command.Command, "observe_network_render")) {
+						_, _ = channel.Write(observationWire)
+					} else if strings.Contains(command.Command, "observe_network_render") {
+						result, _ := json.Marshal(struct {
+							Version    int             `json:"version"`
+							Management json.RawMessage `json:"management"`
+						}{1, wire})
+						_, _ = channel.Write(result)
 					} else if strings.Contains(command.Command, "observe_management_link") {
 						_, _ = channel.Write(wire)
 					} else if strings.Contains(command.Command, "machine_id") {
