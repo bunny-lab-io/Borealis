@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Stable draft release tag (YYYY.MM.REVISION[.HOTFIX])
+        description: Stable or qualification draft release tag (YYYY.MM.REVISION[.HOTFIX][-rc.N])
         required: true
         type: string
 
@@ -14,24 +14,28 @@ permissions:
 jobs:
   package-engine-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Require stable draft release
+      - name: Require draft release with matching channel
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release }}
         run: |
-          [[ "$RELEASE_TAG" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(\.[0-9]+)?$ ]] || {
-            echo "Release must use stable YYYY.MM.REVISION[.HOTFIX] form." >&2
+          [[ "$RELEASE_TAG" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(\.[0-9]+)?(-rc\.[1-9][0-9]*)?$ ]] || {
+            echo "Release must use stable or qualification dotted tag form." >&2
             exit 64
           }
+          prerelease=false
+          if [[ "$RELEASE_TAG" == *-rc.* ]]; then prerelease=true; fi
           # Immutable-release settings require repository Administration access,
           # which GitHub's workflow token does not receive. Maintainer verifies
           # setting before dispatch; bootstrap verifies release after publication.
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json isDraft,isPrerelease,tagName \
             --jq '[.tagName, .isDraft, .isPrerelease] | @tsv' \
-            | grep -Fx "${RELEASE_TAG}"$'\ttrue\tfalse'
+            | grep -Fx "${RELEASE_TAG}"$'\ttrue\t'"${prerelease}"
+          printf 'prerelease=%s\n' "$prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Checkout immutable release tag
         uses: actions/checkout@v7
@@ -44,7 +48,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up node-manager compiler
+        if: hashFiles('Tests/tools/build_node_bootstrap_assets.py') != ''
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.25.12
+          cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+
       - name: Build release assets
+        if: steps.release.outputs.prerelease == 'false'
         env:
           RELEASE_TAG: ${{ inputs.release }}
         run: |
@@ -58,7 +70,25 @@ jobs:
             --bootstrap-script Install-Engine.sh \
             --output-dir "$RUNNER_TEMP/borealis-engine-release"
 
-      - name: Upload assets to draft release
+      - name: Build central SSH bootstrap assets
+        if: hashFiles('Tests/tools/build_node_bootstrap_assets.py') != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          python3 Tests/tools/build_node_bootstrap_assets.py \
+            --source . --release "$RELEASE_TAG" \
+            --source-sha "$(git rev-parse HEAD)" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output-dir "$RUNNER_TEMP/borealis-node-bootstrap"
+
+      - name: Reject qualification source without bootstrap packager
+        if: steps.release.outputs.prerelease == 'true' && hashFiles('Tests/tools/build_node_bootstrap_assets.py') == ''
+        run: |
+          echo "Source predates central SSH bootstrap packaging; publish legacy qualification through documented source-only path." >&2
+          exit 64
+
+      - name: Upload standalone installer assets to draft release
+        if: steps.release.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release }}
@@ -68,4 +98,15 @@ jobs:
             "$RUNNER_TEMP/borealis-engine-release/Engine.sh" \
             "$RUNNER_TEMP/borealis-engine-release/borealis-engine-install-manifest.json" \
             "$RUNNER_TEMP/borealis-engine-release/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Upload central SSH bootstrap assets to draft release
+        if: hashFiles('Tests/tools/build_node_bootstrap_assets.py') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/borealis-node-bootstrap/borealis-node-bootstrap-linux-amd64.tar.gz" \
+            "$RUNNER_TEMP/borealis-node-bootstrap/borealis-node-bootstrap-linux-amd64.json" \
             --repo "$GITHUB_REPOSITORY"

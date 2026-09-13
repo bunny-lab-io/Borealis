@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -68,7 +69,7 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
 	switch os.Args[1] {
 	case "serve":
@@ -81,10 +82,22 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "source-network-client":
+		if sourceNetworkClient(os.Args[2:]) != nil {
+			fatalf("source network observation unavailable")
+		}
+	case "source-vip-client":
+		if sourceObservationClient(os.Args[2:], true) != nil {
+			fatalf("source VIP observation unavailable")
+		}
 	case "activate-update":
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":
 		shutdownHandoff()
+	case "bootstrap-session":
+		bootstrapSession(os.Args[2:])
+	case "bootstrap-session-contained":
+		bootstrapSessionContained(os.Args[2:])
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}
@@ -247,7 +260,7 @@ func client(args []string) {
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"StageRevisionImages": true,
-		"InspectHealth":       true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"InspectHealth":       true, "InspectSourceNetwork": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
 		"RunSchemaPhase":         true,
 		"PrepareMemberRemoval":   true,
 		"RunK3sProbeConformance": true,
@@ -468,6 +481,12 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": err.Error()})
 		return
 	}
+	if strings.TrimSpace(request.Verb) == "InspectVIPNetwork" {
+		if _, err := clusterbootstrap.ParseVIPActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
@@ -480,6 +499,8 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
+	case "InspectSourceNetwork", "InspectVIPNetwork":
+		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
 	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
@@ -524,6 +545,17 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
 		return m.inspectHealth(ctx)
+	case "InspectSourceNetwork":
+		if len(request.Params) != 0 {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceNetwork(ctx)
+	case "InspectVIPNetwork":
+		address, ok := request.Params["vip"].(string)
+		if len(request.Params) != 1 || !ok || !clusterbootstrap.ValidVIPRequest(address) {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceVIPNetwork(ctx, address)
 	case "InspectCandidateHealth":
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":

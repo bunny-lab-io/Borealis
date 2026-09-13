@@ -138,6 +138,7 @@ Use `--network-mode local` for Internal-Only restore validation. After the clust
     - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, patch policies, patch allow/block rules, patch targets/exclusions, patch catalog cache, metadata definitions/values, and current software and patch inventory.
 
     ### Excluded state
+    - Temporary cluster SSH/sudo provisioning credentials and target-worker state. Their tables are outside the configuration backup allowlist. Restore's Aegis-state deletion also removes active provisioning credentials through a foreign key cascade, even when the restored Aegis generation matches. Retained cluster target evidence requires reconciliation and credential resubmission before further remote work; it is not replay authorization.
     - Engine logs and rotated logs.
     - Engine service log files are removed from mounted log roots during restore so the restored Engine starts from a clean log surface after restart.
     - Saved views.

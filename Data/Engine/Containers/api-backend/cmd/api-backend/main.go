@@ -173,10 +173,12 @@ func main() {
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, fallback)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
+	stopSSHInspections := func() {}
 	if apiBackgroundLoopsEnabled() {
 		vpnRuntime.startClusterPeerReconciler(rootCtx)
 		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
 		startServerLogRetentionRuntime(rootCtx)
+		stopSSHInspections = startClusterSSHInspectionRuntime(rootCtx, auth)
 	} else {
 		log.Printf("Go api-backend background loops disabled")
 	}
@@ -221,6 +223,8 @@ func main() {
 		}
 	}
 
+	// Cancel and join SSH work before Aegis listeners or database pool close.
+	stopSSHInspections()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

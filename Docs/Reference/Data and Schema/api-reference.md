@@ -8,6 +8,9 @@ Public `/api/*` routes validate path/query/body input before domain work where s
 
     ### API endpoints
 
+    - `POST /api/server/cluster/onboarding/operations` (Admin) - queue a complete approved SSH inspection cohort using a public request UUID and one-time Linux credentials. Does not authorize preparation or joining.
+    - `GET /api/server/cluster/onboarding/operations/{id}` (Admin) - recover submission receipt and read public target progress/report ownership without credential material. Exact request/response contracts and field validation live in [Managing Engine Clusters](../../Engine/managing-engine-clusters.md).
+
     ### Core
     - `GET /health` (No Authentication) - liveness probe.
 
