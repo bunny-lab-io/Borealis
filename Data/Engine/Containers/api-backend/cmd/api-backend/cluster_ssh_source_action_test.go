@@ -51,10 +51,17 @@ func sourceActionPod(t *testing.T, job map[string]any, network clusterbootstrap.
 }
 
 func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
-	for _, mode := range []string{"success", "source reader", "lost authority", "wrong controller", "foreign member", "mutable image", "collision", "lost POST", "job replaced", "job missing metadata", "job altered", "job image", "job failed", "duplicate conditions", "two pods", "paginated pods", "pod replaced", "wrong owner", "pod deleting", "wrong nonce", "wrong receipt pod", "private receipt", "wrong source", "wrong management link", "sidecar", "token mounted", "privileged", "logs fallback", "changed mounts", "pod retry", "pod failed", "cancel", "deadline"} {
+	for _, mode := range []string{"success", "source reader", "lost authority", "wrong controller", "foreign member", "mutable image", "collision", "lost POST", "job replaced", "job missing metadata", "job altered", "job image", "job failed", "duplicate conditions", "two pods", "paginated pods", "pod replaced", "wrong owner", "pod deleting", "wrong nonce", "wrong receipt pod", "private receipt", "wrong source", "wrong management link", "sidecar", "token mounted", "privileged", "logs fallback", "changed mounts", "pod retry", "pod failed", "cancel", "deadline", "VIP success", "VIP absent", "VIP wrong address", "VIP wrong command", "VIP wrong args", "VIP legacy receipt", "VIP distinct addresses", "VIP aliased authority"} {
 		t.Run(mode, func(t *testing.T) {
 			cohort, source, lease, baseline := sshPreparationFixture(t)
 			current := clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}
+			vipMode := strings.HasPrefix(mode, "VIP ")
+			if vipMode && mode != "VIP distinct addresses" {
+				current.Source.EdgeVIP = current.Source.ControlPlaneVIP
+			}
+			if mode == "VIP distinct addresses" {
+				current.Source.EdgeVIP = "192.168.90.249"
+			}
 			member := source.Members[0]
 			network := sshSourceNetworkFixture(member, current.K3sVersion)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -68,6 +75,9 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 			var posts, podReads atomic.Int64
 			authority := func(context.Context) (clusterSSHPreparationAuthority, error) {
 				authorityCalls++
+				if mode == "VIP aliased authority" && authorityCalls == 3 {
+					current.Cohort.Targets[1].Report.BootID = newClusterUUID()
+				}
 				if mode == "lost authority" && authorityCalls >= 3 {
 					return clusterSSHPreparationAuthority{}, errors.New("private authority")
 				}
@@ -114,6 +124,13 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 						return
 					}
 					metadata := sourceActionMap(job, "metadata")
+					if vipMode {
+						container := anySlice(sourceActionMap(sourceActionMap(sourceActionMap(job, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
+						args := clusterStringSlice(container["args"])
+						if strings.Join(clusterStringSlice(container["command"]), " ") != "/usr/local/bin/borealis-node-manager source-vip-client" || len(args) != 2 || args[1] != current.Source.ControlPlaneVIP {
+							t.Error("VIP Job command/args changed")
+						}
+					}
 					metadata["uid"] = newClusterUUID()
 					names <- metadata["name"].(string)
 					job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
@@ -177,6 +194,34 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 				meta, spec, status := sourceActionMap(p, "metadata"), sourceActionMap(p, "spec"), sourceActionMap(p, "status")
 				c := anySlice(status["containerStatuses"])[0].(map[string]any)
 				terminated := sourceActionMap(sourceActionMap(c, "state"), "terminated")
+				if vipMode && mode != "VIP legacy receipt" {
+					address := current.Source.ControlPlaneVIP
+					if mode == "VIP wrong address" {
+						address = "192.168.90.249"
+					}
+					vip := clusterbootstrap.VIPAddress{Address: address, NetworkNamespace: n.ManagementLink.NetworkNamespace}
+					if mode != "VIP absent" {
+						vip.Present = true
+						vip.Interface = n.ManagementLink.Interface
+						vip.Index = n.ManagementLink.Index
+						vip.MAC = n.ManagementLink.MAC
+					}
+					raw, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectVIPNetwork", "result": map[string]any{"source_vip_network": clusterbootstrap.SourceVIPNetwork{Network: n, VIP: vip}}})
+					nonce := clusterStringSlice(anySlice(spec["containers"])[0].(map[string]any)["args"])[0]
+					receipt, err := clusterbootstrap.NewSourceVIPReceipt(raw, nonce, sourceActionMap(job, "metadata")["uid"].(string), podUID, address)
+					if err != nil {
+						t.Error("VIP fixture failed", err)
+						w.WriteHeader(500)
+						return
+					}
+					terminated["message"] = string(receipt)
+					if mode == "VIP wrong command" {
+						anySlice(spec["containers"])[0].(map[string]any)["command"] = []string{"/usr/local/bin/borealis-node-manager", "source-network-client"}
+					}
+					if mode == "VIP wrong args" {
+						anySlice(spec["containers"])[0].(map[string]any)["args"] = []string{nonce, "192.168.90.249"}
+					}
+				}
 				switch mode {
 				case "pod replaced":
 					if podReads.Load() == 1 {
@@ -231,6 +276,27 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 			}
 			if mode == "foreign member" {
 				member.NodeUID = newClusterUUID()
+			}
+			if vipMode {
+				read := runner.newSSHSourceVIPRead(authority)
+				start := time.Now()
+				got, err := read(ctx, member)
+				if mode == "VIP success" || mode == "VIP absent" {
+					if err != nil || got.value.Network != network || got.value.VIP.Present != (mode == "VIP success") || got.started.Before(start) {
+						t.Fatal("VIP observation failed", err)
+					}
+					start = time.Now()
+					got, err = read(ctx, member)
+					if err != nil || got.started.Before(start) || posts.Load() != 2 || <-names == <-names {
+						t.Fatal("VIP observation reused Job", err)
+					}
+				} else if err != clusterbootstrap.ErrPreparationConfig || got != (clusterSSHSourceVIPObservation{}) || posts.Load() > 1 {
+					t.Fatal("unsafe VIP observation", err)
+				}
+				if mode == "VIP distinct addresses" && posts.Load() != 0 {
+					t.Fatal("unsupported VIP topology created Job")
+				}
+				return
 			}
 			read := runner.newSSHSourceNetworkRead(authority)
 			if mode == "source reader" {

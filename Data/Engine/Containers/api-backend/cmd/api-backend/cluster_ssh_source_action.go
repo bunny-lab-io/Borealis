@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -17,9 +16,35 @@ import (
 // broker supplies current Aegis/worker authority; no preparation phase is
 // activated by constructing this reader.
 func (r *kubernetesClusterStepRunner) newSSHSourceNetworkRead(authority clusterSSHPreparationAuthorityRead) clusterSSHSourceNetworkRead {
-	return func(parent context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
-		fail := func() (clusterbootstrap.SourceNetwork, error) {
-			return clusterbootstrap.SourceNetwork{}, clusterbootstrap.ErrPreparationConfig
+	read := r.newSSHSourceObservationRead(authority, false)
+	return func(ctx context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
+		value, err := read(ctx, member)
+		return value.Network, err
+	}
+}
+
+type clusterSSHSourceVIPObservation struct {
+	value   clusterbootstrap.SourceVIPNetwork
+	started time.Time
+}
+type clusterSSHSourceVIPRead func(context.Context, clusterSSHSourceMember) (clusterSSHSourceVIPObservation, error)
+
+func (r *kubernetesClusterStepRunner) newSSHSourceVIPRead(authority clusterSSHPreparationAuthorityRead) clusterSSHSourceVIPRead {
+	read := r.newSSHSourceObservationRead(authority, true)
+	return func(ctx context.Context, member clusterSSHSourceMember) (clusterSSHSourceVIPObservation, error) {
+		started := time.Now()
+		value, err := read(ctx, member)
+		if err != nil || ctx.Err() != nil {
+			return clusterSSHSourceVIPObservation{}, clusterbootstrap.ErrPreparationConfig
+		}
+		return clusterSSHSourceVIPObservation{value, started}, nil
+	}
+}
+
+func (r *kubernetesClusterStepRunner) newSSHSourceObservationRead(authority clusterSSHPreparationAuthorityRead, inspectVIP bool) func(context.Context, clusterSSHSourceMember) (clusterbootstrap.SourceVIPNetwork, error) {
+	return func(parent context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceVIPNetwork, error) {
+		fail := func() (clusterbootstrap.SourceVIPNetwork, error) {
+			return clusterbootstrap.SourceVIPNetwork{}, clusterbootstrap.ErrPreparationConfig
 		}
 		if r == nil || r.kube == nil || r.namespace != "borealis" || r.controllerHolder == "" || authority == nil ||
 			!borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) {
@@ -41,15 +66,37 @@ func (r *kubernetesClusterStepRunner) newSSHSourceNetworkRead(authority clusterS
 		if !found {
 			return fail()
 		}
+		address := ""
+		if inspectVIP {
+			address = before.Source.ControlPlaneVIP
+			if !clusterbootstrap.ValidVIPRequest(address) || address != before.Source.EdgeVIP {
+				return fail()
+			}
+		}
+		// Own canonical bytes: authority readers may reuse nested allocations.
+		original := before
+		original.Cohort.ObservedAt = 0
+		frozen, err := json.Marshal(original)
+		if err != nil {
+			return fail()
+		}
 		check := func() bool {
 			after, err := authority(ctx)
-			original := before
-			original.Cohort.ObservedAt, after.Cohort.ObservedAt = 0, 0
-			return err == nil && ctx.Err() == nil && reflect.DeepEqual(original, after)
+			if err != nil || ctx.Err() != nil || validateClusterSSHInspectionCohort(after.Cohort, after.Source) != nil {
+				return false
+			}
+			after.Cohort.ObservedAt = 0
+			wire, err := json.Marshal(after)
+			return err == nil && bytes.Equal(wire, frozen)
 		}
 		nonce := newClusterUUID()
 		name := "borealis-source-" + strings.ReplaceAll(nonce, "-", "")
 		manifest := clusterSSHSourceJobManifest(name, nonce, r.actionImage, member.Name, before.Lease.OperationID)
+		if inspectVIP {
+			c := anySlice(nestedMap(nestedMap(nestedMap(manifest, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
+			c["command"] = []string{"/usr/local/bin/borealis-node-manager", "source-vip-client"}
+			c["args"] = []string{nonce, address}
+		}
 		var job map[string]any
 		// One POST only. Conflict or an uncertain POST receipt fails this read;
 		// neither a name lookup nor old successful Job can substitute for it.
@@ -100,16 +147,28 @@ func (r *kubernetesClusterStepRunner) newSSHSourceNetworkRead(authority clusterS
 					return fail()
 				}
 				observedPodUID = podUID
-				network, complete, err := clusterSSHSourcePodResult(pods.Items[0], manifest, nonce, uid)
+				message, complete, err := clusterSSHSourcePodMessage(pods.Items[0], manifest, nonce, uid)
 				if err != nil {
 					return fail()
 				}
+				var value clusterbootstrap.SourceVIPNetwork
+				if message != "" {
+					if inspectVIP {
+						value, err = clusterbootstrap.ParseSourceVIPReceipt([]byte(message), nonce, uid, podUID, address)
+					} else {
+						value.Network, err = clusterbootstrap.ParseSourceNetworkReceipt([]byte(message), nonce, uid, podUID)
+					}
+					if err != nil {
+						return fail()
+					}
+				}
+				network := value.Network
 				if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
 					if network.NodeUID != member.NodeUID || network.Hostname != member.Name || network.MachineID != member.MachineID ||
 						network.BootID != member.BootID || !network.ManagementLink.MatchesAddress(member.Address) || network.K3sVersion != before.K3sVersion || !check() {
 						return fail()
 					}
-					return network, nil
+					return value, nil
 				}
 			}
 			select {
@@ -240,8 +299,21 @@ func validSourceConditions(status map[string]any) bool {
 }
 
 func clusterSSHSourcePodResult(pod, manifest map[string]any, nonce, jobUID string) (clusterbootstrap.SourceNetwork, bool, error) {
-	fail := func() (clusterbootstrap.SourceNetwork, bool, error) {
+	message, complete, err := clusterSSHSourcePodMessage(pod, manifest, nonce, jobUID)
+	if err != nil || message == "" {
+		return clusterbootstrap.SourceNetwork{}, complete, err
+	}
+	podUID, _ := nestedMap(pod, "metadata")["uid"].(string)
+	network, err := clusterbootstrap.ParseSourceNetworkReceipt([]byte(message), nonce, jobUID, podUID)
+	if err != nil {
 		return clusterbootstrap.SourceNetwork{}, false, clusterbootstrap.ErrPreparationConfig
+	}
+	return network, complete, nil
+}
+
+func clusterSSHSourcePodMessage(pod, manifest map[string]any, nonce, jobUID string) (string, bool, error) {
+	fail := func() (string, bool, error) {
+		return "", false, clusterbootstrap.ErrPreparationConfig
 	}
 	metadata, spec, status := nestedMap(pod, "metadata"), nestedMap(pod, "spec"), nestedMap(pod, "status")
 	podUID, _ := metadata["uid"].(string)
@@ -262,7 +334,7 @@ func clusterSSHSourcePodResult(pod, manifest map[string]any, nonce, jobUID strin
 	}
 	statuses := anySlice(status["containerStatuses"])
 	if len(statuses) == 0 && phase == "Pending" {
-		return clusterbootstrap.SourceNetwork{}, false, nil
+		return "", false, nil
 	}
 	if len(statuses) != 1 {
 		return fail()
@@ -273,15 +345,14 @@ func clusterSSHSourcePodResult(pod, manifest map[string]any, nonce, jobUID strin
 	}
 	terminated := nestedMap(nestedMap(c, "state"), "terminated")
 	if len(terminated) == 0 && phase != "Succeeded" {
-		return clusterbootstrap.SourceNetwork{}, false, nil
+		return "", false, nil
 	}
 	if !sourceCount(terminated["exitCode"], 0) || terminated["exitCode"] == nil || terminated["reason"] != "Completed" {
 		return fail()
 	}
 	message, _ := terminated["message"].(string)
-	network, err := clusterbootstrap.ParseSourceNetworkReceipt([]byte(message), nonce, jobUID, podUID)
-	if err != nil {
+	if message == "" || len(message) > clusterbootstrap.SourceNetworkReceiptLimit {
 		return fail()
 	}
-	return network, phase == "Succeeded", nil
+	return message, phase == "Succeeded", nil
 }

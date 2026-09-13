@@ -86,6 +86,10 @@ func main() {
 		if sourceNetworkClient(os.Args[2:]) != nil {
 			fatalf("source network observation unavailable")
 		}
+	case "source-vip-client":
+		if sourceObservationClient(os.Args[2:], true) != nil {
+			fatalf("source VIP observation unavailable")
+		}
 	case "activate-update":
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":
@@ -477,6 +481,12 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": err.Error()})
 		return
 	}
+	if strings.TrimSpace(request.Verb) == "InspectVIPNetwork" {
+		if _, err := clusterbootstrap.ParseVIPActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
@@ -489,7 +499,7 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
-	case "InspectSourceNetwork":
+	case "InspectSourceNetwork", "InspectVIPNetwork":
 		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
@@ -540,6 +550,12 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 			return nil, clusterbootstrap.ErrPreparationConfig
 		}
 		return m.inspectSourceNetwork(ctx)
+	case "InspectVIPNetwork":
+		address, ok := request.Params["vip"].(string)
+		if len(request.Params) != 1 || !ok || !clusterbootstrap.ValidVIPRequest(address) {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceVIPNetwork(ctx, address)
 	case "InspectCandidateHealth":
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":

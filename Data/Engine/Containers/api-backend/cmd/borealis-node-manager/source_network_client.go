@@ -16,8 +16,16 @@ import (
 // Kubernetes supplies the public Job/Pod IDs through the downward API. The
 // controller independently verifies both objects and their ownership chain.
 func sourceNetworkClient(args []string) error {
+	return sourceObservationClient(args, false)
+}
+
+func sourceObservationClient(args []string, vip bool) error {
 	jobUID, podUID := os.Getenv("BOREALIS_SOURCE_JOB_UID"), os.Getenv("BOREALIS_SOURCE_POD_UID")
-	if len(args) != 1 || !clusterbootstrap.ValidSourceReceiptIdentity(args[0], jobUID, podUID) {
+	address := ""
+	if vip && len(args) == 2 {
+		address = args[1]
+	}
+	if (!vip && len(args) != 1) || (vip && (len(args) != 2 || !clusterbootstrap.ValidVIPRequest(address))) || !clusterbootstrap.ValidSourceReceiptIdentity(args[0], jobUID, podUID) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -41,7 +49,7 @@ func sourceNetworkClient(args []string) error {
 		return (&net.Dialer{}).DialContext(ctx, "unix", defaultSocketPath)
 	}, DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
-	receipt, err := readSourceNetworkReceipt(ctx, &http.Client{Transport: transport}, strings.TrimSpace(string(raw)), args[0], jobUID, podUID)
+	receipt, err := readSourceObservationReceipt(ctx, &http.Client{Transport: transport}, strings.TrimSpace(string(raw)), args[0], jobUID, podUID, address)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -63,10 +71,22 @@ func sourceNetworkClient(args []string) error {
 }
 
 func readSourceNetworkReceipt(ctx context.Context, client *http.Client, token, nonce, jobUID, podUID string) ([]byte, error) {
+	return readSourceObservationReceipt(ctx, client, token, nonce, jobUID, podUID, "")
+}
+
+func readSourceObservationReceipt(ctx context.Context, client *http.Client, token, nonce, jobUID, podUID, address string) ([]byte, error) {
 	if client == nil || len(token) < 32 || len(token) > 4096 || !clusterbootstrap.ValidSourceReceiptIdentity(nonce, jobUID, podUID) {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://node-manager/v1/action", strings.NewReader(`{"verb":"InspectSourceNetwork","params":{}}`))
+	body := `{"verb":"InspectSourceNetwork","params":{}}`
+	if address != "" {
+		if !clusterbootstrap.ValidVIPRequest(address) {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		// Canonical IPv4 contains only digits/dots; no caller syntax is copied.
+		body = `{"verb":"InspectVIPNetwork","params":{"vip":"` + address + `"}}`
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://node-manager/v1/action", strings.NewReader(body))
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
@@ -85,6 +105,9 @@ func readSourceNetworkReceipt(ctx context.Context, client *http.Client, token, n
 	raw, err := io.ReadAll(io.LimitReader(response.Body, clusterbootstrap.SourceNetworkReceiptLimit+1))
 	if err != nil || ctx.Err() != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	if address != "" {
+		return clusterbootstrap.NewSourceVIPReceipt(raw, nonce, jobUID, podUID, address)
 	}
 	return clusterbootstrap.NewSourceNetworkReceipt(raw, nonce, jobUID, podUID)
 }
