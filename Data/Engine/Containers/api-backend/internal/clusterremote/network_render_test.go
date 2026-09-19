@@ -51,178 +51,204 @@ func installNetworkRenderFixture(t *testing.T, root string) {
 func TestNetworkRenderNativeCorrespondence(t *testing.T) {
 	for _, mode := range []string{"success", "vendor shadow", "lexical merge", "earlier Ethernet", "later Ethernet", "merged usr", "later foreign", "changed DNS", "stale bytes", "empty mask", "symlink mask", "etc override", "earlier foreign", "vendor earlier", "legacy earlier", "local earlier", "dropin", "generic dropin", "malformed", "runtime Netplan", "unsupported auth", "unsupported match", "unsupported renderer", "unsupported device", "source drift", "runtime drift", "host drift", "link drift", "tool drift", "missing tool", "wrong generator", "generator writable", "generator failure", "generator hang", "generator overflow", "generator file overflow", "generator TERM", "generator incomplete", "generator writable output", "too many files", "oversize file", "writable directory", "symlink directory"} {
 		t.Run(mode, func(t *testing.T) {
-			root := t.TempDir()
-			if err := os.Chmod(root, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			write := func(path, body string, permissions os.FileMode) {
-				path = filepath.Join(root, path)
-				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte(body), permissions); err != nil {
-					t.Fatal(err)
-				}
-			}
-			write("etc/machine-id", strings.Repeat("a", 32), 0o600)
-			write("proc/sys/kernel/random/boot_id", "11111111-1111-4111-8111-111111111111", 0o600)
-			write("proc/self/ns/net", "namespace", 0o600)
-			if err := os.MkdirAll(filepath.Join(root, "proc/1/ns"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Link(filepath.Join(root, "proc/self/ns/net"), filepath.Join(root, "proc/1/ns/net")); err != nil {
-				t.Fatal(err)
-			}
-			write("etc/netplan/10-static.yaml", persistentNetplanFixture+"# private-source-comment\n", 0o600)
-			if mode == "vendor shadow" {
-				write("lib/netplan/10-static.yaml", strings.Replace(persistentNetplanFixture, ".251", ".245", 1), 0o600)
-			}
-			if mode == "lexical merge" || mode == "changed DNS" {
-				write("etc/netplan/20-dns.yaml", "network:\n  ethernets:\n    ens18:\n      nameservers:\n        addresses: [192.168.3.1]\n", 0o600)
-			}
-			if mode == "earlier Ethernet" || mode == "later Ethernet" {
-				name := "ens17"
-				if mode == "later Ethernet" {
-					name = "ens19"
-				}
-				write("etc/netplan/20-other.yaml", "network:\n  ethernets:\n    "+name+":\n      dhcp4: true\n", 0o600)
-			}
-			if mode == "merged usr" {
-				write("usr/lib/netplan/10-static.yaml", persistentNetplanFixture, 0o600)
-				if err := os.Symlink("usr/lib", filepath.Join(root, "lib")); err != nil {
-					t.Fatal(err)
-				}
-			}
-			installNetworkRenderFixture(t, root)
-			write("daemon.json", networkdDescriptionFixture, 0o600)
-			write("kernel.json", targetManagementKernelFixture, 0o600)
-			write("routing.json", routingStateFixture, 0o600)
-			write("usr/libexec/netplan/generate", "trusted fixture tool identity", 0o700)
-			write("usr/lib/x86_64-linux-gnu/libnetplan.so.1", "trusted fixture library identity", 0o600)
-			write("usr/lib/systemd/system-generators/unused", "", 0o600)
-			generator := filepath.Join(root, "usr/lib/systemd/system-generators/netplan")
-			if err := os.Symlink("../../../libexec/netplan/generate", generator); err != nil {
-				t.Fatal(err)
-			}
-			fixture := strings.Replace(activeNetworkCommandFixture, "args = sys.argv[1:]\n", "args = sys.argv[1:]\n"+targetManagementCommandFixture+routedNetworkCommandFixture, 1)
-			stub := "#!/usr/bin/python3\nROOT=" + strconv.Quote(root) + "\nMODE=\"success\"\n" + fixture
-			write("bin/busctl", stub, 0o700)
-			write("bin/ip", stub, 0o700)
-			write("bin/systemd/system-generators/netplan", "#!/usr/bin/python3\nROOT="+strconv.Quote(root)+"\nMODE="+strconv.Quote(mode)+networkRenderGeneratorFixture, 0o700)
-			networkPath := "run/systemd/network/10-netplan-ens18.network"
-			switch mode {
-			case "changed DNS":
-				write("etc/netplan/20-dns.yaml", "network:\n  ethernets:\n    ens18:\n      nameservers:\n        addresses: [192.168.3.2]\n", 0o600)
-			case "stale bytes":
-				write(networkPath, "[Match]\nName=ens18\n[Network]\nAddress=192.168.3.251/24\n", 0o600)
-			case "empty mask":
-				write(networkPath, "", 0o600)
-			case "symlink mask":
-				if os.Remove(filepath.Join(root, networkPath)) != nil || os.Symlink("/dev/null", filepath.Join(root, networkPath)) != nil {
-					t.Fatal("mask fixture")
-				}
-			case "etc override":
-				data, err := os.ReadFile(filepath.Join(root, networkPath))
-				if err != nil {
-					t.Fatal(err)
-				}
-				write("etc/systemd/network/10-netplan-ens18.network", string(data), 0o600)
-			case "earlier foreign", "vendor earlier", "legacy earlier", "local earlier", "later foreign":
-				area, name := "run", "05-foreign.network"
-				if mode == "vendor earlier" {
-					area = "usr/lib"
-				} else if mode == "legacy earlier" {
-					area = "lib"
-				} else if mode == "local earlier" {
-					area = "usr/local/lib"
-				} else if mode == "later foreign" {
-					name = "99-foreign.network"
-				}
-				write(area+"/systemd/network/"+name, "[Match]\nName=*\n[Network]\nDHCP=yes\n", 0o600)
-			case "dropin", "generic dropin":
-				name := "10-netplan-ens18.network.d"
-				if mode == "generic dropin" {
-					name = "network.d"
-				}
-				write("etc/systemd/network/"+name+"/50-custom.conf", "[Network]\nDNS=192.168.3.9\n", 0o600)
-			case "malformed":
-				write("etc/netplan/30-invalid.yaml", "invalid: [", 0o600)
-			case "runtime Netplan":
-				write("run/netplan/30-volatile.yaml", persistentNetplanFixture, 0o600)
-			case "unsupported auth":
-				write("etc/netplan/30-auth.yaml", "network:\n  ethernets:\n    ens19:\n      auth:\n        key-management: eap\n        method: peap\n        identity: private-fixture\n        password: private-fixture-password\n", 0o600)
-			case "unsupported match":
-				write("etc/netplan/30-match.yaml", "network:\n  ethernets:\n    ens19:\n      match:\n        name: ens19\n", 0o600)
-			case "unsupported renderer":
-				write("etc/netplan/30-nm.yaml", "network:\n  ethernets:\n    ens19:\n      renderer: NetworkManager\n      dhcp4: true\n", 0o600)
-			case "unsupported device":
-				write("etc/netplan/30-bridge.yaml", "network:\n  bridges:\n    br0:\n      dhcp4: true\n", 0o600)
-			case "missing tool":
-				if err := os.Remove(filepath.Join(root, "usr/libexec/netplan/generate")); err != nil {
-					t.Fatal(err)
-				}
-			case "wrong generator":
-				if os.Remove(generator) != nil || os.Symlink("/dev/null", generator) != nil {
-					t.Fatal("generator fixture")
-				}
-			case "generator writable":
-				if err := os.Chmod(filepath.Join(root, "usr/libexec/netplan/generate"), 0o777); err != nil {
-					t.Fatal(err)
-				}
-			case "too many files":
-				for i := 0; i < 257; i++ {
-					write("etc/systemd/network/99-other"+strconv.Itoa(i)+".network", "[Match]\nName=other\n", 0o600)
-				}
-			case "oversize file":
-				write("etc/systemd/network/99-other.network", strings.Repeat("x", 65537), 0o600)
-			case "writable directory":
-				if err := os.Chmod(filepath.Join(root, "run/systemd/network"), 0o777); err != nil {
-					t.Fatal(err)
-				}
-			case "symlink directory":
-				if os.Rename(filepath.Join(root, "run/systemd/network"), filepath.Join(root, "run/systemd/other")) != nil || os.Symlink("other", filepath.Join(root, "run/systemd/network")) != nil {
-					t.Fatal("directory fixture")
-				}
-			}
-			script := strings.Replace(networkRenderScript, `ROOT = "/"`, "ROOT = "+strconv.Quote(root), 1)
-			script = strings.Replace(script, "EXPECTED_UID = 0", "EXPECTED_UID = "+strconv.Itoa(os.Getuid()), 1)
-			script = strings.ReplaceAll(script, `"/usr/bin/busctl"`, strconv.Quote(filepath.Join(root, "bin/busctl")))
-			script = strings.ReplaceAll(script, `"/usr/sbin/ip"`, strconv.Quote(filepath.Join(root, "bin/ip")))
-			script = strings.ReplaceAll(script, `"/usr/lib/systemd/system-generators/netplan"`, strconv.Quote(filepath.Join(root, "bin/systemd/system-generators/netplan")))
-			raw, _ := json.Marshal(routedNetworkFixture(t).Targets)
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script, base64.StdEncoding.EncodeToString(raw))
-			command.Env = append(os.Environ(), "NETPLAN_PARSER_IGNORE_ERRORS=1", "DBUS_SYSTEM_BUS_ADDRESS=invalid-inherited-bus", "SNAP=invalid-inherited-snap")
-			out, err := command.Output()
-			want := mode == "success" || mode == "vendor shadow" || mode == "lexical merge" || mode == "later Ethernet" || mode == "merged usr" || mode == "later foreign"
-			if ctx.Err() != nil || (err == nil) != want || bytes.Contains(out, []byte("private-")) {
-				t.Fatalf("native correspondence outcome: error=%v deadline=%v bytes=%d", err, ctx.Err(), len(out))
-			}
-			if want {
-				var value networkRenderObservation
-				if json.Unmarshal(out, &value) != nil || value.Version != 1 || value.Management.validate() != nil || value.Management.Link.Interface != "ens18" {
-					t.Fatal("invalid successful projection")
-				}
-			} else if len(out) != 0 {
-				t.Fatal("failure emitted partial evidence")
-			}
-			left, err := filepath.Glob(filepath.Join(root, "run/.borealis-network-render-*"))
-			if err != nil || len(left) != 0 {
-				t.Fatal("private render scratch not removed")
-			}
-			if mode == "generator file overflow" {
-				if body, err := os.ReadFile(filepath.Join(root, "file-limit")); err != nil || string(body) != "bounded" {
-					t.Fatal("kernel file-size bound missing")
-				}
-			}
-			if raw, err := os.ReadFile(filepath.Join(root, "generator-pid")); err == nil {
-				pid, err := strconv.Atoi(string(raw))
-				if err != nil || syscall.Kill(pid, 0) != syscall.ESRCH {
-					t.Fatal("generator not killed and joined")
-				}
-			}
+			testNetworkRenderCorrespondence(t, mode, false)
 		})
+	}
+}
+
+func testNetworkRenderCorrespondence(t *testing.T, mode string, boot bool) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, body string, permissions os.FileMode) {
+		path = filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), permissions); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("etc/machine-id", strings.Repeat("a", 32), 0o600)
+	write("proc/sys/kernel/random/boot_id", "11111111-1111-4111-8111-111111111111", 0o600)
+	write("proc/self/ns/net", "namespace", 0o600)
+	if err := os.MkdirAll(filepath.Join(root, "proc/1/ns"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(root, "proc/self/ns/net"), filepath.Join(root, "proc/1/ns/net")); err != nil {
+		t.Fatal(err)
+	}
+	write("etc/netplan/10-static.yaml", persistentNetplanFixture+"# private-source-comment\n", 0o600)
+	if mode == "vendor shadow" {
+		write("lib/netplan/10-static.yaml", strings.Replace(persistentNetplanFixture, ".251", ".245", 1), 0o600)
+	}
+	if mode == "lexical merge" || mode == "changed DNS" {
+		write("etc/netplan/20-dns.yaml", "network:\n  ethernets:\n    ens18:\n      nameservers:\n        addresses: [192.168.3.1]\n", 0o600)
+	}
+	if mode == "earlier Ethernet" || mode == "later Ethernet" {
+		name := "ens17"
+		if mode == "later Ethernet" {
+			name = "ens19"
+		}
+		write("etc/netplan/20-other.yaml", "network:\n  ethernets:\n    "+name+":\n      dhcp4: true\n", 0o600)
+	}
+	if mode == "merged usr" || boot {
+		write("usr/lib/netplan/10-static.yaml", persistentNetplanFixture, 0o600)
+		if err := os.Symlink("usr/lib", filepath.Join(root, "lib")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installNetworkRenderFixture(t, root)
+	write("daemon.json", networkdDescriptionFixture, 0o600)
+	write("kernel.json", targetManagementKernelFixture, 0o600)
+	write("routing.json", routingStateFixture, 0o600)
+	write("usr/libexec/netplan/generate", "trusted fixture tool identity", 0o700)
+	write("usr/lib/x86_64-linux-gnu/libnetplan.so.1", "trusted fixture library identity", 0o600)
+	write("usr/lib/systemd/system-generators/unused", "", 0o600)
+	generator := filepath.Join(root, "usr/lib/systemd/system-generators/netplan")
+	if err := os.Symlink("../../../libexec/netplan/generate", generator); err != nil {
+		t.Fatal(err)
+	}
+	if boot {
+		installNetworkBootFixture(t, root)
+		if mode == "boot graphical" {
+			path := filepath.Join(root, "etc/systemd/system/default.target")
+			if os.Remove(path) != nil || os.Symlink("/lib/systemd/system/graphical.target", path) != nil {
+				t.Fatal("graphical default fixture")
+			}
+		}
+	}
+	bootFixture := ""
+	if boot {
+		bootFixture = networkBootCommandFixture
+	}
+	fixture := strings.Replace(activeNetworkCommandFixture, "args = sys.argv[1:]\n", "args = sys.argv[1:]\n"+bootFixture+targetManagementCommandFixture+routedNetworkCommandFixture, 1)
+	busMode := "success"
+	if boot {
+		busMode = mode
+	}
+	stub := "#!/usr/bin/python3\nROOT=" + strconv.Quote(root) + "\nMODE=" + strconv.Quote(busMode) + "\n" + fixture
+	write("bin/busctl", stub, 0o700)
+	write("bin/ip", stub, 0o700)
+	write("bin/systemd/system-generators/netplan", "#!/usr/bin/python3\nROOT="+strconv.Quote(root)+"\nMODE="+strconv.Quote(mode)+networkRenderGeneratorFixture, 0o700)
+	networkPath := "run/systemd/network/10-netplan-ens18.network"
+	switch mode {
+	case "changed DNS":
+		write("etc/netplan/20-dns.yaml", "network:\n  ethernets:\n    ens18:\n      nameservers:\n        addresses: [192.168.3.2]\n", 0o600)
+	case "stale bytes":
+		write(networkPath, "[Match]\nName=ens18\n[Network]\nAddress=192.168.3.251/24\n", 0o600)
+	case "empty mask":
+		write(networkPath, "", 0o600)
+	case "symlink mask":
+		if os.Remove(filepath.Join(root, networkPath)) != nil || os.Symlink("/dev/null", filepath.Join(root, networkPath)) != nil {
+			t.Fatal("mask fixture")
+		}
+	case "etc override":
+		data, err := os.ReadFile(filepath.Join(root, networkPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write("etc/systemd/network/10-netplan-ens18.network", string(data), 0o600)
+	case "earlier foreign", "vendor earlier", "legacy earlier", "local earlier", "later foreign":
+		area, name := "run", "05-foreign.network"
+		if mode == "vendor earlier" {
+			area = "usr/lib"
+		} else if mode == "legacy earlier" {
+			area = "lib"
+		} else if mode == "local earlier" {
+			area = "usr/local/lib"
+		} else if mode == "later foreign" {
+			name = "99-foreign.network"
+		}
+		write(area+"/systemd/network/"+name, "[Match]\nName=*\n[Network]\nDHCP=yes\n", 0o600)
+	case "dropin", "generic dropin":
+		name := "10-netplan-ens18.network.d"
+		if mode == "generic dropin" {
+			name = "network.d"
+		}
+		write("etc/systemd/network/"+name+"/50-custom.conf", "[Network]\nDNS=192.168.3.9\n", 0o600)
+	case "malformed":
+		write("etc/netplan/30-invalid.yaml", "invalid: [", 0o600)
+	case "runtime Netplan":
+		write("run/netplan/30-volatile.yaml", persistentNetplanFixture, 0o600)
+	case "unsupported auth":
+		write("etc/netplan/30-auth.yaml", "network:\n  ethernets:\n    ens19:\n      auth:\n        key-management: eap\n        method: peap\n        identity: private-fixture\n        password: private-fixture-password\n", 0o600)
+	case "unsupported match":
+		write("etc/netplan/30-match.yaml", "network:\n  ethernets:\n    ens19:\n      match:\n        name: ens19\n", 0o600)
+	case "unsupported renderer":
+		write("etc/netplan/30-nm.yaml", "network:\n  ethernets:\n    ens19:\n      renderer: NetworkManager\n      dhcp4: true\n", 0o600)
+	case "unsupported device":
+		write("etc/netplan/30-bridge.yaml", "network:\n  bridges:\n    br0:\n      dhcp4: true\n", 0o600)
+	case "missing tool":
+		if err := os.Remove(filepath.Join(root, "usr/libexec/netplan/generate")); err != nil {
+			t.Fatal(err)
+		}
+	case "wrong generator":
+		if os.Remove(generator) != nil || os.Symlink("/dev/null", generator) != nil {
+			t.Fatal("generator fixture")
+		}
+	case "generator writable":
+		if err := os.Chmod(filepath.Join(root, "usr/libexec/netplan/generate"), 0o777); err != nil {
+			t.Fatal(err)
+		}
+	case "too many files":
+		for i := 0; i < 257; i++ {
+			write("etc/systemd/network/99-other"+strconv.Itoa(i)+".network", "[Match]\nName=other\n", 0o600)
+		}
+	case "oversize file":
+		write("etc/systemd/network/99-other.network", strings.Repeat("x", 65537), 0o600)
+	case "writable directory":
+		if err := os.Chmod(filepath.Join(root, "run/systemd/network"), 0o777); err != nil {
+			t.Fatal(err)
+		}
+	case "symlink directory":
+		if os.Rename(filepath.Join(root, "run/systemd/network"), filepath.Join(root, "run/systemd/other")) != nil || os.Symlink("other", filepath.Join(root, "run/systemd/network")) != nil {
+			t.Fatal("directory fixture")
+		}
+	}
+	script := networkRenderScript
+	if boot {
+		script = networkBootScript
+	}
+	script = strings.Replace(script, `ROOT = "/"`, "ROOT = "+strconv.Quote(root), 1)
+	script = strings.Replace(script, "EXPECTED_UID = 0", "EXPECTED_UID = "+strconv.Itoa(os.Getuid()), 1)
+	script = strings.ReplaceAll(script, `"/usr/bin/busctl"`, strconv.Quote(filepath.Join(root, "bin/busctl")))
+	script = strings.ReplaceAll(script, `"/usr/sbin/ip"`, strconv.Quote(filepath.Join(root, "bin/ip")))
+	script = strings.ReplaceAll(script, `"/usr/lib/systemd/system-generators/netplan"`, strconv.Quote(filepath.Join(root, "bin/systemd/system-generators/netplan")))
+	raw, _ := json.Marshal(routedNetworkFixture(t).Targets)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script, base64.StdEncoding.EncodeToString(raw))
+	command.Env = append(os.Environ(), "NETPLAN_PARSER_IGNORE_ERRORS=1", "DBUS_SYSTEM_BUS_ADDRESS=invalid-inherited-bus", "SNAP=invalid-inherited-snap")
+	out, err := command.Output()
+	want := mode == "success" || mode == "boot graphical" || mode == "vendor shadow" || mode == "lexical merge" || mode == "later Ethernet" || mode == "merged usr" || mode == "later foreign"
+	if ctx.Err() != nil || (err == nil) != want || bytes.Contains(out, []byte("private-")) {
+		t.Fatalf("native correspondence outcome: error=%v deadline=%v bytes=%d", err, ctx.Err(), len(out))
+	}
+	if want {
+		var value networkRenderObservation
+		if json.Unmarshal(out, &value) != nil || value.Version != map[bool]int{false: 1, true: 2}[boot] || value.Management.validate() != nil || value.Management.Link.Interface != "ens18" {
+			t.Fatal("invalid successful projection")
+		}
+	} else if len(out) != 0 {
+		t.Fatal("failure emitted partial evidence")
+	}
+	left, err := filepath.Glob(filepath.Join(root, "run/.borealis-network-render-*"))
+	if err != nil || len(left) != 0 {
+		t.Fatal("private render scratch not removed")
+	}
+	if mode == "generator file overflow" {
+		if body, err := os.ReadFile(filepath.Join(root, "file-limit")); err != nil || string(body) != "bounded" {
+			t.Fatal("kernel file-size bound missing")
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(root, "generator-pid")); err == nil {
+		pid, err := strconv.Atoi(string(raw))
+		if err != nil || syscall.Kill(pid, 0) != syscall.ESRCH {
+			t.Fatal("generator not killed and joined")
+		}
 	}
 }
 
@@ -279,10 +305,25 @@ os.execve("/usr/lib/systemd/system-generators/netplan", ["/usr/lib/systemd/syste
 `
 
 func TestNetworkRenderNativePinnedScope(t *testing.T) {
+	testNetworkRenderNativePinnedScope(t, false)
+}
+
+func testNetworkRenderNativePinnedScope(t *testing.T, boot bool) {
+	t.Helper()
+	version := map[bool]int{false: 1, true: 2}[boot]
+	matches := func(v TargetNetworkRender, floor time.Time, target Target, key HostKey, request NetworkRenderRequest) error {
+		if boot {
+			return (TargetNetworkBoot{observation: v}).Matches(floor, target, key, request)
+		}
+		return v.Matches(floor, target, key, request)
+	}
 	for _, mode := range []string{"success", "wrong port", "wrong key", "unbound address", "failed authority", "lost during command", "callback deadline", "cancel", "private output", "changed result", "wrong version", "duplicate", "trailing", "empty", "overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			r := networkRenderFixture(t)
 			command, _ := networkRenderCommand(r.Targets)
+			if boot {
+				command, _ = networkBootCommand(r.Targets)
+			}
 			var commands, checks atomic.Int32
 			var joined atomic.Bool
 			server := newFakeSSH(t, "network render", func(cmd string, channel ssh.Channel) uint32 {
@@ -297,7 +338,7 @@ func TestNetworkRenderNativePinnedScope(t *testing.T) {
 				if mode == "lost during command" || mode == "callback deadline" || mode == "cancel" {
 					time.Sleep(1300 * time.Millisecond)
 				}
-				wire := networkRenderObservation{Version: 1, Management: targetManagementFixture(t)}
+				wire := networkRenderObservation{Version: version, Management: targetManagementFixture(t)}
 				if mode == "private output" {
 					channel.Stderr().Write([]byte("private-sudo"))
 					return 1
@@ -306,11 +347,11 @@ func TestNetworkRenderNativePinnedScope(t *testing.T) {
 					wire.Management.Link.Index++
 				}
 				if mode == "wrong version" {
-					wire.Version = 2
+					wire.Version = 3 - version
 				}
 				out, _ := json.Marshal(wire)
 				if mode == "duplicate" {
-					out = bytes.Replace(out, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1)
+					out = bytes.Replace(out, []byte(`"version":`+strconv.Itoa(version)), []byte(`"version":1,"version":`+strconv.Itoa(version)), 1)
 				}
 				if mode == "trailing" {
 					out = append(out, out...)
@@ -359,7 +400,14 @@ func TestNetworkRenderNativePinnedScope(t *testing.T) {
 				r.Targets.Management = "192.168.3.248"
 			}
 			started := time.Now()
-			result, err := client.InspectNetworkRender(ctx, []byte("private-sudo"), target, key, r, check)
+			var result TargetNetworkRender
+			if boot {
+				var value TargetNetworkBoot
+				value, err = client.InspectNetworkBoot(ctx, []byte("private-sudo"), target, key, r, check)
+				result = value.observation
+			} else {
+				result, err = client.InspectNetworkRender(ctx, []byte("private-sudo"), target, key, r, check)
+			}
 			if mode != "success" {
 				if err != ErrNetworkRender || !reflect.DeepEqual(result, TargetNetworkRender{}) {
 					t.Fatal("unsafe render result", err)
@@ -372,7 +420,7 @@ func TestNetworkRenderNativePinnedScope(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || result.Matches(started, target, key, r) != nil {
+			if err != nil || matches(result, started, target, key, r) != nil {
 				t.Fatal("valid observation", err)
 			}
 			for _, change := range []string{"old", "future", "zero", "serialized", "machine", "boot", "MAC", "namespace", "peers", "port", "pin"} {
@@ -404,7 +452,7 @@ func TestNetworkRenderNativePinnedScope(t *testing.T) {
 				case "pin":
 					key.PublicKey = []byte("different")
 				}
-				if v.Matches(floor, target, key, request) == nil {
+				if matches(v, floor, target, key, request) == nil {
 					t.Fatal("stale/changed observation accepted", change)
 				}
 			}
@@ -413,6 +461,15 @@ func TestNetworkRenderNativePinnedScope(t *testing.T) {
 }
 
 func TestNetworkRenderShellData(t *testing.T) {
+	testNetworkRenderShellData(t, false)
+}
+
+func testNetworkRenderShellData(t *testing.T, boot bool) {
+	t.Helper()
+	build := networkRenderCommand
+	if boot {
+		build = networkBootCommand
+	}
 	targets := routedNetworkFixture(t).Targets
 	expected, _ := json.Marshal(targets)
 	for _, mode := range []string{"password", "nopasswd", "root"} {
@@ -424,12 +481,13 @@ func TestNetworkRenderShellData(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			command, err := networkRenderCommand(targets)
+			command, err := build(targets)
 			if err != nil {
 				t.Fatal(err)
 			}
 			command = strings.ReplaceAll(command, "/usr/sbin:/usr/bin:/sbin:/bin", root+":/usr/bin:/bin")
 			command = strings.ReplaceAll(command, "main(observe_network_render)", "main(route_targets)")
+			command = strings.ReplaceAll(command, "main(lambda: observe_network_render(boot_snapshot))", "main(route_targets)")
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
@@ -448,7 +506,7 @@ func TestNetworkRenderShellData(t *testing.T) {
 		})
 	}
 	for _, targets := range []RouteTargets{{Management: "192.168.3.251", Peers: nil}, {Management: "$(id)", Peers: []string{"192.168.3.250"}}, {Management: "192.168.3.251", Peers: []string{"--help"}}, {Management: "192.168.3.251", Peers: []string{"192.168.3.250", "192.168.3.250"}}} {
-		if _, err := networkRenderCommand(targets); err != ErrNetworkRender {
+		if _, err := build(targets); err != ErrNetworkRender {
 			t.Fatal("input crossed transport")
 		}
 	}

@@ -46,10 +46,14 @@ type TargetNetworkRender struct {
 }
 
 func (v TargetNetworkRender) Matches(notBefore time.Time, target Target, key HostKey, request NetworkRenderRequest) error {
+	return v.matchesVersion(notBefore, target, key, request, 1)
+}
+
+func (v TargetNetworkRender) matchesVersion(notBefore time.Time, target Target, key HostKey, request NetworkRenderRequest, version int) error {
 	if notBefore.IsZero() || v.started.Before(notBefore) || v.finished.Before(v.started) || v.finished.After(time.Now()) ||
 		v.finished.Sub(v.started) > 25*time.Second || target.Validate() != nil || key.Validate() != nil || v.target != target ||
 		v.key.Algorithm != key.Algorithm || v.key.Fingerprint != key.Fingerprint || !bytes.Equal(v.key.PublicKey, key.PublicKey) ||
-		v.wire.Version != 1 || v.wire.Management.validate() != nil || request.Validate() != nil || request.Targets.Management != target.Address ||
+		v.wire.Version != version || v.wire.Management.validate() != nil || request.Validate() != nil || request.Targets.Management != target.Address ||
 		v.wire.Management.Link != request.Link || v.wire.Management.Routing.Active.Declarations.MachineID != request.MachineID ||
 		v.wire.Management.Routing.Active.Declarations.BootID != request.BootID ||
 		v.wire.Management.Routing.Targets.Management != request.Targets.Management || !slices.Equal(v.wire.Management.Routing.Targets.Peers, request.Targets.Peers) {
@@ -74,10 +78,19 @@ func networkRenderCommand(targets RouteTargets) (string, error) {
 // check must retain each original target credential/claim and complete current
 // cohort/VIP authority. Callback work honors context and joins its children.
 func (client *Client) InspectNetworkRender(parent context.Context, sudoPassword []byte, expected Target, approved HostKey, request NetworkRenderRequest, check func(context.Context) error) (TargetNetworkRender, error) {
+	return client.inspectNetworkRender(parent, sudoPassword, expected, approved, request, check, false)
+}
+
+func (client *Client) inspectNetworkRender(parent context.Context, sudoPassword []byte, expected Target, approved HostKey, request NetworkRenderRequest, check func(context.Context) error, boot bool) (TargetNetworkRender, error) {
 	started := time.Now()
 	request.Targets.Peers = slices.Clone(request.Targets.Peers)
 	approved.PublicKey = bytes.Clone(approved.PublicKey)
 	command, err := networkRenderCommand(request.Targets)
+	version := 1
+	if boot {
+		command, err = networkBootCommand(request.Targets)
+		version = 2
+	}
 	if err != nil || request.Validate() != nil || client == nil || client.ssh == nil || expected.Validate() != nil || approved.Validate() != nil || check == nil ||
 		client.target != expected || request.Targets.Management != expected.Address || client.approved.Algorithm != approved.Algorithm ||
 		client.approved.Fingerprint != approved.Fingerprint || !bytes.Equal(client.approved.PublicKey, approved.PublicKey) || parent.Err() != nil {
@@ -127,7 +140,7 @@ func (client *Client) InspectNetworkRender(parent context.Context, sudoPassword 
 	}
 	canonical, err := json.Marshal(wire)
 	v := TargetNetworkRender{wire: wire, target: expected, key: approved, started: started, finished: time.Now()}
-	if err != nil || !bytes.Equal(canonical, bytes.TrimSpace(raw)) || v.Matches(started, expected, approved, request) != nil || ctx.Err() != nil {
+	if err != nil || !bytes.Equal(canonical, bytes.TrimSpace(raw)) || v.matchesVersion(started, expected, approved, request, version) != nil || ctx.Err() != nil {
 		return TargetNetworkRender{}, ErrNetworkRender
 	}
 	return v, nil
@@ -285,7 +298,7 @@ def render_selection(files, generated, name):
     if any(filename < selected for filename in effective):
         raise ValueError()
 
-def observe_network_render():
+def observe_network_render(boot_snapshot=None):
     route_targets() # Validate public argv before host reads or scratch writes.
     if os.geteuid() != EXPECTED_UID:
         raise ValueError()
@@ -300,6 +313,7 @@ def observe_network_render():
     try:
         checked(os.fstat(root), True)
         host, files, tools = identity(root), snapshot(root), render_tools(root)
+        boot = boot_snapshot(root) if boot_snapshot is not None else None
         installed = network_file_snapshot(root)
         payload, names = render_payload(parse_snapshot(files))
         before = observe_management_link()
@@ -309,9 +323,11 @@ def observe_network_render():
         if before != management or [declarations["machine_id"], declarations["boot_id"]] != host:
             raise ValueError()
         render_selection(installed, generated, management["link"]["interface"])
+        if boot_snapshot is not None and boot != boot_snapshot(root):
+            raise ValueError()
         if host != identity(root) or files != snapshot(root) or tools != render_tools(root) or installed != network_file_snapshot(root):
             raise ValueError()
-        return {"version": 1, "management": management}
+        return {"version": 1 if boot_snapshot is None else 2, "management": management}
     finally:
         os.close(root)
         signal.setitimer(signal.ITIMER_REAL, 0)

@@ -126,10 +126,14 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 					} else if observationWire != nil && (strings.Contains(command.Command, "observe_arp") || strings.Contains(command.Command, "observe_network_render")) {
 						_, _ = channel.Write(observationWire)
 					} else if strings.Contains(command.Command, "observe_network_render") {
+						version := 1
+						if strings.Contains(command.Command, "def boot_snapshot(root):") {
+							version = 2
+						}
 						result, _ := json.Marshal(struct {
 							Version    int             `json:"version"`
 							Management json.RawMessage `json:"management"`
-						}{1, wire})
+						}{version, wire})
 						_, _ = channel.Write(result)
 					} else if strings.Contains(command.Command, "observe_management_link") {
 						_, _ = channel.Write(wire)
