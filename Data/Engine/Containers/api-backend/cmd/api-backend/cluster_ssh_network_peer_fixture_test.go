@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -60,6 +61,25 @@ func sshNetworkFixturePeer(t *testing.T, ctx context.Context, item clusterSSHIns
 func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSHInspectedTarget, signer ssh.Signer,
 	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, consume func(*clusterremote.Client) error) error {
 	t.Helper()
+	transport, done, closeServer := sshNetworkFixtureTransport(t, item, signer, link, peers, observationWire, "fixture", "fixture-private")
+	defer closeServer()
+	credential, err := clusterremote.PasswordCredential("fixture", []byte("fixture-private"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credential.Destroy()
+	client, err := transport.Connect(ctx,
+		clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}, item.Key, credential)
+	if err != nil {
+		return err
+	}
+	defer func() { client.Close(); <-done }()
+	return consume(client)
+}
+
+func sshNetworkFixtureTransport(t *testing.T, item clusterSSHInspectedTarget, signer ssh.Signer,
+	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, username, expectedPassword string) (clusterremote.Transport, <-chan struct{}, func()) {
+	t.Helper()
 	prefix := netip.MustParsePrefix(link.Address)
 	routing := clusterremote.RoutedNetworkOwnership{Version: 1, Targets: clusterremote.RouteTargets{Management: item.Binding.Address, Peers: peers}, Resolved: peers,
 		Active: clusterremote.ActiveNetworkOwnership{Version: 1, Declarations: clusterremote.PersistentNetworkDeclarations{Version: 1, MachineID: item.Report.MachineID, BootID: item.Report.BootID,
@@ -78,7 +98,6 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -87,8 +106,8 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 			return
 		}
 		defer conn.Close()
-		config := &ssh.ServerConfig{PasswordCallback: func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
-			if !bytes.Equal(password, []byte("fixture-private")) {
+		config := &ssh.ServerConfig{PasswordCallback: func(metadata ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+			if metadata.User() != username || !bytes.Equal(password, []byte(expectedPassword)) {
 				return nil, fmt.Errorf("fixture authentication")
 			}
 			return nil, nil
@@ -149,18 +168,14 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 			}
 		}
 	}()
-	credential, err := clusterremote.PasswordCredential("fixture", []byte("fixture-private"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer credential.Destroy()
-	client, err := (clusterremote.Transport{Dialer: sshNetworkFixtureDialer{listener.Addr().String()}}).Connect(ctx,
-		clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}, item.Key, credential)
-	if err != nil {
+	closeServer := func() {
 		listener.Close()
-		<-done
-		return err
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("native fixture session not closed and joined")
+		}
 	}
-	defer func() { client.Close(); <-done }()
-	return consume(client)
+	t.Cleanup(closeServer)
+	return clusterremote.Transport{Dialer: sshNetworkFixtureDialer{listener.Addr().String()}}, done, closeServer
 }
