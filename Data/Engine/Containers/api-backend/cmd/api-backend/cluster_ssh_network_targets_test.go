@@ -16,6 +16,7 @@ import (
 )
 
 type sshNetworkTargetsFixture struct {
+	hostWire    func(int, string) string
 	sources     []clusterbootstrap.SourceNetwork
 	vipLease    clusterbootstrap.VIPLease
 	a           clusterSSHPreparationAuthority
@@ -98,8 +99,12 @@ func newSSHNetworkTargetsFixture(t *testing.T, replacement bool, kind string) *s
 				Rounds  int                      `json:"rounds"`
 			}{1, f.arps[i], 2})
 		}
+		var edits []func(string) string
+		if f.hostWire != nil {
+			edits = append(edits, func(wire string) string { return f.hostWire(i, wire) })
+		}
 		transport, done, _ := sshNetworkFixtureTransport(t, item, keys[item.Binding.TargetID], f.boots[i].Link,
-			f.boots[i].Targets.Peers, wire, fmt.Sprintf("target%d", i), fmt.Sprintf("fixture-private-%d", i))
+			f.boots[i].Targets.Peers, wire, fmt.Sprintf("target%d", i), fmt.Sprintf("fixture-private-%d", i), edits...)
 		f.sessions = append(f.sessions, done)
 		f.credentials = append(f.credentials, credential)
 		return transport.Connect(ctx, target, key, credential)

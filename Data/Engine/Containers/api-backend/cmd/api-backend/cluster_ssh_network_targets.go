@@ -24,6 +24,7 @@ func (clusterSSHNetworkTargetClaim) String() string   { return "network target c
 func (clusterSSHNetworkTargetClaim) GoString() string { return "network target claim [redacted]" }
 
 type clusterSSHNetworkTargetReaders struct {
+	within    func(context.Context, func(context.Context) error) error
 	Authority clusterSSHPreparationAuthorityRead
 	Refresh   func(context.Context) error
 	Peer      clusterSSHTargetNetworkRead
@@ -229,7 +230,7 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 				result = clusterbootstrap.ErrPreparationConfig
 			}
 		}()
-		readers := clusterSSHNetworkTargetReaders{}
+		readers := clusterSSHNetworkTargetReaders{within: lifetime.run}
 		readers.Authority = func(caller context.Context) (clusterSSHPreparationAuthority, error) {
 			var value clusterSSHPreparationAuthority
 			err := lifetime.run(caller, func(ctx context.Context) error { var err error; value, err = authority(ctx); return err })

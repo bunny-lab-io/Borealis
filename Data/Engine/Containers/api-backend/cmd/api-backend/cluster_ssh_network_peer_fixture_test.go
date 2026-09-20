@@ -78,7 +78,7 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 }
 
 func sshNetworkFixtureTransport(t *testing.T, item clusterSSHInspectedTarget, signer ssh.Signer,
-	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, username, expectedPassword string) (clusterremote.Transport, <-chan struct{}, func()) {
+	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, username, expectedPassword string, editHost ...func(string) string) (clusterremote.Transport, <-chan struct{}, func()) {
 	t.Helper()
 	prefix := netip.MustParsePrefix(link.Address)
 	routing := clusterremote.RoutedNetworkOwnership{Version: 1, Targets: clusterremote.RouteTargets{Management: item.Binding.Address, Peers: peers}, Resolved: peers,
@@ -92,6 +92,9 @@ func sshNetworkFixtureTransport(t *testing.T, item clusterSSHInspectedTarget, si
 		Link    clusterbootstrap.ManagementLink      `json:"link"`
 	}{1, routing, link})
 	host := fmt.Sprintf("kernel=Linux\narchitecture=x86_64\nuid=1000\nhostname=%s\nos_id=ubuntu\nos_version=24.04\ncpu_count=16\nmemory_kib=33554432\ndisk_total_kib=524288000\ndisk_free_kib=314572800\ndisk_scope=opt\nborealis_path=absent\nk3s_unit=not-found\n", item.Report.Hostname)
+	for _, edit := range editHost {
+		host = edit(host)
+	}
 	privileged := fmt.Sprintf("protocol=1\nuid=0\nmachine_id=%s\nboot_id=%s\nborealis_path=absent\nborealis_config=absent\nk3s_config=absent\nk3s_data=absent\nk3s_binary=absent\nk3s_load=not-found\nk3s_active=inactive\nk3s_agent_load=not-found\nk3s_agent_active=inactive\naddresses=[{\"ifindex\":%d,\"ifname\":%q,\"flags\":[\"UP\",\"LOWER_UP\"],\"operstate\":\"UP\",\"addr_info\":[{\"family\":\"inet\",\"local\":%q,\"prefixlen\":%d,\"scope\":\"global\",\"valid_life_time\":4294967295,\"preferred_life_time\":4294967295}]}]\nroutes=[{\"dst\":%q,\"dev\":%q,\"scope\":\"link\",\"protocol\":\"kernel\",\"flags\":[]}]\nkube_system_uid=not-present\nnodes=not-present\n",
 		item.Report.MachineID, item.Report.BootID, link.Index, link.Interface, item.Binding.Address, prefix.Bits(), prefix.Masked().String(), link.Interface)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
