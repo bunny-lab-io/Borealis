@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -15,7 +16,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed"} {
+	for _, mode := range []string{"expansion", "replacement", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
 			f.c.store.db.SetMaxOpenConns(1)
@@ -23,6 +24,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
+			storage := newSSHStorageFixtureForAuthority(t, current)
 			before := f.events(t)
 			var jobs, secretReads atomic.Int64
 			var changed atomic.Bool
@@ -32,10 +34,30 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			kubernetes := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				if f.c.store.db.Stats().InUse != 0 {
-					t.Error("database connection retained during Kubernetes request")
+				// The joined authority heartbeat may independently borrow this one
+				// connection. A bounded acquisition proves the request released its
+				// connection before HTTP, without mistaking a short heartbeat for a leak.
+				probeCtx, stop := context.WithTimeout(r.Context(), time.Second)
+				connection, probeErr := f.c.store.db.Conn(probeCtx)
+				if connection != nil {
+					if connection.Close() != nil {
+						t.Error("pool probe release")
+					}
+				}
+				stop()
+				if probeErr != nil && r.Context().Err() == nil {
+					t.Error("database connection unavailable during Kubernetes request")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
 				}
 				if r.Method == "GET" {
+					if object, ok := storage.objects[r.URL.RequestURI()]; ok && r.URL.Path != "/api/v1/nodes" && r.URL.Path != "/api/v1/namespaces/kube-system" {
+						if mode == "storage revision changed" && changed.Load() {
+							clusterSSHStorageMap(storage.volume(0), "metadata")["resourceVersion"] = "2"
+						}
+						_ = json.NewEncoder(w).Encode(object)
+						return
+					}
 					switch r.URL.Path {
 					case "/api/v1/nodes":
 						items := make([]any, 0, len(current.Source.Members))
@@ -75,6 +97,8 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					job["metadata"].(map[string]any)["uid"] = newClusterUUID()
 					job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
 					switch mode {
+					case "storage placement changed during Job":
+						clusterSSHStorageMap(storage.volume(1), "status")["currentNodeID"] = "foreign"
 					case "controller changed":
 						f.exec(t, `UPDATE engine.cluster_application_leases SET holder='changed-controller' WHERE name=$1`, clusterControllerLeaseName)
 					case "worker expired":
@@ -122,16 +146,16 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			client.httpClient.Timeout = 10 * time.Second
 			read := client.preparationRead(f.read, f.lease, f.baseline, f.sealed)
 			expected, settings, err := read(f.ctx)
-			good := mode == "expansion" || mode == "replacement" || strings.Contains(mode, "Secret")
+			good := mode == "expansion" || mode == "replacement" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
 			if good {
 				if err != nil || expected.Target.TargetID != f.lease.TargetID || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) {
 					t.Fatal("valid private broker source rejected")
 				}
 				changed.Store(true)
 				_, next, err := read(f.ctx)
-				if strings.Contains(mode, "Secret") {
+				if strings.Contains(mode, "Secret") || mode == "storage revision changed" {
 					if err != clusterbootstrap.ErrPreparationConfig || next != nil {
-						t.Fatal("Secret observation drift accepted")
+						t.Fatal("source observation drift accepted")
 					}
 				} else if err != nil || !reflect.DeepEqual(next, settings) || jobs.Load() != int64(4*len(current.Source.Members)) {
 					t.Fatal("fresh source Job not observed per member/read")

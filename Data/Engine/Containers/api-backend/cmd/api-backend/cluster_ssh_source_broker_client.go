@@ -90,6 +90,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 	gate := make(chan struct{}, 1)
 	retained := ""
 	var retainedSources []clusterbootstrap.SourceNetwork
+	var retainedStorage clusterSSHStorageSnapshot
 	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
 		started := time.Now()
 		fail := func() (clusterSSHPreparationSnapshot, error) {
@@ -118,7 +119,8 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		value, err := c.fetch(ctx, request)
 		if err != nil || value.Expected.Validate() != nil || !clusterSSHSourceObservationRE.MatchString(value.Observation) ||
 			validateClusterSSHSourceNetworks(before, value.Sources) != nil ||
-			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources))) {
+			!validClusterSSHStorageSnapshot(value.Storage, before.Source) ||
+			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources) || !reflect.DeepEqual(retainedStorage, value.Storage))) {
 			return fail()
 		}
 		expected, err := buildClusterSSHPreparationExpected(before.Cohort, before.Source, lease, baseline, before.K3sVersion, value.Expected.PodCIDR, value.Expected.ServiceCIDR)
@@ -138,6 +140,8 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		}
 		retained = value.Observation
 		retainedSources = slices.Clone(value.Sources)
+		retainedStorage = value.Storage
+		retainedStorage.Requirements.Volumes = slices.Clone(value.Storage.Requirements.Volumes)
 		value.started = started
 		return value, nil
 	}
@@ -178,7 +182,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 2 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 3 || value.ID != request.ID || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

@@ -4,6 +4,7 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -216,6 +217,14 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	}
 	result.Requirements.PostgresInstanceBytes = pgBytes
 	result.Requirements.ConfiguredPostgresInstances = instances
+	// Canonical map order binds every full object receipt without exporting raw
+	// objects, names of unrelated resources, revisions or private annotations.
+	wire, err := json.Marshal(result.receipts)
+	if err != nil || ctx.Err() != nil {
+		return fail()
+	}
+	digest := sha256.Sum256(wire)
+	result.Requirements.observation = hex.EncodeToString(digest[:])
 	return result, nil
 }
 

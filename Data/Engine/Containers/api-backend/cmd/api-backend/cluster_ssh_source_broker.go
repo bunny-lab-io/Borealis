@@ -131,7 +131,7 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 			defer cancel()
 			return store.loadClusterSSHPreparationAuthority(ctx, request.Lease, request.Baseline, request.sealed())
 		}
-		return newClusterSSHPreparationSnapshotRead(authority, runner.kube.getClusterSSHPreparationJSON, runner.newSSHSourceNetworkRead(authority))(ctx)
+		return runner.readSSHStoragePreparationSnapshot(ctx, authority)
 	}
 	return b
 }
@@ -155,7 +155,7 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	reply := func(status string, snapshot *clusterSSHPreparationSnapshot) {
-		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Version: 2, ID: request.ID, Status: status, Snapshot: snapshot})
+		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Version: 3, ID: request.ID, Status: status, Snapshot: snapshot})
 		if err != nil {
 			fail(http.StatusServiceUnavailable)
 			return

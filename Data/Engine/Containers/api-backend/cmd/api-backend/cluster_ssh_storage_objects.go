@@ -184,16 +184,27 @@ func clusterSSHStorageOwner(object map[string]any, owner clusterSSHStorageIdenti
 // All fields are public scalar observations, not a storage reservation or
 // provisioning grant. Other claims remain occupied inventory, never free space.
 type clusterSSHStorageVolume struct {
-	Claim, ClaimUID, PV, PVUID, VolumeUID, StorageClass, Role, Node string
-	Bytes                                                           uint64
-	Replicas                                                        int64
-	DataLocality, State, Robustness                                 string
+	Claim        string `json:"claim"`
+	ClaimUID     string `json:"claim_uid"`
+	PV           string `json:"pv"`
+	PVUID        string `json:"pv_uid"`
+	VolumeUID    string `json:"volume_uid"`
+	StorageClass string `json:"storage_class"`
+	Role         string `json:"role"`
+	Node         string `json:"node"`
+	Bytes        uint64 `json:"bytes"`
+	Replicas     int64  `json:"replicas"`
+	DataLocality string `json:"data_locality"`
+	State        string `json:"state"`
+	Robustness   string `json:"robustness"`
 }
 
 type clusterSSHStorageRequirements struct {
-	ArtifactReplicaBytes, PostgresInstanceBytes uint64
-	ConfiguredPostgresInstances                 int64
-	Volumes                                     []clusterSSHStorageVolume
+	ArtifactReplicaBytes        uint64                    `json:"artifact_replica_bytes"`
+	PostgresInstanceBytes       uint64                    `json:"postgres_instance_bytes"`
+	ConfiguredPostgresInstances int64                     `json:"configured_postgres_instances"`
+	Volumes                     []clusterSSHStorageVolume `json:"volumes"`
+	observation                 string                    // Private provenance from the complete source object set; never imported.
 }
 
 func clusterSSHStorageBoundVolume(claim, pv, volume map[string]any) (clusterSSHStorageVolume, error) {

@@ -44,6 +44,7 @@ type clusterSSHPreparationSnapshot struct {
 	Settings    map[string]string                    `json:"settings"`
 	Observation string                               `json:"observation_sha256"`
 	Sources     []clusterbootstrap.SourceNetwork     `json:"sources"`
+	Storage     clusterSSHStorageSnapshot            `json:"storage"`
 	started     time.Time                            // Local acquisition start; never imported from wire or storage.
 }
 

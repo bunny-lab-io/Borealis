@@ -35,7 +35,14 @@ func newSSHStorageFixture(t *testing.T, replacement bool) *sshStorageFixture {
 		source.ActiveSize, source.DesiredSize, source.Status = 2, 3, "Degraded Quorum"
 		cohort.Targets = cohort.Targets[:1]
 	}
-	f := &sshStorageFixture{a: clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}, objects: map[string]map[string]any{}, calls: map[string]int{}}
+	return newSSHStorageFixtureForAuthority(t, clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"})
+}
+
+func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAuthority) *sshStorageFixture {
+	t.Helper()
+	source := a.Source
+	replacement := len(source.Members) == 2
+	f := &sshStorageFixture{a: a, objects: map[string]map[string]any{}, calls: map[string]int{}}
 	f.objects["/api/v1/namespaces/kube-system"] = map[string]any{"metadata": map[string]any{"uid": source.KubeSystemUID}}
 	nodes := []any{}
 	for _, member := range source.Members {
