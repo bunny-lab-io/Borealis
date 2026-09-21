@@ -166,8 +166,14 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			if jobs.Load() == 0 {
 				t.Fatal("actual controller source transport was not exercised")
 			}
-			if !good && mode != "Aegis locked" && secretReads.Load() != 0 {
+			if textInSet(mode, "controller changed", "worker expired", "credential removed") && secretReads.Load() != 0 {
 				t.Fatal("private Secret read after persisted authority loss")
+			}
+			// Storage drift is found by the final inventory after valid source
+			// reads. Its error must discard that response, not pretend DB ownership
+			// was lost before the private Secret acquisition.
+			if mode == "storage placement changed during Job" && secretReads.Load() != 2 {
+				t.Fatal("storage drift did not bracket complete source acquisition")
 			}
 			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {
 				t.Fatal("broker retained DB connection or published event")
