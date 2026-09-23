@@ -115,7 +115,12 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
         assert interface == "org.freedesktop.DBus.Properties"
         if method == "Get":
             assert path == manager and args[11:13] == ["ss", manager_interface] and len(args) == 14
-            if args[-1] == "Reloading": emit("v", {"type": "b", "data": MODE == "boot manager reload"})
+            if args[-1] == "SystemState": emit("v", {"type": "s", "data": "running"})
+            if args[-1] == "UnitsLoadTimestampMonotonic":
+                counter = pathlib.Path(ROOT)/"manager-generation-reads"
+                calls = int(counter.read_text())+1 if counter.exists() else 1
+                counter.write_text(str(calls))
+                emit("v", {"type": "t", "data": calls if MODE == "boot manager reload" else 0})
             assert args[-1] == "UnitPath"
             paths = ["/"+p for p in ("etc/systemd/system.control", "run/systemd/system.control", "run/systemd/transient", "run/systemd/generator.early", "etc/systemd/system", "etc/systemd/system.attached", "run/systemd/system", "run/systemd/system.attached", "run/systemd/generator", "usr/local/lib/systemd/system", "usr/lib/systemd/system", "run/systemd/generator.late")]
             if MODE == "boot unit path": paths.reverse()

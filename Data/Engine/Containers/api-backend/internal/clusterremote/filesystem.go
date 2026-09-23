@@ -24,6 +24,9 @@ type FilesystemRequest struct {
 	MachineID string
 	BootID    string
 	Paths     []string
+	// RequirePersistent selects the stricter root-backed configuration proof.
+	// Current mount statistics alone cannot satisfy this request.
+	RequirePersistent bool
 }
 
 func validFilesystemPath(value string) bool {
@@ -158,10 +161,14 @@ type TargetFilesystem struct {
 }
 
 func (v TargetFilesystem) Evidence(notBefore time.Time, target Target, key HostKey, request FilesystemRequest) (FilesystemEvidence, error) {
+	version := 1
+	if request.RequirePersistent {
+		version = 2
+	}
 	if notBefore.IsZero() || v.started.Before(notBefore) || v.finished.Before(v.started) || v.finished.After(time.Now()) ||
 		v.finished.Sub(v.started) > 25*time.Second || request.Validate() != nil || target.Validate() != nil || key.Validate() != nil ||
 		v.target != target || v.key.Algorithm != key.Algorithm || v.key.Fingerprint != key.Fingerprint || !bytes.Equal(v.key.PublicKey, key.PublicKey) ||
-		v.wire.Version != 1 || v.wire.MachineID != request.MachineID || v.wire.BootID != request.BootID || v.wire.Evidence.validate(request.Paths) != nil {
+		v.wire.Version != version || v.wire.MachineID != request.MachineID || v.wire.BootID != request.BootID || v.wire.Evidence.validate(request.Paths) != nil {
 		return FilesystemEvidence{}, ErrFilesystem
 	}
 	return v.wire.Evidence.Clone(), nil
@@ -177,7 +184,11 @@ func filesystemCommand(request FilesystemRequest) (string, error) {
 	if err != nil || len(raw) > 16<<10 {
 		return "", ErrFilesystem
 	}
-	return buildPrivilegedInspectionCommand("/usr/sbin:/usr/bin:/sbin:/bin", "exec /usr/bin/python3 -I -B -c "+shellConstant(filesystemScript)+" "+shellConstant(base64.StdEncoding.EncodeToString(raw))+" 2>/dev/null"), nil
+	script := filesystemScript
+	if request.RequirePersistent {
+		script = persistentFilesystemScript
+	}
+	return buildPrivilegedInspectionCommand("/usr/sbin:/usr/bin:/sbin:/bin", "exec /usr/bin/python3 -I -B -c "+shellConstant(script)+" "+shellConstant(base64.StdEncoding.EncodeToString(raw))+" 2>/dev/null"), nil
 }
 
 func (client *Client) InspectFilesystem(parent context.Context, sudoPassword []byte, expected Target, approved HostKey, request FilesystemRequest, check func(context.Context) error) (TargetFilesystem, error) {

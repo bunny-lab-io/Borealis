@@ -34,7 +34,7 @@ func TestClusterSSHFilesystemOriginalNativeCohort(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			selection := make([]clusterSSHTargetFilesystemSelection, len(f.claims))
 			for i, claim := range f.claims {
-				selection[i] = clusterSSHTargetFilesystemSelection{claim.Lease.TargetID, []string{"/opt/Borealis", "/var/lib/longhorn"}}
+				selection[i] = clusterSSHTargetFilesystemSelection{TargetID: claim.Lease.TargetID, Paths: []string{"/opt/Borealis", "/var/lib/longhorn"}}
 			}
 			if mode == "missing target" {
 				selection = selection[:1]

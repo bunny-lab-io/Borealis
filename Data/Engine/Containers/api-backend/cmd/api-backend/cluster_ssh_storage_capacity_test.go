@@ -83,7 +83,7 @@ func TestClusterSSHStorageCapacitySharedFilesystem(t *testing.T) {
 }
 
 func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "low space", "policy drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory"} {
+	for _, mode := range []string{"expansion", "replacement", "low space", "policy drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory", "current-only wire", "downgraded reader", "persistent final drift"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			f.filesystemWire = func(i int, raw []byte) []byte {
@@ -94,6 +94,13 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 					Evidence  clusterremote.FilesystemEvidence `json:"evidence"`
 				}
 				_ = json.Unmarshal(raw, &wire)
+				wire.Version = 2
+				if mode == "current-only wire" || mode == "downgraded reader" {
+					wire.Version = 1
+				}
+				if mode == "persistent final drift" && f.opens[i].Load() > 2 {
+					wire.Evidence.Receipt = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+				}
 				wire.Evidence.Filesystems[0].TotalBytes = 120 << 30
 				wire.Evidence.Filesystems[0].AvailableBytes = 90 << 30
 				if mode == "low space" && i == 0 {
@@ -125,6 +132,12 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 				original := readers.Filesystem
 				cached := map[string]clusterremote.TargetFilesystem{}
 				readers.Filesystem = func(ctx context.Context, item clusterSSHInspectedTarget, r clusterremote.FilesystemRequest) (clusterremote.TargetFilesystem, error) {
+					if !r.RequirePersistent {
+						t.Fatal("capacity accepted current-only request")
+					}
+					if mode == "downgraded reader" {
+						r.RequirePersistent = false
+					}
 					if mode == "historical filesystem" {
 						if value, ok := cached[item.Binding.TargetID]; ok {
 							return value, nil

@@ -192,7 +192,7 @@ func withClusterSSHTargetStorageCapacity(parent context.Context, readers cluster
 		}
 		selection := make([]clusterSSHTargetFilesystemSelection, len(a.Cohort.Targets))
 		for i, t := range a.Cohort.Targets {
-			selection[i] = clusterSSHTargetFilesystemSelection{t.Binding.TargetID, slices.Clone(paths)}
+			selection[i] = clusterSSHTargetFilesystemSelection{TargetID: t.Binding.TargetID, Paths: slices.Clone(paths), RequirePersistent: true}
 		}
 		current := func() error {
 			if readers.Refresh(ctx) != nil {

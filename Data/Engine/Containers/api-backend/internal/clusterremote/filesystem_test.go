@@ -32,9 +32,15 @@ func filesystemFixture() (FilesystemRequest, filesystemObservation) {
 }
 
 func TestFilesystemPinnedObservation(t *testing.T) {
-	for _, mode := range []string{"success", "wrong port", "wrong key", "machine", "boot", "namespace", "receipt", "path", "ancestor", "mount point", "mount ID", "unknown FS", "duplicate FS", "FS type", "FS device", "overflow", "free overflow", "unknown field", "duplicate field", "alias field", "null", "trailing", "private error", "oversized", "authority lost", "cancel", "joined heartbeat", "late heartbeat failure"} {
+	for _, mode := range []string{"success", "persistent", "persistent downgrade", "wrong port", "wrong key", "machine", "boot", "namespace", "receipt", "path", "ancestor", "mount point", "mount ID", "unknown FS", "duplicate FS", "FS type", "FS device", "overflow", "free overflow", "unknown field", "duplicate field", "alias field", "null", "trailing", "private error", "oversized", "authority lost", "cancel", "joined heartbeat", "late heartbeat failure"} {
 		t.Run(mode, func(t *testing.T) {
 			request, wire := filesystemFixture()
+			if strings.HasPrefix(mode, "persistent") {
+				request.RequirePersistent = true
+				if mode == "persistent" {
+					wire.Version = 2
+				}
+			}
 			switch mode {
 			case "machine":
 				wire.MachineID = strings.Repeat("b", 32)
@@ -145,7 +151,7 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 			}
 			started := time.Now()
 			value, err := client.InspectFilesystem(ctx, []byte("private-sudo"), target, key, request, check)
-			if mode != "success" && mode != "joined heartbeat" {
+			if mode != "success" && mode != "persistent" && mode != "joined heartbeat" {
 				if err != ErrFilesystem || !reflect.DeepEqual(value, TargetFilesystem{}) {
 					t.Fatal("unsafe observation", err)
 				}
@@ -174,7 +180,7 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 			if !reflect.DeepEqual(again, wire.Evidence) {
 				t.Fatal("mutable result alias")
 			}
-			for _, bad := range []string{"old", "zero time", "endpoint", "key", "machine", "boot", "paths", "serialized"} {
+			for _, bad := range []string{"old", "zero time", "endpoint", "key", "machine", "boot", "paths", "proof mode", "serialized"} {
 				floor, endpoint, pin, req, copy := started, target, key, request, value
 				switch bad {
 				case "old":
@@ -191,6 +197,8 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 					req.BootID = "22222222-2222-4222-8222-222222222222"
 				case "paths":
 					req.Paths = []string{"/other"}
+				case "proof mode":
+					req.RequirePersistent = !req.RequirePersistent
 				case "serialized":
 					encoded, _ := json.Marshal(value)
 					copy = TargetFilesystem{}
