@@ -113,6 +113,17 @@ func testNetworkRenderCorrespondence(t *testing.T, mode string, boot bool) {
 	}
 	if boot {
 		installNetworkBootFixture(t, root)
+		if strings.HasPrefix(mode, "boot cloud ") {
+			installNetworkCloudFixture(t, root)
+			if mode == "boot cloud removed files" {
+				paths, _ := filepath.Glob(filepath.Join(root, "usr/lib/systemd/system/cloud-*"))
+				for _, path := range paths {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
 		if mode == "boot graphical" {
 			path := filepath.Join(root, "etc/systemd/system/default.target")
 			if os.Remove(path) != nil || os.Symlink("/lib/systemd/system/graphical.target", path) != nil {
@@ -223,7 +234,7 @@ func testNetworkRenderCorrespondence(t *testing.T, mode string, boot bool) {
 	command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script, base64.StdEncoding.EncodeToString(raw))
 	command.Env = append(os.Environ(), "NETPLAN_PARSER_IGNORE_ERRORS=1", "DBUS_SYSTEM_BUS_ADDRESS=invalid-inherited-bus", "SNAP=invalid-inherited-snap")
 	out, err := command.Output()
-	want := mode == "success" || mode == "boot graphical" || mode == "vendor shadow" || mode == "lexical merge" || mode == "later Ethernet" || mode == "merged usr" || mode == "later foreign"
+	want := mode == "success" || mode == "boot graphical" || mode == "boot cloud disabled" || mode == "boot cloud unloaded" || mode == "vendor shadow" || mode == "lexical merge" || mode == "later Ethernet" || mode == "merged usr" || mode == "later foreign"
 	if ctx.Err() != nil || (err == nil) != want || bytes.Contains(out, []byte("private-")) {
 		t.Fatalf("native correspondence outcome: error=%v deadline=%v bytes=%d", err, ctx.Err(), len(out))
 	}

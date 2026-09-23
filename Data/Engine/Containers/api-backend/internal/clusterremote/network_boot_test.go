@@ -76,6 +76,8 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
         counter = root/"boot-round"
         n = int(counter.read_text())+1 if counter.exists() else 1
         counter.write_text(str(n))
+        if MODE == "boot cloud marker drift" and n > 1:
+            (root/"etc/cloud/cloud-init.disabled").unlink(missing_ok=True)
         if MODE == "boot namespace": (root/"proc/1/ns/mnt").unlink()
         if MODE == "boot file drift":
             with (root/"usr/lib/systemd/system/systemd-networkd.service").open("a") as output: output.write("# drift\n")
@@ -85,6 +87,19 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
         assert args[11:] in (["s", ":1.7"], ["s", ":1.8"], ["s", ":1.42"])
         emit("u", 42 if args[-1] == ":1.42" else 2 if MODE == "boot PID" else 1)
     if destination in (":1.7", ":1.8"):
+        if method == "ListUnitsByPatterns":
+            assert (path, interface) == (manager, manager_interface)
+            assert args[11:] == ["asas", "0", "3", "cloud-init*", "cloud-config.*", "cloud-final.*"]
+            rows=[]
+            if MODE.startswith("boot cloud ") and MODE != "boot cloud unloaded":
+                unit="cloud-init-local.service"
+                if MODE == "boot cloud unknown": unit="cloud-init-foreign.service"
+                rows=[[unit,"Cloud-init local","loaded","active" if MODE == "boot cloud active" else "inactive","dead","",manager+"/unit/"+unit.replace("-","_2d").replace(".","_2e"),1 if MODE == "boot cloud job" else 0,"","/"]]
+                if MODE == "boot cloud duplicate": rows += rows
+            emit("a(ssssssouso)", rows)
+        if method == "GetUnitProcesses":
+            assert (path, interface) == (manager, manager_interface) and args[11:] == ["s","cloud-init-local.service"]
+            emit("a(sus)", [["/system.slice/cloud-init-local.service",44,"private-argument"]] if MODE == "boot cloud orphan" else [])
         if MODE == "boot hang":
             (root/"generator-pid").write_text(str(os.getpid()))
             time.sleep(20)
@@ -109,6 +124,17 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
         unit = path.removeprefix(manager+"/unit/").replace("_2d", "-").replace("_2e", ".")
         values = {}
         def prop(name, signature, data): values[name] = {"type": signature, "data": data}
+        if unit == "cloud-init-local.service":
+            if args[-1] == "org.freedesktop.systemd1.Service":
+                prop("MainPID","u",44 if MODE == "boot cloud process" else 0); prop("ControlPID","u",0)
+            else:
+                assert args[-1] == "org.freedesktop.systemd1.Unit"
+                for name,data in {"Id":unit,"LoadState":"loaded","ActiveState":"inactive","SubState":"dead","SourcePath":"","FragmentPath":"/usr/lib/systemd/system/"+unit}.items(): prop(name,"s",data)
+                prop("Names","as",[unit]); prop("DropInPaths","as",["/etc/systemd/system/cloud-init-local.service.d/private.conf"] if MODE == "boot cloud loaded dropin" else [])
+                prop("Transient","b",False); prop("NeedDaemonReload","b",MODE == "boot cloud reload")
+                prop("Job","(uo)",[0,"/"]); prop("LoadError","(ss)",["",""])
+                prop("Conditions","a(sbbsi)",[["ConditionPathExists",0 if MODE == "boot cloud condition type" else MODE == "boot cloud trigger", MODE != "boot cloud condition","/etc/cloud/cloud-init.disabled",0]])
+            emit("a{sv}",values)
         if args[-1] == "org.freedesktop.systemd1.Unit":
             assert unit in ("systemd-networkd.service", "systemd-networkd.socket", "multi-user.target", "sockets.target", "graphical.target")
             prop("Id", "s", unit)
@@ -152,7 +178,7 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
 func TestNetworkBootFiles(t *testing.T) {
 	// Exercise actual no-follow opens and real precedence/alias/drop-in trees,
 	// not a second implementation of filesystem selection in Go.
-	for _, mode := range []string{"success", "graphical", "runtime enablement", "missing socket", "default runtime", "default rescue", "service override", "service mask", "attached override", "early override", "late override", "generator run", "generator etc", "generator local", "alias", "named dropin", "alias dropin", "prefix dropin", "type dropin", "default dropin", "socket dropin", "dependency mask", "dependency alias", "unknown dependency", "cloud-init", "NetworkManager", "symlink directory", "writable unit", "hardlinked unit", "large unit", "entry bound"} {
+	for _, mode := range []string{"success", "graphical", "gpt mask", "gpt runtime mask", "gpt executable", "runtime enablement", "missing socket", "default runtime", "default rescue", "service override", "service mask", "attached override", "early override", "late override", "generator run", "generator etc", "generator local", "alias", "named dropin", "alias dropin", "prefix dropin", "type dropin", "default dropin", "socket dropin", "dependency mask", "dependency alias", "unknown dependency", "cloud-init", "NetworkManager", "symlink directory", "writable unit", "hardlinked unit", "large unit", "entry bound"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			installNetworkBootFixture(t, root)
@@ -178,6 +204,9 @@ if MODE in ("service override", "attached override", "early override", "late ove
     area = {"service override":"etc/systemd/system", "attached override":"etc/systemd/system.attached", "early override":"run/systemd/generator.early", "late override":"run/systemd/generator.late"}[MODE]
     write(area+"/"+service)
 if MODE == "service mask": link("etc/systemd/system/"+service, "/dev/null")
+if MODE == "gpt mask": link("etc/systemd/system-generators/systemd-gpt-auto-generator", "/dev/null")
+if MODE == "gpt runtime mask": link("run/systemd/system-generators/systemd-gpt-auto-generator", "/dev/null")
+if MODE == "gpt executable": write("etc/systemd/system-generators/systemd-gpt-auto-generator")
 if MODE.startswith("generator "):
     area = {"generator run":"run", "generator etc":"etc", "generator local":"usr/local/lib"}[MODE]
     link(area+"/systemd/system-generators/netplan", "/dev/null")
@@ -205,7 +234,7 @@ if MODE == "entry bound":
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			out, err := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script).Output()
-			want := mode == "success" || mode == "graphical" || mode == "late override"
+			want := mode == "success" || mode == "graphical" || mode == "late override" || mode == "gpt mask"
 			if ctx.Err() != nil || (err == nil) != want || want && !bytes.Equal(bytes.TrimSpace(out), []byte("true")) || !want && len(out) != 0 {
 				t.Fatalf("boot file outcome: error=%v timeout=%v output bytes=%d", err, ctx.Err(), len(out))
 			}

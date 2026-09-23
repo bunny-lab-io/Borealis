@@ -42,7 +42,7 @@ if __name__ == "__main__":
     main(lambda: observe_network_render(boot_snapshot))
 `
 
-const networkBootLibraryScript = `
+const networkBootLibraryScript = networkBootCloudLibraryScript + `
 BOOT_PATHS = ("etc/systemd/system.control", "run/systemd/system.control", "run/systemd/transient",
               "run/systemd/generator.early", "etc/systemd/system", "etc/systemd/system.attached",
               "run/systemd/system", "run/systemd/system.attached", "run/systemd/generator",
@@ -89,8 +89,16 @@ def boot_files(root):
             continue
         try:
             with os.scandir(fd) as entries:
-                if next(entries, None) is not None:
-                    raise ValueError()
+                for entry in entries:
+                    # Ubuntu installations may persistently disable GPT auto
+                    # discovery. This exact mask cannot introduce a writer;
+                    # retain its identity and reject every other override.
+                    if path != "etc/systemd/system-generators" or entry.name != "systemd-gpt-auto-generator":
+                        raise ValueError()
+                    value = boot_entry(fd, entry.name)
+                    if value[1] != "/dev/null":
+                        raise ValueError()
+                    result["gpt-auto-generator-mask"] = value
         finally:
             os.close(fd)
     for path in BOOT_PATHS:
@@ -104,7 +112,7 @@ def boot_files(root):
                     count += 1
                     if count > 8192:
                         raise ValueError()
-                    if not entry.name.endswith((".service", ".socket", ".target")):
+                    if not entry.name.endswith((".service", ".socket", ".target")) and not (boot_cloud_name(entry.name) and entry.name.endswith((".timer", ".path", ".mount", ".automount", ".slice", ".scope", ".device"))):
                         continue
                     value = boot_entry(fd, entry.name)
                     inventory[(path, entry.name)] = value
@@ -114,7 +122,8 @@ def boot_files(root):
             os.close(fd)
     # Conservative alias closure includes even shadowed symlinks. Unknown
     # aliases could contribute drop-ins after reload despite today's Names.
-    for unit, allowed in BOOT_ALIASES.items():
+    aliases_by_unit = dict(BOOT_ALIASES, **{unit: {unit} for unit in BOOT_CLOUD_UNITS})
+    for unit, allowed in aliases_by_unit.items():
         aliases = {unit}
         for _ in range(16):
             added = {name for name, targets in links.items() if targets & aliases}
@@ -141,22 +150,28 @@ def boot_files(root):
     units = ["systemd-networkd.service", "systemd-networkd.socket", "multi-user.target", "sockets.target"]
     if default == "graphical.target":
         units.append(default)
-    # Unknown network config writers are not qualified through a mere disabled
-    # or active/exited status. Explicit writer quiescence/support remains later
-    # work; this initial contract requires their units to be absent entirely.
-    for name in effective:
-        if name.startswith(("cloud-init", "cloud-config.", "cloud-final.")) or name in ("NetworkManager.service", "networking.service", "connman.service", "wicked.service"):
+    cloud_units = sorted(name for name in effective if boot_cloud_name(name))
+    if cloud_units:
+        if set(cloud_units) != BOOT_CLOUD_UNITS:
             raise ValueError()
-    for unit in units:
+        result["cloud-init.disabled"] = boot_cloud_marker(root)
+    # A disabled service flag alone never establishes writer quiescence. Only
+    # the explicitly guarded standard cloud-init layout gains support here.
+    for name in effective:
+        if name in ("NetworkManager.service", "networking.service", "connman.service", "wicked.service"):
+            raise ValueError()
+    for unit in units+cloud_units:
         if effective.get(unit, (None,))[0] != BOOT_VENDOR or inventory[(BOOT_VENDOR, unit)][1] is not None:
             raise ValueError()
         fd = directory(root, BOOT_VENDOR)
         try:
             result[unit] = read_file(fd, unit)
+            if unit in BOOT_CLOUD_UNITS:
+                boot_cloud_fragment(unit, result[unit][1])
         finally:
             os.close(fd)
         dropins = set()
-        for alias in BOOT_ALIASES[unit]:
+        for alias in aliases_by_unit[unit]:
             stem, kind = alias.rsplit(".", 1)
             dropins |= {alias+".d", kind+".d"}
             for i, char in enumerate(stem):
@@ -180,7 +195,7 @@ def boot_files(root):
         # selection. Retain every applicable link, including shadowed links;
         # refuse masks/foreign destinations for either networkd dependency.
         for path in BOOT_PATHS:
-            for alias in sorted(BOOT_ALIASES[unit]):
+            for alias in sorted(aliases_by_unit[unit]):
                 for kind in ("wants", "requires"):
                     area = path+"/"+alias+"."+kind
                     try:
@@ -212,7 +227,7 @@ def boot_files(root):
             result[parent] = value
         finally:
             os.close(fd)
-    return (default, units, inventory, result, lib)
+    return (default, units, inventory, result, lib, cloud_units)
 
 def boot_value(values, name, signature):
     value = values.get(name)
@@ -294,7 +309,7 @@ def boot_snapshot(root):
     paths = boot_property(owner, manager_path, manager_interface, "UnitPath", "as")
     if [boot_canonical(path) for path in paths] != ["/"+path for path in BOOT_PATHS] or boot_property(owner, manager_path, manager_interface, "Reloading", "b"):
         raise ValueError()
-    observed = {}
+    observed = {"cloud-init": boot_cloud_loaded(owner, files[5])}
     for unit in files[1]:
         path, values, invocation = boot_unit(owner, unit)
         # Native properties can change without restarting the unit. Retain
@@ -341,7 +356,7 @@ def boot_snapshot(root):
     default_path = "/org/freedesktop/systemd1/unit/"+files[0].replace("-", "_2d").replace(".", "_2e")
     if wire["type"] != "o" or wire["data"][0] != default_path:
         raise ValueError()
-    if (bus, network_owner) != bus_identity() or boot_pid(owner) != 1 or boot_property(owner, manager_path, manager_interface, "Reloading", "b"):
+    if (bus, network_owner) != bus_identity() or boot_pid(owner) != 1 or boot_property(owner, manager_path, manager_interface, "Reloading", "b") or boot_files(root) != files:
         raise ValueError()
     return (files, bus, owner, network_owner, (own.st_dev, own.st_ino), observed)
 `
