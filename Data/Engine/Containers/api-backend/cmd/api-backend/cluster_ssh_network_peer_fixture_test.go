@@ -145,7 +145,7 @@ func sshNetworkFixtureTransport(t *testing.T, item clusterSSHInspectedTarget, si
 					stdin, err := io.ReadAll(channel)
 					if err != nil || !bytes.Equal(stdin, []byte("fixture-sudo\n")) {
 						status = 1
-					} else if observationWire != nil && (strings.Contains(command.Command, "observe_arp") || strings.Contains(command.Command, "observe_network_render")) {
+					} else if observationWire != nil && (strings.Contains(command.Command, "observe_arp") || strings.Contains(command.Command, "observe_network_render") || strings.Contains(command.Command, "observe_filesystems")) {
 						_, _ = channel.Write(observationWire)
 					} else if strings.Contains(command.Command, "observe_network_render") {
 						version := 1

@@ -16,19 +16,20 @@ import (
 )
 
 type sshNetworkTargetsFixture struct {
-	hostWire    func(int, string) string
-	sources     []clusterbootstrap.SourceNetwork
-	vipLease    clusterbootstrap.VIPLease
-	a           clusterSSHPreparationAuthority
-	claims      []clusterSSHNetworkTargetClaim
-	deps        clusterSSHNetworkTargetDependencies
-	boots       []clusterremote.NetworkRenderRequest
-	arps        []clusterremote.ARPRequest
-	lost        atomic.Int32
-	opens       [2]atomic.Int32
-	renews      [2]atomic.Int32
-	sessions    []<-chan struct{}
-	credentials []*clusterremote.Credential
+	hostWire       func(int, string) string
+	filesystemWire func(int, []byte) []byte
+	sources        []clusterbootstrap.SourceNetwork
+	vipLease       clusterbootstrap.VIPLease
+	a              clusterSSHPreparationAuthority
+	claims         []clusterSSHNetworkTargetClaim
+	deps           clusterSSHNetworkTargetDependencies
+	boots          []clusterremote.NetworkRenderRequest
+	arps           []clusterremote.ARPRequest
+	lost           atomic.Int32
+	opens          [2]atomic.Int32
+	renews         [2]atomic.Int32
+	sessions       []<-chan struct{}
+	credentials    []*clusterremote.Credential
 }
 
 func newSSHNetworkTargetsFixture(t *testing.T, replacement bool, kind string) *sshNetworkTargetsFixture {
@@ -100,6 +101,12 @@ func newSSHNetworkTargetsFixture(t *testing.T, replacement bool, kind string) *s
 			}{1, f.arps[i], 2})
 		}
 		var edits []func(string) string
+		if kind == "filesystem" {
+			wire = sshFilesystemFixtureWire(item)
+			if f.filesystemWire != nil {
+				wire = f.filesystemWire(i, wire)
+			}
+		}
 		if f.hostWire != nil {
 			edits = append(edits, func(wire string) string { return f.hostWire(i, wire) })
 		}

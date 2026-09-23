@@ -24,12 +24,13 @@ func (clusterSSHNetworkTargetClaim) String() string   { return "network target c
 func (clusterSSHNetworkTargetClaim) GoString() string { return "network target claim [redacted]" }
 
 type clusterSSHNetworkTargetReaders struct {
-	within    func(context.Context, func(context.Context) error) error
-	Authority clusterSSHPreparationAuthorityRead
-	Refresh   func(context.Context) error
-	Peer      clusterSSHTargetNetworkRead
-	Boot      clusterSSHTargetNetworkBootRead
-	ARP       clusterSSHTargetARPRead
+	within     func(context.Context, func(context.Context) error) error
+	Authority  clusterSSHPreparationAuthorityRead
+	Refresh    func(context.Context) error
+	Peer       clusterSSHTargetNetworkRead
+	Boot       clusterSSHTargetNetworkBootRead
+	ARP        clusterSSHTargetARPRead
+	Filesystem func(context.Context, clusterSSHInspectedTarget, clusterremote.FilesystemRequest) (clusterremote.TargetFilesystem, error)
 }
 
 type clusterSSHNetworkTargetDependencies struct {
@@ -305,6 +306,21 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 			})
 			if err != nil {
 				return clusterremote.TargetManagementPeer{}, err
+			}
+			return value, nil
+		}
+		readers.Filesystem = func(caller context.Context, item clusterSSHInspectedTarget, request clusterremote.FilesystemRequest) (clusterremote.TargetFilesystem, error) {
+			request.Paths = slices.Clone(request.Paths)
+			var value clusterremote.TargetFilesystem
+			err := read(caller, item, nil, func(expected clusterSSHInspectedTarget) bool {
+				return request.Validate() == nil && request.MachineID == expected.Report.MachineID && request.BootID == expected.Report.BootID
+			}, func(ctx context.Context, expected clusterSSHInspectedTarget, client *clusterremote.Client, sudo []byte, current func(context.Context) error) error {
+				var err error
+				value, err = client.InspectFilesystem(ctx, sudo, clusterremote.Target{Address: expected.Binding.Address, Port: expected.Binding.Port}, expected.Key, request, current)
+				return err
+			})
+			if err != nil {
+				return clusterremote.TargetFilesystem{}, err
 			}
 			return value, nil
 		}
