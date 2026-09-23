@@ -45,7 +45,7 @@ func (r clusterSSHSourceBrokerRequest) sealed() sealedClusterSSHCredentials {
 
 func (r clusterSSHSourceBrokerRequest) valid(now time.Time) bool {
 	return r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+40 &&
-		validClusterSSHPreparationLease(r.Lease) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
+		validClusterSSHObservationLease(r.Lease) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
 		r.Binding.valid() && r.Binding.OperationID == r.Lease.OperationID && r.Binding.TargetID == r.Lease.TargetID &&
 		r.Generation != "" && len(r.Generation) <= 16<<10 && strings.HasPrefix(r.Ciphertext, aegisEnvelopePrefix) && len(r.Ciphertext) <= 256<<10
 }
@@ -155,7 +155,7 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	reply := func(status string, snapshot *clusterSSHPreparationSnapshot) {
-		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Version: 3, ID: request.ID, Status: status, Snapshot: snapshot})
+		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Version: 4, ID: request.ID, Status: status, Snapshot: snapshot})
 		if err != nil {
 			fail(http.StatusServiceUnavailable)
 			return

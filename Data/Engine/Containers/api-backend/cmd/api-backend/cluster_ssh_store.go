@@ -208,7 +208,14 @@ func (s *postgresOperatorStore) renewClusterSSHTargetGeneration(ctx context.Cont
 // started. Replacing ciphertext under an unchanged Aegis generation must fence
 // that scope too. This neither claims a target nor advances an operation.
 func (s *postgresOperatorStore) renewClusterSSHPreparationTarget(ctx context.Context, lease clusterSSHTargetLease, sealed sealedClusterSSHCredentials) error {
-	if !validClusterSSHPreparationLease(lease) || !sealed.binding.valid() || sealed.binding.OperationID != lease.OperationID || sealed.binding.TargetID != lease.TargetID ||
+	if !validClusterSSHPreparationLease(lease) {
+		return errClusterSSHCredentials
+	}
+	return s.renewClusterSSHObservationTarget(ctx, lease, sealed)
+}
+
+func (s *postgresOperatorStore) renewClusterSSHObservationTarget(ctx context.Context, lease clusterSSHTargetLease, sealed sealedClusterSSHCredentials) error {
+	if !validClusterSSHObservationLease(lease) || !sealed.binding.valid() || sealed.binding.OperationID != lease.OperationID || sealed.binding.TargetID != lease.TargetID ||
 		sealed.generation == "" || len(sealed.generation) > 16<<10 || !strings.HasPrefix(sealed.ciphertext, aegisEnvelopePrefix) || len(sealed.ciphertext) > 256<<10 {
 		return errClusterSSHCredentials
 	}
@@ -220,8 +227,8 @@ func (s *postgresOperatorStore) renewClusterSSHTargetEnvelope(ctx context.Contex
 		return errClusterUnavailable
 	}
 	// Legacy inspection entrypoints cannot bypass preparation's envelope fence.
-	if (lease.OperationStep == clusterSSHPreparationOperationStep || lease.Step == "stage_source") &&
-		(!validClusterSSHPreparationLease(lease) || generation == "" || ciphertext == "") {
+	if (lease.OperationStep == clusterSSHPreparationOperationStep || lease.Step == "stage_source" || lease.OperationStep == clusterSSHQualificationStep || lease.Step == "qualify") &&
+		(!validClusterSSHObservationLease(lease) || generation == "" || ciphertext == "") {
 		return errClusterConflict
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -236,7 +243,8 @@ func (s *postgresOperatorStore) renewClusterSSHTargetEnvelope(ctx context.Contex
 		UPDATE engine.cluster_onboarding_targets t SET lease_expires_at=moment.now+$6,updated_at=moment.now
 		FROM moment,engine.cluster_operations o,engine.cluster_state c,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a,engine.cluster_application_leases l
 		WHERE t.id=$1 AND t.operation_id=$2 AND t.lease_holder=$3 AND t.lease_generation=$4 AND t.current_step=$5
-		  AND t.lease_expires_at>moment.now AND t.state='running' AND t.credential_state='available' AND o.id=t.operation_id AND o.state='running'
+		  AND t.lease_expires_at>moment.now AND t.state='running' AND t.credential_state='available' AND o.id=t.operation_id
+		  AND o.state=CASE WHEN $9='qualify_ssh_targets' THEN 'waiting' ELSE 'running' END
 		  AND c.active_operation_id=o.id AND c.cluster_id=t.cluster_id
 		  AND l.name=$10 AND l.holder=$7 AND l.expires_at>moment.now
 		  AND o.attempt=$8 AND t.operation_attempt=o.attempt AND o.current_step=$9
@@ -268,7 +276,7 @@ func (s *postgresOperatorStore) loadClusterSSHTargetCredentials(ctx context.Cont
 	err = tx.QueryRowContext(ctx, `SELECT t.cluster_id,t.operation_id,t.id,t.management_ip,t.ssh_port,t.host_key_fingerprint,p.aegis_generation,p.ciphertext
 		FROM engine.cluster_onboarding_targets t JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
 		JOIN engine.aegis_cipher_state a ON a.id=1 AND a.verification_token=p.aegis_generation
-		JOIN engine.cluster_operations o ON o.id=t.operation_id AND o.state='running'
+		JOIN engine.cluster_operations o ON o.id=t.operation_id AND o.state=CASE WHEN $8='qualify_ssh_targets' THEN 'waiting' ELSE 'running' END
 		JOIN engine.cluster_state c ON c.active_operation_id=o.id AND c.cluster_id=t.cluster_id
 		JOIN engine.cluster_application_leases l ON l.name=$9 AND l.holder=$6 AND l.expires_at>extract(epoch FROM clock_timestamp())
 		WHERE t.id=$1 AND t.operation_id=$2 AND t.lease_holder=$3 AND t.lease_generation=$4 AND t.current_step=$5

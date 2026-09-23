@@ -451,6 +451,11 @@ finally:
     - If a helper repeatedly asks for repo or catalog metadata, add a short TTL cache so repeated reads do not create unnecessary external latency while DB connections are checked out.
     - After each fix, test the route and inspect `pg_stat_activity` to confirm pooled sessions return to `idle` rather than `idle in transaction`.
 
+    ### SSH qualification persistence
+
+    - Existing onboarding tables support a separate read-only whole-cohort claim at parent `waiting/qualify_ssh_targets`. Targets use `qualify` and `qualification_complete`; no schema migration is needed. An optional bounded `payload_json.ssh_qualification` records public observations while preparation remains disabled.
+    - Claim/result transactions preserve controller-first locking and compare original source topology/configuration, complete target bindings, current encrypted credential envelopes and producing inspection evidence. Cancellation retains reports and removes temporary credentials after releasing the transaction. The progress query selects only the public result subobject and parses it after connection release. Canonical state and field guidance lives in [read-only qualification](../../Engine/managing-engine-clusters.md#read-only-qualification-worker-and-result-contract).
+
     ### Engine runtime database tables (`engine.*`)
 
     ### Enrollment, Identity, and Site Mapping

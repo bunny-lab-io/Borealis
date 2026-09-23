@@ -78,7 +78,7 @@ func (r *clusterSSHInspectionRuntime) runOnce(ctx context.Context) error {
 		}()
 	}
 	joined.Wait()
-	return nil
+	return r.qualifyOnce(ctx)
 }
 
 func startClusterSSHInspectionRuntime(parent context.Context, auth *authService) func() {

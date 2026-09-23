@@ -53,7 +53,7 @@ func (r *kubernetesClusterStepRunner) newSSHSourceObservationRead(authority clus
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()
 		before, err := authority(ctx)
-		if err != nil || before.Baseline.Validate() != nil || !validClusterSSHPreparationLease(before.Lease) ||
+		if err != nil || before.Baseline.Validate() != nil || !validClusterSSHObservationLease(before.Lease) ||
 			before.Lease.ControllerHolder != r.controllerHolder || validateClusterSSHInspectionCohort(before.Cohort, before.Source) != nil {
 			return fail()
 		}

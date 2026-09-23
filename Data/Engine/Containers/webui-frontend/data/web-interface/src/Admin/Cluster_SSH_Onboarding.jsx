@@ -13,6 +13,42 @@ const clearCredentials = (targets) => targets.forEach((target) => {
   for (const field of ["password", "private_key", "passphrase", "sudo_password"]) delete target[field];
 });
 
+const qualificationChecks = {
+  source_inputs: ["Source release and storage policy", "Check the source release, unlocked credentials and storage health before starting another inspection."],
+  host_profile: ["Inherited hardware requirements", "Targets must support the source Engine's CPU and memory profile."],
+  replica_capacity: ["Replica storage and rebuild space", "Each target needs space for its replicas, bootstrap copies and rebuild headroom. Existing storage needs a separate recovery plan."],
+  network_boot: ["Persistent network configuration", "The Engine could not establish supported persistent network ownership. Review host configuration before retrying."],
+  network_arp: ["Local network reachability", "Check the management network, peer identities and cluster virtual IP ownership."],
+  remaining_prerequisites: ["Remaining join prerequisites", "Full workload and runtime disk sizing, mount/reboot persistence, recovery and preparation still need qualification. Joining remains unavailable."],
+};
+
+export function validSSHQualification(value, attempt, targets) {
+  if (!value || value.version !== 1 || value.attempt !== attempt || value.ready !== false
+    || !Number.isSafeInteger(value.observed_at) || value.observed_at < 1 || value.observed_at > Math.floor(Date.now() / 1000) + 5
+    || !Array.isArray(value.checks) || value.checks.length !== Object.keys(qualificationChecks).length
+    || !Array.isArray(value.storage) || (value.storage.length !== 0 && value.storage.length !== targets.length)) return false;
+  const codes = Object.keys(qualificationChecks);
+  if (!value.checks.every((check, index) => check?.code === codes[index] && ["passed", "blocked", "pending"].includes(check.state)
+    && (index !== codes.length - 1 || check.state === "pending"))) return false;
+  const seen = new Set();
+  for (const target of value.storage) {
+    if (!target || !targets.some((known) => known.id === target.target_id) || seen.has(target.target_id)
+      || typeof target.fits !== "boolean" || typeof target.storage_path !== "string" || target.storage_path.length > 1024
+      || !/^\/[\x20-\x7e]+$/.test(target.storage_path) || target.storage_path.split("/").some((part, index) => index > 0 && (!part || part === "." || part === ".." || part.length > 255))
+      || !Array.isArray(target.budgets) || target.budgets.length < 1 || target.budgets.length > 8) return false;
+    seen.add(target.target_id);
+    const filesystems = new Set();
+    for (const budget of target.budgets) {
+      if (!budget || !/^[0-9a-f]{16}$/.test(budget.filesystem) || filesystems.has(budget.filesystem) || typeof budget.fits !== "boolean"
+        || ![budget.available_bytes, budget.other_bytes, budget.replica_bytes, budget.rebuild_bytes, budget.minimum_free_bytes, budget.logical_limit_bytes].every((n) => Number.isSafeInteger(n) && n >= 0)
+        || !Number.isSafeInteger(budget.other_bytes + budget.replica_bytes + budget.rebuild_bytes + budget.minimum_free_bytes)) return false;
+      filesystems.add(budget.filesystem);
+    }
+    if (target.fits !== target.budgets.every((budget) => budget.fits)) return false;
+  }
+  return true;
+}
+
 export function validSSHInspectionProgress(value, id) {
   if (!value || value.operation_id !== id || !validSSHInspectionID(id) || !["queued", "running", "waiting", "failed", "cancelled", "succeeded"].includes(value.state)
     || typeof value.current_step !== "string" || !/^[a-z_]{1,64}$/.test(value.current_step) || !Number.isSafeInteger(value.attempt) || value.attempt < 1
@@ -35,7 +71,7 @@ export function validSSHInspectionProgress(value, id) {
         || target.inspected_at > 8640000000000 || target.inspected_attempt > value.attempt) return false;
     } else if (target.inspected_at || target.inspected_attempt || target.inspected_generation) return false;
   }
-  return true;
+  return value.qualification == null || validSSHQualification(value.qualification, value.attempt, value.targets);
 }
 
 export default function ClusterSSHOnboarding({ targetCount = 2, initialOperationID = "", onClose, onOperation, onChanged }) {
@@ -150,20 +186,33 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
     onBack={index ? () => { clearCredentials(drafts.current); drafts.current = []; setIndex(0); } : undefined} />;
 
   const canCancel = !submittingID && !cancelling && receivedAt > 0 && Date.now() - receivedAt <= 15000 && ["queued", "running", "waiting"].includes(progress?.state) && phases.has(progress?.current_step)
-    && progress.targets.every((target) => ["queued", "running", "recovery_required"].includes(target.state) && ["inspect", "inspection_complete"].includes(target.current_step));
+    && progress.targets.every((target) => ["queued", "running", "recovery_required"].includes(target.state) && ["inspect", "inspection_complete", "qualify", "qualification_complete"].includes(target.current_step));
   return <Dialog open onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
     <DialogTitle sx={DIALOG_TITLE_SX}>Engine host inspection</DialogTitle>
     <DialogContent sx={{ ...DIALOG_CONTENT_SX, overflowY: "auto" }}><Stack spacing={2} sx={{ pt: 1.25 }}>
       {operationID && !validSSHInspectionID(operationID) ? <Alert severity="error">Invalid inspection request ID. Open an inspection from operation history.</Alert> : error ? <Alert severity="warning">{error}</Alert> : null}
-      <Typography>{submittingID ? "Submitting approved hosts…" : progress?.state === "waiting" ? "Inspection complete. Review collected host results." : progress?.state === "cancelled" ? "Inspection ended. Temporary credentials and host reservations released." : progress?.state === "failed" ? "Inspection stopped. Review retained host results before starting over." : progress?.state === "succeeded" ? "Operation finished. Review recorded results and cluster membership." : "Checking approved hosts from this Engine…"}</Typography>
+      <Typography>{submittingID ? "Submitting approved hosts…" : progress?.state === "waiting" ? (progress.qualification ? "Readiness checks recorded. Review results below." : "Inspection complete. Checking host readiness…") : progress?.state === "cancelled" ? "Inspection ended. Temporary credentials and host reservations released." : progress?.state === "failed" ? "Inspection stopped. Review retained host results before starting over." : progress?.state === "succeeded" ? "Operation finished. Review recorded results and cluster membership." : "Checking approved hosts from this Engine…"}</Typography>
       {progress?.state === "waiting" ? <Typography>Joining requires further readiness checks. End inspection to release hosts and temporary credentials.</Typography> : null}
       {progress?.targets.map((target) => <Stack key={target.id} spacing={0.5} sx={{ p: 1.5, border: "1px solid rgba(148,163,184,0.2)", borderRadius: 2 }}>
         <Typography sx={{ fontWeight: 600 }}>{target.address}:{target.port}</Typography>
         <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>{target.host_key_fingerprint}</Typography>
-        <Typography>{target.current_step === "inspection_complete" ? "Host inspection recorded" : target.state.replaceAll("_", " ")}</Typography>
+        <Typography>{({ inspection_complete: "Host inspection recorded", qualify: "Checking host readiness", qualification_complete: "Readiness results recorded" })[target.current_step] || target.state.replaceAll("_", " ")}</Typography>
         <Typography variant="body2">{target.credentials_available ? "Temporary credentials available" : "Temporary credentials unavailable"}</Typography>
         {target.report ? <Typography variant="body2">{target.report.hostname} · {target.report.cpu_count} CPUs · {(target.report.memory_kib / 1048576).toFixed(1)} GiB RAM<br />Recorded {new Date(target.inspected_at * 1000).toLocaleString()} · attempt {target.inspected_attempt}, generation {target.inspected_generation}</Typography> : null}
       </Stack>)}
+      {progress?.qualification ? <Stack spacing={1} aria-label="Host readiness results">
+        <Typography variant="caption">Recorded {new Date(progress.qualification.observed_at * 1000).toLocaleString()}. Results are observations; preparation requires fresh qualification.</Typography>
+        {progress.qualification.checks.map((check) => <Alert key={check.code} severity={check.state === "blocked" ? "warning" : check.state === "passed" ? "success" : "info"}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>{qualificationChecks[check.code][0]}: {check.state === "passed" ? "Observed" : check.state === "blocked" ? "Blocked" : "Pending"}</Typography>
+          {check.state === "blocked" || check.code === "remaining_prerequisites" ? <Typography variant="body2">{qualificationChecks[check.code][1]}</Typography> : null}
+        </Alert>)}
+        {progress.qualification.storage.map((storage) => <Stack key={storage.target_id} spacing={0.5}>
+          <Typography variant="body2">{progress.targets.find((target) => target.id === storage.target_id).address} · {storage.storage_path}</Typography>
+          {storage.budgets.map((budget) => <Typography key={budget.filesystem} variant="caption">
+            {(budget.available_bytes / 1073741824).toFixed(1)} GiB available · {((budget.other_bytes + budget.replica_bytes + budget.rebuild_bytes + budget.minimum_free_bytes) / 1073741824).toFixed(1)} GiB budgeted · {budget.fits ? "Fits checked demands" : "Insufficient capacity"}
+          </Typography>)}
+        </Stack>)}
+      </Stack> : null}
       <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>Request: {operationID || submittingID}</Typography>
     </Stack></DialogContent>
     <DialogActions sx={DIALOG_ACTIONS_SX}>

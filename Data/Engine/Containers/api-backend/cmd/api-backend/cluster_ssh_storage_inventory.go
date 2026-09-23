@@ -217,6 +217,10 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	}
 	result.Requirements.PostgresInstanceBytes = pgBytes
 	result.Requirements.ConfiguredPostgresInstances = instances
+	result.Requirements.Policy, err = observeClusterSSHStoragePolicy(read, result.Requirements.Volumes)
+	if err != nil {
+		return fail()
+	}
 	// Canonical map order binds every full object receipt without exporting raw
 	// objects, names of unrelated resources, revisions or private annotations.
 	wire, err := json.Marshal(result.receipts)
@@ -229,14 +233,17 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 }
 
 // Fixed GET-only transport uses existing controller TLS/token and existing
-// PVC/PV/Pod/CNPG/Longhorn read permissions. No StorageClass read or RBAC change.
+// PVC/PV/Pod/CNPG/Longhorn reads plus GET-only provisioning policy permissions.
 func (c *kubernetesAPIClient) getClusterSSHStorageJSON(ctx context.Context, path string, out any) error {
 	valid := path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
-	for _, prefix := range []string{clusterSSHStoragePVPrefix, clusterSSHStorageVolumePrefix} {
+	for _, prefix := range []string{clusterSSHStoragePVPrefix, clusterSSHStorageVolumePrefix, clusterSSHStorageClassPrefix} {
 		if strings.HasPrefix(path, prefix) {
 			valid = clusterSSHStorageName(strings.TrimPrefix(path, prefix))
 			break
 		}
+	}
+	if strings.HasPrefix(path, clusterSSHStorageSettingPrefix) {
+		valid = slices.Contains(clusterSSHStoragePolicySettings, strings.TrimPrefix(path, clusterSSHStorageSettingPrefix))
 	}
 	if !valid {
 		return clusterbootstrap.ErrPreparationConfig

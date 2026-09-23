@@ -48,7 +48,7 @@ func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPre
 			return clusterbootstrap.ErrSessionAuthority
 		}
 		value, err := authority(ctx)
-		if err != nil || ctx.Err() != nil || value.Baseline.Validate() != nil || !validClusterSSHPreparationLease(value.Lease) ||
+		if err != nil || ctx.Err() != nil || value.Baseline.Validate() != nil || !validClusterSSHObservationLease(value.Lease) ||
 			validateClusterSSHInspectionCohort(value.Cohort, value.Source) != nil ||
 			value.Lease.OperationID != value.Cohort.OperationID || value.Lease.ControllerHolder != value.Cohort.ControllerHolder || value.Lease.OperationAttempt != value.Cohort.Attempt ||
 			!slices.ContainsFunc(value.Cohort.Targets, func(target clusterSSHInspectedTarget) bool {
@@ -120,6 +120,7 @@ func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPre
 		}
 		value := retained.Requirements
 		value.Volumes = slices.Clone(value.Volumes)
+		value.Policy.Classes = slices.Clone(value.Policy.Classes)
 		if consume(readerCtx, value, checks) != nil || readerCtx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}

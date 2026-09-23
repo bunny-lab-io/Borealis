@@ -43,7 +43,7 @@ func withClusterSSHVIPOwner(parent context.Context, authority clusterSSHPreparat
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	initial, err := authority(ctx)
-	if err != nil || initial.Baseline.Validate() != nil || !validClusterSSHPreparationLease(initial.Lease) || validateClusterSSHSourceNetworks(initial, networks) != nil ||
+	if err != nil || initial.Baseline.Validate() != nil || !validClusterSSHObservationLease(initial.Lease) || validateClusterSSHSourceNetworks(initial, networks) != nil ||
 		initial.Source.ControlPlaneVIP != initial.Source.EdgeVIP {
 		return clusterbootstrap.ErrPreparationConfig
 	}

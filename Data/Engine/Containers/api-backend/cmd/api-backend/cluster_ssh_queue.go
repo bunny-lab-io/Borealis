@@ -124,11 +124,12 @@ func (s *postgresOperatorStore) queueClusterSSHInspections(ctx context.Context, 
 }
 
 type clusterSSHInspectionProgress struct {
-	OperationID string                               `json:"operation_id"`
-	State       string                               `json:"state"`
-	Step        string                               `json:"current_step"`
-	Attempt     int64                                `json:"attempt"`
-	Targets     []clusterSSHInspectionProgressTarget `json:"targets"`
+	OperationID   string                               `json:"operation_id"`
+	State         string                               `json:"state"`
+	Step          string                               `json:"current_step"`
+	Attempt       int64                                `json:"attempt"`
+	Targets       []clusterSSHInspectionProgressTarget `json:"targets"`
+	Qualification *clusterSSHQualificationReport       `json:"qualification,omitempty"`
 }
 
 type clusterSSHInspectionProgressTarget struct {
@@ -157,7 +158,8 @@ func (s *postgresOperatorStore) clusterSSHInspectionProgress(ctx context.Context
  t.state,t.current_step,t.inspected_at,t.inspected_attempt,t.inspected_generation,t.inspection_json,
  (o.state IN ('queued','running','waiting') AND t.state IN ('queued','running','recovery_required')
  AND t.operation_attempt=o.attempt AND t.credential_state='available' AND EXISTS (SELECT 1 FROM engine.cluster_onboarding_credentials p JOIN engine.aegis_cipher_state a
- ON a.id=1 AND a.verification_token=p.aegis_generation WHERE p.target_id=t.id AND p.expires_at>extract(epoch FROM statement_timestamp())))
+ ON a.id=1 AND a.verification_token=p.aegis_generation WHERE p.target_id=t.id AND p.expires_at>extract(epoch FROM statement_timestamp()))),
+ COALESCE((o.payload_json::json->'ssh_qualification')::text,'')
  FROM engine.cluster_operations o JOIN engine.cluster_onboarding_targets t ON t.operation_id=o.id
  WHERE o.id=$1 AND o.kind='ssh_onboarding' ORDER BY t.ordinal LIMIT 3`, operationID)
 	if err != nil {
@@ -165,11 +167,12 @@ func (s *postgresOperatorStore) clusterSSHInspectionProgress(ctx context.Context
 	}
 	progress := clusterSSHInspectionProgress{OperationID: operationID}
 	var reports []string
+	var qualification string
 	for rows.Next() {
 		var target clusterSSHInspectionProgressTarget
 		var report string
 		if err := rows.Scan(&progress.State, &progress.Step, &progress.Attempt, &target.ID, &target.Address, &target.Port, &target.Fingerprint,
-			&target.State, &target.Step, &target.InspectedAt, &target.InspectedAttempt, &target.InspectedGeneration, &report, &target.CredentialsReady); err != nil {
+			&target.State, &target.Step, &target.InspectedAt, &target.InspectedAttempt, &target.InspectedGeneration, &report, &target.CredentialsReady, &qualification); err != nil {
 			rows.Close()
 			return fail(errClusterUnavailable)
 		}
@@ -182,6 +185,24 @@ func (s *postgresOperatorStore) clusterSSHInspectionProgress(ctx context.Context
 	}
 	if len(reports) == 0 {
 		return fail(errClusterNotFound)
+	}
+	progress.Qualification, err = parseClusterSSHQualificationReport(qualification, progress.Attempt)
+	if err != nil {
+		return fail(err)
+	}
+	if progress.Qualification != nil {
+		if len(progress.Qualification.Storage) > 0 && len(progress.Qualification.Storage) != len(progress.Targets) {
+			return fail(errClusterUnavailable)
+		}
+		for _, storage := range progress.Qualification.Storage {
+			found := false
+			for _, target := range progress.Targets {
+				found = found || target.ID == storage.TargetID
+			}
+			if !found {
+				return fail(errClusterUnavailable)
+			}
+		}
 	}
 	for i, raw := range reports {
 		if raw == "{}" && progress.Targets[i].InspectedAt == 0 {

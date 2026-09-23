@@ -1,7 +1,7 @@
 import React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import ClusterSSHOnboarding, { validSSHInspectionProgress } from "@/Admin/Cluster_SSH_Onboarding.jsx";
+import ClusterSSHOnboarding, { validSSHInspectionProgress, validSSHQualification } from "@/Admin/Cluster_SSH_Onboarding.jsx";
 import { createSSHInspectionSubmission, validateSSHInspectionSubmission } from "@/Admin/clusterSSHOnboarding.js";
 import { validateBorealisFetchRequest } from "@/app/utils/inputValidation.js";
 
@@ -52,6 +52,9 @@ const progress = (state = "waiting") => ({ operation_id: requestID, state, curre
     host_key_fingerprint: target.host_key_fingerprint, state: "running", current_step: "inspection_complete", credentials_available: state === "waiting",
     inspected_at: 1788920000, inspected_attempt: 1, inspected_generation: 2, report: { hostname: `engine-${index + 2}`, cpu_count: 4, memory_kib: 8388608 } })) });
 
+const qualification = () => ({ version: 1, attempt: 1, observed_at: Math.floor(Date.now() / 1000), ready: false, storage: [],
+  checks: ["source_inputs", "host_profile", "replica_capacity", "network_boot", "network_arp", "remaining_prerequisites"].map((code, index) => ({ code, state: index === 0 ? "blocked" : "pending" })) });
+
 async function fillHost(index, address = targets()[index].address) {
   fireEvent.change(screen.getByLabelText("Private IPv4 address"), { target: { value: address } });
   fireEvent.click(screen.getByRole("button", { name: "Discover host key" }));
@@ -72,6 +75,30 @@ function mockDiscovery(path, init) {
 
 describe("SSH cohort inspection dialog", () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it("shows recorded readiness blockers and permits cancellation after read-only qualification", async () => {
+    const value = progress(); value.qualification = qualification();
+    value.targets.forEach((target) => { target.state = "queued"; target.current_step = "qualification_complete"; });
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(value))));
+    render(<ClusterSSHOnboarding initialOperationID={requestID} onClose={vi.fn()} />);
+    expect(await screen.findByText("Source release and storage policy: Blocked")).toBeInTheDocument();
+    expect(screen.getByText("Remaining join prerequisites: Pending")).toBeInTheDocument();
+    expect(screen.getByText(/Joining remains unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Prepare|Join hosts/ })).toBeNull();
+  });
+
+  it.each(["ready", "attempt", "future", "check omission", "unknown check", "partial storage", "unsafe number"])("rejects malformed qualification: %s", (mode) => {
+    const value = qualification(); const known = progress().targets;
+    if (mode === "ready") value.ready = true;
+    if (mode === "attempt") value.attempt++;
+    if (mode === "future") value.observed_at += 60;
+    if (mode === "check omission") value.checks.pop();
+    if (mode === "unknown check") value.checks[0].code = "<script>";
+    if (mode === "partial storage") value.storage = [{ target_id: known[0].id }];
+    if (mode === "unsafe number") value.observed_at = Number.MAX_SAFE_INTEGER + 1;
+    expect(validSSHQualification(value, 1, known)).toBe(false);
+  });
 
   it("collects both approved hosts before one POST, preserves secret syntax, clears forms and shows durable ownership", async () => {
     const saved = vi.fn();

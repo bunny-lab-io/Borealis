@@ -107,6 +107,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	addClaim("postgres-data-postgres-db-0", "borealis-longhorn", "ReadWriteOnce", "disabled", "20Gi", "", 1, false)
 	f.objects[clusterSSHStorageClaimsPath] = map[string]any{"apiVersion": "v1", "kind": "PersistentVolumeClaimList", "metadata": map[string]any{"resourceVersion": "100"}, "items": claims}
 	f.objects[clusterSSHStoragePodsPath] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "100"}, "items": pods}
+	addSSHStoragePolicyFixture(f)
 	return f
 }
 
@@ -186,10 +187,8 @@ func TestClusterSSHStorageInventory(t *testing.T) {
 			if pg != len(f.a.Source.Members) || legacy != 1 || artifacts != 1 {
 				t.Fatal("misclassified claims")
 			}
-			for path := range f.calls {
-				if strings.Contains(path, "storageclasses") {
-					t.Fatal("provisioning default substituted")
-				}
+			if f.calls[clusterSSHStorageClassPrefix+"borealis-longhorn"] != 1 || r.Policy.Classes[0].Replicas != 1 {
+				t.Fatal("missing independent provisioning policy")
 			}
 			before := got
 			for _, path := range []string{clusterSSHStorageClaimsPath, clusterSSHStoragePodsPath} {

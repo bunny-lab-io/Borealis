@@ -26,7 +26,7 @@ func buildClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, sourc
 	}
 	if baseline.Validate() != nil || validateClusterSSHInspectionCohort(cohort, source) != nil ||
 		lease.ControllerHolder != cohort.ControllerHolder || lease.OperationID != cohort.OperationID || lease.OperationAttempt != cohort.Attempt ||
-		lease.OperationKind != "ssh_onboarding" || lease.OperationStep != clusterSSHPreparationOperationStep || lease.Step != "stage_source" {
+		!validClusterSSHObservationLease(lease) {
 		return fail()
 	}
 	peers := make([]string, 0, 3)

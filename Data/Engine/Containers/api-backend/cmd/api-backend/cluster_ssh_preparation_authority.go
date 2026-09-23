@@ -25,7 +25,7 @@ func newClusterSSHPreparationAuthorityRead(store *postgresOperatorStore, aegis *
 		fail := func() (clusterSSHPreparationAuthority, error) {
 			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
 		}
-		if store == nil || store.db == nil || aegis == nil || !validClusterSSHPreparationLease(lease) || baseline.Validate() != nil ||
+		if store == nil || store.db == nil || aegis == nil || !validClusterSSHObservationLease(lease) || baseline.Validate() != nil ||
 			baseline.Repository != clusterGitHubRepo() || !sealed.binding.valid() || sealed.binding.OperationID != lease.OperationID || sealed.binding.TargetID != lease.TargetID ||
 			sealed.generation == "" || len(sealed.generation) > 16<<10 || !strings.HasPrefix(sealed.ciphertext, aegisEnvelopePrefix) || len(sealed.ciphertext) > 256<<10 {
 			return fail()
@@ -46,9 +46,16 @@ func newClusterSSHPreparationAuthorityRead(store *postgresOperatorStore, aegis *
 }
 
 func validClusterSSHPreparationLease(lease clusterSSHTargetLease) bool {
+	return validClusterSSHObservationLease(lease) && lease.OperationStep == clusterSSHPreparationOperationStep && lease.Step == "stage_source"
+}
+
+// Qualification is a read-only capability. Keep the preparation predicate
+// separate: a qualification claim cannot enter archive/receiver dispatch.
+func validClusterSSHObservationLease(lease clusterSSHTargetLease) bool {
 	return clusterUUIDRE.MatchString(lease.OperationID) && clusterUUIDRE.MatchString(lease.TargetID) && clusterUUIDRE.MatchString(lease.Holder) &&
 		lease.ControllerHolder != "" && len(lease.ControllerHolder) <= 1024 && lease.Generation > 0 && lease.OperationAttempt > 0 &&
-		lease.OperationKind == "ssh_onboarding" && lease.OperationStep == clusterSSHPreparationOperationStep && lease.Step == "stage_source"
+		lease.OperationKind == "ssh_onboarding" && ((lease.OperationStep == clusterSSHPreparationOperationStep && lease.Step == "stage_source") ||
+		(lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify"))
 }
 
 // The first short read obtains bounded historical proof for parsing outside a
@@ -60,13 +67,13 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	fail := func() (clusterSSHPreparationAuthority, error) {
 		return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
 	}
-	if s == nil || s.db == nil || !validClusterSSHPreparationLease(lease) || baseline.Validate() != nil || ctx.Err() != nil {
+	if s == nil || s.db == nil || !validClusterSSHObservationLease(lease) || baseline.Validate() != nil || ctx.Err() != nil {
 		return fail()
 	}
 	var payload string
 	if s.db.QueryRowContext(ctx, `SELECT payload_json FROM engine.cluster_operations WHERE id=$1
- AND kind='ssh_onboarding' AND state='running' AND current_step='prepare_ssh_targets' AND attempt=$2
- AND octet_length(payload_json)<=262144`, lease.OperationID, lease.OperationAttempt).Scan(&payload) != nil {
+ AND kind='ssh_onboarding' AND state=CASE WHEN $3='qualify_ssh_targets' THEN 'waiting' ELSE 'running' END AND current_step=$3 AND attempt=$2
+ AND octet_length(payload_json)<=262144`, lease.OperationID, lease.OperationAttempt, lease.OperationStep).Scan(&payload) != nil {
 		return fail()
 	}
 	proof, version, err := parseClusterSSHPreparationInspection([]byte(payload), lease, baseline)
@@ -134,10 +141,10 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
  SELECT floor(moment.now)::bigint
  FROM moment,engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l,
  engine.aegis_cipher_state a,engine.cluster_onboarding_targets own,engine.cluster_onboarding_credentials credential
- WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step='prepare_ssh_targets' AND o.attempt=$2 AND o.payload_json=$3
+ WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state=CASE WHEN $15='qualify_ssh_targets' THEN 'waiting' ELSE 'running' END AND o.current_step=$15 AND o.attempt=$2 AND o.payload_json=$3
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=$4
  AND l.name=$5 AND l.holder=$6 AND l.expires_at>moment.now AND a.id=1 AND a.verification_token=$7
- AND own.id=$8 AND own.operation_id=o.id AND own.state='running' AND own.current_step='stage_source'
+ AND own.id=$8 AND own.operation_id=o.id AND own.state='running' AND own.current_step=$16
  AND own.lease_holder=$9 AND own.lease_generation=$10 AND own.lease_expires_at>moment.now
  AND credential.target_id=own.id AND credential.ciphertext=$11
  AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$12
@@ -147,10 +154,10 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
    t.cluster_id=c.cluster_id AND t.operation_attempt=o.attempt AND t.credential_state='available'
    AND t.inspected_attempt=o.attempt AND t.inspected_generation>0 AND t.inspected_at>moment.now-$13 AND t.inspected_at<=moment.now
    AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now
-   AND ((t.state='queued' AND t.current_step IN ('inspection_complete','stage_source') AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
-    OR (t.state='running' AND t.current_step='stage_source' AND t.lease_holder ~ $14 AND t.lease_expires_at>moment.now AND t.lease_generation>t.inspected_generation))
+   AND ((t.state='queued' AND t.current_step IN ('inspection_complete',$16) AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
+    OR (t.state='running' AND t.current_step=$16 AND t.lease_holder ~ $14 AND t.lease_expires_at>moment.now AND t.lease_generation>t.inspected_generation))
   ) IS NOT TRUE)`, lease.OperationID, lease.OperationAttempt, payload, proof.Source.ClusterID, clusterControllerLeaseName, lease.ControllerHolder, sealed.generation,
-		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String()).Scan(&now)
+		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String(), lease.OperationStep, lease.Step).Scan(&now)
 	if err != nil || tx.Commit() != nil {
 		return fail()
 	}

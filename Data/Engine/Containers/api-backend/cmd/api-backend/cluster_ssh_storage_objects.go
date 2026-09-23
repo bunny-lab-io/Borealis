@@ -204,6 +204,7 @@ type clusterSSHStorageRequirements struct {
 	PostgresInstanceBytes       uint64                    `json:"postgres_instance_bytes"`
 	ConfiguredPostgresInstances int64                     `json:"configured_postgres_instances"`
 	Volumes                     []clusterSSHStorageVolume `json:"volumes"`
+	Policy                      clusterSSHStoragePolicy   `json:"policy"`
 	observation                 string                    // Private provenance from the complete source object set; never imported.
 }
 

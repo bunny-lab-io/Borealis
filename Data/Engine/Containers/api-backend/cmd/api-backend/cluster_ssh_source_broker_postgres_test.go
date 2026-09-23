@@ -16,9 +16,18 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job"} {
+	for _, mode := range []string{"expansion", "replacement", "qualification", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
+			if mode == "qualification" {
+				f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets' WHERE id=$1`, f.op.ID)
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='queued',current_step='inspection_complete',lease_holder='',lease_expires_at=0,lease_generation=inspected_generation WHERE operation_id=$1`, f.op.ID)
+				work, err := f.c.store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.lease, f.sealed = work.Claims[0].Lease, work.Claims[0].Sealed
+			}
 			f.c.store.db.SetMaxOpenConns(1)
 			current, err := f.read(f.ctx)
 			if err != nil {
@@ -146,7 +155,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			client.httpClient.Timeout = 10 * time.Second
 			read := client.preparationRead(f.read, f.lease, f.baseline, f.sealed)
 			expected, settings, err := read(f.ctx)
-			good := mode == "expansion" || mode == "replacement" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
+			good := mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
 			if good {
 				if err != nil || expected.Target.TargetID != f.lease.TargetID || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) {
 					t.Fatal("valid private broker source rejected")

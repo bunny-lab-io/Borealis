@@ -51,7 +51,7 @@ func withClusterSSHNetworkTargets(parent context.Context, store *postgresOperato
 			return newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed)
 		},
 		renew: func(ctx context.Context, claim clusterSSHNetworkTargetClaim) error {
-			return store.renewClusterSSHPreparationTarget(ctx, claim.Lease, claim.Sealed)
+			return store.renewClusterSSHObservationTarget(ctx, claim.Lease, claim.Sealed)
 		},
 		open: aegis.openClusterSSHCredentials,
 		connect: func(ctx context.Context, target clusterremote.Target, key clusterremote.HostKey, credential *clusterremote.Credential) (*clusterremote.Client, error) {
@@ -68,7 +68,8 @@ func validateClusterSSHNetworkClaims(a clusterSSHPreparationAuthority, baseline 
 	}
 	for i, claim := range claims {
 		target := a.Cohort.Targets[i]
-		if !validClusterSSHPreparationLease(claim.Lease) || claim.Lease.OperationID != a.Cohort.OperationID ||
+		if !validClusterSSHObservationLease(claim.Lease) || claim.Lease.OperationID != a.Cohort.OperationID ||
+			claim.Lease.OperationStep != a.Lease.OperationStep || claim.Lease.Step != a.Lease.Step ||
 			claim.Lease.OperationAttempt != a.Cohort.Attempt || claim.Lease.ControllerHolder != a.Cohort.ControllerHolder ||
 			claim.Lease.TargetID != target.Binding.TargetID || claim.Lease.Generation <= target.Generation ||
 			!claim.Sealed.binding.valid() || claim.Sealed.binding != target.Binding || claim.Sealed.generation == "" ||

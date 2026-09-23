@@ -87,7 +87,7 @@ func newClusterSSHPreparationLeaseCheck(authority clusterSSHPreparationAuthority
 		}
 		observe := func() ([]byte, error) {
 			value, err := authority(ctx)
-			if err != nil || value.Baseline.Validate() != nil || !validClusterSSHPreparationLease(value.Lease) ||
+			if err != nil || value.Baseline.Validate() != nil || !validClusterSSHObservationLease(value.Lease) ||
 				validateClusterSSHInspectionCohort(value.Cohort, value.Source) != nil || ctx.Err() != nil {
 				return nil, clusterbootstrap.ErrSessionAuthority
 			}

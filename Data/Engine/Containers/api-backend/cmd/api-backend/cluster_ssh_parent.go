@@ -276,7 +276,7 @@ func cancelClusterSSHInspectionTargets(ctx context.Context, tx *sql.Tx, operatio
 			return errClusterUnavailable
 		}
 		count++
-		safe = safe && textInSet(state, "queued", "running", "recovery_required") && textInSet(targetStep, "inspect", "inspection_complete")
+		safe = safe && textInSet(state, "queued", "running", "recovery_required") && textInSet(targetStep, "inspect", "inspection_complete", "qualify", "qualification_complete")
 	}
 	scanErr, closeErr := rows.Err(), rows.Close()
 	if scanErr != nil || closeErr != nil {
