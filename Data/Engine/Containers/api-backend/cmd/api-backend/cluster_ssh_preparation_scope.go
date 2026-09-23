@@ -26,10 +26,25 @@ func runClusterSSHPreparationScope(parent context.Context, interval time.Duratio
 	if check(ctx) != nil || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
-	guard := startClusterControllerLeaseGuardWithGrace(ctx, interval, time.Millisecond, func(ctx context.Context) (bool, error) {
-		return check(ctx) == nil, nil
+	guard := startClusterControllerLeaseGuardWithGrace(ctx, interval, time.Millisecond, func(heartbeat context.Context) (bool, error) {
+		if heartbeat.Err() != nil {
+			return false, nil
+		}
+		// Close stops scheduling, but a successful scope must finish an already
+		// admitted check. Canceling its HTTP/SQL context would make fail-closed
+		// VIP checks invalidate the enclosing scope during ordinary cleanup.
+		// Keep the original lifetime/deadline and latch failure independently:
+		// the guard ignores callback results after its scheduler is stopped.
+		if check(lifetime) != nil || lifetime.Err() != nil {
+			cancel()
+			return false, nil
+		}
+		return true, nil
 	})
 	defer func() {
+		if result != nil {
+			cancel() // Failed work still interrupts and joins any active check.
+		}
 		guard.Close()
 		if guard.Err() != nil || lifetime.Err() != nil {
 			result = clusterbootstrap.ErrSessionAuthority

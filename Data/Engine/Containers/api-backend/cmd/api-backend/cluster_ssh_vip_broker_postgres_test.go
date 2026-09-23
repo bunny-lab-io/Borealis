@@ -2,17 +2,21 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"bytes"
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestClusterSSHVIPBrokerPostgresLiveAuthorityAndFreshJobs(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "controller changed", "worker expired", "ciphertext changed", "credential removed", "Aegis locked", "locked after finish"} {
+	for _, mode := range []string{"expansion", "replacement", "replacement heartbeat join", "controller changed", "worker expired", "ciphertext changed", "credential removed", "Aegis locked", "locked after finish"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
+			f := newSSHPreparationAuthorityFixtureForTopology(t, strings.HasPrefix(mode, "replacement"))
 			f.c.store.db.SetMaxOpenConns(1)
 			a, err := f.read(f.ctx)
 			if err != nil {
@@ -42,12 +46,65 @@ func TestClusterSSHVIPBrokerPostgresLiveAuthorityAndFreshJobs(t *testing.T) {
 			server := httptest.NewServer(controller.healthServer().Handler)
 			defer server.Close()
 			client := sshVIPBrokerClient(t, server.URL)
+			heartbeatEntered := make(chan struct{})
+			if mode == "replacement heartbeat join" {
+				// Hold an actual worker heartbeat across the final synchronous
+				// check. Normal shutdown must join it without canceling its HTTP
+				// request and therefore invalidating the controller scope.
+				transport := http.DefaultTransport.(*http.Transport).Clone()
+				defer transport.CloseIdleConnections()
+				var controls atomic.Int64
+				finalChecked := make(chan struct{})
+				client.httpClient.Transport = bootstrapRoundTripper(func(r *http.Request) (*http.Response, error) {
+					var control clusterSSHVIPControl
+					if r.URL.Path == clusterSSHVIPCheckPath {
+						raw, err := io.ReadAll(r.Body)
+						r.Body.Close()
+						if err != nil || openClusterSSHVIP(client.checkRequest, clusterSSHVIPCheckPath, raw, &control, clusterSSHVIPFrameLimit) != nil {
+							return nil, clusterbootstrap.ErrPreparationConfig
+						}
+						r.Body = io.NopCloser(bytes.NewReader(raw))
+					}
+					var n int64
+					if control.Step == "authority" {
+						n = controls.Add(1)
+					}
+					if n == 2 {
+						close(heartbeatEntered)
+						select {
+						case <-finalChecked:
+						case <-r.Context().Done():
+							return nil, r.Context().Err()
+						}
+						timer := time.NewTimer(30 * time.Millisecond)
+						defer timer.Stop()
+						select {
+						case <-timer.C:
+						case <-r.Context().Done():
+							return nil, r.Context().Err()
+						}
+					}
+					response, err := transport.RoundTrip(r)
+					if n == 3 {
+						close(finalChecked)
+					}
+					return response, err
+				})
+			}
 			events := f.events(t)
 			consumed := false
 			consume := func(ctx context.Context, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
 				consumed = true
 				if posts.Load() != int64(2*len(sources)) || !validClusterSSHVIPOwner(owner, a, sources) {
 					t.Error("missing fresh source ownership")
+				}
+				if mode == "replacement heartbeat join" {
+					select {
+					case <-heartbeatEntered:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 				switch mode {
 				case "controller changed":
@@ -80,11 +137,15 @@ func TestClusterSSHVIPBrokerPostgresLiveAuthorityAndFreshJobs(t *testing.T) {
 				}
 			}
 			err = client.withOwner(f.ctx, authority, f.lease, f.baseline, f.sealed, sources, consume)
-			good := mode == "expansion" || mode == "replacement"
+			good := mode == "expansion" || strings.HasPrefix(mode, "replacement")
 			if (err == nil) != good || !consumed {
 				t.Fatal("live broker authority outcome", err, consumed)
 			}
-			if good && posts.Load() != int64(4*len(sources)) {
+			rounds := 4
+			if mode == "replacement heartbeat join" {
+				rounds = 3 // No explicit Inputs call inside this consumer.
+			}
+			if good && posts.Load() != int64(rounds*len(sources)) {
 				t.Fatal("missing final source Job round", posts.Load())
 			}
 			server.Close()

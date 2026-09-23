@@ -114,6 +114,99 @@ func TestClusterSSHPreparationScopeRejectsBeforeWorkAndAtCompletion(t *testing.T
 	}
 }
 
+func TestClusterSSHPreparationScopeJoinsFinalHeartbeat(t *testing.T) {
+	for _, mode := range []string{"success", "late rejection", "late check error", "parent canceled", "work failed"} {
+		t.Run(mode, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			var calls atomic.Int64
+			heartbeat := make(chan context.Context, 1)
+			final := make(chan struct{})
+			release := make(chan struct{})
+			joined := make(chan struct{})
+			done := make(chan error, 1)
+			check := func(ctx context.Context) error {
+				switch calls.Add(1) {
+				case 2:
+					heartbeat <- ctx
+					defer close(joined)
+					select {
+					case <-release:
+						if mode != "late rejection" && mode != "late check error" {
+							return nil
+						}
+					case <-ctx.Done():
+					}
+					// Model VIP checks: every failed challenge invalidates the
+					// enclosing scope, including cancellation during HTTP I/O.
+					if mode != "late check error" {
+						cancel()
+					}
+					return errors.New("private heartbeat failure")
+				case 3:
+					close(final)
+				}
+				return nil
+			}
+			workReturned := make(chan struct{})
+			go func() {
+				done <- runClusterSSHPreparationScope(parent, time.Millisecond, check, func(context.Context) error {
+					<-workReturned
+					if mode == "work failed" {
+						return errors.New("private work failure")
+					}
+					return nil
+				})
+			}()
+			var heartbeatCtx context.Context
+			select {
+			case heartbeatCtx = <-heartbeat:
+			case <-parent.Done():
+				close(workReturned)
+				t.Fatal("heartbeat did not enter")
+			}
+			close(workReturned)
+			if mode != "work failed" {
+				select {
+				case <-final:
+				case <-parent.Done():
+					t.Fatal("completion check did not enter")
+				}
+				if mode == "parent canceled" {
+					cancel()
+				} else {
+					select {
+					case <-heartbeatCtx.Done():
+						t.Error("successful completion canceled an admitted heartbeat")
+					case <-time.After(30 * time.Millisecond):
+					}
+					select {
+					case <-joined:
+						t.Error("heartbeat ended before release")
+					default:
+					}
+					close(release)
+				}
+			}
+			select {
+			case err := <-done:
+				if (err == nil) != (mode == "success") {
+					t.Fatal("joined heartbeat outcome", err)
+				}
+				select {
+				case <-joined:
+				default:
+					t.Fatal("scope returned before heartbeat joined")
+				}
+			case <-time.After(time.Second):
+				cancel()
+				<-done
+				t.Fatal("failed scope did not cancel and join heartbeat")
+			}
+		})
+	}
+}
+
 func TestClusterSSHPreparationLeaseCheckFreezesAuthorityAcrossRenewal(t *testing.T) {
 	for _, mode := range []string{"clock only", "changed after renewal", "changed next check", "renew failure", "read failure", "locked after renewal"} {
 		t.Run(mode, func(t *testing.T) {
