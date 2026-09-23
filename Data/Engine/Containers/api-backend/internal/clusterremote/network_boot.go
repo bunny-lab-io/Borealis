@@ -42,7 +42,7 @@ if __name__ == "__main__":
     main(lambda: observe_network_render(boot_snapshot))
 `
 
-const networkBootLibraryScript = networkBootCloudLibraryScript + systemdObservationLibraryScript + `
+const networkBootLibraryScript = networkBootCloudLibraryScript + systemdObservationLibraryScript + networkBootProcessLibraryScript + `
 BOOT_ALIASES = {
     "systemd-networkd.service": {"systemd-networkd.service", "dbus-org.freedesktop.network1.service"},
     "systemd-networkd.socket": {"systemd-networkd.socket"},
@@ -204,17 +204,36 @@ def boot_files(root):
             os.close(fd)
     return (default, units, inventory, result, lib, cloud_units)
 
-def boot_unit(owner, unit):
+def boot_manager_capabilities(root):
+    # ConditionCapability uses the system manager's CapBnd, not the observer's
+    # effective capabilities or the service's permissions. Read PID1 directly;
+    # the caller independently binds the systemd bus owner to PID1/host namespace.
+    fd = directory(root, "proc/1")
+    try:
+        _, raw = read_file(fd, "status")
+    finally:
+        os.close(fd)
+    text = raw.decode("ascii")
+    if re.findall(r"^Pid:\s*([0-9]+)$", text, re.M) != ["1"] or re.findall(r"^Tgid:\s*([0-9]+)$", text, re.M) != ["1"]:
+        raise ValueError()
+    values = re.findall(r"^CapBnd:\s*([0-9a-f]{16})$", text, re.M)
+    if len(values) != 1 or len(re.findall(r"^CapBnd:", text, re.M)) != 1:
+        raise ValueError()
+    return int(values[0], 16)
+
+def boot_unit(owner, unit, capabilities):
     wire = bus_reply(owner, "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "GetUnit", "s", unit)
     expected = "/org/freedesktop/systemd1/unit/"+unit.replace("-", "_2d").replace(".", "_2e")
     if wire["type"] != "o" or wire["data"][0] != expected:
         raise ValueError()
     values = boot_properties(owner, expected, "org.freedesktop.systemd1.Unit")
-    common = {"Id": unit, "LoadState": "loaded", "ActiveState": "active", "SourcePath": "", "UnitFileState": "enabled" if unit.endswith((".service", ".socket")) else "static",
-              "SubState": "running" if unit.endswith(".service") else "listening" if unit.endswith(".socket") else "active"}
+    common = {"Id": unit, "LoadState": "loaded", "ActiveState": "active", "SourcePath": "", "UnitFileState": "enabled" if unit.endswith((".service", ".socket")) else "static"}
     for name, wanted in common.items():
         if boot_value(values, name, "s") != wanted:
             raise ValueError()
+    states = ("listening", "running") if unit.endswith(".socket") else ("running",) if unit.endswith(".service") else ("active",)
+    if boot_value(values, "SubState", "s") not in states:
+        raise ValueError()
     if boot_canonical(boot_value(values, "FragmentPath", "s")) != "/"+BOOT_VENDOR+"/"+unit or boot_value(values, "DropInPaths", "as"):
         raise ValueError()
     for name, wanted in (("Transient", False), ("NeedDaemonReload", False), ("ConditionResult", True), ("AssertResult", True)):
@@ -227,9 +246,12 @@ def boot_unit(owner, unit):
     if unit not in names or not set(names) <= BOOT_ALIASES[unit] or len(invocation) != 16 or not any(invocation):
         raise ValueError()
     conditions = boot_value(values, "Conditions", "a(sbbsi)")
-    expected_conditions = [["ConditionCapability", False, False, "CAP_NET_ADMIN", 1]] if unit.endswith((".service", ".socket")) else []
+    network_unit = unit.endswith((".service", ".socket"))
+    expected_conditions = [[["ConditionCapability", False, False, "CAP_NET_ADMIN", result]] for result in (0, 1)] if network_unit else [[]]
     # JSON equality alone would alias false/0 and true/1 in nested conditions.
-    if json.dumps(conditions) != json.dumps(expected_conditions) or boot_value(values, "Asserts", "a(sbbsi)") != []:
+    # Result0 after reload is not historical success: current PID1 CapBnd must
+    # independently satisfy the exact standard condition, including for result1.
+    if all(json.dumps(conditions) != json.dumps(expected) for expected in expected_conditions) or boot_value(values, "Asserts", "a(sbbsi)") != [] or network_unit and not capabilities & (1 << 12):
         raise ValueError()
     return (expected, values, invocation)
 
@@ -245,11 +267,12 @@ def boot_snapshot(root):
     manager_path, manager_interface = "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager"
     paths = boot_property(owner, manager_path, manager_interface, "UnitPath", "as")
     generation = boot_manager_generation(owner)
+    capabilities = boot_manager_capabilities(root)
     if [boot_canonical(path) for path in paths] != ["/"+path for path in BOOT_PATHS]:
         raise ValueError()
     observed = {"cloud-init": boot_cloud_loaded(owner, files[5])}
     for unit in files[1]:
-        path, values, invocation = boot_unit(owner, unit)
+        path, values, invocation = boot_unit(owner, unit, capabilities)
         # Native properties can change without restarting the unit. Retain
         # forward dependencies and configured conditions, not reverse ordering
         # edges contributed by unrelated jobs.
@@ -280,9 +303,12 @@ def boot_snapshot(root):
             if type(command) is not list or len(command) != 1 or type(command[0]) is not list or len(command[0]) != 10:
                 raise ValueError()
             row = command[0]
-            if type(row[0]) is not str or boot_canonical(row[0]) != "/usr/lib/systemd/systemd-networkd" or row[1] != [row[0]] or row[2] is not False or any(type(n) is not int or not 0 <= n < 2**64 for n in row[3:]) or row[7] != pid or row[8:] != [0, 0]:
+            if type(row[0]) is not str or boot_canonical(row[0]) != "/usr/lib/systemd/systemd-networkd" or row[1] != [row[0]] or row[2] is not False or any(type(n) is not int or not 0 <= n < 2**64 for n in row[3:]) or row[8:] != [0, 0]:
                 raise ValueError()
-            observed[unit]["service"] = (pid, command)
+            if row[7] != pid and row[3:] != [0]*7:
+                raise ValueError()
+            process = boot_network_process(root, pid, row[0])
+            observed[unit]["service"] = (pid, command, process)
         elif unit == "multi-user.target":
             if "systemd-networkd.service" not in boot_value(values, "Wants", "as") or "basic.target" not in boot_value(values, "Requires", "as"):
                 raise ValueError()
@@ -294,7 +320,9 @@ def boot_snapshot(root):
     default_path = "/org/freedesktop/systemd1/unit/"+files[0].replace("-", "_2d").replace(".", "_2e")
     if wire["type"] != "o" or wire["data"][0] != default_path:
         raise ValueError()
-    if (bus, network_owner) != bus_identity() or boot_pid(owner) != 1 or generation != boot_manager_generation(owner) or boot_files(root) != files:
+    if (bus, network_owner) != bus_identity() or boot_pid(owner) != 1 or generation != boot_manager_generation(owner) or capabilities != boot_manager_capabilities(root) or boot_files(root) != files:
         raise ValueError()
-    return (files, bus, owner, network_owner, (own.st_dev, own.st_ino), observed, generation)
+    if boot_pid(network_owner) != pid or boot_network_process(root, pid, command[0][0]) != process:
+        raise ValueError()
+    return (files, bus, owner, network_owner, (own.st_dev, own.st_ino), observed, generation, capabilities)
 `

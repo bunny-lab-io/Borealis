@@ -234,7 +234,7 @@ func testNetworkRenderCorrespondence(t *testing.T, mode string, boot bool) {
 	command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script, base64.StdEncoding.EncodeToString(raw))
 	command.Env = append(os.Environ(), "NETPLAN_PARSER_IGNORE_ERRORS=1", "DBUS_SYSTEM_BUS_ADDRESS=invalid-inherited-bus", "SNAP=invalid-inherited-snap")
 	out, err := command.Output()
-	want := mode == "success" || mode == "boot graphical" || mode == "boot cloud disabled" || mode == "boot cloud unloaded" || mode == "vendor shadow" || mode == "lexical merge" || mode == "later Ethernet" || mode == "merged usr" || mode == "later foreign"
+	want := mode == "success" || mode == "boot running socket" || mode == "boot cleared execution" || mode == "boot current capability" || mode == "boot graphical" || mode == "boot cloud disabled" || mode == "boot cloud unloaded" || mode == "vendor shadow" || mode == "lexical merge" || mode == "later Ethernet" || mode == "merged usr" || mode == "later foreign"
 	if ctx.Err() != nil || (err == nil) != want || bytes.Contains(out, []byte("private-")) {
 		t.Fatalf("native correspondence outcome: error=%v deadline=%v bytes=%d", err, ctx.Err(), len(out))
 	}
@@ -493,8 +493,8 @@ func testNetworkRenderShellData(t *testing.T, boot bool) {
 				}
 			}
 			command, err := build(targets)
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || len(command) > 120<<10 {
+				t.Fatalf("command bound: error=%v bytes=%d", err, len(command))
 			}
 			command = strings.ReplaceAll(command, "/usr/sbin:/usr/bin:/sbin:/bin", root+":/usr/bin:/bin")
 			command = strings.ReplaceAll(command, "main(observe_network_render)", "main(route_targets)")

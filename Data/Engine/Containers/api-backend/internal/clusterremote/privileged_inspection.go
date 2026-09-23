@@ -206,11 +206,12 @@ var privilegedInspectionCommand = buildPrivilegedInspectionCommand("/usr/sbin:/u
 // caller shell text is never accepted. Tests substitute isolated fixtures.
 func buildPrivilegedInspectionCommand(toolPath, script string) string {
 	return "PATH=" + shellConstant(toolPath) + " LC_ALL=C /bin/sh -c " + shellConstant(
-		"export PATH="+shellConstant(toolPath)+` LC_ALL=C
+		"export PATH="+shellConstant(toolPath)+" LC_ALL=C\n"+
+			"set -- timeout --signal=TERM --kill-after=2s 15s /bin/sh -c "+shellConstant(script)+`
 if [ "$(id -u)" = 0 ]; then
-  exec timeout --signal=TERM --kill-after=2s 15s /bin/sh -c `+shellConstant(script)+`
+  exec "$@"
 fi
-exec sudo -k -S -p '' -- timeout --signal=TERM --kill-after=2s 15s /bin/sh -c `+shellConstant(script))
+exec sudo -k -S -p '' -- "$@"`)
 }
 
 func shellConstant(text string) string { return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'" }

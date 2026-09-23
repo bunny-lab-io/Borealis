@@ -44,6 +44,16 @@ func installNetworkBootFixture(t *testing.T, root string) {
 		}
 	}
 	write("proc/self/ns/mnt", "mount namespace")
+	write("proc/1/status", "Name:\tsystemd\nPid:\t1\nTgid:\t1\nCapBnd:\t0000000000001000\n")
+	write("usr/lib/systemd/systemd-networkd", "fixture executable")
+	if err := os.Chmod(filepath.Join(root, "usr/lib/systemd/systemd-networkd"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write("proc/42/stat", "42 (systemd-network) S "+strings.Repeat("0 ", 18)+"123 0\n")
+	write("proc/42/cmdline", "/usr/lib/systemd/systemd-networkd\x00")
+	if err := os.Symlink(filepath.Join(root, "usr/lib/systemd/systemd-networkd"), filepath.Join(root, "proc/42/exe")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "proc/1/ns"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +64,14 @@ func installNetworkBootFixture(t *testing.T, root string) {
 
 func TestNetworkBootNativeCorrespondence(t *testing.T) {
 	t.Run("graphical", func(t *testing.T) { testNetworkRenderCorrespondence(t, "boot graphical", true) })
-	for _, mode := range []string{"success", "boot file drift", "boot manager drift", "boot property drift", "boot reload", "boot namespace", "boot hang", "boot overflow", "boot malformed", "boot boolean job", "boot condition", "boot runtime enabled", "boot PID", "boot unit path", "boot default", "boot environment", "boot executable", "boot transient", "boot fragment", "boot dropins", "boot invocation", "boot job", "boot signature", "boot missing property", "boot hook", "boot requires", "boot condition type", "boot manager reload", "boot socket PID", "host drift", "link drift", "tool drift"} {
+	t.Run("current capability", func(t *testing.T) { testNetworkRenderCorrespondence(t, "boot current capability", true) })
+	t.Run("cleared execution", func(t *testing.T) { testNetworkRenderCorrespondence(t, "boot cleared execution", true) })
+	t.Run("running socket", func(t *testing.T) { testNetworkRenderCorrespondence(t, "boot running socket", true) })
+	t.Run("socket stopping", func(t *testing.T) { testNetworkRenderCorrespondence(t, "boot socket stopping", true) })
+	for _, mode := range []string{"boot partial execution", "boot process drift", "boot process arguments", "boot process replacement"} {
+		t.Run(mode, func(t *testing.T) { testNetworkRenderCorrespondence(t, mode, true) })
+	}
+	for _, mode := range []string{"success", "boot file drift", "boot manager drift", "boot property drift", "boot reload", "boot namespace", "boot hang", "boot overflow", "boot malformed", "boot boolean job", "boot condition", "boot condition error", "boot absent capability", "boot capability drift", "boot capability malformed", "boot runtime enabled", "boot PID", "boot unit path", "boot default", "boot environment", "boot executable", "boot transient", "boot fragment", "boot dropins", "boot invocation", "boot job", "boot signature", "boot missing property", "boot hook", "boot requires", "boot condition type", "boot manager reload", "boot socket PID", "host drift", "link drift", "tool drift"} {
 		t.Run(mode, func(t *testing.T) { testNetworkRenderCorrespondence(t, mode, true) })
 	}
 }
@@ -78,6 +95,8 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
         counter.write_text(str(n))
         if MODE == "boot cloud marker drift" and n > 1:
             (root/"etc/cloud/cloud-init.disabled").unlink(missing_ok=True)
+        if MODE == "boot absent capability": (root/"proc/1/status").write_text("Pid:\t1\nTgid:\t1\nCapBnd:\t0000000000000000\n")
+        if MODE == "boot capability malformed": (root/"proc/1/status").write_text("Pid:\t1\nTgid:\t1\nCapBnd:\t0000000000001000\nCapBnd:\t0000000000001000\n")
         if MODE == "boot namespace": (root/"proc/1/ns/mnt").unlink()
         if MODE == "boot file drift":
             with (root/"usr/lib/systemd/system/systemd-networkd.service").open("a") as output: output.write("# drift\n")
@@ -144,12 +163,13 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
             assert unit in ("systemd-networkd.service", "systemd-networkd.socket", "multi-user.target", "sockets.target", "graphical.target")
             prop("Id", "s", unit)
             for name, data in {"LoadState": "loaded", "ActiveState": "active", "SubState": "running" if unit.endswith(".service") else "listening" if unit.endswith(".socket") else "active", "SourcePath": "", "FragmentPath": "/usr/lib/systemd/system/"+unit, "UnitFileState": "enabled" if unit.endswith((".service", ".socket")) else "static"}.items(): prop(name, "s", data)
+            if unit.endswith(".socket") and MODE in ("boot running socket", "boot socket stopping"): prop("SubState", "s", "running" if MODE == "boot running socket" else "stop-pre")
             for name, data in {"Transient": False, "NeedDaemonReload": MODE == "boot reload", "ConditionResult": True, "AssertResult": True}.items(): prop(name, "b", data)
             prop("Names", "as", [unit]); prop("DropInPaths", "as", [])
             prop("InvocationID", "ay", [1]*16)
             prop("Job", "(uo)", [False if MODE == "boot boolean job" else 0, "/"])
             prop("LoadError", "(ss)", ["", ""])
-            prop("Conditions", "a(sbbsi)", [["ConditionCapability", False, False, "CAP_NET_ADMIN", 0 if MODE == "boot condition" else 1]] if unit.endswith((".service", ".socket")) else [])
+            prop("Conditions", "a(sbbsi)", [["ConditionCapability", False, False, "CAP_NET_ADMIN", 2 if MODE == "boot condition" else 3 if MODE == "boot condition error" else 0 if MODE in ("boot current capability", "boot absent capability") else 1]] if unit.endswith((".service", ".socket")) else [])
             prop("Asserts", "a(sbbsi)", [])
             prop("Requires", "as", ["basic.target"] if unit == "multi-user.target" else [])
             if unit == "graphical.target": prop("Requires", "as", ["multi-user.target"])
@@ -169,6 +189,10 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
         else:
             assert args[-1] == "org.freedesktop.systemd1.Service" and unit == "systemd-networkd.service"
             prop("MainPID", "u", 42); prop("ControlPID", "u", 0)
+            if MODE == "boot capability drift": (root/"proc/1/status").write_text("Pid:\t1\nTgid:\t1\nCapBnd:\t0000000000000000\n")
+            if MODE == "boot process arguments": (root/"proc/42/cmdline").write_bytes(b"/usr/lib/systemd/systemd-networkd\0--foreign\0")
+            if MODE == "boot process replacement":
+                (root/"proc/42/exe").unlink(); (root/"proc/42/exe").symlink_to(root/"bin/busctl")
             if MODE == "boot socket PID": prop("MainPID", "u", 43)
             for name, data in {"BusName": "org.freedesktop.network1", "Type": "notify-reload", "User": "systemd-network", "RootDirectory": "", "RootImage": "", "WorkingDirectory": ""}.items(): prop(name, "s", data)
             for name in ("Environment", "PassEnvironment", "UnsetEnvironment"): prop(name, "as", ["OVERRIDE=yes"] if MODE == "boot environment" else [])
@@ -176,7 +200,10 @@ if pathlib.Path(sys.argv[0]).name == "busctl":
             for name in ("ExecStartPre", "ExecStartPost", "ExecCondition", "ExecReload"): prop(name, "a(sasbttttuii)", [])
             if MODE == "boot hook": prop("ExecStartPre", "a(sasbttttuii)", [["/tmp/hook", ["/tmp/hook"], False, 0, 0, 0, 0, 0, 0, 0]])
             executable = "/tmp/foreign-networkd" if MODE == "boot executable" else "/usr/lib/systemd/systemd-networkd"
-            prop("ExecStart", "a(sasbttttuii)", [[executable, [executable], False, 1, 1, 0, 0, 42, 0, 0]])
+            execution = [0]*7 if MODE == "boot cleared execution" else [1, 1, 0, 0, 0 if MODE == "boot partial execution" else 42, 0, 0]
+            prop("ExecStart", "a(sasbttttuii)", [[executable, [executable], False]+execution])
+        if MODE == "boot process drift" and unit == "sockets.target":
+            (root/"proc/42/stat").write_text("42 (systemd-network) S "+"0 "*18+"456 0\n")
         emit("a{sv}", values)
 `
 
