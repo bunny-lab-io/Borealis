@@ -158,7 +158,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
 | shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
-| shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| shared-engine | Docker Buildx plugin / BuildKit (local Engine build acceleration; required isolated production OCI release packaging) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | curl (HTTPS transport for verified Engine release bootstrap and pinned dependency downloads) | [curl License](https://curl.se/docs/copyright.html) |
 | shared-engine | GNU Coreutils (`sha256sum`, `stat`, and `mktemp` used by verified Engine release bootstrap) | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
@@ -175,7 +175,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | NFS client utilities (`nfs-common`, `nfs-utils`, or `nfs-client`) host dependency for Longhorn RWX volumes (installed by `Engine.sh` when missing) | [GPL-2.0-or-later with BSD components](https://github.com/linux-nfs/nfs-utils/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
-| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing; release workflow builds exact-source node-manager SSH bootstrap binary) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing; release workflow builds exact-source node-manager archive verifier and production Go application binaries) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | Go standard library/runtime (compiled into `borealis-node-manager` in central SSH bootstrap release assets) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | Host systemd manager, `systemd-run`, `systemctl` and `busctl` (Ubuntu-provided; systemd255 baseline for central SSH supervision/watchdogs, read-only networkd ownership and persistent startup-wiring queries) | [LGPL-2.1-or-later](https://github.com/systemd/systemd/blob/v255/LICENSE.LGPL2.1) |
 | shared-engine | iproute2 `ip` (Ubuntu host-provided; read-only SSH and node-manager IPv4 address/link/route/rule observations) | [GPL-2.0-or-later](https://github.com/iproute2/iproute2/blob/main/COPYING) |

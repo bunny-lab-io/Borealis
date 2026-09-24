@@ -72,6 +72,10 @@ func main() {
 		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
 	switch os.Args[1] {
+	case "image-archive-proof":
+		if imageArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable image evidence invalid or changed")
+		}
 	case "serve":
 		serve()
 	case "status":

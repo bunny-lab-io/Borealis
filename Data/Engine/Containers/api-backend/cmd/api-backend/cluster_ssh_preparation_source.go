@@ -153,7 +153,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 // fence; changing the target phase inside consume invalidates this scope.
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -187,7 +187,23 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
 			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
 		}
-		if err := consume(ctx, inputs, expected, checks); err != nil {
+		inventory, err := resolveClusterSSHImageInventory(ctx, expected.Source)
+		if err != nil {
+			return err
+		}
+		images, err := inventory.stage(ctx, scratchParent, checks.Inputs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if images.Close() != nil {
+				result = clusterbootstrap.ErrImageArchive
+			}
+		}()
+		if err := consume(ctx, inputs, images, expected, checks); err != nil {
+			return err
+		}
+		if err := inventory.refresh(ctx); err != nil {
 			return err
 		}
 		// A short session heartbeat must not spawn source Jobs. Revalidate full

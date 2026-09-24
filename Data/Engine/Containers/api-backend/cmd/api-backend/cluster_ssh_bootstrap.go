@@ -132,6 +132,13 @@ func prepareClusterSSHBootstrap(ctx context.Context, expected clusterbootstrap.E
 }
 
 func resolveClusterBootstrapAssets(ctx context.Context, expected clusterbootstrap.Expected) (map[string]clusterBootstrapAsset, error) {
+	return resolveClusterPackagedAssets(ctx, expected, map[string]int64{
+		clusterbootstrap.ManifestName: clusterbootstrap.MaxManifestBytes,
+		clusterbootstrap.BundleName:   clusterbootstrap.MaxBundleBytes,
+	})
+}
+
+func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap.Expected, required map[string]int64) (map[string]clusterBootstrapAsset, error) {
 	if err := expected.Validate(); err != nil {
 		return nil, err
 	}
@@ -156,12 +163,9 @@ func resolveClusterBootstrapAssets(ctx context.Context, expected clusterbootstra
 	assets := map[string]clusterBootstrapAsset{}
 	ids := map[int64]bool{}
 	for _, asset := range release.Assets {
-		if asset.Name != clusterbootstrap.ManifestName && asset.Name != clusterbootstrap.BundleName {
+		maximum, needed := required[asset.Name]
+		if !needed {
 			continue
-		}
-		maximum := int64(clusterbootstrap.MaxBundleBytes)
-		if asset.Name == clusterbootstrap.ManifestName {
-			maximum = clusterbootstrap.MaxManifestBytes
 		}
 		apiURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), expected.Repository, asset.ID)
 		if _, exists := assets[asset.Name]; exists || ids[asset.ID] || asset.ID < 1 || asset.State != "uploaded" ||
@@ -171,7 +175,7 @@ func resolveClusterBootstrapAssets(ctx context.Context, expected clusterbootstra
 		}
 		assets[asset.Name], ids[asset.ID] = asset, true
 	}
-	if len(assets) != 2 {
+	if len(assets) != len(required) {
 		return nil, errors.New("node bootstrap release lacks required packaged assets")
 	}
 	return assets, nil
@@ -181,9 +185,13 @@ func resolveClusterBootstrapAssets(ctx context.Context, expected clusterbootstra
 // CDN URL. Follow exactly one approved HTTPS redirect using a NEW request with
 // no Authorization, cookies or Referer. Never surface the signed URL in errors.
 func openClusterBootstrapAsset(ctx context.Context, asset clusterBootstrapAsset) (*http.Response, error) {
+	return openClusterPackagedAsset(ctx, asset, clusterbootstrap.MaxBundleBytes)
+}
+
+func openClusterPackagedAsset(ctx context.Context, asset clusterBootstrapAsset, maximum int64) (*http.Response, error) {
 	invalid := errors.New("node bootstrap asset download failed; remote diagnostics withheld")
 	apiURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), clusterGitHubRepo(), asset.ID)
-	if asset.ID < 1 || asset.URL != apiURL || asset.Size < 1 || asset.Size > clusterbootstrap.MaxBundleBytes {
+	if asset.ID < 1 || asset.URL != apiURL || asset.Size < 1 || maximum < 1 || maximum > clusterbootstrap.MaxImageArchiveBytes || asset.Size > maximum {
 		return nil, invalid
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)

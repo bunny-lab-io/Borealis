@@ -53,7 +53,7 @@ func TestClusterSSHQualificationPostgresReadOnlyLifecycle(t *testing.T) {
 					t.Fatal("weaker renewal bypass")
 				}
 				called := false
-				err = withClusterSSHPreparationSource(f.ctx, t.TempDir(), s, f.aegis, claim.Lease, work.Baseline, claim.Sealed, func(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error {
+				err = withClusterSSHPreparationSource(f.ctx, t.TempDir(), s, f.aegis, claim.Lease, work.Baseline, claim.Sealed, func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error {
 					called = true
 					return nil
 				})

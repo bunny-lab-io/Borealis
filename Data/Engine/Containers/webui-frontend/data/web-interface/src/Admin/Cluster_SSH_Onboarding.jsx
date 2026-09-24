@@ -16,7 +16,7 @@ const clearCredentials = (targets) => targets.forEach((target) => {
 const qualificationChecks = {
   source_inputs: ["Source release and storage policy", "Check the source release, unlocked credentials and storage health before starting another inspection."],
   host_profile: ["Inherited hardware requirements", "Targets must support the source Engine's CPU and memory profile."],
-  replica_capacity: ["Replica storage and rebuild space", "Each target needs space for its replicas, bootstrap copies and rebuild headroom. Existing storage needs a separate recovery plan."],
+  replica_capacity: ["Replica storage and rebuild space", "Each target needs space for its replicas, bootstrap copies, application images and rebuild headroom. Existing storage needs a separate recovery plan."],
   network_boot: ["Persistent network configuration", "The Engine could not establish supported persistent network ownership. Review host configuration before retrying."],
   network_arp: ["Local network reachability", "Check the management network, peer identities and cluster virtual IP ownership."],
   remaining_prerequisites: ["Remaining join prerequisites", "Full workload and runtime disk sizing, mount/reboot persistence, recovery and preparation still need qualification. Joining remains unavailable."],

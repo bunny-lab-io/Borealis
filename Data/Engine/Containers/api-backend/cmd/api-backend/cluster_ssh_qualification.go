@@ -141,10 +141,9 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		}
 		report.Checks[stage].State = "passed"
 		stage = 2
-		// Bound only bootstrap copies here. Runtime images/build caches need a
-		// complete immutable demand plan; remaining_prerequisites stays pending.
-		demands := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 2*clusterbootstrap.MaxExpandedBytes + clusterbootstrap.MaxBundleBytes}}
-		if err := withClusterSSHTargetStorageCapacity(ctx, readers, source, demands, func(ctx context.Context, capacity []clusterSSHTargetStorageCapacity) error {
+		// Exact published image inventory supplies measured application-image
+		// demand. OS/K3s/external images and runtime growth remain separate gates.
+		if err := withClusterSSHImageStorageCapacity(ctx, readers, source, func(ctx context.Context, capacity []clusterSSHTargetStorageCapacity) error {
 			report.Storage = capacity
 			report.Checks[stage].State = "passed"
 			for _, target := range capacity {
