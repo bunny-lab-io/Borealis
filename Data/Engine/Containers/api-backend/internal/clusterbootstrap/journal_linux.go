@@ -71,14 +71,14 @@ func stableMutationBinding(b SessionBinding) SessionBinding {
 
 func validMutationStep(step string) bool {
 	switch step {
-	case "stage_source", "install_identity", "prepare_host", "join_cluster":
+	case "stage_source", "install_identity", "prepare_host", "stage_images", "join_cluster":
 		return true
 	}
 	return false
 }
 
 func (s mutationState) valid() bool {
-	if s.Version != 2 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 4 || len(s.History) > 16 {
+	if s.Version != 2 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 5 || len(s.History) > 16 {
 		return false
 	}
 	pending := 0

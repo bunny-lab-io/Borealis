@@ -107,6 +107,10 @@ func (s *ImageSet) WriteArchive(ctx context.Context, role string, output io.Writ
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.writeArchive(ctx, role, output, check)
+}
+
+func (s *ImageSet) writeArchive(ctx context.Context, role string, output io.Writer, check func(context.Context) error) error {
 	if s.root == nil || s.inventory == nil || imageBoundary(ctx, check) != nil {
 		return ErrSessionAuthority
 	}
