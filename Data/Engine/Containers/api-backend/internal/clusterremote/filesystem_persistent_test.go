@@ -22,7 +22,7 @@ func TestFilesystemPersistentNative(t *testing.T) {
 			}
 			if good {
 				var value filesystemObservation
-				if json.Unmarshal(out, &value) != nil || value.Version != 2 || value.Evidence.validate([]string{"/opt/Borealis", "/var/lib/longhorn"}) != nil {
+				if json.Unmarshal(out, &value) != nil || value.Version != 4 || value.Evidence.validate([]string{"/opt/Borealis", "/var/lib/longhorn"}) != nil {
 					t.Fatal("invalid native persistent evidence")
 				}
 				if mode == "lower availability" && value.Evidence.Filesystems[0].AvailableBytes != 30<<30 {
@@ -114,10 +114,10 @@ snapshots=0
 def fixture_snapshot(paths):
     global snapshots
     snapshots += 1
-    return {'version':1,'machine_id':'a'*32,'boot_id':'11111111-1111-4111-8111-111111111111','evidence':{
+    return {'version':3,'machine_id':'a'*32,'boot_id':'11111111-1111-4111-8111-111111111111','evidence':{
         'mount_namespace':21,'receipt':('b' if mode=='mount drift' and snapshots>1 else 'a')*64,
         'paths':[{'path':p,'ancestor':'/opt' if p.startswith('/opt') else '/var/lib','inode':123+i,'mount_id':29,'mount_root':'/','mount_point':'/','filesystem':'0000000000000001'} for i,p in enumerate(paths)],
-        'filesystems':[{'id':'0000000000000001','device':'8:1','type':kind,'total_bytes':100<<30,'available_bytes':(30 if mode=='lower availability' and snapshots>2 else 70)<<30}]}}
+        'filesystems':[{'id':'0000000000000001','device':'8:1','type':kind,'total_bytes':100<<30,'allocation_unit':4096,'total_inodes':1000000,'available_inodes':800000,'available_bytes':(30 if mode=='lower availability' and snapshots>2 else 70)<<30}]}}
 fs_snapshot = fixture_snapshot
 def value(signature, data): return {'type':signature,'data':data}
 unit_props={name:value('s',v) for name,v in {'Id':'-.mount','LoadState':'loaded','ActiveState':'active','SubState':'mounted','FragmentPath':'/run/systemd/generator/-.mount','SourcePath':'/etc/fstab','UnitFileState':'generated'}.items()}

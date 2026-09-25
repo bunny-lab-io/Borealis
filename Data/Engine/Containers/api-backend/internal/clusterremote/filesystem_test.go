@@ -20,13 +20,13 @@ import (
 
 func filesystemFixture() (FilesystemRequest, filesystemObservation) {
 	request := FilesystemRequest{MachineID: strings.Repeat("a", 32), BootID: "11111111-1111-4111-8111-111111111111", Paths: []string{"/opt/Borealis", "/var/lib/longhorn"}}
-	wire := filesystemObservation{Version: 1, MachineID: request.MachineID, BootID: request.BootID, Evidence: FilesystemEvidence{
+	wire := filesystemObservation{Version: 3, MachineID: request.MachineID, BootID: request.BootID, Evidence: FilesystemEvidence{
 		MountNamespace: 4026531840, Receipt: strings.Repeat("a", 64),
 		Paths: []FilesystemPath{
 			{Path: request.Paths[0], Ancestor: "/opt", Inode: 123, MountID: 29, MountRoot: "/", MountPoint: "/", Filesystem: "0000000000000001"},
 			{Path: request.Paths[1], Ancestor: "/var/lib", Inode: 124, MountID: 29, MountRoot: "/", MountPoint: "/", Filesystem: "0000000000000001"},
 		},
-		Filesystems: []FilesystemCapacity{{ID: "0000000000000001", Device: "8:1", Type: "ext4", TotalBytes: 100 << 30, AvailableBytes: 70 << 30}},
+		Filesystems: []FilesystemCapacity{{ID: "0000000000000001", Device: "8:1", Type: "ext4", TotalBytes: 100 << 30, AvailableBytes: 70 << 30, AllocationUnit: 4096, TotalInodes: 1000000, AvailableInodes: 800000}},
 	}}
 	return request, wire
 }
@@ -38,7 +38,7 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 			if strings.HasPrefix(mode, "persistent") {
 				request.RequirePersistent = true
 				if mode == "persistent" {
-					wire.Version = 2
+					wire.Version = 4
 				}
 			}
 			switch mode {
@@ -213,13 +213,13 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 }
 
 func TestFilesystemNativeObservation(t *testing.T) {
-	for _, mode := range []string{"success", "decreasing", "increasing", "xfs", "bind mount", "spaces", "symlink", "file", "mount drift", "identity drift", "directory drift", "namespace drift", "FSID drift", "device mismatch", "readonly mount", "readonly super", "readonly stat", "unsupported", "negative free", "reserved overflow", "free overflow", "total overflow", "zero unit", "zero FSID", "duplicate mount", "unknown escape", "mount bound", "missing mount", "extra fdinfo", "same device different FSID", "permission denied"} {
+	for _, mode := range []string{"success", "decreasing", "increasing", "xfs", "bind mount", "spaces", "symlink", "file", "mount drift", "identity drift", "directory drift", "namespace drift", "FSID drift", "device mismatch", "readonly mount", "readonly super", "readonly stat", "unsupported", "negative free", "reserved overflow", "free overflow", "total overflow", "inode decreases", "inode free overflow", "inode total drift", "allocation drift", "allocation unsupported", "zero inodes", "zero unit", "zero FSID", "duplicate mount", "unknown escape", "mount bound", "missing mount", "extra fdinfo", "same device different FSID", "permission denied"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "python3", "-I", "-B", "-c", filesystemLibraryScript+filesystemNativeFixture, t.TempDir(), mode)
 			out, err := cmd.CombinedOutput()
-			good := mode == "success" || mode == "decreasing" || mode == "increasing" || mode == "xfs" || mode == "bind mount" || mode == "spaces"
+			good := mode == "success" || mode == "inode decreases" || mode == "decreasing" || mode == "increasing" || mode == "xfs" || mode == "bind mount" || mode == "spaces"
 			if (err == nil) != good || ctx.Err() != nil {
 				t.Fatalf("native outcome %v: %s", err, out)
 			}
@@ -231,6 +231,13 @@ func TestFilesystemNativeObservation(t *testing.T) {
 				want := uint64(40 * 4096)
 				if mode == "decreasing" {
 					want = 20 * 4096
+				}
+				wantInodes := uint64(800)
+				if mode == "inode decreases" {
+					wantInodes = 200
+				}
+				if wire.Evidence.Filesystems[0].AvailableInodes != wantInodes || wire.Evidence.Filesystems[0].AllocationUnit != 4096 {
+					t.Fatal("inode minimum/allocation unit changed")
 				}
 				if wire.Evidence.Filesystems[0].AvailableBytes != want {
 					t.Fatal("reserved blocks or higher reading credited")
@@ -419,13 +426,19 @@ def capacity(fd):
     global calls
     calls += 1
     available = 20 if mode == "decreasing" and calls > 2 else 60 if mode == "increasing" and calls > 2 else 40
-    values = dict(f_frsize=4096, f_blocks=100, f_bavail=available, f_bfree=80, f_fsid=123, f_flag=0)
+    values = dict(f_frsize=4096, f_bsize=4096, f_files=1000, f_favail=800, f_ffree=900, f_blocks=100, f_bavail=available, f_bfree=80, f_fsid=123, f_flag=0)
     if mode == "readonly stat": values["f_flag"] = os.ST_RDONLY
     if mode == "negative free": values["f_bavail"] = -1
     if mode == "reserved overflow": values["f_bavail"] = 81
     if mode == "free overflow": values["f_bfree"] = 101
     if mode == "total overflow": values["f_blocks"] = FS_LIMIT
     if mode == "zero unit": values["f_frsize"] = 0
+    if mode == "inode decreases" and calls > 2: values["f_favail"] = 200
+    if mode == "inode free overflow": values["f_favail"] = 901
+    if mode == "inode total drift" and calls > 2: values["f_files"] = 1001
+    if mode == "allocation drift" and calls > 2: values["f_bsize"] = 8192
+    if mode == "allocation unsupported": values["f_bsize"] = 12345
+    if mode == "zero inodes": values["f_files"] = 0
     if mode == "zero FSID": values["f_fsid"] = 0
     if mode == "FSID drift" and calls > 2: values["f_fsid"] = 124
     if mode == "same device different FSID" and calls == 2: values["f_fsid"] = 124

@@ -110,15 +110,22 @@ def fs_capacity(fd, mount):
     if device != str(os.major(info.st_dev)) + ":" + str(os.minor(info.st_dev)) or values.f_flag & os.ST_RDONLY:
         raise ValueError()
     unit = fs_integer(values.f_frsize, 1)
+    allocation = max(unit, fs_integer(values.f_bsize, 1))
+    if allocation < 512 or allocation > 1 << 20 or allocation & (allocation - 1):
+        raise ValueError()
     total = fs_integer(fs_integer(values.f_blocks, 1) * unit, 1)
     available = fs_integer(fs_integer(values.f_bavail) * unit)
     free = fs_integer(fs_integer(values.f_bfree) * unit)
+    inodes = fs_integer(values.f_files, 1)
+    available_inodes, free_inodes = fs_integer(values.f_favail), fs_integer(values.f_ffree)
+    if not available_inodes <= free_inodes <= inodes:
+        raise ValueError()
     if not available <= free <= total or type(values.f_fsid) is not int or not -(1 << 63) <= values.f_fsid < (1 << 64):
         raise ValueError()
     identity = format(values.f_fsid & ((1 << 64)-1), "016x")
     if identity == "0" * 16:
         raise ValueError()
-    return {"id": identity, "device": device, "type": kind, "total_bytes": total, "available_bytes": available}
+    return {"id": identity, "device": device, "type": kind, "total_bytes": total, "available_bytes": available, "allocation_unit": allocation, "total_inodes": inodes, "available_inodes": available_inodes}
 
 def fs_selected_path(value, mounts):
     fd = os.open("/", FS_OPEN)
@@ -155,9 +162,10 @@ def fs_snapshot(paths):
         item, budget, chain = fs_selected_path(path, mounts)
         prior = budgets.get(budget["id"])
         if prior is not None:
-            if any(prior[key] != budget[key] for key in ("device", "type", "total_bytes")):
+            if any(prior[key] != budget[key] for key in ("device", "type", "total_bytes", "allocation_unit", "total_inodes")):
                 raise ValueError()
             budget["available_bytes"] = min(prior["available_bytes"], budget["available_bytes"])
+            budget["available_inodes"] = min(prior["available_inodes"], budget["available_inodes"])
         if devices.get(budget["device"], budget["id"]) != budget["id"]:
             raise ValueError()
         budgets[budget["id"]], devices[budget["device"]] = budget, budget["id"]
@@ -167,7 +175,7 @@ def fs_snapshot(paths):
         raise ValueError()
     receipt = hashlib.sha256(raw + b"\x00" + json.dumps(chains, separators=(",", ":")).encode("ascii")).hexdigest()
     evidence = {"mount_namespace": identity[2], "receipt": receipt, "paths": selected, "filesystems": [budgets[key] for key in sorted(budgets)]}
-    return {"version": 1, "machine_id": identity[0], "boot_id": identity[1], "evidence": evidence}
+    return {"version": 3, "machine_id": identity[0], "boot_id": identity[1], "evidence": evidence}
 
 def observe_filesystems(paths):
     if type(paths) is not list or not 1 <= len(paths) <= 8 or any(type(item) is not str for item in paths) or paths != sorted(set(paths)):
@@ -180,6 +188,7 @@ def observe_filesystems(paths):
     for left, right in zip(first["evidence"]["filesystems"], second["evidence"]["filesystems"]):
         available = min(left["available_bytes"], right["available_bytes"])
         left["available_bytes"] = right["available_bytes"] = available
+        left["available_inodes"] = right["available_inodes"] = min(left["available_inodes"], right["available_inodes"])
     if first != second:
         raise ValueError()
     return first

@@ -126,11 +126,13 @@ func mergeClusterSSHFilesystemAvailability(first, next []clusterSSHTargetFilesys
 			return false
 		}
 		for j := range left.Filesystems {
-			if final && right.Filesystems[j].AvailableBytes < left.Filesystems[j].AvailableBytes {
+			if final && (right.Filesystems[j].AvailableBytes < left.Filesystems[j].AvailableBytes || right.Filesystems[j].AvailableInodes < left.Filesystems[j].AvailableInodes) {
 				return false
 			}
 			left.Filesystems[j].AvailableBytes = min(left.Filesystems[j].AvailableBytes, right.Filesystems[j].AvailableBytes)
 			right.Filesystems[j].AvailableBytes = left.Filesystems[j].AvailableBytes
+			left.Filesystems[j].AvailableInodes = min(left.Filesystems[j].AvailableInodes, right.Filesystems[j].AvailableInodes)
+			right.Filesystems[j].AvailableInodes = left.Filesystems[j].AvailableInodes
 		}
 		if !reflect.DeepEqual(left, right) {
 			return false

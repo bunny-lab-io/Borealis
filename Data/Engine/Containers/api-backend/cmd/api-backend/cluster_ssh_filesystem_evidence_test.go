@@ -17,19 +17,19 @@ func sshFilesystemFixtureWire(item clusterSSHInspectedTarget) []byte {
 			{Path: "/opt/Borealis", Ancestor: "/opt", Inode: 123, MountID: 29, MountRoot: "/", MountPoint: "/", Filesystem: "0000000000000001"},
 			{Path: "/var/lib/longhorn", Ancestor: "/var/lib", Inode: 124, MountID: 29, MountRoot: "/", MountPoint: "/", Filesystem: "0000000000000001"},
 		},
-		Filesystems: []clusterremote.FilesystemCapacity{{ID: "0000000000000001", Device: "8:1", Type: "ext4", TotalBytes: 1000000, AvailableBytes: 700000}},
+		Filesystems: []clusterremote.FilesystemCapacity{{ID: "0000000000000001", Device: "8:1", Type: "ext4", TotalBytes: 1000000, AvailableBytes: 700000, AllocationUnit: 4096, TotalInodes: 1000000, AvailableInodes: 800000}},
 	}
 	wire, _ := json.Marshal(struct {
 		Version   int                              `json:"version"`
 		MachineID string                           `json:"machine_id"`
 		BootID    string                           `json:"boot_id"`
 		Evidence  clusterremote.FilesystemEvidence `json:"evidence"`
-	}{1, item.Report.MachineID, item.Report.BootID, storage})
+	}{3, item.Report.MachineID, item.Report.BootID, storage})
 	return wire
 }
 
 func TestClusterSSHFilesystemOriginalNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "mount drift", "ignored failure", "final drift", "lower final free", "free varies", "consumer copy", "input copy", "key copy", "cached", "zero", "substituted", "missing target", "wrong target", "unsorted paths", "source lost", "background loss", "consumer error", "late read"} {
+	for _, mode := range []string{"expansion", "replacement", "mount drift", "ignored failure", "final drift", "lower final free", "lower final inodes", "free varies", "consumer copy", "input copy", "key copy", "cached", "zero", "substituted", "missing target", "wrong target", "unsorted paths", "source lost", "background loss", "consumer error", "late read"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			selection := make([]clusterSSHTargetFilesystemSelection, len(f.claims))
@@ -52,6 +52,9 @@ func TestClusterSSHFilesystemOriginalNativeCohort(t *testing.T) {
 				}
 				if (mode == "mount drift" || mode == "ignored failure") && f.opens[i].Load() > 1 || mode == "final drift" && consumed {
 					return bytes.ReplaceAll(wire, []byte(`"mount_id":29`), []byte(`"mount_id":30`))
+				}
+				if mode == "lower final inodes" && consumed {
+					return bytes.Replace(wire, []byte(`"available_inodes":800000`), []byte(`"available_inodes":1`), 1)
 				}
 				if mode == "lower final free" && consumed {
 					return bytes.Replace(wire, []byte(`"available_bytes":700000`), []byte(`"available_bytes":1`), 1)

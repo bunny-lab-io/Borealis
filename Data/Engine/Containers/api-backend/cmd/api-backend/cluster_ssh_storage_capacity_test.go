@@ -11,14 +11,14 @@ import (
 func sshCapacityEvidence() clusterremote.FilesystemEvidence {
 	return clusterremote.FilesystemEvidence{
 		Paths:       []clusterremote.FilesystemPath{{Path: "/opt/Borealis", Ancestor: "/opt", Filesystem: "root"}, {Path: "/var/lib/longhorn", Ancestor: "/var/lib", Filesystem: "root"}},
-		Filesystems: []clusterremote.FilesystemCapacity{{ID: "root", Type: "ext4", TotalBytes: 120 << 30, AvailableBytes: 90 << 30}},
+		Filesystems: []clusterremote.FilesystemCapacity{{ID: "root", Type: "ext4", TotalBytes: 120 << 30, AvailableBytes: 90 << 30, AllocationUnit: 4096, TotalInodes: 1000000, AvailableInodes: 800000}},
 	}
 }
 
 func TestClusterSSHStorageCapacitySharedFilesystem(t *testing.T) {
 	f := newSSHStorageFixture(t, false)
 	storage := sshStorageSnapshotFixture(t, f.a).Requirements
-	demands := []clusterSSHFilesystemDemand{{"/opt/Borealis", 8 << 30}}
+	demands := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30}}
 	for _, mode := range []string{"shared", "split", "insufficient", "strict boundary", "overprovision not physical credit", "existing storage", "missing path", "duplicate filesystem", "overflow", "extra filesystem", "reserve rounding"} {
 		t.Run(mode, func(t *testing.T) {
 			r := storage
@@ -27,7 +27,7 @@ func TestClusterSSHStorageCapacitySharedFilesystem(t *testing.T) {
 			switch mode {
 			case "split":
 				e.Paths[0].Filesystem = "install"
-				e.Filesystems = append(e.Filesystems, clusterremote.FilesystemCapacity{ID: "install", Type: "xfs", TotalBytes: 20 << 30, AvailableBytes: 9 << 30})
+				e.Filesystems = append(e.Filesystems, clusterremote.FilesystemCapacity{ID: "install", Type: "xfs", TotalBytes: 20 << 30, AvailableBytes: 9 << 30, AllocationUnit: 4096, TotalInodes: 1000000, AvailableInodes: 800000})
 			case "insufficient":
 				e.Filesystems[0].AvailableBytes = 80 << 30
 			case "strict boundary":
@@ -44,7 +44,7 @@ func TestClusterSSHStorageCapacitySharedFilesystem(t *testing.T) {
 			case "overflow":
 				d[0].Bytes = clusterSSHCapacityLimit
 			case "extra filesystem":
-				e.Filesystems = append(e.Filesystems, clusterremote.FilesystemCapacity{ID: "unused", Type: "ext4", TotalBytes: 1, AvailableBytes: 1})
+				e.Filesystems = append(e.Filesystems, clusterremote.FilesystemCapacity{ID: "unused", Type: "ext4", TotalBytes: 1, AvailableBytes: 1, AllocationUnit: 4096, TotalInodes: 1000000, AvailableInodes: 800000})
 			case "reserve rounding":
 				e.Filesystems[0].TotalBytes++
 			}
@@ -82,6 +82,41 @@ func TestClusterSSHStorageCapacitySharedFilesystem(t *testing.T) {
 	}
 }
 
+func TestClusterSSHStorageCapacityAllocationAndInodes(t *testing.T) {
+	f := newSSHStorageFixture(t, false)
+	r := sshStorageSnapshotFixture(t, f.a).Requirements
+	for _, mode := range []string{"shared", "large blocks", "inode equality", "inode exhausted", "entry overflow", "invalid unit", "invalid inode count"} {
+		t.Run(mode, func(t *testing.T) {
+			e := sshCapacityEvidence()
+			e.Paths = append(e.Paths, clusterremote.FilesystemPath{Path: "/var/lib/rancher/k3s", Ancestor: "/var/lib", Filesystem: "root"})
+			e.Filesystems[0].AvailableInodes = 11
+			demands := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 100, Entries: 6}, {Path: "/var/lib/rancher/k3s", Bytes: 100, Entries: 4}}
+			switch mode {
+			case "large blocks":
+				e.Filesystems[0].AllocationUnit = 65536
+			case "inode equality":
+				e.Filesystems[0].AvailableInodes = 10
+			case "inode exhausted":
+				e.Filesystems[0].AvailableInodes = 0
+			case "entry overflow":
+				demands[0].Entries = clusterSSHCapacityLimit
+			case "invalid unit":
+				e.Filesystems[0].AllocationUnit = 1000
+			case "invalid inode count":
+				e.Filesystems[0].TotalInodes = 1 << 53
+			}
+			budgets, err := calculateClusterSSHStorageCapacity(r, e, demands)
+			good := mode == "shared" || mode == "large blocks"
+			if (err == nil) != good {
+				t.Fatalf("allocation/inode decision: %v", err)
+			}
+			if good && (len(budgets) != 1 || budgets[0].OtherBytes != 200+10*e.Filesystems[0].AllocationUnit || !budgets[0].Fits) {
+				t.Fatal("shared allocation demand lost or double counted")
+			}
+		})
+	}
+}
+
 func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 	for _, mode := range []string{"expansion", "replacement", "low space", "policy drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory", "current-only wire", "downgraded reader", "persistent final drift"} {
 		t.Run(mode, func(t *testing.T) {
@@ -94,9 +129,9 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 					Evidence  clusterremote.FilesystemEvidence `json:"evidence"`
 				}
 				_ = json.Unmarshal(raw, &wire)
-				wire.Version = 2
+				wire.Version = 4
 				if mode == "current-only wire" || mode == "downgraded reader" {
-					wire.Version = 1
+					wire.Version = 3
 				}
 				if mode == "persistent final drift" && f.opens[i].Load() > 2 {
 					wire.Evidence.Receipt = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -117,7 +152,7 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot := clusterSSHPreparationSnapshot{Expected: expected, Storage: sshStorageSnapshotFixture(t, f.a)}
-			demands := []clusterSSHFilesystemDemand{{"/opt/Borealis", 8 << 30}}
+			demands := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30}}
 			reads, consumed := 0, false
 			source := func(ctx context.Context) (clusterSSHPreparationSnapshot, error) {
 				reads++

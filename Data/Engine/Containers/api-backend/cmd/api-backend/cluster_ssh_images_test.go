@@ -42,7 +42,7 @@ func imageReleaseFixture(t *testing.T, expected ...clusterbootstrap.Expected) *b
 }
 
 func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "image drift", "source drift", "sibling lost"} {
+	for _, mode := range []string{"expansion", "replacement", "image drift", "source drift", "sibling lost", "inode exhausted"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			release := imageReleaseFixture(t, f.a.Baseline)
@@ -54,9 +54,12 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 					Evidence  clusterremote.FilesystemEvidence `json:"evidence"`
 				}
 				_ = json.Unmarshal(raw, &w)
-				w.Version = 2
+				w.Version = 4
 				w.Evidence.Filesystems[0].TotalBytes = 120 << 30
 				w.Evidence.Filesystems[0].AvailableBytes = 90 << 30
+				if mode == "inode exhausted" {
+					w.Evidence.Filesystems[0].AvailableInodes = 1
+				}
 				p := w.Evidence.Paths[1]
 				p.Path = "/var/lib/rancher/k3s"
 				w.Evidence.Paths = append(w.Evidence.Paths, p)
@@ -83,7 +86,7 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 						t.Fatal("partial image-capacity cohort")
 					}
 					for _, v := range out {
-						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096) {
+						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7) {
 							t.Fatal("image bytes missing from shared filesystem budget")
 						}
 					}
@@ -96,7 +99,7 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 					return nil
 				})
 			})
-			if (err == nil) != (mode == "expansion" || mode == "replacement") || !consumed {
+			if (err == nil) != (mode == "expansion" || mode == "replacement") || consumed != (mode != "inode exhausted") {
 				t.Fatalf("image-capacity authority: consumed=%v error=%v", consumed, err)
 			}
 			f.assertClosed(t)

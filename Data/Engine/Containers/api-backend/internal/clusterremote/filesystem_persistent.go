@@ -297,11 +297,12 @@ def pfs_snapshot(paths):
         final = fs_snapshot(paths)
         for left, right in zip(evidence["filesystems"], final["evidence"]["filesystems"]):
             left["available_bytes"] = right["available_bytes"] = min(left["available_bytes"], right["available_bytes"])
+            left["available_inodes"] = right["available_inodes"] = min(left["available_inodes"], right["available_inodes"])
         if observation != final:
             raise ValueError()
         proof = json.dumps((files, device_proof, manager), sort_keys=True, separators=(",", ":")).encode("ascii")
         evidence["receipt"] = hashlib.sha256(evidence["receipt"].encode("ascii")+b"\x00"+proof).hexdigest()
-        observation["version"] = 2
+        observation["version"] = 4
         return observation
     finally:
         os.close(root)
@@ -316,6 +317,7 @@ def observe_persistent_filesystems(paths):
         raise ValueError()
     for left, right in zip(first["evidence"]["filesystems"], second["evidence"]["filesystems"]):
         left["available_bytes"] = right["available_bytes"] = min(left["available_bytes"], right["available_bytes"])
+        left["available_inodes"] = right["available_inodes"] = min(left["available_inodes"], right["available_inodes"])
     if first != second:
         raise ValueError()
     return first

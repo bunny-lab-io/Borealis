@@ -76,11 +76,14 @@ type FilesystemPath struct {
 // One budget per filesystem, even when several selected paths/bind mounts use
 // it. AvailableBytes is unprivileged f_bavail * f_frsize, never root reserves.
 type FilesystemCapacity struct {
-	ID             string `json:"id"`
-	Device         string `json:"device"`
-	Type           string `json:"type"`
-	TotalBytes     uint64 `json:"total_bytes"`
-	AvailableBytes uint64 `json:"available_bytes"`
+	ID              string `json:"id"`
+	Device          string `json:"device"`
+	Type            string `json:"type"`
+	TotalBytes      uint64 `json:"total_bytes"`
+	AvailableBytes  uint64 `json:"available_bytes"`
+	AllocationUnit  uint64 `json:"allocation_unit"`
+	TotalInodes     uint64 `json:"total_inodes"`
+	AvailableInodes uint64 `json:"available_inodes"`
 }
 
 type FilesystemEvidence struct {
@@ -112,7 +115,9 @@ func (v FilesystemEvidence) validate(paths []string) error {
 	for i, fs := range v.Filesystems {
 		if !filesystemIDPattern.MatchString(fs.ID) || fs.ID == strings.Repeat("0", 16) || seen[fs.ID] || devices[fs.Device] ||
 			(i > 0 && fs.ID <= v.Filesystems[i-1].ID) || (fs.Type != "ext4" && fs.Type != "xfs") ||
-			fs.TotalBytes == 0 || fs.TotalBytes > filesystemIntegerLimit || fs.AvailableBytes > fs.TotalBytes {
+			fs.TotalBytes == 0 || fs.TotalBytes > filesystemIntegerLimit || fs.AvailableBytes > fs.TotalBytes ||
+			fs.AllocationUnit < 512 || fs.AllocationUnit > 1<<20 || fs.AllocationUnit&(fs.AllocationUnit-1) != 0 ||
+			fs.TotalInodes == 0 || fs.TotalInodes > filesystemIntegerLimit || fs.AvailableInodes > fs.TotalInodes {
 			return ErrFilesystem
 		}
 		parts := strings.Split(fs.Device, ":")
@@ -161,9 +166,9 @@ type TargetFilesystem struct {
 }
 
 func (v TargetFilesystem) Evidence(notBefore time.Time, target Target, key HostKey, request FilesystemRequest) (FilesystemEvidence, error) {
-	version := 1
+	version := 3
 	if request.RequirePersistent {
-		version = 2
+		version = 4
 	}
 	if notBefore.IsZero() || v.started.Before(notBefore) || v.finished.Before(v.started) || v.finished.After(time.Now()) ||
 		v.finished.Sub(v.started) > 25*time.Second || request.Validate() != nil || target.Validate() != nil || key.Validate() != nil ||

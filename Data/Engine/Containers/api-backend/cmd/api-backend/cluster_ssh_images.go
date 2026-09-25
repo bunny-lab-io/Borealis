@@ -113,7 +113,7 @@ func (v clusterSSHImageInventory) demands() ([]clusterSSHFilesystemDemand, error
 	if v.inventory == nil {
 		return nil, clusterbootstrap.ErrImageArchive
 	}
-	var stage, runtime uint64
+	var stage, runtime, runtimeEntries uint64
 	add := func(a *uint64, n int64) bool {
 		if n < 0 {
 			return false
@@ -130,12 +130,22 @@ func (v clusterSSHImageInventory) demands() ([]clusterSSHFilesystemDemand, error
 			if !add(&runtime, layer.BlobBytes) || !add(&runtime, layer.TarBytes) {
 				return nil, clusterbootstrap.ErrImageArchive
 			}
+			// Blob plus expanded entries. Count repeated layers independently.
+			if !add(&runtimeEntries, layer.Entries+1) {
+				return nil, clusterbootstrap.ErrImageArchive
+			}
+		}
+		// Two archive generations, config and manifest content blobs.
+		if !add(&runtimeEntries, 4) {
+			return nil, clusterbootstrap.ErrImageArchive
 		}
 	}
 	if !add(&stage, 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes) {
 		return nil, clusterbootstrap.ErrImageArchive
 	}
-	return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: stage}, {Path: "/var/lib/rancher/k3s", Bytes: runtime}}, nil
+	// Two bounded bootstrap expansions, bootstrap archive and image archives.
+	stageEntries := uint64(2*clusterbootstrap.MaxEntries + 1 + len(v.inventory.Images()))
+	return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: stage, Entries: stageEntries}, {Path: "/var/lib/rancher/k3s", Bytes: runtime, Entries: runtimeEntries}}, nil
 }
 
 func withClusterSSHImageStorageCapacity(ctx context.Context, readers clusterSSHNetworkTargetReaders,

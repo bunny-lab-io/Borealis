@@ -16,6 +16,10 @@ import (
 type clusterSSHFilesystemDemand struct {
 	Path  string
 	Bytes uint64
+	// Entries adds one allocation unit per known file/directory/layer entry and
+	// consumes one available inode. This is a content bound, not complete FS
+	// metadata, quotas, runtime growth or OS/external-image reserve evidence.
+	Entries uint64
 }
 
 type clusterSSHStorageBudget struct {
@@ -53,7 +57,7 @@ func clusterSSHStorageDemandPaths(policy clusterSSHStoragePolicy, demands []clus
 	seen := map[string]bool{}
 	for _, d := range demands {
 		p, ok := clusterSSHStoragePath(d.Path)
-		if !ok || p != d.Path || d.Bytes == 0 || d.Bytes > clusterSSHCapacityLimit || seen[d.Path] {
+		if !ok || p != d.Path || d.Bytes == 0 || d.Bytes > clusterSSHCapacityLimit || d.Entries > clusterSSHCapacityLimit || seen[d.Path] {
 			return nil, false
 		}
 		seen[d.Path] = true
@@ -78,8 +82,10 @@ func calculateClusterSSHStorageCapacity(requirements clusterSSHStorageRequiremen
 	// arithmetic independently bounded even when called by an internal adapter.
 	fsIndex := map[string]int{}
 	budgets := make([]clusterSSHStorageBudget, len(evidence.Filesystems))
+	inodes := make([]uint64, len(evidence.Filesystems))
 	for i, fs := range evidence.Filesystems {
-		if fs.ID == "" || fs.TotalBytes == 0 || fs.TotalBytes > clusterSSHCapacityLimit || fs.AvailableBytes > fs.TotalBytes || (fs.Type != "ext4" && fs.Type != "xfs") {
+		if fs.ID == "" || fs.TotalBytes == 0 || fs.TotalBytes > clusterSSHCapacityLimit || fs.AvailableBytes > fs.TotalBytes || (fs.Type != "ext4" && fs.Type != "xfs") ||
+			fs.AllocationUnit < 512 || fs.AllocationUnit > 1<<20 || fs.AllocationUnit&(fs.AllocationUnit-1) != 0 || fs.TotalInodes == 0 || fs.TotalInodes > clusterSSHCapacityLimit || fs.AvailableInodes > fs.TotalInodes {
 			return fail()
 		}
 		if _, exists := fsIndex[fs.ID]; exists {
@@ -108,7 +114,18 @@ func calculateClusterSSHStorageCapacity(requirements clusterSSHStorageRequiremen
 		if !exists {
 			return fail()
 		}
-		if budgets[index].OtherBytes, ok = clusterSSHCapacitySum(budgets[index].OtherBytes, d.Bytes); !ok {
+		fs := evidence.Filesystems[index]
+		if d.Entries > clusterSSHCapacityLimit/fs.AllocationUnit {
+			return fail()
+		}
+		bytes, ok := clusterSSHCapacitySum(d.Bytes, d.Entries*fs.AllocationUnit)
+		if !ok {
+			return fail()
+		}
+		if inodes[index], ok = clusterSSHCapacitySum(inodes[index], d.Entries); !ok || inodes[index] >= fs.AvailableInodes {
+			return fail()
+		}
+		if budgets[index].OtherBytes, ok = clusterSSHCapacitySum(budgets[index].OtherBytes, bytes); !ok {
 			return fail()
 		}
 	}
