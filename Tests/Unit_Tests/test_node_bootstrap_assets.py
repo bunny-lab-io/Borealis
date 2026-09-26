@@ -96,6 +96,18 @@ class NodeBootstrapAssetsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source SHA"):
             self.build()
 
+    def test_manager_build_accepts_existing_private_output_directory(self):
+        # Image packaging creates dist first; K3s packaging uses its existing
+        # private scratch root. Exercise the real compiler helper contract.
+        output = self.root / "private-bin"
+        output.mkdir()
+        sentinel = output / "retained"
+        sentinel.write_text("unrelated output")
+        binary = output / "node-manager"
+        builder.build_manager(self.source, binary, os.environ.get("BOREALIS_GO_BIN", "go"))
+        self.assertEqual(subprocess.check_output([str(binary)], text=True), "tagged-node-manager")
+        self.assertEqual(sentinel.read_text(), "unrelated output")
+
     def test_symlink_or_submodule_fails_before_checkout(self):
         (self.source / "escape").symlink_to("../../outside")
         self.sha = self.commit()

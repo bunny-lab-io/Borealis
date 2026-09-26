@@ -100,7 +100,7 @@ def build_manager(source: Path, destination: Path, go_bin: str) -> None:
     env = os.environ.copy()
     env.update(GOWORK="off", GOTOOLCHAIN="local", GOOS="linux", GOARCH="amd64",
                CGO_ENABLED="0", GOFLAGS="-mod=readonly")
-    destination.parent.mkdir(parents=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [go_bin, "-C", str(source / "Data/Engine/Containers/api-backend"), "build",
          "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", str(destination),
