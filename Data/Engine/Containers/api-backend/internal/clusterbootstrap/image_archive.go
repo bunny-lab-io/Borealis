@@ -388,6 +388,12 @@ func inspectImageLayer(ctx context.Context, source io.Reader, d imageDescriptor,
 			return fail()
 		}
 		name := strings.TrimSuffix(header.Name, "/")
+		// OCI layers commonly retain tar's explicit relative prefix (including
+		// K3s CoreDNS/metrics-server). Canonicalize only that prefix before
+		// checking traversal and duplicates; never clean away a '..' segment.
+		for strings.HasPrefix(name, "./") {
+			name = strings.TrimPrefix(name, "./")
+		}
 		if name == "." && header.Typeflag == tar.TypeDir {
 			continue
 		}

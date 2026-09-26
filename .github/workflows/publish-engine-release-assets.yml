@@ -98,6 +98,17 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --output-dir "$RUNNER_TEMP/borealis-node-images"
 
+      - name: Package pinned K3s inputs
+        if: hashFiles('Tests/tools/build_node_k3s_assets.py') != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          python3 Tests/tools/build_node_k3s_assets.py \
+            --source . --release "$RELEASE_TAG" \
+            --source-sha "$(git rev-parse HEAD)" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output-dir "$RUNNER_TEMP/borealis-node-k3s"
+
       - name: Upload standalone installer assets to draft release
         if: steps.release.outputs.prerelease == 'false'
         env:
@@ -131,4 +142,16 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             "$RUNNER_TEMP/borealis-node-images/"*.oci.tar \
             "$RUNNER_TEMP/borealis-node-images/borealis-node-images-linux-amd64.json" \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Upload pinned K3s inputs to draft release
+        if: hashFiles('Tests/tools/build_node_k3s_assets.py') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-linux-amd64" \
+            "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-images-linux-amd64.tar" \
+            "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-linux-amd64.json" \
             --repo "$GITHUB_REPOSITORY"

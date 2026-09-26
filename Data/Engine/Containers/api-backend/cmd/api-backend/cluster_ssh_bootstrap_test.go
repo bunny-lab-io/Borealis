@@ -33,6 +33,7 @@ type bootstrapReleaseFixture struct {
 	publication   string
 	manifestReply string
 	archiveReads  int
+	extraBodies   map[string]string
 }
 
 func newBootstrapReleaseFixture(t *testing.T) *bootstrapReleaseFixture {
@@ -46,6 +47,8 @@ func newBootstrapReleaseFixture(t *testing.T) *bootstrapReleaseFixture {
 			t.Error("GitHub API authentication missing")
 		}
 		switch {
+		case f.extraBodies[r.URL.Path] != "":
+			_, _ = io.WriteString(w, f.extraBodies[r.URL.Path])
 		case strings.Contains(r.URL.Path, "/releases/tags/"):
 			if f.publication != "" {
 				_, _ = io.WriteString(w, f.publication)

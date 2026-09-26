@@ -169,9 +169,21 @@ func withClusterSSHImageStorageCapacity(ctx context.Context, readers clusterSSHN
 		if err != nil {
 			return err
 		}
+		k3s, err := resolveClusterSSHK3sInventory(ctx, initial.Expected.Source, initial.Expected.K3sVersion)
+		if err != nil {
+			return err
+		}
+		k3sDemands, err := k3s.demands()
+		if err != nil {
+			return err
+		}
+		demands, err = mergeClusterSSHFilesystemDemands(demands, k3sDemands)
+		if err != nil {
+			return err
+		}
 		boundSource := func(ctx context.Context) (clusterSSHPreparationSnapshot, error) {
 			value, err := source(ctx)
-			if err != nil || value.Expected.Source != initial.Expected.Source {
+			if err != nil || value.Expected.Source != initial.Expected.Source || value.Expected.K3sVersion != initial.Expected.K3sVersion {
 				return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrImageArchive
 			}
 			return value, nil
@@ -179,7 +191,7 @@ func withClusterSSHImageStorageCapacity(ctx context.Context, readers clusterSSHN
 		if err := withClusterSSHTargetStorageCapacity(ctx, readers, boundSource, demands, consume); err != nil {
 			return err
 		}
-		if images.refresh(ctx) != nil || readers.Refresh(ctx) != nil {
+		if images.refresh(ctx) != nil || k3s.refresh(ctx) != nil || readers.Refresh(ctx) != nil {
 			return clusterbootstrap.ErrImageArchive
 		}
 		_, err = boundSource(ctx)

@@ -23,10 +23,19 @@ func imageFixture(t *testing.T, mode, role string) []byte {
 	if mode == "unsafe layer" {
 		name = "../escape"
 	}
+	if mode == "relative prefix" || mode == "relative duplicate" {
+		name = "./etc/example"
+	}
+	if mode == "relative traversal" {
+		name = "./../escape"
+	}
 	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: 4, Typeflag: tar.TypeReg}); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = tw.Write([]byte("data"))
+	if mode == "relative duplicate" {
+		_ = tw.WriteHeader(&tar.Header{Name: "etc/example", Typeflag: tar.TypeReg, Mode: 0o644})
+	}
 	if mode == "special layer" {
 		_ = tw.WriteHeader(&tar.Header{Name: "device", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3})
 	}
@@ -135,7 +144,7 @@ func imageFixture(t *testing.T, mode, role string) []byte {
 }
 
 func TestImageArchive(t *testing.T) {
-	for _, mode := range []string{"gzip", "plain", "unsafe layer", "special layer", "gzip concatenation", "wrong diff", "architecture", "source", "labels alias", "invalid UTF8", "platform variant", "duplicate JSON", "case alias", "reference", "multiple images", "blob digest", "missing blob", "extra blob", "foreign outer", "duplicate outer", "trailing", "cancelled", "wrong role", "size", "truncated"} {
+	for _, mode := range []string{"gzip", "plain", "relative prefix", "relative duplicate", "relative traversal", "unsafe layer", "special layer", "gzip concatenation", "wrong diff", "architecture", "source", "labels alias", "invalid UTF8", "platform variant", "duplicate JSON", "case alias", "reference", "multiple images", "blob digest", "missing blob", "extra blob", "foreign outer", "duplicate outer", "trailing", "cancelled", "wrong role", "size", "truncated"} {
 		t.Run(mode, func(t *testing.T) {
 			raw := imageFixture(t, mode, "api-backend")
 			ctx, cancel := context.WithCancel(context.Background())
@@ -155,7 +164,7 @@ func TestImageArchive(t *testing.T) {
 				size = int64(len(raw))
 			}
 			proof, err := InspectImageArchive(ctx, bytes.NewReader(raw), size, role, imageTestSHA)
-			good := mode == "gzip" || mode == "plain"
+			good := mode == "gzip" || mode == "plain" || mode == "relative prefix"
 			if (err == nil) != good {
 				t.Fatalf("accepted=%v error=%v", err == nil, err)
 			}
