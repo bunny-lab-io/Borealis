@@ -1,0 +1,192 @@
+package main
+
+import (
+	"borealis/api-backend/internal/clusterbootstrap"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
+	for _, mode := range []string{"expansion", "replacement", "qualification", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
+			if mode == "qualification" {
+				f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets' WHERE id=$1`, f.op.ID)
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='queued',current_step='inspection_complete',lease_holder='',lease_expires_at=0,lease_generation=inspected_generation WHERE operation_id=$1`, f.op.ID)
+				work, err := f.c.store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.lease, f.sealed = work.Claims[0].Lease, work.Claims[0].Sealed
+			}
+			f.c.store.db.SetMaxOpenConns(1)
+			current, err := f.read(f.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			storage := newSSHStorageFixtureForAuthority(t, current)
+			before := f.events(t)
+			var jobs, secretReads atomic.Int64
+			var changed atomic.Bool
+			var mu sync.Mutex
+			var job map[string]any
+			podUID := newClusterUUID()
+			kubernetes := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				// The joined authority heartbeat may independently borrow this one
+				// connection. A bounded acquisition proves the request released its
+				// connection before HTTP, without mistaking a short heartbeat for a leak.
+				probeCtx, stop := context.WithTimeout(r.Context(), time.Second)
+				connection, probeErr := f.c.store.db.Conn(probeCtx)
+				if connection != nil {
+					if connection.Close() != nil {
+						t.Error("pool probe release")
+					}
+				}
+				stop()
+				if probeErr != nil && r.Context().Err() == nil {
+					t.Error("database connection unavailable during Kubernetes request")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				if r.Method == "GET" {
+					if object, ok := storage.objects[r.URL.RequestURI()]; ok && r.URL.Path != "/api/v1/nodes" && r.URL.Path != "/api/v1/namespaces/kube-system" {
+						if mode == "storage revision changed" && changed.Load() {
+							clusterSSHStorageMap(storage.volume(0), "metadata")["resourceVersion"] = "2"
+						}
+						_ = json.NewEncoder(w).Encode(object)
+						return
+					}
+					switch r.URL.Path {
+					case "/api/v1/nodes":
+						items := make([]any, 0, len(current.Source.Members))
+						for _, member := range current.Source.Members {
+							items = append(items, sshSourceKubernetesFixture(member))
+						}
+						_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+						return
+					case "/api/v1/namespaces/kube-system":
+						_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"uid": current.Source.KubeSystemUID}})
+						return
+					case clusterSSHRuntimeSecretPath:
+						secretReads.Add(1)
+						value := sshPreparationSecretFixture()
+						if changed.Load() {
+							switch mode {
+							case "Secret UID changed":
+								value["metadata"].(map[string]any)["uid"] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+							case "Secret revision changed":
+								value["metadata"].(map[string]any)["resourceVersion"] = "changed-revision"
+							case "excluded Secret data changed":
+								value["data"].(map[string]string)["BOREALIS_REPO_ROOT"] = base64.StdEncoding.EncodeToString([]byte("/changed"))
+							}
+						}
+						_ = json.NewEncoder(w).Encode(value)
+						return
+					}
+				}
+				if r.Method == "POST" && r.URL.Path == "/apis/batch/v1/namespaces/borealis/jobs" {
+					jobs.Add(1)
+					job = nil
+					if json.NewDecoder(r.Body).Decode(&job) != nil {
+						t.Error("Job decode")
+						w.WriteHeader(500)
+						return
+					}
+					job["metadata"].(map[string]any)["uid"] = newClusterUUID()
+					job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
+					switch mode {
+					case "storage placement changed during Job":
+						clusterSSHStorageMap(storage.volume(1), "status")["currentNodeID"] = "foreign"
+					case "controller changed":
+						f.exec(t, `UPDATE engine.cluster_application_leases SET holder='changed-controller' WHERE name=$1`, clusterControllerLeaseName)
+					case "worker expired":
+						f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=0 WHERE id=$1`, f.lease.TargetID)
+					case "credential removed":
+						f.exec(t, `DELETE FROM engine.cluster_onboarding_credentials WHERE target_id=$1`, f.lease.TargetID)
+					case "Aegis locked":
+						f.aegis.mu.Lock()
+						clear(f.aegis.key)
+						f.aegis.key = nil
+						f.aegis.mu.Unlock()
+					}
+					w.WriteHeader(201)
+					_ = json.NewEncoder(w).Encode(job)
+					return
+				}
+				if r.Method == "GET" && job != nil {
+					if strings.HasPrefix(r.URL.Path, "/apis/batch/") {
+						_ = json.NewEncoder(w).Encode(job)
+						return
+					}
+					if r.URL.Path == "/api/v1/namespaces/borealis/pods" {
+						node := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["nodeName"]
+						for _, member := range current.Source.Members {
+							if member.Name != node {
+								continue
+							}
+							network := sshSourceNetworkFixture(member, current.K3sVersion)
+							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sourceActionPod(t, job, network, podUID)}})
+							return
+						}
+					}
+				}
+				t.Error("unexpected Kubernetes request")
+				w.WriteHeader(500)
+			}))
+			defer kubernetes.Close()
+			runner := &kubernetesClusterStepRunner{controllerHolder: f.lease.ControllerHolder, namespace: "borealis", actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64),
+				jobPollInterval: time.Millisecond, kube: &kubernetesAPIClient{baseURL: kubernetes.URL, token: "private-fixture", httpClient: kubernetes.Client()}}
+			controller := &clusterController{store: f.c.store, runner: runner, holder: f.c.holder}
+			t.Setenv("BOREALIS_OPERATOR_SECRET", sshBrokerTestSecret)
+			server := httptest.NewServer(controller.healthServer().Handler)
+			defer server.Close()
+			client := sshBrokerClient(t, server.URL)
+			client.httpClient.Timeout = 10 * time.Second
+			read := client.preparationRead(f.read, f.lease, f.baseline, f.sealed)
+			expected, settings, err := read(f.ctx)
+			good := mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
+			if good {
+				if err != nil || expected.Target.TargetID != f.lease.TargetID || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) {
+					t.Fatal("valid private broker source rejected")
+				}
+				changed.Store(true)
+				_, next, err := read(f.ctx)
+				if strings.Contains(mode, "Secret") || mode == "storage revision changed" {
+					if err != clusterbootstrap.ErrPreparationConfig || next != nil {
+						t.Fatal("source observation drift accepted")
+					}
+				} else if err != nil || !reflect.DeepEqual(next, settings) || jobs.Load() != int64(4*len(current.Source.Members)) {
+					t.Fatal("fresh source Job not observed per member/read")
+				}
+			} else if err != clusterbootstrap.ErrPreparationConfig || settings != nil {
+				t.Fatal("stale authority returned private settings")
+			}
+			if jobs.Load() == 0 {
+				t.Fatal("actual controller source transport was not exercised")
+			}
+			if textInSet(mode, "controller changed", "worker expired", "credential removed") && secretReads.Load() != 0 {
+				t.Fatal("private Secret read after persisted authority loss")
+			}
+			// Storage drift is found by the final inventory after valid source
+			// reads. Its error must discard that response, not pretend DB ownership
+			// was lost before the private Secret acquisition.
+			if mode == "storage placement changed during Job" && secretReads.Load() != 2 {
+				t.Fatal("storage drift did not bracket complete source acquisition")
+			}
+			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {
+				t.Fatal("broker retained DB connection or published event")
+			}
+		})
+	}
+}

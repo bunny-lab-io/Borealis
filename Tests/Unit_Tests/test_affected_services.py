@@ -31,6 +31,14 @@ class AffectedServicesTests(unittest.TestCase):
             ["api-backend", "borealis-operator", "job-scheduler"],
         )
 
+    def test_engine_shared_packages_rebuild_multi_role_consumers(self) -> None:
+        for package in ("clusterbootstrap", "clusterremote", "engineidentity"):
+            with self.subTest(package=package):
+                self.assertEqual(
+                    affected_services([f"Data/Engine/Containers/api-backend/internal/{package}/changed.go"], SERVICES),
+                    ["api-backend", "borealis-operator", "job-scheduler"],
+                )
+
     def test_python_change_rebuilds_python_consumers(self) -> None:
         self.assertEqual(
             affected_services(["Data/Engine/Containers/site-worker/data/database.py"], SERVICES),

@@ -1,0 +1,38 @@
+{
+  "version": "v1.36.3+k3s1",
+  "binary": {
+    "name": "k3s",
+    "size": 82010274,
+    "sha256": "2f98a9f8fe5782479ee2d54e70a1b10a7f6fd4cae8d38ed3098452dc6eed76b5"
+  },
+  "archive": {
+    "name": "k3s-airgap-images-amd64.tar",
+    "size": 265197568,
+    "sha256": "ad67d696c5c96755c20196f07fee3390db3eca499a1dc3cdd443b56057ab00ff"
+  },
+  "images": [
+    "rancher/klipper-helm:v0.13.3-build20260727",
+    "rancher/klipper-lb:v0.4.17",
+    "rancher/local-path-provisioner:v0.0.36",
+    "rancher/mirrored-coredns-coredns:1.14.6",
+    "rancher/mirrored-library-busybox:1.37.0",
+    "rancher/mirrored-library-traefik:3.7.8",
+    "rancher/mirrored-metrics-server:v0.9.0",
+    "rancher/mirrored-pause:3.10.2"
+  ],
+  "payload": {
+    "offset": 6968736,
+    "compressed_bytes": 69804442,
+    "sha256": "e1784de142752c8bc4497493cd3619f1edd74e766794812f339d7eb194d89ef4",
+    "tar_sha256": "341fc12eab25963f5464523fc0586df5240c23f498eb65d19ce15121923544cf",
+    "tar_bytes": 264386560,
+    "file_bytes": 264183478,
+    "entries": 377,
+    "cni_links": 7
+  },
+  "installer": {
+    "name": "install.sh",
+    "size": 37118,
+    "sha256": "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
+  }
+}

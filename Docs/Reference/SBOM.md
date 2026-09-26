@@ -11,6 +11,7 @@ Repeated entries are intentional when multiple Engine containers install the sam
 - `Engine.sh`
 - `Data/Engine/Containers/build-manifest.json`
 - `Data/Engine/K3s/cluster/dependencies.lock`
+- `Data/Engine/Containers/api-backend/internal/clusterbootstrap/k3s_inputs.lock.json`
 - `Data/Engine/Containers/compose.yaml`
 - `Data/Engine/Containers/*/Dockerfile`
 - `Data/Engine/Containers/api-backend/go.mod`
@@ -158,11 +159,20 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
 | shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
-| shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| shared-engine | Docker Buildx plugin / BuildKit (local Engine build acceleration; required isolated production OCI release packaging) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| shared-engine | Zstandard `zstd` CLI (release-packaging and portable-test decoding of the checksum-pinned embedded K3s runtime; never executes K3s) | [BSD-3-Clause](https://github.com/facebook/zstd/blob/dev/LICENSE) |
 | shared-engine | curl (HTTPS transport for verified Engine release bootstrap and pinned dependency downloads) | [curl License](https://curl.se/docs/copyright.html) |
 | shared-engine | GNU Coreutils (`sha256sum`, `stat`, and `mktemp` used by verified Engine release bootstrap) | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
-| shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
+| shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` binary, version-matched installer and complete LinuxAMD64 airgap archive are checksum-pinned release-packaging inputs; cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
+| shared-engine | K3s bundled klipper-helm `v0.13.3-build20260727` | [Apache-2.0](https://github.com/k3s-io/klipper-helm/blob/master/LICENSE) |
+| shared-engine | K3s bundled klipper-lb `v0.4.17` | [Apache-2.0](https://github.com/k3s-io/klipper-lb/blob/master/LICENSE) |
+| shared-engine | K3s bundled local-path-provisioner `v0.0.36` | [Apache-2.0](https://github.com/rancher/local-path-provisioner/blob/master/LICENSE) |
+| shared-engine | K3s bundled CoreDNS `1.14.6` | [Apache-2.0](https://github.com/coredns/coredns/blob/master/LICENSE) |
+| shared-engine | K3s bundled BusyBox `1.37.0` | [GPL-2.0-only](https://git.busybox.net/busybox/tree/LICENSE) |
+| shared-engine | K3s bundled Traefik `3.7.8` | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
+| shared-engine | K3s bundled metrics-server `v0.9.0` | [Apache-2.0](https://github.com/kubernetes-sigs/metrics-server/blob/master/LICENSE) |
+| shared-engine | K3s bundled Kubernetes pause `3.10.2` | [Apache-2.0](https://github.com/kubernetes/kubernetes/blob/master/LICENSE) |
 | shared-engine | kube-vip `v1.1.0` (Cluster Virtual IP lease; checksum-pinned SBOM artifact) | [Apache-2.0](https://github.com/kube-vip/kube-vip/blob/main/LICENSE) |
 | shared-engine | CloudNativePG `v1.30.0` (cluster PostgreSQL operator and synchronous replication) | [Apache-2.0](https://github.com/cloudnative-pg/cloudnative-pg/blob/main/LICENSE) |
 | shared-engine | cert-manager `v1.21.1` (cluster workload mTLS certificate lifecycle) | [Apache-2.0](https://github.com/cert-manager/cert-manager/blob/master/LICENSE) |
@@ -175,7 +185,12 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | NFS client utilities (`nfs-common`, `nfs-utils`, or `nfs-client`) host dependency for Longhorn RWX volumes (installed by `Engine.sh` when missing) | [GPL-2.0-or-later with BSD components](https://github.com/linux-nfs/nfs-utils/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
-| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing; release workflow builds exact-source node-manager archive verifier and production Go application binaries) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go standard library/runtime (compiled into `borealis-node-manager` in central SSH bootstrap release assets) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Host systemd manager, `systemd-run`, `systemctl` and `busctl` (Ubuntu-provided; systemd255 baseline for central SSH supervision/watchdogs, read-only networkd ownership and persistent startup-wiring queries) | [LGPL-2.1-or-later](https://github.com/systemd/systemd/blob/v255/LICENSE.LGPL2.1) |
+| shared-engine | iproute2 `ip` (Ubuntu host-provided; read-only SSH and node-manager IPv4 address/link/route/rule observations) | [GPL-2.0-or-later](https://github.com/iproute2/iproute2/blob/main/COPYING) |
+| shared-engine | Netplan / libnetplan / python3-netplan / netplan.io (Ubuntu host-provided parser and native generator; SSH declarations and private-root render correspondence, isolated CI fixtures; native generator tested at 1.1.2) | [GPL-3.0-only](https://github.com/canonical/netplan/blob/1.1.2/COPYING) |
+| shared-engine | PyYAML / python3-yaml (Ubuntu host-provided parser for Netplan's rendered in-memory state; SSH observer and CI fixtures) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | PyYAML 6.0.3 (repository validation manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | Zensical 0.0.55 (documentation validation and Pages build) | [MIT](https://github.com/zensical/zensical/blob/main/LICENSE) |
 | shared-engine | actionlint v1.7.7 (GitHub Actions workflow validation) | [MIT](https://github.com/rhysd/actionlint/blob/main/LICENSE.txt) |
