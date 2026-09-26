@@ -103,6 +103,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.release }}
         run: |
+          # Decode source-pinned runtime payload without executing K3s.
+          command -v zstd >/dev/null || { sudo apt-get update && sudo apt-get install --yes zstd; }
           python3 Tests/tools/build_node_k3s_assets.py \
             --source . --release "$RELEASE_TAG" \
             --source-sha "$(git rev-parse HEAD)" \
@@ -152,6 +154,7 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" \
             "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-linux-amd64" \
+            "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-install.sh" \
             "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-images-linux-amd64.tar" \
             "$RUNNER_TEMP/borealis-node-k3s/borealis-node-k3s-linux-amd64.json" \
             --repo "$GITHUB_REPOSITORY"

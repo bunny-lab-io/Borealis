@@ -16,6 +16,7 @@ import (
 const (
 	K3sInventoryName     = "borealis-node-k3s-linux-amd64.json"
 	K3sBinaryName        = "borealis-node-k3s-linux-amd64"
+	K3sInstallerName     = "borealis-node-k3s-install.sh"
 	K3sArchiveName       = "borealis-node-k3s-images-linux-amd64.tar"
 	MaxK3sInventoryBytes = 16 << 10
 )
@@ -30,10 +31,25 @@ type K3sAssetPin struct {
 }
 
 type K3sInputPins struct {
-	Version string      `json:"version"`
-	Binary  K3sAssetPin `json:"binary"`
-	Archive K3sAssetPin `json:"archive"`
-	Images  []string    `json:"images"`
+	Version   string        `json:"version"`
+	Binary    K3sAssetPin   `json:"binary"`
+	Archive   K3sAssetPin   `json:"archive"`
+	Images    []string      `json:"images"`
+	Payload   K3sPayloadPin `json:"payload"`
+	Installer K3sAssetPin   `json:"installer"`
+}
+
+// The exact binary pin authenticates this embedded zstd frame. Packaging also
+// remeasures the frame and decompressed tar without executing the binary.
+type K3sPayloadPin struct {
+	Offset          int64  `json:"offset"`
+	CompressedBytes int64  `json:"compressed_bytes"`
+	SHA256          string `json:"sha256"`
+	TarSHA256       string `json:"tar_sha256"`
+	TarBytes        int64  `json:"tar_bytes"`
+	FileBytes       int64  `json:"file_bytes"`
+	Entries         int64  `json:"entries"`
+	CNILinks        int64  `json:"cni_links"`
 }
 
 // Pins are compiled from reviewed source, never taken from a remote inventory.
@@ -44,8 +60,8 @@ func K3sPins() K3sInputPins {
 	return p
 }
 
-// Known K3s archive demand only: embedded binary extraction, runtime growth,
-// OS packages and external operators still require independent accounting.
+// Known K3s archive demand only: binary payload is accounted separately;
+// runtime growth, OS packages and external operators remain independent.
 type K3sArchiveProof struct {
 	ArchiveSHA256   string   `json:"archive_sha256"`
 	ArchiveBytes    int64    `json:"archive_bytes"`
@@ -197,6 +213,8 @@ type k3sInventoryWire struct {
 	Platform   string          `json:"platform"`
 	K3sVersion string          `json:"k3s_version"`
 	Binary     K3sAssetPin     `json:"binary"`
+	Payload    K3sPayloadPin   `json:"payload"`
+	Installer  K3sAssetPin     `json:"installer"`
 	Archive    K3sArchiveProof `json:"archive"`
 }
 
@@ -207,17 +225,27 @@ type K3sInventory struct {
 
 func ParseK3sInventory(raw []byte, expected Expected, version string) (*K3sInventory, error) {
 	p := K3sPins()
+	x := p.Payload
+	if x.Offset < 0 || x.CompressedBytes < 1 || x.CompressedBytes > 128<<20 || x.Offset > p.Binary.Size-x.CompressedBytes || !digestPattern.MatchString(x.SHA256) || !digestPattern.MatchString(x.TarSHA256) || x.TarBytes < 1024 || x.TarBytes > 1<<30 || x.FileBytes < 1 || x.FileBytes > x.TarBytes || x.Entries < 1 || x.Entries > 10000 || x.CNILinks < 0 || x.CNILinks > x.Entries {
+		return nil, ErrImageArchive
+	}
 	var w k3sInventoryWire
-	if expected.Validate() != nil || len(raw) > MaxK3sInventoryBytes || version != p.Version || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "k3s_version", "binary", "archive"}, nil) != nil || imageJSON(raw, &w) != nil {
+	if expected.Validate() != nil || len(raw) > MaxK3sInventoryBytes || version != p.Version || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "k3s_version", "binary", "payload", "installer", "archive"}, nil) != nil || imageJSON(raw, &w) != nil {
 		return nil, ErrImageArchive
 	}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &fields)
+	if imageFields(fields["installer"], []string{"name", "size", "sha256"}, nil) != nil || w.Installer != p.Installer || p.Installer.Size < 1 || p.Installer.Size > 128<<10 || !digestPattern.MatchString(p.Installer.SHA256) {
+		return nil, ErrImageArchive
+	}
+	if imageFields(fields["payload"], []string{"offset", "compressed_bytes", "sha256", "tar_sha256", "tar_bytes", "file_bytes", "entries", "cni_links"}, nil) != nil || w.Payload != p.Payload {
+		return nil, ErrImageArchive
+	}
 	if imageFields(fields["binary"], []string{"name", "size", "sha256"}, nil) != nil || imageFields(fields["archive"], []string{"archive_sha256", "archive_bytes", "content_bytes", "content_entries", "expanded_bytes", "expanded_entries", "images"}, nil) != nil {
 		return nil, ErrImageArchive
 	}
 	a := w.Archive
-	if w.Version != 1 || w.Repository != expected.Repository || w.Release != expected.Release || w.SourceSHA != expected.SourceSHA || w.Platform != "linux-amd64" || w.K3sVersion != version || w.Binary != p.Binary || a.ArchiveSHA256 != p.Archive.SHA256 || a.ArchiveBytes != p.Archive.Size || a.ContentBytes < 1 || a.ContentBytes > a.ArchiveBytes || a.ContentEntries < 1 || a.ContentEntries > 4096 || a.ExpandedBytes < 1024 || a.ExpandedBytes > 64<<30 || a.ExpandedEntries < 1 || a.ExpandedEntries > 8*MaxImageEntries || !slices.Equal(a.Images, p.Images) {
+	if w.Version != 2 || w.Repository != expected.Repository || w.Release != expected.Release || w.SourceSHA != expected.SourceSHA || w.Platform != "linux-amd64" || w.K3sVersion != version || w.Binary != p.Binary || a.ArchiveSHA256 != p.Archive.SHA256 || a.ArchiveBytes != p.Archive.Size || a.ContentBytes < 1 || a.ContentBytes > a.ArchiveBytes || a.ContentEntries < 1 || a.ContentEntries > 4096 || a.ExpandedBytes < 1024 || a.ExpandedBytes > 64<<30 || a.ExpandedEntries < 1 || a.ExpandedEntries > 8*MaxImageEntries || !slices.Equal(a.Images, p.Images) {
 		return nil, ErrImageArchive
 	}
 	return &K3sInventory{wire: w, raw: bytes.Clone(raw)}, nil

@@ -93,9 +93,9 @@ func TestK3sArchivePinnedContentAndMeasuredLayers(t *testing.T) {
 func TestK3sInventoryIdentityAndBounds(t *testing.T) {
 	p := K3sPins()
 	e := Expected{Repository: "bunny-lab-io/Borealis", Release: "2026.09.999-rc.1", SourceSHA: imageTestSHA, AllowQualification: true}
-	base := k3sInventoryWire{Version: 1, Repository: e.Repository, Release: e.Release, SourceSHA: e.SourceSHA, Platform: "linux-amd64", K3sVersion: p.Version, Binary: p.Binary,
+	base := k3sInventoryWire{Version: 2, Repository: e.Repository, Release: e.Release, SourceSHA: e.SourceSHA, Platform: "linux-amd64", K3sVersion: p.Version, Binary: p.Binary, Payload: p.Payload, Installer: p.Installer,
 		Archive: K3sArchiveProof{ArchiveSHA256: p.Archive.SHA256, ArchiveBytes: p.Archive.Size, ContentBytes: 1024, ContentEntries: 4, ExpandedBytes: 4096, ExpandedEntries: 2, Images: p.Images}}
-	for _, mode := range []string{"valid", "source", "binary", "archive", "entries", "expansion", "missing image", "unknown", "alias", "duplicate", "baseline"} {
+	for _, mode := range []string{"valid", "source", "binary", "archive", "entries", "expansion", "missing image", "unknown", "alias", "duplicate", "baseline", "old inventory", "payload", "installer"} {
 		t.Run(mode, func(t *testing.T) {
 			w := base
 			version := p.Version
@@ -112,6 +112,12 @@ func TestK3sInventoryIdentityAndBounds(t *testing.T) {
 				w.Archive.ExpandedBytes = 65 << 30
 			case "missing image":
 				w.Archive.Images = p.Images[:7]
+			case "old inventory":
+				w.Version = 1
+			case "installer":
+				w.Installer.SHA256 = strings.Repeat("f", 64)
+			case "payload":
+				w.Payload.TarBytes--
 			case "baseline":
 				version = "v1.36.4+k3s1"
 			}

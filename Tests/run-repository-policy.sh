@@ -28,6 +28,7 @@ require_command python3
 require_command node
 require_command pwsh
 require_command actionlint
+require_command zstd
 
 if [[ -n "${BASE}" ]]; then
   git -C "${REPO_ROOT}" diff --check "${BASE}" "${HEAD}" --

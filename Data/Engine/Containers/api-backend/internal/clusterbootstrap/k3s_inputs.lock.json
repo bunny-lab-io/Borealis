@@ -19,5 +19,20 @@
     "rancher/mirrored-library-traefik:3.7.8",
     "rancher/mirrored-metrics-server:v0.9.0",
     "rancher/mirrored-pause:3.10.2"
-  ]
+  ],
+  "payload": {
+    "offset": 6968736,
+    "compressed_bytes": 69804442,
+    "sha256": "e1784de142752c8bc4497493cd3619f1edd74e766794812f339d7eb194d89ef4",
+    "tar_sha256": "341fc12eab25963f5464523fc0586df5240c23f498eb65d19ce15121923544cf",
+    "tar_bytes": 264386560,
+    "file_bytes": 264183478,
+    "entries": 377,
+    "cni_links": 7
+  },
+  "installer": {
+    "name": "install.sh",
+    "size": 37118,
+    "sha256": "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
+  }
 }

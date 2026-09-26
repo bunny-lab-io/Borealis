@@ -63,12 +63,13 @@ func resolveClusterSSHK3sInventory(ctx context.Context, expected clusterbootstra
 	assets, err := resolveClusterPackagedAssets(ctx, expected, map[string]int64{
 		clusterbootstrap.K3sInventoryName: clusterbootstrap.MaxK3sInventoryBytes,
 		clusterbootstrap.K3sBinaryName:    pins.Binary.Size,
+		clusterbootstrap.K3sInstallerName: pins.Installer.Size,
 		clusterbootstrap.K3sArchiveName:   pins.Archive.Size,
 	})
 	if err != nil {
 		return fail()
 	}
-	for name, pin := range map[string]clusterbootstrap.K3sAssetPin{clusterbootstrap.K3sBinaryName: pins.Binary, clusterbootstrap.K3sArchiveName: pins.Archive} {
+	for name, pin := range map[string]clusterbootstrap.K3sAssetPin{clusterbootstrap.K3sBinaryName: pins.Binary, clusterbootstrap.K3sArchiveName: pins.Archive, clusterbootstrap.K3sInstallerName: pins.Installer} {
 		a := assets[name]
 		if a.Size != pin.Size || a.Digest != "sha256:"+pin.SHA256 {
 			return fail()
@@ -113,12 +114,17 @@ func (v clusterSSHK3sInventory) demands() ([]clusterSSHFilesystemDemand, error) 
 		return nil, clusterbootstrap.ErrImageArchive
 	}
 	a, p := v.inventory.Archive(), clusterbootstrap.K3sPins()
+	// Current/previous runtime generations each retain the full measured tar.
+	// Extra entries cover the generation/data/CNI dirs, lock, current/previous
+	// links, CNI multicall link and each cloned CNI alias from upstream extract().
+	payloadBytes := 2 * p.Payload.TarBytes
+	payloadEntries := 2 * (p.Payload.Entries + p.Payload.CNILinks + 7)
 	// Bounds were checked by the private inventory parser. Keep every incoming
 	// input, two image-archive generations, full content store and each expanded
 	// layer; do not discount duplicate layers or retained deployed content.
 	return []clusterSSHFilesystemDemand{
-		{Path: "/opt/Borealis", Bytes: uint64(p.Binary.Size + a.ArchiveBytes), Entries: 3},
+		{Path: "/opt/Borealis", Bytes: uint64(p.Binary.Size + a.ArchiveBytes + p.Installer.Size), Entries: 4},
 		{Path: "/usr/local/bin", Bytes: uint64(2 * p.Binary.Size), Entries: 2},
-		{Path: "/var/lib/rancher/k3s", Bytes: uint64(2*a.ArchiveBytes + a.ContentBytes + a.ExpandedBytes), Entries: uint64(2 + a.ContentEntries + a.ExpandedEntries)},
+		{Path: "/var/lib/rancher/k3s", Bytes: uint64(2*a.ArchiveBytes + a.ContentBytes + a.ExpandedBytes + payloadBytes), Entries: uint64(2 + a.ContentEntries + a.ExpandedEntries + payloadEntries)},
 	}, nil
 }

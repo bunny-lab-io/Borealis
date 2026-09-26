@@ -12,11 +12,11 @@ func addK3sReleaseFixture(t *testing.T, f *bootstrapReleaseFixture) {
 	t.Helper()
 	p := clusterbootstrap.K3sPins()
 	proof := clusterbootstrap.K3sArchiveProof{ArchiveSHA256: p.Archive.SHA256, ArchiveBytes: p.Archive.Size, ContentBytes: 1024, ContentEntries: 4, ExpandedBytes: 4096, ExpandedEntries: 2, Images: p.Images}
-	raw, _ := json.Marshal(map[string]any{"version": 1, "repository": f.expected.Repository, "release": f.expected.Release, "source_sha": f.expected.SourceSHA, "platform": "linux-amd64", "k3s_version": p.Version, "binary": p.Binary, "archive": proof})
+	raw, _ := json.Marshal(map[string]any{"version": 2, "repository": f.expected.Repository, "release": f.expected.Release, "source_sha": f.expected.SourceSHA, "platform": "linux-amd64", "k3s_version": p.Version, "binary": p.Binary, "payload": p.Payload, "installer": p.Installer, "archive": proof})
 	if f.extraBodies == nil {
 		f.extraBodies = map[string]string{}
 	}
-	for i, name := range []string{clusterbootstrap.K3sInventoryName, clusterbootstrap.K3sBinaryName, clusterbootstrap.K3sArchiveName} {
+	for i, name := range []string{clusterbootstrap.K3sInventoryName, clusterbootstrap.K3sBinaryName, clusterbootstrap.K3sArchiveName, clusterbootstrap.K3sInstallerName} {
 		a := clusterBootstrapAsset{ID: int64(100 + i), Name: name, State: "uploaded"}
 		a.URL = fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), f.expected.Repository, a.ID)
 		a.BrowserDownloadURL = clusterbootstrap.AssetURL(f.expected, name)
@@ -26,6 +26,8 @@ func addK3sReleaseFixture(t *testing.T, f *bootstrapReleaseFixture) {
 			f.extraBodies[fmt.Sprintf("/repos/%s/releases/assets/100", f.expected.Repository)] = string(raw)
 		case 1:
 			a.Size, a.Digest = p.Binary.Size, "sha256:"+p.Binary.SHA256
+		case 3:
+			a.Size, a.Digest = p.Installer.Size, "sha256:"+p.Installer.SHA256
 		case 2:
 			a.Size, a.Digest = p.Archive.Size, "sha256:"+p.Archive.SHA256
 		}
@@ -61,11 +63,11 @@ func TestClusterSSHK3sPublicationAndCapacity(t *testing.T) {
 				return
 			}
 			d, err := v.demands()
-			if err != nil || len(d) != 3 || d[1].Path != "/usr/local/bin" || d[1].Bytes != uint64(2*p.Binary.Size) || d[2].Bytes != uint64(2*p.Archive.Size+1024+4096) || d[2].Entries != 8 {
+			if err != nil || len(d) != 3 || d[1].Path != "/usr/local/bin" || d[1].Bytes != uint64(2*p.Binary.Size) || d[2].Bytes != uint64(2*p.Archive.Size+1024+4096+2*p.Payload.TarBytes) || d[2].Entries != uint64(8+2*(p.Payload.Entries+p.Payload.CNILinks+7)) {
 				t.Fatal("incomplete K3s demand")
 			}
 			merged, err := mergeClusterSSHFilesystemDemands(d, d)
-			if err != nil || len(merged) != 3 || merged[0].Bytes != 2*d[0].Bytes || merged[0].Entries != 6 {
+			if err != nil || len(merged) != 3 || merged[0].Bytes != 2*d[0].Bytes || merged[0].Entries != 8 {
 				t.Fatal("shared paths not summed")
 			}
 			if mode == "publication changed" {

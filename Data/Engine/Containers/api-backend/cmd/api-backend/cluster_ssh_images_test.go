@@ -93,7 +93,7 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 					}
 					for _, v := range out {
 						p := clusterbootstrap.K3sPins()
-						k3sBytes := uint64(3*p.Binary.Size + 3*p.Archive.Size + 1024 + 4096 + 13*4096)
+						k3sBytes := uint64(3*p.Binary.Size + 3*p.Archive.Size + 1024 + 4096 + 14*4096 + p.Installer.Size + 2*p.Payload.TarBytes + 4096*2*(p.Payload.Entries+p.Payload.CNILinks+7))
 						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7)+k3sBytes {
 							t.Fatal("image bytes missing from shared filesystem budget")
 						}

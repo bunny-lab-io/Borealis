@@ -77,7 +77,7 @@ jobs:
       - name: Install policy tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          sudo apt-get install --yes shellcheck zstd
           python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
           GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

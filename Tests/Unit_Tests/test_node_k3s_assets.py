@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import tarfile
+import subprocess
 import unittest
 from unittest import mock
 import urllib.request
@@ -18,6 +20,41 @@ sys.path.pop(0)
 
 
 class NodeK3sAssetsTests(unittest.TestCase):
+    def test_static_payload_measurement_and_failure_bounds(self):
+        for mode in ("valid", "binary changed", "frame changed", "tar changed", "too small", "wrong entries", "escaping link"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                raw = io.BytesIO()
+                with tarfile.open(fileobj=raw, mode="w") as archive:
+                    member = tarfile.TarInfo("./bin/busybox")
+                    member.size = 4
+                    archive.addfile(member, io.BytesIO(b"data"))
+                    member = tarfile.TarInfo("./bin/aux/mount")
+                    member.type, member.linkname = tarfile.SYMTYPE, "../../../escape" if mode == "escaping link" else "../busybox"
+                    archive.addfile(member)
+                frame = subprocess.run(["zstd", "--compress", "--stdout"], input=raw.getvalue(), stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, check=True, timeout=10).stdout
+                binary = root / "binary"
+                binary.write_bytes(b"fixture prefix" + frame + b"suffix")
+                p = dict(offset=len(b"fixture prefix"), compressed_bytes=len(frame), sha256=hashlib.sha256(frame).hexdigest(),
+                         tar_sha256=hashlib.sha256(raw.getvalue()).hexdigest(), tar_bytes=len(raw.getvalue()), file_bytes=4, entries=2, cni_links=0)
+                pins = dict(binary=dict(size=binary.stat().st_size, sha256=hashlib.sha256(binary.read_bytes()).hexdigest()), payload=p)
+                if mode == "binary changed":
+                    binary.write_bytes(b"changed")
+                elif mode == "frame changed":
+                    p["sha256"] = "a" * 64
+                elif mode == "tar changed":
+                    p["tar_sha256"] = "b" * 64
+                elif mode == "too small":
+                    p["tar_bytes"] = 1024
+                elif mode == "wrong entries":
+                    p["entries"] += 1
+                if mode == "valid":
+                    self.assertEqual(k3s.measure_payload(binary, pins, root), p)
+                else:
+                    with self.assertRaises(ValueError):
+                        k3s.measure_payload(binary, pins, root)
+
     def test_download_pins_length_digest_and_hides_remote_errors(self):
         for mode in ("valid", "short", "long", "digest", "encoding", "remote error"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
@@ -92,7 +129,7 @@ class NodeK3sAssetsTests(unittest.TestCase):
 
             args = dict(source=source, release=release, source_sha=sha, repository="bunny-lab-io/Borealis",
                         output_dir=root / "assets", go_bin="fixture-go")
-            with mock.patch.object(k3s.bootstrap, "build_manager", side_effect=build_manager), mock.patch.object(k3s, "download", side_effect=download):
+            with mock.patch.object(k3s.bootstrap, "build_manager", side_effect=build_manager), mock.patch.object(k3s, "download", side_effect=download), mock.patch.object(k3s, "measure_payload", return_value=pins["payload"]):
                 result = k3s.build_assets(**args)
                 self.assertEqual(result["archive"], proof)
                 self.assertEqual(result["source_sha"], sha)
