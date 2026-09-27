@@ -54,7 +54,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	if replacement {
 		instances = 3
 	}
-	cluster["spec"] = map[string]any{"instances": instances, "storage": map[string]any{"size": "20Gi", "storageClass": "borealis-longhorn-local", "resizeInUseVolumes": true}}
+	cluster["spec"] = map[string]any{"instances": instances, "imageName": sshPostgresConfiguredFixture, "storage": map[string]any{"size": "20Gi", "storageClass": "borealis-longhorn-local", "resizeInUseVolumes": true}}
 	cluster["status"] = map[string]any{"readyInstances": len(source.Members), "currentPrimary": "borealis-postgres-1"}
 	f.objects[clusterSSHStoragePostgresPath] = cluster
 	owner := func() []any {
@@ -100,8 +100,8 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 		pod := sshStorageObject("v1", "Pod", "borealis", name)
 		clusterSSHStorageMap(pod, "metadata")["ownerReferences"] = owner()
 		clusterSSHStorageMap(pod, "metadata")["labels"] = map[string]any{"cnpg.io/cluster": "borealis-postgres"}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "volumes": []any{map[string]any{"name": "pgdata", "persistentVolumeClaim": map[string]any{"claimName": name}}, map[string]any{"name": "scratch", "emptyDir": map[string]any{}}}}
-		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}
+		pod["spec"] = map[string]any{"nodeName": member.Name, "containers": []any{map[string]any{"name": "postgres", "image": sshPostgresConfiguredFixture}}, "volumes": []any{map[string]any{"name": "pgdata", "persistentVolumeClaim": map[string]any{"claimName": name}}, map[string]any{"name": "scratch", "emptyDir": map[string]any{}}}}
+		pod["status"] = map[string]any{"containerStatuses": []any{map[string]any{"name": "postgres", "image": sshPostgresConfiguredFixture, "imageID": sshPostgresResolvedFixture, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-09-26T00:00:00Z"}}}}, "phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}
 		pods = append(pods, pod)
 	}
 	addClaim("postgres-data-postgres-db-0", "borealis-longhorn", "ReadWriteOnce", "disabled", "20Gi", "", 1, false)
