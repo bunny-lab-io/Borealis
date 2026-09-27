@@ -75,6 +75,8 @@ class RegistryDownloadTests(unittest.TestCase):
         for url in ("http://cdn01.quay.io/blob", "https://cdn01.quay.io.evil/blob", "https://user@cdn01.quay.io/blob", "https://cdn01.quay.io:444/blob", "https://cdn01.quay.io/blob#fragment"):
             self.assertFalse(registry.allowed_redirect("quay.io", url))
         self.assertTrue(registry.allowed_redirect("quay.io", "https://cdn01.quay.io/blob?signature=fixture"))
+        self.assertTrue(registry.allowed_redirect("docker.io", "https://production.cloudfront.docker.com/blob?signature=fixture"))
+        self.assertFalse(registry.allowed_redirect("docker.io", "https://production.cloudfront.docker.com.evil/blob"))
         with self.assertRaises(ValueError):
             registry.read_bounded(Response(b"x"), 1, 0, lambda _: self.fail("read after deadline"))
 

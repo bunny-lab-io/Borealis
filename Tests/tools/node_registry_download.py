@@ -37,7 +37,7 @@ def allowed_redirect(registry: str, url: str) -> bool:
     if registry == "quay.io":
         return re.fullmatch(r"cdn[0-9]*\.quay\.io", host) is not None
     if registry == "docker.io":
-        return host == "production.cloudflare.docker.com" or re.fullmatch(r"docker-images-prod\.[0-9a-f]{32}\.r2\.cloudflarestorage\.com", host) is not None
+        return host in ("production.cloudflare.docker.com", "production.cloudfront.docker.com") or re.fullmatch(r"docker-images-prod\.[0-9a-f]{32}\.r2\.cloudflarestorage\.com", host) is not None
     return re.fullmatch(r"[a-z]+-[a-z]+[0-9]-docker\.pkg\.dev", host) is not None
 
 
