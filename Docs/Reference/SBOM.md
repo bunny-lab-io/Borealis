@@ -159,7 +159,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
 | shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
-| shared-engine | Docker Buildx plugin / BuildKit (local Engine build acceleration; required isolated production OCI release packaging) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| shared-engine | Docker Buildx plugin / BuildKit (local Engine build acceleration; required isolated production OCI release packaging and public external-image metadata pinning) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Zstandard `zstd` CLI (release-packaging and portable-test decoding of the checksum-pinned embedded K3s runtime; never executes K3s) | [BSD-3-Clause](https://github.com/facebook/zstd/blob/dev/LICENSE) |
 | shared-engine | curl (HTTPS transport for verified Engine release bootstrap and pinned dependency downloads) | [curl License](https://curl.se/docs/copyright.html) |
 | shared-engine | GNU Coreutils (`sha256sum`, `stat`, and `mktemp` used by verified Engine release bootstrap) | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
@@ -191,7 +191,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | iproute2 `ip` (Ubuntu host-provided; read-only SSH and node-manager IPv4 address/link/route/rule observations) | [GPL-2.0-or-later](https://github.com/iproute2/iproute2/blob/main/COPYING) |
 | shared-engine | Netplan / libnetplan / python3-netplan / netplan.io (Ubuntu host-provided parser and native generator; SSH declarations and private-root render correspondence, isolated CI fixtures; native generator tested at 1.1.2) | [GPL-3.0-only](https://github.com/canonical/netplan/blob/1.1.2/COPYING) |
 | shared-engine | PyYAML / python3-yaml (Ubuntu host-provided parser for Netplan's rendered in-memory state; SSH observer and CI fixtures) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
-| shared-engine | PyYAML 6.0.3 (repository validation manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
+| shared-engine | PyYAML 6.0.3 (repository validation and external release-input manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | Zensical 0.0.55 (documentation validation and Pages build) | [MIT](https://github.com/zensical/zensical/blob/main/LICENSE) |
 | shared-engine | actionlint v1.7.7 (GitHub Actions workflow validation) | [MIT](https://github.com/rhysd/actionlint/blob/main/LICENSE.txt) |
 | shared-engine | GitHub CLI (GitHub-hosted runner tool used to validate draft releases and upload Engine release assets) | [MIT](https://github.com/cli/cli/blob/trunk/LICENSE) |
