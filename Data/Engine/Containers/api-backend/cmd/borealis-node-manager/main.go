@@ -72,6 +72,10 @@ func main() {
 		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
 	switch os.Args[1] {
+	case "external-image-proof":
+		if externalImageArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable external image evidence invalid or changed")
+		}
 	case "k3s-archive-proof":
 		if k3sArchiveProof(os.Args[2:]) != nil {
 			fatalf("immutable K3s evidence invalid or changed")

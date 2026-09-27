@@ -29,7 +29,7 @@ CONFIG_TYPES = {"application/vnd.oci.image.config.v1+json", "application/vnd.doc
 LAYER_TYPES = {"application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip",
                "application/vnd.oci.image.layer.v1.tar"}
 MAX_DOCUMENT = 1 << 20
-LOCK = "Data/Engine/K3s/cluster/external-images.lock.json"
+LOCK = "Data/Engine/Containers/api-backend/internal/clusterbootstrap/external_images.lock.json"
 
 
 def unique_object(pairs):

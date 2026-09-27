@@ -37,6 +37,19 @@ func k3sArchiveProof(args []string) error {
 	})
 }
 
+func externalImageArchiveProof(args []string) error {
+	flags := flag.NewFlagSet("external-image-proof", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	archive := flags.String("archive", "", "")
+	reference := flags.String("reference", "", "")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || len(*archive) == 0 || len(*archive) > 4096 || clusterbootstrap.ExternalImageAssetName(*reference) == "" {
+		return clusterbootstrap.ErrImageArchive
+	}
+	return archiveProof(*archive, func(ctx context.Context, file *os.File, size int64) (any, error) {
+		return clusterbootstrap.InspectExternalImageArchive(ctx, file, size, *reference)
+	})
+}
+
 func archiveProof(archive string, inspect func(context.Context, *os.File, int64) (any, error)) error {
 	before, err := os.Lstat(archive)
 	if err != nil || !before.Mode().IsRegular() {
