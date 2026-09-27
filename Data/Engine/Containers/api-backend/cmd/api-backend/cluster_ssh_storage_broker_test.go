@@ -47,7 +47,13 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"missing receipt":             func(v *clusterSSHStorageSnapshot) { v.Observation = "" },
 			"bad receipt":                 func(v *clusterSSHStorageSnapshot) { v.Observation = strings.Repeat("z", 64) },
 			"private provenance imported": func(v *clusterSSHStorageSnapshot) { v.Requirements.observation = v.Observation },
-			"missing PG image":            func(v *clusterSSHStorageSnapshot) { v.Requirements.PostgresImage = clusterSSHPostgresImage{} },
+			"missing bootstrap image": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.PostgresImage.Bootstrap = clusterSSHSourceExternalImage{}
+			},
+			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
+			},
+			"missing PG image": func(v *clusterSSHStorageSnapshot) { v.Requirements.PostgresImage = clusterSSHPostgresImage{} },
 			"invalid PG digest": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Resolved = sshPostgresConfiguredFixture
 			},

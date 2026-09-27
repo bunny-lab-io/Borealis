@@ -44,7 +44,7 @@ func sshBrokerClient(t *testing.T, peers ...string) *clusterSSHSourceBrokerClien
 }
 
 func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T) {
-	for _, mode := range []string{"fresh repeated", "postgres image changed", "storage receipt changed", "storage requirements changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
+	for _, mode := range []string{"fresh repeated", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
 		t.Run(mode, func(t *testing.T) {
 			r, current, snapshot := sshBrokerFixture(t)
 			b := newClusterSSHSourceBroker(nil, nil, r.Lease.ControllerHolder, sshBrokerTestSecret)
@@ -58,6 +58,10 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				value.Sources = slices.Clone(snapshot.Sources)
 				value.Storage.Requirements.Volumes = slices.Clone(snapshot.Storage.Requirements.Volumes)
 				switch mode {
+				case "bootstrap image changed":
+					if n > 1 {
+						value.Storage.Requirements.PostgresImage.Bootstrap.Configured = value.Storage.Requirements.PostgresImage.Bootstrap.Resolved
+					}
 				case "postgres image changed":
 					if n > 1 {
 						value.Storage.Requirements.PostgresImage.Resolved = clusterSSHPostgresRepository + "@sha256:" + strings.Repeat("c", 64)
@@ -133,7 +137,7 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				started := time.Now()
 				value, err := read(context.Background())
 				expected, settings := value.Expected, value.Settings
-				wantOK := mode == "fresh repeated" || ((mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "storage receipt changed" || mode == "storage requirements changed") && i == 0)
+				wantOK := mode == "fresh repeated" || ((mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed") && i == 0)
 				if wantOK {
 					if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) || !reflect.DeepEqual(settings, snapshot.Settings) || !slices.Equal(value.Sources, snapshot.Sources) || value.started.Before(started) || !reflect.DeepEqual(value.Storage, snapshot.Storage) {
 						t.Fatal("valid broker source rejected")
@@ -297,7 +301,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 5, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 6, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -308,11 +312,11 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 					value.Snapshot = nil
 				}
 				if mode == "legacy response" {
-					value.Version = 4
+					value.Version = 5
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					raw = bytes.Replace(raw, []byte(`"version":5`), []byte(`"version":5,"version":5`), 1)
+					raw = bytes.Replace(raw, []byte(`"version":6`), []byte(`"version":6,"version":6`), 1)
 				}
 				aead := client.responseCipher
 				if mode == "wrong direction" {

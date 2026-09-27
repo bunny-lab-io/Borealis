@@ -102,6 +102,9 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 		clusterSSHStorageMap(pod, "metadata")["labels"] = map[string]any{"cnpg.io/cluster": "borealis-postgres"}
 		pod["spec"] = map[string]any{"nodeName": member.Name, "containers": []any{map[string]any{"name": "postgres", "image": sshPostgresConfiguredFixture}}, "volumes": []any{map[string]any{"name": "pgdata", "persistentVolumeClaim": map[string]any{"claimName": name}}, map[string]any{"name": "scratch", "emptyDir": map[string]any{}}}}
 		pod["status"] = map[string]any{"containerStatuses": []any{map[string]any{"name": "postgres", "image": sshPostgresConfiguredFixture, "imageID": sshPostgresResolvedFixture, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-09-26T00:00:00Z"}}}}, "phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}
+		bootstrap := sshPostgresBootstrapFixture()
+		clusterSSHStorageMap(pod, "spec")["initContainers"] = []any{map[string]any{"name": "bootstrap-controller", "image": bootstrap.Configured}}
+		clusterSSHStorageMap(pod, "status")["initContainerStatuses"] = []any{map[string]any{"name": "bootstrap-controller", "image": bootstrap.Configured, "imageID": bootstrap.Resolved, "state": map[string]any{"terminated": map[string]any{"exitCode": 0, "reason": "Completed"}}}}
 		pods = append(pods, pod)
 	}
 	addClaim("postgres-data-postgres-db-0", "borealis-longhorn", "ReadWriteOnce", "disabled", "20Gi", "", 1, false)
