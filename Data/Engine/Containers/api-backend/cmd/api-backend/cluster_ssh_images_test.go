@@ -43,11 +43,12 @@ func imageReleaseFixture(t *testing.T, expected ...clusterbootstrap.Expected) *b
 }
 
 func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "image drift", "K3s drift", "source drift", "sibling lost", "inode exhausted"} {
+	for _, mode := range []string{"expansion", "replacement", "image drift", "K3s drift", "external drift", "source drift", "sibling lost", "inode exhausted"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			release := imageReleaseFixture(t, f.a.Baseline)
 			addK3sReleaseFixture(t, release)
+			externalBudget := addExternalReleaseFixture(t, release)
 			f.filesystemWire = func(_ int, raw []byte) []byte {
 				var w struct {
 					Version   int                              `json:"version"`
@@ -94,7 +95,7 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 					for _, v := range out {
 						p := clusterbootstrap.K3sPins()
 						k3sBytes := uint64(3*p.Binary.Size + 3*p.Archive.Size + 1024 + 4096 + 14*4096 + p.Installer.Size + 2*p.Payload.TarBytes + 4096*2*(p.Payload.Entries+p.Payload.CNILinks+7))
-						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7)+k3sBytes {
+						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7)+k3sBytes+externalBudget {
 							t.Fatal("image bytes missing from shared filesystem budget")
 						}
 					}
@@ -102,6 +103,13 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 						release.release.Assets = release.release.Assets[:9]
 					}
 					if mode == "K3s drift" {
+						for i := range release.release.Assets {
+							if release.release.Assets[i].Name == clusterbootstrap.K3sArchiveName {
+								release.release.Assets[i].Size--
+							}
+						}
+					}
+					if mode == "external drift" {
 						release.release.Assets[len(release.release.Assets)-1].Size--
 					}
 					if mode == "sibling lost" {
