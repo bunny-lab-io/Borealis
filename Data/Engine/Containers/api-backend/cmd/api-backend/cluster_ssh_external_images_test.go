@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -103,6 +104,42 @@ func TestClusterSSHExternalPublicationAndDemand(t *testing.T) {
 			}
 			if f.archiveReads != 0 {
 				t.Fatal("metadata resolution read archive")
+			}
+		})
+	}
+}
+
+func TestClusterSSHExternalStageRejectsInvalidAuthorityAndPublication(t *testing.T) {
+	for _, mode := range []string{"nil check", "lost authority", "publication drift", "cancelled"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newBootstrapReleaseFixture(t)
+			addExternalReleaseFixture(t, f)
+			ctx, cancel := context.WithCancel(bootstrapContext())
+			defer cancel()
+			v, err := resolveClusterSSHExternalInventory(ctx, f.expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func(context.Context) error { return nil }
+			switch mode {
+			case "nil check":
+				check = nil
+			case "lost authority":
+				check = func(context.Context) error { return clusterbootstrap.ErrSessionAuthority }
+			case "publication drift":
+				f.release.Assets[2].Size--
+			case "cancelled":
+				cancel()
+			}
+			parent := t.TempDir()
+			set, err := v.stage(ctx, parent, check)
+			if set != nil {
+				_ = set.Close()
+				t.Fatal("invalid staged set escaped")
+			}
+			entries, readErr := os.ReadDir(parent)
+			if err == nil || readErr != nil || len(entries) != 0 || f.archiveReads != 0 {
+				t.Fatal("invalid staging retained files or read archive", err, readErr)
 			}
 		})
 	}

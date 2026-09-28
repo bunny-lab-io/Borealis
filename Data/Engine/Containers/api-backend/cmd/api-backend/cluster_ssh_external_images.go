@@ -76,6 +76,35 @@ func (v clusterSSHExternalInventory) refresh(ctx context.Context) error {
 	return nil
 }
 
+// Stage downloads under the original joined preparation lease scope. The
+// caller supplies complete source/configuration/cohort checks and owns cleanup.
+// No database connection may remain borrowed during this call. Publication is
+// checked once on either side of the batch, while claim checks bracket each
+// archive. The immutable asset IDs/digests remain fixed throughout streaming.
+func (v clusterSSHExternalInventory) stage(ctx context.Context, scratchParent string, check func(context.Context) error) (*clusterbootstrap.ExternalImageSet, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	if check == nil || v.refresh(ctx) != nil || check(ctx) != nil {
+		return nil, clusterbootstrap.ErrImageArchive
+	}
+	set, err := clusterbootstrap.StageExternalImages(ctx, scratchParent, v.inventory,
+		func(ctx context.Context, proof clusterbootstrap.ExternalImageProof) (io.ReadCloser, error) {
+			response, err := openClusterPackagedAsset(ctx, v.assets[clusterbootstrap.ExternalImageAssetName(proof.Reference)], clusterbootstrap.MaxImageArchiveBytes)
+			if err != nil {
+				return nil, err
+			}
+			return response.Body, nil
+		}, check)
+	if err != nil {
+		return nil, err
+	}
+	if v.refresh(ctx) != nil || check(ctx) != nil || ctx.Err() != nil {
+		_ = set.Close()
+		return nil, clusterbootstrap.ErrImageArchive
+	}
+	return set, nil
+}
+
 // Conditional static-image demand only: incoming archive, current/previous
 // archives, content store and every expanded layer. No cross-image deduplication
 // credit. Filesystem allocation/inode reserve is added by the shared budgeter.

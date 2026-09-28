@@ -15,6 +15,10 @@ import (
 )
 
 func externalFixture(t *testing.T, mode string) ([]byte, ExternalImagePin) {
+	return externalFixtureReference(t, mode, "ghcr.io/kube-vip/kube-vip:test")
+}
+
+func externalFixtureReference(t *testing.T, mode, reference string) ([]byte, ExternalImagePin) {
 	t.Helper()
 	blobs := map[string][]byte{}
 	tr := tar.NewReader(bytes.NewReader(imageFixture(t, mode, "api-backend")))
@@ -73,7 +77,7 @@ func externalFixture(t *testing.T, mode string) ([]byte, ExternalImagePin) {
 		upstreamType = dockerIndexType
 	}
 	upstream := encode(map[string]any{"schemaVersion": 2, "mediaType": upstreamType, "manifests": children})
-	pin := ExternalImagePin{Reference: "ghcr.io/kube-vip/kube-vip:test", IndexDigest: digest(upstream), IndexBytes: int64(len(upstream)), ManifestDigest: child.Digest, ManifestBytes: child.Size, ConfigDigest: manifest.Config.Digest, ConfigBytes: manifest.Config.Size, LayerCount: len(manifest.Layers)}
+	pin := ExternalImagePin{Reference: reference, IndexDigest: digest(upstream), IndexBytes: int64(len(upstream)), ManifestDigest: child.Digest, ManifestBytes: child.Size, ConfigDigest: manifest.Config.Digest, ConfigBytes: manifest.Config.Size, LayerCount: len(manifest.Layers)}
 	for _, l := range manifest.Layers {
 		pin.LayerBlobBytes += l.Size
 	}

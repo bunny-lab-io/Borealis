@@ -153,7 +153,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 // fence; changing the target phase inside consume invalidates this scope.
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, *clusterbootstrap.ExternalImageSet, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -200,7 +200,27 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 				result = clusterbootstrap.ErrImageArchive
 			}
 		}()
-		if err := consume(ctx, inputs, images, expected, checks); err != nil {
+		externalInventory, err := resolveClusterSSHExternalInventory(ctx, expected.Source)
+		if err != nil {
+			return err
+		}
+		externalImages, err := externalInventory.stage(ctx, scratchParent, checks.Inputs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if externalImages.Close() != nil {
+				result = clusterbootstrap.ErrImageArchive
+			}
+		}()
+		// Application publication may have changed during the external batch.
+		if inventory.refresh(ctx) != nil || checks.Inputs(ctx) != nil {
+			return clusterbootstrap.ErrImageArchive
+		}
+		if err := consume(ctx, inputs, images, externalImages, expected, checks); err != nil {
+			return err
+		}
+		if err := externalInventory.refresh(ctx); err != nil {
 			return err
 		}
 		if err := inventory.refresh(ctx); err != nil {
