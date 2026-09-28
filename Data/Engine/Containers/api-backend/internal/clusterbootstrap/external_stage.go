@@ -18,6 +18,7 @@ type ExternalImageSet struct {
 	path      string
 	root      *os.Root
 	inventory *ExternalImageInventory
+	names     map[string]string
 }
 
 func (*ExternalImageSet) String() string               { return "staged external images [private]" }
@@ -51,7 +52,11 @@ func stageExternalImages(ctx context.Context, parent string, inventory *External
 		_ = os.RemoveAll(directory)
 		return nil, ErrImageArchive
 	}
-	set := &ExternalImageSet{path: directory, root: root, inventory: inventory}
+	names := map[string]string{}
+	for _, proof := range inventory.Images() {
+		names[proof.Reference] = ExternalImageAssetName(proof.Reference)
+	}
+	set := &ExternalImageSet{path: directory, root: root, inventory: inventory, names: names}
 	defer func() {
 		if result != nil {
 			_ = set.Close()
@@ -80,7 +85,7 @@ func (s *ExternalImageSet) receive(ctx context.Context, proof ExternalImageProof
 		return ErrImageArchive
 	}
 	defer input.Close()
-	f, err := s.root.OpenFile(ExternalImageAssetName(proof.Reference), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	f, err := s.root.OpenFile(s.names[proof.Reference], os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return ErrImageArchive
 	}
@@ -125,7 +130,7 @@ func (s *ExternalImageSet) writeArchive(ctx context.Context, reference string, o
 	if proof.Reference == "" {
 		return ErrImageArchive
 	}
-	name := ExternalImageAssetName(reference)
+	name := s.names[reference]
 	before, err := s.root.Lstat(name)
 	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 || before.Size() != proof.ArchiveBytes {
 		return ErrImageArchive
@@ -177,6 +182,6 @@ func (s *ExternalImageSet) Close() error {
 	if removeErr := os.RemoveAll(filepath.Clean(s.path)); removeErr != nil {
 		err = removeErr
 	}
-	s.root, s.inventory, s.path = nil, nil, ""
+	s.root, s.inventory, s.path, s.names = nil, nil, "", nil
 	return err
 }

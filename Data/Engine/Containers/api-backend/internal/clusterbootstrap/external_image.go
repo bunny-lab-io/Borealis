@@ -91,6 +91,12 @@ func InspectExternalImageArchive(ctx context.Context, source io.ReaderAt, size i
 }
 
 func inspectExternalImageArchive(ctx context.Context, source io.ReaderAt, size int64, pin ExternalImagePin) (ExternalImageProof, error) {
+	return inspectDependencyImageArchive(ctx, source, size, pin.Reference, pin.IndexDigest, &pin)
+}
+
+// Dynamic PostgreSQL accepts only its independently observed root digest. Static
+// dependencies additionally retain every compiled index/manifest/config pin.
+func inspectDependencyImageArchive(ctx context.Context, source io.ReaderAt, size int64, reference, rootDigest string, pin *ExternalImagePin) (ExternalImageProof, error) {
 	fail := func() (ExternalImageProof, error) { return ExternalImageProof{}, ErrImageArchive }
 	if ctx.Err() != nil || source == nil || size < 1 || size > MaxImageArchiveBytes {
 		return fail()
@@ -191,31 +197,40 @@ func inspectExternalImageArchive(ctx context.Context, source io.ReaderAt, size i
 		return fail()
 	}
 	root, ok := parseDescriptor(index.Manifests[0])
-	if !ok || !slices.Contains([]string{ociIndexType, dockerIndexType}, root.MediaType) || root.Digest != pin.IndexDigest || root.Size != pin.IndexBytes || !checkBlob(root) || root.Annotations["org.opencontainers.image.ref.name"] != pin.Reference || root.Annotations["io.containerd.image.name"] != "" && root.Annotations["io.containerd.image.name"] != pin.Reference {
+	if !ok || root.Digest != rootDigest || !checkBlob(root) || root.Annotations["org.opencontainers.image.ref.name"] != reference || root.Annotations["io.containerd.image.name"] != "" && root.Annotations["io.containerd.image.name"] != reference {
 		return fail()
 	}
-	upstreamRaw, err := read("blobs/sha256/" + strings.TrimPrefix(root.Digest, "sha256:"))
-	var upstream indexValue
-	if err != nil || imageJSON(upstreamRaw, &upstream) != nil || upstream.SchemaVersion != 2 || upstream.MediaType != root.MediaType || len(upstream.Manifests) < 1 || len(upstream.Manifests) > 64 {
-		return fail()
-	}
-	var manifestDesc imageDescriptor
-	matches := 0
-	for _, raw := range upstream.Manifests {
-		var d imageDescriptor
-		if imageJSON(raw, &d) != nil || d.Platform == nil || !validImageDigest(d.Digest) || d.Size < 1 || d.Size > 1<<20 || !slices.Contains([]string{ociManifestType, dockerManifestType}, d.MediaType) {
+	manifestDesc := root
+	indexDigest := ""
+	if slices.Contains([]string{ociIndexType, dockerIndexType}, root.MediaType) {
+		indexDigest = root.Digest
+		if pin != nil && root.Size != pin.IndexBytes {
 			return fail()
 		}
-		if d.Platform.OS != "linux" || d.Platform.Architecture != "amd64" {
-			continue
-		}
-		d, ok := parseDescriptor(raw)
-		if !ok || !slices.Contains([]string{ociManifestType, dockerManifestType}, d.MediaType) || d.Digest != pin.ManifestDigest || d.Size != pin.ManifestBytes || !checkBlob(d) {
+		upstreamRaw, err := read("blobs/sha256/" + strings.TrimPrefix(root.Digest, "sha256:"))
+		var upstream indexValue
+		if err != nil || imageJSON(upstreamRaw, &upstream) != nil || upstream.SchemaVersion != 2 || upstream.MediaType != root.MediaType || len(upstream.Manifests) < 1 || len(upstream.Manifests) > 64 {
 			return fail()
 		}
-		manifestDesc, matches = d, matches+1
-	}
-	if matches != 1 {
+		matches := 0
+		for _, raw := range upstream.Manifests {
+			var d imageDescriptor
+			if imageJSON(raw, &d) != nil || d.Platform == nil || !validImageDigest(d.Digest) || d.Size < 1 || d.Size > 1<<20 || !slices.Contains([]string{ociManifestType, dockerManifestType}, d.MediaType) {
+				return fail()
+			}
+			if d.Platform.OS != "linux" || d.Platform.Architecture != "amd64" {
+				continue
+			}
+			d, ok := parseDescriptor(raw)
+			if !ok || !slices.Contains([]string{ociManifestType, dockerManifestType}, d.MediaType) || !checkBlob(d) || pin != nil && (d.Digest != pin.ManifestDigest || d.Size != pin.ManifestBytes) {
+				return fail()
+			}
+			manifestDesc, matches = d, matches+1
+		}
+		if matches != 1 {
+			return fail()
+		}
+	} else if pin != nil || !slices.Contains([]string{ociManifestType, dockerManifestType}, root.MediaType) {
 		return fail()
 	}
 	manifestRaw, err := read("blobs/sha256/" + strings.TrimPrefix(manifestDesc.Digest, "sha256:"))
@@ -225,11 +240,11 @@ func inspectExternalImageArchive(ctx context.Context, source io.ReaderAt, size i
 		Config        json.RawMessage   `json:"config"`
 		Layers        []json.RawMessage `json:"layers"`
 	}
-	if err != nil || imageFields(manifestRaw, []string{"schemaVersion", "mediaType", "config", "layers"}, []string{"annotations"}) != nil || imageJSON(manifestRaw, &manifest) != nil || manifest.SchemaVersion != 2 || manifest.MediaType != manifestDesc.MediaType || len(manifest.Layers) != pin.LayerCount || pin.LayerCount < 1 || pin.LayerCount > 128 {
+	if err != nil || imageFields(manifestRaw, []string{"schemaVersion", "mediaType", "config", "layers"}, []string{"annotations"}) != nil || imageJSON(manifestRaw, &manifest) != nil || manifest.SchemaVersion != 2 || manifest.MediaType != manifestDesc.MediaType || len(manifest.Layers) < 1 || len(manifest.Layers) > 128 || pin != nil && len(manifest.Layers) != pin.LayerCount {
 		return fail()
 	}
 	configDesc, ok := parseDescriptor(manifest.Config)
-	if !ok || !slices.Contains([]string{ociConfigType, dockerConfigType}, configDesc.MediaType) || configDesc.Digest != pin.ConfigDigest || configDesc.Size != pin.ConfigBytes || !checkBlob(configDesc) {
+	if !ok || !slices.Contains([]string{ociConfigType, dockerConfigType}, configDesc.MediaType) || !checkBlob(configDesc) || pin != nil && (configDesc.Digest != pin.ConfigDigest || configDesc.Size != pin.ConfigBytes) {
 		return fail()
 	}
 	configRaw, err := read("blobs/sha256/" + strings.TrimPrefix(configDesc.Digest, "sha256:"))
@@ -242,10 +257,10 @@ func inspectExternalImageArchive(ctx context.Context, source io.ReaderAt, size i
 		} `json:"rootfs"`
 	}
 	var cf map[string]json.RawMessage
-	if err != nil || imageJSON(configRaw, &cf) != nil || imageFields(cf["rootfs"], []string{"type", "diff_ids"}, nil) != nil || imageJSON(configRaw, &config) != nil || config.OS != "linux" || config.Architecture != "amd64" || config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != pin.LayerCount {
+	if err != nil || imageJSON(configRaw, &cf) != nil || imageFields(cf["rootfs"], []string{"type", "diff_ids"}, nil) != nil || imageJSON(configRaw, &config) != nil || config.OS != "linux" || config.Architecture != "amd64" || config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != len(manifest.Layers) {
 		return fail()
 	}
-	proof := ExternalImageProof{Reference: pin.Reference, ArchiveSHA256: hex.EncodeToString(h.Sum(nil)), ArchiveBytes: size, IndexDigest: root.Digest, ManifestDigest: manifestDesc.Digest, ConfigDigest: configDesc.Digest, Layers: []ImageLayerProof{}}
+	proof := ExternalImageProof{Reference: reference, ArchiveSHA256: hex.EncodeToString(h.Sum(nil)), ArchiveBytes: size, IndexDigest: indexDigest, ManifestDigest: manifestDesc.Digest, ConfigDigest: configDesc.Digest, Layers: []ImageLayerProof{}}
 	var expanded, entries, compressed int64
 	for i, raw := range manifest.Layers {
 		d, ok := parseDescriptor(raw)
@@ -266,7 +281,7 @@ func inspectExternalImageArchive(ctx context.Context, source io.ReaderAt, size i
 		}
 		proof.Layers = append(proof.Layers, layer)
 	}
-	if compressed != pin.LayerBlobBytes || len(visited) != len(blobs) || ctx.Err() != nil {
+	if pin != nil && compressed != pin.LayerBlobBytes || len(visited) != len(blobs) || ctx.Err() != nil {
 		return fail()
 	}
 	for name, blob := range blobs {

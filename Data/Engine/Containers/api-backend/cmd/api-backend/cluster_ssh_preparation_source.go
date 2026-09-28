@@ -153,7 +153,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 // fence; changing the target phase inside consume invalidates this scope.
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, *clusterbootstrap.ExternalImageSet, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, *clusterbootstrap.ExternalImageSet, *clusterbootstrap.PostgresImage, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -164,8 +164,13 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
 	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
 	return runClusterSSHPreparationScope(parent, 5*time.Second, leaseCheck, func(ctx context.Context) (result error) {
-		read := client.preparationRead(authority, lease, baseline, sealed)
-		expected, settings, err := read(ctx)
+		snapshotRead := client.snapshotRead(authority, lease, baseline, sealed)
+		initial, err := snapshotRead(ctx)
+		read := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
+			value, err := snapshotRead(ctx)
+			return value.Expected, value.Settings, err
+		}
+		expected, settings := initial.Expected, initial.Settings
 		if err != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -213,11 +218,20 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 				result = clusterbootstrap.ErrImageArchive
 			}
 		}()
-		// Application publication may have changed during the external batch.
-		if inventory.refresh(ctx) != nil || checks.Inputs(ctx) != nil {
+		postgresImage, err := clusterbootstrap.AcquirePostgresImage(ctx, scratchParent, initial.Storage.Requirements.PostgresImage.Resolved, checks.Inputs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if postgresImage.Close() != nil {
+				result = clusterbootstrap.ErrImageArchive
+			}
+		}()
+		// Static publications may have changed during dynamic acquisition.
+		if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checks.Inputs(ctx) != nil {
 			return clusterbootstrap.ErrImageArchive
 		}
-		if err := consume(ctx, inputs, images, externalImages, expected, checks); err != nil {
+		if err := consume(ctx, inputs, images, externalImages, postgresImage, expected, checks); err != nil {
 			return err
 		}
 		if err := externalInventory.refresh(ctx); err != nil {

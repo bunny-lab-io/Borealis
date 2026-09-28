@@ -8,7 +8,7 @@ import (
 
 // Only the supported CNPG runtime repository may become a future registry
 // input. A configured tag is context, never an immutable artifact identity.
-const clusterSSHPostgresRepository = "ghcr.io/cloudnative-pg/postgresql"
+const clusterSSHPostgresRepository = clusterbootstrap.PostgresImageRepository
 
 var clusterSSHPostgresTagRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 
