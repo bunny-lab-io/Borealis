@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -71,7 +73,12 @@ func AcquirePostgresImage(ctx context.Context, parent, reference string, check f
 type postgresImageFetch func(context.Context, string, int64, bool, io.Writer) error
 
 func acquirePostgresImage(ctx context.Context, parent, reference string, check func(context.Context) error, fetch postgresImageFetch) (_ *PostgresImage, result error) {
-	if !ValidPostgresImageReference(reference) || fetch == nil || imageBoundary(ctx, check) != nil {
+	return acquirePostgresImageReserved(ctx, parent, reference, check, fetch, reservePostgresFile)
+}
+
+// Allocation seam is private; production never substitutes sparse truncation.
+func acquirePostgresImageReserved(ctx context.Context, parent, reference string, check func(context.Context) error, fetch postgresImageFetch, reserve func(*os.File, int64) error) (_ *PostgresImage, result error) {
+	if !ValidPostgresImageReference(reference) || fetch == nil || reserve == nil || imageBoundary(ctx, check) != nil {
 		return nil, ErrImageArchive
 	}
 	directory, err := os.MkdirTemp(parent, "borealis-node-postgresql-")
@@ -90,6 +97,7 @@ func acquirePostgresImage(ctx context.Context, parent, reference string, check f
 		}
 	}()
 	blobs := map[string]int64{}
+	reserved := map[string]int64{}
 	var total int64
 	// Metadata and layer downloads share exact digest/length verification. No
 	// fetch URL or metadata-supplied URL can influence the fixed registry client.
@@ -104,12 +112,25 @@ func acquirePostgresImage(ctx context.Context, parent, reference string, check f
 			return nil, nil
 		}
 		name := strings.TrimPrefix(d.Digest, "sha256:")
-		f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		flags := os.O_CREATE | os.O_EXCL | os.O_RDWR
+		if size, exists := reserved[d.Digest]; exists {
+			if size != d.Size {
+				return nil, ErrImageArchive
+			}
+			flags = os.O_RDWR
+		}
+		f, err := root.OpenFile(name, flags, 0600)
 		if err != nil {
 			return nil, ErrImageArchive
 		}
 		defer f.Close()
-		if fetch(ctx, d.Digest, d.Size, manifest, f) != nil {
+		limit := d.Size
+		if limit == -1 {
+			limit = 1 << 20
+		}
+		h := sha256.New()
+		writer := &postgresDownloadWriter{out: io.MultiWriter(f, h), limit: limit}
+		if fetch(ctx, d.Digest, d.Size, manifest, writer) != nil || writer.n < 1 || (d.Size != -1 && writer.n != d.Size) || "sha256:"+hex.EncodeToString(h.Sum(nil)) != d.Digest {
 			return nil, ErrImageArchive
 		}
 		st, err := f.Stat()
@@ -190,31 +211,95 @@ func acquirePostgresImage(ctx context.Context, parent, reference string, check f
 	if !postgresImageDescriptor(manifest.Config, &config, []string{ociConfigType, dockerConfigType}, 1<<20) {
 		return nil, ErrImageArchive
 	}
-	if _, err = download(config, false); err != nil {
-		return nil, err
+	// Authenticate and bound the complete descriptor set before any bulk IO.
+	descriptors := map[string]imageDescriptor{}
+	for digest, size := range blobs {
+		descriptors[digest] = imageDescriptor{Digest: digest, Size: size}
+	}
+	add := func(d imageDescriptor) bool {
+		if old, ok := descriptors[d.Digest]; ok {
+			return old.Size == d.Size
+		}
+		descriptors[d.Digest] = d
+		return true
+	}
+	if _, collision := descriptors[config.Digest]; collision || !add(config) {
+		return nil, ErrImageArchive
 	}
 	var compressed int64
+	layers := make([]imageDescriptor, 0, len(manifest.Layers))
 	for _, raw := range manifest.Layers {
 		var layer imageDescriptor
 		if !postgresImageDescriptor(raw, &layer, []string{ociLayerType, ociLayerType + "+gzip", dockerLayerType}, MaxImageArchiveBytes) {
+			return nil, ErrImageArchive
+		}
+		if _, metadata := blobs[layer.Digest]; metadata || layer.Digest == config.Digest || !add(layer) {
 			return nil, ErrImageArchive
 		}
 		compressed += layer.Size
 		if compressed > MaxImageArchiveBytes {
 			return nil, ErrImageArchive
 		}
-		if _, err = download(layer, false); err != nil {
-			return nil, err
-		}
+		layers = append(layers, layer)
 	}
 	rootWire := map[string]any{"mediaType": rootDesc.MediaType, "digest": rootDesc.Digest, "size": rootDesc.Size, "annotations": map[string]string{"org.opencontainers.image.ref.name": reference, "io.containerd.image.name": reference}}
 	index, _ := json.Marshal(map[string]any{"schemaVersion": 2, "mediaType": ociIndexType, "manifests": []any{rootWire}})
 	metadata := map[string][]byte{"oci-layout": []byte(`{"imageLayoutVersion":"1.0.0"}`), "index.json": index}
+	// Fixed short names and bounded lengths use ordinary USTAR headers. Reserve
+	// exact padded archive plus every unique content file on the worker filesystem.
+	archiveBytes := int64(1024)
+	for _, raw := range metadata {
+		archiveBytes += 512 + (int64(len(raw))+511)/512*512
+	}
+	var contentBytes int64
+	namesToReserve := make([]string, 0, len(descriptors))
+	for digest, d := range descriptors {
+		contentBytes += d.Size
+		archiveBytes += 512 + (d.Size+511)/512*512
+		namesToReserve = append(namesToReserve, digest)
+	}
+	if archiveBytes > MaxImageArchiveBytes || contentBytes > MaxImageArchiveBytes {
+		return nil, ErrImageArchive
+	}
+	slices.Sort(namesToReserve)
+	for _, digest := range namesToReserve {
+		if _, exists := blobs[digest]; exists {
+			continue
+		}
+		if imageBoundary(ctx, check) != nil {
+			return nil, ErrSessionAuthority
+		}
+		d := descriptors[digest]
+		f, err := root.OpenFile(strings.TrimPrefix(digest, "sha256:"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		if err != nil {
+			return nil, ErrImageArchive
+		}
+		err = reserve(f, d.Size)
+		closeErr := f.Close()
+		if err != nil || closeErr != nil {
+			return nil, ErrImageArchive
+		}
+		reserved[digest] = d.Size
+	}
+	if imageBoundary(ctx, check) != nil {
+		return nil, ErrSessionAuthority
+	}
 	archive, err := root.OpenFile(postgresArchiveName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, ErrImageArchive
 	}
 	defer archive.Close()
+	if reserve(archive, archiveBytes) != nil || imageBoundary(ctx, check) != nil {
+		return nil, ErrImageArchive
+	}
+	if _, err = download(config, false); err != nil {
+		return nil, err
+	}
+	for _, layer := range layers {
+		if _, err = download(layer, false); err != nil {
+			return nil, err
+		}
+	}
 	tw := tar.NewWriter(archive)
 	names := []string{"oci-layout", "index.json"}
 	for digest := range blobs {
@@ -253,11 +338,15 @@ func acquirePostgresImage(ctx context.Context, parent, reference string, check f
 		return nil, ErrImageArchive
 	}
 	st, err := archive.Stat()
-	if err != nil {
+	if err != nil || st.Size() != archiveBytes {
+		return nil, ErrImageArchive
+	}
+	position, err := archive.Seek(0, io.SeekCurrent)
+	if err != nil || position != archiveBytes {
 		return nil, ErrImageArchive
 	}
 	proof, err := InspectPostgresImageArchive(ctx, archive, st.Size(), reference)
-	if err != nil || imageBoundary(ctx, check) != nil {
+	if err != nil || proof.ContentBytes != contentBytes || proof.ContentEntries != int64(len(descriptors)) || imageBoundary(ctx, check) != nil {
 		return nil, ErrImageArchive
 	}
 	for digest := range blobs {
@@ -284,4 +373,20 @@ func postgresImageDescriptor(raw []byte, d *imageDescriptor, types []string, lim
 		return imageFields(platform, []string{"os", "architecture"}, nil) == nil && d.Platform != nil && d.Platform.OS == "linux" && d.Platform.Architecture == "amd64"
 	}
 	return true
+}
+
+// Bound every fetch independently of registry implementation and authenticate
+// bytes before parsing metadata or trusting their allocation instructions.
+type postgresDownloadWriter struct {
+	out      io.Writer
+	limit, n int64
+}
+
+func (w *postgresDownloadWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.limit-w.n {
+		return 0, ErrImageArchive
+	}
+	n, err := w.out.Write(p)
+	w.n += int64(n)
+	return n, err
 }

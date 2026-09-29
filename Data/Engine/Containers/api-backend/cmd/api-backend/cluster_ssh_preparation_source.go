@@ -153,7 +153,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 // fence; changing the target phase inside consume invalidates this scope.
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, *clusterbootstrap.ExternalImageSet, *clusterbootstrap.PostgresImage, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, *clusterbootstrap.ExternalImageSet, *clusterbootstrap.PostgresImage, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -231,7 +231,35 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 		if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checks.Inputs(ctx) != nil {
 			return clusterbootstrap.ErrImageArchive
 		}
-		if err := consume(ctx, inputs, images, externalImages, postgresImage, expected, checks); err != nil {
+		// Compose target demands separately from physically reserved PostgreSQL
+		// acquisition scratch. K3s metadata remains conditional until bulk staging.
+		k3s, err := resolveClusterSSHK3sInventory(ctx, expected.Source, expected.K3sVersion)
+		if err != nil {
+			return err
+		}
+		appDemand, err := inventory.demands()
+		if err != nil {
+			return err
+		}
+		externalDemand, err := externalInventory.demands()
+		if err != nil {
+			return err
+		}
+		k3sDemand, err := k3s.demands()
+		if err != nil {
+			return err
+		}
+		baseDemand, err := mergeClusterSSHFilesystemDemands(appDemand, externalDemand, k3sDemand)
+		if err != nil {
+			return err
+		}
+		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checks.Inputs, baseDemand,
+			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
+				return consume(ctx, inputs, images, externalImages, postgresImage, capacity, expected, checks)
+			}); err != nil {
+			return err
+		}
+		if err := k3s.refresh(ctx); err != nil {
 			return err
 		}
 		if err := externalInventory.refresh(ctx); err != nil {
