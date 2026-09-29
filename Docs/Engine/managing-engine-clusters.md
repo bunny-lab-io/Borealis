@@ -320,7 +320,11 @@ The Database view reports configured and Ready CloudNativePG instances separatel
 
 Cluster Events preserves failed records for audit and translates internal operation kinds into operator-facing names such as `Maintenance Mode Enabled`, `Cluster-Wide Node Isolation Disabled`, and `Node Pair Removed`.
 
-Each row identifies affected node hostnames, summarizes the latest lifecycle message or failure, and provides a copy control for full troubleshooting text containing operation metadata, raw step names, error context, redacted payload, and linked lifecycle events.
+Each row identifies affected node hostnames and shows a timeline in **Details**. Passed steps, failed steps, retry requests, and completion retain their recorded timestamps. The current step animates while the operation is running. Queued, waiting, cancelled, and superseded operations remain still.
+
+Use **Show earlier events** to expand an operation's history. The most recent three events and current status remain visible by default. The copy control includes the complete loaded history, operation metadata, raw step names, error context, and redacted payload, including events hidden by the collapsed timeline.
+
+Refresh the browser to reload recorded progress. If updates fail or stall, the timeline retains its last records, displays **Updates delayed**, and pauses animation until both operation state and event history refresh. Health-soak steps show their recorded state; countdowns are unavailable until the Engine supplies authoritative timing.
 
 Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
 
@@ -647,6 +651,18 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 
     Public API, store creation/retry, controller dispatch and step runner reject `hmr_start`. Legacy queued/interrupted entry fails before Kubernetes intent and becomes `restore_failed` with its target retained. Failed HMR exit may queue through the generic quorum failure status; existing controller membership, health and fencing checks still apply. CLI dev commands require confirmed standalone membership; lookup failure never means standalone. WebUI retains recovery controls only. Canonical procedures, test/UI checks and exact-release #492 restoration gate live in [WebUI HMR Development](webui-hmr-development.md).
 
+    ### Cluster operation timeline
+
+    - `src/Admin/ClusterOperationTimeline.jsx` builds the timeline from existing operation snapshots and linked events; `Cluster_Management.jsx` owns fetching, cursor pagination, copy diagnostics, and AG Grid integration. Paths are relative to `Data/Engine/Containers/webui-frontend/data/web-interface/`.
+    - Events are isolated by operation ID, deduplicated by event ID, and ordered by numeric event ID. Only `operation_step_passed` proves a passed step. Its `details.step` labels the milestone and `details.next_step` identifies subsequent recorded work. Node/admission IDs resolve through the current inventory; missing identities remain visible as IDs.
+    - Retry events retain earlier failures and use `details.attempt` and `details.resume_step`. The store emits cancellation as `operation_cancel`; historical `operation_cancelled` is also recognized. Unknown event types remain visible with their recorded message and timestamp.
+    - Snapshot and event fetches complete independently. Newer transitions can advance the displayed current state before the snapshot catches up. A newer snapshot or retry attempt takes precedence over old events; terminal snapshots win equal-second timestamps. No future step plan, percentage, step-start time, or soak deadline is fabricated. Current timestamps mean last recorded status, not elapsed step duration.
+    - Snapshot and event receipt times age independently at the five-second poll interval. A failed fetch or receipt older than 15 seconds pauses the current indicator and labels retained progress as delayed. Existing per-stream completion generations reject superseded responses. Successful reconnect resumes from the retained event cursor; loader hydration rebuilds history after browser refresh.
+    - Details uses AG Grid auto-height and refreshes when nested timeline data changes even if the summary string stays unchanged. Other grids retain fixed rows. Histories show the latest three events by default; expansion keeps all loaded events in a scrollable area. Reduced-motion preference disables animation; labels and icons communicate status without relying on color.
+    - Portable coverage: `Unit_Tests/Admin/ClusterOperationTimeline.test.jsx` and `Unit_Tests/Admin/Cluster_Management.test.jsx`; run `Tests/run-webui.sh` from repository root. No API, schema, input field, or third-party dependency changes are required.
+    - Browser verification after an approved deployment: open `/cluster-management?tab=operations`, inspect running and failed/retried operations, expand history, copy diagnostics, and refresh. Block only the events request and verify delayed status with retained milestones; restore access and verify new steps without duplicate rows. Check narrow columns, keyboard expansion/copy, and reduced-motion preference.
+    - U03/#467 follow-on remains authoritative soak timing and integration with H04 maintenance and S01 onboarding event contracts. This implementation covers existing operation records.
+
     ### Engine release identity
 
     - Nodes grid uses existing `nodes[].release_tag`, `release_sha`, and `last_seen_at`. It never fills missing node identity from `baseline_release`, probes, or K3s observations. These fields are lifecycle records; no fresh runtime Engine identity field exists in this snapshot contract.
@@ -743,13 +759,13 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`
 - Enable dialog uses shared glass overlay, input, and pill-action tokens from `Data/Engine/Containers/webui-frontend/data/web-interface/src/DialogStyles.jsx`.  It contains one `cluster_vip` field and no typed confirmation.
 - WebUI tab keys are `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state.  `operations` appears as Cluster Events, and Engine release controls live under Maintenance.
-- Nodes and Cluster Events use Quartz AG Grid with 44px rows and headers, 20-row default pagination, and `20`, `50`, and `100` selectors.
+- Nodes and Cluster Events use Quartz AG Grid with 44px headers, 20-row default pagination, and `20`, `50`, and `100` selectors. Nodes retain 44px rows; Cluster Events rows grow to fit their Details timeline.
 - Nodes derives Database text from `leaders.postgres_primary` with `roles.postgres_primary` fallback plus aggregate CloudNativePG readiness.
 - Primary displays linked `Active`.
 - Non-primary active members display `Replica Healthy` only when configured instances equal active membership, every configured instance is Ready, and `fully_ready` is not false.  Otherwise replicas display `Not Ready`.
 - Inactive historical rows display `Not Active`.
 - Aggregate readiness cannot identify one failed replica, so degraded state marks every passive replica `Not Ready`.
-- Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics.
+- Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution, lifecycle timelines, and copied diagnostics.
 - Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
 - Release compatibility: `Data/Engine/release-manifest.json`
 - Initial cluster baseline: `Engine.sh` prefers an exact dotted-numeric tag.  A clean untagged checkout emits `dev-<FIRST_12_COMMIT_CHARACTERS>`; API, controller, CRD, and node manager require the identity to match the full SHA.  A dirty checkout emits no baseline.
