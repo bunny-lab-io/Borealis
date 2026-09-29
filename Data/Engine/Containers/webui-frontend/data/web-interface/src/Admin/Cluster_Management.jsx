@@ -41,6 +41,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import ClusterOperationTimeline, { buildClusterOperationTimeline } from "./ClusterOperationTimeline.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -346,6 +347,7 @@ export async function loadClusterManagementPageData(request) {
     let releaseError = "";
     let events = [];
     let eventError = "";
+    let eventsReceivedAt = 0;
     await Promise.all([
       (async () => {
         try {
@@ -358,13 +360,14 @@ export async function loadClusterManagementPageData(request) {
       (async () => {
         try {
           events = await loadClusterEventHistory((path) => progress.fetchJson(path));
+          eventsReceivedAt = Date.now();
         } catch (error) {
           // Cluster controls remain usable if audit history is temporarily unavailable.
           eventError = getRouteErrorMessage(error, "Cluster event details could not be loaded.");
         }
       })(),
     ]);
-    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventError, initialError: "" };
+    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventsReceivedAt, eventError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return { cluster: null, releases: { releases: [] }, events: [], initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
@@ -832,11 +835,7 @@ function OperationDetailsCell({ data }) {
   };
   return (
     <Box sx={{ display: "flex", alignItems: "center", width: "100%", minWidth: 0, gap: 1 }}>
-      <Tooltip title={data?.detailSummary || ""} placement="top-start" arrow>
-        <Typography component="span" sx={{ flex: 1, minWidth: 0, color: "#cbd5e1", fontSize: "inherit", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {data?.detailSummary || "No details recorded."}
-        </Typography>
-      </Tooltip>
+      <ClusterOperationTimeline timeline={data.timeline} stale={data.timelineStale} formatTimestamp={formatClusterTimestamp} />
       <Tooltip title={copied ? "Copied" : "Copy full event details"} arrow>
         <IconButton
           size="small"
@@ -923,6 +922,7 @@ export default function ClusterManagement() {
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
   const [eventError, setEventError] = useState(loaderData?.eventError || "");
+  const [eventsReceivedAt, setEventsReceivedAt] = useState(() => Number(loaderData?.eventsReceivedAt) || 0);
   const eventCursorRef = useRef((Array.isArray(loaderData?.events) ? loaderData.events : []).reduce(
     (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
     0
@@ -1039,6 +1039,7 @@ export default function ClusterManagement() {
             eventCursorRef.current
           );
         }
+        setEventsReceivedAt(Date.now());
         setEventError("");
       } catch (requestError) {
         if (!acceptCompletion(eventsCompletedGeneration)) return;
@@ -1194,12 +1195,14 @@ export default function ClusterManagement() {
           nodeLabel,
           detailSummary: details.summary,
           detailsText: details.copyText,
+          timeline: buildClusterOperationTimeline(operation, linkedEvents, nodes, admissions),
+          timelineStale: Boolean(eventError) || snapshotUnavailable || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS || versionClock - eventsReceivedAt > CLUSTER_SNAPSHOT_STALE_MS,
           timestamp,
           timestampLabel: formatClusterTimestamp(timestamp),
         };
       });
     },
-    [admissions, events, nodes, operations]
+    [admissions, events, nodes, operations, eventError, eventsReceivedAt, snapshotUnavailable, snapshotReceivedAt, versionClock]
   );
 
   const closeNodeActionMenu = useCallback(() => {
@@ -1414,6 +1417,10 @@ export default function ClusterManagement() {
       flex: 1,
       sortable: false,
       filter: true,
+      autoHeight: true,
+      wrapText: true,
+      // Nested timeline changes must refresh even when the latest message stays unchanged.
+      equals: () => false,
       cellRenderer: OperationDetailsCell,
     },
     {
@@ -1502,7 +1509,7 @@ export default function ClusterManagement() {
 
         {tab === "operations" ? (
           <Stack spacing={1.25} sx={{ minHeight: 320, height: "100%", flexGrow: 1 }}>
-            {eventError ? <Alert severity="warning">{eventError} Operation summaries remain available, but copied details may omit lifecycle events.</Alert> : null}
+            {eventError ? <Alert severity="warning">{eventError} Recorded progress remains available. Timelines and copied details may omit recent lifecycle events.</Alert> : null}
             <ClusterGrid
               rowData={operationRows}
               columnDefs={operationColumnDefs}

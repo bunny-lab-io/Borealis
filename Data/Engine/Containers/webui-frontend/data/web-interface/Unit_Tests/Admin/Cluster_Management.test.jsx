@@ -91,6 +91,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
       releases: { releases: state.releases },
       releaseError: state.releaseError,
       events: state.events,
+      eventsReceivedAt: Date.now(),
       eventError: "",
       initialError: "",
     }),
@@ -855,6 +856,51 @@ describe("Cluster Management", () => {
     expect(copied).toContain("wait_node_conformance");
     expect(copied).toContain("[redacted]");
     expect(copied).not.toContain("temporary-secret");
+  });
+
+  it.each(["failed", "hanging"])("retains timeline on %s event polling and recovers without duplicate milestones", async (failure) => {
+    let now = 1_787_770_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.operations = [{ id: "timeline-op", kind: "node_maintenance", state: "running", current_step: "inspect_health", updated_at: now / 1000 }];
+    state.events = [{ id: 40, operation_id: "timeline-op", event_type: "operation_started", created_at: now / 1000 - 1 }];
+    let recover = false;
+    let passed = { id: 41, operation_id: "timeline-op", event_type: "operation_step_passed", message: "Cluster operation step passed.", details: { step: "inspect_health", next_step: "minimum_ready_soak" }, created_at: now / 1000 + 20 };
+    const fetchMock = vi.fn((path) => {
+      if (String(path).includes("/events")) {
+        if (!recover) return failure === "failed" ? Promise.reject(new Error("history offline")) : new Promise(() => {});
+        return Promise.resolve({ ok: true, json: async () => ({ events: [state.events[0], passed, passed] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => path === "/api/server/cluster" ? { nodes: [], operations: state.operations } : { releases: [] } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("Current: In progress · Verify workload health")).toBeInTheDocument();
+    await act(async () => { now += 20_000; poll(); });
+    expect(await screen.findByText(/Updates delayed/)).toBeInTheDocument();
+    expect(screen.getByText("Operation started")).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Operation timeline" })).queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
+    recover = true;
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Current: In progress · Observe sustained workload health")).toBeInTheDocument();
+    expect(screen.queryByText(/Updates delayed/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Verify workload health — passed")).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=40", expect.anything());
+    // Same generic event message; renderer still updates the nested timeline.
+    passed = { ...passed, id: 42, details: { step: "minimum_ready_soak", next_step: "restore_roles" } };
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Current: In progress · Restore cluster roles")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=41", expect.anything());
+    view.unmount();
+    // Browser refresh rebuilds progress from durable loader history.
+    state.events = [state.events[0], passed];
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("Current: In progress · Restore cluster roles")).toBeInTheDocument();
   });
 
   it("requires paired safe removal and explicit external fencing for emergency removal", async () => {
