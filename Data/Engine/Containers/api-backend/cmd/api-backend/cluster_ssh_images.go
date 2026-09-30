@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"reflect"
 	"time"
@@ -150,7 +151,14 @@ func (v clusterSSHImageInventory) demands() ([]clusterSSHFilesystemDemand, error
 
 func withClusterSSHImageStorageCapacity(ctx context.Context, readers clusterSSHNetworkTargetReaders,
 	source clusterSSHPreparationSnapshotRead, consume func(context.Context, []clusterSSHTargetStorageCapacity) error) error {
-	if source == nil || readers.within == nil || readers.Refresh == nil || consume == nil {
+	return withClusterSSHImageStorageCapacityAcquired(ctx, readers, source, consume, acquireClusterSSHQualificationPostgres)
+}
+
+// Private acquisition seam; production only lends an owned native archive.
+func withClusterSSHImageStorageCapacityAcquired(ctx context.Context, readers clusterSSHNetworkTargetReaders,
+	source clusterSSHPreparationSnapshotRead, consume func(context.Context, []clusterSSHTargetStorageCapacity) error,
+	acquire clusterSSHQualificationPostgresAcquire) error {
+	if source == nil || readers.within == nil || readers.Refresh == nil || consume == nil || acquire == nil {
 		return clusterbootstrap.ErrImageArchive
 	}
 	return readers.within(ctx, func(ctx context.Context) error {
@@ -189,14 +197,31 @@ func withClusterSSHImageStorageCapacity(ctx context.Context, readers clusterSSHN
 		if err != nil {
 			return err
 		}
+		// Freeze all public source/configuration/storage fields, not just release.
+		// A caller-mutated map/slice cannot move the acquisition's source binding.
+		frozen, err := json.Marshal(initial)
+		if err != nil {
+			return clusterbootstrap.ErrImageArchive
+		}
 		boundSource := func(ctx context.Context) (clusterSSHPreparationSnapshot, error) {
 			value, err := source(ctx)
-			if err != nil || value.Expected.Source != initial.Expected.Source || value.Expected.K3sVersion != initial.Expected.K3sVersion {
+			encoded, encodeErr := json.Marshal(value)
+			if err != nil || encodeErr != nil || string(encoded) != string(frozen) {
 				return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrImageArchive
 			}
 			return value, nil
 		}
-		if err := withClusterSSHTargetStorageCapacity(ctx, readers, boundSource, demands, consume); err != nil {
+		check := func(ctx context.Context) error {
+			if ctx.Err() != nil || readers.Refresh(ctx) != nil {
+				return clusterbootstrap.ErrImageArchive
+			}
+			_, err := boundSource(ctx)
+			return err
+		}
+		if err := withClusterSSHQualificationPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, demands, check, acquire,
+			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
+				return withClusterSSHTargetStorageCapacity(ctx, readers, boundSource, capacity.Target, consume)
+			}); err != nil {
 			return err
 		}
 		if images.refresh(ctx) != nil || k3s.refresh(ctx) != nil || external.refresh(ctx) != nil || readers.Refresh(ctx) != nil {

@@ -141,8 +141,9 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		}
 		report.Checks[stage].State = "passed"
 		stage = 2
-		// Exact published image inventory supplies measured application-image
-		// demand. OS/K3s/external images and runtime growth remain separate gates.
+		// Published application/K3s/external inventory and an owned, measured
+		// PostgreSQL archive supply conditional target demand. Aggregate worker,
+		// OS/runtime headroom and workload fit remain separate readiness gates.
 		if err := withClusterSSHImageStorageCapacity(ctx, readers, source, func(ctx context.Context, capacity []clusterSSHTargetStorageCapacity) error {
 			report.Storage = capacity
 			report.Checks[stage].State = "passed"

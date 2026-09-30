@@ -6,8 +6,7 @@ import (
 	"reflect"
 )
 
-// Reserved preparation only. Qualification remains metadata-only until complete
-// bounded acquisition and all image/OS/workload requirements can be composed.
+// Reserved preparation and inert qualification acquisition share measured demand.
 // This value is conditional demand, never a target-space or admission receipt.
 type clusterSSHPreparedImageCapacity struct {
 	Target                    []clusterSSHFilesystemDemand

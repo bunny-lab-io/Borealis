@@ -43,7 +43,7 @@ func imageReleaseFixture(t *testing.T, expected ...clusterbootstrap.Expected) *b
 }
 
 func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "image drift", "K3s drift", "external drift", "source drift", "sibling lost", "inode exhausted"} {
+	for _, mode := range []string{"expansion", "replacement", "image drift", "K3s drift", "external drift", "source drift", "Postgres drift", "source settings drift", "sibling lost", "inode exhausted"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			release := imageReleaseFixture(t, f.a.Baseline)
@@ -77,17 +77,30 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			snapshot := clusterSSHPreparationSnapshot{Expected: expected, Storage: sshStorageSnapshotFixture(t, f.a)}
+			snapshot := clusterSSHPreparationSnapshot{Expected: expected, Settings: map[string]string{"BOREALIS_TEST": "original"}, Storage: sshStorageSnapshotFixture(t, f.a)}
+			image := newQualificationPostgresFixture()
+			acquire := func(ctx context.Context, reference string, check func(context.Context) error) (clusterSSHQualificationPostgresArchive, error) {
+				if reference != snapshot.Storage.Requirements.PostgresImage.Resolved || check(ctx) != nil {
+					t.Fatal("PostgreSQL source/authority lost")
+				}
+				return image, nil
+			}
 			consumed := false
 			source := func(ctx context.Context) (clusterSSHPreparationSnapshot, error) {
 				v := snapshot
+				if mode == "Postgres drift" && consumed {
+					v.Storage.Requirements.PostgresImage.Resolved = clusterSSHPostgresRepository + "@sha256:" + strings.Repeat("f", 64)
+				}
+				if mode == "source settings drift" && consumed {
+					v.Settings["BOREALIS_TEST"] = "changed shared map"
+				}
 				if mode == "source drift" && consumed {
 					v.Expected.Source.SourceSHA = strings.Repeat("d", 40)
 				}
 				return v, ctx.Err()
 			}
 			err = runClusterSSHNetworkTargets(bootstrapContext(), f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
-				return withClusterSSHImageStorageCapacity(ctx, readers, source, func(_ context.Context, out []clusterSSHTargetStorageCapacity) error {
+				return withClusterSSHImageStorageCapacityAcquired(ctx, readers, source, func(_ context.Context, out []clusterSSHTargetStorageCapacity) error {
 					consumed = true
 					if len(out) != len(f.claims) {
 						t.Fatal("partial image-capacity cohort")
@@ -95,7 +108,7 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 					for _, v := range out {
 						p := clusterbootstrap.K3sPins()
 						k3sBytes := uint64(3*p.Binary.Size + 3*p.Archive.Size + 1024 + 4096 + 14*4096 + p.Installer.Size + 2*p.Payload.TarBytes + 4096*2*(p.Payload.Entries+p.Payload.CNILinks+7))
-						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7)+k3sBytes+externalBudget {
+						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7)+k3sBytes+externalBudget+1100+11*4096 {
 							t.Fatal("image bytes missing from shared filesystem budget")
 						}
 					}
@@ -116,8 +129,11 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 						f.lost.Store(2)
 					}
 					return nil
-				})
+				}, acquire)
 			})
+			if image.closes != 1 {
+				t.Fatal("qualification archive leaked")
+			}
 			if (err == nil) != (mode == "expansion" || mode == "replacement") || consumed != (mode != "inode exhausted") {
 				t.Fatalf("image-capacity authority: consumed=%v error=%v", consumed, err)
 			}

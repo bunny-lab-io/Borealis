@@ -227,6 +227,8 @@ When asked to work on Gitea or GitHub issue:
 
 Every issue has corresponding pull request. No exceptions, no matter how small request is.
 
+For Borealis clustering work, [#530](https://github.com/bunny-lab-io/Borealis/issues/530) is the current-state tracker. Read its short resume section, acceptance checklist and new or edited relevant comments/reviews; inspect current checkout and remote state before editing. Update its body in place at meaningful handoffs with active PR/full SHA, actual validation, unresolved approvals, exact next action, unpushed work and runtime/cleanup obligations. This replaces the append-only reporting protocol in #493 for clustering only; historical evidence and approvals remain valid, and all security, runtime, review and release gates remain unchanged. Reuse existing implementation branches/PRs; #530 is an umbrella, not a new implementation workstream. Keep canonical procedures in `Docs/`.
+
 Before implementation, post or retain working understanding:
 
 ```md
