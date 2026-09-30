@@ -48,6 +48,9 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	for _, member := range source.Members {
 		nodes = append(nodes, sshSourceKubernetesFixture(member))
 	}
+	for _, name := range clusterSSHCertManagerDeployments {
+		f.objects[clusterSSHCertManagerDeploymentPrefix+name] = sshCertManagerDeploymentFixture(name)
+	}
 	f.objects["/api/v1/nodes"] = map[string]any{"items": nodes}
 	cluster := sshStorageObject("postgresql.cnpg.io/v1", "Cluster", "borealis", "borealis-postgres")
 	instances := 1

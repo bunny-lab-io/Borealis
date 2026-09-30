@@ -53,6 +53,13 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
 			},
+			"missing cert-manager": func(v *clusterSSHStorageSnapshot) { v.Requirements.CertManagerImages = clusterSSHCertManagerImages{} },
+			"wrong cert-manager role": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.CertManagerImages.Solver = v.Requirements.CertManagerImages.Controller
+			},
+			"unreviewed cert-manager": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.CertManagerImages.Webhook = "quay.io/jetstack/cert-manager-webhook:other"
+			},
 			"missing PG image": func(v *clusterSSHStorageSnapshot) { v.Requirements.PostgresImage = clusterSSHPostgresImage{} },
 			"invalid PG digest": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Resolved = sshPostgresConfiguredFixture
