@@ -2,7 +2,7 @@
 
 This review identifies work needed for reliable one-node and three-node Engine clustering, automatic recovery, and WebUI-driven SSH onboarding. It records the accepted review at [`78ddf977990e`](https://github.com/bunny-lab-io/Borealis/commit/78ddf977990e4cf7f69538f4caf67d6996785eed); it does not certify a release or describe SSH onboarding as available today.
 
-Use [#493](https://github.com/bunny-lab-io/Borealis/issues/493) for current progress, decisions and handovers. Its [work register](https://github.com/bunny-lab-io/Borealis/issues/493#issuecomment-5552835571) links each active issue, PR, branch and latest checkpoint. [Closure recommendations](https://github.com/bunny-lab-io/Borealis/issues/493#issuecomment-5552835900) remain separate from executed closures. This Markdown review/design PR is the first deliverable; the umbrella stays open through implementation and final qualification.
+Use [#530](https://github.com/bunny-lab-io/Borealis/issues/530) for current progress and resumption instructions. Historical [#493 evidence and approvals](https://github.com/bunny-lab-io/Borealis/issues/493) remain valid. This document preserves the original review/design snapshot; it does not replace the current acceptance checklist.
 
 ## Agreed MVP
 
@@ -27,7 +27,7 @@ Current operator procedures remain in [Managing Engine Clusters](../../Engine/ma
 
     This versioned design preserves the 22 accepted assessments, seven hardening plans, onboarding design and qualification scenarios from #493. Source findings refer to the reviewed baseline; earlier test results and live observations retain their original scope. Tracker initialization rechecked current GitHub states but did not rerun live failure injection. Implementation and release readiness require new evidence, not extrapolation from merged PRs.
 
-    Read repository guidance, #493 body, work register, latest checkpoint, subsequent operator comments and linked active issue/PR before resuming. Verify current remote and checkout state, test evidence and runtime operations. Append checkpoints using issue's contract and update index links; explicitly record uncommitted/unpushed work and cleanup. Use child issues and PRs for implementation; reference #493 without auto-closing it. Keep new issues uncreated until their register item is claimed, then create/link the issue, branch and PR together. Existing issue/PR pairs take precedence over replacements.
+    Follow `AGENTS.md` and #530's in-place tracking protocol. Read only new or edited relevant comments/reviews and the active implementation source needed for the next acceptance item. Preserve historical evidence and approvals; do not reinstate append-only checkpoints. Record uncommitted/unpushed work and runtime cleanup at meaningful handoffs. Reuse existing child issues, branches and PRs; the tracking umbrella does not create an implementation branch.
 
     ### Per-issue and per-PR assessments
 
@@ -371,7 +371,7 @@ Current operator procedures remain in [Managing Engine Clusters](../../Engine/ma
 
     For each scenario, record exact source SHA, immutable release metadata and asset/image digests, K3s and Agent versions, topology, preconditions, failure injection and recovery timestamps, assertions, redacted artifacts, and residual risk. Power-loss/partition acceptance must show service recovery before healing the failed target. Preserve acknowledged PostgreSQL writes; distinguish safe queued-work takeover from unknown already-dispatched work. Never infer a real-database pass from a skipped integration test.
 
-    Tracker/documentation validation results belong in the latest #493 checkpoint and linked PR; they do not substitute for Q01 runtime qualification. Missing local artifacts must be labeled non-durable with exact rerun commands.
+    Current validation scope and evidence belong in #530's resume/checklist record; they do not substitute for Q01 runtime qualification. Missing local artifacts must be labeled non-durable with exact rerun commands.
 
     ### Related documentation
 
@@ -384,7 +384,7 @@ Current operator procedures remain in [Managing Engine Clusters](../../Engine/ma
 
     ### Source map
 
-    - Tracker entrypoint: `AGENTS.md`; durable progress: GitHub #493 index and checkpoints.
+    - Tracker entrypoint: `AGENTS.md`; current progress: GitHub #530 body. Historical #493 evidence and approvals remain valid.
     - Cluster API and audit store: `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go`, `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster_store.go`.
     - Membership and recovery orchestration: `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go`.
     - Scheduler ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
