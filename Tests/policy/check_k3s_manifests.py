@@ -206,10 +206,12 @@ def validate_cluster_controller_contract() -> None:
         "storage-reserved-percentage-for-default-disk", "storage-minimal-available-percentage", "storage-over-provisioning-percentage",
         "default-replica-count", "replica-soft-anti-affinity", "replica-zone-soft-anti-affinity", "replica-disk-soft-anti-affinity",
         "allow-empty-node-selector-volume", "allow-empty-disk-selector-volume", "disable-scheduling-on-cordoned-node", "replica-auto-balance",
+        "default-engine-image", "support-bundle-manager-image",
     ]
     storage_rule = {"apiGroups": ["longhorn.io"], "resources": ["settings"], "resourceNames": storage_settings, "verbs": ["get"]}
-    if len(storage_roles) != 1 or storage_roles[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_roles[0].get("rules") != [storage_rule]:
-        fail("storage policy Role must allow only fixed Longhorn setting GETs")
+    manager_rule = {"apiGroups": ["apps"], "resources": ["daemonsets"], "resourceNames": ["longhorn-manager"], "verbs": ["get"]}
+    if len(storage_roles) != 1 or storage_roles[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_roles[0].get("rules") != [storage_rule, manager_rule]:
+        fail("storage policy Role must allow only fixed Longhorn setting and manager DaemonSet GETs")
     storage_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-storage-policy"]
     if len(storage_bindings) != 1 or storage_bindings[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-storage-policy"} or storage_bindings[0].get("subjects") != binding.get("subjects"):
         fail("storage policy RoleBinding must bind only controller ServiceAccount")

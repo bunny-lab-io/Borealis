@@ -122,6 +122,12 @@ rules:
       - allow-empty-disk-selector-volume
       - disable-scheduling-on-cordoned-node
       - replica-auto-balance
+      - default-engine-image
+      - support-bundle-manager-image
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    resourceNames: ["longhorn-manager"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

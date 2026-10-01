@@ -1,0 +1,74 @@
+import contextlib
+import copy
+import importlib.util
+import io
+from pathlib import Path
+import unittest
+from unittest import mock
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location("k3s_policy", ROOT / "Tests/policy/check_k3s_manifests.py")
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+
+
+class ClusterStorageRBACTests(unittest.TestCase):
+    def setUp(self):
+        self.objects = list(yaml.safe_load_all(
+            (ROOT / "Data/Engine/K3s/cluster/controller.yaml").read_text(encoding="utf-8")
+        ))
+
+    def validate(self, objects):
+        with mock.patch.object(policy.yaml, "safe_load_all", return_value=objects):
+            policy.validate_cluster_controller_contract()
+
+    def test_committed_controller_passes(self):
+        self.validate(self.objects)
+
+    def test_storage_role_rejects_permission_drift(self):
+        mutations = {
+            "extra setting": lambda role: role["rules"][0]["resourceNames"].append("unreviewed-setting"),
+            "extra daemonset": lambda role: role["rules"][1]["resourceNames"].append("other-manager"),
+            "wrong namespace": lambda role: role["metadata"].update(namespace="borealis"),
+            "extra rule": lambda role: role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}),
+            "missing manager rule": lambda role: role["rules"].pop(),
+        }
+        for index in (0, 1):
+            for verb in ("list", "watch", "create", "update", "patch", "delete", "*"):
+                mutations[f"rule {index} verb {verb}"] = lambda role, i=index, v=verb: role["rules"][i]["verbs"].append(v)
+            for field in ("apiGroups", "resources", "resourceNames"):
+                mutations[f"rule {index} wildcard {field}"] = lambda role, i=index, f=field: role["rules"][i].update({f: ["*"]})
+            mutations[f"rule {index} unrestricted names"] = lambda role, i=index: role["rules"][i].pop("resourceNames")
+        for setting in ("default-engine-image", "support-bundle-manager-image"):
+            mutations[f"missing {setting}"] = lambda role, s=setting: role["rules"][0]["resourceNames"].remove(s)
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "Role" and item["metadata"]["name"] == "borealis-cluster-storage-policy")
+                mutate(role)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_storage_binding_rejects_scope_drift(self):
+        mutations = {
+            "wrong namespace": lambda binding: binding["metadata"].update(namespace="borealis"),
+            "cluster role": lambda binding: binding["roleRef"].update(kind="ClusterRole"),
+            "wrong role": lambda binding: binding["roleRef"].update(name="other-role"),
+            "wrong subject": lambda binding: binding["subjects"][0].update(name="other-controller"),
+            "wrong subject namespace": lambda binding: binding["subjects"][0].update(namespace="default"),
+            "extra subject": lambda binding: binding["subjects"].append({"kind": "Group", "name": "system:authenticated"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                binding = next(item for item in objects if item.get("kind") == "RoleBinding" and item["metadata"]["name"] == "borealis-cluster-storage-policy")
+                mutate(binding)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+
+if __name__ == "__main__":
+    unittest.main()
