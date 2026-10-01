@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "qualification", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job"} {
+	for _, mode := range []string{"expansion", "replacement", "qualification", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
 			if mode == "qualification" {
@@ -106,6 +106,8 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					job["metadata"].(map[string]any)["uid"] = newClusterUUID()
 					job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
 					switch mode {
+					case "Longhorn CSI changed during Job":
+						sshLonghornDriverContainer(storage)["env"].([]any)[3].(map[string]any)["value"] = "docker.io/longhornio/csi-attacher@" + sshLonghornDriverPin("csi-attacher").ManifestDigest
 					case "cert-manager solver changed during Job":
 						sshCertManagerContainer(storage, "cert-manager")["args"].([]any)[3] = "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver@" + sshCertManagerPin("acmesolver").ManifestDigest
 					case "bootstrap image changed during Job":
@@ -186,7 +188,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			// Storage drift is found by the final inventory after valid source
 			// reads. Its error must discard that response, not pretend DB ownership
 			// was lost before the private Secret acquisition.
-			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job") && secretReads.Load() != 2 {
+			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job") && secretReads.Load() != 2 {
 				t.Fatal("storage drift did not bracket complete source acquisition")
 			}
 			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {

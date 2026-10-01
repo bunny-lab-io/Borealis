@@ -55,7 +55,7 @@ func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clus
 	r := value.Requirements
 	validBytes := func(n uint64) bool { return n > 0 && n <= math.MaxInt64 }
 	if !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
-		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !r.CertManagerImages.valid() || len(source.Members) < 1 || len(source.Members) > 2 ||
+		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !r.CertManagerImages.valid() || !r.LonghornDriverImages.valid() || len(source.Members) < 1 || len(source.Members) > 2 ||
 		len(r.Volumes) < len(source.Members)+1 || len(r.Volumes) > 16 {
 		return false
 	}
