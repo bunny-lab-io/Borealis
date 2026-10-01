@@ -63,6 +63,11 @@ func clusterSSHSnapshotControllerArguments(raw any) bool {
 		}
 		flag, value, equals := strings.Cut(arg, "=")
 		if !equals {
+			// Boolean flags need explicit values; do not interpret a following
+			// positional token as the reviewed leader-election value.
+			if flag == "--leader-election" {
+				return false
+			}
 			i++
 			if i >= len(args) {
 				return false

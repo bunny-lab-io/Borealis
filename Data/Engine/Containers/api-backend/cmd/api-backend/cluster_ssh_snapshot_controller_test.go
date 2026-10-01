@@ -36,7 +36,7 @@ func sshSnapshotControllerContainer(f *sshStorageFixture) map[string]any {
 }
 
 func TestClusterSSHSnapshotControllerSourceConfiguration(t *testing.T) {
-	for _, mode := range []string{"reviewed index", "platform digest", "split flags", "mixed flags", "reordered flags",
+	for _, mode := range []string{"reviewed index", "platform digest", "split flags", "mixed flags", "reordered flags", "split boolean", "bare boolean",
 		"missing deployment", "wrong kind", "wrong namespace", "wrong name", "missing UID", "missing revision", "deleting", "wrong container", "sidecar", "init", "ephemeral",
 		"tag", "unreviewed digest", "wrong role", "image type", "command", "missing args", "args type", "argument type", "duplicate flag", "unknown flag", "missing value", "value type", "wrong namespace flag", "disabled election", "endpoint override", "expanded argument", "repeated flag",
 		"env", "envFrom", "mount", "device", "unused volume", "working directory", "lifecycle", "restart policy"} {
@@ -54,10 +54,14 @@ func TestClusterSSHSnapshotControllerSourceConfiguration(t *testing.T) {
 				container["image"] = clusterSSHSnapshotControllerRepository + "@" + sshSnapshotControllerPin().ManifestDigest
 			case "split flags":
 				valid = true
-				container["args"] = []any{"--v", "2", "--leader-election", "true", "--leader-election-namespace", "kube-system", "--http-endpoint", ":8080"}
+				container["args"] = []any{"--v", "2", "--leader-election=true", "--leader-election-namespace", "kube-system", "--http-endpoint", ":8080"}
 			case "mixed flags":
 				valid = true
-				container["args"] = []any{"--v=2", "--leader-election", "true", "--leader-election-namespace=kube-system", "--http-endpoint", ":8080"}
+				container["args"] = []any{"--v=2", "--leader-election=true", "--leader-election-namespace=kube-system", "--http-endpoint", ":8080"}
+			case "split boolean":
+				container["args"] = []any{"--v=2", "--leader-election", "true", "--leader-election-namespace=kube-system", "--http-endpoint=:8080"}
+			case "bare boolean":
+				args[1] = "--leader-election"
 			case "reordered flags":
 				valid = true
 				args[0], args[3] = args[3], args[0]
