@@ -344,6 +344,12 @@ func (c *kubernetesAPIClient) clusterSSHPrivateJSON(ctx context.Context, method,
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	defer response.Body.Close()
+	if method == http.MethodGet && response.StatusCode == http.StatusNotFound && clusterSSHCNPGOptionalConfigPath(path) {
+		if ctx.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return clusterSSHCNPGNotFound(path, response.Body)
+	}
 	if (method == http.MethodGet && response.StatusCode != http.StatusOK) || (method == http.MethodPost && response.StatusCode != http.StatusCreated) {
 		return clusterbootstrap.ErrPreparationConfig
 	}

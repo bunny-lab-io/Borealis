@@ -14,7 +14,7 @@ import (
 )
 
 func TestClusterSSHStorageScope(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "initial revision drift", "final revision drift", "final content drift", "snapshot receipt drift", "snapshot image drift", "upgrade receipt drift", "upgrade kubectl drift", "UI receipt drift", "UI image drift", "manager receipt drift", "manager Settings drift", "Longhorn receipt drift", "Longhorn CSI drift", "cert-manager receipt drift", "cert-manager solver drift", "source boot drift", "source authority drift", "target authority drift", "lost authority during GET", "ignored input failure", "ignored cancelled authority", "consumer failure"} {
+	for _, mode := range []string{"expansion", "replacement", "initial revision drift", "final revision drift", "final content drift", "CNPG receipt drift", "CNPG config receipt drift", "CNPG secret receipt drift", "CNPG config override", "snapshot receipt drift", "snapshot image drift", "upgrade receipt drift", "upgrade kubectl drift", "UI receipt drift", "UI image drift", "manager receipt drift", "manager Settings drift", "Longhorn receipt drift", "Longhorn CSI drift", "cert-manager receipt drift", "cert-manager solver drift", "source boot drift", "source authority drift", "target authority drift", "lost authority during GET", "ignored input failure", "ignored cancelled authority", "consumer failure"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHStorageFixture(t, mode == "replacement")
 			var lost atomic.Bool
@@ -54,6 +54,14 @@ func TestClusterSSHStorageScope(t *testing.T) {
 				switch mode {
 				case "final content drift":
 					clusterSSHStorageMap(f.volume(0), "spec")["numberOfReplicas"] = 3
+				case "CNPG receipt drift":
+					clusterSSHStorageMap(f.objects[clusterSSHCNPGOperatorPath], "metadata")["resourceVersion"] = "2"
+				case "CNPG config receipt drift":
+					clusterSSHStorageMap(f.objects[clusterSSHCNPGConfigMapPath], "metadata")["resourceVersion"] = "2"
+				case "CNPG secret receipt drift":
+					clusterSSHStorageMap(f.objects[clusterSSHCNPGSecretPath], "metadata")["resourceVersion"] = "2"
+				case "CNPG config override":
+					f.objects[clusterSSHCNPGConfigMapPath]["data"] = map[string]any{"OPERATOR_IMAGE_NAME": "other"}
 				case "snapshot receipt drift":
 					clusterSSHStorageMap(f.objects[clusterSSHSnapshotControllerPath], "metadata")["annotations"] = map[string]any{"changed": "original receipt"}
 				case "snapshot image drift":
@@ -299,7 +307,7 @@ func TestClusterSSHStorageControllerTLSBoundary(t *testing.T) {
 		t.Fatal("redirect followed")
 	}
 	before := requests.Load()
-	for _, path := range []string{clusterSSHSnapshotControllerPath + "/status", clusterSSHSnapshotControllerPath + "?watch=true", strings.Replace(clusterSSHSnapshotControllerPath, "snapshot-controller", "other", 1), clusterSSHSystemUpgradePath + "/status", clusterSSHSystemUpgradeConfigPath + "?watch=true", strings.Replace(clusterSSHSystemUpgradeConfigPath, "default-controller-env", "other", 1), "/api/v1/namespaces/system-upgrade/configmaps", clusterSSHLonghornUIPath + "/status", clusterSSHLonghornUIPath + "?watch=true", strings.Replace(clusterSSHLonghornUIPath, "longhorn-ui", "other", 1), clusterSSHLonghornManagerPath + "/status", clusterSSHLonghornManagerPath + "?watch=true", clusterSSHStorageSettingPrefix + "default-instance-manager-image", clusterSSHStorageSettingPrefix + "default-backing-image-manager-image", clusterSSHLonghornDriverPath + "?watch=true", clusterSSHLonghornDriverPath + "/status", strings.Replace(clusterSSHLonghornDriverPath, "longhorn-driver-deployer", "other", 1), clusterSSHCertManagerDeploymentPrefix, clusterSSHCertManagerDeploymentPrefix + "other", clusterSSHCertManagerDeploymentPrefix + "cert-manager?watch=true", clusterSSHCertManagerDeploymentPrefix + "../cert-manager", "/api/v1/secrets", clusterSSHRuntimeSecretPath, "/apis/storage.k8s.io/v1/storageclasses", clusterSSHStoragePVPrefix + "../secrets", clusterSSHStorageVolumePrefix + "volume?other=true", clusterSSHStoragePVPrefix + "%2fsecret", clusterSSHStoragePodsPath + "&limit=1", clusterSSHStoragePVPrefix + strings.Repeat("a", 64)} {
+	for _, path := range []string{clusterSSHCNPGOperatorPath + "/status", clusterSSHCNPGConfigMapPath + "?watch=true", clusterSSHCNPGSecretPath + "/other", "/api/v1/namespaces/cnpg-system/secrets", clusterSSHSnapshotControllerPath + "/status", clusterSSHSnapshotControllerPath + "?watch=true", strings.Replace(clusterSSHSnapshotControllerPath, "snapshot-controller", "other", 1), clusterSSHSystemUpgradePath + "/status", clusterSSHSystemUpgradeConfigPath + "?watch=true", strings.Replace(clusterSSHSystemUpgradeConfigPath, "default-controller-env", "other", 1), "/api/v1/namespaces/system-upgrade/configmaps", clusterSSHLonghornUIPath + "/status", clusterSSHLonghornUIPath + "?watch=true", strings.Replace(clusterSSHLonghornUIPath, "longhorn-ui", "other", 1), clusterSSHLonghornManagerPath + "/status", clusterSSHLonghornManagerPath + "?watch=true", clusterSSHStorageSettingPrefix + "default-instance-manager-image", clusterSSHStorageSettingPrefix + "default-backing-image-manager-image", clusterSSHLonghornDriverPath + "?watch=true", clusterSSHLonghornDriverPath + "/status", strings.Replace(clusterSSHLonghornDriverPath, "longhorn-driver-deployer", "other", 1), clusterSSHCertManagerDeploymentPrefix, clusterSSHCertManagerDeploymentPrefix + "other", clusterSSHCertManagerDeploymentPrefix + "cert-manager?watch=true", clusterSSHCertManagerDeploymentPrefix + "../cert-manager", "/api/v1/secrets", clusterSSHRuntimeSecretPath, "/apis/storage.k8s.io/v1/storageclasses", clusterSSHStoragePVPrefix + "../secrets", clusterSSHStorageVolumePrefix + "volume?other=true", clusterSSHStoragePVPrefix + "%2fsecret", clusterSSHStoragePodsPath + "&limit=1", clusterSSHStoragePVPrefix + strings.Repeat("a", 64)} {
 		var raw json.RawMessage
 		if kube.getClusterSSHStorageJSON(context.Background(), path, &raw) == nil {
 			t.Fatal("unscoped path accepted")

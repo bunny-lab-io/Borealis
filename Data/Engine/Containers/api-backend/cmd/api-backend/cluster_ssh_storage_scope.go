@@ -78,10 +78,14 @@ func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPre
 			}
 		}()
 		get := func(ctx context.Context, path string, out any) error {
-			if checkAuthority(ctx) != nil || getJSON(ctx, path, out) != nil || ctx.Err() != nil || checkAuthority(ctx) != nil {
+			if checkAuthority(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
-			return nil
+			err := getJSON(ctx, path, out)
+			if (err != nil && !(err == errClusterSSHCNPGConfigAbsent && clusterSSHCNPGOptionalConfigPath(path))) || ctx.Err() != nil || checkAuthority(ctx) != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			return err
 		}
 		var retained *clusterSSHStorageObservation
 		inputGate := make(chan struct{}, 1)

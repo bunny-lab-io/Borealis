@@ -53,6 +53,13 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
 			},
+			"missing CNPG operator": func(v *clusterSSHStorageSnapshot) { v.Requirements.CNPGOperatorImage = "" },
+			"wrong CNPG role": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.CNPGOperatorImage = v.Requirements.SnapshotControllerImage
+			},
+			"unreviewed CNPG operator": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.CNPGOperatorImage = clusterSSHCNPGRepository + ":other"
+			},
 			"missing snapshot controller": func(v *clusterSSHStorageSnapshot) { v.Requirements.SnapshotControllerImage = "" },
 			"wrong snapshot role": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.SnapshotControllerImage = v.Requirements.SystemUpgradeImages.Controller

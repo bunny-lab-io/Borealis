@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "qualification", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
+	for _, mode := range []string{"expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
 			if mode == "qualification" {
@@ -60,6 +60,15 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					return
 				}
 				if r.Method == "GET" {
+					if mode == "absent CNPG config" && clusterSSHCNPGOptionalConfigPath(r.URL.Path) {
+						kind := "configmaps"
+						if r.URL.Path == clusterSSHCNPGSecretPath {
+							kind = "secrets"
+						}
+						w.WriteHeader(http.StatusNotFound)
+						_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "Status", "status": "Failure", "reason": "NotFound", "code": 404, "details": map[string]any{"kind": kind, "name": "cnpg-controller-manager-config"}})
+						return
+					}
 					if object, ok := storage.objects[r.URL.RequestURI()]; ok && r.URL.Path != "/api/v1/nodes" && r.URL.Path != "/api/v1/namespaces/kube-system" {
 						if mode == "storage revision changed" && changed.Load() {
 							clusterSSHStorageMap(storage.volume(0), "metadata")["resourceVersion"] = "2"
@@ -106,6 +115,8 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					job["metadata"].(map[string]any)["uid"] = newClusterUUID()
 					job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
 					switch mode {
+					case "CNPG configuration changed during Job":
+						clusterSSHStorageMap(storage.objects[clusterSSHCNPGSecretPath], "metadata")["resourceVersion"] = "2"
 					case "snapshot image changed during Job":
 						sshSnapshotControllerContainer(storage)["image"] = clusterSSHSnapshotControllerRepository + "@" + sshSnapshotControllerPin().ManifestDigest
 					case "upgrade kubectl changed during Job":
@@ -170,7 +181,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			client.httpClient.Timeout = 10 * time.Second
 			read := client.preparationRead(f.read, f.lease, f.baseline, f.sealed)
 			expected, settings, err := read(f.ctx)
-			good := mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
+			good := mode == "absent CNPG config" || mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
 			if good {
 				if err != nil || expected.Target.TargetID != f.lease.TargetID || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) {
 					t.Fatal("valid private broker source rejected")
@@ -196,7 +207,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			// Storage drift is found by the final inventory after valid source
 			// reads. Its error must discard that response, not pretend DB ownership
 			// was lost before the private Secret acquisition.
-			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
+			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
 				t.Fatal("storage drift did not bracket complete source acquisition")
 			}
 			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {

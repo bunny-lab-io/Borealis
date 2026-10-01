@@ -30,7 +30,12 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	result := clusterSSHStorageObservation{receipts: map[string][32]byte{}}
 	read := func(path string) (map[string]any, error) {
 		var raw json.RawMessage
-		if getJSON(ctx, path, &raw) != nil || ctx.Err() != nil {
+		err := getJSON(ctx, path, &raw)
+		if err == errClusterSSHCNPGConfigAbsent && clusterSSHCNPGOptionalConfigPath(path) && ctx.Err() == nil {
+			result.receipts[path] = sha256.Sum256([]byte("CNPG configuration absent: " + path))
+			return nil, nil
+		}
+		if err != nil || ctx.Err() != nil {
 			return nil, clusterbootstrap.ErrPreparationConfig
 		}
 		object, digest, err := clusterSSHStorageObject(raw)
@@ -246,6 +251,10 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
+	result.Requirements.CNPGOperatorImage, err = observeClusterSSHCNPGOperatorImage(read, result.Requirements.PostgresImage.Bootstrap)
+	if err != nil {
+		return fail()
+	}
 	result.Requirements.SnapshotControllerImage, err = observeClusterSSHSnapshotControllerImage(read)
 	if err != nil {
 		return fail()
@@ -264,7 +273,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 // Fixed GET-only transport uses existing controller TLS/token and existing
 // PVC/PV/Pod/CNPG/Longhorn reads plus GET-only provisioning policy permissions.
 func (c *kubernetesAPIClient) getClusterSSHStorageJSON(ctx context.Context, path string, out any) error {
-	valid := slices.ContainsFunc(clusterSSHCertManagerDeployments, func(name string) bool { return path == clusterSSHCertManagerDeploymentPrefix+name }) || path == clusterSSHSnapshotControllerPath || path == clusterSSHSystemUpgradePath || path == clusterSSHSystemUpgradeConfigPath || path == clusterSSHLonghornUIPath || path == clusterSSHLonghornManagerPath || path == clusterSSHLonghornDriverPath || path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
+	valid := slices.ContainsFunc(clusterSSHCertManagerDeployments, func(name string) bool { return path == clusterSSHCertManagerDeploymentPrefix+name }) || path == clusterSSHCNPGOperatorPath || clusterSSHCNPGOptionalConfigPath(path) || path == clusterSSHSnapshotControllerPath || path == clusterSSHSystemUpgradePath || path == clusterSSHSystemUpgradeConfigPath || path == clusterSSHLonghornUIPath || path == clusterSSHLonghornManagerPath || path == clusterSSHLonghornDriverPath || path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
 	for _, prefix := range []string{clusterSSHStoragePVPrefix, clusterSSHStorageVolumePrefix, clusterSSHStorageClassPrefix} {
 		if strings.HasPrefix(path, prefix) {
 			valid = clusterSSHStorageName(strings.TrimPrefix(path, prefix))
