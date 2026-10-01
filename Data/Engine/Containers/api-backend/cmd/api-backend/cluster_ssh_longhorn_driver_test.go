@@ -74,6 +74,7 @@ func TestClusterSSHLonghornDriverSourceConfiguration(t *testing.T) {
 					ref := "docker.io/longhornio/" + role + "@" + digest
 					if role == "longhorn-manager" {
 						main["image"], init["image"], cmd[4] = ref, ref, ref
+						sshLonghornManagerSetImage(f, role, ref)
 					}
 					for _, e := range env {
 						if e.(map[string]any)["value"] == pin.Reference {

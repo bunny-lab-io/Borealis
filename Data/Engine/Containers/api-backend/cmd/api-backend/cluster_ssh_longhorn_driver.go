@@ -29,20 +29,21 @@ func (images clusterSSHLonghornDriverImages) valid() bool {
 		"csi-provisioner": images.Provisioner, "csi-node-driver-registrar": images.Registrar,
 		"csi-resizer": images.Resizer, "csi-snapshotter": images.Snapshotter, "livenessprobe": images.Liveness,
 	} {
-		repository := "docker.io/longhornio/" + role
-		found := false
-		for _, pin := range clusterbootstrap.ExternalImagePins() {
-			if strings.HasPrefix(pin.Reference, repository+":") &&
-				(reference == pin.Reference || reference == repository+"@"+pin.IndexDigest || reference == repository+"@"+pin.ManifestDigest) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !clusterSSHLonghornImageValid(reference, role) {
 			return false
 		}
 	}
 	return true
+}
+
+func clusterSSHLonghornImageValid(reference, role string) bool {
+	repository := "docker.io/longhornio/" + role
+	for _, pin := range clusterbootstrap.ExternalImagePins() {
+		if strings.HasPrefix(pin.Reference, repository+":") && (reference == pin.Reference || reference == repository+"@"+pin.IndexDigest || reference == repository+"@"+pin.ManifestDigest) {
+			return true
+		}
+	}
+	return false
 }
 
 func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, error)) (clusterSSHLonghornDriverImages, error) {
