@@ -200,6 +200,7 @@ type clusterSSHStorageVolume struct {
 }
 
 type clusterSSHStorageRequirements struct {
+	LonghornUIImage             string                          `json:"longhorn_ui_image"`
 	LonghornManagerImages       clusterSSHLonghornManagerImages `json:"longhorn_manager_images"`
 	LonghornDriverImages        clusterSSHLonghornDriverImages  `json:"longhorn_driver_images"`
 	CertManagerImages           clusterSSHCertManagerImages     `json:"cert_manager_images"`

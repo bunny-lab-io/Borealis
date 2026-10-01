@@ -53,6 +53,13 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
 			},
+			"missing Longhorn UI": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIImage = "" },
+			"unreviewed Longhorn UI": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornUIImage = "docker.io/longhornio/longhorn-ui:other"
+			},
+			"wrong UI role": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornUIImage = sshLonghornDriverPin("longhorn-manager").Reference
+			},
 			"missing Longhorn manager": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornManagerImages = clusterSSHLonghornManagerImages{}
 			},
