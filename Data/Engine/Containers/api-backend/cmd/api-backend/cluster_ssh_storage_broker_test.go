@@ -53,6 +53,13 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
 			},
+			"missing snapshot controller": func(v *clusterSSHStorageSnapshot) { v.Requirements.SnapshotControllerImage = "" },
+			"wrong snapshot role": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.SnapshotControllerImage = v.Requirements.SystemUpgradeImages.Controller
+			},
+			"unreviewed snapshot image": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.SnapshotControllerImage = clusterSSHSnapshotControllerRepository + ":other"
+			},
 			"missing upgrade images": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.SystemUpgradeImages = clusterSSHSystemUpgradeImages{}
 			},

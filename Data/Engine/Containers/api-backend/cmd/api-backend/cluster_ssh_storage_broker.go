@@ -55,7 +55,7 @@ func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clus
 	r := value.Requirements
 	validBytes := func(n uint64) bool { return n > 0 && n <= math.MaxInt64 }
 	if !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
-		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !r.SystemUpgradeImages.valid() || !r.CertManagerImages.valid() || !r.LonghornDriverImages.valid() || !r.LonghornManagerImages.valid() || !clusterSSHLonghornImageValid(r.LonghornUIImage, "longhorn-ui") || r.LonghornManagerImages.Manager != r.LonghornDriverImages.Manager || len(source.Members) < 1 || len(source.Members) > 2 ||
+		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !r.SystemUpgradeImages.valid() || !clusterSSHSnapshotControllerImageValid(r.SnapshotControllerImage) || !r.CertManagerImages.valid() || !r.LonghornDriverImages.valid() || !r.LonghornManagerImages.valid() || !clusterSSHLonghornImageValid(r.LonghornUIImage, "longhorn-ui") || r.LonghornManagerImages.Manager != r.LonghornDriverImages.Manager || len(source.Members) < 1 || len(source.Members) > 2 ||
 		len(r.Volumes) < len(source.Members)+1 || len(r.Volumes) > 16 {
 		return false
 	}

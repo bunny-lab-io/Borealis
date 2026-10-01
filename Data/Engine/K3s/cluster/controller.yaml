@@ -252,3 +252,28 @@ spec:
     app.kubernetes.io/name: borealis-cluster-controller
   ports:
     - {name: source, port: 8090, targetPort: health, protocol: TCP}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: borealis-cluster-upgrade-settings
+  namespace: system-upgrade
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["default-controller-env"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: borealis-cluster-upgrade-settings
+  namespace: system-upgrade
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: borealis-cluster-upgrade-settings
+subjects:
+  - kind: ServiceAccount
+    name: borealis-cluster-controller
+    namespace: borealis
