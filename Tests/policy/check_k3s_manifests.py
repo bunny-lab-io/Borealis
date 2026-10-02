@@ -222,7 +222,14 @@ def validate_cluster_controller_contract() -> None:
     upgrade_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-upgrade-settings"]
     if len(upgrade_bindings) != 1 or upgrade_bindings[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-upgrade-settings"} or upgrade_bindings[0].get("subjects") != binding.get("subjects"):
         fail("upgrade settings RoleBinding must bind only controller ServiceAccount")
-    if sum(item.get("kind") == "Role" for item in objects) != 3 or sum(item.get("kind") == "RoleBinding" for item in objects) != 3:
+    cnpg_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
+    cnpg_rule = {"apiGroups": [""], "resources": ["configmaps", "secrets"], "resourceNames": ["cnpg-controller-manager-config"], "verbs": ["get"]}
+    if len(cnpg_roles) != 1 or cnpg_roles[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_roles[0].get("rules") != [cnpg_rule]:
+        fail("CNPG settings Role must allow only named controller configuration ConfigMap and Secret GETs")
+    cnpg_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
+    if len(cnpg_bindings) != 1 or cnpg_bindings[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cnpg-settings"} or cnpg_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("CNPG settings RoleBinding must bind only controller ServiceAccount")
+    if sum(item.get("kind") == "Role" for item in objects) != 4 or sum(item.get("kind") == "RoleBinding" for item in objects) != 4:
         fail("controller must not gain additional namespaced permissions")
     storage_class_rules = [rule for rule in rules if "storageclasses" in (rule.get("resources") or [])]
     if storage_class_rules != [{"apiGroups": ["storage.k8s.io"], "resources": ["storageclasses"], "verbs": ["get"]}]:

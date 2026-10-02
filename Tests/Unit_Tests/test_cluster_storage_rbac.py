@@ -109,10 +109,60 @@ class ClusterStorageRBACTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     self.validate(objects)
 
+    def test_cnpg_role_rejects_permission_drift(self):
+        mutations = {
+            "wrong namespace": lambda role: role["metadata"].update(namespace="borealis"),
+            "cluster role": lambda role: role.update(kind="ClusterRole"),
+            "extra name": lambda role: role["rules"][0]["resourceNames"].append("other"),
+            "all names": lambda role: role["rules"][0].pop("resourceNames"),
+            "missing read": lambda role: role.update(rules=[]),
+            "missing ConfigMap read": lambda role: role["rules"][0].update(resources=["secrets"]),
+            "missing Secret read": lambda role: role["rules"][0].update(resources=["configmaps"]),
+            "extra resource": lambda role: role["rules"][0]["resources"].append("services"),
+            "extra API group": lambda role: role["rules"][0]["apiGroups"].append("apps"),
+            "extra rule": lambda role: role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}),
+        }
+        for verb in ("list", "watch", "create", "update", "patch", "delete", "*"):
+            mutations[f"verb {verb}"] = lambda role, v=verb: role["rules"][0]["verbs"].append(v)
+        for field in ("apiGroups", "resources", "resourceNames"):
+            mutations[f"wildcard {field}"] = lambda role, f=field: role["rules"][0].update({f: ["*"]})
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "Role" and item["metadata"]["name"] == "borealis-cluster-cnpg-settings")
+                mutate(role)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_cnpg_binding_rejects_scope_drift(self):
+        mutations = {
+            "wrong namespace": lambda binding: binding["metadata"].update(namespace="borealis"),
+            "cluster binding": lambda binding: binding.update(kind="ClusterRoleBinding"),
+            "cluster role": lambda binding: binding["roleRef"].update(kind="ClusterRole"),
+            "wrong role": lambda binding: binding["roleRef"].update(name="other-role"),
+            "wrong subject": lambda binding: binding["subjects"][0].update(name="other-controller"),
+            "wrong subject namespace": lambda binding: binding["subjects"][0].update(namespace="default"),
+            "extra subject": lambda binding: binding["subjects"].append({"kind": "Group", "name": "system:authenticated"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                binding = next(item for item in objects if item.get("kind") == "RoleBinding" and item["metadata"]["name"] == "borealis-cluster-cnpg-settings")
+                mutate(binding)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
     def test_configmap_read_cannot_move_to_cluster_role(self):
         objects = copy.deepcopy(self.objects)
         role = next(item for item in objects if item.get("kind") == "ClusterRole")
         role["rules"].append({"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["default-controller-env"], "verbs": ["get"]})
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.validate(objects)
+
+    def test_cnpg_secret_read_cannot_move_to_cluster_role(self):
+        objects = copy.deepcopy(self.objects)
+        role = next(item for item in objects if item.get("kind") == "ClusterRole")
+        role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["cnpg-controller-manager-config"], "verbs": ["get"]})
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             self.validate(objects)
 
