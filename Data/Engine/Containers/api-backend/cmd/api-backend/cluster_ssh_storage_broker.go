@@ -32,7 +32,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		}
 		var err error
 		value, err = newClusterSSHPreparationSnapshotRead(boundAuthority, r.kube.getClusterSSHPreparationJSON, r.newSSHSourceNetworkRead(boundAuthority))(ctx)
-		if err != nil || checks.Authority(ctx) != nil {
+		if err != nil || !storage.KubeVIP.matchesNetworks(value.Sources) || checks.Authority(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		observation := storage.observation
@@ -54,7 +54,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clusterSSHSourceCohort) bool {
 	r := value.Requirements
 	validBytes := func(n uint64) bool { return n > 0 && n <= math.MaxInt64 }
-	if !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
+	if !r.KubeVIP.valid(source) || !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
 		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !clusterSSHCNPGOperatorImageValid(r.CNPGOperatorImage, r.PostgresImage.Bootstrap) || !r.SystemUpgradeImages.valid() || !clusterSSHSnapshotControllerImageValid(r.SnapshotControllerImage) || !r.CertManagerImages.valid() || !r.LonghornDriverImages.valid() || !r.LonghornManagerImages.valid() || !clusterSSHLonghornImageValid(r.LonghornUIImage, "longhorn-ui") || r.LonghornManagerImages.Manager != r.LonghornDriverImages.Manager || len(source.Members) < 1 || len(source.Members) > 2 ||
 		len(r.Volumes) < len(source.Members)+1 || len(r.Volumes) > 16 {
 		return false

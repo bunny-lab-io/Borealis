@@ -119,7 +119,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		value, err := c.fetch(ctx, request)
 		if err != nil || value.Expected.Validate() != nil || !clusterSSHSourceObservationRE.MatchString(value.Observation) ||
 			validateClusterSSHSourceNetworks(before, value.Sources) != nil ||
-			!validClusterSSHStorageSnapshot(value.Storage, before.Source) ||
+			!validClusterSSHStorageSnapshot(value.Storage, before.Source) || !value.Storage.Requirements.KubeVIP.matchesNetworks(value.Sources) ||
 			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources) || !reflect.DeepEqual(retainedStorage, value.Storage))) {
 			return fail()
 		}
@@ -183,7 +183,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 13 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 14 || value.ID != request.ID || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

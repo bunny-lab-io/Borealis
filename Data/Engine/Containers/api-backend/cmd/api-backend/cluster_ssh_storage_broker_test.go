@@ -53,7 +53,13 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
 			},
-			"missing CNPG operator": func(v *clusterSSHStorageSnapshot) { v.Requirements.CNPGOperatorImage = "" },
+			"missing kube-vip": func(v *clusterSSHStorageSnapshot) { v.Requirements.KubeVIP = clusterSSHKubeVIPConfiguration{} },
+			"wrong kube-vip role": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.KubeVIP.Image = sshSnapshotControllerPin().Reference
+			},
+			"wrong kube-vip address":     func(v *clusterSSHStorageSnapshot) { v.Requirements.KubeVIP.Address = "192.168.90.99" },
+			"missing kube-vip interface": func(v *clusterSSHStorageSnapshot) { v.Requirements.KubeVIP.Interface = "" },
+			"missing CNPG operator":      func(v *clusterSSHStorageSnapshot) { v.Requirements.CNPGOperatorImage = "" },
 			"wrong CNPG role": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.CNPGOperatorImage = v.Requirements.SnapshotControllerImage
 			},
@@ -175,9 +181,12 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 }
 
 func TestClusterSSHStorageBrokerControllerComposition(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "storage changed during Job", "storage changed during Secret", "cancel during storage", "changed receipt on reread"} {
+	for _, mode := range []string{"expansion", "replacement", "kube-vip interface mismatch", "storage changed during Job", "storage changed during Secret", "cancel during storage", "changed receipt on reread"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHStorageFixture(t, mode == "replacement")
+			if mode == "kube-vip interface mismatch" {
+				sshKubeVIPEnv(f, "vip_interface")["value"] = "ens19"
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			var job map[string]any

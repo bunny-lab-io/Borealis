@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
+	for _, mode := range []string{"expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
 			if mode == "qualification" {
@@ -34,6 +34,9 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 				t.Fatal(err)
 			}
 			storage := newSSHStorageFixtureForAuthority(t, current)
+			if mode == "kube-vip interface mismatch" {
+				sshKubeVIPEnv(storage, "vip_interface")["value"] = "ens19"
+			}
 			before := f.events(t)
 			var jobs, secretReads atomic.Int64
 			var changed atomic.Bool
@@ -117,6 +120,8 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					switch mode {
 					case "CNPG configuration changed during Job":
 						clusterSSHStorageMap(storage.objects[clusterSSHCNPGSecretPath], "metadata")["resourceVersion"] = "2"
+					case "kube-vip image changed during Job":
+						sshKubeVIPContainer(storage)["image"] = clusterSSHKubeVIPRepository + "@" + sshKubeVIPPin().ManifestDigest
 					case "snapshot image changed during Job":
 						sshSnapshotControllerContainer(storage)["image"] = clusterSSHSnapshotControllerRepository + "@" + sshSnapshotControllerPin().ManifestDigest
 					case "upgrade kubectl changed during Job":
@@ -207,7 +212,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			// Storage drift is found by the final inventory after valid source
 			// reads. Its error must discard that response, not pretend DB ownership
 			// was lost before the private Secret acquisition.
-			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
+			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
 				t.Fatal("storage drift did not bracket complete source acquisition")
 			}
 			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {

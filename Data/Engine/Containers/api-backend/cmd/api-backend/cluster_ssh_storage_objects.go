@@ -200,6 +200,7 @@ type clusterSSHStorageVolume struct {
 }
 
 type clusterSSHStorageRequirements struct {
+	KubeVIP                     clusterSSHKubeVIPConfiguration  `json:"kube_vip"`
 	CNPGOperatorImage           string                          `json:"cnpg_operator_image"`
 	SnapshotControllerImage     string                          `json:"snapshot_controller_image"`
 	SystemUpgradeImages         clusterSSHSystemUpgradeImages   `json:"system_upgrade_images"`
