@@ -116,7 +116,7 @@ func clusterSSHStorageMetadata(object map[string]any, version, kind, namespace s
 	return id, true
 }
 
-func clusterSSHStorageList(object map[string]any, kind string, limit int) ([]map[string]any, bool) {
+func clusterSSHStorageList(object map[string]any, kind, namespace string, limit int) ([]map[string]any, bool) {
 	items, ok := object["items"].([]any)
 	meta := clusterSSHStorageMap(object, "metadata")
 	if !ok || len(items) > limit || clusterSSHStorageText(object, "apiVersion") != "v1" || clusterSSHStorageText(object, "kind") != kind+"List" || meta == nil {
@@ -135,7 +135,7 @@ func clusterSSHStorageList(object map[string]any, kind string, limit int) ([]map
 	names, uids := map[string]bool{}, map[string]bool{}
 	for _, item := range items {
 		x, ok := item.(map[string]any)
-		id, valid := clusterSSHStorageMetadata(x, "v1", kind, "borealis")
+		id, valid := clusterSSHStorageMetadata(x, "v1", kind, namespace)
 		if !ok || !valid || names[id.Name] || uids[id.UID] {
 			return nil, false
 		}

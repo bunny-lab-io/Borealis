@@ -42,17 +42,17 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		if err != nil {
 			return nil, err
 		}
-		if path != clusterSSHStorageClaimsPath && path != clusterSSHStoragePodsPath {
+		if path != clusterSSHStorageClaimsPath && path != clusterSSHStoragePodsPath && !clusterSSHKubeVIPPodsPathValid(path) {
 			result.receipts[path] = digest
 		}
 		return object, nil
 	}
-	readList := func(path, kind string, limit int) ([]map[string]any, error) {
+	readList := func(path, kind, namespace string, limit int) ([]map[string]any, error) {
 		object, err := read(path)
 		if err != nil {
 			return nil, err
 		}
-		items, ok := clusterSSHStorageList(object, kind, limit)
+		items, ok := clusterSSHStorageList(object, kind, namespace, limit)
 		if !ok {
 			return nil, clusterbootstrap.ErrPreparationConfig
 		}
@@ -96,7 +96,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 			return fail()
 		}
 	}
-	pods, err := readList(clusterSSHStoragePodsPath, "Pod", 3)
+	pods, err := readList(clusterSSHStoragePodsPath, "Pod", "borealis", 3)
 	if err != nil || len(pods) != len(source.Members) {
 		return fail()
 	}
@@ -176,7 +176,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if !primaryFound {
 		return fail()
 	}
-	claims, err := readList(clusterSSHStorageClaimsPath, "PersistentVolumeClaim", 16)
+	claims, err := readList(clusterSSHStorageClaimsPath, "PersistentVolumeClaim", "borealis", 16)
 	if err != nil || len(claims) < len(pods)+1 {
 		return fail()
 	}
@@ -259,7 +259,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.KubeVIP, err = observeClusterSSHKubeVIP(read, source)
+	result.Requirements.KubeVIP, err = observeClusterSSHKubeVIP(read, readList, source)
 	if err != nil {
 		return fail()
 	}
@@ -277,7 +277,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 // Fixed GET-only transport uses existing controller TLS/token and existing
 // PVC/PV/Pod/CNPG/Longhorn reads plus GET-only provisioning policy permissions.
 func (c *kubernetesAPIClient) getClusterSSHStorageJSON(ctx context.Context, path string, out any) error {
-	valid := slices.ContainsFunc(clusterSSHCertManagerDeployments, func(name string) bool { return path == clusterSSHCertManagerDeploymentPrefix+name }) || path == clusterSSHKubeVIPPath || path == clusterSSHCNPGOperatorPath || clusterSSHCNPGOptionalConfigPath(path) || path == clusterSSHSnapshotControllerPath || path == clusterSSHSystemUpgradePath || path == clusterSSHSystemUpgradeConfigPath || path == clusterSSHLonghornUIPath || path == clusterSSHLonghornManagerPath || path == clusterSSHLonghornDriverPath || path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
+	valid := slices.ContainsFunc(clusterSSHCertManagerDeployments, func(name string) bool { return path == clusterSSHCertManagerDeploymentPrefix+name }) || clusterSSHKubeVIPPodsPathValid(path) || path == clusterSSHKubeVIPPath || path == clusterSSHCNPGOperatorPath || clusterSSHCNPGOptionalConfigPath(path) || path == clusterSSHSnapshotControllerPath || path == clusterSSHSystemUpgradePath || path == clusterSSHSystemUpgradeConfigPath || path == clusterSSHLonghornUIPath || path == clusterSSHLonghornManagerPath || path == clusterSSHLonghornDriverPath || path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
 	for _, prefix := range []string{clusterSSHStoragePVPrefix, clusterSSHStorageVolumePrefix, clusterSSHStorageClassPrefix} {
 		if strings.HasPrefix(path, prefix) {
 			valid = clusterSSHStorageName(strings.TrimPrefix(path, prefix))

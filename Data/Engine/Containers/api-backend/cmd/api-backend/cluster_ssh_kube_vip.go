@@ -12,15 +12,20 @@ const clusterSSHKubeVIPRepository = "ghcr.io/kube-vip/kube-vip"
 
 var clusterSSHKubeVIPInterface = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}$`)
 
-// Configured inputs only. Running image identity, lease ownership and network
-// health retain their own evidence; this projection never grants readiness.
+// Desired configuration and active-source running image identity. Lease
+// ownership and network health remain separate; this never grants readiness.
 type clusterSSHKubeVIPConfiguration struct {
 	Image     string `json:"image"`
+	Resolved  string `json:"resolved"`
 	Address   string `json:"address"`
 	Interface string `json:"interface"`
 }
 
 func (v clusterSSHKubeVIPConfiguration) valid(source clusterSSHSourceCohort) bool {
+	return v.configuredValid(source) && (clusterSSHSourceExternalImage{Configured: v.Image, Resolved: v.Resolved}).valid(clusterSSHKubeVIPRepository)
+}
+
+func (v clusterSSHKubeVIPConfiguration) configuredValid(source clusterSSHSourceCohort) bool {
 	address, err := netip.ParseAddr(v.Address)
 	if err != nil || !address.Is4() || !address.IsPrivate() || v.Address != source.ControlPlaneVIP || v.Address != source.EdgeVIP || !clusterSSHKubeVIPInterface.MatchString(v.Interface) || len(v.Image) > 256 {
 		return false
@@ -47,7 +52,7 @@ func (v clusterSSHKubeVIPConfiguration) matchesNetworks(sources []clusterbootstr
 	return true
 }
 
-func observeClusterSSHKubeVIP(read func(string) (map[string]any, error), source clusterSSHSourceCohort) (clusterSSHKubeVIPConfiguration, error) {
+func observeClusterSSHKubeVIP(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHKubeVIPConfiguration, error) {
 	fail := func() (clusterSSHKubeVIPConfiguration, error) {
 		return clusterSSHKubeVIPConfiguration{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -110,7 +115,11 @@ func observeClusterSSHKubeVIP(read func(string) (map[string]any, error), source 
 			}
 		}
 	}
-	if !result.valid(source) {
+	if !result.configuredValid(source) {
+		return fail()
+	}
+	result.Resolved, err = observeClusterSSHKubeVIPRuntime(readList, source, metadata, result.Image)
+	if err != nil || !result.valid(source) {
 		return fail()
 	}
 	return result, nil

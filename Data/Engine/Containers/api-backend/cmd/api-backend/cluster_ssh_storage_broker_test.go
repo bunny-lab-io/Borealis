@@ -53,6 +53,10 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"foreign bootstrap image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.PostgresImage.Bootstrap.Resolved = sshPostgresResolvedFixture
 			},
+			"missing kube-vip runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.KubeVIP.Resolved = "" },
+			"wrong kube-vip runtime": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.KubeVIP.Resolved = sshSnapshotControllerPin().Reference
+			},
 			"missing kube-vip": func(v *clusterSSHStorageSnapshot) { v.Requirements.KubeVIP = clusterSSHKubeVIPConfiguration{} },
 			"wrong kube-vip role": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.KubeVIP.Image = sshSnapshotControllerPin().Reference

@@ -59,6 +59,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	sshSystemUpgradeFixture(f)
 	f.objects[clusterSSHSnapshotControllerPath] = sshSnapshotControllerFixture()
 	f.objects[clusterSSHKubeVIPPath] = sshKubeVIPFixture(source)
+	sshKubeVIPRuntimeFixture(f)
 	f.objects[clusterSSHLonghornUIPath] = sshLonghornUIFixture()
 	f.objects["/api/v1/nodes"] = map[string]any{"items": nodes}
 	cluster := sshStorageObject("postgresql.cnpg.io/v1", "Cluster", "borealis", "borealis-postgres")

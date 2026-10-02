@@ -52,6 +52,7 @@ func TestClusterSSHKubeVIPSourceConfiguration(t *testing.T) {
 		"reviewed index": func(f *sshStorageFixture) {},
 		"reviewed platform": func(f *sshStorageFixture) {
 			sshKubeVIPContainer(f)["image"] = clusterSSHKubeVIPRepository + "@" + sshKubeVIPPin().ManifestDigest
+			sshKubeVIPRuntimeFixture(f)
 		},
 		"defaulted field API": func(f *sshStorageFixture) {
 			clusterSSHStorageMap(clusterSSHStorageMap(sshKubeVIPEnv(f, "vip_nodename"), "valueFrom"), "fieldRef")["apiVersion"] = "v1"
