@@ -302,3 +302,28 @@ subjects:
   - kind: ServiceAccount
     name: borealis-cluster-controller
     namespace: borealis
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: borealis-cluster-kube-vip-source
+  namespace: kube-system
+rules:
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    resourceNames: ["kube-vip-borealis-cluster"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: borealis-cluster-kube-vip-source
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: borealis-cluster-kube-vip-source
+subjects:
+  - kind: ServiceAccount
+    name: borealis-cluster-controller
+    namespace: borealis

@@ -188,8 +188,8 @@ def validate_cluster_controller_contract() -> None:
     namespace_rules = [rule for rule in rules if "namespaces" in (rule.get("resources") or [])]
     if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}]:
         fail("cluster controller namespace read must stay limited to kube-system identity")
-    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "*"} for rule in rules):
-        fail("cluster controller must not gain cluster-wide Secret, ConfigMap or Pod-log access")
+    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "*"} for rule in rules):
+        fail("cluster controller must not gain cluster-wide Secret, ConfigMap, DaemonSet or Pod-log access")
     source_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
     expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env"], "verbs": ["get"]}
     if len(source_roles) != 1 or source_roles[0].get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or source_roles[0].get("rules") != [expected_source_rule]:
@@ -229,7 +229,14 @@ def validate_cluster_controller_contract() -> None:
     cnpg_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
     if len(cnpg_bindings) != 1 or cnpg_bindings[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cnpg-settings"} or cnpg_bindings[0].get("subjects") != binding.get("subjects"):
         fail("CNPG settings RoleBinding must bind only controller ServiceAccount")
-    if sum(item.get("kind") == "Role" for item in objects) != 4 or sum(item.get("kind") == "RoleBinding" for item in objects) != 4:
+    vip_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-kube-vip-source"]
+    vip_rule = {"apiGroups": ["apps"], "resources": ["daemonsets"], "resourceNames": ["kube-vip-borealis-cluster"], "verbs": ["get"]}
+    if len(vip_roles) != 1 or vip_roles[0].get("metadata") != {"name": "borealis-cluster-kube-vip-source", "namespace": "kube-system"} or vip_roles[0].get("rules") != [vip_rule]:
+        fail("kube-vip source Role must allow only named kube-vip DaemonSet GET")
+    vip_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-kube-vip-source"]
+    if len(vip_bindings) != 1 or vip_bindings[0].get("metadata") != {"name": "borealis-cluster-kube-vip-source", "namespace": "kube-system"} or vip_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-kube-vip-source"} or vip_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("kube-vip source RoleBinding must bind only controller ServiceAccount")
+    if sum(item.get("kind") == "Role" for item in objects) != 5 or sum(item.get("kind") == "RoleBinding" for item in objects) != 5:
         fail("controller must not gain additional namespaced permissions")
     storage_class_rules = [rule for rule in rules if "storageclasses" in (rule.get("resources") or [])]
     if storage_class_rules != [{"apiGroups": ["storage.k8s.io"], "resources": ["storageclasses"], "verbs": ["get"]}]:
