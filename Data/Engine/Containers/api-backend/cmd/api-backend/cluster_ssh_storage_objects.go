@@ -117,9 +117,13 @@ func clusterSSHStorageMetadata(object map[string]any, version, kind, namespace s
 }
 
 func clusterSSHStorageList(object map[string]any, kind, namespace string, limit int) ([]map[string]any, bool) {
+	version := "v1"
+	if kind == "Replica" {
+		version = "longhorn.io/v1beta2"
+	}
 	items, ok := object["items"].([]any)
 	meta := clusterSSHStorageMap(object, "metadata")
-	if !ok || len(items) > limit || clusterSSHStorageText(object, "apiVersion") != "v1" || clusterSSHStorageText(object, "kind") != kind+"List" || meta == nil {
+	if !ok || len(items) > limit || clusterSSHStorageText(object, "apiVersion") != version || clusterSSHStorageText(object, "kind") != kind+"List" || meta == nil {
 		return nil, false
 	}
 	if value, exists := meta["continue"]; exists && value != "" {
@@ -135,7 +139,7 @@ func clusterSSHStorageList(object map[string]any, kind, namespace string, limit 
 	names, uids := map[string]bool{}, map[string]bool{}
 	for _, item := range items {
 		x, ok := item.(map[string]any)
-		id, valid := clusterSSHStorageMetadata(x, "v1", kind, namespace)
+		id, valid := clusterSSHStorageMetadata(x, version, kind, namespace)
 		if !ok || !valid || names[id.Name] || uids[id.UID] {
 			return nil, false
 		}
@@ -210,6 +214,7 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
+	ReplicaImages               []clusterSSHStorageReplicaImage `json:"replica_images"`
 	KubeVIP                     clusterSSHKubeVIPConfiguration  `json:"kube_vip"`
 	CNPGOperatorImage           string                          `json:"cnpg_operator_image"`
 	SnapshotControllerImage     string                          `json:"snapshot_controller_image"`

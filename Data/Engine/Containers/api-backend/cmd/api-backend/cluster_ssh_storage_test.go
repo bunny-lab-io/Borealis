@@ -124,6 +124,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	addClaim("postgres-data-postgres-db-0", "borealis-longhorn", "ReadWriteOnce", "disabled", "20Gi", "", 1, false)
 	f.objects[clusterSSHStorageClaimsPath] = map[string]any{"apiVersion": "v1", "kind": "PersistentVolumeClaimList", "metadata": map[string]any{"resourceVersion": "100"}, "items": claims}
 	f.objects[clusterSSHStoragePodsPath] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "100"}, "items": pods}
+	sshStorageReplicaFixture(f)
 	addSSHStoragePolicyFixture(f)
 	return f
 }

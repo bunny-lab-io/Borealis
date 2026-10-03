@@ -118,7 +118,7 @@ func TestClusterSSHStorageCapacityAllocationAndInodes(t *testing.T) {
 }
 
 func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "low space", "policy drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory", "current-only wire", "downgraded reader", "persistent final drift"} {
+	for _, mode := range []string{"expansion", "replacement", "low space", "policy drift", "replica alias drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory", "current-only wire", "downgraded reader", "persistent final drift"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			f.filesystemWire = func(i int, raw []byte) []byte {
@@ -160,6 +160,13 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 				value.Storage.Requirements.Policy.Classes = append([]clusterSSHStorageClass(nil), snapshot.Storage.Requirements.Policy.Classes...)
 				if mode == "policy drift" && consumed {
 					value.Storage.Requirements.Policy.MinimalAvailablePercent++
+				}
+				if mode == "replica alias drift" && consumed {
+					// Mutate the original backing slice. The capacity observer must
+					// have retained its own copy before any target/consumer work.
+					image := "docker.io/longhornio/longhorn-engine@" + sshLonghornDriverPin("longhorn-engine").ManifestDigest
+					value.Storage.Requirements.ReplicaImages[0].Image = image
+					value.Storage.Requirements.ReplicaImages[0].CurrentImage = image
 				}
 				return value, ctx.Err()
 			}

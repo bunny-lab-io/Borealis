@@ -202,6 +202,7 @@ func withClusterSSHTargetStorageCapacity(parent context.Context, readers cluster
 		// Freeze owned copies before lending values to any observer/consumer.
 		storage := value.Storage
 		storage.Requirements.Volumes = slices.Clone(storage.Requirements.Volumes)
+		storage.Requirements.ReplicaImages = slices.Clone(storage.Requirements.ReplicaImages)
 		storage.Requirements.Policy.Classes = slices.Clone(storage.Requirements.Policy.Classes)
 		paths, ok := clusterSSHStorageDemandPaths(storage.Requirements.Policy, demands)
 		if !ok {

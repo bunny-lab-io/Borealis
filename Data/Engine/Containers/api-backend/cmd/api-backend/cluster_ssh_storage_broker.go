@@ -38,6 +38,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		observation := storage.observation
 		storage.observation = ""
 		storage.Volumes = slices.Clone(storage.Volumes)
+		storage.ReplicaImages = slices.Clone(storage.ReplicaImages)
 		storage.Policy.Classes = slices.Clone(storage.Policy.Classes)
 		value.Storage = clusterSSHStorageSnapshot{Requirements: storage, Observation: observation}
 		return nil
@@ -118,5 +119,5 @@ func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clus
 			return false
 		}
 	}
-	return artifact == 1 && pg == len(nodes) && r.Policy.valid(r.Volumes)
+	return artifact == 1 && pg == len(nodes) && r.Policy.valid(r.Volumes) && clusterSSHStorageReplicaImagesValid(r.ReplicaImages, r.Volumes)
 }

@@ -171,6 +171,7 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				next := value
 				next.Requirements.Volumes = slices.Clone(value.Requirements.Volumes)
+				next.Requirements.ReplicaImages = slices.Clone(value.Requirements.ReplicaImages)
 				change(&next)
 				if validClusterSSHStorageSnapshot(next, f.a.Source) {
 					t.Fatal("invalid storage accepted")
