@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
+	for _, mode := range []string{"expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn volume images changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
 			if mode == "qualification" {
@@ -120,6 +120,10 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					switch mode {
 					case "CNPG configuration changed during Job":
 						clusterSSHStorageMap(storage.objects[clusterSSHCNPGSecretPath], "metadata")["resourceVersion"] = "2"
+					case "Longhorn volume images changed during Job":
+						image := "docker.io/longhornio/longhorn-engine@" + sshLonghornDriverPin("longhorn-engine").ManifestDigest
+						clusterSSHStorageMap(storage.volume(0), "spec")["image"] = image
+						clusterSSHStorageMap(storage.volume(0), "status")["currentImage"] = image
 					case "Longhorn manager runtime changed during Job":
 						sshLonghornManagerRuntime(storage, 0)["imageID"] = "docker.io/longhornio/longhorn-manager@" + sshLonghornDriverPin("longhorn-manager").IndexDigest
 					case "Longhorn share runtime changed during Job":
@@ -222,7 +226,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			// Storage drift is found by the final inventory after valid source
 			// reads. Its error must discard that response, not pretend DB ownership
 			// was lost before the private Secret acquisition.
-			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
+			if textInSet(mode, "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn volume images changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
 				t.Fatal("storage drift did not bracket complete source acquisition")
 			}
 			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {

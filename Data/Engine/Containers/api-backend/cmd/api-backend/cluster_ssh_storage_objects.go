@@ -184,19 +184,29 @@ func clusterSSHStorageOwner(object map[string]any, owner clusterSSHStorageIdenti
 // All fields are public scalar observations, not a storage reservation or
 // provisioning grant. Other claims remain occupied inventory, never free space.
 type clusterSSHStorageVolume struct {
-	Claim        string `json:"claim"`
-	ClaimUID     string `json:"claim_uid"`
-	PV           string `json:"pv"`
-	PVUID        string `json:"pv_uid"`
-	VolumeUID    string `json:"volume_uid"`
-	StorageClass string `json:"storage_class"`
-	Role         string `json:"role"`
-	Node         string `json:"node"`
-	Bytes        uint64 `json:"bytes"`
-	Replicas     int64  `json:"replicas"`
-	DataLocality string `json:"data_locality"`
-	State        string `json:"state"`
-	Robustness   string `json:"robustness"`
+	Claim              string `json:"claim"`
+	ClaimUID           string `json:"claim_uid"`
+	PV                 string `json:"pv"`
+	PVUID              string `json:"pv_uid"`
+	VolumeUID          string `json:"volume_uid"`
+	EngineImage        string `json:"engine_image"`
+	CurrentEngineImage string `json:"current_engine_image"`
+	StorageClass       string `json:"storage_class"`
+	Role               string `json:"role"`
+	Node               string `json:"node"`
+	Bytes              uint64 `json:"bytes"`
+	Replicas           int64  `json:"replicas"`
+	DataLocality       string `json:"data_locality"`
+	State              string `json:"state"`
+	Robustness         string `json:"robustness"`
+}
+
+// These are Longhorn's desired/current engine references, not container imageIDs.
+// Longhorn initializes CurrentImage even while detached; unequal references
+// indicate an unfinished upgrade. Neither field proves a running engine or the
+// absence of retained old engine/replica files.
+func (v clusterSSHStorageVolume) engineImagesValid() bool {
+	return clusterSSHLonghornImageValid(v.EngineImage, "longhorn-engine") && v.CurrentEngineImage == v.EngineImage
 }
 
 type clusterSSHStorageRequirements struct {
@@ -265,5 +275,10 @@ func clusterSSHStorageBoundVolume(claim, pv, volume map[string]any) (clusterSSHS
 	if !textInSet(state, "attached", "detached") || !textInSet(robustness, "healthy", "degraded", "unknown") {
 		return fail()
 	}
-	return clusterSSHStorageVolume{Claim: c.Name, ClaimUID: c.UID, PV: p.Name, PVUID: p.UID, VolumeUID: v.UID, StorageClass: class, Role: "other", Bytes: capacity, Replicas: replicas, DataLocality: locality, State: state, Robustness: robustness}, nil
+	result := clusterSSHStorageVolume{Claim: c.Name, ClaimUID: c.UID, PV: p.Name, PVUID: p.UID, VolumeUID: v.UID, StorageClass: class, Role: "other", Bytes: capacity, Replicas: replicas, DataLocality: locality, State: state, Robustness: robustness,
+		EngineImage: clusterSSHStorageText(vs, "image"), CurrentEngineImage: clusterSSHStorageText(vt, "currentImage")}
+	if !result.engineImagesValid() {
+		return fail()
+	}
+	return result, nil
 }

@@ -79,7 +79,7 @@ func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clus
 	pgClass := ""
 	previous := ""
 	for _, v := range r.Volumes {
-		if !clusterSSHStorageName(v.Claim) || v.Claim <= previous || !clusterSSHStorageName(v.PV) || !clusterSSHStorageName(v.StorageClass) ||
+		if !v.engineImagesValid() || !clusterSSHStorageName(v.Claim) || v.Claim <= previous || !clusterSSHStorageName(v.PV) || !clusterSSHStorageName(v.StorageClass) ||
 			!validBytes(v.Bytes) || (v.Replicas != 1 && v.Replicas != 3) || !textInSet(v.DataLocality, "disabled", "strict-local") ||
 			(v.DataLocality == "strict-local" && v.Replicas != 1) || !textInSet(v.State, "attached", "detached") || !textInSet(v.Robustness, "healthy", "degraded", "unknown") {
 			return false

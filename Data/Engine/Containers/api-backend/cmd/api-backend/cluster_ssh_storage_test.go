@@ -94,12 +94,12 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 		if mode == "ReadWriteMany" {
 			access = "rwx"
 		}
-		volume["spec"] = map[string]any{"frontend": "blockdev", "dataEngine": "v1", "encrypted": false, "migratable": false, "size": strconv.FormatUint(bytes, 10), "numberOfReplicas": replicas, "accessMode": access, "dataLocality": locality, "nodeID": node}
+		volume["spec"] = map[string]any{"image": sshLonghornDriverPin("longhorn-engine").Reference, "frontend": "blockdev", "dataEngine": "v1", "encrypted": false, "migratable": false, "size": strconv.FormatUint(bytes, 10), "numberOfReplicas": replicas, "accessMode": access, "dataLocality": locality, "nodeID": node}
 		state, robustness := "attached", "healthy"
 		if node == "" {
 			state, robustness = "detached", "unknown"
 		}
-		volume["status"] = map[string]any{"state": state, "robustness": robustness, "currentNodeID": node, "kubernetesStatus": map[string]any{"namespace": "borealis", "pvcName": name, "pvName": pvName, "pvStatus": "Bound"}}
+		volume["status"] = map[string]any{"currentImage": sshLonghornDriverPin("longhorn-engine").Reference, "state": state, "robustness": robustness, "currentNodeID": node, "kubernetesStatus": map[string]any{"namespace": "borealis", "pvcName": name, "pvName": pvName, "pvStatus": "Bound"}}
 		f.objects[clusterSSHStoragePVPrefix+pvName], f.objects[clusterSSHStorageVolumePrefix+pvName] = pv, volume
 		claims = append(claims, claim)
 	}

@@ -44,6 +44,15 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			t.Fatal("projection round trip failed")
 		}
 		cases := map[string]func(*clusterSSHStorageSnapshot){
+			"missing volume desired image": func(v *clusterSSHStorageSnapshot) { v.Requirements.Volumes[0].EngineImage = "" },
+			"missing volume current image": func(v *clusterSSHStorageSnapshot) { v.Requirements.Volumes[0].CurrentEngineImage = "" },
+			"volume image upgrade": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.Volumes[0].CurrentEngineImage = "docker.io/longhornio/longhorn-engine@" + sshLonghornDriverPin("longhorn-engine").ManifestDigest
+			},
+			"unreviewed detached image": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.Volumes[len(v.Requirements.Volumes)-1].EngineImage = "docker.io/longhornio/longhorn-engine:v1.11.0"
+				v.Requirements.Volumes[len(v.Requirements.Volumes)-1].CurrentEngineImage = "docker.io/longhornio/longhorn-engine:v1.11.0"
+			},
 			"missing receipt":             func(v *clusterSSHStorageSnapshot) { v.Observation = "" },
 			"bad receipt":                 func(v *clusterSSHStorageSnapshot) { v.Observation = strings.Repeat("z", 64) },
 			"private provenance imported": func(v *clusterSSHStorageSnapshot) { v.Requirements.observation = v.Observation },
