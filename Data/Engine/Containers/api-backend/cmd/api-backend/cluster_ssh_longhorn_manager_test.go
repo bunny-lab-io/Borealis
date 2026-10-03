@@ -250,6 +250,9 @@ func TestClusterSSHLonghornManagerSourceConfiguration(t *testing.T) {
 			case "setting no revision":
 				delete(clusterSSHStorageMap(setting, "metadata"), "resourceVersion")
 			}
+			if valid {
+				sshLonghornManagerRuntimeFixture(f)
+			}
 			value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {
 				if err != nil || !value.Requirements.LonghornManagerImages.valid() {

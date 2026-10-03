@@ -14,15 +14,23 @@ const clusterSSHLonghornManagerPath = "/apis/apps/v1/namespaces/longhorn-system/
 var clusterSSHLonghornImageSettings = []string{"default-engine-image", "support-bundle-manager-image"}
 
 type clusterSSHLonghornManagerImages struct {
-	Manager       string `json:"manager"`
-	Engine        string `json:"engine"`
-	Instance      string `json:"instance"`
-	Share         string `json:"share"`
-	Backing       string `json:"backing"`
-	SupportBundle string `json:"support_bundle"`
+	Manager         string `json:"manager"`
+	ManagerResolved string `json:"manager_resolved"`
+	ShareResolved   string `json:"share_resolved"`
+	Engine          string `json:"engine"`
+	Instance        string `json:"instance"`
+	Share           string `json:"share"`
+	Backing         string `json:"backing"`
+	SupportBundle   string `json:"support_bundle"`
 }
 
 func (images clusterSSHLonghornManagerImages) valid() bool {
+	return images.configuredValid() &&
+		(clusterSSHSourceExternalImage{Configured: images.Manager, Resolved: images.ManagerResolved}).valid("docker.io/longhornio/longhorn-manager") &&
+		(clusterSSHSourceExternalImage{Configured: images.Share, Resolved: images.ShareResolved}).valid("docker.io/longhornio/longhorn-share-manager")
+}
+
+func (images clusterSSHLonghornManagerImages) configuredValid() bool {
 	for role, reference := range map[string]string{
 		"longhorn-manager": images.Manager, "longhorn-engine": images.Engine, "longhorn-instance-manager": images.Instance,
 		"longhorn-share-manager": images.Share, "backing-image-manager": images.Backing, "support-bundle-kit": images.SupportBundle,
@@ -34,9 +42,9 @@ func (images clusterSSHLonghornManagerImages) valid() bool {
 	return true
 }
 
-// Desired configuration and effective image Settings only, not runtime Pod
-// image IDs, existing engine generations, mount safety or workload readiness.
-func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, error), driver clusterSSHLonghornDriverImages) (clusterSSHLonghornManagerImages, error) {
+// Desired configuration, active image Settings and manager Pod image IDs.
+// Existing engine generations, mount safety and workload readiness remain separate.
+func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHLonghornManagerImages, error) {
 	fail := func() (clusterSSHLonghornManagerImages, error) {
 		return clusterSSHLonghornManagerImages{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -62,7 +70,7 @@ func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, e
 	}
 	main, share := byName["longhorn-manager"], byName["pre-pull-share-manager-image"]
 	images, ok := clusterSSHLonghornManagerCommand(main)
-	if !ok || !images.valid() || images.Manager != driver.Manager || clusterSSHStorageText(main, "image") != images.Manager ||
+	if !ok || !images.configuredValid() || images.Manager != driver.Manager || clusterSSHStorageText(main, "image") != images.Manager ||
 		clusterSSHStorageText(share, "image") != images.Share || !clusterSSHLonghornManagerEnvironment(main["env"]) || !clusterSSHLonghornManagerMounts(main["volumeMounts"]) {
 		return fail()
 	}
@@ -77,6 +85,10 @@ func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, e
 		if err != nil || !ok || id.Name != name || clusterSSHStorageText(setting, "value") != want {
 			return fail()
 		}
+	}
+	images.ManagerResolved, images.ShareResolved, err = observeClusterSSHLonghornManagerRuntime(readList, source, id, images)
+	if err != nil || !images.valid() {
+		return fail()
 	}
 	return images, nil
 }

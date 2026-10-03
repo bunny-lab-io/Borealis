@@ -303,7 +303,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 15, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 16, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -314,11 +314,11 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 					value.Snapshot = nil
 				}
 				if mode == "legacy response" {
-					value.Version = 14
+					value.Version = 15
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					raw = bytes.Replace(raw, []byte(`"version":15`), []byte(`"version":15,"version":15`), 1)
+					raw = bytes.Replace(raw, []byte(`"version":16`), []byte(`"version":16,"version":16`), 1)
 				}
 				aead := client.responseCipher
 				if mode == "wrong direction" {

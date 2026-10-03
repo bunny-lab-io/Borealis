@@ -93,6 +93,14 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"wrong UI role": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornUIImage = sshLonghornDriverPin("longhorn-manager").Reference
 			},
+			"missing manager runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornManagerImages.ManagerResolved = "" },
+			"missing share runtime":   func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornManagerImages.ShareResolved = "" },
+			"swapped runtime roles": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornManagerImages.ShareResolved = v.Requirements.LonghornManagerImages.ManagerResolved
+			},
+			"tag runtime": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornManagerImages.ManagerResolved = v.Requirements.LonghornManagerImages.Manager
+			},
 			"missing Longhorn manager": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornManagerImages = clusterSSHLonghornManagerImages{}
 			},

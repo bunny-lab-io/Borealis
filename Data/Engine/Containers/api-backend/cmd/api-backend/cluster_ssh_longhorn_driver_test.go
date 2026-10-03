@@ -173,6 +173,9 @@ func TestClusterSSHLonghornDriverSourceConfiguration(t *testing.T) {
 			case "literal downward field":
 				env[0] = map[string]any{"name": "POD_NAMESPACE", "value": "longhorn-system"}
 			}
+			if valid {
+				sshLonghornManagerRuntimeFixture(f)
+			}
 			result, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {
 				if err != nil || !result.Requirements.LonghornDriverImages.valid() {
