@@ -99,7 +99,17 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"wrong UI runtime": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornUIResolved = v.Requirements.LonghornManagerImages.ManagerResolved
 			},
-			"tag UI runtime":         func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIResolved = v.Requirements.LonghornUIImage },
+			"tag UI runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIResolved = v.Requirements.LonghornUIImage },
+			"missing attacher": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornAttacherImage = clusterSSHSourceExternalImage{}
+			},
+			"missing attacher runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornAttacherImage.Resolved = "" },
+			"wrong attacher role": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornAttacherImage.Resolved = v.Requirements.LonghornUIResolved
+			},
+			"attacher driver disagreement": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornAttacherImage.Configured = v.Requirements.LonghornAttacherImage.Resolved
+			},
 			"missing driver runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornDriverImages.Resolved = "" },
 			"missing driver init":    func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornDriverImages.InitResolved = "" },
 			"tag driver init": func(v *clusterSSHStorageSnapshot) {
