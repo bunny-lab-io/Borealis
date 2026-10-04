@@ -34,7 +34,7 @@ class ClusterStorageRBACTests(unittest.TestCase):
             "extra daemonset": lambda role: role["rules"][1]["resourceNames"].append("other-manager"),
             "wrong namespace": lambda role: role["metadata"].update(namespace="borealis"),
             "extra rule": lambda role: role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}),
-            "missing manager rule": lambda role: role["rules"].pop(),
+            "missing manager rule": lambda role: role["rules"].pop(1),
         }
         for index in (0, 1):
             for verb in ("list", "watch", "create", "update", "patch", "delete", "*"):
@@ -52,9 +52,40 @@ class ClusterStorageRBACTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     self.validate(objects)
 
+    def test_ui_replicaset_role_rejects_permission_drift(self):
+        mutations = {
+            "missing read": lambda role: role["rules"].pop(2),
+            "no verbs": lambda role: role["rules"][2].update(verbs=[]),
+            "wrong group": lambda role: role["rules"][2].update(apiGroups=[""]),
+            "extra resource": lambda role: role["rules"][2]["resources"].append("deployments"),
+            "subresource": lambda role: role["rules"][2].update(resources=["replicasets/status"]),
+            "fixed name cannot cover dynamic owners": lambda role: role["rules"][2].update(resourceNames=["longhorn-ui"]),
+            "wildcard names do not match revisions": lambda role: role["rules"][2].update(resourceNames=["longhorn-ui-*"]),
+            "duplicate rule": lambda role: role["rules"].append(copy.deepcopy(role["rules"][2])),
+        }
+        for verb in ("list", "watch", "create", "update", "patch", "delete", "deletecollection", "*"):
+            mutations[f"verb {verb}"] = lambda role, v=verb: role["rules"][2]["verbs"].append(v)
+        for field in ("apiGroups", "resources"):
+            mutations[f"wildcard {field}"] = lambda role, f=field: role["rules"][2].update({f: ["*"]})
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "Role" and item["metadata"]["name"] == "borealis-cluster-storage-policy")
+                mutate(role)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_ui_replicaset_read_cannot_move_to_cluster_role(self):
+        objects = copy.deepcopy(self.objects)
+        role = next(item for item in objects if item.get("kind") == "ClusterRole")
+        role["rules"].append({"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]})
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.validate(objects)
+
     def test_storage_binding_rejects_scope_drift(self):
         mutations = {
             "wrong namespace": lambda binding: binding["metadata"].update(namespace="borealis"),
+            "cluster binding": lambda binding: binding.update(kind="ClusterRoleBinding"),
             "cluster role": lambda binding: binding["roleRef"].update(kind="ClusterRole"),
             "wrong role": lambda binding: binding["roleRef"].update(name="other-role"),
             "wrong subject": lambda binding: binding["subjects"][0].update(name="other-controller"),
