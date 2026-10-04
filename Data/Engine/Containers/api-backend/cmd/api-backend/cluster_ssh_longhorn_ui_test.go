@@ -160,6 +160,9 @@ func TestClusterSSHLonghornUISourceConfiguration(t *testing.T) {
 			case "invalid emptyDir":
 				volume["emptyDir"] = nil
 			}
+			if valid {
+				sshLonghornUIRuntimeFixture(f)
+			}
 			value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {
 				if err != nil || value.Requirements.LonghornUIImage != container["image"] {

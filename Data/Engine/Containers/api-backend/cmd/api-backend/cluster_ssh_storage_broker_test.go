@@ -95,6 +95,11 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"unreviewed upgrade image": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.SystemUpgradeImages.Kubectl = "rancher/kubectl:other"
 			},
+			"missing UI runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIResolved = "" },
+			"wrong UI runtime": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornUIResolved = v.Requirements.LonghornManagerImages.ManagerResolved
+			},
+			"tag UI runtime":      func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIResolved = v.Requirements.LonghornUIImage },
 			"missing Longhorn UI": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIImage = "" },
 			"unreviewed Longhorn UI": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornUIImage = "docker.io/longhornio/longhorn-ui:other"

@@ -4,15 +4,28 @@ import "borealis/api-backend/internal/clusterbootstrap"
 
 const clusterSSHLonghornUIPath = "/apis/apps/v1/namespaces/longhorn-system/deployments/longhorn-ui"
 
-// Observe desired image/configuration only. Running Pod image identity, emptyDir
-// demand and workload fit remain separate evidence; this grants no readiness.
-func observeClusterSSHLonghornUIImage(read func(string) (map[string]any, error)) (string, error) {
-	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
+// Observe desired configuration and owned running images. EmptyDir demand and
+// effective loaded inputs remain separate evidence; this grants no readiness.
+func observeClusterSSHLonghornUIImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (string, string, error) {
+	fail := func() (string, string, error) { return "", "", clusterbootstrap.ErrPreparationConfig }
 	object, err := read(clusterSSHLonghornUIPath)
 	metadata, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 	if err != nil || !ok || metadata.Name != "longhorn-ui" {
 		return fail()
 	}
+	image, err := clusterSSHLonghornUITemplateImage(object)
+	if err != nil {
+		return fail()
+	}
+	resolved, err := observeClusterSSHLonghornUIRuntime(read, readList, source, metadata, image)
+	if err != nil {
+		return fail()
+	}
+	return image, resolved, nil
+}
+
+func clusterSSHLonghornUITemplateImage(object map[string]any) (string, error) {
+	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
 	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
 	containers, ok := spec["containers"].([]any)
 	if !ok || len(containers) != 1 || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) {
