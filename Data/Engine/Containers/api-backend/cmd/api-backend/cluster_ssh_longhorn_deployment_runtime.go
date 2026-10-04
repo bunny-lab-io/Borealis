@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Fixed internal UI/attacher contracts share proof mechanics, not authority.
+// Fixed internal UI/CSI contracts share proof mechanics, not authority.
 // Transport still permits only each explicitly listed namespace/name/selector.
 type clusterSSHLonghornDeploymentWorkload struct {
 	name, serviceAccount, repository, replicaSetPrefix string

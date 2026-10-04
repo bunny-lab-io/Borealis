@@ -214,6 +214,7 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
+	LonghornCSIImages           clusterSSHLonghornCSIImages     `json:"longhorn_csi_images"`
 	ReplicaImages               []clusterSSHStorageReplicaImage `json:"replica_images"`
 	KubeVIP                     clusterSSHKubeVIPConfiguration  `json:"kube_vip"`
 	CNPGOperatorImage           string                          `json:"cnpg_operator_image"`
