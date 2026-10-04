@@ -99,7 +99,15 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 			"wrong UI runtime": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornUIResolved = v.Requirements.LonghornManagerImages.ManagerResolved
 			},
-			"tag UI runtime":      func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIResolved = v.Requirements.LonghornUIImage },
+			"tag UI runtime":         func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIResolved = v.Requirements.LonghornUIImage },
+			"missing driver runtime": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornDriverImages.Resolved = "" },
+			"missing driver init":    func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornDriverImages.InitResolved = "" },
+			"tag driver init": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornDriverImages.InitResolved = v.Requirements.LonghornDriverImages.Manager
+			},
+			"foreign driver runtime": func(v *clusterSSHStorageSnapshot) {
+				v.Requirements.LonghornDriverImages.Resolved = v.Requirements.LonghornUIResolved
+			},
 			"missing Longhorn UI": func(v *clusterSSHStorageSnapshot) { v.Requirements.LonghornUIImage = "" },
 			"unreviewed Longhorn UI": func(v *clusterSSHStorageSnapshot) {
 				v.Requirements.LonghornUIImage = "docker.io/longhornio/longhorn-ui:other"

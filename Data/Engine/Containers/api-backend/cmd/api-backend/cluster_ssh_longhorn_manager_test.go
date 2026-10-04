@@ -252,6 +252,7 @@ func TestClusterSSHLonghornManagerSourceConfiguration(t *testing.T) {
 			}
 			if valid {
 				sshLonghornManagerRuntimeFixture(f)
+				sshLonghornDriverRuntimeFixture(f)
 			}
 			value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {

@@ -11,19 +11,27 @@ const clusterSSHLonghornDriverPath = "/apis/apps/v1/namespaces/longhorn-system/d
 // This is the reviewed init-container command, compared as inert text only.
 const clusterSSHLonghornDriverWait = `while [ $(curl -m 1 -s -o /dev/null -w "%{http_code}" http://longhorn-backend:9500/v1) != "200" ]; do echo waiting; sleep 2; done`
 
-// Desired driver-deployer inputs, not proof of running CSI/manager images,
+// Driver-deployer inputs/runtime evidence, not proof of running CSI images,
 // effective Longhorn Settings, workload fit or readiness.
 type clusterSSHLonghornDriverImages struct {
-	Manager     string `json:"manager"`
-	Attacher    string `json:"attacher"`
-	Provisioner string `json:"provisioner"`
-	Registrar   string `json:"registrar"`
-	Resizer     string `json:"resizer"`
-	Snapshotter string `json:"snapshotter"`
-	Liveness    string `json:"liveness"`
+	Resolved     string `json:"resolved"`
+	InitResolved string `json:"init_resolved"`
+	Manager      string `json:"manager"`
+	Attacher     string `json:"attacher"`
+	Provisioner  string `json:"provisioner"`
+	Registrar    string `json:"registrar"`
+	Resizer      string `json:"resizer"`
+	Snapshotter  string `json:"snapshotter"`
+	Liveness     string `json:"liveness"`
 }
 
 func (images clusterSSHLonghornDriverImages) valid() bool {
+	return images.configuredValid() &&
+		(clusterSSHSourceExternalImage{Configured: images.Manager, Resolved: images.Resolved}).valid("docker.io/longhornio/longhorn-manager") &&
+		(clusterSSHSourceExternalImage{Configured: images.Manager, Resolved: images.InitResolved}).valid("docker.io/longhornio/longhorn-manager")
+}
+
+func (images clusterSSHLonghornDriverImages) configuredValid() bool {
 	for role, reference := range map[string]string{
 		"longhorn-manager": images.Manager, "csi-attacher": images.Attacher,
 		"csi-provisioner": images.Provisioner, "csi-node-driver-registrar": images.Registrar,
@@ -46,7 +54,7 @@ func clusterSSHLonghornImageValid(reference, role string) bool {
 	return false
 }
 
-func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, error)) (clusterSSHLonghornDriverImages, error) {
+func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHLonghornDriverImages, error) {
 	fail := func() (clusterSSHLonghornDriverImages, error) {
 		return clusterSSHLonghornDriverImages{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -54,6 +62,21 @@ func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, er
 	metadata, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 	if err != nil || !ok || metadata.Name != "longhorn-driver-deployer" {
 		return fail()
+	}
+	images, err := clusterSSHLonghornDriverTemplateImages(object)
+	if err != nil {
+		return fail()
+	}
+	images.Resolved, images.InitResolved, err = observeClusterSSHLonghornDriverRuntime(read, readList, source, metadata, images)
+	if err != nil || !images.valid() {
+		return fail()
+	}
+	return images, nil
+}
+
+func clusterSSHLonghornDriverTemplateImages(object map[string]any) (clusterSSHLonghornDriverImages, error) {
+	fail := func() (clusterSSHLonghornDriverImages, error) {
+		return clusterSSHLonghornDriverImages{}, clusterbootstrap.ErrPreparationConfig
 	}
 	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
 	containers, mainOK := spec["containers"].([]any)
@@ -89,7 +112,7 @@ func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, er
 		Attacher: env["CSI_ATTACHER_IMAGE"], Provisioner: env["CSI_PROVISIONER_IMAGE"], Registrar: env["CSI_NODE_DRIVER_REGISTRAR_IMAGE"],
 		Resizer: env["CSI_RESIZER_IMAGE"], Snapshotter: env["CSI_SNAPSHOTTER_IMAGE"], Liveness: env["CSI_LIVENESS_PROBE_IMAGE"],
 	}
-	if !images.valid() {
+	if !images.configuredValid() {
 		return fail()
 	}
 	return images, nil
