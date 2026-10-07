@@ -8,6 +8,7 @@ import (
 // Fixed internal UI/CSI contracts share proof mechanics, not authority.
 // Transport still permits only each explicitly listed namespace/name/selector.
 type clusterSSHLonghornDeploymentWorkload struct {
+	containerValid                                     func(map[string]any) bool // Optional fixed workload invocation contract; UI keeps existing behavior.
 	name, serviceAccount, repository, replicaSetPrefix string
 	podsPath                                           func(string) string
 	replicaSetPathValid                                func(string) bool
@@ -98,7 +99,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 				return fail()
 			}
 			container, ok := containers[0].(map[string]any)
-			if !ok || container["name"] != workload.name || container["image"] != image {
+			if !ok || container["name"] != workload.name || container["image"] != image || (workload.containerValid != nil && !workload.containerValid(container)) {
 				return fail()
 			}
 			statuses, ok := status["containerStatuses"].([]any)

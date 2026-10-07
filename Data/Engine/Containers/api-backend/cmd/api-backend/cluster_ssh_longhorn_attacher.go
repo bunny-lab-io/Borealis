@@ -27,8 +27,8 @@ func clusterSSHLonghornAttacherReplicaSetPathValid(path string) bool {
 	return ok && strings.HasPrefix(name, "csi-attacher-") && clusterSSHStorageName(name)
 }
 
-// Image identity only. Effective startup arguments, environment, socket mounts,
-// underlying host contents and demand remain separate readiness inputs.
+// Reviewed image and invocation inputs. Socket mounts, underlying host contents,
+// loaded process state and demand remain separate readiness inputs.
 func clusterSSHLonghornAttacherTemplateImage(object map[string]any) (string, error) {
 	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
 	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
@@ -38,7 +38,7 @@ func clusterSSHLonghornAttacherTemplateImage(object map[string]any) (string, err
 	}
 	container, ok := containers[0].(map[string]any)
 	image := clusterSSHStorageText(container, "image")
-	if !ok || container["name"] != "csi-attacher" || !clusterSSHLonghornImageValid(image, "csi-attacher") {
+	if !ok || container["name"] != "csi-attacher" || !clusterSSHLonghornImageValid(image, "csi-attacher") || !clusterSSHLonghornCSIStartup(container, "csi-attacher") {
 		return fail()
 	}
 	return image, nil
@@ -59,7 +59,8 @@ func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, e
 	}
 	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 		name: "csi-attacher", serviceAccount: "longhorn-service-account", repository: clusterSSHLonghornAttacherRepository,
-		podsPath: clusterSSHLonghornAttacherPodsPath, replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
+		containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, "csi-attacher") },
+		podsPath:       clusterSSHLonghornAttacherPodsPath, replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
 		replicaSetPathValid: clusterSSHLonghornAttacherReplicaSetPathValid, templateImage: clusterSSHLonghornAttacherTemplateImage,
 	})
 	if err != nil {

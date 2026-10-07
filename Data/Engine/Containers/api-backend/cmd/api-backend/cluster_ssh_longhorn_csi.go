@@ -53,8 +53,8 @@ func clusterSSHLonghornCSIPathValid(path string) bool {
 	return false
 }
 
-// Image identity only. Startup arguments/environment, socket contents and demand
-// still require separate qualification; receipts detect changes, not correctness.
+// Reviewed image and invocation inputs. Socket contents, loaded process state
+// and demand still require separate qualification.
 func (r clusterSSHLonghornCSIRole) templateImage(object map[string]any) (string, error) {
 	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
 	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
@@ -64,7 +64,7 @@ func (r clusterSSHLonghornCSIRole) templateImage(object map[string]any) (string,
 	}
 	container, ok := containers[0].(map[string]any)
 	image := clusterSSHStorageText(container, "image")
-	if !ok || container["name"] != string(r) || !clusterSSHLonghornImageValid(image, string(r)) {
+	if !ok || container["name"] != string(r) || !clusterSSHLonghornImageValid(image, string(r)) || !clusterSSHLonghornCSIStartup(container, string(r)) {
 		return fail()
 	}
 	return image, nil
@@ -101,7 +101,8 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 		}
 		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 			name: string(role), serviceAccount: "longhorn-service-account", repository: role.repository(), replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
-			podsPath: role.podsPath, replicaSetPathValid: role.replicaSetPathValid, templateImage: role.templateImage,
+			containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, string(role)) },
+			podsPath:       role.podsPath, replicaSetPathValid: role.replicaSetPathValid, templateImage: role.templateImage,
 		})
 		if err != nil {
 			return clusterSSHLonghornCSIImages{}, clusterbootstrap.ErrPreparationConfig

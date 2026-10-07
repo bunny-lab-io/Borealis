@@ -14,8 +14,8 @@ func sshLonghornAttacherDeploymentFixture() map[string]any {
 	object["spec"] = map[string]any{"replicas": 3, "template": map[string]any{"spec": map[string]any{
 		"serviceAccountName": "longhorn-service-account",
 		"containers": []any{map[string]any{"name": "csi-attacher", "image": sshLonghornDriverPin("csi-attacher").Reference,
-			"args":         []any{"--v=2", "--csi-address=$(ADDRESS)", "--timeout=1m50s", "--leader-election", "--leader-election-namespace=$(POD_NAMESPACE)"},
-			"env":          []any{map[string]any{"name": "ADDRESS", "value": "/csi/csi.sock"}},
+			"args":         sshLonghornCSIStartupArgs("csi-attacher"),
+			"env":          sshLonghornCSIStartupEnv(),
 			"volumeMounts": []any{map[string]any{"name": "socket-dir", "mountPath": "/csi/"}},
 		}},
 		"volumes": []any{map[string]any{"name": "socket-dir", "hostPath": map[string]any{"path": "/var/lib/kubelet/plugins/driver.longhorn.io", "type": "DirectoryOrCreate"}}},
@@ -45,7 +45,7 @@ func sshLonghornAttacherRuntimeFixture(f *sshStorageFixture) {
 		meta := clusterSSHStorageMap(pod, "metadata")
 		meta["labels"] = map[string]any{"app": "csi-attacher"}
 		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "csi-attacher-abcdef", "uid": clusterSSHStorageMap(rs, "metadata")["uid"], "controller": true}}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": "csi-attacher", "image": image}}}
+		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": "csi-attacher", "image": image, "args": sshLonghornCSIStartupArgs("csi-attacher"), "env": sshLonghornCSIStartupEnv()}}}
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": "csi-attacher", "image": image, "imageID": "docker.io/longhornio/csi-attacher@" + sshLonghornDriverPin("csi-attacher").ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
 		f.objects[clusterSSHLonghornAttacherPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}
