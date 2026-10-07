@@ -81,7 +81,7 @@ func (v clusterSSHLonghornCSIImages) valid(driver clusterSSHLonghornDriverImages
 		v.Resizer.valid(clusterSSHLonghornResizer.repository()) && v.Resizer.Configured == driver.Resizer &&
 		v.Snapshotter.valid(clusterSSHLonghornSnapshotter.repository()) && v.Snapshotter.Configured == driver.Snapshotter
 }
-func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHLonghornCSIImages, error) {
+func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) (clusterSSHLonghornCSIImages, error) {
 	result := clusterSSHLonghornCSIImages{}
 	for _, input := range []struct {
 		role       clusterSSHLonghornCSIRole
@@ -96,11 +96,12 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 		object, err := read(role.deploymentPath())
 		owner, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 		image, imageErr := role.templateImage(object)
-		if err != nil || !ok || owner.Name != string(role) || imageErr != nil || image != input.configured {
+		if err != nil || !ok || owner.Name != string(role) || imageErr != nil || image != input.configured || !clusterSSHLonghornCSISocketMatches(socket)(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false) {
 			return clusterSSHLonghornCSIImages{}, clusterbootstrap.ErrPreparationConfig
 		}
 		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 			name: string(role), serviceAccount: "longhorn-service-account", repository: role.repository(), replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
+			specValid:      clusterSSHLonghornCSISocketMatches(socket),
 			containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, string(role)) },
 			podsPath:       role.podsPath, replicaSetPathValid: role.replicaSetPathValid, templateImage: role.templateImage,
 		})

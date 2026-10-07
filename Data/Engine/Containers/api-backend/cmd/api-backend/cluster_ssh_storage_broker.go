@@ -54,6 +54,10 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 // digest alone cannot create provenance, prove free space or select a target.
 func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clusterSSHSourceCohort) bool {
 	r := value.Requirements
+	socket, socketOK := clusterSSHLonghornCSISocketPath(r.LonghornCSISocketPath)
+	if !socketOK || socket != r.LonghornCSISocketPath {
+		return false
+	}
 	validBytes := func(n uint64) bool { return n > 0 && n <= math.MaxInt64 }
 	if !r.KubeVIP.valid(source) || !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
 		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !clusterSSHCNPGOperatorImageValid(r.CNPGOperatorImage, r.PostgresImage.Bootstrap) || !r.SystemUpgradeImages.valid() || !clusterSSHSnapshotControllerImageValid(r.SnapshotControllerImage) || !r.CertManagerImages.valid() || !r.LonghornCSIImages.valid(r.LonghornDriverImages) || !r.LonghornDriverImages.valid() || !r.LonghornAttacherImage.valid(clusterSSHLonghornAttacherRepository) || r.LonghornAttacherImage.Configured != r.LonghornDriverImages.Attacher || !r.LonghornManagerImages.valid() || !(clusterSSHSourceExternalImage{Configured: r.LonghornUIImage, Resolved: r.LonghornUIResolved}).valid("docker.io/longhornio/longhorn-ui") || r.LonghornManagerImages.Manager != r.LonghornDriverImages.Manager || len(source.Members) < 1 || len(source.Members) > 2 ||

@@ -44,21 +44,23 @@ func clusterSSHLonghornAttacherTemplateImage(object map[string]any) (string, err
 	return image, nil
 }
 
-func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHSourceExternalImage, error) {
-	fail := func() (clusterSSHSourceExternalImage, error) {
-		return clusterSSHSourceExternalImage{}, clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHSourceExternalImage, string, error) {
+	fail := func() (clusterSSHSourceExternalImage, string, error) {
+		return clusterSSHSourceExternalImage{}, "", clusterbootstrap.ErrPreparationConfig
 	}
 	object, err := read(clusterSSHLonghornAttacherPath)
 	owner, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 	if err != nil || !ok || owner.Name != "csi-attacher" {
 		return fail()
 	}
+	socket, socketOK := clusterSSHLonghornCSISocketSpec(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false)
 	image, err := clusterSSHLonghornAttacherTemplateImage(object)
-	if err != nil || image != driver.Attacher {
+	if err != nil || !socketOK || image != driver.Attacher {
 		return fail()
 	}
 	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 		name: "csi-attacher", serviceAccount: "longhorn-service-account", repository: clusterSSHLonghornAttacherRepository,
+		specValid:      clusterSSHLonghornCSISocketMatches(socket),
 		containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, "csi-attacher") },
 		podsPath:       clusterSSHLonghornAttacherPodsPath, replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
 		replicaSetPathValid: clusterSSHLonghornAttacherReplicaSetPathValid, templateImage: clusterSSHLonghornAttacherTemplateImage,
@@ -66,5 +68,5 @@ func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, e
 	if err != nil {
 		return fail()
 	}
-	return clusterSSHSourceExternalImage{Configured: image, Resolved: resolved}, nil
+	return clusterSSHSourceExternalImage{Configured: image, Resolved: resolved}, socket, nil
 }

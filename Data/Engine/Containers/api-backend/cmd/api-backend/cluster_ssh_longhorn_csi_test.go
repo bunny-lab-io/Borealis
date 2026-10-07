@@ -57,6 +57,7 @@ func sshLonghornCSIRuntimeFixture(f *sshStorageFixture, role clusterSSHLonghornC
 		meta["labels"] = map[string]any{"app": string(role)}
 		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": string(role) + "-abcdef", "uid": clusterSSHStorageMap(rs, "metadata")["uid"], "controller": true}}
 		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": string(role), "image": image, "args": sshLonghornCSIStartupArgs(string(role)), "env": sshLonghornCSIStartupEnv()}}}
+		sshLonghornCSISocketPodFixture(pod)
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": string(role), "image": image, "imageID": role.repository() + "@" + sshLonghornDriverPin(string(role)).ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
 		f.objects[role.podsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}

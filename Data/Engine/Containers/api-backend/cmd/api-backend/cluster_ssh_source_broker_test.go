@@ -44,7 +44,7 @@ func sshBrokerClient(t *testing.T, peers ...string) *clusterSSHSourceBrokerClien
 }
 
 func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T) {
-	for _, mode := range []string{"fresh repeated", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
+	for _, mode := range []string{"fresh repeated", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
 		t.Run(mode, func(t *testing.T) {
 			r, current, snapshot := sshBrokerFixture(t)
 			b := newClusterSSHSourceBroker(nil, nil, r.Lease.ControllerHolder, sshBrokerTestSecret)
@@ -89,6 +89,10 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				case "snapshotter runtime changed":
 					if n > 1 {
 						value.Storage.Requirements.LonghornCSIImages.Snapshotter.Resolved = "docker.io/longhornio/csi-snapshotter@" + sshLonghornDriverPin("csi-snapshotter").IndexDigest
+					}
+				case "CSI socket path changed":
+					if n > 1 {
+						value.Storage.Requirements.LonghornCSISocketPath = "/srv/kubelet/plugins/driver.longhorn.io"
 					}
 				case "attacher runtime changed":
 					if n > 1 {
@@ -181,7 +185,7 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				started := time.Now()
 				value, err := read(context.Background())
 				expected, settings := value.Expected, value.Settings
-				wantOK := mode == "fresh repeated" || ((mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed" || mode == "volume images changed" || mode == "replica images changed" || mode == "provisioner runtime changed" || mode == "resizer runtime changed" || mode == "snapshotter runtime changed" || mode == "attacher runtime changed" || mode == "UI runtime changed" || mode == "driver runtime changed" || mode == "driver init changed") && i == 0)
+				wantOK := mode == "fresh repeated" || ((mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed" || mode == "volume images changed" || mode == "replica images changed" || mode == "provisioner runtime changed" || mode == "resizer runtime changed" || mode == "snapshotter runtime changed" || mode == "CSI socket path changed" || mode == "attacher runtime changed" || mode == "UI runtime changed" || mode == "driver runtime changed" || mode == "driver init changed") && i == 0)
 				if wantOK {
 					if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) || !reflect.DeepEqual(settings, snapshot.Settings) || !slices.Equal(value.Sources, snapshot.Sources) || value.started.Before(started) || !reflect.DeepEqual(value.Storage, snapshot.Storage) {
 						t.Fatal("valid broker source rejected")
@@ -346,7 +350,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 23, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 24, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -357,11 +361,11 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 					value.Snapshot = nil
 				}
 				if mode == "legacy response" {
-					value.Version = 22
+					value.Version = 23
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					raw = bytes.Replace(raw, []byte(`"version":23`), []byte(`"version":23,"version":23`), 1)
+					raw = bytes.Replace(raw, []byte(`"version":24`), []byte(`"version":24,"version":24`), 1)
 				}
 				aead := client.responseCipher
 				if mode == "wrong direction" {

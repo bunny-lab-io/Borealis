@@ -243,11 +243,11 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.LonghornAttacherImage, err = observeClusterSSHLonghornAttacherImage(read, readList, source, result.Requirements.LonghornDriverImages)
+	result.Requirements.LonghornAttacherImage, result.Requirements.LonghornCSISocketPath, err = observeClusterSSHLonghornAttacherImage(read, readList, source, result.Requirements.LonghornDriverImages)
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.LonghornCSIImages, err = observeClusterSSHLonghornCSIImages(read, readList, source, result.Requirements.LonghornDriverImages)
+	result.Requirements.LonghornCSIImages, err = observeClusterSSHLonghornCSIImages(read, readList, source, result.Requirements.LonghornDriverImages, result.Requirements.LonghornCSISocketPath)
 	if err != nil {
 		return fail()
 	}

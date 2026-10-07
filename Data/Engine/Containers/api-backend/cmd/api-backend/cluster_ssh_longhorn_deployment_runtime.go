@@ -8,7 +8,8 @@ import (
 // Fixed internal UI/CSI contracts share proof mechanics, not authority.
 // Transport still permits only each explicitly listed namespace/name/selector.
 type clusterSSHLonghornDeploymentWorkload struct {
-	containerValid                                     func(map[string]any) bool // Optional fixed workload invocation contract; UI keeps existing behavior.
+	specValid                                          func(map[string]any, bool) bool // CSI declared mount contract; bool distinguishes admitted Pods from templates.
+	containerValid                                     func(map[string]any) bool       // Optional fixed workload invocation contract; UI keeps existing behavior.
 	name, serviceAccount, repository, replicaSetPrefix string
 	podsPath                                           func(string) string
 	replicaSetPathValid                                func(string) bool
@@ -62,7 +63,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 				set, valid = clusterSSHStorageMetadata(object, "apps/v1", "ReplicaSet", "longhorn-system")
 				parent, owned := clusterSSHLonghornUIOwner(object, "Deployment")
 				configured, configErr := workload.templateImage(object)
-				if err != nil || !valid || set.Name != owner.Name || setIDs[set.UID] || !owned || parent.Name != deployment.Name || parent.UID != deployment.UID || configErr != nil || configured != image {
+				if err != nil || !valid || set.Name != owner.Name || setIDs[set.UID] || !owned || parent.Name != deployment.Name || parent.UID != deployment.UID || configErr != nil || configured != image || (workload.specValid != nil && !workload.specValid(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false)) {
 					return fail()
 				}
 				sets[owner.Name], setIDs[set.UID] = set, true
@@ -71,6 +72,9 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 				return fail()
 			}
 			spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
+			if workload.specValid != nil && !workload.specValid(spec, true) {
+				return fail()
+			}
 			if spec["nodeName"] != member.Name || (spec["hostNetwork"] != nil && spec["hostNetwork"] != false) || spec["serviceAccountName"] != workload.serviceAccount || status["phase"] != "Running" || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) || !clusterSSHStorageEmptyList(status["initContainerStatuses"]) || !clusterSSHStorageEmptyList(status["ephemeralContainerStatuses"]) {
 				return fail()
 			}
