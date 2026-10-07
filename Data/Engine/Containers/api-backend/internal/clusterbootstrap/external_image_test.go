@@ -11,6 +11,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -222,5 +223,39 @@ func TestExternalImageInventoryBindsCompleteReviewedSetAndCopies(t *testing.T) {
 	pins[0].Reference = "caller"
 	if ExternalImagePins()[0].Reference == "caller" {
 		t.Fatal("pin alias")
+	}
+}
+
+// Concurrent validators and callers must never share writable trust records.
+func TestExternalImagePinsConcurrentCallerIsolation(t *testing.T) {
+	expected := ExternalImagePins()
+	if len(expected) != 23 {
+		t.Fatalf("incomplete reviewed inventory: %d", len(expected))
+	}
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for range 8 {
+				pins := ExternalImagePins()
+				if !slices.Equal(pins, expected) {
+					t.Error("caller mutation changed compiled pins")
+					return
+				}
+				// Replace every field and reorder without retaining the previous value.
+				for i := range pins {
+					pins[i] = ExternalImagePin{Reference: "caller"}
+				}
+				slices.Reverse(pins)
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	if !slices.Equal(ExternalImagePins(), expected) {
+		t.Fatal("concurrent callers changed compiled pins")
 	}
 }

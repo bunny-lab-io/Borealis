@@ -10,6 +10,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 )
 
 const (
@@ -36,8 +37,9 @@ type ExternalImagePin struct {
 	LayerBlobBytes int64  `json:"layer_blob_bytes"`
 }
 
-// Reviewed source pins, never a registry response or caller-owned allocation.
-func ExternalImagePins() []ExternalImagePin {
+// Decode only immutable, embedded release data once. Live source observations,
+// registry responses and authority checks are never cached here.
+var reviewedExternalImagePins = sync.OnceValue(func() []ExternalImagePin {
 	var lock struct {
 		Components []struct {
 			Images []ExternalImagePin `json:"images"`
@@ -52,6 +54,12 @@ func ExternalImagePins() []ExternalImagePin {
 	}
 	slices.SortFunc(pins, func(a, b ExternalImagePin) int { return strings.Compare(a.Reference, b.Reference) })
 	return pins
+})
+
+// Each caller owns its slice. ExternalImagePin contains only scalar fields, so
+// callers may edit/reorder their copy without changing compiled trust inputs.
+func ExternalImagePins() []ExternalImagePin {
+	return slices.Clone(reviewedExternalImagePins())
 }
 
 func ExternalImageAssetName(reference string) string {
