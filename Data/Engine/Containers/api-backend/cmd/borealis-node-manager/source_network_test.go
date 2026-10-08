@@ -32,7 +32,7 @@ func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"success", "boot drift", "machine drift", "network drift", "stale Node version", "upgrade during read", "not ready", "wrong Node", "transport", "cancel", "path injection", "link failure", "wrong link IP", "MAC drift", "interface drift", "index drift", "namespace drift", "prefix drift", "Node drift", "Node IP drift"} {
+	for _, mode := range []string{"success", "boot drift", "machine drift", "network drift", "stale Node version", "upgrade during read", "not ready", "wrong Node", "transport", "cancel", "path injection", "link failure", "wrong link IP", "MAC drift", "interface drift", "index drift", "namespace drift", "prefix drift", "Node drift", "Node IP drift", "kubelet failure", "kubelet drift", "kubelet namespace"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -123,9 +123,24 @@ func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
 				}
 				return value, nil
 			}
-			observed, err := observeSourceNetwork(ctx, name, identity, get, linkRead)
+			kubeletReads := 0
+			kubeletRead := func(context.Context) (clusterbootstrap.SourceKubelet, error) {
+				kubeletReads++
+				v := clusterbootstrap.SourceKubelet{Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}
+				if mode == "kubelet failure" {
+					return v, errors.New("private native failure")
+				}
+				if mode == "kubelet namespace" {
+					v.NetworkNamespace++
+				}
+				if mode == "kubelet drift" && kubeletReads > 1 {
+					v.StartTicks++
+				}
+				return v, nil
+			}
+			observed, err := observeSourceNetwork(ctx, name, identity, get, linkRead, kubeletRead)
 			if mode == "success" {
-				if err != nil || observed.Validate() != nil || observed.PodCIDR != "10.42.0.0/16" || identities != 2 || configs != 2 || versions != 2 || links != 2 || nodes != 2 {
+				if err != nil || observed.Validate() != nil || observed.PodCIDR != "10.42.0.0/16" || identities != 2 || configs != 2 || versions != 2 || links != 2 || nodes != 2 || kubeletReads != 2 {
 					t.Fatalf("incomplete observation: %v", err)
 				}
 			} else {

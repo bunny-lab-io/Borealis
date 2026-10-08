@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn replica images changed during Job", "Longhorn volume images changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn driver runtime changed during Job", "Longhorn driver init changed during Job", "Longhorn driver owner changed during Job", "Longhorn provisioner runtime changed during Job", "Longhorn provisioner owner changed during Job", "Longhorn resizer runtime changed during Job", "Longhorn resizer owner changed during Job", "Longhorn snapshotter runtime changed during Job", "Longhorn snapshotter owner changed during Job", "Longhorn csi-attacher startup changed during Job", "Longhorn csi-provisioner startup changed during Job", "Longhorn csi-resizer startup changed during Job", "Longhorn csi-snapshotter startup changed during Job", "Longhorn csi-attacher socket changed during Job", "Longhorn csi-provisioner socket changed during Job", "Longhorn csi-resizer socket changed during Job", "Longhorn csi-snapshotter socket changed during Job", "Longhorn attacher runtime changed during Job", "Longhorn attacher owner changed during Job", "Longhorn UI runtime changed during Job", "Longhorn UI owner changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
+	for _, mode := range []string{"native kubelet root mismatch", "native kubelet process changed during Job", "expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn replica images changed during Job", "Longhorn volume images changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn driver runtime changed during Job", "Longhorn driver init changed during Job", "Longhorn driver owner changed during Job", "Longhorn provisioner runtime changed during Job", "Longhorn provisioner owner changed during Job", "Longhorn resizer runtime changed during Job", "Longhorn resizer owner changed during Job", "Longhorn snapshotter runtime changed during Job", "Longhorn snapshotter owner changed during Job", "Longhorn csi-attacher startup changed during Job", "Longhorn csi-provisioner startup changed during Job", "Longhorn csi-resizer startup changed during Job", "Longhorn csi-snapshotter startup changed during Job", "Longhorn csi-attacher socket changed during Job", "Longhorn csi-provisioner socket changed during Job", "Longhorn csi-resizer socket changed during Job", "Longhorn csi-snapshotter socket changed during Job", "Longhorn attacher runtime changed during Job", "Longhorn attacher owner changed during Job", "Longhorn UI runtime changed during Job", "Longhorn UI owner changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
 			if mode == "qualification" {
@@ -228,6 +228,12 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 								continue
 							}
 							network := sshSourceNetworkFixture(member, current.K3sVersion)
+							if mode == "native kubelet root mismatch" {
+								network.Kubelet.Root = "/other/root"
+							}
+							if mode == "native kubelet process changed during Job" && jobs.Load() > 1 {
+								network.Kubelet.StartTicks++
+							}
 							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sourceActionPod(t, job, network, podUID)}})
 							return
 						}
@@ -250,7 +256,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			good := mode == "absent CNPG config" || mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
 			if good {
 				if err != nil || expected.Target.TargetID != f.lease.TargetID || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) {
-					t.Fatal("valid private broker source rejected")
+					t.Fatalf("valid private broker source rejected: err=%v target_matches=%t settings_match=%t jobs=%d", err, expected.Target.TargetID == f.lease.TargetID, reflect.DeepEqual(settings, sshPreparationRuntimeFixture()), jobs.Load())
 				}
 				changed.Store(true)
 				_, next, err := read(f.ctx)
@@ -259,7 +265,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 						t.Fatal("source observation drift accepted")
 					}
 				} else if err != nil || !reflect.DeepEqual(next, settings) || jobs.Load() != int64(4*len(current.Source.Members)) {
-					t.Fatal("fresh source Job not observed per member/read")
+					t.Fatalf("fresh source Job not observed per member/read: err=%v settings_match=%t jobs=%d want_jobs=%d", err, reflect.DeepEqual(next, settings), jobs.Load(), 4*len(current.Source.Members))
 				}
 			} else if err != clusterbootstrap.ErrPreparationConfig || settings != nil {
 				t.Fatal("stale authority returned private settings")

@@ -9,13 +9,14 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
 func sshSourceNetworkFixture(member clusterSSHSourceMember, version string) clusterbootstrap.SourceNetwork {
 	ip := netip.MustParseAddr(member.Address).As4()
-	return clusterbootstrap.SourceNetwork{NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID,
+	return clusterbootstrap.SourceNetwork{Kubelet: clusterbootstrap.SourceKubelet{Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}, NodeUID: member.NodeUID, Hostname: member.Name, MachineID: member.MachineID, BootID: member.BootID,
 		K3sVersion: version, PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: clusterbootstrap.ManagementLink{
 			Interface: "ens18", Index: 2, Address: member.Address + "/24", MAC: fmt.Sprintf("02:00:%02x:%02x:%02x:%02x", ip[0], ip[1], ip[2], ip[3]), NetworkNamespace: 1234}}
 }

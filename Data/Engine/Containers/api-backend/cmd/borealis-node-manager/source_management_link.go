@@ -70,7 +70,7 @@ func (out *sourceLinkOutput) Write(p []byte) (int, error) {
 	return out.buffer.Write(p)
 }
 
-// Only the fixed ip invocation above uses this runner in production. No
+// Only fixed ip and source K3s service-metadata reads use this runner. No
 // request-controlled command, environment, stdin, path or diagnostic escapes.
 func sourceLinkCommand(parent context.Context, binary string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 2500*time.Millisecond)

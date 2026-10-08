@@ -66,7 +66,7 @@ func (m *manager) inspectSourceNetwork(ctx context.Context) (map[string]any, err
 		}
 		return strings.TrimSpace(string(machine)), strings.TrimSpace(string(boot)), nil
 	}
-	observed, err := observeSourceNetwork(ctx, m.nodeName, identity, get, sourceManagementLink)
+	observed, err := observeSourceNetwork(ctx, m.nodeName, identity, get, sourceManagementLink, sourceKubelet)
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
@@ -99,12 +99,12 @@ func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path s
 	return raw, nil
 }
 
-func observeSourceNetwork(ctx context.Context, name string, identity func() (string, string, error), get func(context.Context, string) ([]byte, error), linkRead func(context.Context, string) (clusterbootstrap.ManagementLink, error)) (clusterbootstrap.SourceNetwork, error) {
+func observeSourceNetwork(ctx context.Context, name string, identity func() (string, string, error), get func(context.Context, string) ([]byte, error), linkRead func(context.Context, string) (clusterbootstrap.ManagementLink, error), kubeletRead func(context.Context) (clusterbootstrap.SourceKubelet, error)) (clusterbootstrap.SourceNetwork, error) {
 	fail := func() (clusterbootstrap.SourceNetwork, error) {
 		return clusterbootstrap.SourceNetwork{}, clusterbootstrap.ErrPreparationConfig
 	}
 	// Validate name before constructing the only Node request path.
-	if !sourceNetworkHostname.MatchString(name) || identity == nil || get == nil || linkRead == nil || ctx.Err() != nil {
+	if !sourceNetworkHostname.MatchString(name) || identity == nil || get == nil || linkRead == nil || kubeletRead == nil || ctx.Err() != nil {
 		return fail()
 	}
 	machine, boot, err := identity()
@@ -142,7 +142,11 @@ func observeSourceNetwork(ctx context.Context, name string, identity func() (str
 	if err != nil || !link.MatchesAddress(address) {
 		return fail()
 	}
-	base := clusterbootstrap.SourceNetwork{NodeUID: node.Metadata.UID, Hostname: name, MachineID: machine, BootID: boot, K3sVersion: node.Status.NodeInfo.KubeletVersion, ManagementLink: link}
+	kubelet, err := kubeletRead(ctx)
+	if err != nil || kubelet.Validate() != nil || kubelet.NetworkNamespace != link.NetworkNamespace {
+		return fail()
+	}
+	base := clusterbootstrap.SourceNetwork{Kubelet: kubelet, NodeUID: node.Metadata.UID, Hostname: name, MachineID: machine, BootID: boot, K3sVersion: node.Status.NodeInfo.KubeletVersion, ManagementLink: link}
 	network, err := clusterbootstrap.ParseSourceNetwork(before, base)
 	if err != nil {
 		return fail()
@@ -162,8 +166,9 @@ func observeSourceNetwork(ctx context.Context, name string, identity func() (str
 	version, versionErr := get(ctx, "/version")
 	currentNode, nodeErr := get(ctx, "/api/v1/nodes/"+name)
 	currentLink, linkErr := linkRead(ctx, address)
+	currentKubelet, kubeletErr := kubeletRead(ctx)
 	currentMachine, currentBoot, identityErr := identity()
-	if nodeErr != nil || clusterbootstrap.ValidateSourceNode(currentNode, network, address) != nil || linkErr != nil || currentLink != link || err != nil || versionErr != nil || clusterbootstrap.ValidateSourceVersion(version, network.K3sVersion) != nil || identityErr != nil || rechecked != network || currentMachine != machine || currentBoot != boot || ctx.Err() != nil {
+	if kubeletErr != nil || currentKubelet != kubelet || nodeErr != nil || clusterbootstrap.ValidateSourceNode(currentNode, network, address) != nil || linkErr != nil || currentLink != link || err != nil || versionErr != nil || clusterbootstrap.ValidateSourceVersion(version, network.K3sVersion) != nil || identityErr != nil || rechecked != network || currentMachine != machine || currentBoot != boot || ctx.Err() != nil {
 		return fail()
 	}
 	return network, nil

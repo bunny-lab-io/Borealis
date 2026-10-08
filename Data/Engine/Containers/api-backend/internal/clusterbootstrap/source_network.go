@@ -23,6 +23,7 @@ type SourceNetwork struct {
 	PodCIDR        string         `json:"pod_cidr"`
 	ServiceCIDR    string         `json:"service_cidr"`
 	ManagementLink ManagementLink `json:"management_link"`
+	Kubelet        SourceKubelet  `json:"kubelet"`
 }
 
 func ValidateSourceVersion(raw []byte, version string) error {
@@ -37,7 +38,7 @@ func ValidateSourceVersion(raw []byte, version string) error {
 func (n SourceNetwork) Validate() error {
 	pods, podOK := preparationPrefix(n.PodCIDR)
 	services, serviceOK := preparationPrefix(n.ServiceCIDR)
-	if n.ManagementLink.Validate() != nil || !nonzeroPreparationUUID(n.NodeUID) || !nonzeroPreparationUUID(n.BootID) || !sessionHostname.MatchString(n.Hostname) ||
+	if n.Kubelet.Validate() != nil || n.Kubelet.NetworkNamespace != n.ManagementLink.NetworkNamespace || n.ManagementLink.Validate() != nil || !nonzeroPreparationUUID(n.NodeUID) || !nonzeroPreparationUUID(n.BootID) || !sessionHostname.MatchString(n.Hostname) ||
 		!sessionMachineID.MatchString(n.MachineID) || n.MachineID == strings.Repeat("0", 32) ||
 		len(n.K3sVersion) > 32 || !preparationK3s.MatchString(n.K3sVersion) || !podOK || !serviceOK || pods.Overlaps(services) {
 		return ErrPreparationConfig

@@ -239,3 +239,37 @@ func TestClusterSSHLonghornCSISocketServiceAccountProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterSSHLonghornCSISocketNativeRootBinding(t *testing.T) {
+	_, _, snapshot := sshBrokerFixture(t)
+	source := snapshot.Sources[0]
+	storage := snapshot.Storage.Requirements
+	for _, root := range []string{"/var/lib/kubelet", "/srv/custom root", "/var/lib/rancher/k3s/agent/kubelet"} {
+		source.Kubelet.Root = root
+		storage.LonghornCSISocketPath = root + "/plugins/driver.longhorn.io"
+		for _, mode := range []string{"one source", "replacement", "missing", "mismatch", "second mismatch", "invalid identity", "invalid namespace"} {
+			t.Run(root+"/"+mode, func(t *testing.T) {
+				sources := []clusterbootstrap.SourceNetwork{source}
+				switch mode {
+				case "replacement":
+					sources = append(sources, source)
+					sources[1].Kubelet.PID++
+				case "missing":
+					sources = nil
+				case "mismatch":
+					sources[0].Kubelet.Root = "/other"
+				case "second mismatch":
+					sources = append(sources, source)
+					sources[1].Kubelet.Root = "/other"
+				case "invalid identity":
+					sources[0].Kubelet.Invocation = ""
+				case "invalid namespace":
+					sources[0].Kubelet.NetworkNamespace++
+				}
+				if storage.csiSocketMatchesNetworks(sources) != (mode == "one source" || mode == "replacement") {
+					t.Fatal("declared socket/native root binding")
+				}
+			})
+		}
+	}
+}

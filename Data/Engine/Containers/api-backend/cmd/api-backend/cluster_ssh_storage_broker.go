@@ -32,7 +32,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		}
 		var err error
 		value, err = newClusterSSHPreparationSnapshotRead(boundAuthority, r.kube.getClusterSSHPreparationJSON, r.newSSHSourceNetworkRead(boundAuthority))(ctx)
-		if err != nil || !storage.KubeVIP.matchesNetworks(value.Sources) || checks.Authority(ctx) != nil {
+		if err != nil || !storage.KubeVIP.matchesNetworks(value.Sources) || !storage.csiSocketMatchesNetworks(value.Sources) || checks.Authority(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		observation := storage.observation

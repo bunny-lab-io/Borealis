@@ -239,7 +239,11 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 				case "wrong receipt pod":
 					terminated["message"] = strings.ReplaceAll(terminated["message"].(string), podUID, newClusterUUID())
 				case "private receipt":
-					terminated["message"] = strings.Replace(terminated["message"].(string), `"version":2`, `"version":2,"private":"never publish"`, 1)
+					message := terminated["message"].(string)
+					terminated["message"] = strings.Replace(message, `"source_network":`, `"private":"never publish","source_network":`, 1)
+					if terminated["message"] == message {
+						t.Error("private receipt fixture did not inject unknown field")
+					}
 				case "sidecar":
 					spec["containers"] = append(anySlice(spec["containers"]), map[string]any{"name": "sidecar"})
 				case "token mounted":

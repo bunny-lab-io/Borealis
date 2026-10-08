@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"borealis/api-backend/internal/clusterbootstrap"
+	"strings"
+)
 
 // Declared host path only, never proof of the effective kubelet root, inode,
 // socket type, host ownership or contents. No host IO occurs in this parser.
@@ -146,4 +149,18 @@ func clusterSSHLonghornCSIServiceAccountProjection(raw any) bool {
 		}
 	}
 	return len(seen) == 3
+}
+
+// Source members can have different process/inode identities, but every actual
+// kubelet root must agree with the single cluster-wide CSI hostPath declaration.
+func (r clusterSSHStorageRequirements) csiSocketMatchesNetworks(sources []clusterbootstrap.SourceNetwork) bool {
+	if len(sources) < 1 || len(sources) > 2 {
+		return false
+	}
+	for _, source := range sources {
+		if source.Validate() != nil || r.LonghornCSISocketPath != source.Kubelet.Root+"/plugins/driver.longhorn.io" {
+			return false
+		}
+	}
+	return true
 }

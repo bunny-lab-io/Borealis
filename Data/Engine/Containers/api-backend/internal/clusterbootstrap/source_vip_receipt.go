@@ -70,7 +70,7 @@ func NewSourceVIPReceipt(raw []byte, nonce, jobUID, podUID, address string) ([]b
 	if err != nil || value.VIP.Address != address {
 		return nil, ErrPreparationConfig
 	}
-	out, err := json.Marshal(sourceVIPReceipt{1, nonce, jobUID, podUID, value})
+	out, err := json.Marshal(sourceVIPReceipt{2, nonce, jobUID, podUID, value})
 	if err != nil || len(out) > SourceNetworkReceiptLimit {
 		return nil, ErrPreparationConfig
 	}
@@ -84,7 +84,7 @@ func ParseSourceVIPReceipt(raw []byte, nonce, jobUID, podUID, address string) (S
 	}
 	object, err := sourceExactObject(raw, "version", "nonce", "job_uid", "pod_uid", "source_vip_network")
 	var receipt sourceVIPReceipt
-	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Version != 1 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID {
+	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Version != 2 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID {
 		return fail()
 	}
 	value, err := parseSourceVIPNetwork(object["source_vip_network"])
