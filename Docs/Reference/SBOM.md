@@ -164,7 +164,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | curl (HTTPS transport for verified Engine release bootstrap and pinned dependency downloads) | [curl License](https://curl.se/docs/copyright.html) |
 | shared-engine | GNU Coreutils (`sha256sum`, `stat`, and `mktemp` used by verified Engine release bootstrap) | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
-| shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` binary, version-matched installer and complete LinuxAMD64 airgap archive are checksum-pinned release-packaging inputs; cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
+| shared-engine | K3s Kubernetes runtime (`v1.36.3+k3s1` binary, embedded server executable, version-matched installer and complete LinuxAMD64 airgap archive are checksum-pinned release-packaging inputs; cluster baseline; standalone install may use stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
 | shared-engine | K3s bundled klipper-helm `v0.13.3-build20260727` | [Apache-2.0](https://github.com/k3s-io/klipper-helm/blob/master/LICENSE) |
 | shared-engine | K3s bundled klipper-lb `v0.4.17` | [Apache-2.0](https://github.com/k3s-io/klipper-lb/blob/master/LICENSE) |
 | shared-engine | K3s bundled local-path-provisioner `v0.0.36` | [Apache-2.0](https://github.com/rancher/local-path-provisioner/blob/master/LICENSE) |

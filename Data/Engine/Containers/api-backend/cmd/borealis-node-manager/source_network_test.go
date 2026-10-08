@@ -126,7 +126,7 @@ func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
 			kubeletReads := 0
 			kubeletRead := func(context.Context) (clusterbootstrap.SourceKubelet, error) {
 				kubeletReads++
-				v := clusterbootstrap.SourceKubelet{Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}
+				v := clusterbootstrap.SourceKubelet{ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}
 				if mode == "kubelet failure" {
 					return v, errors.New("private native failure")
 				}

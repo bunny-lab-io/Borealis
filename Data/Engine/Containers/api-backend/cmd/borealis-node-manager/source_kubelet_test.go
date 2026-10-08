@@ -3,6 +3,8 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -108,7 +110,7 @@ func TestSourceKubeletServiceAndListenerBoundaries(t *testing.T) {
 }
 
 func TestSourceKubeletObserverRechecksProcessAndService(t *testing.T) {
-	for _, mode := range []string{"valid", "custom root", "service failure", "service restart", "service stopped", "process restarted", "socket replaced", "socket closed", "root changed", "mount namespace changed", "network namespace changed", "executable changed", "process UID changed", "host root changed", "zombie", "missing process", "canceled"} {
+	for _, mode := range []string{"valid", "custom root", "service failure", "service restart", "service stopped", "process restarted", "socket replaced", "socket closed", "root changed", "mount namespace changed", "network namespace changed", "executable changed", "process UID changed", "host root changed", "zombie", "missing process", "executable proof rejected", "executable replaced during hash", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			proc := t.TempDir()
 			root := "/var/lib/kubelet"
@@ -208,9 +210,29 @@ func TestSourceKubeletObserverRechecksProcessAndService(t *testing.T) {
 				}
 				return []byte(raw), nil
 			}
-			got, err := observeSourceKubelet(ctx, proc, read)
+			// Small root-owned system binary models the reviewed executable. The
+			// native hash verifier still reads the descriptor selected by the observer.
+			fixture, fixtureErr := os.ReadFile("/usr/bin/true")
+			if fixtureErr != nil {
+				t.Fatal(fixtureErr)
+			}
+			digest := sha256.Sum256(fixture)
+			pin := clusterbootstrap.K3sAssetPin{Name: "bin/k3s", Size: int64(len(fixture)), SHA256: hex.EncodeToString(digest[:])}
+			checks := 0
+			check := func(ctx context.Context, file *os.File) error {
+				checks++
+				if mode == "executable proof rejected" {
+					return clusterbootstrap.ErrPreparationConfig
+				}
+				err := hashSourceKubeletExecutable(ctx, file, pin)
+				if mode == "executable replaced during hash" && checks == 1 {
+					replaceLink("42/exe", "/usr/bin/false")
+				}
+				return err
+			}
+			got, err := observeSourceKubelet(ctx, proc, read, check)
 			if mode == "valid" || mode == "custom root" {
-				if err != nil || got.Validate() != nil || got.Root != root || got.PID != 42 || got.StartTicks != 100 || got.ListenerInode != 123 || calls != 2 {
+				if err != nil || got.Validate() != nil || got.Root != root || got.PID != 42 || got.StartTicks != 100 || got.ListenerInode != 123 || calls != 2 || checks != 2 {
 					t.Fatalf("native projection %+v %v", got, err)
 				}
 			} else if err != clusterbootstrap.ErrPreparationConfig || got != (clusterbootstrap.SourceKubelet{}) {

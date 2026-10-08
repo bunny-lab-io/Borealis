@@ -37,6 +37,9 @@ type K3sInputPins struct {
 	Images    []string      `json:"images"`
 	Payload   K3sPayloadPin `json:"payload"`
 	Installer K3sAssetPin   `json:"installer"`
+	// The launcher execs this member of the authenticated embedded payload.
+	// It is already included in Payload.FileBytes; never add capacity again.
+	ServerExecutable K3sAssetPin `json:"server_executable"`
 }
 
 // The exact binary pin authenticates this embedded zstd frame. Packaging also

@@ -44,7 +44,7 @@ func sshBrokerClient(t *testing.T, peers ...string) *clusterSSHSourceBrokerClien
 }
 
 func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T) {
-	for _, mode := range []string{"fresh repeated", "kubelet missing", "kubelet root mismatch", "kubelet process changed", "kubelet listener changed", "kubelet root changed coherently", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
+	for _, mode := range []string{"fresh repeated", "kubelet missing", "kubelet executable digest", "kubelet root mismatch", "kubelet process changed", "kubelet listener changed", "kubelet root changed coherently", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
 		t.Run(mode, func(t *testing.T) {
 			r, current, snapshot := sshBrokerFixture(t)
 			b := newClusterSSHSourceBroker(nil, nil, r.Lease.ControllerHolder, sshBrokerTestSecret)
@@ -128,6 +128,8 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 					value.Storage.Requirements.Volumes[1].Node = "foreign"
 				}
 				switch mode {
+				case "kubelet executable digest":
+					value.Sources[0].Kubelet.ExecutableSHA256 = clusterbootstrap.K3sPins().Binary.SHA256
 				case "kubelet missing":
 					value.Sources[0].Kubelet = clusterbootstrap.SourceKubelet{}
 				case "kubelet root mismatch":
@@ -367,7 +369,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 25, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 26, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -378,11 +380,11 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 					value.Snapshot = nil
 				}
 				if mode == "legacy response" {
-					value.Version = 24
+					value.Version = 25
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					raw = bytes.Replace(raw, []byte(`"version":25`), []byte(`"version":25,"version":25`), 1)
+					raw = bytes.Replace(raw, []byte(`"version":26`), []byte(`"version":26,"version":26`), 1)
 				}
 				aead := client.responseCipher
 				if mode == "wrong direction" {

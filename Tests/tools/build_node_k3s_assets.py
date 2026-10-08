@@ -32,6 +32,12 @@ def measure_payload(binary: Path, pins: dict, scratch: Path) -> dict:
     for magic bytes or invocation of the host's installed K3s is permitted.
     """
     p = pins["payload"]
+    server = pins["server_executable"]
+    if (set(server) != {"name", "size", "sha256"} or server["name"] != "bin/k3s" or
+            type(server["size"]) is not int or not 0 < server["size"] <= p["file_bytes"] or
+            not isinstance(server["sha256"], str) or
+            not bootstrap.re.fullmatch(r"[0-9a-f]{64}", server["sha256"])):
+        raise ValueError("invalid pinned K3s server executable")
     integers = ("offset", "compressed_bytes", "tar_bytes", "file_bytes", "entries", "cni_links")
     if (any(type(p[k]) is not int or p[k] < 0 for k in integers) or
             not 0 < p["compressed_bytes"] <= 128 << 20 or
@@ -80,7 +86,7 @@ def measure_payload(binary: Path, pins: dict, scratch: Path) -> dict:
             process.kill()
         process.wait()
         process.stdout.close()
-    seen, file_bytes, cni_links = set(), 0, 0
+    seen, file_bytes, cni_links, server_seen = set(), 0, 0, False
     with tarfile.open(expanded, "r:") as archive:
         for entry in archive:
             name = entry.name.rstrip("/")
@@ -90,6 +96,11 @@ def measure_payload(binary: Path, pins: dict, scratch: Path) -> dict:
                     posixpath.normpath(name) != name or ".." in name.split("/") or entry.issparse()):
                 raise ValueError("invalid K3s payload member")
             seen.add(name)
+            if name == server["name"]:
+                if (not entry.isfile() or entry.size != server["size"] or
+                        hashlib.file_digest(archive.extractfile(entry), "sha256").hexdigest() != server["sha256"]):
+                    raise ValueError("changed K3s server executable")
+                server_seen = True
             if entry.isfile():
                 file_bytes += entry.size
             elif entry.issym():
@@ -101,7 +112,7 @@ def measure_payload(binary: Path, pins: dict, scratch: Path) -> dict:
                     cni_links += 1
             elif not entry.isdir() or entry.size:
                 raise ValueError("unsupported K3s payload member")
-    if file_bytes != p["file_bytes"] or len(seen) != p["entries"] or cni_links != p["cni_links"]:
+    if not server_seen or file_bytes != p["file_bytes"] or len(seen) != p["entries"] or cni_links != p["cni_links"]:
         raise ValueError("changed K3s runtime entry inventory")
     return dict(p)
 

@@ -21,7 +21,7 @@ sys.path.pop(0)
 
 class NodeK3sAssetsTests(unittest.TestCase):
     def test_static_payload_measurement_and_failure_bounds(self):
-        for mode in ("valid", "binary changed", "frame changed", "tar changed", "too small", "wrong entries", "escaping link"):
+        for mode in ("valid", "binary changed", "frame changed", "tar changed", "too small", "wrong entries", "escaping link", "server hash", "server size", "server missing", "server symlink", "launcher substitution"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 raw = io.BytesIO()
@@ -29,6 +29,13 @@ class NodeK3sAssetsTests(unittest.TestCase):
                     member = tarfile.TarInfo("./bin/busybox")
                     member.size = 4
                     archive.addfile(member, io.BytesIO(b"data"))
+                    member = tarfile.TarInfo("./bin/other" if mode == "server missing" else "./bin/k3s")
+                    if mode == "server symlink":
+                        member.type, member.linkname = tarfile.SYMTYPE, "busybox"
+                        archive.addfile(member)
+                    else:
+                        member.size = 6
+                        archive.addfile(member, io.BytesIO(b"server"))
                     member = tarfile.TarInfo("./bin/aux/mount")
                     member.type, member.linkname = tarfile.SYMTYPE, "../../../escape" if mode == "escaping link" else "../busybox"
                     archive.addfile(member)
@@ -37,8 +44,14 @@ class NodeK3sAssetsTests(unittest.TestCase):
                 binary = root / "binary"
                 binary.write_bytes(b"fixture prefix" + frame + b"suffix")
                 p = dict(offset=len(b"fixture prefix"), compressed_bytes=len(frame), sha256=hashlib.sha256(frame).hexdigest(),
-                         tar_sha256=hashlib.sha256(raw.getvalue()).hexdigest(), tar_bytes=len(raw.getvalue()), file_bytes=4, entries=2, cni_links=0)
-                pins = dict(binary=dict(size=binary.stat().st_size, sha256=hashlib.sha256(binary.read_bytes()).hexdigest()), payload=p)
+                         tar_sha256=hashlib.sha256(raw.getvalue()).hexdigest(), tar_bytes=len(raw.getvalue()), file_bytes=4 if mode == "server symlink" else 10, entries=3, cni_links=0)
+                pins = dict(binary=dict(size=binary.stat().st_size, sha256=hashlib.sha256(binary.read_bytes()).hexdigest()), payload=p, server_executable=dict(name="bin/k3s", size=6, sha256=hashlib.sha256(b"server").hexdigest()))
+                if mode == "server hash":
+                    pins["server_executable"]["sha256"] = "a" * 64
+                elif mode == "server size":
+                    pins["server_executable"]["size"] = 5
+                elif mode == "launcher substitution":
+                    pins["server_executable"] = dict(pins["binary"], name="bin/k3s")
                 if mode == "binary changed":
                     binary.write_bytes(b"changed")
                 elif mode == "frame changed":

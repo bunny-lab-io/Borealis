@@ -14,7 +14,7 @@ func TestSourceKubeletPublicReceiptContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	nonce, job, pod := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
-	for _, mode := range []string{"custom root", "longest root", "empty", "relative", "traversal", "slash", "long", "control", "zero pid", "large pid", "zero start", "large inode", "bad invocation", "zero namespace", "namespace mismatch"} {
+	for _, mode := range []string{"custom root", "longest root", "empty", "relative", "traversal", "slash", "long", "control", "zero pid", "large pid", "zero start", "large inode", "bad invocation", "zero namespace", "namespace mismatch", "missing executable digest", "wrong executable digest", "launcher digest"} {
 		t.Run(mode, func(t *testing.T) {
 			value := network
 			switch mode {
@@ -22,6 +22,12 @@ func TestSourceKubeletPublicReceiptContract(t *testing.T) {
 				value.Kubelet.Root = "/srv/custom root"
 			case "longest root":
 				value.Kubelet.Root = "/" + strings.Repeat("x", 106-len(KubeletPodResourcesSuffix))
+			case "missing executable digest":
+				value.Kubelet.ExecutableSHA256 = ""
+			case "wrong executable digest":
+				value.Kubelet.ExecutableSHA256 = strings.Repeat("a", 64)
+			case "launcher digest":
+				value.Kubelet.ExecutableSHA256 = K3sPins().Binary.SHA256
 			case "empty":
 				value.Kubelet = SourceKubelet{}
 			case "relative":
@@ -72,7 +78,7 @@ func TestSourceKubeletPublicReceiptContract(t *testing.T) {
 		"duplicate": bytes.Replace(receipt, []byte(`"pid":42`), []byte(`"pid":42,"pid":42`), 1),
 		"missing":   bytes.Replace(receipt, []byte(`"pid":42,`), nil, 1),
 		"null":      bytes.Replace(receipt, []byte(`"pid":42`), []byte(`"pid":null`), 1),
-		"legacy":    bytes.Replace(receipt, []byte(`"version":3`), []byte(`"version":2`), 1),
+		"legacy":    bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":3`), 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, err := ParseSourceNetworkReceipt(bad, nonce, job, pod); err != ErrPreparationConfig || got != (SourceNetwork{}) {

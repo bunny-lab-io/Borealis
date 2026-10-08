@@ -16,7 +16,7 @@ import (
 func sourceKubelet(ctx context.Context) (clusterbootstrap.SourceKubelet, error) {
 	return observeSourceKubelet(ctx, "/proc", func(ctx context.Context) ([]byte, error) {
 		return sourceLinkCommand(ctx, "/usr/bin/systemctl", "show", "k3s.service", "--property=Id,MainPID,InvocationID,ActiveState,SubState", "--no-pager")
-	})
+	}, checkSourceKubeletExecutable)
 }
 
 type sourceKubeletService struct {
@@ -147,7 +147,7 @@ func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, ui
 			return fail()
 		}
 		// Validate all path rules through the same public contract as consumers.
-		probe := clusterbootstrap.SourceKubelet{Root: root, PID: 2, StartTicks: 1, Invocation: strings.Repeat("a", 32), ListenerInode: inode, NetworkNamespace: 1, MountNamespace: 1, ExecutableDevice: 1, ExecutableInode: 1, HostRootDevice: 1, HostRootInode: 1}
+		probe := clusterbootstrap.SourceKubelet{ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: 2, StartTicks: 1, Invocation: strings.Repeat("a", 32), ListenerInode: inode, NetworkNamespace: 1, MountNamespace: 1, ExecutableDevice: 1, ExecutableInode: 1, HostRootDevice: 1, HostRootInode: 1}
 		if probe.Validate() != nil {
 			return fail()
 		}
@@ -159,11 +159,11 @@ func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, ui
 	return foundRoot, foundInode, nil
 }
 
-func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(context.Context) ([]byte, error)) (clusterbootstrap.SourceKubelet, error) {
+func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(context.Context) ([]byte, error), executableCheck func(context.Context, *os.File) error) (clusterbootstrap.SourceKubelet, error) {
 	fail := func() (clusterbootstrap.SourceKubelet, error) {
 		return clusterbootstrap.SourceKubelet{}, clusterbootstrap.ErrPreparationConfig
 	}
-	if serviceRead == nil || ctx.Err() != nil {
+	if serviceRead == nil || executableCheck == nil || ctx.Err() != nil {
 		return fail()
 	}
 	raw, err := serviceRead(ctx)
@@ -174,7 +174,7 @@ func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(con
 	if err != nil {
 		return fail()
 	}
-	before, err := sourceKubeletProcess(ctx, proc, service)
+	before, err := sourceKubeletProcess(ctx, proc, service, executableCheck)
 	if err != nil {
 		return fail()
 	}
@@ -186,14 +186,14 @@ func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(con
 	if err != nil || afterService != service {
 		return fail()
 	}
-	after, err := sourceKubeletProcess(ctx, proc, service)
+	after, err := sourceKubeletProcess(ctx, proc, service, executableCheck)
 	if err != nil || after != before || ctx.Err() != nil {
 		return fail()
 	}
 	return before, nil
 }
 
-func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubeletService) (clusterbootstrap.SourceKubelet, error) {
+func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubeletService, executableCheck func(context.Context, *os.File) error) (clusterbootstrap.SourceKubelet, error) {
 	fail := func() (clusterbootstrap.SourceKubelet, error) {
 		return clusterbootstrap.SourceKubelet{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -243,14 +243,19 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if err != nil {
 		return fail()
 	}
-	exe, err := os.Stat(filepath.Join(pidPath, "exe"))
-	if err != nil || !exe.Mode().IsRegular() {
+	// Follow only the fixed kernel procfs executable link; keep its descriptor
+	// through all process/listener rechecks so pathname replacement cannot stand
+	// in for the bytes that were authenticated.
+	executable, err := os.Open(filepath.Join(pidPath, "exe"))
+	if err != nil {
 		return fail()
 	}
-	exestat, ok := exe.Sys().(*syscall.Stat_t)
-	if !ok || exestat.Uid != 0 {
+	defer executable.Close()
+	exe, err := executable.Stat()
+	if err != nil || !sourceKubeletExecutableUnchanged(exe, exe) || executableCheck == nil || executableCheck(ctx, executable) != nil {
 		return fail()
 	}
+	exestat := exe.Sys().(*syscall.Stat_t)
 	fdDir, err := process.Open("fd")
 	if err != nil {
 		return fail()
@@ -329,14 +334,15 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 		return fail()
 	}
 	afterExe, err := os.Stat(filepath.Join(pidPath, "exe"))
-	if err != nil || !os.SameFile(exe, afterExe) {
+	heldExe, heldErr := executable.Stat()
+	if err != nil || heldErr != nil || !sourceKubeletExecutableUnchanged(exe, afterExe) || !sourceKubeletExecutableUnchanged(exe, heldExe) {
 		return fail()
 	}
 	target, err = process.Readlink(fdName)
 	if err != nil || target != "socket:["+strconv.FormatUint(inode, 10)+"]" || ctx.Err() != nil {
 		return fail()
 	}
-	result := clusterbootstrap.SourceKubelet{Root: root, PID: service.pid, StartTicks: start, Invocation: service.invocation, ListenerInode: inode, NetworkNamespace: host[0], MountNamespace: host[1], HostRootDevice: host[2], HostRootInode: host[3], ExecutableDevice: uint64(exestat.Dev), ExecutableInode: exestat.Ino}
+	result := clusterbootstrap.SourceKubelet{ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: service.pid, StartTicks: start, Invocation: service.invocation, ListenerInode: inode, NetworkNamespace: host[0], MountNamespace: host[1], HostRootDevice: host[2], HostRootInode: host[3], ExecutableDevice: uint64(exestat.Dev), ExecutableInode: exestat.Ino}
 	if result.Validate() != nil {
 		return fail()
 	}

@@ -6,8 +6,8 @@ import (
 )
 
 // SourceKubelet binds an observed PodResources listener pathname to the current
-// k3s.service process. It does not attest filesystem/socket contents, executable
-// digest, CSI service health or persistent configuration.
+// k3s.service process and its reviewed executable backing bytes. It does not
+// attest process memory, filesystem/socket contents, CSI health or persistence.
 type SourceKubelet struct {
 	Root             string `json:"root"`
 	PID              uint64 `json:"pid"`
@@ -18,6 +18,7 @@ type SourceKubelet struct {
 	MountNamespace   uint64 `json:"mount_namespace"`
 	ExecutableDevice uint64 `json:"executable_device"`
 	ExecutableInode  uint64 `json:"executable_inode"`
+	ExecutableSHA256 string `json:"executable_sha256"`
 	HostRootDevice   uint64 `json:"host_root_device"`
 	HostRootInode    uint64 `json:"host_root_inode"`
 }
@@ -27,7 +28,8 @@ const KubeletPodResourcesSuffix = "/pod-resources/kubelet.sock"
 func (k SourceKubelet) Validate() error {
 	// Linux sockaddr_un has 108 bytes including its terminating NUL. The observed
 	// pathname, not a default or a caller-supplied target, selects the root.
-	if len(k.Root) < 2 || len(k.Root)+len(KubeletPodResourcesSuffix) > 107 || k.Root[0] != '/' || path.Clean(k.Root) != k.Root ||
+	if !digestPattern.MatchString(k.ExecutableSHA256) || k.ExecutableSHA256 != K3sPins().ServerExecutable.SHA256 ||
+		len(k.Root) < 2 || len(k.Root)+len(KubeletPodResourcesSuffix) > 107 || k.Root[0] != '/' || path.Clean(k.Root) != k.Root ||
 		!sessionMachineID.MatchString(k.Invocation) || k.Invocation == strings.Repeat("0", 32) || k.PID < 2 || k.PID > 2147483647 {
 		return ErrPreparationConfig
 	}
