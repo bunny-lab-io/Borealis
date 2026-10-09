@@ -237,7 +237,13 @@ def validate_cluster_controller_contract() -> None:
     vip_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-kube-vip-source"]
     if len(vip_bindings) != 1 or vip_bindings[0].get("metadata") != {"name": "borealis-cluster-kube-vip-source", "namespace": "kube-system"} or vip_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-kube-vip-source"} or vip_bindings[0].get("subjects") != binding.get("subjects"):
         fail("kube-vip source RoleBinding must bind only controller ServiceAccount")
-    if sum(item.get("kind") == "Role" for item in objects) != 5 or sum(item.get("kind") == "RoleBinding" for item in objects) != 5:
+    snapshot_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-snapshot-source"]
+    if len(snapshot_roles) != 1 or snapshot_roles[0].get("metadata") != {"name": "borealis-cluster-snapshot-source", "namespace": "kube-system"} or snapshot_roles[0].get("rules") != [{"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("snapshot source Role must allow only namespace ReplicaSet GET")
+    snapshot_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-snapshot-source"]
+    if len(snapshot_bindings) != 1 or snapshot_bindings[0].get("metadata") != {"name": "borealis-cluster-snapshot-source", "namespace": "kube-system"} or snapshot_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-snapshot-source"} or snapshot_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("snapshot source RoleBinding must bind only controller ServiceAccount")
+    if sum(item.get("kind") == "Role" for item in objects) != 6 or sum(item.get("kind") == "RoleBinding" for item in objects) != 6:
         fail("controller must not gain additional namespaced permissions")
     storage_class_rules = [rule for rule in rules if "storageclasses" in (rule.get("resources") or [])]
     if storage_class_rules != [{"apiGroups": ["storage.k8s.io"], "resources": ["storageclasses"], "verbs": ["get"]}]:

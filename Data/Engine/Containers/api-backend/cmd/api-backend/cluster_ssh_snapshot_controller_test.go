@@ -20,7 +20,8 @@ func sshSnapshotControllerPin() clusterbootstrap.ExternalImagePin {
 // Mirrors Data/Engine/K3s/cluster/snapshot-controller.yaml's executable inputs.
 func sshSnapshotControllerFixture() map[string]any {
 	object := sshStorageObject("apps/v1", "Deployment", "kube-system", "snapshot-controller")
-	object["spec"] = map[string]any{"template": map[string]any{"spec": map[string]any{
+	object["spec"] = map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": "snapshot-controller"}}, "spec": map[string]any{
+		"serviceAccountName": "snapshot-controller",
 		"containers": []any{map[string]any{"name": "snapshot-controller", "image": sshSnapshotControllerPin().Reference,
 			"args": []any{"--v=2", "--leader-election=true", "--leader-election-namespace=kube-system", "--http-endpoint=:8080"}}},
 	}}}
@@ -137,6 +138,9 @@ func TestClusterSSHSnapshotControllerSourceConfiguration(t *testing.T) {
 				container["lifecycle"] = map[string]any{"postStart": map[string]any{"exec": map[string]any{"command": []any{"other"}}}}
 			case "restart policy":
 				container["restartPolicy"] = "Always"
+			}
+			if valid {
+				sshSnapshotRuntimeFixture(f)
 			}
 			value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {

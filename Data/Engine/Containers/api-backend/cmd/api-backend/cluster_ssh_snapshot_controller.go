@@ -30,17 +30,36 @@ func observeClusterSSHSnapshotControllerImage(read func(string) (map[string]any,
 	if err != nil || !ok || metadata.Name != "snapshot-controller" {
 		return fail()
 	}
-	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
+	return clusterSSHSnapshotControllerTemplateImage(object)
+}
+
+func clusterSSHSnapshotControllerTemplateImage(object map[string]any) (string, error) {
+	template := clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template")
+	if clusterSSHStorageMap(clusterSSHStorageMap(template, "metadata"), "labels")["app.kubernetes.io/name"] != "snapshot-controller" {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	return clusterSSHSnapshotControllerSpecImage(clusterSSHStorageMap(template, "spec"), false)
+}
+
+func clusterSSHSnapshotControllerSpecImage(spec map[string]any, pod bool) (string, error) {
+	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
+	if spec["serviceAccountName"] != "snapshot-controller" || spec["hostNetwork"] != nil && spec["hostNetwork"] != false {
+		return fail()
+	}
 	containers, ok := spec["containers"].([]any)
-	if !ok || len(containers) != 1 || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) || !clusterSSHStorageEmptyList(spec["volumes"]) {
+	if !ok || len(containers) != 1 || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) {
 		return fail()
 	}
 	container, ok := containers[0].(map[string]any)
 	if !ok || container["name"] != "snapshot-controller" || !clusterSSHStorageEmptyList(container["command"]) ||
 		!clusterSSHStorageEmptyList(container["env"]) || !clusterSSHStorageEmptyList(container["envFrom"]) ||
-		!clusterSSHStorageEmptyList(container["volumeMounts"]) || !clusterSSHStorageEmptyList(container["volumeDevices"]) ||
-		!clusterSSHStorageEmptyText(container["workingDir"]) || !clusterSSHStorageEmptyText(container["restartPolicy"]) ||
-		!clusterSSHStorageEmptyMap(container["lifecycle"]) || !clusterSSHSnapshotControllerArguments(container["args"]) {
+		!clusterSSHStorageEmptyList(container["volumeDevices"]) || !clusterSSHStorageEmptyText(container["workingDir"]) ||
+		!clusterSSHStorageEmptyText(container["restartPolicy"]) || !clusterSSHStorageEmptyMap(container["lifecycle"]) ||
+		!clusterSSHSnapshotControllerArguments(container["args"]) {
+		return fail()
+	}
+	mounts, volumes, ok := clusterSSHServiceAccountMounts(container["volumeMounts"], spec["volumes"], 0, pod)
+	if !ok || len(mounts) != 0 || len(volumes) != 0 {
 		return fail()
 	}
 	image := clusterSSHStorageText(container, "image")

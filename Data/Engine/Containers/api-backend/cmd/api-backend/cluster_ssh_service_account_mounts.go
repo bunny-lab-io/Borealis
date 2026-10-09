@@ -5,6 +5,14 @@ import "strings"
 // Strip only Kubernetes' standard admitted service-account projection. Each
 // fixed caller still validates its own complete remaining mount/volume contract.
 func clusterSSHServiceAccountMounts(rawMounts, rawVolumes any, baseCount int, pod bool) ([]any, []any, bool) {
+	if baseCount == 0 {
+		if rawVolumes == nil {
+			rawVolumes = []any{}
+		}
+		if rawMounts == nil {
+			rawMounts = []any{}
+		}
+	}
 	volumes, ok := rawVolumes.([]any)
 	if !ok || len(volumes) < baseCount || len(volumes) > baseCount+1 || !pod && len(volumes) != baseCount {
 		return nil, nil, false

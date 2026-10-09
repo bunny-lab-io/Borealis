@@ -65,6 +65,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	sshSystemUpgradeFixture(f)
 	sshSystemUpgradeRuntimeFixture(f)
 	f.objects[clusterSSHSnapshotControllerPath] = sshSnapshotControllerFixture()
+	sshSnapshotRuntimeFixture(f)
 	f.objects[clusterSSHKubeVIPPath] = sshKubeVIPFixture(source)
 	sshKubeVIPRuntimeFixture(f)
 	f.objects[clusterSSHLonghornUIPath] = sshLonghornUIFixture()

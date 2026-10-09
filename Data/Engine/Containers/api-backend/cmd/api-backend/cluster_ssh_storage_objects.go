@@ -222,6 +222,7 @@ type clusterSSHStorageRequirements struct {
 	CNPGOperatorResolved        string                           `json:"cnpg_operator_resolved"`
 	CNPGOperatorImage           string                           `json:"cnpg_operator_image"`
 	SnapshotControllerImage     string                           `json:"snapshot_controller_image"`
+	SnapshotControllerResolved  string                           `json:"snapshot_controller_resolved"`
 	SystemUpgradeImages         clusterSSHSystemUpgradeImages    `json:"system_upgrade_images"`
 	LonghornAttacherImage       clusterSSHSourceExternalImage    `json:"longhorn_attacher_image"`
 	LonghornUIResolved          string                           `json:"longhorn_ui_resolved"`
