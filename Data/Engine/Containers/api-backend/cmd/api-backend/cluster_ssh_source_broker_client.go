@@ -184,7 +184,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 26 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 27 || value.ID != request.ID || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

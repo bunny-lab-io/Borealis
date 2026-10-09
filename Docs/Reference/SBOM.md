@@ -63,7 +63,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | github.com/google/uuid v1.6.0 (Go WebAuthn UUID support dependency) | [BSD-3-Clause](https://github.com/google/uuid/blob/master/LICENSE) |
 | api-backend | github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) | [MIT](https://github.com/mitchellh/mapstructure/blob/main/LICENSE) |
 | api-backend | github.com/x448/float16 v0.8.4 (Go CBOR half-float dependency) | [MIT](https://github.com/x448/float16/blob/master/LICENSE) |
-| api-backend | golang.org/x/sys v0.45.0 (Go WebAuthn system support dependency) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| api-backend | golang.org/x/sys v0.45.0 (native source filesystem identity and Go WebAuthn system support) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
 | borealis-operator | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
 | borealis-operator | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
 | borealis-operator | Go standard library/runtime (compiled into the Go `api-backend` binary in operator mode) | [BSD-3-Clause](https://go.dev/LICENSE) |

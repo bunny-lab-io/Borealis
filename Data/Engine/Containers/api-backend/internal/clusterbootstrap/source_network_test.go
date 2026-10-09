@@ -14,7 +14,7 @@ func sourceNetworkFixture(t *testing.T) ([]byte, SourceNetwork) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return raw, SourceNetwork{Kubelet: SourceKubelet{ExecutableSHA256: K3sPins().ServerExecutable.SHA256, Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}, NodeUID: "33333333-3333-4333-8333-333333333333", Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: "22222222-2222-4222-8222-222222222222", K3sVersion: "v1.36.3+k3s1", ManagementLink: ManagementLink{Interface: "ens18", Index: 2, Address: "192.168.90.20/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
+	return raw, SourceNetwork{Kubelet: SourceKubelet{CSISocket: SourceCSISocket{DirectoryDevice: 8, DirectoryInode: 12, DirectoryMount: 1, SocketDevice: 8, SocketInode: 13, SocketMount: 1, PathSHA256: strings.Repeat("c", 64)}, ExecutableSHA256: K3sPins().ServerExecutable.SHA256, Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}, NodeUID: "33333333-3333-4333-8333-333333333333", Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: "22222222-2222-4222-8222-222222222222", K3sVersion: "v1.36.3+k3s1", ManagementLink: ManagementLink{Interface: "ens18", Index: 2, Address: "192.168.90.20/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}}
 }
 
 func TestSourceNetworkUsesSupervisorRangeAndCurrentNode(t *testing.T) {

@@ -29,25 +29,28 @@ func TestSourceReceiptRejectsPrivateAmbiguousAndReplayedResults(t *testing.T) {
 		}
 	}
 	for name, bad := range map[string][]byte{
-		"unknown":        bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":4,"private":"do-not-publish"`), 1),
+		"unknown":        bytes.Replace(receipt, []byte(`"nonce":`), []byte(`"private":"do-not-publish","nonce":`), 1),
 		"link private":   bytes.Replace(receipt, []byte(`"mac":`), []byte(`"private":"do-not-publish","mac":`), 1),
 		"link alias":     bytes.Replace(receipt, []byte(`"mac":`), []byte(`"MAC":`), 1),
 		"link duplicate": bytes.Replace(receipt, []byte(`"index":2`), []byte(`"index":2,"index":2`), 1),
 		"link missing":   bytes.Replace(receipt, []byte(`"index":2,`), nil, 1),
 		"link null":      bytes.Replace(receipt, []byte(`"mac":"02:00:00:00:00:01"`), []byte(`"mac":null`), 1),
 		"nested unknown": bytes.Replace(receipt, []byte(`"hostname":`), []byte(`"private":"do-not-publish","hostname":`), 1),
-		"duplicate":      bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":5,"version":4`), 1),
+		"duplicate":      bytes.Replace(receipt, []byte(`"version":5`), []byte(`"version":5,"version":5`), 1),
 		"case alias":     bytes.Replace(receipt, []byte(`"pod_uid":`), []byte(`"POD_UID":`), 1),
 		"nested alias":   bytes.Replace(receipt, []byte(`"hostname":`), []byte(`"Hostname":`), 1),
-		"missing":        bytes.Replace(receipt, []byte(`"version":4,`), nil, 1),
-		"null":           bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":null`), 1),
-		"version":        bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":3`), 1),
+		"missing":        bytes.Replace(receipt, []byte(`"version":5,`), nil, 1),
+		"null":           bytes.Replace(receipt, []byte(`"version":5`), []byte(`"version":null`), 1),
+		"version":        bytes.Replace(receipt, []byte(`"version":5`), []byte(`"version":4`), 1),
 		"bad network":    bytes.Replace(receipt, []byte("10.42.0.0/16"), []byte("10.42.0.1/16"), 1),
 		"truncated":      receipt[:len(receipt)-1], "trailing": append(append([]byte(nil), receipt...), []byte(`{}`)...),
 		"oversize": append(append([]byte(nil), receipt...), bytes.Repeat([]byte(" "), SourceNetworkReceiptLimit)...),
 		"encoding": append(append([]byte(nil), receipt...), 0xff),
 	} {
 		t.Run(name, func(t *testing.T) {
+			if bytes.Equal(bad, receipt) {
+				t.Fatal("receipt mutation did not apply")
+			}
 			got, err := ParseSourceNetworkReceipt(bad, nonce, job, pod)
 			if err != ErrPreparationConfig || got != (SourceNetwork{}) {
 				t.Fatal("invalid result accepted or disclosed")

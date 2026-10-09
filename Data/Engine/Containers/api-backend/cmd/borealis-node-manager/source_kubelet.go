@@ -147,8 +147,7 @@ func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, ui
 			return fail()
 		}
 		// Validate all path rules through the same public contract as consumers.
-		probe := clusterbootstrap.SourceKubelet{ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: 2, StartTicks: 1, Invocation: strings.Repeat("a", 32), ListenerInode: inode, NetworkNamespace: 1, MountNamespace: 1, ExecutableDevice: 1, ExecutableInode: 1, HostRootDevice: 1, HostRootInode: 1}
-		if probe.Validate() != nil {
+		if !clusterbootstrap.ValidSourceKubeletRoot(root) {
 			return fail()
 		}
 		foundRoot, foundInode = root, inode
@@ -303,6 +302,14 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if err != nil {
 		return fail()
 	}
+	csi, err := captureSourceCSIPath(ctx, filepath.Join(pidPath, "root"), root)
+	if err != nil {
+		return fail()
+	}
+	defer csi.close()
+	if csi.nodes[0].Device != host[2] || csi.nodes[0].Inode != host[3] {
+		return fail()
+	}
 	// Recheck the owning descriptor and kernel socket inode, not filesystem inode.
 	fdName := "fd/" + owned[inode]
 	target, err := process.Readlink(fdName)
@@ -342,7 +349,10 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if err != nil || target != "socket:["+strconv.FormatUint(inode, 10)+"]" || ctx.Err() != nil {
 		return fail()
 	}
-	result := clusterbootstrap.SourceKubelet{ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: service.pid, StartTicks: start, Invocation: service.invocation, ListenerInode: inode, NetworkNamespace: host[0], MountNamespace: host[1], HostRootDevice: host[2], HostRootInode: host[3], ExecutableDevice: uint64(exestat.Dev), ExecutableInode: exestat.Ino}
+	if csi.recheck(ctx, filepath.Join(pidPath, "root"), root) != nil {
+		return fail()
+	}
+	result := clusterbootstrap.SourceKubelet{CSISocket: csi.projection(root), ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: service.pid, StartTicks: start, Invocation: service.invocation, ListenerInode: inode, NetworkNamespace: host[0], MountNamespace: host[1], HostRootDevice: host[2], HostRootInode: host[3], ExecutableDevice: uint64(exestat.Dev), ExecutableInode: exestat.Ino}
 	if result.Validate() != nil {
 		return fail()
 	}

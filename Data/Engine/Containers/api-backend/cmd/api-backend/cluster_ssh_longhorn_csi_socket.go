@@ -158,7 +158,7 @@ func (r clusterSSHStorageRequirements) csiSocketMatchesNetworks(sources []cluste
 		return false
 	}
 	for _, source := range sources {
-		if source.Validate() != nil || r.LonghornCSISocketPath != source.Kubelet.Root+"/plugins/driver.longhorn.io" {
+		if source.Validate() != nil || r.LonghornCSISocketPath != source.Kubelet.Root+clusterbootstrap.KubeletCSIDirectorySuffix {
 			return false
 		}
 	}

@@ -78,12 +78,92 @@ func TestSourceKubeletPublicReceiptContract(t *testing.T) {
 		"duplicate": bytes.Replace(receipt, []byte(`"pid":42`), []byte(`"pid":42,"pid":42`), 1),
 		"missing":   bytes.Replace(receipt, []byte(`"pid":42,`), nil, 1),
 		"null":      bytes.Replace(receipt, []byte(`"pid":42`), []byte(`"pid":null`), 1),
-		"legacy":    bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":3`), 1),
+		"legacy":    bytes.Replace(receipt, []byte(`"version":5`), []byte(`"version":4`), 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, err := ParseSourceNetworkReceipt(bad, nonce, job, pod); err != ErrPreparationConfig || got != (SourceNetwork{}) {
 				t.Fatal("unsafe receipt")
 			}
 		})
+	}
+}
+
+func TestSourceCSISocketStrictProjection(t *testing.T) {
+	raw, identity := sourceNetworkFixture(t)
+	network, err := ParseSourceNetwork(raw, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, job, pod := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
+	action, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceNetwork", "result": map[string]any{"source_network": network}})
+	receipt, err := NewSourceNetworkReceipt(action, nonce, job, pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"directory_device", "directory_inode", "directory_mount", "socket_device", "socket_inode", "socket_mount", "path_sha256"} {
+		for _, mode := range []string{"missing", "null", "zero", "negative", "too large", "wrong type", "alias", "duplicate", "private"} {
+			t.Run(field+"/"+mode, func(t *testing.T) {
+				var wire map[string]any
+				if json.Unmarshal(receipt, &wire) != nil {
+					t.Fatal("fixture")
+				}
+				socket := wire["source_network"].(map[string]any)["kubelet"].(map[string]any)["csi_socket"].(map[string]any)
+				switch mode {
+				case "missing":
+					delete(socket, field)
+				case "null":
+					socket[field] = nil
+				case "zero":
+					if field == "path_sha256" {
+						socket[field] = strings.Repeat("0", 64)
+					} else {
+						socket[field] = 0
+					}
+				case "negative":
+					socket[field] = -1
+				case "too large":
+					socket[field] = uint64(1 << 53)
+				case "wrong type":
+					socket[field] = true
+				case "alias":
+					socket[strings.ToUpper(field)] = socket[field]
+					delete(socket, field)
+				case "private":
+					socket["private"] = "never publish"
+				}
+				bad, _ := json.Marshal(wire)
+				if mode == "duplicate" {
+					key := []byte(`"` + field + `":`)
+					bad = bytes.Replace(bad, key, []byte(`"`+field+`":null,"`+field+`":`), 1)
+				}
+				if bytes.Equal(bad, receipt) {
+					t.Fatal("mutation absent")
+				}
+				if got, err := ParseSourceNetworkReceipt(bad, nonce, job, pod); err != ErrPreparationConfig || got != (SourceNetwork{}) {
+					t.Fatal("unsafe filesystem proof accepted")
+				}
+			})
+		}
+	}
+	// Maximum representable identifiers and both longest text paths still fit
+	// unchanged termination-receipt bound, including the embedded VIP projection.
+	k := &network.Kubelet
+	k.Root = "/" + strings.Repeat("x", 106-len(KubeletPodResourcesSuffix))
+	k.PID = 2147483647
+	for _, n := range []*uint64{&k.StartTicks, &k.ListenerInode, &k.NetworkNamespace, &k.MountNamespace, &k.ExecutableDevice, &k.ExecutableInode, &k.HostRootDevice, &k.HostRootInode, &k.CSISocket.DirectoryDevice, &k.CSISocket.DirectoryInode, &k.CSISocket.DirectoryMount, &k.CSISocket.SocketDevice, &k.CSISocket.SocketInode, &k.CSISocket.SocketMount} {
+		*n = 1<<53 - 1
+	}
+	network.ManagementLink.NetworkNamespace = k.NetworkNamespace
+	network.Hostname = strings.Repeat("a", 63)
+	network.ManagementLink.Interface = strings.Repeat("e", 15)
+	action, _ = json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceNetwork", "result": map[string]any{"source_network": network}})
+	if _, err = NewSourceNetworkReceipt(action, nonce, job, pod); err != nil {
+		t.Fatal("maximum source proof", err)
+	}
+	vip := VIPAddress{Address: "192.168.90.250", Present: true, Interface: network.ManagementLink.Interface, Index: network.ManagementLink.Index, MAC: network.ManagementLink.MAC, NetworkNamespace: k.NetworkNamespace}
+	value := SourceVIPNetwork{Network: network, VIP: vip}
+	action, _ = json.Marshal(map[string]any{"ok": true, "verb": "InspectVIPNetwork", "result": map[string]any{"source_vip_network": value}})
+	if _, err = NewSourceVIPReceipt(action, nonce, job, pod, vip.Address); err != nil {
+		t.Fatal("maximum VIP proof", err)
 	}
 }

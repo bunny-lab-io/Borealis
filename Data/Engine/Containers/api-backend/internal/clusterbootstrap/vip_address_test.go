@@ -116,7 +116,7 @@ func TestSourceVIPReceiptAndRequestBoundaries(t *testing.T) {
 		bytes.Replace(receipt, []byte(`"present":false`), []byte(`"Present":false`), 1),
 		bytes.Replace(receipt, []byte(`"present":false`), []byte(`"present":false,"present":false`), 1),
 		bytes.Replace(receipt, []byte(`"present":false`), []byte(`"private":"never publish","present":false`), 1),
-		bytes.Replace(receipt, []byte(`"version":3`), []byte(`"version":2`), 1),
+		bytes.Replace(receipt, []byte(`"version":4`), []byte(`"version":3`), 1),
 		bytes.ReplaceAll(receipt, []byte(pod), []byte(job)),
 		bytes.Replace(receipt, []byte(address), []byte("192.168.90.249"), 1),
 		append(bytes.Clone(receipt), bytes.Repeat([]byte(" "), SourceNetworkReceiptLimit)...),

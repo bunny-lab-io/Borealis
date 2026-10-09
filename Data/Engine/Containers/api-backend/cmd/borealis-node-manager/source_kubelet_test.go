@@ -110,7 +110,7 @@ func TestSourceKubeletServiceAndListenerBoundaries(t *testing.T) {
 }
 
 func TestSourceKubeletObserverRechecksProcessAndService(t *testing.T) {
-	for _, mode := range []string{"valid", "custom root", "service failure", "service restart", "service stopped", "process restarted", "socket replaced", "socket closed", "root changed", "mount namespace changed", "network namespace changed", "executable changed", "process UID changed", "host root changed", "zombie", "missing process", "executable proof rejected", "executable replaced during hash", "canceled"} {
+	for _, mode := range []string{"valid", "custom root", "CSI socket replaced", "CSI directory replaced", "CSI permissions changed", "service failure", "service restart", "service stopped", "process restarted", "socket replaced", "socket closed", "root changed", "mount namespace changed", "network namespace changed", "executable changed", "process UID changed", "host root changed", "zombie", "missing process", "executable proof rejected", "executable replaced during hash", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			proc := t.TempDir()
 			root := "/var/lib/kubelet"
@@ -157,6 +157,7 @@ func TestSourceKubeletObserverRechecksProcessAndService(t *testing.T) {
 				link(pid+"/ns/mnt", filepath.Join(proc, "host-mnt"))
 			}
 			link("42/exe", "/usr/bin/true")
+			makeSourceCSISocket(t, proc, root)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			calls := 0
@@ -168,6 +169,21 @@ func TestSourceKubeletObserverRechecksProcessAndService(t *testing.T) {
 				}
 				if calls == 2 {
 					switch mode {
+					case "CSI socket replaced":
+						if err := os.Rename(filepath.Join(proc, root+clusterbootstrap.KubeletCSISocketSuffix), filepath.Join(proc, root+clusterbootstrap.KubeletCSISocketSuffix)+"-old"); err != nil {
+							t.Fatal(err)
+						}
+						makeSourceCSISocket(t, proc, root)
+					case "CSI directory replaced":
+						dir := filepath.Join(proc, root+clusterbootstrap.KubeletCSIDirectorySuffix)
+						if err := os.Rename(dir, dir+"-old"); err != nil {
+							t.Fatal(err)
+						}
+						makeSourceCSISocket(t, proc, root)
+					case "CSI permissions changed":
+						if err := os.Chmod(filepath.Join(proc, root+clusterbootstrap.KubeletCSISocketSuffix), 0777); err != nil {
+							t.Fatal(err)
+						}
 					case "service restart":
 						raw = strings.Replace(raw, strings.Repeat("a", 32), strings.Repeat("b", 32), 1)
 					case "service stopped":

@@ -19,7 +19,7 @@ func sourceVIPFixture(t *testing.T, present bool) (clusterbootstrap.SourceNetwor
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := clusterbootstrap.SourceNetwork{Kubelet: clusterbootstrap.SourceKubelet{ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}, NodeUID: "11111111-1111-4111-8111-111111111111", Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: "22222222-2222-4222-8222-222222222222", K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: link}
+	n := clusterbootstrap.SourceNetwork{Kubelet: clusterbootstrap.SourceKubelet{CSISocket: clusterbootstrap.SourceCSISocket{DirectoryDevice: 8, DirectoryInode: 12, DirectoryMount: 1, SocketDevice: 8, SocketInode: 13, SocketMount: 1, PathSHA256: strings.Repeat("c", 64)}, ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}, NodeUID: "11111111-1111-4111-8111-111111111111", Hostname: "engine-01", MachineID: strings.Repeat("b", 32), BootID: "22222222-2222-4222-8222-222222222222", K3sVersion: "v1.36.3+k3s1", PodCIDR: "10.42.0.0/16", ServiceCIDR: "10.43.0.0/16", ManagementLink: link}
 	var rows []map[string]any
 	_ = json.Unmarshal([]byte(sourceManagementFixture), &rows)
 	if present {
