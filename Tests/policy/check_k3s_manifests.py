@@ -218,8 +218,8 @@ def validate_cluster_controller_contract() -> None:
         fail("storage policy RoleBinding must bind only controller ServiceAccount")
     upgrade_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-upgrade-settings"]
     upgrade_rule = {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["default-controller-env"], "verbs": ["get"]}
-    if len(upgrade_roles) != 1 or upgrade_roles[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_roles[0].get("rules") != [upgrade_rule]:
-        fail("upgrade settings Role must allow only named default-controller-env ConfigMap GET")
+    if len(upgrade_roles) != 1 or upgrade_roles[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_roles[0].get("rules") != [upgrade_rule, {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("upgrade settings Role must allow only named default-controller-env ConfigMap GET and namespace ReplicaSet GET")
     upgrade_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-upgrade-settings"]
     if len(upgrade_bindings) != 1 or upgrade_bindings[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-upgrade-settings"} or upgrade_bindings[0].get("subjects") != binding.get("subjects"):
         fail("upgrade settings RoleBinding must bind only controller ServiceAccount")

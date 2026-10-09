@@ -33,7 +33,7 @@ func sshSystemUpgradeFixture(f *sshStorageFixture) {
 	deployment := sshStorageObject("apps/v1", "Deployment", "system-upgrade", "system-upgrade-controller")
 	deployment["spec"] = map[string]any{"template": map[string]any{
 		"metadata": map[string]any{"labels": map[string]any{"upgrade.cattle.io/controller": "system-upgrade-controller"}},
-		"spec": map[string]any{"containers": []any{map[string]any{"name": "system-upgrade-controller", "image": "rancher/system-upgrade-controller:v0.20.1", "env": env,
+		"spec": map[string]any{"serviceAccountName": "system-upgrade", "containers": []any{map[string]any{"name": "system-upgrade-controller", "image": "rancher/system-upgrade-controller:v0.20.1", "env": env,
 			"envFrom": []any{map[string]any{"configMapRef": map[string]any{"name": "default-controller-env"}}}, "volumeMounts": mounts}}, "volumes": volumes},
 	}}
 	config := sshStorageObject("v1", "ConfigMap", "system-upgrade", "default-controller-env")
@@ -213,6 +213,9 @@ func TestClusterSSHSystemUpgradeSourceConfiguration(t *testing.T) {
 				volumes[0] = map[string]any{"name": "etc-ssl", "configMap": map[string]any{"name": "other"}}
 			case "memory tmp":
 				volumes[3].(map[string]any)["emptyDir"] = map[string]any{"medium": "Memory"}
+			}
+			if valid {
+				sshSystemUpgradeRuntimeFixture(f)
 			}
 			value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {

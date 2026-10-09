@@ -59,6 +59,7 @@ func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, e
 		return fail()
 	}
 	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
+		namespace: "longhorn-system", labelKey: "app",
 		name: "csi-attacher", serviceAccount: "longhorn-service-account", repository: clusterSSHLonghornAttacherRepository,
 		specValid:      clusterSSHLonghornCSISocketMatches(socket),
 		containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, "csi-attacher") },

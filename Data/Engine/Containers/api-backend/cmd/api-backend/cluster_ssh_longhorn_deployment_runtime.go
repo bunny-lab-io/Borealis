@@ -5,9 +5,11 @@ import (
 	"time"
 )
 
-// Fixed internal UI/CSI contracts share proof mechanics, not authority.
+// Fixed internal deployment contracts share proof mechanics, not authority.
 // Transport still permits only each explicitly listed namespace/name/selector.
 type clusterSSHLonghornDeploymentWorkload struct {
+	namespace, labelKey                                string
+	imageValid                                         func(string, string) bool
 	specValid                                          func(map[string]any, bool) bool // CSI declared mount contract; bool distinguishes admitted Pods from templates.
 	containerValid                                     func(map[string]any) bool       // Optional fixed workload invocation contract; UI keeps existing behavior.
 	name, serviceAccount, repository, replicaSetPrefix string
@@ -27,6 +29,12 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 	if read == nil || readList == nil || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
 	}
+	imageValid := workload.imageValid
+	if imageValid == nil {
+		imageValid = func(configured, resolved string) bool {
+			return (clusterSSHSourceExternalImage{Configured: configured, Resolved: resolved}).valid(workload.repository)
+		}
+	}
 	nodes, podIDs, podNames := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	sets := map[string]clusterSSHStorageIdentity{}
 	setIDs := map[string]bool{}
@@ -37,7 +45,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 			return fail()
 		}
 		nodes[member.Name] = true
-		pods, err := readList(workload.podsPath(member.Name), "Pod", "longhorn-system", clusterSSHLonghornDeploymentPodLimit)
+		pods, err := readList(workload.podsPath(member.Name), "Pod", workload.namespace, clusterSSHLonghornDeploymentPodLimit)
 		if err != nil {
 			return fail()
 		}
@@ -46,8 +54,8 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 			return fail()
 		}
 		for _, pod := range pods {
-			id, ok := clusterSSHStorageMetadata(pod, "v1", "Pod", "longhorn-system")
-			if !ok || podIDs[id.UID] || podNames[id.Name] || clusterSSHStorageMap(clusterSSHStorageMap(pod, "metadata"), "labels")["app"] != workload.name {
+			id, ok := clusterSSHStorageMetadata(pod, "v1", "Pod", workload.namespace)
+			if !ok || podIDs[id.UID] || podNames[id.Name] || clusterSSHStorageMap(clusterSSHStorageMap(pod, "metadata"), "labels")[workload.labelKey] != workload.name {
 				return fail()
 			}
 			podIDs[id.UID], podNames[id.Name] = true, true
@@ -60,7 +68,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 			if !seen {
 				object, err := read(path)
 				var valid bool
-				set, valid = clusterSSHStorageMetadata(object, "apps/v1", "ReplicaSet", "longhorn-system")
+				set, valid = clusterSSHStorageMetadata(object, "apps/v1", "ReplicaSet", workload.namespace)
 				parent, owned := clusterSSHLonghornUIOwner(object, "Deployment")
 				configured, configErr := workload.templateImage(object)
 				if err != nil || !valid || set.Name != owner.Name || setIDs[set.UID] || !owned || parent.Name != deployment.Name || parent.UID != deployment.UID || configErr != nil || configured != image || (workload.specValid != nil && !workload.specValid(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false)) {
@@ -117,7 +125,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 			state := clusterSSHStorageMap(runtime, "state")
 			started, err := time.Parse(time.RFC3339Nano, clusterSSHStorageText(clusterSSHStorageMap(state, "running"), "startedAt"))
 			current := clusterSSHStorageText(runtime, "imageID")
-			if len(state) != 1 || err != nil || started.IsZero() || !(clusterSSHSourceExternalImage{Configured: image, Resolved: current}).valid(workload.repository) || (resolved != "" && resolved != current) {
+			if len(state) != 1 || err != nil || started.IsZero() || !imageValid(image, current) || (resolved != "" && resolved != current) {
 				return fail()
 			}
 			resolved = current

@@ -108,11 +108,15 @@ class ClusterStorageRBACTests(unittest.TestCase):
             "extra name": lambda role: role["rules"][0]["resourceNames"].append("other"),
             "all names": lambda role: role["rules"][0].pop("resourceNames"),
             "missing read": lambda role: role.update(rules=[]),
+            "missing owner read": lambda role: role["rules"].pop(1),
+            "owner names cannot cover dynamic revisions": lambda role: role["rules"][1].update(resourceNames=["system-upgrade-controller"]),
+            "owner subresource": lambda role: role["rules"][1].update(resources=["replicasets/status"]),
             "Secret": lambda role: role["rules"][0].update(resources=["secrets"]),
             "extra rule": lambda role: role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}),
         }
         for verb in ("list", "watch", "create", "update", "patch", "delete", "*"):
             mutations[f"verb {verb}"] = lambda role, v=verb: role["rules"][0]["verbs"].append(v)
+            mutations[f"owner verb {verb}"] = lambda role, v=verb: role["rules"][1]["verbs"].append(v)
         for field in ("apiGroups", "resources", "resourceNames"):
             mutations[f"wildcard {field}"] = lambda role, f=field: role["rules"][0].update({f: ["*"]})
         for name, mutate in mutations.items():

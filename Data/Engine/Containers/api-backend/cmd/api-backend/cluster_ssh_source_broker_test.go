@@ -44,7 +44,7 @@ func sshBrokerClient(t *testing.T, peers ...string) *clusterSSHSourceBrokerClien
 }
 
 func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T) {
-	for _, mode := range []string{"fresh repeated", "kubelet missing", "kubelet CSI missing", "kubelet CSI inode changed", "kubelet CSI mount changed", "kubelet CSI ancestry changed", "CSI peer process changed", "CSI peer and Pod changed", "kubelet executable digest", "kubelet root mismatch", "kubelet process changed", "kubelet listener changed", "kubelet root changed coherently", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
+	for _, mode := range []string{"fresh repeated", "kubelet missing", "kubelet CSI missing", "kubelet CSI inode changed", "kubelet CSI mount changed", "kubelet CSI ancestry changed", "CSI peer process changed", "CSI peer and Pod changed", "kubelet executable digest", "kubelet root mismatch", "kubelet process changed", "kubelet listener changed", "kubelet root changed coherently", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "upgrade runtime changed", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
 		t.Run(mode, func(t *testing.T) {
 			r, current, snapshot := sshBrokerFixture(t)
 			b := newClusterSSHSourceBroker(nil, nil, r.Lease.ControllerHolder, sshBrokerTestSecret)
@@ -70,7 +70,7 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 					if n > 1 {
 						value.Storage.Requirements.PostgresImage.Resolved = clusterSSHPostgresRepository + "@sha256:" + strings.Repeat("c", 64)
 					}
-				case "driver runtime changed", "driver init changed":
+				case "driver runtime changed", "upgrade runtime changed", "driver init changed":
 					if n > 1 {
 						image := "docker.io/longhornio/longhorn-manager@" + sshLonghornDriverPin("longhorn-manager").IndexDigest
 						if mode == "driver runtime changed" {
@@ -227,7 +227,7 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				started := time.Now()
 				value, err := read(context.Background())
 				expected, settings := value.Expected, value.Settings
-				wantOK := mode == "fresh repeated" || ((mode == "CSI peer process changed" || mode == "CSI peer and Pod changed" || mode == "kubelet CSI inode changed" || mode == "kubelet CSI mount changed" || mode == "kubelet CSI ancestry changed" || mode == "kubelet process changed" || mode == "kubelet listener changed" || mode == "kubelet root changed coherently" || mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed" || mode == "volume images changed" || mode == "replica images changed" || mode == "provisioner runtime changed" || mode == "resizer runtime changed" || mode == "snapshotter runtime changed" || mode == "CSI socket path changed" || mode == "attacher runtime changed" || mode == "UI runtime changed" || mode == "driver runtime changed" || mode == "driver init changed") && i == 0)
+				wantOK := mode == "fresh repeated" || ((mode == "CSI peer process changed" || mode == "CSI peer and Pod changed" || mode == "kubelet CSI inode changed" || mode == "kubelet CSI mount changed" || mode == "kubelet CSI ancestry changed" || mode == "kubelet process changed" || mode == "kubelet listener changed" || mode == "kubelet root changed coherently" || mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed" || mode == "volume images changed" || mode == "replica images changed" || mode == "provisioner runtime changed" || mode == "resizer runtime changed" || mode == "snapshotter runtime changed" || mode == "CSI socket path changed" || mode == "attacher runtime changed" || mode == "UI runtime changed" || mode == "upgrade runtime changed" || mode == "driver runtime changed" || mode == "driver init changed") && i == 0)
 				if wantOK {
 					if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) || !reflect.DeepEqual(settings, snapshot.Settings) || !slices.Equal(value.Sources, snapshot.Sources) || value.started.Before(started) || !reflect.DeepEqual(value.Storage, snapshot.Storage) {
 						t.Fatal("valid broker source rejected")
@@ -407,7 +407,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					raw = bytes.Replace(raw, []byte(`"version":28`), []byte(`"version":28,"version":28`), 1)
+					raw = bytes.Replace(raw, []byte(`"version":29`), []byte(`"version":29,"version":29`), 1)
 				}
 				aead := client.responseCipher
 				if mode == "wrong direction" {

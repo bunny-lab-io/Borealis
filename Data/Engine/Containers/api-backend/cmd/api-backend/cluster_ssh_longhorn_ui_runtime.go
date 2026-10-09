@@ -35,6 +35,7 @@ func clusterSSHLonghornUIOwner(object map[string]any, kind string) (clusterSSHSt
 
 func observeClusterSSHLonghornUIRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, deployment clusterSSHStorageIdentity, image string) (string, error) {
 	return observeClusterSSHLonghornDeploymentRuntime(read, readList, source, deployment, image, clusterSSHLonghornDeploymentWorkload{
+		namespace: "longhorn-system", labelKey: "app",
 		name: "longhorn-ui", serviceAccount: "longhorn-ui-service-account", repository: "docker.io/longhornio/longhorn-ui",
 		podsPath: clusterSSHLonghornUIPodsPath, replicaSetPrefix: clusterSSHLonghornUIReplicaSetPrefix,
 		replicaSetPathValid: clusterSSHLonghornUIReplicaSetPathValid, templateImage: clusterSSHLonghornUITemplateImage,

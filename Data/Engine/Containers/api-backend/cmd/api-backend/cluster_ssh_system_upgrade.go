@@ -10,10 +10,11 @@ const (
 	clusterSSHSystemUpgradeConfigPath = "/api/v1/namespaces/system-upgrade/configmaps/default-controller-env"
 )
 
-// Desired controller/drain-helper inputs only. Running identities, upgrade Plan
+// Desired controller/drain-helper inputs and running controller identity. Upgrade Plan
 // images, trust-directory contents and workload budgets remain separate evidence.
 type clusterSSHSystemUpgradeImages struct {
 	Controller string `json:"controller"`
+	Resolved   string `json:"resolved"`
 	Kubectl    string `json:"kubectl"`
 }
 
@@ -36,10 +37,13 @@ func clusterSSHSystemUpgradeImageValid(reference, role string) bool {
 }
 
 func (images clusterSSHSystemUpgradeImages) valid() bool {
+	return images.configuredValid() && clusterSSHSystemUpgradeRuntimeImageValid(images.Controller, images.Resolved)
+}
+func (images clusterSSHSystemUpgradeImages) configuredValid() bool {
 	return clusterSSHSystemUpgradeImageValid(images.Controller, "system-upgrade-controller") && clusterSSHSystemUpgradeImageValid(images.Kubectl, "kubectl")
 }
 
-func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, error)) (clusterSSHSystemUpgradeImages, error) {
+func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHSystemUpgradeImages, error) {
 	fail := func() (clusterSSHSystemUpgradeImages, error) {
 		return clusterSSHSystemUpgradeImages{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -48,24 +52,11 @@ func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, err
 	if err != nil || !ok || metadata.Name != "system-upgrade-controller" {
 		return fail()
 	}
-	template := clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template")
-	labels := clusterSSHStorageMap(clusterSSHStorageMap(template, "metadata"), "labels")
-	if labels["upgrade.cattle.io/controller"] != "system-upgrade-controller" {
+	image, err := clusterSSHSystemUpgradeTemplateImage(object)
+	if err != nil {
 		return fail()
 	}
-	spec := clusterSSHStorageMap(template, "spec")
-	containers, ok := spec["containers"].([]any)
-	if !ok || len(containers) != 1 || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) {
-		return fail()
-	}
-	container, ok := containers[0].(map[string]any)
-	if !ok || container["name"] != "system-upgrade-controller" || !clusterSSHStorageEmptyList(container["command"]) ||
-		!clusterSSHStorageEmptyList(container["args"]) || !clusterSSHStorageEmptyList(container["volumeDevices"]) ||
-		!clusterSSHStorageEmptyText(container["workingDir"]) || !clusterSSHStorageEmptyText(container["restartPolicy"]) ||
-		!clusterSSHStorageEmptyMap(container["lifecycle"]) || !clusterSSHSystemUpgradeEnvironment(container["env"], container["envFrom"]) ||
-		!clusterSSHSystemUpgradeMounts(container["volumeMounts"], spec["volumes"]) {
-		return fail()
-	}
+	owner := metadata
 	config, err := read(clusterSSHSystemUpgradeConfigPath)
 	metadata, ok = clusterSSHStorageMetadata(config, "v1", "ConfigMap", "system-upgrade")
 	if err != nil || !ok || metadata.Name != "default-controller-env" || !clusterSSHStorageEmptyMap(config["binaryData"]) {
@@ -85,8 +76,20 @@ func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, err
 			return fail()
 		}
 	}
-	images := clusterSSHSystemUpgradeImages{Controller: clusterSSHStorageText(container, "image"), Kubectl: clusterSSHStorageText(data, "SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE")}
-	if !images.valid() {
+	images := clusterSSHSystemUpgradeImages{Controller: image, Kubectl: clusterSSHStorageText(data, "SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE")}
+	if !images.configuredValid() {
+		return fail()
+	}
+	images.Resolved, err = observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
+		namespace: "system-upgrade", labelKey: "upgrade.cattle.io/controller", name: "system-upgrade-controller", serviceAccount: "system-upgrade",
+		repository: "docker.io/rancher/system-upgrade-controller", imageValid: clusterSSHSystemUpgradeRuntimeImageValid,
+		podsPath: clusterSSHSystemUpgradePodsPath, replicaSetPrefix: clusterSSHSystemUpgradeReplicaSetPrefix, replicaSetPathValid: clusterSSHSystemUpgradeReplicaSetPathValid, templateImage: clusterSSHSystemUpgradeTemplateImage,
+		specValid: func(spec map[string]any, pod bool) bool {
+			_, err := clusterSSHSystemUpgradeSpecImage(spec, pod)
+			return err == nil
+		},
+	})
+	if err != nil || !images.valid() {
 		return fail()
 	}
 	return images, nil

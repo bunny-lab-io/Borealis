@@ -100,6 +100,7 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 			return clusterSSHLonghornCSIImages{}, clusterbootstrap.ErrPreparationConfig
 		}
 		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
+			namespace: "longhorn-system", labelKey: "app",
 			name: string(role), serviceAccount: "longhorn-service-account", repository: role.repository(), replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
 			specValid:      clusterSSHLonghornCSISocketMatches(socket),
 			containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, string(role)) },
