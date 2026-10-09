@@ -28,7 +28,12 @@ func sshCertManagerDeploymentFixture(name string) map[string]any {
 		args = []any{"--v=2", "--secure-port=10250", "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)", "--dynamic-serving-ca-secret-name=cert-manager-webhook-ca", "--dynamic-serving-dns-names=cert-manager-webhook", "--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE)", "--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc"}
 	}
 	object := sshStorageObject("apps/v1", "Deployment", "cert-manager", name)
-	object["spec"] = map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
+	object["spec"] = map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": func() string {
+		if name == "cert-manager" {
+			return name
+		}
+		return role
+	}()}}, "spec": map[string]any{"serviceAccountName": name, "containers": []any{map[string]any{
 		"name": "cert-manager-" + role, "image": sshCertManagerPin(role).Reference, "args": args,
 		"env": []any{map[string]any{"name": "POD_NAMESPACE", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.namespace"}}}},
 	}}}}}
@@ -131,6 +136,9 @@ func TestClusterSSHCertManagerSourceConfiguration(t *testing.T) {
 				c["args"] = append(args, "--v")
 			case "malformed args":
 				c["args"] = []any{1}
+			}
+			if valid {
+				sshCertManagerRuntimeFixture(f)
 			}
 			result, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if valid {

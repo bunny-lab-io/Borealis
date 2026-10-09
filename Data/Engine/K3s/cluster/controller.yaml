@@ -360,3 +360,27 @@ subjects:
   - kind: ServiceAccount
     name: borealis-cluster-controller
     namespace: borealis
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: borealis-cluster-cert-manager-source
+  namespace: cert-manager
+rules:
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: borealis-cluster-cert-manager-source
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: borealis-cluster-cert-manager-source
+subjects:
+  - kind: ServiceAccount
+    name: borealis-cluster-controller
+    namespace: borealis

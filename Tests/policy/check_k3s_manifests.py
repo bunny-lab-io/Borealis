@@ -243,7 +243,13 @@ def validate_cluster_controller_contract() -> None:
     snapshot_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-snapshot-source"]
     if len(snapshot_bindings) != 1 or snapshot_bindings[0].get("metadata") != {"name": "borealis-cluster-snapshot-source", "namespace": "kube-system"} or snapshot_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-snapshot-source"} or snapshot_bindings[0].get("subjects") != binding.get("subjects"):
         fail("snapshot source RoleBinding must bind only controller ServiceAccount")
-    if sum(item.get("kind") == "Role" for item in objects) != 6 or sum(item.get("kind") == "RoleBinding" for item in objects) != 6:
+    cert_manager_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cert-manager-source"]
+    if len(cert_manager_roles) != 1 or cert_manager_roles[0].get("metadata") != {"name": "borealis-cluster-cert-manager-source", "namespace": "cert-manager"} or cert_manager_roles[0].get("rules") != [{"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("cert-manager source Role must allow only namespace ReplicaSet GET")
+    cert_manager_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cert-manager-source"]
+    if len(cert_manager_bindings) != 1 or cert_manager_bindings[0].get("metadata") != {"name": "borealis-cluster-cert-manager-source", "namespace": "cert-manager"} or cert_manager_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cert-manager-source"} or cert_manager_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("cert-manager source RoleBinding must bind only controller ServiceAccount")
+    if sum(item.get("kind") == "Role" for item in objects) != 7 or sum(item.get("kind") == "RoleBinding" for item in objects) != 7:
         fail("controller must not gain additional namespaced permissions")
     storage_class_rules = [rule for rule in rules if "storageclasses" in (rule.get("resources") or [])]
     if storage_class_rules != [{"apiGroups": ["storage.k8s.io"], "resources": ["storageclasses"], "verbs": ["get"]}]:

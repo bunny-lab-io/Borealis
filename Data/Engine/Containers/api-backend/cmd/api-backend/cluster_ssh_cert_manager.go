@@ -9,13 +9,16 @@ const clusterSSHCertManagerDeploymentPrefix = "/apis/apps/v1/namespaces/cert-man
 
 var clusterSSHCertManagerDeployments = []string{"cert-manager", "cert-manager-cainjector", "cert-manager-webhook"}
 
-// Desired Deployment configuration only: this does not assert running Pod
-// ownership, runtime image IDs, workload fit or readiness.
+// Configured role inputs and active-source runtime identities. Transient ACME
+// solver Pods are conditional; configuration alone does not prove their runtime.
 type clusterSSHCertManagerImages struct {
-	Controller string `json:"controller"`
-	Cainjector string `json:"cainjector"`
-	Webhook    string `json:"webhook"`
-	Solver     string `json:"solver"`
+	Controller         string `json:"controller"`
+	Cainjector         string `json:"cainjector"`
+	Webhook            string `json:"webhook"`
+	Solver             string `json:"solver"`
+	ControllerResolved string `json:"controller_resolved"`
+	CainjectorResolved string `json:"cainjector_resolved"`
+	WebhookResolved    string `json:"webhook_resolved"`
 }
 
 func clusterSSHCertManagerImageValid(reference, role string) bool {
@@ -29,11 +32,18 @@ func clusterSSHCertManagerImageValid(reference, role string) bool {
 	return false
 }
 
-func (images clusterSSHCertManagerImages) valid() bool {
+func (images clusterSSHCertManagerImages) configuredValid() bool {
 	return clusterSSHCertManagerImageValid(images.Controller, "controller") &&
 		clusterSSHCertManagerImageValid(images.Cainjector, "cainjector") &&
 		clusterSSHCertManagerImageValid(images.Webhook, "webhook") &&
 		clusterSSHCertManagerImageValid(images.Solver, "acmesolver")
+}
+
+func (images clusterSSHCertManagerImages) valid() bool {
+	return images.configuredValid() &&
+		(clusterSSHSourceExternalImage{Configured: images.Controller, Resolved: images.ControllerResolved}).valid("quay.io/jetstack/cert-manager-controller") &&
+		(clusterSSHSourceExternalImage{Configured: images.Cainjector, Resolved: images.CainjectorResolved}).valid("quay.io/jetstack/cert-manager-cainjector") &&
+		(clusterSSHSourceExternalImage{Configured: images.Webhook, Resolved: images.WebhookResolved}).valid("quay.io/jetstack/cert-manager-webhook")
 }
 
 func observeClusterSSHCertManagerImages(read func(string) (map[string]any, error)) (clusterSSHCertManagerImages, error) {
@@ -47,35 +57,20 @@ func observeClusterSSHCertManagerImages(read func(string) (map[string]any, error
 		if err != nil || !ok || metadata.Name != name {
 			return fail()
 		}
-		spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
-		containers, ok := spec["containers"].([]any)
-		if !ok || len(containers) != 1 || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) {
-			return fail()
-		}
-		container, ok := containers[0].(map[string]any)
-		containerName := name
-		if name == "cert-manager" {
-			containerName += "-controller"
-		}
-		if !ok || container["name"] != containerName || !clusterSSHStorageEmptyList(container["command"]) ||
-			!clusterSSHStorageEmptyList(container["envFrom"]) || !clusterSSHStorageEmptyList(container["volumeMounts"]) ||
-			!clusterSSHStorageEmptyList(container["volumeDevices"]) || !clusterSSHCertManagerEnvironment(container["env"]) {
-			return fail()
-		}
-		solver, ok := clusterSSHCertManagerArguments(container["args"], name)
-		if !ok {
+		image, solver, err := clusterSSHCertManagerTemplateImages(object, name)
+		if err != nil {
 			return fail()
 		}
 		switch name {
 		case "cert-manager":
-			images.Controller, images.Solver = clusterSSHStorageText(container, "image"), solver
+			images.Controller, images.Solver = image, solver
 		case "cert-manager-cainjector":
-			images.Cainjector = clusterSSHStorageText(container, "image")
+			images.Cainjector = image
 		case "cert-manager-webhook":
-			images.Webhook = clusterSSHStorageText(container, "image")
+			images.Webhook = image
 		}
 	}
-	if !images.valid() {
+	if !images.configuredValid() {
 		return fail()
 	}
 	return images, nil
