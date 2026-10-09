@@ -219,6 +219,7 @@ type clusterSSHStorageRequirements struct {
 	LonghornCSIImages           clusterSSHLonghornCSIImages      `json:"longhorn_csi_images"`
 	ReplicaImages               []clusterSSHStorageReplicaImage  `json:"replica_images"`
 	KubeVIP                     clusterSSHKubeVIPConfiguration   `json:"kube_vip"`
+	CNPGOperatorResolved        string                           `json:"cnpg_operator_resolved"`
 	CNPGOperatorImage           string                           `json:"cnpg_operator_image"`
 	SnapshotControllerImage     string                           `json:"snapshot_controller_image"`
 	SystemUpgradeImages         clusterSSHSystemUpgradeImages    `json:"system_upgrade_images"`

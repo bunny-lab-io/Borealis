@@ -294,6 +294,9 @@ rules:
     resources: ["configmaps", "secrets"]
     resourceNames: ["cnpg-controller-manager-config"]
     verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

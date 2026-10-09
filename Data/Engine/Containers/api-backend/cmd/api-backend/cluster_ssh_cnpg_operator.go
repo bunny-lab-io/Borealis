@@ -44,8 +44,8 @@ func clusterSSHCNPGOperatorImageValid(image string, bootstrap clusterSSHSourceEx
 		(clusterSSHSourceExternalImage{Configured: image, Resolved: bootstrap.Resolved}).valid(clusterSSHCNPGRepository)
 }
 
-// Desired operator inputs only. Reuse completed bootstrap identity; do not
-// infer running operator identity, TLS health, actual startup config or readiness.
+// Desired operator inputs remain tied to completed bootstrap identity. Running
+// operator image/ownership is observed separately; TLS/loaded state is not proved.
 func observeClusterSSHCNPGOperatorImage(read func(string) (map[string]any, error), bootstrap clusterSSHSourceExternalImage) (string, error) {
 	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
 	object, err := read(clusterSSHCNPGOperatorPath)
@@ -53,19 +53,8 @@ func observeClusterSSHCNPGOperatorImage(read func(string) (map[string]any, error
 	if err != nil || !ok || metadata.Name != "cnpg-controller-manager" {
 		return fail()
 	}
-	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
-	containers, ok := spec["containers"].([]any)
-	if !ok || len(containers) != 1 || !clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) {
-		return fail()
-	}
-	container, ok := containers[0].(map[string]any)
-	image := clusterSSHStorageText(container, "image")
-	if !ok || container["name"] != "manager" || !clusterSSHCNPGOperatorImageValid(image, bootstrap) ||
-		!clusterSSHStorageStrings(container["command"], "/manager") || !clusterSSHCNPGOperatorArguments(container["args"]) ||
-		!clusterSSHStorageEmptyList(container["envFrom"]) || !clusterSSHCNPGOperatorEnvironment(container["env"], image) ||
-		!clusterSSHStorageEmptyList(container["volumeDevices"]) || !clusterSSHStorageEmptyText(container["workingDir"]) ||
-		!clusterSSHStorageEmptyText(container["restartPolicy"]) || !clusterSSHStorageEmptyMap(container["lifecycle"]) ||
-		!clusterSSHCNPGOperatorMounts(container["volumeMounts"], spec["volumes"]) {
+	image, err := clusterSSHCNPGOperatorTemplateImage(object, bootstrap)
+	if err != nil {
 		return fail()
 	}
 	for _, path := range []string{clusterSSHCNPGConfigMapPath, clusterSSHCNPGSecretPath} {

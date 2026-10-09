@@ -19,7 +19,7 @@ func sshCNPGOperatorFixture() map[string]any {
 	if err := json.Unmarshal([]byte(`{"containers":[{"args":["controller","--leader-elect","--max-concurrent-reconciles=10","--config-map-name=cnpg-controller-manager-config","--secret-name=cnpg-controller-manager-config","--webhook-port=9443"],"command":["/manager"],"env":[{"name":"OPERATOR_IMAGE_NAME","value":"ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0"},{"name":"OPERATOR_NAMESPACE","valueFrom":{"fieldRef":{"fieldPath":"metadata.namespace"}}},{"name":"MONITORING_QUERIES_CONFIGMAP","value":"cnpg-default-monitoring"}],"image":"ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0","imagePullPolicy":"Always","livenessProbe":{"httpGet":{"path":"/readyz","port":9443,"scheme":"HTTPS"}},"name":"manager","ports":[{"containerPort":8080,"name":"metrics","protocol":"TCP"},{"containerPort":9443,"name":"webhook-server","protocol":"TCP"}],"readinessProbe":{"httpGet":{"path":"/readyz","port":9443,"scheme":"HTTPS"}},"resources":{"limits":{"cpu":"100m","memory":"200Mi"},"requests":{"cpu":"100m","memory":"100Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":10001,"runAsUser":10001,"seccompProfile":{"type":"RuntimeDefault"}},"startupProbe":{"failureThreshold":6,"httpGet":{"path":"/readyz","port":9443,"scheme":"HTTPS"},"periodSeconds":5},"volumeMounts":[{"mountPath":"/controller","name":"scratch-data"},{"mountPath":"/run/secrets/cnpg.io/webhook","name":"webhook-certificates"}]}],"securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"serviceAccountName":"cnpg-manager","terminationGracePeriodSeconds":10,"volumes":[{"emptyDir":{},"name":"scratch-data"},{"name":"webhook-certificates","secret":{"defaultMode":420,"optional":true,"secretName":"cnpg-webhook-cert"}}]}`), &spec); err != nil {
 		panic(err)
 	}
-	object["spec"] = map[string]any{"template": map[string]any{"spec": spec}}
+	object["spec"] = map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": "cloudnative-pg"}}, "spec": spec}}
 	return object
 }
 func sshCNPGOperatorSpec(f *sshStorageFixture) map[string]any {
@@ -158,6 +158,9 @@ func TestClusterSSHCNPGOperatorConfiguration(t *testing.T) {
 					return errClusterSSHCNPGConfigAbsent
 				}
 				return f.get(ctx, path, out)
+			}
+			if valid {
+				sshCNPGRuntimeFixture(f)
 			}
 			got, err := observeClusterSSHStorage(context.Background(), f.a.Source, get)
 			if valid {

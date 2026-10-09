@@ -50,55 +50,8 @@ func clusterSSHSystemUpgradeSpecImage(spec map[string]any, pod bool) (string, er
 	if !ok || container["name"] != "system-upgrade-controller" || !clusterSSHStorageEmptyList(container["command"]) || !clusterSSHStorageEmptyList(container["args"]) || !clusterSSHStorageEmptyList(container["volumeDevices"]) || !clusterSSHStorageEmptyText(container["workingDir"]) || !clusterSSHStorageEmptyText(container["restartPolicy"]) || !clusterSSHStorageEmptyMap(container["lifecycle"]) || !clusterSSHSystemUpgradeEnvironment(container["env"], container["envFrom"]) {
 		return fail()
 	}
-	volumes, ok := spec["volumes"].([]any)
-	if !ok || len(volumes) < 4 || len(volumes) > 5 || !pod && len(volumes) != 4 {
-		return fail()
-	}
-	mounts, ok := container["volumeMounts"].([]any)
-	if !ok || len(mounts) != len(volumes) {
-		return fail()
-	}
-	// Admission may add only the standard projected credentials, checked without
-	// reading their contents. Keep the existing TLS/tmp contract for all others.
-	token := ""
-	baseVolumes := []any{}
-	baseMounts := []any{}
-	for _, raw := range volumes {
-		volume, ok := raw.(map[string]any)
-		name := clusterSSHStorageText(volume, "name")
-		if !ok {
-			return fail()
-		}
-		if strings.HasPrefix(name, "kube-api-access-") {
-			if !pod || token != "" || len(volume) != 2 || !clusterSSHStorageName(name) || !clusterSSHLonghornCSIServiceAccountProjection(volume["projected"]) {
-				return fail()
-			}
-			token = name
-		} else {
-			baseVolumes = append(baseVolumes, raw)
-		}
-	}
-	found := false
-	for _, raw := range mounts {
-		mount, ok := raw.(map[string]any)
-		if !ok {
-			return fail()
-		}
-		if token != "" && mount["name"] == token {
-			if found || mount["mountPath"] != "/var/run/secrets/kubernetes.io/serviceaccount" || mount["readOnly"] != true {
-				return fail()
-			}
-			found = true
-			for key, value := range mount {
-				if key != "name" && key != "mountPath" && key != "readOnly" && (key != "mountPropagation" || value != "None") {
-					return fail()
-				}
-			}
-		} else {
-			baseMounts = append(baseMounts, raw)
-		}
-	}
-	if (token != "") != found || !clusterSSHSystemUpgradeMounts(baseMounts, baseVolumes) {
+	mounts, volumes, valid := clusterSSHServiceAccountMounts(container["volumeMounts"], spec["volumes"], 4, pod)
+	if !valid || !clusterSSHSystemUpgradeMounts(mounts, volumes) {
 		return fail()
 	}
 	image := clusterSSHStorageText(container, "image")

@@ -152,6 +152,9 @@ class ClusterStorageRBACTests(unittest.TestCase):
             "extra name": lambda role: role["rules"][0]["resourceNames"].append("other"),
             "all names": lambda role: role["rules"][0].pop("resourceNames"),
             "missing read": lambda role: role.update(rules=[]),
+            "missing owner read": lambda role: role["rules"].pop(1),
+            "owner subresource": lambda role: role["rules"][1].update(resources=["replicasets/status"]),
+            "owner wildcard": lambda role: role["rules"][1].update(resources=["*"]),
             "missing ConfigMap read": lambda role: role["rules"][0].update(resources=["secrets"]),
             "missing Secret read": lambda role: role["rules"][0].update(resources=["configmaps"]),
             "extra resource": lambda role: role["rules"][0]["resources"].append("services"),
@@ -160,6 +163,7 @@ class ClusterStorageRBACTests(unittest.TestCase):
         }
         for verb in ("list", "watch", "create", "update", "patch", "delete", "*"):
             mutations[f"verb {verb}"] = lambda role, v=verb: role["rules"][0]["verbs"].append(v)
+            mutations[f"owner verb {verb}"] = lambda role, v=verb: role["rules"][1]["verbs"].append(v)
         for field in ("apiGroups", "resources", "resourceNames"):
             mutations[f"wildcard {field}"] = lambda role, f=field: role["rules"][0].update({f: ["*"]})
         for name, mutate in mutations.items():

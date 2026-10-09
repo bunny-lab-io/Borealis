@@ -52,6 +52,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 		f.objects[clusterSSHCertManagerDeploymentPrefix+name] = sshCertManagerDeploymentFixture(name)
 	}
 	f.objects[clusterSSHCNPGOperatorPath] = sshCNPGOperatorFixture()
+	sshCNPGRuntimeFixture(f)
 	f.objects[clusterSSHCNPGConfigMapPath] = sshStorageObject("v1", "ConfigMap", "cnpg-system", "cnpg-controller-manager-config")
 	f.objects[clusterSSHCNPGSecretPath] = sshStorageObject("v1", "Secret", "cnpg-system", "cnpg-controller-manager-config")
 	f.objects[clusterSSHLonghornDriverPath] = sshLonghornDriverFixture()

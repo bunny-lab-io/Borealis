@@ -9,6 +9,7 @@ import (
 // Transport still permits only each explicitly listed namespace/name/selector.
 type clusterSSHLonghornDeploymentWorkload struct {
 	namespace, labelKey                                string
+	labelValue, containerName                          string
 	imageValid                                         func(string, string) bool
 	specValid                                          func(map[string]any, bool) bool // CSI declared mount contract; bool distinguishes admitted Pods from templates.
 	containerValid                                     func(map[string]any) bool       // Optional fixed workload invocation contract; UI keeps existing behavior.
@@ -28,6 +29,13 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
 	if read == nil || readList == nil || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
+	}
+	labelValue, containerName := workload.labelValue, workload.containerName
+	if labelValue == "" {
+		labelValue = workload.name
+	}
+	if containerName == "" {
+		containerName = workload.name
 	}
 	imageValid := workload.imageValid
 	if imageValid == nil {
@@ -55,7 +63,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 		}
 		for _, pod := range pods {
 			id, ok := clusterSSHStorageMetadata(pod, "v1", "Pod", workload.namespace)
-			if !ok || podIDs[id.UID] || podNames[id.Name] || clusterSSHStorageMap(clusterSSHStorageMap(pod, "metadata"), "labels")[workload.labelKey] != workload.name {
+			if !ok || podIDs[id.UID] || podNames[id.Name] || clusterSSHStorageMap(clusterSSHStorageMap(pod, "metadata"), "labels")[workload.labelKey] != labelValue {
 				return fail()
 			}
 			podIDs[id.UID], podNames[id.Name] = true, true
@@ -111,7 +119,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 				return fail()
 			}
 			container, ok := containers[0].(map[string]any)
-			if !ok || container["name"] != workload.name || container["image"] != image || (workload.containerValid != nil && !workload.containerValid(container)) {
+			if !ok || container["name"] != containerName || container["image"] != image || (workload.containerValid != nil && !workload.containerValid(container)) {
 				return fail()
 			}
 			statuses, ok := status["containerStatuses"].([]any)
@@ -119,7 +127,7 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 				return fail()
 			}
 			runtime, ok := statuses[0].(map[string]any)
-			if !ok || runtime["name"] != workload.name || runtime["image"] != image || runtime["ready"] != true || runtime["started"] != true {
+			if !ok || runtime["name"] != containerName || runtime["image"] != image || runtime["ready"] != true || runtime["started"] != true {
 				return fail()
 			}
 			state := clusterSSHStorageMap(runtime, "state")

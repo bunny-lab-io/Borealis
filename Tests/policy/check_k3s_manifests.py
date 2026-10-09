@@ -225,8 +225,8 @@ def validate_cluster_controller_contract() -> None:
         fail("upgrade settings RoleBinding must bind only controller ServiceAccount")
     cnpg_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
     cnpg_rule = {"apiGroups": [""], "resources": ["configmaps", "secrets"], "resourceNames": ["cnpg-controller-manager-config"], "verbs": ["get"]}
-    if len(cnpg_roles) != 1 or cnpg_roles[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_roles[0].get("rules") != [cnpg_rule]:
-        fail("CNPG settings Role must allow only named controller configuration ConfigMap and Secret GETs")
+    if len(cnpg_roles) != 1 or cnpg_roles[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_roles[0].get("rules") != [cnpg_rule, {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("CNPG settings Role must allow only named controller configuration ConfigMap/Secret GETs and namespace ReplicaSet GET")
     cnpg_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
     if len(cnpg_bindings) != 1 or cnpg_bindings[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cnpg-settings"} or cnpg_bindings[0].get("subjects") != binding.get("subjects"):
         fail("CNPG settings RoleBinding must bind only controller ServiceAccount")
