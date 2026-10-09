@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"path"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -46,9 +47,17 @@ func sourceCSIPathStat(fd int, socket bool) (sourceCSIPathNode, error) {
 	return sourceCSIPathNode{device, stat.Ino, stat.Mnt_id, uint32(stat.Mode), stat.Uid, stat.Gid}, nil
 }
 func captureSourceCSIPath(ctx context.Context, hostRoot, root string) (*sourceCSIPath, error) {
+	if !clusterbootstrap.ValidSourceKubeletRoot(root) {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	return captureSourceSocketPath(ctx, hostRoot, root+clusterbootstrap.KubeletCSISocketSuffix)
+}
+
+// Private caller selects either derived host CSI path or fixed in-container path.
+func captureSourceSocketPath(ctx context.Context, hostRoot, socketPath string) (*sourceCSIPath, error) {
 	p := &sourceCSIPath{}
 	fail := func() (*sourceCSIPath, error) { p.close(); return nil, clusterbootstrap.ErrPreparationConfig }
-	if ctx.Err() != nil || !clusterbootstrap.ValidSourceKubeletRoot(root) {
+	if ctx.Err() != nil || socketPath == "" || socketPath[0] != '/' || len(socketPath) > 107-len(clusterbootstrap.KubeletPodResourcesSuffix)+len(clusterbootstrap.KubeletCSISocketSuffix) || path.Clean(socketPath) != socketPath {
 		return fail()
 	}
 	fd, err := unix.Open(hostRoot, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -61,7 +70,7 @@ func captureSourceCSIPath(ctx context.Context, hostRoot, root string) (*sourceCS
 		return fail()
 	}
 	p.nodes = append(p.nodes, info)
-	parts := strings.Split(strings.TrimPrefix(root+clusterbootstrap.KubeletCSISocketSuffix, "/"), "/")
+	parts := strings.Split(strings.TrimPrefix(socketPath, "/"), "/")
 	for i, part := range parts {
 		if ctx.Err() != nil {
 			return fail()
@@ -88,11 +97,14 @@ func captureSourceCSIPath(ctx context.Context, hostRoot, root string) (*sourceCS
 	return p, nil
 }
 func (p *sourceCSIPath) recheck(ctx context.Context, hostRoot, root string) error {
+	return p.recheckSocket(ctx, hostRoot, root+clusterbootstrap.KubeletCSISocketSuffix)
+}
+func (p *sourceCSIPath) recheckSocket(ctx context.Context, hostRoot, socketPath string) error {
 	fail := clusterbootstrap.ErrPreparationConfig
-	if p == nil || len(p.nodes) < 4 || len(p.fds) != len(p.nodes) || ctx.Err() != nil {
+	if p == nil || len(p.nodes) < 3 || len(p.fds) != len(p.nodes) || ctx.Err() != nil {
 		return fail
 	}
-	current, err := captureSourceCSIPath(ctx, hostRoot, root)
+	current, err := captureSourceSocketPath(ctx, hostRoot, socketPath)
 	if err != nil {
 		return fail
 	}

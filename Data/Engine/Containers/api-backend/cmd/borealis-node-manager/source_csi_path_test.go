@@ -100,7 +100,9 @@ func TestSourceCSIPathFilesystemIdentity(t *testing.T) {
 			}
 			defer p.close()
 			first := p.projection(root)
-			if first.Validate() != nil {
+			validation := first
+			validation.Listener = sourceCSIListenerFixture()
+			if validation.Validate() != nil {
 				t.Fatal("invalid projection")
 			}
 			switch mode {

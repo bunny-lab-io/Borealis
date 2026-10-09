@@ -78,7 +78,7 @@ func TestSourceKubeletPublicReceiptContract(t *testing.T) {
 		"duplicate": bytes.Replace(receipt, []byte(`"pid":42`), []byte(`"pid":42,"pid":42`), 1),
 		"missing":   bytes.Replace(receipt, []byte(`"pid":42,`), nil, 1),
 		"null":      bytes.Replace(receipt, []byte(`"pid":42`), []byte(`"pid":null`), 1),
-		"legacy":    bytes.Replace(receipt, []byte(`"version":5`), []byte(`"version":4`), 1),
+		"legacy":    bytes.Replace(receipt, []byte(`"version":6`), []byte(`"version":4`), 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, err := ParseSourceNetworkReceipt(bad, nonce, job, pod); err != ErrPreparationConfig || got != (SourceNetwork{}) {
@@ -150,6 +150,7 @@ func TestSourceCSISocketStrictProjection(t *testing.T) {
 	k := &network.Kubelet
 	k.Root = "/" + strings.Repeat("x", 106-len(KubeletPodResourcesSuffix))
 	k.PID = 2147483647
+	k.CSISocket.Listener.UserID = ^uint32(0)
 	for _, n := range []*uint64{&k.StartTicks, &k.ListenerInode, &k.NetworkNamespace, &k.MountNamespace, &k.ExecutableDevice, &k.ExecutableInode, &k.HostRootDevice, &k.HostRootInode, &k.CSISocket.DirectoryDevice, &k.CSISocket.DirectoryInode, &k.CSISocket.DirectoryMount, &k.CSISocket.SocketDevice, &k.CSISocket.SocketInode, &k.CSISocket.SocketMount} {
 		*n = 1<<53 - 1
 	}
@@ -165,5 +166,47 @@ func TestSourceCSISocketStrictProjection(t *testing.T) {
 	action, _ = json.Marshal(map[string]any{"ok": true, "verb": "InspectVIPNetwork", "result": map[string]any{"source_vip_network": value}})
 	if _, err = NewSourceVIPReceipt(action, nonce, job, pod, vip.Address); err != nil {
 		t.Fatal("maximum VIP proof", err)
+	}
+}
+
+func TestSourceCSIListenerStrictReceipt(t *testing.T) {
+	raw, identity := sourceNetworkFixture(t)
+	network, err := ParseSourceNetwork(raw, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, job, pod := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
+	action, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceNetwork", "result": map[string]any{"source_network": network}})
+	receipt, err := NewSourceNetworkReceipt(action, nonce, job, pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"pod_uid", "container_id", "identity_sha256", "user_id"} {
+		for _, mode := range []string{"missing", "null", "alias", "private", "duplicate"} {
+			t.Run(field+"/"+mode, func(t *testing.T) {
+				var wire map[string]any
+				_ = json.Unmarshal(receipt, &wire)
+				listener := wire["source_network"].(map[string]any)["kubelet"].(map[string]any)["csi_socket"].(map[string]any)["listener"].(map[string]any)
+				switch mode {
+				case "missing":
+					delete(listener, field)
+				case "null":
+					listener[field] = nil
+				case "alias":
+					listener[strings.ToUpper(field)] = listener[field]
+					delete(listener, field)
+				case "private":
+					listener["private"] = "hidden"
+				}
+				bad, _ := json.Marshal(wire)
+				if mode == "duplicate" {
+					key := []byte(`"` + field + `":`)
+					bad = bytes.Replace(bad, key, []byte(`"`+field+`":null,"`+field+`":`), 1)
+				}
+				if _, err := ParseSourceNetworkReceipt(bad, nonce, job, pod); err == nil {
+					t.Fatal("invalid listener receipt accepted")
+				}
+			})
+		}
 	}
 }

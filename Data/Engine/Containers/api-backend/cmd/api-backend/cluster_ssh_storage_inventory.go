@@ -42,7 +42,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		if err != nil {
 			return nil, err
 		}
-		if path != clusterSSHStorageClaimsPath && path != clusterSSHStoragePodsPath && !clusterSSHKubeVIPPodsPathValid(path) && !clusterSSHLonghornManagerPodsPathValid(path) && !clusterSSHLonghornUIPodsPathValid(path) && !clusterSSHLonghornCSIPodsPathValid(path) && !clusterSSHLonghornAttacherPodsPathValid(path) && !clusterSSHLonghornDriverPodsPathValid(path) && !clusterSSHStorageReplicasPathValid(path) {
+		if path != clusterSSHStorageClaimsPath && path != clusterSSHStoragePodsPath && !clusterSSHKubeVIPPodsPathValid(path) && !clusterSSHLonghornManagerPodsPathValid(path) && !clusterSSHLonghornPluginPodsPathValid(path) && !clusterSSHLonghornUIPodsPathValid(path) && !clusterSSHLonghornCSIPodsPathValid(path) && !clusterSSHLonghornAttacherPodsPathValid(path) && !clusterSSHLonghornDriverPodsPathValid(path) && !clusterSSHStorageReplicasPathValid(path) {
 			result.receipts[path] = digest
 		}
 		return object, nil
@@ -251,6 +251,10 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
+	result.Requirements.LonghornPlugin, err = observeClusterSSHLonghornPlugin(read, readList, source, result.Requirements.LonghornDriverImages, result.Requirements.LonghornCSISocketPath)
+	if err != nil {
+		return fail()
+	}
 	result.Requirements.LonghornManagerImages, err = observeClusterSSHLonghornManagerImages(read, readList, source, result.Requirements.LonghornDriverImages)
 	if err != nil {
 		return fail()
@@ -289,7 +293,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 // Fixed GET-only transport uses existing controller TLS/token and existing
 // PVC/PV/Pod/CNPG/Longhorn reads plus GET-only provisioning policy permissions.
 func (c *kubernetesAPIClient) getClusterSSHStorageJSON(ctx context.Context, path string, out any) error {
-	valid := clusterSSHLonghornCSIPathValid(path) || path == clusterSSHLonghornAttacherPath || clusterSSHLonghornAttacherPodsPathValid(path) || clusterSSHLonghornAttacherReplicaSetPathValid(path) || clusterSSHLonghornDriverPodsPathValid(path) || clusterSSHLonghornDriverReplicaSetPathValid(path) || clusterSSHLonghornUIPodsPathValid(path) || clusterSSHLonghornUIReplicaSetPathValid(path) || slices.ContainsFunc(clusterSSHCertManagerDeployments, func(name string) bool { return path == clusterSSHCertManagerDeploymentPrefix+name }) || clusterSSHStorageReplicasPathValid(path) || clusterSSHLonghornManagerPodsPathValid(path) || clusterSSHKubeVIPPodsPathValid(path) || path == clusterSSHKubeVIPPath || path == clusterSSHCNPGOperatorPath || clusterSSHCNPGOptionalConfigPath(path) || path == clusterSSHSnapshotControllerPath || path == clusterSSHSystemUpgradePath || path == clusterSSHSystemUpgradeConfigPath || path == clusterSSHLonghornUIPath || path == clusterSSHLonghornManagerPath || path == clusterSSHLonghornDriverPath || path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
+	valid := path == clusterSSHLonghornPluginPath || clusterSSHLonghornPluginPodsPathValid(path) || clusterSSHLonghornCSIPathValid(path) || path == clusterSSHLonghornAttacherPath || clusterSSHLonghornAttacherPodsPathValid(path) || clusterSSHLonghornAttacherReplicaSetPathValid(path) || clusterSSHLonghornDriverPodsPathValid(path) || clusterSSHLonghornDriverReplicaSetPathValid(path) || clusterSSHLonghornUIPodsPathValid(path) || clusterSSHLonghornUIReplicaSetPathValid(path) || slices.ContainsFunc(clusterSSHCertManagerDeployments, func(name string) bool { return path == clusterSSHCertManagerDeploymentPrefix+name }) || clusterSSHStorageReplicasPathValid(path) || clusterSSHLonghornManagerPodsPathValid(path) || clusterSSHKubeVIPPodsPathValid(path) || path == clusterSSHKubeVIPPath || path == clusterSSHCNPGOperatorPath || clusterSSHCNPGOptionalConfigPath(path) || path == clusterSSHSnapshotControllerPath || path == clusterSSHSystemUpgradePath || path == clusterSSHSystemUpgradeConfigPath || path == clusterSSHLonghornUIPath || path == clusterSSHLonghornManagerPath || path == clusterSSHLonghornDriverPath || path == clusterSSHStorageClaimsPath || path == clusterSSHStoragePodsPath || path == clusterSSHStoragePostgresPath || path == "/api/v1/namespaces/kube-system" || path == "/api/v1/nodes"
 	for _, prefix := range []string{clusterSSHStoragePVPrefix, clusterSSHStorageVolumePrefix, clusterSSHStorageClassPrefix} {
 		if strings.HasPrefix(path, prefix) {
 			valid = clusterSSHStorageName(strings.TrimPrefix(path, prefix))

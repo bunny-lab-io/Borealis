@@ -46,7 +46,13 @@ func parsePublicSourceNetwork(raw []byte) (SourceNetwork, error) {
 		return SourceNetwork{}, ErrPreparationConfig
 	}
 
-	if _, err := sourceExactObject(kubelet["csi_socket"], "directory_device", "directory_inode", "directory_mount", "socket_device", "socket_inode", "socket_mount", "path_sha256"); err != nil {
+	socket, err := sourceExactObject(kubelet["csi_socket"], "directory_device", "directory_inode", "directory_mount", "socket_device", "socket_inode", "socket_mount", "path_sha256", "listener")
+	if err != nil {
+		return SourceNetwork{}, ErrPreparationConfig
+	}
+	listener, err := sourceExactObject(socket["listener"], "pod_uid", "container_id", "identity_sha256", "user_id")
+	var uid *uint32
+	if err != nil || json.Unmarshal(listener["user_id"], &uid) != nil || uid == nil {
 		return SourceNetwork{}, ErrPreparationConfig
 	}
 	return network, nil
@@ -72,7 +78,7 @@ func NewSourceNetworkReceipt(raw []byte, nonce, jobUID, podUID string) ([]byte, 
 	if err != nil {
 		return nil, ErrPreparationConfig
 	}
-	receipt, err := json.Marshal(sourceNetworkReceipt{5, nonce, jobUID, podUID, network})
+	receipt, err := json.Marshal(sourceNetworkReceipt{6, nonce, jobUID, podUID, network})
 	if err != nil || len(receipt) > SourceNetworkReceiptLimit {
 		return nil, ErrPreparationConfig
 	}
@@ -86,7 +92,7 @@ func ParseSourceNetworkReceipt(raw []byte, nonce, jobUID, podUID string) (Source
 	}
 	object, err := sourceExactObject(raw, "version", "nonce", "job_uid", "pod_uid", "source_network")
 	var receipt sourceNetworkReceipt
-	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Version != 5 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID {
+	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Version != 6 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID {
 		return fail()
 	}
 	return parsePublicSourceNetwork(object["source_network"])

@@ -251,6 +251,7 @@ func TestClusterSSHLonghornManagerSourceConfiguration(t *testing.T) {
 				delete(clusterSSHStorageMap(setting, "metadata"), "resourceVersion")
 			}
 			if valid {
+				sshLonghornPluginFixture(f)
 				sshLonghornManagerRuntimeFixture(f)
 				sshLonghornDriverRuntimeFixture(f)
 			}

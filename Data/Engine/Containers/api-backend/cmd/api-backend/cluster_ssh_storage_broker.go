@@ -39,6 +39,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		storage.observation = ""
 		storage.Volumes = slices.Clone(storage.Volumes)
 		storage.ReplicaImages = slices.Clone(storage.ReplicaImages)
+		storage.LonghornPlugin = slices.Clone(storage.LonghornPlugin)
 		storage.Policy.Classes = slices.Clone(storage.Policy.Classes)
 		value.Storage = clusterSSHStorageSnapshot{Requirements: storage, Observation: observation}
 		return nil
@@ -59,7 +60,7 @@ func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clus
 		return false
 	}
 	validBytes := func(n uint64) bool { return n > 0 && n <= math.MaxInt64 }
-	if !r.KubeVIP.valid(source) || !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
+	if !clusterSSHLonghornPluginValid(r.LonghornPlugin, source, r.LonghornDriverImages) || !r.KubeVIP.valid(source) || !clusterSSHSourceObservationRE.MatchString(value.Observation) || r.observation != "" ||
 		!validBytes(r.ArtifactReplicaBytes) || !validBytes(r.PostgresInstanceBytes) || !r.PostgresImage.valid() || !clusterSSHCNPGOperatorImageValid(r.CNPGOperatorImage, r.PostgresImage.Bootstrap) || !r.SystemUpgradeImages.valid() || !clusterSSHSnapshotControllerImageValid(r.SnapshotControllerImage) || !r.CertManagerImages.valid() || !r.LonghornCSIImages.valid(r.LonghornDriverImages) || !r.LonghornDriverImages.valid() || !r.LonghornAttacherImage.valid(clusterSSHLonghornAttacherRepository) || r.LonghornAttacherImage.Configured != r.LonghornDriverImages.Attacher || !r.LonghornManagerImages.valid() || !(clusterSSHSourceExternalImage{Configured: r.LonghornUIImage, Resolved: r.LonghornUIResolved}).valid("docker.io/longhornio/longhorn-ui") || r.LonghornManagerImages.Manager != r.LonghornDriverImages.Manager || len(source.Members) < 1 || len(source.Members) > 2 ||
 		len(r.Volumes) < len(source.Members)+1 || len(r.Volumes) > 16 {
 		return false

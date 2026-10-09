@@ -12,11 +12,12 @@ import (
 )
 
 // Only fixed read-only service metadata and procfs are consumed. No process
-// arguments, environment, configuration contents or socket traffic are read.
+// arguments, environment or configuration contents are read. CSI connection
+// reads kernel credentials only; no application payload is sent or received.
 func sourceKubelet(ctx context.Context) (clusterbootstrap.SourceKubelet, error) {
 	return observeSourceKubelet(ctx, "/proc", func(ctx context.Context) ([]byte, error) {
 		return sourceLinkCommand(ctx, "/usr/bin/systemctl", "show", "k3s.service", "--property=Id,MainPID,InvocationID,ActiveState,SubState", "--no-pager")
-	}, checkSourceKubeletExecutable)
+	}, checkSourceKubeletExecutable, captureSourceCSIListener)
 }
 
 type sourceKubeletService struct {
@@ -104,6 +105,9 @@ func sourceKubeletRootUID(raw []byte) bool {
 // Linux unix_seq_show writes seven whitespace-delimited fields followed by the
 // unescaped pathname. Preserve spaces inside path; never infer a default root.
 func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, uint64, error) {
+	return parseSourceUnixListener(raw, owned, clusterbootstrap.KubeletPodResourcesSuffix)
+}
+func parseSourceUnixListener(raw []byte, owned map[uint64]string, suffix string) (string, uint64, error) {
 	fail := func() (string, uint64, error) { return "", 0, clusterbootstrap.ErrPreparationConfig }
 	if len(raw) == 0 || len(raw) > 1<<20 {
 		return fail()
@@ -139,7 +143,7 @@ func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, ui
 			continue
 		}
 		socket := strings.TrimLeft(rest, " \t")
-		root, ok := strings.CutSuffix(socket, clusterbootstrap.KubeletPodResourcesSuffix)
+		root, ok := strings.CutSuffix(socket, suffix)
 		if !ok {
 			continue
 		}
@@ -158,11 +162,11 @@ func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, ui
 	return foundRoot, foundInode, nil
 }
 
-func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(context.Context) ([]byte, error), executableCheck func(context.Context, *os.File) error) (clusterbootstrap.SourceKubelet, error) {
+func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(context.Context) ([]byte, error), executableCheck func(context.Context, *os.File) error, listenerCapture sourceCSIListenerCapture) (clusterbootstrap.SourceKubelet, error) {
 	fail := func() (clusterbootstrap.SourceKubelet, error) {
 		return clusterbootstrap.SourceKubelet{}, clusterbootstrap.ErrPreparationConfig
 	}
-	if serviceRead == nil || executableCheck == nil || ctx.Err() != nil {
+	if serviceRead == nil || executableCheck == nil || listenerCapture == nil || ctx.Err() != nil {
 		return fail()
 	}
 	raw, err := serviceRead(ctx)
@@ -173,7 +177,7 @@ func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(con
 	if err != nil {
 		return fail()
 	}
-	before, err := sourceKubeletProcess(ctx, proc, service, executableCheck)
+	before, err := sourceKubeletProcess(ctx, proc, service, executableCheck, listenerCapture)
 	if err != nil {
 		return fail()
 	}
@@ -185,14 +189,14 @@ func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(con
 	if err != nil || afterService != service {
 		return fail()
 	}
-	after, err := sourceKubeletProcess(ctx, proc, service, executableCheck)
+	after, err := sourceKubeletProcess(ctx, proc, service, executableCheck, listenerCapture)
 	if err != nil || after != before || ctx.Err() != nil {
 		return fail()
 	}
 	return before, nil
 }
 
-func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubeletService, executableCheck func(context.Context, *os.File) error) (clusterbootstrap.SourceKubelet, error) {
+func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubeletService, executableCheck func(context.Context, *os.File) error, listenerCapture sourceCSIListenerCapture) (clusterbootstrap.SourceKubelet, error) {
 	fail := func() (clusterbootstrap.SourceKubelet, error) {
 		return clusterbootstrap.SourceKubelet{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -310,6 +314,11 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if csi.nodes[0].Device != host[2] || csi.nodes[0].Inode != host[3] {
 		return fail()
 	}
+	listener, err := listenerCapture(ctx, proc, csi)
+	if err != nil {
+		return fail()
+	}
+	defer listener.close()
 	// Recheck the owning descriptor and kernel socket inode, not filesystem inode.
 	fdName := "fd/" + owned[inode]
 	target, err := process.Readlink(fdName)
@@ -352,7 +361,12 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if csi.recheck(ctx, filepath.Join(pidPath, "root"), root) != nil {
 		return fail()
 	}
-	result := clusterbootstrap.SourceKubelet{CSISocket: csi.projection(root), ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: service.pid, StartTicks: start, Invocation: service.invocation, ListenerInode: inode, NetworkNamespace: host[0], MountNamespace: host[1], HostRootDevice: host[2], HostRootInode: host[3], ExecutableDevice: uint64(exestat.Dev), ExecutableInode: exestat.Ino}
+	if listener.recheck(ctx) != nil {
+		return fail()
+	}
+	socket := csi.projection(root)
+	socket.Listener = listener.value
+	result := clusterbootstrap.SourceKubelet{CSISocket: socket, ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: root, PID: service.pid, StartTicks: start, Invocation: service.invocation, ListenerInode: inode, NetworkNamespace: host[0], MountNamespace: host[1], HostRootDevice: host[2], HostRootInode: host[3], ExecutableDevice: uint64(exestat.Dev), ExecutableInode: exestat.Ino}
 	if result.Validate() != nil {
 		return fail()
 	}

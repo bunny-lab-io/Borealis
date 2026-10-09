@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"slices"
 	"strings"
 )
 
@@ -154,10 +155,18 @@ func clusterSSHLonghornCSIServiceAccountProjection(raw any) bool {
 // Source members can have different process/inode identities, but every actual
 // kubelet root must agree with the single cluster-wide CSI hostPath declaration.
 func (r clusterSSHStorageRequirements) csiSocketMatchesNetworks(sources []clusterbootstrap.SourceNetwork) bool {
-	if len(sources) < 1 || len(sources) > 2 {
+	if len(sources) < 1 || len(sources) > 2 || len(r.LonghornPlugin) != len(sources) {
 		return false
 	}
+	seen := map[string]bool{}
 	for _, source := range sources {
+		peer := source.Kubelet.CSISocket.Listener
+		if seen[source.NodeUID] || peer.UserID != 0 || !slices.ContainsFunc(r.LonghornPlugin, func(p clusterSSHLonghornPluginMember) bool {
+			return p.Node == source.Hostname && p.NodeUID == source.NodeUID && p.PodUID == peer.PodUID && p.ContainerID == peer.ContainerID
+		}) {
+			return false
+		}
+		seen[source.NodeUID] = true
 		if source.Validate() != nil || r.LonghornCSISocketPath != source.Kubelet.Root+clusterbootstrap.KubeletCSIDirectorySuffix {
 			return false
 		}

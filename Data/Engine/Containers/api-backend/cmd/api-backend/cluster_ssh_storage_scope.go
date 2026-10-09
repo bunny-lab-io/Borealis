@@ -125,6 +125,7 @@ func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPre
 		value := retained.Requirements
 		value.Volumes = slices.Clone(value.Volumes)
 		value.ReplicaImages = slices.Clone(value.ReplicaImages)
+		value.LonghornPlugin = slices.Clone(value.LonghornPlugin)
 		value.Policy.Classes = slices.Clone(value.Policy.Classes)
 		if consume(readerCtx, value, checks) != nil || readerCtx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig

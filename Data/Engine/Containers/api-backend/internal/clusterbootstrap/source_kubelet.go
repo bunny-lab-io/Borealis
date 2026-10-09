@@ -7,7 +7,8 @@ import (
 
 // SourceKubelet binds an observed PodResources listener pathname to the current
 // k3s.service process and its reviewed executable backing bytes. It does not
-// attest process memory, socket listener ownership, CSI health or persistence.
+// attest process memory, CSI health or persistence. CSI listener metadata is
+// independently matched to the observed Kubernetes plugin Pod by the controller.
 type SourceKubelet struct {
 	CSISocket        SourceCSISocket `json:"csi_socket"`
 	Root             string          `json:"root"`
@@ -30,18 +31,35 @@ const KubeletCSISocketSuffix = KubeletCSIDirectorySuffix + "/csi.sock"
 
 // SourceCSISocket identifies the selected directory and socket filesystem
 // objects. PathSHA256 freezes every held path component's mount/inode/type and
-// ownership/mode, not directory contents or a listening process.
+// ownership/mode, not directory contents. Listener carries separate process proof.
 type SourceCSISocket struct {
-	DirectoryDevice uint64 `json:"directory_device"`
-	DirectoryInode  uint64 `json:"directory_inode"`
-	DirectoryMount  uint64 `json:"directory_mount"`
-	SocketDevice    uint64 `json:"socket_device"`
-	SocketInode     uint64 `json:"socket_inode"`
-	SocketMount     uint64 `json:"socket_mount"`
-	PathSHA256      string `json:"path_sha256"`
+	Listener        SourceCSIListener `json:"listener"`
+	DirectoryDevice uint64            `json:"directory_device"`
+	DirectoryInode  uint64            `json:"directory_inode"`
+	DirectoryMount  uint64            `json:"directory_mount"`
+	SocketDevice    uint64            `json:"socket_device"`
+	SocketInode     uint64            `json:"socket_inode"`
+	SocketMount     uint64            `json:"socket_mount"`
+	PathSHA256      string            `json:"path_sha256"`
 }
 
+type SourceCSIListener struct {
+	PodUID         string `json:"pod_uid"`
+	ContainerID    string `json:"container_id"`
+	IdentitySHA256 string `json:"identity_sha256"`
+	UserID         uint32 `json:"user_id"`
+}
+
+func (v SourceCSIListener) Validate() error {
+	if !nonzeroPreparationUUID(v.PodUID) || !digestPattern.MatchString(v.ContainerID) || v.ContainerID == strings.Repeat("0", 64) || !digestPattern.MatchString(v.IdentitySHA256) || v.IdentitySHA256 == strings.Repeat("0", 64) {
+		return ErrPreparationConfig
+	}
+	return nil
+}
 func (s SourceCSISocket) Validate() error {
+	if s.Listener.Validate() != nil {
+		return ErrPreparationConfig
+	}
 	if !digestPattern.MatchString(s.PathSHA256) || s.PathSHA256 == strings.Repeat("0", 64) {
 		return ErrPreparationConfig
 	}

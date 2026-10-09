@@ -155,6 +155,7 @@ func TestClusterSSHLonghornCSISocketProjectionAndDrift(t *testing.T) {
 			f := newSSHStorageFixture(t, true)
 			socket := root + "/plugins/driver.longhorn.io"
 			sshLonghornCSISetSocket(f, socket+"/")
+			sshLonghornPluginFixture(f)
 			v, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if err != nil || v.Requirements.LonghornCSISocketPath != socket {
 				t.Fatalf("actual declared path lost: %v", err)
@@ -249,11 +250,22 @@ func TestClusterSSHLonghornCSISocketNativeRootBinding(t *testing.T) {
 		storage.LonghornCSISocketPath = root + "/plugins/driver.longhorn.io"
 		for _, mode := range []string{"one source", "replacement", "missing", "mismatch", "second mismatch", "invalid identity", "invalid namespace"} {
 			t.Run(root+"/"+mode, func(t *testing.T) {
+				current := storage
 				sources := []clusterbootstrap.SourceNetwork{source}
 				switch mode {
 				case "replacement":
 					sources = append(sources, source)
 					sources[1].Kubelet.PID++
+					sources[1].NodeUID = newClusterUUID()
+					sources[1].Hostname = "second-source"
+					sources[1].Kubelet.CSISocket.Listener.PodUID = newClusterUUID()
+					sources[1].Kubelet.CSISocket.Listener.ContainerID = strings.Repeat("f", 64)
+					second := storage.LonghornPlugin[0]
+					second.NodeUID = sources[1].NodeUID
+					second.Node = sources[1].Hostname
+					second.PodUID = sources[1].Kubelet.CSISocket.Listener.PodUID
+					second.ContainerID = sources[1].Kubelet.CSISocket.Listener.ContainerID
+					current.LonghornPlugin = append(slices.Clone(storage.LonghornPlugin), second)
 				case "missing":
 					sources = nil
 				case "mismatch":
@@ -266,7 +278,7 @@ func TestClusterSSHLonghornCSISocketNativeRootBinding(t *testing.T) {
 				case "invalid namespace":
 					sources[0].Kubelet.NetworkNamespace++
 				}
-				if storage.csiSocketMatchesNetworks(sources) != (mode == "one source" || mode == "replacement") {
+				if current.csiSocketMatchesNetworks(sources) != (mode == "one source" || mode == "replacement") {
 					t.Fatal("declared socket/native root binding")
 				}
 			})

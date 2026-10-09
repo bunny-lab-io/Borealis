@@ -58,6 +58,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	sshLonghornDriverRuntimeFixture(f)
 	sshLonghornAttacherFixture(f)
 	sshLonghornCSIFixture(f)
+	sshLonghornPluginFixture(f)
 	sshLonghornManagerFixture(f)
 	sshLonghornManagerRuntimeFixture(f)
 	sshSystemUpgradeFixture(f)

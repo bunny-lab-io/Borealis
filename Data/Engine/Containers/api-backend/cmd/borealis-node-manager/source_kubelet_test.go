@@ -246,7 +246,9 @@ func TestSourceKubeletObserverRechecksProcessAndService(t *testing.T) {
 				}
 				return err
 			}
-			got, err := observeSourceKubelet(ctx, proc, read, check)
+			got, err := observeSourceKubelet(ctx, proc, read, check, func(context.Context, string, *sourceCSIPath) (*sourceCSIListenerObservation, error) {
+				return &sourceCSIListenerObservation{value: sourceCSIListenerFixture(), recheck: func(context.Context) error { return nil }, close: func() {}}, nil
+			})
 			if mode == "valid" || mode == "custom root" {
 				if err != nil || got.Validate() != nil || got.Root != root || got.PID != 42 || got.StartTicks != 100 || got.ListenerInode != 123 || calls != 2 || checks != 2 {
 					t.Fatalf("native projection %+v %v", got, err)

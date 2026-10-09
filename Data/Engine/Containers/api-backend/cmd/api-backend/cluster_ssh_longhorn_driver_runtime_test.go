@@ -74,6 +74,7 @@ func TestClusterSSHLonghornDriverRunningImages(t *testing.T) {
 				spec["initContainers"].([]any)[0].(map[string]any)["image"] = image
 				sshLonghornDriverInitRuntime(f, 0)["image"] = image
 				container["image"], runtime["image"] = image, image
+				sshLonghornPluginFixture(f)
 				if mode == "platform to index" {
 					runtime["imageID"] = "docker.io/longhornio/longhorn-manager@" + sshLonghornDriverPin("longhorn-manager").IndexDigest
 				}

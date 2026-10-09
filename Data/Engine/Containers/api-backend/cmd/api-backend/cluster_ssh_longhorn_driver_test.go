@@ -174,6 +174,7 @@ func TestClusterSSHLonghornDriverSourceConfiguration(t *testing.T) {
 				env[0] = map[string]any{"name": "POD_NAMESPACE", "value": "longhorn-system"}
 			}
 			if valid {
+				sshLonghornPluginFixture(f)
 				sshLonghornManagerRuntimeFixture(f)
 				sshLonghornDriverRuntimeFixture(f)
 				sshLonghornAttacherFixture(f)

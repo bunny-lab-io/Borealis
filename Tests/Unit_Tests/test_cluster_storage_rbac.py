@@ -34,6 +34,7 @@ class ClusterStorageRBACTests(unittest.TestCase):
             "extra daemonset": lambda role: role["rules"][1]["resourceNames"].append("other-manager"),
             "wrong namespace": lambda role: role["metadata"].update(namespace="borealis"),
             "extra rule": lambda role: role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}),
+            "missing plugin read": lambda role: role["rules"][1]["resourceNames"].remove("longhorn-csi-plugin"),
             "missing manager rule": lambda role: role["rules"].pop(1),
         }
         for index in (0, 1):

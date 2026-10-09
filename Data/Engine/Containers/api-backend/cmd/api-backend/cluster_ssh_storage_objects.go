@@ -214,26 +214,27 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
-	LonghornCSISocketPath       string                          `json:"longhorn_csi_socket_path"`
-	LonghornCSIImages           clusterSSHLonghornCSIImages     `json:"longhorn_csi_images"`
-	ReplicaImages               []clusterSSHStorageReplicaImage `json:"replica_images"`
-	KubeVIP                     clusterSSHKubeVIPConfiguration  `json:"kube_vip"`
-	CNPGOperatorImage           string                          `json:"cnpg_operator_image"`
-	SnapshotControllerImage     string                          `json:"snapshot_controller_image"`
-	SystemUpgradeImages         clusterSSHSystemUpgradeImages   `json:"system_upgrade_images"`
-	LonghornAttacherImage       clusterSSHSourceExternalImage   `json:"longhorn_attacher_image"`
-	LonghornUIResolved          string                          `json:"longhorn_ui_resolved"`
-	LonghornUIImage             string                          `json:"longhorn_ui_image"`
-	LonghornManagerImages       clusterSSHLonghornManagerImages `json:"longhorn_manager_images"`
-	LonghornDriverImages        clusterSSHLonghornDriverImages  `json:"longhorn_driver_images"`
-	CertManagerImages           clusterSSHCertManagerImages     `json:"cert_manager_images"`
-	ArtifactReplicaBytes        uint64                          `json:"artifact_replica_bytes"`
-	PostgresInstanceBytes       uint64                          `json:"postgres_instance_bytes"`
-	ConfiguredPostgresInstances int64                           `json:"configured_postgres_instances"`
-	PostgresImage               clusterSSHPostgresImage         `json:"postgres_image"`
-	Volumes                     []clusterSSHStorageVolume       `json:"volumes"`
-	Policy                      clusterSSHStoragePolicy         `json:"policy"`
-	observation                 string                          // Private provenance from the complete source object set; never imported.
+	LonghornPlugin              []clusterSSHLonghornPluginMember `json:"longhorn_plugin"`
+	LonghornCSISocketPath       string                           `json:"longhorn_csi_socket_path"`
+	LonghornCSIImages           clusterSSHLonghornCSIImages      `json:"longhorn_csi_images"`
+	ReplicaImages               []clusterSSHStorageReplicaImage  `json:"replica_images"`
+	KubeVIP                     clusterSSHKubeVIPConfiguration   `json:"kube_vip"`
+	CNPGOperatorImage           string                           `json:"cnpg_operator_image"`
+	SnapshotControllerImage     string                           `json:"snapshot_controller_image"`
+	SystemUpgradeImages         clusterSSHSystemUpgradeImages    `json:"system_upgrade_images"`
+	LonghornAttacherImage       clusterSSHSourceExternalImage    `json:"longhorn_attacher_image"`
+	LonghornUIResolved          string                           `json:"longhorn_ui_resolved"`
+	LonghornUIImage             string                           `json:"longhorn_ui_image"`
+	LonghornManagerImages       clusterSSHLonghornManagerImages  `json:"longhorn_manager_images"`
+	LonghornDriverImages        clusterSSHLonghornDriverImages   `json:"longhorn_driver_images"`
+	CertManagerImages           clusterSSHCertManagerImages      `json:"cert_manager_images"`
+	ArtifactReplicaBytes        uint64                           `json:"artifact_replica_bytes"`
+	PostgresInstanceBytes       uint64                           `json:"postgres_instance_bytes"`
+	ConfiguredPostgresInstances int64                            `json:"configured_postgres_instances"`
+	PostgresImage               clusterSSHPostgresImage          `json:"postgres_image"`
+	Volumes                     []clusterSSHStorageVolume        `json:"volumes"`
+	Policy                      clusterSSHStoragePolicy          `json:"policy"`
+	observation                 string                           // Private provenance from the complete source object set; never imported.
 }
 
 func clusterSSHStorageBoundVolume(claim, pv, volume map[string]any) (clusterSSHStorageVolume, error) {

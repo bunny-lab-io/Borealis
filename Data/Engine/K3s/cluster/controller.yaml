@@ -127,7 +127,7 @@ rules:
     verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
-    resourceNames: ["longhorn-manager"]
+    resourceNames: ["longhorn-manager", "longhorn-csi-plugin"]
     verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["replicasets"]
