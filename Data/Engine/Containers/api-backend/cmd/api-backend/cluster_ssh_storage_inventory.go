@@ -146,6 +146,11 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		if !ok || (result.Requirements.PostgresImage != (clusterSSHPostgresImage{}) && result.Requirements.PostgresImage != image) {
 			return fail()
 		}
+		resources, resourcesOK := observeClusterSSHPostgresResources(spec, pod)
+		if !resourcesOK || (result.Requirements.PostgresResources != (clusterSSHApplicationResource{}) && result.Requirements.PostgresResources != resources) {
+			return fail()
+		}
+		result.Requirements.PostgresResources = resources
 		result.Requirements.PostgresImage = image
 		volumes, ok := ps["volumes"].([]any)
 		claimCount := 0

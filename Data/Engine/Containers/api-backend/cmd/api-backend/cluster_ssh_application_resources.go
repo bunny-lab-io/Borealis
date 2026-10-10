@@ -117,18 +117,8 @@ func observeClusterSSHApplicationResources(read func(string) (map[string]any, er
 		}
 		uids[id.UID] = true
 		container, valid := containers[0].(map[string]any)
-		resources := clusterSSHStorageMap(container, "resources")
-		requests, limits := clusterSSHStorageMap(resources, "requests"), clusterSSHStorageMap(resources, "limits")
-		if !valid || !clusterSSHStorageName(clusterSSHStorageText(container, "name")) || len(resources) != 2 || len(requests) != 2 || len(limits) != 2 {
-			return fail()
-		}
-		v := clusterSSHApplicationResource{Name: name}
-		var cpuRequestOK, cpuLimitOK, memoryRequestOK, memoryLimitOK bool
-		v.CPURequestMilli, cpuRequestOK = clusterSSHWorkloadMilliCPU(requests["cpu"])
-		v.CPULimitMilli, cpuLimitOK = clusterSSHWorkloadMilliCPU(limits["cpu"])
-		v.MemoryRequestBytes, memoryRequestOK = clusterSSHWorkloadMemory(requests["memory"])
-		v.MemoryLimitBytes, memoryLimitOK = clusterSSHWorkloadMemory(limits["memory"])
-		if !cpuRequestOK || !cpuLimitOK || !memoryRequestOK || !memoryLimitOK {
+		v, resourcesOK := clusterSSHWorkloadResources(name, container["resources"])
+		if !valid || !clusterSSHStorageName(clusterSSHStorageText(container, "name")) || !resourcesOK {
 			return fail()
 		}
 		values = append(values, v)
@@ -145,6 +135,7 @@ func observeClusterSSHApplicationResources(read func(string) (map[string]any, er
 func withClusterSSHTargetApplicationSizing(parent context.Context, readers clusterSSHNetworkTargetReaders,
 	source clusterSSHPreparationSnapshotRead, consume func(context.Context, []clusterSSHTargetHostEvidence) error) error {
 	var retained []clusterSSHApplicationResource
+	var postgres clusterSSHApplicationResource
 	observation := ""
 	var cpu, memory uint64
 	settings := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
@@ -154,12 +145,13 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		v, err := source(ctx)
 		values := v.Storage.Requirements.Applications
 		var ok bool
-		cpu, memory, ok = clusterSSHApplicationBudget(values)
+		cpu, memory, ok = clusterSSHNodeWorkloadBudget(v.Storage.Requirements)
 		if err != nil || !ok || !clusterSSHSourceObservationRE.MatchString(v.Storage.Observation) ||
-			(retained != nil && (!slices.Equal(retained, values) || observation != v.Storage.Observation)) {
+			(retained != nil && (!slices.Equal(retained, values) || postgres != v.Storage.Requirements.PostgresResources || observation != v.Storage.Observation)) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		retained, observation = slices.Clone(values), v.Storage.Observation
+		postgres = v.Storage.Requirements.PostgresResources
 		return v.Expected, v.Settings, nil
 	}
 	return withClusterSSHTargetSizing(parent, readers, settings, func(ctx context.Context, targets []clusterSSHTargetHostEvidence) error {

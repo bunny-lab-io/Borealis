@@ -168,13 +168,13 @@ print(json.dumps(sorted(v[0])))`).Output()
 }
 
 func TestClusterSSHTargetApplicationSizing(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "sibling CPU", "sibling memory", "missing", "drift before", "drift after", "receipt drift", "cancel"} {
+	for _, mode := range []string{"expansion", "replacement", "sibling CPU", "sibling memory", "missing", "drift before", "drift after", "postgres missing", "postgres before", "postgres after", "receipt drift", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			values := sshApplicationResourceValues(t)
 			for i := range values {
-				values[i].CPURequestMilli = 2000
-				values[i].MemoryLimitBytes = 4 << 30
+				values[i].CPURequestMilli = 1750
+				values[i].MemoryLimitBytes = 7 << 29
 			}
 			f.hostWire = func(i int, wire string) string {
 				if i == 1 && mode == "sibling CPU" {
@@ -185,6 +185,8 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 				}
 				return wire
 			}
+			postgres := sshPostgresResourceValue(t)
+			postgres.CPURequestMilli = 2000
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			settings := sshPreparationRuntimeFixture()
@@ -196,6 +198,12 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 				if (mode == "drift before" && reads == 2) || (mode == "drift after" && consumed) {
 					values[0].CPULimitMilli = 5000
 				}
+				if (mode == "postgres before" && reads == 2) || (mode == "postgres after" && consumed) {
+					postgres.CPULimitMilli++
+				}
+				if mode == "postgres missing" {
+					postgres = clusterSSHApplicationResource{}
+				}
 				observation := strings.Repeat("a", 64)
 				if mode == "receipt drift" && reads == 2 {
 					observation = strings.Repeat("b", 64)
@@ -203,7 +211,7 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 				if mode == "missing" {
 					values = nil
 				}
-				return clusterSSHPreparationSnapshot{Expected: e, Settings: settings, Storage: clusterSSHStorageSnapshot{Observation: observation, Requirements: clusterSSHStorageRequirements{Applications: values}}}, err
+				return clusterSSHPreparationSnapshot{Expected: e, Settings: settings, Storage: clusterSSHStorageSnapshot{Observation: observation, Requirements: clusterSSHStorageRequirements{Applications: values, PostgresResources: postgres}}}, err
 			}
 			err := runClusterSSHNetworkTargets(ctx, f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
 				return withClusterSSHTargetApplicationSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error {
@@ -215,7 +223,7 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 				})
 			})
 			ok := mode == "expansion" || mode == "replacement"
-			if (err == nil) != ok || consumed != (ok || mode == "drift after" || mode == "cancel") {
+			if (err == nil) != ok || consumed != (ok || mode == "drift after" || mode == "postgres after" || mode == "cancel") {
 				t.Fatal("unsafe application sizing boundary", err, consumed)
 			}
 			if ok && reads < 5 {

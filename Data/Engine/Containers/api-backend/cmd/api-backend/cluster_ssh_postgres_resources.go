@@ -1,0 +1,93 @@
+package main
+
+// The pinned CNPG controller gives postgres and its sequential bootstrap init
+// the same Cluster resources. Require that exact effective contract on every
+// owned active-member Pod; missing declarations cannot imply bounded demand.
+func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (clusterSSHApplicationResource, bool) {
+	v, ok := clusterSSHWorkloadResources("postgres", clusterSpec["resources"])
+	fail := func() (clusterSSHApplicationResource, bool) { return clusterSSHApplicationResource{}, false }
+	spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
+	if !ok || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) || !clusterSSHStorageEmptyMap(spec["resources"]) ||
+		!clusterSSHStorageEmptyMap(spec["overhead"]) || !clusterSSHStorageEmptyText(spec["runtimeClassName"]) ||
+		!clusterSSHStorageEmptyList(spec["resourceClaims"]) || !clusterSSHStorageEmptyText(status["resize"]) {
+		return fail()
+	}
+	conditions, conditionsOK := status["conditions"].([]any)
+	if !conditionsOK {
+		return fail()
+	}
+	for _, raw := range conditions {
+		condition, valid := raw.(map[string]any)
+		if !valid || ((condition["type"] == "PodResizePending" || condition["type"] == "PodResizeInProgress") && condition["status"] != "False") {
+			return fail()
+		}
+	}
+	for _, kind := range []struct{ spec, status, name string }{
+		{"containers", "containerStatuses", "postgres"},
+		{"initContainers", "initContainerStatuses", "bootstrap-controller"},
+	} {
+		containers, containersOK := spec[kind.spec].([]any)
+		statuses, statusesOK := status[kind.status].([]any)
+		if !containersOK || len(containers) != 1 || !statusesOK || len(statuses) != 1 {
+			return fail()
+		}
+		container, containerOK := containers[0].(map[string]any)
+		runtime, runtimeOK := statuses[0].(map[string]any)
+		observed, resourcesOK := clusterSSHWorkloadResources("postgres", container["resources"])
+		if !containerOK || !runtimeOK || container["name"] != kind.name || runtime["name"] != kind.name || !resourcesOK || observed != v ||
+			!clusterSSHStorageEmptyText(container["restartPolicy"]) || !clusterSSHStorageEmptyList(container["resizePolicy"]) ||
+			!clusterSSHStorageEmptyList(runtime["allocatedResourcesStatus"]) {
+			return fail()
+		}
+		// In-place resize evidence must agree with the declared resources. Never
+		// substitute a smaller request for resources still allocated by kubelet.
+		if current, present := runtime["resources"]; present {
+			actual, valid := clusterSSHWorkloadResources("postgres", current)
+			if !valid || actual != v {
+				return fail()
+			}
+		}
+		if allocated, present := runtime["allocatedResources"]; present {
+			requests, valid := allocated.(map[string]any)
+			cpu, cpuOK := clusterSSHWorkloadMilliCPU(requests["cpu"])
+			memory, memoryOK := clusterSSHWorkloadMemory(requests["memory"])
+			if !valid || len(requests) != 2 || !cpuOK || !memoryOK || cpu != v.CPURequestMilli || memory != v.MemoryRequestBytes {
+				return fail()
+			}
+		}
+	}
+	return v, true
+}
+
+func clusterSSHWorkloadResources(name string, raw any) (clusterSSHApplicationResource, bool) {
+	resources, valid := raw.(map[string]any)
+	requests, limits := clusterSSHStorageMap(resources, "requests"), clusterSSHStorageMap(resources, "limits")
+	v := clusterSSHApplicationResource{Name: name}
+	var cpuRequestOK, cpuLimitOK, memoryRequestOK, memoryLimitOK bool
+	v.CPURequestMilli, cpuRequestOK = clusterSSHWorkloadMilliCPU(requests["cpu"])
+	v.CPULimitMilli, cpuLimitOK = clusterSSHWorkloadMilliCPU(limits["cpu"])
+	v.MemoryRequestBytes, memoryRequestOK = clusterSSHWorkloadMemory(requests["memory"])
+	v.MemoryLimitBytes, memoryLimitOK = clusterSSHWorkloadMemory(limits["memory"])
+	return v, valid && len(resources) == 2 && len(requests) == 2 && len(limits) == 2 &&
+		cpuRequestOK && cpuLimitOK && memoryRequestOK && memoryLimitOK && clusterSSHWorkloadResourceValid(v)
+}
+
+func clusterSSHWorkloadResourceValid(v clusterSSHApplicationResource) bool {
+	return v.CPURequestMilli > 0 && v.CPURequestMilli <= v.CPULimitMilli && v.CPULimitMilli <= clusterSSHCapacityLimit &&
+		v.MemoryRequestBytes > 0 && v.MemoryRequestBytes <= v.MemoryLimitBytes && v.MemoryLimitBytes <= clusterSSHCapacityLimit
+}
+
+func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory uint64, ok bool) {
+	cpu, memory, ok = clusterSSHApplicationBudget(r.Applications)
+	if !ok || r.PostgresResources.Name != "postgres" || !clusterSSHWorkloadResourceValid(r.PostgresResources) {
+		return 0, 0, false
+	}
+	// One planned instance per target. Bootstrap and postgres run sequentially
+	// with identical resources, so max(init, postgres) equals one instance.
+	cpu, ok = clusterSSHCapacitySum(cpu, r.PostgresResources.CPURequestMilli)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, r.PostgresResources.MemoryLimitBytes)
+	return cpu, memory, ok
+}
