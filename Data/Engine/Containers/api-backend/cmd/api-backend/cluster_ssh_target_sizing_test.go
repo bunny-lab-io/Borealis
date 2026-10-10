@@ -10,7 +10,7 @@ import (
 )
 
 func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "smaller than source", "consumer copy", "CPU low", "sibling RAM low", "cap too large", "cap missing", "source error", "source binding", "source drift early", "source drift before consume", "source drift after consume", "source drift final", "source alias", "claim lost", "host drift", "cancel source", "cancel consumer", "consumer error", "ignored failure", "nil source", "nil consumer", "partial cohort"} {
+	for _, mode := range []string{"expansion", "replacement", "smaller than source", "consumer copy", "CPU low", "sibling RAM low", "computed cap too large", "cap too large", "cap missing", "source error", "source binding", "source drift early", "source drift before consume", "source drift after consume", "source drift final", "source alias", "claim lost", "host drift", "cancel source", "cancel consumer", "consumer error", "ignored failure", "nil source", "nil consumer", "partial cohort"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			settings := sshPreparationRuntimeFixture()
@@ -19,6 +19,11 @@ func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
 			settings["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "4g"
 			if mode == "smaller than source" {
 				settings["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = "131072"
+			}
+			if mode == "computed cap too large" {
+				settings["BOREALIS_CLUSTER_SIZING_RANK"] = "0"
+				settings["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = "131072"
+				settings["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "1Ki"
 			}
 			if mode == "cap too large" {
 				settings["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "33g"
@@ -35,6 +40,9 @@ func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
 			}
 			consumed := false
 			f.hostWire = func(i int, wire string) string {
+				if mode == "computed cap too large" && i == 1 {
+					return strings.Replace(wire, "memory_kib=33554432", "memory_kib=4194304", 1)
+				}
 				if mode == "CPU low" && i == 0 {
 					return strings.Replace(wire, "cpu_count=16", "cpu_count=7", 1)
 				}

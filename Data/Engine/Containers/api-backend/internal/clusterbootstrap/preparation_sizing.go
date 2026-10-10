@@ -46,13 +46,27 @@ func (s PreparationSizing) valid() bool {
 
 // Fits preserves the source profile even on larger targets. A CPU-limited
 // source may have a larger RAM reference than a target: only the profile floor
-// and actual effective cap must fit. This is not available-RAM/reservation proof.
+// and both computed and effective caps must fit. This is not available-RAM/reservation proof.
 func (s PreparationSizing) Fits(cpu uint32, memoryKiB uint64) error {
 	if !s.valid() || cpu < sizingMinimumCPU[s.rank] || cpu > 999999999 || memoryKiB == 0 || memoryKiB > 1<<53-1 || memoryKiB/1024 > 999999999 ||
 		memoryKiB/1024 < sizingMinimumMiB[s.rank] || s.postgresBytes > memoryKiB*1024 {
 		return ErrPreparationConfig
 	}
+	if s.postgresProfileMiB() > memoryKiB/1024 {
+		return ErrPreparationConfig
+	}
 	return nil
+}
+
+// Mirror Engine.sh load_profile_tuning's guard before service overrides. The
+// inherited reference drives shared_buffers, not the target's own RAM. Call
+// only after valid() bounds both rank and arithmetic inputs.
+func (s PreparationSizing) postgresProfileMiB() uint64 {
+	minimum := [...]uint64{1024, 4096, 8192, 12288}
+	maximum := [...]uint64{4096, 8192, 16384, 24576}
+	extra := [...]uint64{512, 2048, 4096, 8192}
+	shared := s.referenceMiB * 25 / 100
+	return min(max(shared, minimum[s.rank]), maximum[s.rank]) + extra[s.rank]
 }
 
 var preparationEffectiveMemory = regexp.MustCompile(`^([1-9][0-9]{0,8})(Ki|Mi|Gi|Ti|k|K|m|M|g|G|T)$`)

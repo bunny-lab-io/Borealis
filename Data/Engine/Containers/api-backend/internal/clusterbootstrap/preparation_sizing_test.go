@@ -36,12 +36,14 @@ func TestPreparationSizingProfileBoundaries(t *testing.T) {
 	}{{1, 1}, {8, 16384}, {16, 32768}, {24, 65536}} {
 		t.Run(strconv.Itoa(rank), func(t *testing.T) {
 			s := preparationSizingFixture(t, rank, strconv.FormatUint(minimum.mib, 10), "1Ki")
+			// Rank zero's computed cap exceeds its rank floor even with a tiny override.
+			hostMinimumMiB := max(minimum.mib, 1536)
 			for _, host := range []struct {
 				cpu uint32
 				kib uint64
 				ok  bool
-			}{{minimum.cpu, minimum.mib * 1024, true}, {minimum.cpu - 1, minimum.mib * 1024, false},
-				{minimum.cpu, minimum.mib*1024 - 1, false}, {64, 262144 * 1024, true},
+			}{{minimum.cpu, hostMinimumMiB * 1024, true}, {minimum.cpu - 1, hostMinimumMiB * 1024, false},
+				{minimum.cpu, hostMinimumMiB*1024 - 1, false}, {64, 262144 * 1024, true},
 				{64, 0, false}, {64, 1 << 53, false}, {64, 1<<53 - 1, false}, {64, ^uint64(0), false},
 				{999999999, 999999999*1024 + 1023, true}, {1000000000, minimum.mib * 1024, false}, {64, 1000000000 * 1024, false}} {
 				if (s.Fits(host.cpu, host.kib) == nil) != host.ok {
@@ -54,7 +56,7 @@ func TestPreparationSizingProfileBoundaries(t *testing.T) {
 		})
 	}
 	// Smaller RAM than a CPU-limited source is allowed when the inherited
-	// profile and explicit effective cap fit, without retuning from target RAM.
+	// profile and both caps fit, without retuning from target RAM.
 	s := preparationSizingFixture(t, 0, "131072", "4608m")
 	if s.Fits(8, 32768*1024) != nil || s.Fits(8, 4608*1024) != nil || s.Fits(8, 4608*1024-1) == nil {
 		t.Fatal("effective cap boundary or source reference substituted")
@@ -157,9 +159,8 @@ func TestPreparationSizingRuntimeParity(t *testing.T) {
 		if n, err := fmt.Sscanf(out, "%d\n%d", &cpuRank, &memoryRank); n != 2 || err != nil {
 			t.Fatal("invalid runtime rank output")
 		}
-		for rank, reference := range []string{"1", "16384", "32768", "65536"} {
-			s := preparationSizingFixture(t, rank, reference, "1Ki")
-			if (s.Fits(uint32(host.cpu), uint64(host.mib)*1024) == nil) != (cpuRank >= rank && memoryRank >= rank) {
+		for rank := range sizingMinimumCPU {
+			if (uint32(host.cpu) >= sizingMinimumCPU[rank] && uint64(host.mib) >= sizingMinimumMiB[rank]) != (cpuRank >= rank && memoryRank >= rank) {
 				t.Fatal("Go profile differs from runtime", host, rank)
 			}
 		}
@@ -181,6 +182,75 @@ func TestPreparationSizingRuntimeParity(t *testing.T) {
 	for _, value := range []string{"", "0m", "01m", "-1m", "+1m", "1.5Gi", "1", "1e9", "1P", "1t", "1GB", "1ki", "1 Mi", "1Gi\n", "1000000000Ki", "8388608Ti", "9223373T"} {
 		if _, err := preparationMemoryBytes(value); err == nil {
 			t.Fatal("invalid, ambiguous or overflowing bytes accepted", value)
+		}
+	}
+}
+
+func TestPreparationSizingComputedProfileRuntimeParity(t *testing.T) {
+	functions := []string{"profile_rank_for_cpu", "profile_rank_for_memory", "profile_name_for_rank",
+		"clamp_mib", "format_pg_memory_mib", "format_docker_memory_mib", "load_profile_tuning"}
+	for rank, references := range [][]uint64{
+		{1, 4095, 4096, 4097, 8195, 16383, 16384, 16387, 131072, 999999999},
+		{16384, 16387, 32767, 32768, 32771, 999999999},
+		{32768, 32771, 65535, 65536, 65539, 999999999},
+		{65536, 65539, 98303, 98304, 98307, 999999999},
+	} {
+		for _, reference := range references {
+			t.Run(fmt.Sprintf("rank%d/reference%d", rank, reference), func(t *testing.T) {
+				// Extract actual runtime tuning and admission behavior without invoking
+				// Engine startup, host detection, override loading or deployment.
+				rankArg, refArg := strconv.Itoa(rank), strconv.FormatUint(reference, 10)
+				out := preparationSizingBash(t, functions, `
+load_profile_tuning 64 999999999 "$1" "$2"
+printf '%s\n' "$PROFILE_POSTGRES_DB_MEMORY_LIMIT"
+`, rankArg, refArg)
+				computed, err := preparationMemoryBytes(out)
+				if err != nil {
+					t.Fatal("invalid runtime computed cap", out)
+				}
+				s := preparationSizingFixture(t, rank, refArg, "1Ki")
+				if s.postgresProfileMiB()*(1<<20) != computed {
+					t.Fatal("computed cap differs from Engine.sh", computed)
+				}
+				minimumKiB := max(sizingMinimumMiB[rank]*1024, computed/1024)
+				// Runtime receives whole MiB; effective overrides still compare exact bytes.
+				hosts := []uint64{minimumKiB - 1, minimumKiB, minimumKiB + 1, 262144 * 1024}
+				args := []string{rankArg, refArg}
+				for _, kib := range hosts {
+					args = append(args, strconv.FormatUint(kib/1024, 10))
+				}
+				out = preparationSizingBash(t, functions, `
+rank="$1"; reference="$2"; shift 2
+for memory in "$@"; do
+  if (load_profile_tuning 64 "$memory" "$rank" "$reference"); then
+    printf 'fit\n'
+  else
+    printf 'reject\n'
+  fi
+done
+`, args...)
+				results := strings.Fields(out)
+				if len(results) != len(hosts) {
+					t.Fatal("invalid runtime guard results", out)
+				}
+				for i, kib := range hosts {
+					if (s.Fits(64, kib) == nil) != (results[i] == "fit") {
+						t.Fatalf("runtime guard differs at %d KiB: %s", kib, results[i])
+					}
+				}
+				// Both caps remain mandatory: overrides below/equal/above the computed
+				// cap cannot bypass it, and larger overrides retain exact KiB boundaries.
+				for _, capKiB := range []uint64{1, computed/1024 - 1, computed / 1024, computed/1024 + 1, 262144 * 1024} {
+					s = preparationSizingFixture(t, rank, refArg, fmt.Sprintf("%dKi", capKiB))
+					boundary := max(minimumKiB, capKiB)
+					if s.Fits(64, boundary) != nil || s.Fits(64, boundary-1) == nil {
+						t.Fatalf("computed/effective cap boundary %d KiB", boundary)
+					}
+					if s.rank != rank || s.referenceMiB != reference {
+						t.Fatal("target or override changed inherited tuning")
+					}
+				}
+			})
 		}
 	}
 }
