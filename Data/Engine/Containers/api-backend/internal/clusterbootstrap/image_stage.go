@@ -24,13 +24,20 @@ func (*ImageSet) String() string               { return "staged application imag
 func (*ImageSet) GoString() string             { return "staged application images [private]" }
 func (*ImageSet) MarshalJSON() ([]byte, error) { return nil, ErrImageArchive }
 
-// StageImages downloads one archive at a time into new mode0700 scratch. The
+// StageImages reserves the complete archive set, then downloads one archive at
+// a time into new mode0700 scratch. The
 // opener must bind its IO to ctx; the caller maintains joined lease heartbeats
 // during long IO. check verifies current source/cohort/claim at each boundary.
 // No partial set escapes; any failure removes only this call's scratch.
 func StageImages(ctx context.Context, parent string, inventory *ImageInventory,
 	open func(context.Context, ImageArchiveProof) (io.ReadCloser, error),
-	check func(context.Context) error) (_ *ImageSet, result error) {
+	check func(context.Context) error) (*ImageSet, error) {
+	return stageImagesReserved(ctx, parent, inventory, open, check, reserveImageFile)
+}
+
+func stageImagesReserved(ctx context.Context, parent string, inventory *ImageInventory,
+	open func(context.Context, ImageArchiveProof) (io.ReadCloser, error), check func(context.Context) error,
+	allocate func(*os.File, int64) error) (_ *ImageSet, result error) {
 	if inventory == nil || len(inventory.raw) == 0 || open == nil || check == nil || imageBoundary(ctx, check) != nil {
 		return nil, ErrImageArchive
 	}
@@ -49,12 +56,28 @@ func StageImages(ctx context.Context, parent string, inventory *ImageInventory,
 			_ = set.Close()
 		}
 	}()
+	sizes := map[string]int64{}
+	for _, proof := range inventory.Images() {
+		sizes[ImageAssetName(proof.Role)] = proof.ArchiveBytes
+	}
+	files, err := reserveStagedImageArchives(ctx, root, sizes, check, allocate)
+	if err != nil {
+		return nil, err
+	}
+	defer closeStagedImageArchives(files)
 	for _, proof := range inventory.Images() {
 		if imageBoundary(ctx, check) != nil {
 			return nil, ErrSessionAuthority
 		}
-		if err := set.receive(ctx, proof, open); err != nil {
+		name := ImageAssetName(proof.Role)
+		err := set.receive(ctx, proof, files[name], open)
+		closeErr := files[name].Close()
+		delete(files, name)
+		if err != nil {
 			return nil, err
+		}
+		if closeErr != nil {
+			return nil, ErrImageArchive
 		}
 		if imageBoundary(ctx, check) != nil {
 			return nil, ErrSessionAuthority
@@ -70,7 +93,10 @@ func imageBoundary(ctx context.Context, check func(context.Context) error) error
 	return nil
 }
 
-func (s *ImageSet) receive(ctx context.Context, proof ImageArchiveProof, open func(context.Context, ImageArchiveProof) (io.ReadCloser, error)) error {
+func (s *ImageSet) receive(ctx context.Context, proof ImageArchiveProof, f *os.File, open func(context.Context, ImageArchiveProof) (io.ReadCloser, error)) error {
+	if !stagedImageFileMatches(s.root, ImageAssetName(proof.Role), f, proof.ArchiveBytes) {
+		return ErrImageArchive
+	}
 	input, err := open(ctx, proof)
 	if err != nil || input == nil {
 		if input != nil {
@@ -79,18 +105,13 @@ func (s *ImageSet) receive(ctx context.Context, proof ImageArchiveProof, open fu
 		return ErrImageArchive
 	}
 	defer input.Close()
-	f, err := s.root.OpenFile(ImageAssetName(proof.Role), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		return ErrImageArchive
-	}
-	defer f.Close()
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(contextReader{ctx, input}, proof.ArchiveBytes+1))
 	if err != nil || n != proof.ArchiveBytes || hex.EncodeToString(h.Sum(nil)) != proof.ArchiveSHA256 {
 		return ErrImageArchive
 	}
 	actual, err := InspectImageArchive(ctx, f, n, proof.Role, s.inventory.wire.SourceSHA)
-	if err != nil || s.inventory.MatchesArchive(actual) != nil || f.Sync() != nil || ctx.Err() != nil {
+	if err != nil || s.inventory.MatchesArchive(actual) != nil || f.Sync() != nil || !stagedImageFileMatches(s.root, ImageAssetName(proof.Role), f, proof.ArchiveBytes) || ctx.Err() != nil {
 		return ErrImageArchive
 	}
 	return nil

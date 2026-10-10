@@ -73,7 +73,7 @@ func AcquirePostgresImage(ctx context.Context, parent, reference string, check f
 type postgresImageFetch func(context.Context, string, int64, bool, io.Writer) error
 
 func acquirePostgresImage(ctx context.Context, parent, reference string, check func(context.Context) error, fetch postgresImageFetch) (_ *PostgresImage, result error) {
-	return acquirePostgresImageReserved(ctx, parent, reference, check, fetch, reservePostgresFile)
+	return acquirePostgresImageReserved(ctx, parent, reference, check, fetch, reserveImageFile)
 }
 
 // Allocation seam is private; production never substitutes sparse truncation.

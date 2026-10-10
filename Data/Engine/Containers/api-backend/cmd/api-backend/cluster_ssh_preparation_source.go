@@ -253,9 +253,24 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 		if err != nil {
 			return err
 		}
+		bundleDemand, err := inputs.StorageDemand(ctx, expected, checks.Inputs)
+		if err != nil {
+			return err
+		}
 		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checks.Inputs, baseDemand,
 			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
-				return consume(ctx, inputs, images, externalImages, postgresImage, capacity, expected, checks)
+				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, capacity)
+				if err != nil {
+					return err
+				}
+				if err := consume(ctx, inputs, images, externalImages, postgresImage, capacity, expected, checks); err != nil {
+					return err
+				}
+				fresh, err := inputs.StorageDemand(ctx, expected, checks.Inputs)
+				if err != nil || fresh != bundleDemand {
+					return clusterbootstrap.ErrImageArchive
+				}
+				return nil
 			}); err != nil {
 			return err
 		}

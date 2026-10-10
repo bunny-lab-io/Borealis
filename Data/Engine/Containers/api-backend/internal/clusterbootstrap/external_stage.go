@@ -25,7 +25,8 @@ func (*ExternalImageSet) String() string               { return "staged external
 func (*ExternalImageSet) GoString() string             { return "staged external images [private]" }
 func (*ExternalImageSet) MarshalJSON() ([]byte, error) { return nil, ErrImageArchive }
 
-// StageExternalImages downloads one archive at a time into new mode0700 scratch. The
+// StageExternalImages reserves the complete set, then downloads one archive at
+// a time into new mode0700 scratch. The
 // opener must bind its IO to ctx; the caller maintains joined lease heartbeats
 // during long IO. check verifies current source/cohort/claim at each boundary.
 // No partial set escapes; any failure removes only this call's scratch.
@@ -39,7 +40,12 @@ func StageExternalImages(ctx context.Context, parent string, inventory *External
 func stageExternalImages(ctx context.Context, parent string, inventory *ExternalImageInventory,
 	open func(context.Context, ExternalImageProof) (io.ReadCloser, error),
 	check func(context.Context) error,
-	inspect func(context.Context, io.ReaderAt, int64, string) (ExternalImageProof, error)) (_ *ExternalImageSet, result error) {
+	inspect func(context.Context, io.ReaderAt, int64, string) (ExternalImageProof, error)) (*ExternalImageSet, error) {
+	return stageExternalImagesReserved(ctx, parent, inventory, open, check, inspect, reserveImageFile)
+}
+func stageExternalImagesReserved(ctx context.Context, parent string, inventory *ExternalImageInventory,
+	open func(context.Context, ExternalImageProof) (io.ReadCloser, error), check func(context.Context) error,
+	inspect func(context.Context, io.ReaderAt, int64, string) (ExternalImageProof, error), allocate func(*os.File, int64) error) (_ *ExternalImageSet, result error) {
 	if inventory == nil || len(inventory.raw) == 0 || open == nil || inspect == nil || check == nil || imageBoundary(ctx, check) != nil {
 		return nil, ErrImageArchive
 	}
@@ -62,12 +68,28 @@ func stageExternalImages(ctx context.Context, parent string, inventory *External
 			_ = set.Close()
 		}
 	}()
+	sizes := map[string]int64{}
+	for _, proof := range inventory.Images() {
+		sizes[names[proof.Reference]] = proof.ArchiveBytes
+	}
+	files, err := reserveStagedImageArchives(ctx, root, sizes, check, allocate)
+	if err != nil {
+		return nil, err
+	}
+	defer closeStagedImageArchives(files)
 	for _, proof := range inventory.Images() {
 		if imageBoundary(ctx, check) != nil {
 			return nil, ErrSessionAuthority
 		}
-		if err := set.receive(ctx, proof, open, inspect); err != nil {
+		name := names[proof.Reference]
+		err := set.receive(ctx, proof, files[name], open, inspect)
+		closeErr := files[name].Close()
+		delete(files, name)
+		if err != nil {
 			return nil, err
+		}
+		if closeErr != nil {
+			return nil, ErrImageArchive
 		}
 		if imageBoundary(ctx, check) != nil {
 			return nil, ErrSessionAuthority
@@ -76,7 +98,10 @@ func stageExternalImages(ctx context.Context, parent string, inventory *External
 	return set, nil
 }
 
-func (s *ExternalImageSet) receive(ctx context.Context, proof ExternalImageProof, open func(context.Context, ExternalImageProof) (io.ReadCloser, error), inspect func(context.Context, io.ReaderAt, int64, string) (ExternalImageProof, error)) error {
+func (s *ExternalImageSet) receive(ctx context.Context, proof ExternalImageProof, f *os.File, open func(context.Context, ExternalImageProof) (io.ReadCloser, error), inspect func(context.Context, io.ReaderAt, int64, string) (ExternalImageProof, error)) error {
+	if !stagedImageFileMatches(s.root, s.names[proof.Reference], f, proof.ArchiveBytes) {
+		return ErrImageArchive
+	}
 	input, err := open(ctx, proof)
 	if err != nil || input == nil {
 		if input != nil {
@@ -85,18 +110,13 @@ func (s *ExternalImageSet) receive(ctx context.Context, proof ExternalImageProof
 		return ErrImageArchive
 	}
 	defer input.Close()
-	f, err := s.root.OpenFile(s.names[proof.Reference], os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		return ErrImageArchive
-	}
-	defer f.Close()
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(contextReader{ctx, input}, proof.ArchiveBytes+1))
 	if err != nil || n != proof.ArchiveBytes || hex.EncodeToString(h.Sum(nil)) != proof.ArchiveSHA256 {
 		return ErrImageArchive
 	}
 	actual, err := inspect(ctx, f, n, proof.Reference)
-	if err != nil || s.inventory.MatchesArchive(actual) != nil || f.Sync() != nil || ctx.Err() != nil {
+	if err != nil || s.inventory.MatchesArchive(actual) != nil || f.Sync() != nil || !stagedImageFileMatches(s.root, s.names[proof.Reference], f, proof.ArchiveBytes) || ctx.Err() != nil {
 		return ErrImageArchive
 	}
 	return nil

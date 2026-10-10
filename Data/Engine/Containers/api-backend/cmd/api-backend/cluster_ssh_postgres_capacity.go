@@ -9,6 +9,10 @@ import (
 // Reserved preparation and inert qualification acquisition share measured demand.
 // This value is conditional demand, never a target-space or admission receipt.
 type clusterSSHPreparedImageCapacity struct {
+	// Complete current preparation scratch projection, set only by preparation
+	// composition. Read-only PostgreSQL qualification leaves these zero.
+	WorkerScratchBytes        uint64
+	WorkerScratchEntries      uint64
 	Target                    []clusterSSHFilesystemDemand
 	PostgresWorkerPeakBytes   uint64
 	PostgresWorkerPeakEntries uint64

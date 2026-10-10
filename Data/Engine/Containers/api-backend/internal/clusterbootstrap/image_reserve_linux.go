@@ -8,7 +8,7 @@ import (
 // Allocate actual blocks in the eventual destination, never a separate promise
 // file or sparse truncate. Competing acquisitions cannot spend these blocks.
 // Unsupported filesystems and quota/space failures stop before bulk downloads.
-func reservePostgresFile(f *os.File, size int64) error {
+func reserveImageFile(f *os.File, size int64) error {
 	if f == nil || size < 1 || size > MaxImageArchiveBytes {
 		return ErrImageArchive
 	}

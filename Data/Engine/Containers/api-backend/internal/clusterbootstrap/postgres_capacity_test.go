@@ -39,7 +39,7 @@ func TestPostgresImageReservationAndMeasuredDemand(t *testing.T) {
 				if mode == "blob allocation fails" && !archive || mode == "archive allocation fails" && archive {
 					return syscall.ENOSPC
 				}
-				if err := reservePostgresFile(f, size); err != nil {
+				if err := reserveImageFile(f, size); err != nil {
 					return err
 				}
 				st, err := f.Stat()
