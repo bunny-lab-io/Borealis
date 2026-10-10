@@ -185,6 +185,83 @@ def validate_cluster_controller_contract() -> None:
     if len(roles) != 1:
         fail("cluster controller manifest must contain one dedicated ClusterRole")
     rules = (roles[0].get("rules") or [])
+    namespace_rules = [rule for rule in rules if "namespaces" in (rule.get("resources") or [])]
+    if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}]:
+        fail("cluster controller namespace read must stay limited to kube-system identity")
+    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "*"} for rule in rules):
+        fail("cluster controller must not gain cluster-wide Secret, ConfigMap, DaemonSet, ReplicaSet or Pod-log access")
+    source_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
+    expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env"], "verbs": ["get"]}
+    if len(source_roles) != 1 or source_roles[0].get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or source_roles[0].get("rules") != [expected_source_rule]:
+        fail("cluster source settings Role must permit only named runtime Secret get in borealis")
+    source_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
+    if len(source_bindings) != 1:
+        fail("cluster source settings requires one namespaced RoleBinding")
+    binding = source_bindings[0]
+    if binding.get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or binding.get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-source-settings"} or binding.get("subjects") != [{"kind": "ServiceAccount", "name": "borealis-cluster-controller", "namespace": "borealis"}]:
+        fail("cluster source settings must bind only existing controller ServiceAccount")
+    storage_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-storage-policy"]
+    storage_settings = [
+        "current-longhorn-version", "default-data-path", "create-default-disk-labeled-nodes",
+        "storage-reserved-percentage-for-default-disk", "storage-minimal-available-percentage", "storage-over-provisioning-percentage",
+        "default-replica-count", "replica-soft-anti-affinity", "replica-zone-soft-anti-affinity", "replica-disk-soft-anti-affinity",
+        "allow-empty-node-selector-volume", "allow-empty-disk-selector-volume", "disable-scheduling-on-cordoned-node", "replica-auto-balance",
+        "default-engine-image", "support-bundle-manager-image",
+    ]
+    storage_rule = {"apiGroups": ["longhorn.io"], "resources": ["settings"], "resourceNames": storage_settings, "verbs": ["get"]}
+    manager_rule = {"apiGroups": ["apps"], "resources": ["daemonsets"], "resourceNames": ["longhorn-manager", "longhorn-csi-plugin"], "verbs": ["get"]}
+    ui_owner_rule = {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}
+    if len(storage_roles) != 1 or storage_roles[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_roles[0].get("rules") != [storage_rule, manager_rule, ui_owner_rule]:
+        fail("storage policy Role must allow only fixed Longhorn setting/manager/plugin GETs and namespaced ReplicaSet GETs")
+    storage_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-storage-policy"]
+    if len(storage_bindings) != 1 or storage_bindings[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-storage-policy"} or storage_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("storage policy RoleBinding must bind only controller ServiceAccount")
+    upgrade_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-upgrade-settings"]
+    upgrade_rule = {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["default-controller-env"], "verbs": ["get"]}
+    if len(upgrade_roles) != 1 or upgrade_roles[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_roles[0].get("rules") != [upgrade_rule, {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("upgrade settings Role must allow only named default-controller-env ConfigMap GET and namespace ReplicaSet GET")
+    upgrade_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-upgrade-settings"]
+    if len(upgrade_bindings) != 1 or upgrade_bindings[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-upgrade-settings"} or upgrade_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("upgrade settings RoleBinding must bind only controller ServiceAccount")
+    cnpg_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
+    cnpg_rule = {"apiGroups": [""], "resources": ["configmaps", "secrets"], "resourceNames": ["cnpg-controller-manager-config"], "verbs": ["get"]}
+    if len(cnpg_roles) != 1 or cnpg_roles[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_roles[0].get("rules") != [cnpg_rule, {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("CNPG settings Role must allow only named controller configuration ConfigMap/Secret GETs and namespace ReplicaSet GET")
+    cnpg_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cnpg-settings"]
+    if len(cnpg_bindings) != 1 or cnpg_bindings[0].get("metadata") != {"name": "borealis-cluster-cnpg-settings", "namespace": "cnpg-system"} or cnpg_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cnpg-settings"} or cnpg_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("CNPG settings RoleBinding must bind only controller ServiceAccount")
+    vip_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-kube-vip-source"]
+    vip_rule = {"apiGroups": ["apps"], "resources": ["daemonsets"], "resourceNames": ["kube-vip-borealis-cluster"], "verbs": ["get"]}
+    if len(vip_roles) != 1 or vip_roles[0].get("metadata") != {"name": "borealis-cluster-kube-vip-source", "namespace": "kube-system"} or vip_roles[0].get("rules") != [vip_rule]:
+        fail("kube-vip source Role must allow only named kube-vip DaemonSet GET")
+    vip_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-kube-vip-source"]
+    if len(vip_bindings) != 1 or vip_bindings[0].get("metadata") != {"name": "borealis-cluster-kube-vip-source", "namespace": "kube-system"} or vip_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-kube-vip-source"} or vip_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("kube-vip source RoleBinding must bind only controller ServiceAccount")
+    snapshot_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-snapshot-source"]
+    if len(snapshot_roles) != 1 or snapshot_roles[0].get("metadata") != {"name": "borealis-cluster-snapshot-source", "namespace": "kube-system"} or snapshot_roles[0].get("rules") != [{"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("snapshot source Role must allow only namespace ReplicaSet GET")
+    snapshot_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-snapshot-source"]
+    if len(snapshot_bindings) != 1 or snapshot_bindings[0].get("metadata") != {"name": "borealis-cluster-snapshot-source", "namespace": "kube-system"} or snapshot_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-snapshot-source"} or snapshot_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("snapshot source RoleBinding must bind only controller ServiceAccount")
+    cert_manager_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cert-manager-source"]
+    if len(cert_manager_roles) != 1 or cert_manager_roles[0].get("metadata") != {"name": "borealis-cluster-cert-manager-source", "namespace": "cert-manager"} or cert_manager_roles[0].get("rules") != [{"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:
+        fail("cert-manager source Role must allow only namespace ReplicaSet GET")
+    cert_manager_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cert-manager-source"]
+    if len(cert_manager_bindings) != 1 or cert_manager_bindings[0].get("metadata") != {"name": "borealis-cluster-cert-manager-source", "namespace": "cert-manager"} or cert_manager_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cert-manager-source"} or cert_manager_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("cert-manager source RoleBinding must bind only controller ServiceAccount")
+    if sum(item.get("kind") == "Role" for item in objects) != 7 or sum(item.get("kind") == "RoleBinding" for item in objects) != 7:
+        fail("controller must not gain additional namespaced permissions")
+    storage_class_rules = [rule for rule in rules if "storageclasses" in (rule.get("resources") or [])]
+    if storage_class_rules != [{"apiGroups": ["storage.k8s.io"], "resources": ["storageclasses"], "verbs": ["get"]}]:
+        fail("controller StorageClass access must remain GET-only")
+    source_services = [item for item in objects if item.get("kind") == "Service"]
+    expected_source_service = {
+        "type": "ClusterIP", "clusterIP": "None",
+        "selector": {"app.kubernetes.io/name": "borealis-cluster-controller"},
+        "ports": [{"name": "source", "port": 8090, "targetPort": "health", "protocol": "TCP"}],
+    }
+    if len(source_services) != 1 or source_services[0].get("spec") != expected_source_service or (source_services[0].get("metadata") or {}).get("name") != "borealis-cluster-source" or (source_services[0].get("metadata") or {}).get("namespace") != "borealis":
+        fail("source broker discovery must remain fixed headless internal controller Service")
     lease_rule = next(
         (
             rule

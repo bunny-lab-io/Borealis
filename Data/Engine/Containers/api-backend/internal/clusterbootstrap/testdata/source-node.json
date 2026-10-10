@@ -1,0 +1,9 @@
+{
+  "metadata": {"name": "engine-01", "uid": "33333333-3333-4333-8333-333333333333"},
+  "spec": {"podCIDR": "10.42.0.0/24", "podCIDRs": ["10.42.0.0/24"]},
+  "status": {
+    "nodeInfo": {"machineID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bootID": "22222222-2222-4222-8222-222222222222", "kubeletVersion": "v1.36.3+k3s1"},
+    "addresses": [{"type": "InternalIP", "address": "192.168.90.20"}],
+    "conditions": [{"type": "Ready", "status": "True"}]
+  }
+}

@@ -147,6 +147,7 @@ func (s *postgresOperatorStore) ensureClusterSchema(ctx context.Context) error {
 			PRIMARY KEY (release_sha, phase)
 		)`,
 	}
+	statements = append(statements, clusterSSHSchemaStatements...)
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return errors.Join(errClusterUnavailable, err)
@@ -1003,7 +1004,12 @@ func (s *postgresOperatorStore) retryClusterOperation(ctx context.Context, actor
 }
 
 func (s *postgresOperatorStore) cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error) {
-	return s.transitionClusterOperation(ctx, actor, operationID, "cancel")
+	result, err := s.transitionClusterOperation(ctx, actor, operationID, "cancel")
+	if err == nil && cleanText(result["kind"]) == "ssh_onboarding" {
+		// transition has returned its pooled connection before credential cleanup.
+		err = s.cleanupClusterSSHCredentials(ctx)
+	}
+	return result, err
 }
 
 func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, actor string, operationID string, action string) (map[string]any, error) {
@@ -1033,6 +1039,9 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	nextState, step, message := "", "", ""
 	retryResumeStep := ""
 	if action == "retry" {
+		if kind == "ssh_onboarding" {
+			return nil, fmt.Errorf("%w: SSH retry requires explicit credential resubmission and target reconciliation", errClusterConflict)
+		}
 		if kind == "hmr_start" {
 			return nil, errClusterHMREntryDisabled
 		}
@@ -1110,8 +1119,13 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 		if kind == "membership_admit" {
 			return nil, fmt.Errorf("%w: approved admission may already have joined; retry recovery instead of cancelling membership", errClusterConflict)
 		}
-		if state != "queued" && state != "waiting" {
+		if state != "queued" && state != "waiting" && !(kind == "ssh_onboarding" && state == "running") {
 			return nil, fmt.Errorf("%w: running or completed operation cannot be cancelled", errClusterConflict)
+		}
+		if kind == "ssh_onboarding" {
+			if err := cancelClusterSSHInspectionTargets(ctx, tx, operationID, currentStep); err != nil {
+				return nil, err
+			}
 		}
 		nextState, step, message = "cancelled", "cancelled", "Cluster operation cancelled at safe boundary."
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state=$1, current_step=$2, finished_at=$3, updated_at=$3 WHERE id=$4`, nextState, step, now, operationID); err != nil {
