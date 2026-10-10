@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"io"
 	"math"
 	"regexp"
 	"strconv"
@@ -73,10 +74,9 @@ func clusterSSHStorageInteger(value any) (int64, bool) {
 }
 
 // Raw Kubernetes objects stay private. Decode maps with exact key lookup and
-// numbers, then reuse recursive canonical comparison to reject duplicates,
-// trailing JSON and excessive nesting before policy reads any field.
+// numbers in one bounded token pass. Reject duplicates, trailing JSON and
+// excessive nesting before policy reads any field, then hash canonical bytes.
 func clusterSSHStorageObject(raw []byte) (map[string]any, [32]byte, error) {
-	var object map[string]any
 	fail := func() (map[string]any, [32]byte, error) {
 		return nil, [32]byte{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -85,14 +85,73 @@ func clusterSSHStorageObject(raw []byte) (map[string]any, [32]byte, error) {
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
-	if d.Decode(&object) != nil || object == nil {
+	value, err := clusterSSHStorageJSONValue(d, 0)
+	object, ok := value.(map[string]any)
+	if err != nil || !ok || object == nil {
+		return fail()
+	}
+	if _, err := d.Token(); err != io.EOF {
 		return fail()
 	}
 	canonical, err := json.Marshal(object)
-	if err != nil || !sameClusterSSHStoredJSON(raw, canonical, 0) {
+	if err != nil {
 		return fail()
 	}
 	return object, sha256.Sum256(canonical), nil
+}
+
+// This decoder is private to full Kubernetes object receipts. It does not
+// change stored-authority JSON comparison or public request field contracts.
+func clusterSSHStorageJSONValue(d *json.Decoder, depth int) (any, error) {
+	if depth > 32 {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	token, err := d.Token()
+	if err != nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	delim, container := token.(json.Delim)
+	if !container {
+		return token, nil
+	}
+	switch delim {
+	case '{':
+		object := map[string]any{}
+		for d.More() {
+			token, err := d.Token()
+			name, ok := token.(string)
+			if err != nil || !ok {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
+			if _, exists := object[name]; exists {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
+			value, err := clusterSSHStorageJSONValue(d, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			object[name] = value
+		}
+		if end, err := d.Token(); err != nil || end != json.Delim('}') {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return object, nil
+	case '[':
+		values := []any{}
+		for d.More() {
+			value, err := clusterSSHStorageJSONValue(d, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		if end, err := d.Token(); err != nil || end != json.Delim(']') {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return values, nil
+	default:
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
 }
 
 type clusterSSHStorageIdentity struct{ Name, UID, Revision string }
