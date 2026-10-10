@@ -55,8 +55,12 @@ type sourceFile struct {
 // member before extraction. Only verified regular files/directories reach new
 // mode0700 scratch. No source or node-manager code is executed. gitBin must be
 // a trusted host Git executable; empty selects Git from the process PATH.
-func Stage(ctx context.Context, parent string, m *Manifest, input io.Reader, gitBin string) (_ *Bundle, err error) {
-	if m == nil || m.asset.Size < 1 || m.asset.Size > MaxBundleBytes || !digestPattern.MatchString(m.asset.SHA256) {
+func Stage(ctx context.Context, parent string, m *Manifest, input io.Reader, gitBin string) (*Bundle, error) {
+	return stageBootstrapReserved(ctx, parent, m, input, gitBin, reserveImageFile)
+}
+
+func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, input io.Reader, gitBin string, allocate func(*os.File, int64) error) (_ *Bundle, err error) {
+	if m == nil || input == nil || allocate == nil || m.asset.Size < 1 || m.asset.Size > MaxBundleBytes || !digestPattern.MatchString(m.asset.SHA256) {
 		return nil, errors.New("node bootstrap validated manifest required")
 	}
 	if err := ctx.Err(); err != nil {
@@ -77,6 +81,11 @@ func Stage(ctx context.Context, parent string, m *Manifest, input io.Reader, git
 		return nil, errors.New("node bootstrap staging failed")
 	}
 	defer archive.Close()
+	// Manifest-bound destination blocks precede consuming the archive body.
+	// The caller owns HTTP opening/cancellation; no sparse fallback applies.
+	if allocate(archive, m.asset.Size) != nil || ctx.Err() != nil {
+		return nil, errors.New("node bootstrap archive reservation unavailable")
+	}
 	hash := sha256.New()
 	n, err := io.Copy(io.MultiWriter(archive, hash), io.LimitReader(contextReader{ctx, input}, m.asset.Size+1))
 	if err != nil || n != m.asset.Size || hex.EncodeToString(hash.Sum(nil)) != m.asset.SHA256 {
@@ -86,7 +95,7 @@ func Stage(ctx context.Context, parent string, m *Manifest, input io.Reader, git
 	if err != nil {
 		return nil, err
 	}
-	if err := extractArchive(ctx, archive, filepath.Join(root, "unpacked")); err != nil {
+	if err := extractArchive(ctx, archive, filepath.Join(root, "unpacked"), allocate); err != nil {
 		return nil, err
 	}
 	if err := verifySource(ctx, b.SourcePath(), m.identity, files, gitBin); err != nil {
@@ -279,7 +288,7 @@ func allowedGitPath(name string, directory bool) bool {
 	return packFilePattern.MatchString(name) || strings.HasPrefix(name, "refs/tags/") && releasePattern.MatchString(strings.TrimPrefix(name, "refs/tags/"))
 }
 
-func extractArchive(ctx context.Context, archive *os.File, destination string) error {
+func extractArchive(ctx context.Context, archive *os.File, destination string, allocate func(*os.File, int64) error) error {
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return errors.New("node bootstrap extraction scratch unavailable")
 	}
@@ -299,6 +308,12 @@ func extractArchive(ctx context.Context, archive *os.File, destination string) e
 		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			return errors.New("node bootstrap file extraction failed")
+		}
+		// scanArchive already authenticated lengths and the complete tree.
+		// Empty files own an inode but require no fallocate byte range.
+		if ctx.Err() != nil || h.Size > 0 && allocate(file, h.Size) != nil || ctx.Err() != nil {
+			_ = file.Close()
+			return errors.New("node bootstrap extraction reservation unavailable")
 		}
 		_, copyErr := io.Copy(file, r)
 		modeErr := file.Chmod(os.FileMode(h.Mode))
