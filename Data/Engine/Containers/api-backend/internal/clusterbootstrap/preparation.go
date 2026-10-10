@@ -127,7 +127,7 @@ func (b *Bundle) verifyPreparationSource(ctx context.Context, k3sVersion string)
 		return ErrPreparationConfig
 	}
 	m := &Manifest{identity: b.identity, asset: b.asset}
-	files, err := scanArchive(ctx, f, m)
+	files, _, err := scanArchive(ctx, f, m)
 	if err != nil || verifyPreparationFiles(ctx, f, filepath.Join(b.root, "unpacked")) != nil || verifySource(ctx, b.SourcePath(), b.identity, files, "") != nil || verifyBinary(b.ManagerPath(), b.identity) != nil {
 		return ErrPreparationConfig
 	}

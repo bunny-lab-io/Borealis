@@ -20,12 +20,17 @@ func reserveStagedImageArchives(ctx context.Context, root *os.Root, sizes map[st
 			closeStagedImageArchives(files)
 		}
 	}()
+	demand := PreparationScratchDemand{Entries: uint64(len(sizes))}
 	names := make([]string, 0, len(sizes))
 	for name, size := range sizes {
 		if name == "." || filepath.Base(name) != name || size < 1 || size > MaxImageArchiveBytes {
 			return files, ErrImageArchive
 		}
+		demand.Bytes += uint64(size)
 		names = append(names, name)
+	}
+	if checkRootScratchCapacity(root, demand) != nil {
+		return files, errScratchCapacity
 	}
 	sort.Strings(names)
 	for _, name := range names {

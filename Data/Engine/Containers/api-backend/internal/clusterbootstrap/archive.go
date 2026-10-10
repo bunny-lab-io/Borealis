@@ -76,6 +76,15 @@ func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, inp
 			_ = b.Close()
 		}
 	}()
+	scratch, err := os.Open(root)
+	if err != nil {
+		return nil, errScratchCapacity
+	}
+	capacityErr := checkScratchCapacity(scratch, PreparationScratchDemand{Bytes: uint64(m.asset.Size), Entries: 1})
+	closeErr := scratch.Close()
+	if capacityErr != nil || closeErr != nil {
+		return nil, errScratchCapacity
+	}
 	archive, err := os.OpenFile(b.ArchivePath(), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, errors.New("node bootstrap staging failed")
@@ -91,9 +100,14 @@ func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, inp
 	if err != nil || n != m.asset.Size || hex.EncodeToString(hash.Sum(nil)) != m.asset.SHA256 {
 		return nil, errors.New("node bootstrap archive size or digest mismatch")
 	}
-	files, err := scanArchive(ctx, archive, m)
+	files, expanded, err := scanArchive(ctx, archive, m)
 	if err != nil {
 		return nil, err
+	}
+	// Archive is already allocated. Charge only the complete expanded tree,
+	// including its new unpacked directory, against current remaining space.
+	if checkScratchCapacity(archive, expanded) != nil {
+		return nil, errScratchCapacity
 	}
 	if err := extractArchive(ctx, archive, filepath.Join(root, "unpacked"), allocate); err != nil {
 		return nil, err
@@ -157,7 +171,7 @@ func walkArchive(ctx context.Context, file *os.File, visit func(*tar.Header, io.
 	return nil
 }
 
-func scanArchive(ctx context.Context, file *os.File, m *Manifest) (map[string]sourceFile, error) {
+func scanArchive(ctx context.Context, file *os.File, m *Manifest) (map[string]sourceFile, PreparationScratchDemand, error) {
 	seen := map[string]bool{}
 	files := map[string]sourceFile{}
 	var total int64
@@ -208,13 +222,13 @@ func scanArchive(ctx context.Context, file *os.File, m *Manifest) (map[string]so
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, PreparationScratchDemand{}, err
 	}
 	i, err := parseIdentity(inner, Expected{Repository: m.identity.Repository, Release: m.identity.Release, SourceSHA: m.identity.SourceSHA, AllowQualification: true})
 	if err != nil || i != m.identity || managerSHA != m.identity.NodeManager.SHA256 || len(files) == 0 {
-		return nil, errors.New("node bootstrap inner identity or binary digest mismatch")
+		return nil, PreparationScratchDemand{}, errors.New("node bootstrap inner identity or binary digest mismatch")
 	}
-	return files, nil
+	return files, PreparationScratchDemand{Bytes: uint64(total), Entries: uint64(len(seen)) + 1}, nil
 }
 
 var packFilePattern = regexp.MustCompile(`^objects/pack/pack-[0-9a-f]{40}\.(?:pack|idx|rev)$`)

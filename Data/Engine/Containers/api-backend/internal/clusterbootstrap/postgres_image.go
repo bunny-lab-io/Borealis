@@ -261,6 +261,16 @@ func acquirePostgresImageReserved(ctx context.Context, parent, reference string,
 	if archiveBytes > MaxImageArchiveBytes || contentBytes > MaxImageArchiveBytes {
 		return nil, ErrImageArchive
 	}
+	remaining := PreparationScratchDemand{Bytes: uint64(archiveBytes), Entries: 1}
+	for digest, d := range descriptors {
+		if _, exists := blobs[digest]; !exists {
+			remaining.Bytes += uint64(d.Size)
+			remaining.Entries++
+		}
+	}
+	if checkRootScratchCapacity(root, remaining) != nil {
+		return nil, errScratchCapacity
+	}
 	slices.Sort(namesToReserve)
 	for _, digest := range namesToReserve {
 		if _, exists := blobs[digest]; exists {

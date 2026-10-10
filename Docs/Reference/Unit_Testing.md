@@ -301,3 +301,5 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
     Traefik shell-entrypoint assertions moved from `test_edge_runtime.py` into Go repository-contract tests. Python file now tests only Python edge-settings loader still consumed by site workers.
 
     - `TestBootstrapScratchReservation` checks real Linux allocation before compressed-body reads and extracted-file writes, archive/extraction ENOSPC, cancellation at both boundaries and preservation of caller-owned files. Run `go -C Data/Engine/Containers/api-backend test ./internal/clusterbootstrap -count=1`; no source, node-manager or container image is executed by staging.
+
+    - `TestScratchCapacityCalculatedFit` covers allocation allowance, empty-file demand, exact byte/inode boundaries, missing inode evidence and arithmetic overflow. `TestScratchCapacityUsesOwnedFilesystem` observes the real temporary filesystem through held descriptors across directory rename, rejects exhaustion/closed handles and creates no files. Existing bootstrap/application/external/PostgreSQL staging tests exercise the integrated preflight and physical allocations.
