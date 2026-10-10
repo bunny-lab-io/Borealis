@@ -51,6 +51,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 	for _, name := range clusterSSHCertManagerDeployments {
 		f.objects[clusterSSHCertManagerDeploymentPrefix+name] = sshCertManagerDeploymentFixture(name)
 	}
+	sshApplicationResourcesFixture(f)
 	sshCertManagerRuntimeFixture(f)
 	f.objects[clusterSSHCNPGOperatorPath] = sshCNPGOperatorFixture()
 	sshCNPGRuntimeFixture(f)

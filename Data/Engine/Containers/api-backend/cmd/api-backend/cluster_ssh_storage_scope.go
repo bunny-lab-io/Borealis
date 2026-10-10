@@ -123,6 +123,7 @@ func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPre
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		value := retained.Requirements
+		value.Applications = slices.Clone(value.Applications)
 		value.Volumes = slices.Clone(value.Volumes)
 		value.ReplicaImages = slices.Clone(value.ReplicaImages)
 		value.LonghornPlugin = slices.Clone(value.LonghornPlugin)

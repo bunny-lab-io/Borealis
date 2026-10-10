@@ -1,7 +1,6 @@
 package main
 
 import (
-	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"encoding/json"
 	"regexp"
@@ -132,11 +131,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		}
 		report.Checks[stage].State = "passed"
 		stage = 1
-		settings := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
-			v, err := source(ctx)
-			return v.Expected, v.Settings, err
-		}
-		if err := withClusterSSHTargetSizing(ctx, readers, settings, func(context.Context, []clusterSSHTargetHostEvidence) error { return nil }); err != nil {
+		if err := withClusterSSHTargetApplicationSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error { return nil }); err != nil {
 			return err
 		}
 		report.Checks[stage].State = "passed"
