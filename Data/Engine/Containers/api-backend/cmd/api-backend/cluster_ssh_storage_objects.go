@@ -273,6 +273,7 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
+	SiteWorkers                 []clusterSSHSiteWorkerResource   `json:"site_workers"`
 	PostgresResources           clusterSSHApplicationResource    `json:"postgres_resources"`
 	Applications                []clusterSSHApplicationResource  `json:"applications"`
 	LonghornPlugin              []clusterSSHLonghornPluginMember `json:"longhorn_plugin"`

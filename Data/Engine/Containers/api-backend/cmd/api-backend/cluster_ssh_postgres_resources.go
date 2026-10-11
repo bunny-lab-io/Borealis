@@ -5,9 +5,18 @@ package main
 // owned active-member Pod; missing declarations cannot imply bounded demand.
 func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (clusterSSHApplicationResource, bool) {
 	v, ok := clusterSSHWorkloadResources("postgres", clusterSpec["resources"])
-	fail := func() (clusterSSHApplicationResource, bool) { return clusterSSHApplicationResource{}, false }
+	if !ok || !clusterSSHBoundedPodResources(v, pod, "postgres", "bootstrap-controller") {
+		return clusterSSHApplicationResource{}, false
+	}
+	return v, true
+}
+
+// Both producers use one ordinary container and one sequential init with the
+// same envelope. Keep resize/status accounting identical for both consumers.
+func clusterSSHBoundedPodResources(v clusterSSHApplicationResource, pod map[string]any, mainName, initName string) bool {
+	fail := func() bool { return false }
 	spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
-	if !ok || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) || !clusterSSHStorageEmptyMap(spec["resources"]) ||
+	if !clusterSSHWorkloadResourceValid(v) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) || !clusterSSHStorageEmptyMap(spec["resources"]) ||
 		!clusterSSHStorageEmptyMap(spec["overhead"]) || !clusterSSHStorageEmptyText(spec["runtimeClassName"]) ||
 		!clusterSSHStorageEmptyList(spec["resourceClaims"]) || !clusterSSHStorageEmptyText(status["resize"]) {
 		return fail()
@@ -23,8 +32,8 @@ func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (cluste
 		}
 	}
 	for _, kind := range []struct{ spec, status, name string }{
-		{"containers", "containerStatuses", "postgres"},
-		{"initContainers", "initContainerStatuses", "bootstrap-controller"},
+		{"containers", "containerStatuses", mainName},
+		{"initContainers", "initContainerStatuses", initName},
 	} {
 		containers, containersOK := spec[kind.spec].([]any)
 		statuses, statusesOK := status[kind.status].([]any)
@@ -33,7 +42,7 @@ func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (cluste
 		}
 		container, containerOK := containers[0].(map[string]any)
 		runtime, runtimeOK := statuses[0].(map[string]any)
-		observed, resourcesOK := clusterSSHWorkloadResources("postgres", container["resources"])
+		observed, resourcesOK := clusterSSHWorkloadResources(v.Name, container["resources"])
 		if !containerOK || !runtimeOK || container["name"] != kind.name || runtime["name"] != kind.name || !resourcesOK || observed != v ||
 			!clusterSSHStorageEmptyText(container["restartPolicy"]) || !clusterSSHStorageEmptyList(container["resizePolicy"]) ||
 			!clusterSSHStorageEmptyList(runtime["allocatedResourcesStatus"]) {
@@ -42,7 +51,7 @@ func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (cluste
 		// In-place resize evidence must agree with the declared resources. Never
 		// substitute a smaller request for resources still allocated by kubelet.
 		if current, present := runtime["resources"]; present {
-			actual, valid := clusterSSHWorkloadResources("postgres", current)
+			actual, valid := clusterSSHWorkloadResources(v.Name, current)
 			if !valid || actual != v {
 				return fail()
 			}
@@ -56,7 +65,7 @@ func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (cluste
 			}
 		}
 	}
-	return v, true
+	return true
 }
 
 func clusterSSHWorkloadResources(name string, raw any) (clusterSSHApplicationResource, bool) {
@@ -89,5 +98,17 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 		return 0, 0, false
 	}
 	memory, ok = clusterSSHCapacitySum(memory, r.PostgresResources.MemoryLimitBytes)
+	if !ok {
+		return 0, 0, false
+	}
+	workerCPU, workerMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, workerCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, workerMemory)
 	return cpu, memory, ok
 }

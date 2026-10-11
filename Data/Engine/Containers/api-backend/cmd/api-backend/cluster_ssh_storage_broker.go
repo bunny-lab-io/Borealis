@@ -38,6 +38,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		observation := storage.observation
 		storage.observation = ""
 		storage.Applications = slices.Clone(storage.Applications)
+		storage.SiteWorkers = slices.Clone(storage.SiteWorkers)
 		storage.Volumes = slices.Clone(storage.Volumes)
 		storage.ReplicaImages = slices.Clone(storage.ReplicaImages)
 		storage.LonghornPlugin = slices.Clone(storage.LonghornPlugin)
@@ -56,7 +57,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 // digest alone cannot create provenance, prove free space or select a target.
 func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clusterSSHSourceCohort) bool {
 	r := value.Requirements
-	if _, _, ok := clusterSSHNodeWorkloadBudget(r); !ok {
+	if _, _, ok := clusterSSHNodeWorkloadBudget(r); !ok || !clusterSSHSiteWorkersMatchSource(r.SiteWorkers, source) {
 		return false
 	}
 	socket, socketOK := clusterSSHLonghornCSISocketPath(r.LonghornCSISocketPath)

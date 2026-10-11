@@ -142,6 +142,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		retainedSources = slices.Clone(value.Sources)
 		retainedStorage = value.Storage
 		retainedStorage.Requirements.Applications = slices.Clone(value.Storage.Requirements.Applications)
+		retainedStorage.Requirements.SiteWorkers = slices.Clone(value.Storage.Requirements.SiteWorkers)
 		retainedStorage.Requirements.Volumes = slices.Clone(value.Storage.Requirements.Volumes)
 		retainedStorage.Requirements.ReplicaImages = slices.Clone(value.Storage.Requirements.ReplicaImages)
 		retainedStorage.Requirements.LonghornPlugin = slices.Clone(value.Storage.Requirements.LonghornPlugin)
@@ -186,7 +187,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 34 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 35 || value.ID != request.ID || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

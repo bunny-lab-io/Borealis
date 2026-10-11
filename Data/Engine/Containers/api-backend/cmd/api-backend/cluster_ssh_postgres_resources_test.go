@@ -98,7 +98,7 @@ func TestClusterSSHPostgresResources(t *testing.T) {
 func TestClusterSSHPostgresResourceBudgetRejectsInvalidProjection(t *testing.T) {
 	for _, mode := range []string{"missing", "name", "zero request", "request exceeds cap", "CPU overflow", "memory overflow"} {
 		t.Run(mode, func(t *testing.T) {
-			r := clusterSSHStorageRequirements{Applications: sshApplicationResourceValues(t), PostgresResources: sshPostgresResourceValue(t)}
+			r := clusterSSHStorageRequirements{SiteWorkers: []clusterSSHSiteWorkerResource{}, Applications: sshApplicationResourceValues(t), PostgresResources: sshPostgresResourceValue(t)}
 			switch mode {
 			case "missing":
 				r.PostgresResources = clusterSSHApplicationResource{}
