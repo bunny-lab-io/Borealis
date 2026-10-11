@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -510,6 +511,79 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	}
 	if cleanText(payload["service_cluster_ip"]) != "10.43.10.7" {
 		t.Fatalf("expected service ClusterIP in launch payload: %#v", payload)
+	}
+}
+
+func TestBorealisOperatorLaunchSiteWorkerResourceEnvelope(t *testing.T) {
+	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
+	for _, tc := range []struct {
+		profile, selected, requestCPU, requestMemory, limitCPU, limitMemory string
+	}{
+		{"", "standard", "50m", "128Mi", "1000m", "512Mi"},
+		{"small", "small", "25m", "96Mi", "250m", "256Mi"},
+		{"standard", "standard", "50m", "128Mi", "1000m", "512Mi"},
+		{"large", "large", "100m", "256Mi", "2000m", "1024Mi"},
+		{"unsupported", "", "", "", "", ""},
+	} {
+		t.Run(tc.profile, func(t *testing.T) {
+			var pod map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.selected == "" {
+					t.Error("unsupported profile reached Kubernetes")
+				}
+				switch {
+				case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/namespaces/borealis/pods" || r.URL.Path == "/api/v1/namespaces/borealis/services"):
+					writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+				case r.Method == http.MethodPost && (r.URL.Path == "/api/v1/namespaces/borealis/pods" || r.URL.Path == "/api/v1/namespaces/borealis/services"):
+					var object map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&object); err != nil {
+						t.Error(err)
+					}
+					if r.URL.Path == "/api/v1/namespaces/borealis/pods" {
+						pod = object
+					}
+					writeJSON(w, http.StatusCreated, object)
+				default:
+					t.Errorf("unexpected Kubernetes request %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			_, status, err := borealisOperatorTestClient(server).launchSiteWorker(context.Background(), borealisOperatorLaunchSiteWorkerRequest{
+				SiteID: 7, SiteName: "Resource test", WorkerGUID: "worker-resource-test",
+				ImageRef: "borealis-engine/site-worker:sha-cccccccccccc", ResourceProfile: tc.profile,
+				RemoteOpsPort: 56001, RemoteDesktopPort: 61001,
+			})
+			if tc.selected == "" {
+				if err == nil || status != http.StatusBadRequest || pod != nil {
+					t.Fatalf("unsupported profile accepted: status=%d err=%v", status, err)
+				}
+				return
+			}
+			if err != nil || status != http.StatusAccepted || pod == nil {
+				t.Fatalf("launch failed: status=%d err=%v", status, err)
+			}
+			if nestedMap(nestedMap(pod, "metadata"), "labels")["borealis.io/resource-profile"] != tc.selected {
+				t.Fatal("selected resource profile lost")
+			}
+			want := map[string]any{
+				"requests": map[string]any{"cpu": tc.requestCPU, "memory": tc.requestMemory},
+				"limits":   map[string]any{"cpu": tc.limitCPU, "memory": tc.limitMemory},
+			}
+			for _, kind := range []string{"initContainers", "containers"} {
+				containers, ok := nestedMap(pod, "spec")[kind].([]any)
+				if !ok || len(containers) != 1 {
+					t.Fatalf("unexpected %s: %#v", kind, containers)
+				}
+				container := containers[0].(map[string]any)
+				if !reflect.DeepEqual(container["resources"], want) {
+					t.Fatalf("%s resources = %#v; want %#v", kind, container["resources"], want)
+				}
+				if _, exists := container["restartPolicy"]; exists {
+					t.Fatal("resource envelope assumes sequential init, not restartable sidecar")
+				}
+			}
+		})
 	}
 }
 

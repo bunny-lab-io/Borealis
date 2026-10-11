@@ -362,7 +362,7 @@
   {
     "pattern": "/api/server/k3s/operator",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 2154,
+    "line": 2166,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",

@@ -46,7 +46,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/scheduled_jobs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:134` |
 | `/api/scheduled_jobs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:135` |
 | `/api/server/ansible-runner-settings` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_settings.go:21` |
-| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2154` |
+| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2166` |
 | `/api/server/logs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:24` |
 | `/api/server/logs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:25` |
 | `/api/server/overview` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go:53` |
