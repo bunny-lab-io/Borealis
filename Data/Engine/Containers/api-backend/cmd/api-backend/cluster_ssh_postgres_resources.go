@@ -11,8 +11,8 @@ func observeClusterSSHPostgresResources(clusterSpec, pod map[string]any) (cluste
 	return v, true
 }
 
-// Both producers use one ordinary container and one sequential init with the
-// same envelope. Keep resize/status accounting identical for both consumers.
+// Supported workloads use one ordinary container and optionally one sequential
+// init with the same envelope. Keep resize/status accounting identical.
 func clusterSSHBoundedPodResources(v clusterSSHApplicationResource, pod map[string]any, mainName, initName string) bool {
 	fail := func() bool { return false }
 	spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
@@ -35,6 +35,12 @@ func clusterSSHBoundedPodResources(v clusterSSHApplicationResource, pod map[stri
 		{"containers", "containerStatuses", mainName},
 		{"initContainers", "initContainerStatuses", initName},
 	} {
+		if kind.name == "" {
+			if !clusterSSHStorageEmptyList(spec[kind.spec]) || !clusterSSHStorageEmptyList(status[kind.status]) {
+				return fail()
+			}
+			continue
+		}
 		containers, containersOK := spec[kind.spec].([]any)
 		statuses, statusesOK := status[kind.status].([]any)
 		if !containersOK || len(containers) != 1 || !statusesOK || len(statuses) != 1 {
@@ -98,6 +104,18 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 		return 0, 0, false
 	}
 	memory, ok = clusterSSHCapacitySum(memory, r.PostgresResources.MemoryLimitBytes)
+	if !ok {
+		return 0, 0, false
+	}
+	operatorCPU, operatorMemory, valid := r.CNPGOperatorResources.budget()
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, operatorCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, operatorMemory)
 	if !ok {
 		return 0, 0, false
 	}

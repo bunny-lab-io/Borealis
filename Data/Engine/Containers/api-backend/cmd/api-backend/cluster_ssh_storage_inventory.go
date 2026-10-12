@@ -300,7 +300,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.CNPGOperatorResolved, err = observeClusterSSHCNPGOperatorRuntime(read, readList, source, result.Requirements.CNPGOperatorImage, result.Requirements.PostgresImage.Bootstrap)
+	result.Requirements.CNPGOperatorResolved, result.Requirements.CNPGOperatorResources, err = observeClusterSSHCNPGOperatorRuntime(read, readList, source, result.Requirements.CNPGOperatorImage, result.Requirements.PostgresImage.Bootstrap)
 	if err != nil {
 		return fail()
 	}

@@ -136,6 +136,7 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 	source clusterSSHPreparationSnapshotRead, consume func(context.Context, []clusterSSHTargetHostEvidence) error) error {
 	var retained []clusterSSHApplicationResource
 	var postgres clusterSSHApplicationResource
+	var operator clusterSSHCNPGOperatorResources
 	var workers []clusterSSHSiteWorkerResource
 	var sites []int64
 	var policy clusterSSHWorkerPolicy
@@ -150,11 +151,12 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		var ok bool
 		cpu, memory, ok = clusterSSHDesiredWorkerWorkloadBudget(v)
 		if err != nil || !ok || !clusterSSHSourceObservationRE.MatchString(v.Storage.Observation) ||
-			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || observation != v.Storage.Observation)) {
+			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || observation != v.Storage.Observation)) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		retained, observation = slices.Clone(values), v.Storage.Observation
 		postgres = v.Storage.Requirements.PostgresResources
+		operator = v.Storage.Requirements.CNPGOperatorResources
 		workers = slices.Clone(v.Storage.Requirements.SiteWorkers)
 		sites, policy = slices.Clone(v.DesiredWorkerSites), v.Storage.Requirements.WorkerPolicy
 		return v.Expected, v.Settings, nil
