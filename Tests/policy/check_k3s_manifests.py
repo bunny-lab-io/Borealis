@@ -191,7 +191,7 @@ def validate_cluster_controller_contract() -> None:
     if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "*"} for rule in rules):
         fail("cluster controller must not gain cluster-wide Secret, ConfigMap, DaemonSet, ReplicaSet or Pod-log access")
     source_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
-    expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env"], "verbs": ["get"]}
+    expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env", "borealis-job-scheduler-runtime-env"], "verbs": ["get"]}
     if len(source_roles) != 1 or source_roles[0].get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or source_roles[0].get("rules") != [expected_source_rule]:
         fail("cluster source settings Role must permit only named runtime Secret get in borealis")
     source_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]

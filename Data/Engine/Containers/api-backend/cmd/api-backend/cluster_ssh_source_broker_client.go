@@ -91,6 +91,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 	retained := ""
 	var retainedSources []clusterbootstrap.SourceNetwork
 	var retainedStorage clusterSSHStorageSnapshot
+	var retainedSites []int64
 	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
 		started := time.Now()
 		fail := func() (clusterSSHPreparationSnapshot, error) {
@@ -120,7 +121,10 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		if err != nil || value.Expected.Validate() != nil || !clusterSSHSourceObservationRE.MatchString(value.Observation) ||
 			validateClusterSSHSourceNetworks(before, value.Sources) != nil ||
 			!validClusterSSHStorageSnapshot(value.Storage, before.Source) || !value.Storage.Requirements.KubeVIP.matchesNetworks(value.Sources) || !value.Storage.Requirements.csiSocketMatchesNetworks(value.Sources) ||
-			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources) || !reflect.DeepEqual(retainedStorage, value.Storage))) {
+			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources) || !reflect.DeepEqual(retainedStorage, value.Storage) || !slices.Equal(retainedSites, value.DesiredWorkerSites))) {
+			return fail()
+		}
+		if _, _, ok := clusterSSHDesiredWorkerWorkloadBudget(value); !ok {
 			return fail()
 		}
 		expected, err := buildClusterSSHPreparationExpected(before.Cohort, before.Source, lease, baseline, before.K3sVersion, value.Expected.PodCIDR, value.Expected.ServiceCIDR)
@@ -141,6 +145,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		retained = value.Observation
 		retainedSources = slices.Clone(value.Sources)
 		retainedStorage = value.Storage
+		retainedSites = slices.Clone(value.DesiredWorkerSites)
 		retainedStorage.Requirements.Applications = slices.Clone(value.Storage.Requirements.Applications)
 		retainedStorage.Requirements.SiteWorkers = slices.Clone(value.Storage.Requirements.SiteWorkers)
 		retainedStorage.Requirements.Volumes = slices.Clone(value.Storage.Requirements.Volumes)
@@ -187,7 +192,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 35 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 36 || value.ID != request.ID || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

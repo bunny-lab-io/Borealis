@@ -82,7 +82,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["borealis-api-backend-runtime-env"]
+    resourceNames: ["borealis-api-backend-runtime-env", "borealis-job-scheduler-runtime-env"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

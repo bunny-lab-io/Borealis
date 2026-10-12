@@ -39,6 +39,7 @@
     "TestClusterSSHQueuePostgresPublicProgressRetainsEvidence",
     "TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer",
     "TestClusterSSHVIPBrokerPostgresLiveAuthorityAndFreshJobs",
+    "TestClusterSSHWorkerCensusPostgresDemandAndPoolRelease",
     "TestClusterSSHWorkerPostgresAuthorityLocksAndPhaseClaims",
     "TestClusterSSHWorkerPostgresInspectionCompletionFences",
     "TestClusterSSHWorkerPostgresOwnedInspection",

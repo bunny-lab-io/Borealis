@@ -226,7 +226,7 @@ func TestClusterSSHStorageBrokerProjection(t *testing.T) {
 }
 
 func TestClusterSSHStorageBrokerControllerComposition(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "kube-vip interface mismatch", "storage changed during Job", "storage changed during Secret", "cancel during storage", "changed receipt on reread"} {
+	for _, mode := range []string{"expansion", "replacement", "census changed during Job", "census changed during final storage", "census missing", "worker policy changed during Job", "kube-vip interface mismatch", "storage changed during Job", "storage changed during Secret", "cancel during storage", "changed receipt on reread"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHStorageFixture(t, mode == "replacement")
 			if mode == "kube-vip interface mismatch" {
@@ -270,6 +270,9 @@ func TestClusterSSHStorageBrokerControllerComposition(t *testing.T) {
 					}
 					clusterSSHStorageMap(job, "metadata")["uid"] = newClusterUUID()
 					job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
+					if mode == "worker policy changed during Job" {
+						clusterSSHStorageMap(f.objects[clusterSSHWorkerSecretPath], "data")["BOREALIS_SITE_WORKER_RESOURCE_PROFILE"] = "bGFyZ2U="
+					}
 					if mode == "storage changed during Job" {
 						clusterSSHStorageMap(f.volume(1), "status")["currentNodeID"] = "foreign"
 					}
@@ -303,7 +306,20 @@ func TestClusterSSHStorageBrokerControllerComposition(t *testing.T) {
 				kube: &kubernetesAPIClient{baseURL: kubernetes.URL, token: "synthetic-private-token", httpClient: kubernetes.Client()}}
 			broker := newClusterSSHSourceBroker(nil, nil, f.a.Lease.ControllerHolder, sshBrokerTestSecret)
 			broker.read = func(ctx context.Context, _ clusterSSHSourceBrokerRequest) (clusterSSHPreparationSnapshot, error) {
-				return runner.readSSHStoragePreparationSnapshot(ctx, f.authority)
+				return runner.readSSHStoragePreparationSnapshot(ctx, f.authority, func(_ context.Context, window int64) ([]int64, error) {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					if window != 300 {
+						t.Error("scheduler window lost")
+					}
+					if mode == "census missing" {
+						return nil, nil
+					}
+					if (mode == "census changed during Job" && jobs > 0) || (mode == "census changed during final storage" && f.calls[clusterSSHStoragePostgresPath] >= 3) {
+						return []int64{1, 2}, nil
+					}
+					return []int64{1}, nil
+				})
 			}
 			server := httptest.NewServer(http.HandlerFunc(broker.handle))
 			defer server.Close()

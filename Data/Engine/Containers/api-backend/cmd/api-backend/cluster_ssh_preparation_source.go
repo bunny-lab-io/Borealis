@@ -40,12 +40,13 @@ type clusterSSHSourceNetworkRead func(context.Context, clusterSSHSourceMember) (
 // its controller transport supplies fresh InspectSourceNetwork receipts.
 // Current claims and bootstrap receiver still cannot enter a mutating phase.
 type clusterSSHPreparationSnapshot struct {
-	Expected    clusterbootstrap.PreparationExpected `json:"expected"`
-	Settings    map[string]string                    `json:"settings"`
-	Observation string                               `json:"observation_sha256"`
-	Sources     []clusterbootstrap.SourceNetwork     `json:"sources"`
-	Storage     clusterSSHStorageSnapshot            `json:"storage"`
-	started     time.Time                            // Local acquisition start; never imported from wire or storage.
+	DesiredWorkerSites []int64                              `json:"desired_worker_sites"`
+	Expected           clusterbootstrap.PreparationExpected `json:"expected"`
+	Settings           map[string]string                    `json:"settings"`
+	Observation        string                               `json:"observation_sha256"`
+	Sources            []clusterbootstrap.SourceNetwork     `json:"sources"`
+	Storage            clusterSSHStorageSnapshot            `json:"storage"`
+	started            time.Time                            // Local acquisition start; never imported from wire or storage.
 }
 
 func (clusterSSHPreparationSnapshot) String() string   { return "preparation snapshot [redacted]" }

@@ -273,6 +273,7 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
+	WorkerPolicy                clusterSSHWorkerPolicy           `json:"worker_policy"`
 	SiteWorkers                 []clusterSSHSiteWorkerResource   `json:"site_workers"`
 	PostgresResources           clusterSSHApplicationResource    `json:"postgres_resources"`
 	Applications                []clusterSSHApplicationResource  `json:"applications"`

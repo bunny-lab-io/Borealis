@@ -137,6 +137,8 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 	var retained []clusterSSHApplicationResource
 	var postgres clusterSSHApplicationResource
 	var workers []clusterSSHSiteWorkerResource
+	var sites []int64
+	var policy clusterSSHWorkerPolicy
 	observation := ""
 	var cpu, memory uint64
 	settings := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
@@ -146,14 +148,15 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		v, err := source(ctx)
 		values := v.Storage.Requirements.Applications
 		var ok bool
-		cpu, memory, ok = clusterSSHNodeWorkloadBudget(v.Storage.Requirements)
+		cpu, memory, ok = clusterSSHDesiredWorkerWorkloadBudget(v)
 		if err != nil || !ok || !clusterSSHSourceObservationRE.MatchString(v.Storage.Observation) ||
-			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || postgres != v.Storage.Requirements.PostgresResources || observation != v.Storage.Observation)) {
+			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || observation != v.Storage.Observation)) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		retained, observation = slices.Clone(values), v.Storage.Observation
 		postgres = v.Storage.Requirements.PostgresResources
 		workers = slices.Clone(v.Storage.Requirements.SiteWorkers)
+		sites, policy = slices.Clone(v.DesiredWorkerSites), v.Storage.Requirements.WorkerPolicy
 		return v.Expected, v.Settings, nil
 	}
 	return withClusterSSHTargetSizing(parent, readers, settings, func(ctx context.Context, targets []clusterSSHTargetHostEvidence) error {

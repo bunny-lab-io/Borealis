@@ -52,6 +52,7 @@ func newSSHStorageFixtureForAuthority(t *testing.T, a clusterSSHPreparationAutho
 		f.objects[clusterSSHCertManagerDeploymentPrefix+name] = sshCertManagerDeploymentFixture(name)
 	}
 	sshApplicationResourcesFixture(f)
+	sshWorkerPolicyFixture(f)
 	for _, member := range source.Members {
 		f.objects[clusterSSHSiteWorkerPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{}}
 	}

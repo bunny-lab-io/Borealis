@@ -15,11 +15,48 @@ type clusterSSHStorageSnapshot struct {
 	Observation  string                        `json:"observation_sha256"`
 }
 
-func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx context.Context, authority clusterSSHPreparationAuthorityRead) (clusterSSHPreparationSnapshot, error) {
+func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx context.Context, authority clusterSSHPreparationAuthorityRead, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
+	if census == nil || authority == nil {
+		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+	}
+	censusGate := make(chan struct{}, 1)
+	var sites []int64
+	var policy clusterSSHWorkerPolicy
+	// Once the two initial storage inventories select scheduler policy, bind
+	// census to every existing authority boundary, including the joined final
+	// storage inventory. Never retain a DB connection across another read.
+	scopedAuthority := func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+		current, err := authority(ctx)
+		if err != nil {
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
+		}
+		select {
+		case censusGate <- struct{}{}:
+			defer func() { <-censusGate }()
+		case <-ctx.Done():
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
+		}
+		if policy.OnlineWindow != 0 {
+			wanted, err := census(ctx, policy.OnlineWindow)
+			if err != nil || ctx.Err() != nil || !clusterSSHWorkerCensusValid(wanted) || (sites != nil && !slices.Equal(sites, wanted)) {
+				return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
+			}
+			if sites == nil {
+				sites = slices.Clone(wanted)
+			}
+		}
+		return current, nil
+	}
 	var value clusterSSHPreparationSnapshot
-	err := r.withSSHSourceStorage(ctx, authority, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
-		// Bind source Jobs and private configuration to the storage scope's original
-		// authority at each existing source boundary, without retaining a DB handle.
+	err := r.withSSHSourceStorage(ctx, scopedAuthority, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
+		select {
+		case censusGate <- struct{}{}:
+			policy = storage.WorkerPolicy
+			<-censusGate
+		case <-ctx.Done():
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		// Preserve original authority checks around source Jobs/configuration.
 		boundAuthority := func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
 			if checks.Authority(ctx) != nil {
 				return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
@@ -44,6 +81,16 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		storage.LonghornPlugin = slices.Clone(storage.LonghornPlugin)
 		storage.Policy.Classes = slices.Clone(storage.Policy.Classes)
 		value.Storage = clusterSSHStorageSnapshot{Requirements: storage, Observation: observation}
+		select {
+		case censusGate <- struct{}{}:
+			value.DesiredWorkerSites = slices.Clone(sites)
+			<-censusGate
+		case <-ctx.Done():
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		if _, _, ok := clusterSSHDesiredWorkerWorkloadBudget(value); !ok {
+			return clusterbootstrap.ErrPreparationConfig
+		}
 		return nil
 	})
 	if err != nil || ctx.Err() != nil {
@@ -57,6 +104,9 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 // digest alone cannot create provenance, prove free space or select a target.
 func validClusterSSHStorageSnapshot(value clusterSSHStorageSnapshot, source clusterSSHSourceCohort) bool {
 	r := value.Requirements
+	if _, ok := r.WorkerPolicy.resources(); !ok {
+		return false
+	}
 	if _, _, ok := clusterSSHNodeWorkloadBudget(r); !ok || !clusterSSHSiteWorkersMatchSource(r.SiteWorkers, source) {
 		return false
 	}

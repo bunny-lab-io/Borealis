@@ -28,6 +28,25 @@ class ClusterStorageRBACTests(unittest.TestCase):
     def test_committed_controller_passes(self):
         self.validate(self.objects)
 
+    def test_source_settings_role_rejects_permission_drift(self):
+        mutations = {
+            "missing scheduler": lambda role: role["rules"][0]["resourceNames"].remove("borealis-job-scheduler-runtime-env"),
+            "extra secret": lambda role: role["rules"][0]["resourceNames"].append("other"),
+            "wrong namespace": lambda role: role["metadata"].update(namespace="default"),
+            "unrestricted names": lambda role: role["rules"][0].pop("resourceNames"),
+        }
+        for verb in ("list", "watch", "create", "update", "patch", "delete", "*"):
+            mutations[verb] = lambda role, v=verb: role["rules"][0]["verbs"].append(v)
+        for field in ("apiGroups", "resources", "resourceNames"):
+            mutations[field] = lambda role, f=field: role["rules"][0].update({f: ["*"]})
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "Role" and item["metadata"]["name"] == "borealis-cluster-source-settings")
+                mutate(role)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
     def test_storage_role_rejects_permission_drift(self):
         mutations = {
             "extra setting": lambda role: role["rules"][0]["resourceNames"].append("unreviewed-setting"),
