@@ -11,7 +11,7 @@ const (
 )
 
 // Desired controller/drain-helper inputs and running controller identity. Upgrade Plan
-// images, trust-directory contents and workload budgets remain separate evidence.
+// images, trust-directory contents and helper budgets remain separate evidence.
 type clusterSSHSystemUpgradeImages struct {
 	Controller string `json:"controller"`
 	Resolved   string `json:"resolved"`
@@ -43,9 +43,9 @@ func (images clusterSSHSystemUpgradeImages) configuredValid() bool {
 	return clusterSSHSystemUpgradeImageValid(images.Controller, "system-upgrade-controller") && clusterSSHSystemUpgradeImageValid(images.Kubectl, "kubectl")
 }
 
-func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHSystemUpgradeImages, error) {
-	fail := func() (clusterSSHSystemUpgradeImages, error) {
-		return clusterSSHSystemUpgradeImages{}, clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHSystemUpgradeImages, clusterSSHSystemUpgradeResources, error) {
+	fail := func() (clusterSSHSystemUpgradeImages, clusterSSHSystemUpgradeResources, error) {
+		return clusterSSHSystemUpgradeImages{}, clusterSSHSystemUpgradeResources{}, clusterbootstrap.ErrPreparationConfig
 	}
 	object, err := read(clusterSSHSystemUpgradePath)
 	metadata, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "system-upgrade")
@@ -55,6 +55,23 @@ func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, err
 	image, err := clusterSSHSystemUpgradeTemplateImage(object)
 	if err != nil {
 		return fail()
+	}
+	plan, ok := clusterSSHSystemUpgradeResourcePlan(object)
+	if !ok || readList == nil {
+		return fail()
+	}
+	checkedList := func(path, kind, namespace string, limit int) ([]map[string]any, error) {
+		pods, err := readList(path, kind, namespace, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, pod := range pods {
+			if !clusterSSHBoundedPodResources(plan.Envelope, pod, "system-upgrade-controller", "") {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
+		}
+		plan.Observed += uint64(len(pods))
+		return pods, nil
 	}
 	owner := metadata
 	config, err := read(clusterSSHSystemUpgradeConfigPath)
@@ -80,19 +97,20 @@ func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, err
 	if !images.configuredValid() {
 		return fail()
 	}
-	images.Resolved, err = observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
+	images.Resolved, err = observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 		namespace: "system-upgrade", labelKey: "upgrade.cattle.io/controller", name: "system-upgrade-controller", serviceAccount: "system-upgrade",
 		repository: "docker.io/rancher/system-upgrade-controller", imageValid: clusterSSHSystemUpgradeRuntimeImageValid,
 		podsPath: clusterSSHSystemUpgradePodsPath, replicaSetPrefix: clusterSSHSystemUpgradeReplicaSetPrefix, replicaSetPathValid: clusterSSHSystemUpgradeReplicaSetPathValid, templateImage: clusterSSHSystemUpgradeTemplateImage,
 		specValid: func(spec map[string]any, pod bool) bool {
 			_, err := clusterSSHSystemUpgradeSpecImage(spec, pod)
-			return err == nil
+			resources, ok := clusterSSHSystemUpgradeResourceSpec(spec, pod)
+			return err == nil && ok && resources == plan.Envelope
 		},
 	})
-	if err != nil || !images.valid() {
+	if _, _, ok := plan.budget(); err != nil || !images.valid() || !ok {
 		return fail()
 	}
-	return images, nil
+	return images, plan, nil
 }
 
 func clusterSSHSystemUpgradeEnvironment(rawEnv, rawFrom any) bool {

@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -17,7 +18,8 @@ func sshSystemUpgradePin(role string) clusterbootstrap.ExternalImagePin {
 	panic("missing upgrade fixture pin")
 }
 
-// Mirrors the reviewed v0.20.1 Deployment and default-controller-env ConfigMap.
+// Mirrors pinned v0.20.1 placement/configuration, with synthetic explicit resource
+// bounds. Upstream has no bounds; these test values are not producer defaults.
 func sshSystemUpgradeFixture(f *sshStorageFixture) {
 	env := []any{}
 	for _, field := range [][2]string{{"SYSTEM_UPGRADE_CONTROLLER_NAME", "metadata.labels['upgrade.cattle.io/controller']"}, {"SYSTEM_UPGRADE_CONTROLLER_NAMESPACE", "metadata.namespace"}, {"SYSTEM_UPGRADE_CONTROLLER_NODE_NAME", "spec.nodeName"}} {
@@ -31,11 +33,18 @@ func sshSystemUpgradeFixture(f *sshStorageFixture) {
 	mounts = append(mounts, map[string]any{"name": "tmp", "mountPath": "/tmp"})
 	volumes = append(volumes, map[string]any{"name": "tmp", "emptyDir": map[string]any{}})
 	deployment := sshStorageObject("apps/v1", "Deployment", "system-upgrade", "system-upgrade-controller")
-	deployment["spec"] = map[string]any{"template": map[string]any{
+	deployment["spec"] = map[string]any{"replicas": json.Number("1"), "strategy": map[string]any{"type": "Recreate"}, "template": map[string]any{
 		"metadata": map[string]any{"labels": map[string]any{"upgrade.cattle.io/controller": "system-upgrade-controller"}},
 		"spec": map[string]any{"serviceAccountName": "system-upgrade", "containers": []any{map[string]any{"name": "system-upgrade-controller", "image": "rancher/system-upgrade-controller:v0.20.1", "env": env,
 			"envFrom": []any{map[string]any{"configMapRef": map[string]any{"name": "default-controller-env"}}}, "volumeMounts": mounts}}, "volumes": volumes},
 	}}
+	var placement map[string]any
+	if err := json.Unmarshal([]byte(`{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists"},{"key":"kubernetes.io/os","operator":"In","values":["linux"]}]}]}},"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchExpressions":[{"key":"app.kubernetes.io/name","operator":"In","values":["system-upgrade-controller"]}]},"topologyKey":"kubernetes.io/hostname"}]}},"tolerations":[{"key":"CriticalAddonsOnly","operator":"Exists"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/master","operator":"Exists"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/controlplane","operator":"Exists"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/control-plane","operator":"Exists"},{"effect":"NoExecute","key":"node-role.kubernetes.io/etcd","operator":"Exists"}]}`), &placement); err != nil {
+		panic(err)
+	}
+	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(deployment, "spec"), "template"), "spec")
+	spec["affinity"], spec["tolerations"] = placement["affinity"], placement["tolerations"]
+	spec["containers"].([]any)[0].(map[string]any)["resources"] = map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "64Mi"}, "limits": map[string]any{"cpu": "200m", "memory": "128Mi"}}
 	config := sshStorageObject("v1", "ConfigMap", "system-upgrade", "default-controller-env")
 	config["data"] = map[string]any{
 		"SYSTEM_UPGRADE_CONTROLLER_DEBUG": "false", "SYSTEM_UPGRADE_CONTROLLER_LEADER_ELECT": "true", "SYSTEM_UPGRADE_CONTROLLER_THREADS": "2",

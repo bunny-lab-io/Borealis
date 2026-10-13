@@ -292,7 +292,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.SystemUpgradeImages, err = observeClusterSSHSystemUpgradeImages(read, readList, source)
+	result.Requirements.SystemUpgradeImages, result.Requirements.SystemUpgradeResources, err = observeClusterSSHSystemUpgradeImages(read, readList, source)
 	if err != nil {
 		return fail()
 	}

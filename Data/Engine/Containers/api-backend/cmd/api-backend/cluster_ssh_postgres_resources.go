@@ -119,6 +119,18 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 	if !ok {
 		return 0, 0, false
 	}
+	upgradeCPU, upgradeMemory, valid := r.SystemUpgradeResources.budget()
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, upgradeCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, upgradeMemory)
+	if !ok {
+		return 0, 0, false
+	}
 	workerCPU, workerMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)
 	if !valid {
 		return 0, 0, false

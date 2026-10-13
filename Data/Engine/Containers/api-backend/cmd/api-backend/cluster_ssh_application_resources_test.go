@@ -168,7 +168,7 @@ print(json.dumps(sorted(v[0])))`).Output()
 }
 
 func TestClusterSSHTargetApplicationSizing(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "operator missing", "operator before", "operator after", "operator CPU fit", "operator memory fit", "operator CPU cap overcommit", "census missing", "census before", "census after", "recovery CPU fit", "recovery memory fit", "policy before", "policy after", "sibling CPU", "sibling memory", "workers missing", "workers before", "workers after", "worker CPU fit", "worker memory fit", "worker CPU cap overcommit", "missing", "drift before", "drift after", "postgres missing", "postgres before", "postgres after", "receipt drift", "cancel"} {
+	for _, mode := range []string{"expansion", "replacement", "upgrade missing", "upgrade before", "upgrade after", "upgrade CPU fit", "upgrade memory fit", "upgrade CPU cap overcommit", "operator missing", "operator before", "operator after", "operator CPU fit", "operator memory fit", "operator CPU cap overcommit", "census missing", "census before", "census after", "recovery CPU fit", "recovery memory fit", "policy before", "policy after", "sibling CPU", "sibling memory", "workers missing", "workers before", "workers after", "worker CPU fit", "worker memory fit", "worker CPU cap overcommit", "missing", "drift before", "drift after", "postgres missing", "postgres before", "postgres after", "receipt drift", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			values := sshApplicationResourceValues(t)
@@ -177,6 +177,9 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 				values[i].MemoryLimitBytes = 7 << 29
 			}
 			operator := sshCNPGResourceValue(t)
+			upgrade := sshSystemUpgradeResourceValue(t)
+			values[0].CPURequestMilli -= 100
+			values[0].MemoryLimitBytes -= 128 << 20
 			values[0].CPURequestMilli -= 200
 			values[0].MemoryLimitBytes -= 400 << 20
 			workers := []clusterSSHSiteWorkerResource{sshSiteWorkerResourceValue(f.a.Source.Members[0].Name)}
@@ -200,6 +203,21 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 			reads, consumed := 0, false
 			source := func(context.Context) (clusterSSHPreparationSnapshot, error) {
 				reads++
+				if mode == "upgrade missing" {
+					upgrade = clusterSSHSystemUpgradeResources{}
+				}
+				if (mode == "upgrade before" && reads == 2) || (mode == "upgrade after" && consumed) {
+					upgrade.Envelope.CPULimitMilli++
+				}
+				if mode == "upgrade CPU fit" {
+					upgrade.Envelope.CPURequestMilli = 101
+				}
+				if mode == "upgrade memory fit" {
+					upgrade.Envelope.MemoryLimitBytes++
+				}
+				if mode == "upgrade CPU cap overcommit" {
+					upgrade.Envelope.CPULimitMilli = 64000
+				}
 				if mode == "operator missing" {
 					operator = clusterSSHCNPGOperatorResources{}
 				}
@@ -268,7 +286,7 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 						values[0].CPURequestMilli -= 50
 					}
 				}
-				return clusterSSHPreparationSnapshot{DesiredWorkerSites: sites, Expected: e, Settings: settings, Storage: clusterSSHStorageSnapshot{Observation: observation, Requirements: clusterSSHStorageRequirements{CNPGOperatorResources: operator, WorkerPolicy: policy, SiteWorkers: workers, Applications: values, PostgresResources: postgres}}}, err
+				return clusterSSHPreparationSnapshot{DesiredWorkerSites: sites, Expected: e, Settings: settings, Storage: clusterSSHStorageSnapshot{Observation: observation, Requirements: clusterSSHStorageRequirements{SystemUpgradeResources: upgrade, CNPGOperatorResources: operator, WorkerPolicy: policy, SiteWorkers: workers, Applications: values, PostgresResources: postgres}}}, err
 			}
 			err := runClusterSSHNetworkTargets(ctx, f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
 				return withClusterSSHTargetApplicationSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error {
@@ -279,8 +297,8 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 					return nil
 				})
 			})
-			ok := mode == "expansion" || mode == "replacement" || mode == "worker CPU cap overcommit" || mode == "operator CPU cap overcommit"
-			if (err == nil) != ok || consumed != (ok || mode == "operator after" || mode == "census after" || mode == "policy after" || mode == "drift after" || mode == "postgres after" || mode == "workers after" || mode == "cancel") {
+			ok := mode == "upgrade CPU cap overcommit" || mode == "expansion" || mode == "replacement" || mode == "worker CPU cap overcommit" || mode == "operator CPU cap overcommit"
+			if (err == nil) != ok || consumed != (ok || mode == "upgrade after" || mode == "operator after" || mode == "census after" || mode == "policy after" || mode == "drift after" || mode == "postgres after" || mode == "workers after" || mode == "cancel") {
 				t.Fatal("unsafe application sizing boundary", err, consumed)
 			}
 			if ok && reads < 5 {
