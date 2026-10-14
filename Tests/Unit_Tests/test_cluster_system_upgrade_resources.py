@@ -20,6 +20,7 @@ SPEC.loader.exec_module(RENDERER)
 
 # Synthetic bounds, never production defaults or sizing recommendations.
 BOUNDS = {"requests": {"cpu": "100m", "memory": "64Mi"}, "limits": {"cpu": "0.2", "memory": "128Mi"}}
+CERT_BOUNDS = {"requests": {"cpu": "50m", "memory": "32Mi"}, "limits": {"cpu": "0.1", "memory": "64Mi"}}
 MANIFEST = """apiVersion: v1
 kind: Namespace
 metadata:
@@ -39,6 +40,35 @@ spec:
       - image: rancher/system-upgrade-controller:v0.20.1
         name: system-upgrade-controller
       serviceAccountName: system-upgrade
+"""
+
+
+CERT_MANIFEST = """apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: cert-manager-controller
+          image: quay.io/jetstack/cert-manager-controller:v1.21.1
+      nodeSelector:
+        kubernetes.io/os: linux
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager-webhook
+  namespace: cert-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: cert-manager-webhook
+          resources: {}
 """
 
 
@@ -94,20 +124,39 @@ class SystemUpgradeResourceTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 RENDERER.read_resources(path)
 
+    def test_cert_manager_changes_only_controller_resources(self):
+        rendered = list(yaml.safe_load_all(RENDERER.render_cert_manager(CERT_MANIFEST, json.dumps(BOUNDS))))
+        resource = rendered[0]["spec"]["template"]["spec"]["containers"][0].pop("resources")
+        self.assertEqual(resource, BOUNDS)
+        self.assertEqual(rendered, list(yaml.safe_load_all(CERT_MANIFEST)))
+        for template in (CERT_MANIFEST.replace("  name: cert-manager\n", "  name: other\n"),
+                         CERT_MANIFEST + "\n---\n" + CERT_MANIFEST,
+                         CERT_MANIFEST.replace("        - name: cert-manager-controller", "        - name: other"),
+                         RENDERER.render_cert_manager(CERT_MANIFEST, json.dumps(BOUNDS))):
+            with self.subTest(template=template), self.assertRaises(ValueError):
+                RENDERER.render_cert_manager(template, json.dumps(BOUNDS))
+        with self.assertRaises(ValueError):
+            RENDERER.render_cert_manager(CERT_MANIFEST, '{}')
+
     def test_workflow_preflight_precedes_mutation(self):
         script = (CLUSTER / "cluster-node-workflow.sh").read_text()
-        assignment = next(line for line in script.splitlines() if line.startswith('upgrade_resources="'))
-        self.assertLess(script.index(assignment), script.index('install -d -m 0700'))
-        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}"', script)
-        with tempfile.TemporaryDirectory() as temp:
-            result = subprocess.run(["bash", "-c", 'set -euo pipefail\nscript_dir="$TEST_CLUSTER"\nrepo_root="$TEST_ROOT"\n' + assignment + '\nprintf reached-mutation'],
-                                    env=dict(os.environ, TEST_CLUSTER=str(CLUSTER), TEST_ROOT=temp), capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(result.stdout, "")
+        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}"', script)
+        for prefix in ('upgrade_resources="', 'cert_resources="'):
+            assignment = next(line for line in script.splitlines() if line.startswith(prefix))
+            self.assertLess(script.index(assignment), script.index('install -d -m 0700'))
+            with tempfile.TemporaryDirectory() as temp:
+                result = subprocess.run(["bash", "-c", 'set -euo pipefail\nscript_dir="$TEST_CLUSTER"\nrepo_root="$TEST_ROOT"\n' + assignment + '\nprintf reached-mutation'],
+                                        env=dict(os.environ, TEST_CLUSTER=str(CLUSTER), TEST_ROOT=temp), capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
 
     def test_actual_apply_path_requires_frozen_bounds_and_checksum(self):
-        for mode in ("valid", "canonical rewrite", "missing", "invalid", "caller drift", "download drift", "removed during download", "bad checksum", "template drift"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+        for dependency in ("system-upgrade-controller", "cert-manager"):
+            self.check_apply_path(dependency)
+
+    def check_apply_path(self, dependency):
+        for mode in ("valid", "canonical rewrite", "missing", "invalid", "caller drift", "download drift", "removed during download", "bad checksum", "template drift", "other missing", "other download drift"):
+            with self.subTest(dependency=dependency, mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = pathlib.Path(temp)
                 cluster = root / "Data/Engine/K3s/cluster"
                 cluster.mkdir(parents=True)
@@ -115,19 +164,26 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                     (cluster / name).write_text((CLUSTER / name).read_text())
                 deploy = root / "Engine/Deploy"
                 deploy.mkdir(parents=True)
-                source = deploy / "system-upgrade-resources.json"
-                source.write_text(json.dumps(BOUNDS))
-                payload = MANIFEST if mode != "template drift" else MANIFEST.replace("        name:", "        renamed:")
+                upgrade_source = deploy / "system-upgrade-resources.json"
+                cert_source = deploy / "cert-manager-controller-resources.json"
+                upgrade_source.write_text(json.dumps(BOUNDS))
+                cert_source.write_text(json.dumps(CERT_BOUNDS))
+                bounds = CERT_BOUNDS if dependency == "cert-manager" else BOUNDS
+                source = cert_source if dependency == "cert-manager" else upgrade_source
+                other_source = upgrade_source if dependency == "cert-manager" else cert_source
+                template = CERT_MANIFEST if dependency == "cert-manager" else MANIFEST
+                payload = template if mode != "template drift" else template.replace("name:", "renamed:")
                 manifest = root / "manifest.yaml"
                 manifest.write_text(payload)
                 digest = hashlib.sha256(payload.encode()).hexdigest() if mode != "bad checksum" else "0" * 64
-                (cluster / "dependencies.lock").write_text(f"system-upgrade-controller|v0.20.1|https://example.invalid/pinned|{digest}\n")
+                (cluster / "dependencies.lock").write_text(f"{dependency}|test-version|https://example.invalid/pinned|{digest}\n")
                 binaries = root / "bin"
                 binaries.mkdir()
                 curl = binaries / "curl"
                 curl.write_text('''#!/usr/bin/env python3
 import json,os,pathlib,sys
 args=sys.argv[1:]
+pathlib.Path(os.environ['TEST_DOWNLOAD']).touch()
 pathlib.Path(args[args.index('-o')+1]).write_bytes(pathlib.Path(os.environ['TEST_MANIFEST']).read_bytes())
 p=pathlib.Path(os.environ['TEST_SOURCE'])
 mode=os.environ['TEST_MODE']
@@ -135,6 +191,7 @@ if mode=='download drift':
  v=json.loads(p.read_text());v['limits']['memory']='256Mi';p.write_text(json.dumps(v))
 if mode=='removed during download': p.unlink()
 if mode=='canonical rewrite': p.write_text(json.dumps(json.loads(p.read_text()),sort_keys=True,indent=4))
+if mode=='other download drift': pathlib.Path(os.environ['TEST_OTHER_SOURCE']).write_text('{}')
 ''')
                 kubectl = binaries / "kubectl"
                 kubectl.write_text('''#!/usr/bin/env python3
@@ -147,18 +204,26 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                 kubectl.chmod(0o755)
                 if mode == "missing": source.unlink()
                 if mode == "invalid": source.write_text('{}')
+                if mode == "other missing": other_source.unlink()
                 calls, applied = root / "calls", root / "applied.yaml"
                 command = ["bash", str(cluster / "apply-pinned-dependencies.sh")]
-                if mode == "caller drift": command.append('{}')
+                command.extend([RENDERER.resources(json.dumps(BOUNDS)), RENDERER.resources(json.dumps(CERT_BOUNDS))])
+                if mode == "caller drift": command[3 if dependency == "cert-manager" else 2] = '{}'
+                if mode == "canonical rewrite": command = command[:2]  # Standalone entrypoint snapshots both files.
                 env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], BOREALIS_KUBECTL_BIN=str(kubectl),
-                           TEST_MANIFEST=str(manifest), TEST_SOURCE=str(source), TEST_MODE=mode, TEST_CALLS=str(calls), TEST_APPLIED=str(applied))
+                           TEST_DOWNLOAD=str(root / "downloaded"), TEST_MANIFEST=str(manifest), TEST_SOURCE=str(source), TEST_OTHER_SOURCE=str(other_source), TEST_MODE=mode, TEST_CALLS=str(calls), TEST_APPLIED=str(applied))
                 result = subprocess.run(command, env=env, capture_output=True, text=True)
                 valid = mode in ("valid", "canonical rewrite")
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
                 if valid:
-                    container = list(yaml.safe_load_all(applied.read_text()))[1]["spec"]["template"]["spec"]["containers"][0]
-                    self.assertEqual(container["resources"], BOUNDS)
+                    docs = list(yaml.safe_load_all(applied.read_text()))
+                    index = 0 if dependency == "cert-manager" else 1
+                    container = docs[index]["spec"]["template"]["spec"]["containers"][0]
+                    self.assertEqual(container.pop("resources"), bounds)
+                    self.assertEqual(docs, list(yaml.safe_load_all(template)))
                     self.assertEqual(calls.read_text().count('apply '), 1)
                 else:
                     self.assertFalse(calls.exists(), result.stderr)
                     self.assertFalse(applied.exists())
+                    if mode in ("missing", "invalid", "caller drift", "other missing"):
+                        self.assertFalse((root / "downloaded").exists())

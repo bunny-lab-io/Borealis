@@ -55,6 +55,7 @@ postgres_manifest="$(render_postgres_manifest)"
 
 # Source-owned operator bounds must exist before conversion mutates this host.
 upgrade_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/system-upgrade-resources.json")"
+cert_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/cert-manager-controller-resources.json")"
 
 python3 - "${cluster_vip}" "${management_cidr}" <<'PY'
 import ipaddress, sys
@@ -85,7 +86,7 @@ for attempt in {1..120}; do
   sleep 2
 done
 
-"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}"
+"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}"
 k3s kubectl wait --for=condition=Established crd/volumesnapshotclasses.snapshot.storage.k8s.io --timeout=2m
 k3s kubectl wait --for=condition=Established crd/volumesnapshotcontents.snapshot.storage.k8s.io --timeout=2m
 k3s kubectl wait --for=condition=Established crd/volumesnapshots.snapshot.storage.k8s.io --timeout=2m

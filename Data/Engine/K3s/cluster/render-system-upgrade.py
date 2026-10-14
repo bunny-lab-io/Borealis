@@ -70,16 +70,35 @@ def render(manifest, bounds):
     return manifest.replace(marker, marker + "        resources: " + resources(bounds) + "\n")
 
 
+def render_cert_manager(manifest, bounds):
+    # Shared quantity contract, but a separate exact controller-only edit.
+    # CRDs and webhook/cainjector objects may contain unrelated resources keys.
+    identity = "kind: Deployment\nmetadata:\n  name: cert-manager\n  namespace: cert-manager\n"
+    documents = manifest.split("\n---\n")
+    matches = [i for i, document in enumerate(documents) if identity in document]
+    marker = "        - name: cert-manager-controller\n"
+    if len(matches) != 1:
+        raise ValueError("unexpected pinned cert-manager Deployment")
+    index = matches[0]
+    document = documents[index]
+    if document.count(marker) != 1 or "          resources:" in document:
+        raise ValueError("unexpected pinned cert-manager container")
+    documents[index] = document.replace(marker, marker + "          resources: " + resources(bounds) + "\n")
+    return "\n---\n".join(documents)
+
+
 def main():
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "config":
             result = read_resources(sys.argv[2])
         elif len(sys.argv) == 4 and sys.argv[1] == "manifest":
             result = render(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
+        elif len(sys.argv) == 4 and sys.argv[1] == "cert-manager-manifest":
+            result = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
         else:
             raise ValueError("invalid renderer arguments")
     except (ValueError, KeyError, TypeError, OSError):
-        print("System-upgrade rendering failed: require valid source CPU/memory requests and limits and intact pinned template.", file=sys.stderr)
+        print("Controller resource rendering failed: require valid source CPU/memory requests and limits and intact pinned template.", file=sys.stderr)
         return 1
     sys.stdout.write(result)
     return 0
