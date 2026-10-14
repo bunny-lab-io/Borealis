@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ func sshCertManagerPin(role string) clusterbootstrap.ExternalImagePin {
 	panic("missing cert-manager fixture pin")
 }
 
-// Mirrors the reviewed cert-manager manifest, including repeated DNS flags.
+// Mirrors reviewed placement and flags; controller bounds are synthetic source inputs.
 func sshCertManagerDeploymentFixture(name string) map[string]any {
 	role := strings.TrimPrefix(name, "cert-manager-")
 	args := []any{"--v=2", "--leader-election-namespace=kube-system"}
@@ -37,6 +38,16 @@ func sshCertManagerDeploymentFixture(name string) map[string]any {
 		"name": "cert-manager-" + role, "image": sshCertManagerPin(role).Reference, "args": args,
 		"env": []any{map[string]any{"name": "POD_NAMESPACE", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.namespace"}}}},
 	}}}}}
+	if name == "cert-manager" {
+		spec := clusterSSHStorageMap(object, "spec")
+		spec["replicas"] = json.Number("1")
+		podSpec := clusterSSHStorageMap(clusterSSHStorageMap(spec, "template"), "spec")
+		podSpec["nodeSelector"] = map[string]any{"kubernetes.io/os": "linux"}
+		podSpec["containers"].([]any)[0].(map[string]any)["resources"] = map[string]any{
+			"requests": map[string]any{"cpu": "50m", "memory": "32Mi"},
+			"limits":   map[string]any{"cpu": "100m", "memory": "64Mi"},
+		}
+	}
 	return object
 }
 
