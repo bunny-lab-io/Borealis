@@ -6,6 +6,16 @@ set -o pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 lock_file="${script_dir}/dependencies.lock"
 kubectl_bin="${BOREALIS_KUBECTL_BIN:-k3s kubectl}"
+repo_root="$(cd -- "${script_dir}/../../../.." && pwd)"
+resource_source="${repo_root}/Engine/Deploy/system-upgrade-resources.json"
+resource_renderer="${script_dir}/render-system-upgrade.py"
+# Validate before downloading or applying any dependency; caller may freeze an
+# earlier workflow observation. Never source configuration as shell code.
+upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")"
+[[ "$#" -le 1 && ( "$#" -eq 0 || "$1" == "${upgrade_resources}" ) ]] || {
+  printf 'System-upgrade resource source changed before dependency apply.\n' >&2
+  exit 1
+}
 download_dir="$(mktemp -d)"
 
 cleanup() {
@@ -22,6 +32,16 @@ apply_manifest() {
   target="${download_dir}/${name}-${version}"
   curl -fsSL --proto '=https' --tlsv1.2 "${url}" -o "${target}"
   printf '%s  %s\n' "${expected_sha}" "${target}" | sha256sum -c - >/dev/null
+  if [[ "${name}" == "system-upgrade-controller" ]]; then
+    # Bound the first applied Deployment; never start the upstream unbounded Pod.
+    python3 "${resource_renderer}" manifest "${target}" "${upgrade_resources}" > "${target}.bounded"
+    target="${target}.bounded"
+  fi
+  current_upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")"
+  [[ "${current_upgrade_resources}" == "${upgrade_resources}" ]] || {
+    printf 'System-upgrade resource source changed during dependency preparation.\n' >&2
+    exit 1
+  }
   case "${name}" in
     kube-vip-sbom)
       # Attestation checksum verifies release identity. Borealis-owned kube-vip
