@@ -9,12 +9,14 @@ kubectl_bin="${BOREALIS_KUBECTL_BIN:-k3s kubectl}"
 repo_root="$(cd -- "${script_dir}/../../../.." && pwd)"
 resource_source="${repo_root}/Engine/Deploy/system-upgrade-resources.json"
 cert_resource_source="${repo_root}/Engine/Deploy/cert-manager-controller-resources.json"
+webhook_resource_source="${repo_root}/Engine/Deploy/cert-manager-webhook-resources.json"
 resource_renderer="${script_dir}/render-system-upgrade.py"
 # Validate before downloading or applying any dependency; caller may freeze an
 # earlier workflow observation. Never source configuration as shell code.
 upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")"
 cert_resources="$(python3 "${resource_renderer}" config "${cert_resource_source}")"
-[[ "$#" -eq 0 || ( "$#" -eq 2 && "$1" == "${upgrade_resources}" && "$2" == "${cert_resources}" ) ]] || {
+webhook_resources="$(python3 "${resource_renderer}" config "${webhook_resource_source}")"
+[[ "$#" -eq 0 || ( "$#" -eq 3 && "$1" == "${upgrade_resources}" && "$2" == "${cert_resources}" && "$3" == "${webhook_resources}" ) ]] || {
   printf 'Controller resource source changed before dependency apply.\n' >&2
   exit 1
 }
@@ -39,12 +41,13 @@ apply_manifest() {
     python3 "${resource_renderer}" manifest "${target}" "${upgrade_resources}" > "${target}.bounded"
     target="${target}.bounded"
   elif [[ "${name}" == "cert-manager" ]]; then
-    python3 "${resource_renderer}" cert-manager-manifest "${target}" "${cert_resources}" > "${target}.bounded"
+    python3 "${resource_renderer}" cert-manager-manifest "${target}" "${cert_resources}" "${webhook_resources}" > "${target}.bounded"
     target="${target}.bounded"
   fi
   current_upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")"
   current_cert_resources="$(python3 "${resource_renderer}" config "${cert_resource_source}")"
-  [[ "${current_upgrade_resources}" == "${upgrade_resources}" && "${current_cert_resources}" == "${cert_resources}" ]] || {
+  current_webhook_resources="$(python3 "${resource_renderer}" config "${webhook_resource_source}")"
+  [[ "${current_upgrade_resources}" == "${upgrade_resources}" && "${current_cert_resources}" == "${cert_resources}" && "${current_webhook_resources}" == "${webhook_resources}" ]] || {
     printf 'Controller resource source changed during dependency preparation.\n' >&2
     exit 1
   }

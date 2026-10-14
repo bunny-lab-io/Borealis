@@ -71,12 +71,22 @@ def render(manifest, bounds):
 
 
 def render_cert_manager(manifest, bounds):
-    # Shared quantity contract, but a separate exact controller-only edit.
-    # CRDs and webhook/cainjector objects may contain unrelated resources keys.
-    identity = "kind: Deployment\nmetadata:\n  name: cert-manager\n  namespace: cert-manager\n"
+    return render_cert_manager_deployment(manifest, bounds, "cert-manager")
+
+
+def render_cert_manager_webhook(manifest, bounds):
+    return render_cert_manager_deployment(manifest, bounds, "cert-manager-webhook")
+
+
+def render_cert_manager_deployment(manifest, bounds, name):
+    # Fixed reviewed Deployments only; never rewrite unrelated CRD/resource keys.
+    containers = {"cert-manager": "cert-manager-controller", "cert-manager-webhook": "cert-manager-webhook"}
+    if name not in containers:
+        raise ValueError("unsupported cert-manager Deployment")
+    identity = f"kind: Deployment\nmetadata:\n  name: {name}\n  namespace: cert-manager\n"
     documents = manifest.split("\n---\n")
     matches = [i for i, document in enumerate(documents) if identity in document]
-    marker = "        - name: cert-manager-controller\n"
+    marker = f"        - name: {containers[name]}\n"
     if len(matches) != 1:
         raise ValueError("unexpected pinned cert-manager Deployment")
     index = matches[0]
@@ -93,8 +103,9 @@ def main():
             result = read_resources(sys.argv[2])
         elif len(sys.argv) == 4 and sys.argv[1] == "manifest":
             result = render(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
-        elif len(sys.argv) == 4 and sys.argv[1] == "cert-manager-manifest":
-            result = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
+        elif len(sys.argv) == 5 and sys.argv[1] == "cert-manager-manifest":
+            controller = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
+            result = render_cert_manager_webhook(controller, sys.argv[4])
         else:
             raise ValueError("invalid renderer arguments")
     except (ValueError, KeyError, TypeError, OSError):
