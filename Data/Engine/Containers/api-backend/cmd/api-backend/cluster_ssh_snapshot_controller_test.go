@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -20,11 +21,18 @@ func sshSnapshotControllerPin() clusterbootstrap.ExternalImagePin {
 // Mirrors Data/Engine/K3s/cluster/snapshot-controller.yaml's executable inputs.
 func sshSnapshotControllerFixture() map[string]any {
 	object := sshStorageObject("apps/v1", "Deployment", "kube-system", "snapshot-controller")
-	object["spec"] = map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": "snapshot-controller"}}, "spec": map[string]any{
+	object["spec"] = map[string]any{"replicas": json.Number("2"), "strategy": map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": json.Number("1"), "maxSurge": json.Number("0")}}, "template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": "snapshot-controller"}}, "spec": map[string]any{
 		"serviceAccountName": "snapshot-controller",
 		"containers": []any{map[string]any{"name": "snapshot-controller", "image": sshSnapshotControllerPin().Reference,
 			"args": []any{"--v=2", "--leader-election=true", "--leader-election-namespace=kube-system", "--http-endpoint=:8080"}}},
 	}}}
+	var placement map[string]any
+	if err := json.Unmarshal([]byte(`{"affinity":{"podAntiAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[{"podAffinityTerm":{"labelSelector":{"matchLabels":{"app.kubernetes.io/name":"snapshot-controller"}},"topologyKey":"kubernetes.io/hostname"},"weight":100}]}},"topologySpreadConstraints":[{"labelSelector":{"matchLabels":{"app.kubernetes.io/name":"snapshot-controller"}},"maxSkew":1,"topologyKey":"kubernetes.io/hostname","whenUnsatisfiable":"ScheduleAnyway"}]}`), &placement); err != nil {
+		panic(err)
+	}
+	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
+	spec["affinity"], spec["topologySpreadConstraints"] = placement["affinity"], placement["topologySpreadConstraints"]
+	spec["containers"].([]any)[0].(map[string]any)["resources"] = map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "250m", "memory": "128Mi"}}
 	return object
 }
 

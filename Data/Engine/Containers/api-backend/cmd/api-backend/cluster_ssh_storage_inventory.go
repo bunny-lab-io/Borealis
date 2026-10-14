@@ -308,7 +308,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.SnapshotControllerResolved, err = observeClusterSSHSnapshotControllerRuntime(read, readList, source, result.Requirements.SnapshotControllerImage)
+	result.Requirements.SnapshotControllerResolved, result.Requirements.SnapshotResources, err = observeClusterSSHSnapshotControllerRuntime(read, readList, source, result.Requirements.SnapshotControllerImage)
 	if err != nil {
 		return fail()
 	}

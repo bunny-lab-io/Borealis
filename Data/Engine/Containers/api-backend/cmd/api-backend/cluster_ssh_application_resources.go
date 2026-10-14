@@ -138,6 +138,7 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 	var postgres clusterSSHApplicationResource
 	var operator clusterSSHCNPGOperatorResources
 	var upgrade clusterSSHSystemUpgradeResources
+	var snapshot clusterSSHSnapshotResources
 	var workers []clusterSSHSiteWorkerResource
 	var sites []int64
 	var policy clusterSSHWorkerPolicy
@@ -152,13 +153,14 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		var ok bool
 		cpu, memory, ok = clusterSSHDesiredWorkerWorkloadBudget(v)
 		if err != nil || !ok || !clusterSSHSourceObservationRE.MatchString(v.Storage.Observation) ||
-			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || upgrade != v.Storage.Requirements.SystemUpgradeResources || observation != v.Storage.Observation)) {
+			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || upgrade != v.Storage.Requirements.SystemUpgradeResources || snapshot != v.Storage.Requirements.SnapshotResources || observation != v.Storage.Observation)) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		retained, observation = slices.Clone(values), v.Storage.Observation
 		postgres = v.Storage.Requirements.PostgresResources
 		operator = v.Storage.Requirements.CNPGOperatorResources
 		upgrade = v.Storage.Requirements.SystemUpgradeResources
+		snapshot = v.Storage.Requirements.SnapshotResources
 		workers = slices.Clone(v.Storage.Requirements.SiteWorkers)
 		sites, policy = slices.Clone(v.DesiredWorkerSites), v.Storage.Requirements.WorkerPolicy
 		return v.Expected, v.Settings, nil

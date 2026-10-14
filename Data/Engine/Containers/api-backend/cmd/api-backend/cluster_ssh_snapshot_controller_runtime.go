@@ -23,19 +23,41 @@ func clusterSSHSnapshotReplicaSetPathValid(path string) bool {
 	name, ok := strings.CutPrefix(path, clusterSSHSnapshotReplicaSetPrefix)
 	return ok && strings.HasPrefix(name, "snapshot-controller-") && clusterSSHStorageName(name)
 }
-func observeClusterSSHSnapshotControllerRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, image string) (string, error) {
+func observeClusterSSHSnapshotControllerRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, image string) (string, clusterSSHSnapshotResources, error) {
 	object, err := read(clusterSSHSnapshotControllerPath)
 	id, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "kube-system")
 	if err != nil || !ok || id.Name != "snapshot-controller" || !clusterSSHSnapshotControllerImageValid(image) {
-		return "", clusterbootstrap.ErrPreparationConfig
+		return "", clusterSSHSnapshotResources{}, clusterbootstrap.ErrPreparationConfig
 	}
-	return observeClusterSSHLonghornDeploymentRuntime(read, readList, source, id, image, clusterSSHLonghornDeploymentWorkload{
+	plan, ok := clusterSSHSnapshotResourcePlan(object)
+	if !ok || readList == nil {
+		return "", clusterSSHSnapshotResources{}, clusterbootstrap.ErrPreparationConfig
+	}
+	checkedList := func(path, kind, namespace string, limit int) ([]map[string]any, error) {
+		pods, err := readList(path, kind, namespace, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, pod := range pods {
+			if !clusterSSHBoundedPodResources(plan.Envelope, pod, "snapshot-controller", "") {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
+		}
+		plan.Observed += uint64(len(pods))
+		return pods, nil
+	}
+	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, id, image, clusterSSHLonghornDeploymentWorkload{
 		namespace: "kube-system", labelKey: "app.kubernetes.io/name", name: "snapshot-controller", serviceAccount: "snapshot-controller", repository: clusterSSHSnapshotControllerRepository,
 		podsPath: clusterSSHSnapshotPodsPath, replicaSetPrefix: clusterSSHSnapshotReplicaSetPrefix, replicaSetPathValid: clusterSSHSnapshotReplicaSetPathValid,
 		templateImage: clusterSSHSnapshotControllerTemplateImage,
 		specValid: func(spec map[string]any, pod bool) bool {
 			_, err := clusterSSHSnapshotControllerSpecImage(spec, pod)
-			return err == nil
+			resources, ok := clusterSSHSnapshotResourceSpec(spec, pod)
+			return err == nil && ok && resources == plan.Envelope
 		},
 	})
+	if _, _, ok := plan.budget(); err != nil || !ok {
+		return "", clusterSSHSnapshotResources{}, clusterbootstrap.ErrPreparationConfig
+	}
+	return resolved, plan, nil
 }
