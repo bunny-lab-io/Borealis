@@ -9,8 +9,8 @@ type clusterSSHCertManagerResources struct {
 	Surge    uint64                        `json:"surge"`
 }
 
-func (v clusterSSHCertManagerResources) budget() (cpu, memory uint64, ok bool) {
-	if v.Envelope.Name != "cert-manager-controller" || !clusterSSHWorkloadResourceValid(v.Envelope) || v.Replicas == 0 || v.Replicas > clusterSSHLonghornDeploymentPodLimit || v.Observed == 0 || v.Observed > clusterSSHLonghornDeploymentPodLimit || v.Surge != (v.Replicas+3)/4 {
+func (v clusterSSHCertManagerResources) budget(name string) (cpu, memory uint64, ok bool) {
+	if !textInSet(name, "cert-manager-controller", "cert-manager-webhook") || v.Envelope.Name != name || !clusterSSHWorkloadResourceValid(v.Envelope) || v.Replicas == 0 || v.Replicas > clusterSSHLonghornDeploymentPodLimit || v.Observed == 0 || v.Observed > clusterSSHLonghornDeploymentPodLimit || v.Surge != (v.Replicas+3)/4 {
 		return 0, 0, false
 	}
 	for n := uint64(0); n < max(v.Replicas+v.Surge, v.Observed); n++ {
@@ -28,9 +28,9 @@ func (v clusterSSHCertManagerResources) budget() (cpu, memory uint64, ok bool) {
 
 // Support pinned producer's Linux placement and Kubernetes defaults.
 // Added hard placement, scheduling or Pod resource contracts need separate proof.
-func clusterSSHCertManagerResourceSpec(spec map[string]any, pod bool) (clusterSSHApplicationResource, bool) {
+func clusterSSHCertManagerResourceSpec(spec map[string]any, pod bool, name string) (clusterSSHApplicationResource, bool) {
 	selector := clusterSSHStorageMap(spec, "nodeSelector")
-	if len(selector) != 1 || selector["kubernetes.io/os"] != "linux" || !clusterSSHStorageEmptyMap(spec["affinity"]) ||
+	if !textInSet(name, "cert-manager-controller", "cert-manager-webhook") || len(selector) != 1 || selector["kubernetes.io/os"] != "linux" || !clusterSSHStorageEmptyMap(spec["affinity"]) ||
 		!clusterSSHStorageEmptyList(spec["topologySpreadConstraints"]) || !clusterSSHStorageEmptyList(spec["schedulingGates"]) ||
 		!clusterSSHStorageEmptyMap(spec["resources"]) || !clusterSSHStorageEmptyMap(spec["overhead"]) ||
 		!clusterSSHStorageEmptyList(spec["resourceClaims"]) || !clusterSSHStorageEmptyText(spec["runtimeClassName"]) ||
@@ -68,13 +68,13 @@ func clusterSSHCertManagerResourceSpec(spec map[string]any, pod bool) (clusterSS
 		return clusterSSHApplicationResource{}, false
 	}
 	c, ok := containers[0].(map[string]any)
-	if !ok || c["name"] != "cert-manager-controller" || !clusterSSHStorageEmptyText(c["restartPolicy"]) || !clusterSSHStorageEmptyList(c["resizePolicy"]) {
+	if !ok || c["name"] != name || !clusterSSHStorageEmptyText(c["restartPolicy"]) || !clusterSSHStorageEmptyList(c["resizePolicy"]) {
 		return clusterSSHApplicationResource{}, false
 	}
-	return clusterSSHWorkloadResources("cert-manager-controller", c["resources"])
+	return clusterSSHWorkloadResources(name, c["resources"])
 }
 
-func clusterSSHCertManagerResourcePlan(object map[string]any) (clusterSSHCertManagerResources, bool) {
+func clusterSSHCertManagerResourcePlan(object map[string]any, name string) (clusterSSHCertManagerResources, bool) {
 	spec := clusterSSHStorageMap(object, "spec")
 	replicas, ok := clusterSSHStorageInteger(spec["replicas"])
 	if !ok || replicas < 1 || replicas > clusterSSHLonghornDeploymentPodLimit {
@@ -104,6 +104,6 @@ func clusterSSHCertManagerResourcePlan(object map[string]any) (clusterSSHCertMan
 			}
 		}
 	}
-	envelope, ok := clusterSSHCertManagerResourceSpec(clusterSSHStorageMap(clusterSSHStorageMap(spec, "template"), "spec"), false)
+	envelope, ok := clusterSSHCertManagerResourceSpec(clusterSSHStorageMap(clusterSSHStorageMap(spec, "template"), "spec"), false, name)
 	return clusterSSHCertManagerResources{Envelope: envelope, Replicas: uint64(replicas), Surge: uint64((replicas + 3) / 4)}, ok
 }

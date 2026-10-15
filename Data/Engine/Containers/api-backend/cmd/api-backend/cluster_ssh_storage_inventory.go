@@ -264,7 +264,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.CertManagerImages, result.Requirements.CertManagerResources, err = observeClusterSSHCertManagerRuntime(read, readList, source, result.Requirements.CertManagerImages)
+	result.Requirements.CertManagerImages, result.Requirements.CertManagerResources, result.Requirements.CertManagerWebhookResources, err = observeClusterSSHCertManagerRuntime(read, readList, source, result.Requirements.CertManagerImages)
 	if err != nil {
 		return fail()
 	}

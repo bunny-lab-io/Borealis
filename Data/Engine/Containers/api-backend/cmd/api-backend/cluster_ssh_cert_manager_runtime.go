@@ -82,16 +82,18 @@ func clusterSSHCertManagerSpecImages(spec map[string]any, name string, pod bool)
 	}
 	return image, solver, nil
 }
-func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHCertManagerImages) (clusterSSHCertManagerImages, clusterSSHCertManagerResources, error) {
-	fail := func() (clusterSSHCertManagerImages, clusterSSHCertManagerResources, error) {
-		return clusterSSHCertManagerImages{}, clusterSSHCertManagerResources{}, clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHCertManagerImages) (clusterSSHCertManagerImages, clusterSSHCertManagerResources, clusterSSHCertManagerResources, error) {
+	fail := func() (clusterSSHCertManagerImages, clusterSSHCertManagerResources, clusterSSHCertManagerResources, error) {
+		return clusterSSHCertManagerImages{}, clusterSSHCertManagerResources{}, clusterSSHCertManagerResources{}, clusterbootstrap.ErrPreparationConfig
 	}
-	var plan clusterSSHCertManagerResources
+	var controllerPlan, webhookPlan clusterSSHCertManagerResources
 	if !images.configuredValid() || readList == nil {
 		return fail()
 	}
 	for _, name := range clusterSSHCertManagerDeployments {
 		role, label := clusterSSHCertManagerRole(name)
+		var plan clusterSSHCertManagerResources
+		bounded := name == "cert-manager" || name == "cert-manager-webhook"
 		object, err := read(clusterSSHCertManagerDeploymentPrefix + name)
 		id, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "cert-manager")
 		image, solver, configErr := clusterSSHCertManagerTemplateImages(object, name)
@@ -108,9 +110,9 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 		if image != configured {
 			return fail()
 		}
-		if name == "cert-manager" {
+		if bounded {
 			var valid bool
-			plan, valid = clusterSSHCertManagerResourcePlan(object)
+			plan, valid = clusterSSHCertManagerResourcePlan(object, "cert-manager-"+role)
 			if !valid {
 				return fail()
 			}
@@ -122,8 +124,8 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 			if err != nil || gotImage != image || gotSolver != solver {
 				return false
 			}
-			if name == "cert-manager" {
-				resources, ok := clusterSSHCertManagerResourceSpec(spec, pod)
+			if bounded {
+				resources, ok := clusterSSHCertManagerResourceSpec(spec, pod, "cert-manager-"+role)
 				if !ok || resources != plan.Envelope {
 					return false
 				}
@@ -137,9 +139,9 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 			if err != nil {
 				return nil, err
 			}
-			if name == "cert-manager" {
+			if bounded {
 				for _, pod := range pods {
-					if !clusterSSHBoundedPodResources(plan.Envelope, pod, "cert-manager-controller", "") {
+					if !clusterSSHBoundedPodResources(plan.Envelope, pod, "cert-manager-"+role, "") {
 						return nil, clusterbootstrap.ErrPreparationConfig
 					}
 				}
@@ -165,15 +167,17 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 		}
 		switch name {
 		case "cert-manager":
-			images.ControllerResolved = resolved
+			images.ControllerResolved, controllerPlan = resolved, plan
 		case "cert-manager-cainjector":
 			images.CainjectorResolved = resolved
 		case "cert-manager-webhook":
-			images.WebhookResolved = resolved
+			images.WebhookResolved, webhookPlan = resolved, plan
 		}
 	}
-	if _, _, ok := plan.budget(); !images.valid() || !ok {
+	_, _, controllerOK := controllerPlan.budget("cert-manager-controller")
+	_, _, webhookOK := webhookPlan.budget("cert-manager-webhook")
+	if !images.valid() || !controllerOK || !webhookOK {
 		return fail()
 	}
-	return images, plan, nil
+	return images, controllerPlan, webhookPlan, nil
 }

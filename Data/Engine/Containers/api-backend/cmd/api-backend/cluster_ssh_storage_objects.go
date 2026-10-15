@@ -282,6 +282,7 @@ type clusterSSHStorageRequirements struct {
 	LonghornCSIImages           clusterSSHLonghornCSIImages      `json:"longhorn_csi_images"`
 	ReplicaImages               []clusterSSHStorageReplicaImage  `json:"replica_images"`
 	KubeVIP                     clusterSSHKubeVIPConfiguration   `json:"kube_vip"`
+	CertManagerWebhookResources clusterSSHCertManagerResources   `json:"cert_manager_webhook_resources"`
 	CertManagerResources        clusterSSHCertManagerResources   `json:"cert_manager_resources"`
 	SnapshotResources           clusterSSHSnapshotResources      `json:"snapshot_resources"`
 	SystemUpgradeResources      clusterSSHSystemUpgradeResources `json:"system_upgrade_resources"`

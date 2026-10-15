@@ -143,7 +143,7 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 	if !ok {
 		return 0, 0, false
 	}
-	certManagerCPU, certManagerMemory, valid := r.CertManagerResources.budget()
+	certManagerCPU, certManagerMemory, valid := r.CertManagerResources.budget("cert-manager-controller")
 	if !valid {
 		return 0, 0, false
 	}
@@ -152,6 +152,18 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 		return 0, 0, false
 	}
 	memory, ok = clusterSSHCapacitySum(memory, certManagerMemory)
+	if !ok {
+		return 0, 0, false
+	}
+	webhookCPU, webhookMemory, valid := r.CertManagerWebhookResources.budget("cert-manager-webhook")
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, webhookCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, webhookMemory)
 	if !ok {
 		return 0, 0, false
 	}

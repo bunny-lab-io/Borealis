@@ -38,7 +38,7 @@ func sshCertManagerDeploymentFixture(name string) map[string]any {
 		"name": "cert-manager-" + role, "image": sshCertManagerPin(role).Reference, "args": args,
 		"env": []any{map[string]any{"name": "POD_NAMESPACE", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.namespace"}}}},
 	}}}}}
-	if name == "cert-manager" {
+	if name == "cert-manager" || name == "cert-manager-webhook" {
 		spec := clusterSSHStorageMap(object, "spec")
 		spec["replicas"] = json.Number("1")
 		podSpec := clusterSSHStorageMap(clusterSSHStorageMap(spec, "template"), "spec")
@@ -46,6 +46,12 @@ func sshCertManagerDeploymentFixture(name string) map[string]any {
 		podSpec["containers"].([]any)[0].(map[string]any)["resources"] = map[string]any{
 			"requests": map[string]any{"cpu": "50m", "memory": "32Mi"},
 			"limits":   map[string]any{"cpu": "100m", "memory": "64Mi"},
+		}
+		if name == "cert-manager-webhook" {
+			podSpec["containers"].([]any)[0].(map[string]any)["resources"] = map[string]any{
+				"requests": map[string]any{"cpu": "20m", "memory": "16Mi"},
+				"limits":   map[string]any{"cpu": "75m", "memory": "48Mi"},
+			}
 		}
 	}
 	return object
