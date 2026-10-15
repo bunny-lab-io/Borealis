@@ -20,7 +20,7 @@ func sshCertManagerResourceValue(t *testing.T, name string) clusterSSHCertManage
 }
 
 func TestClusterSSHCertManagerResources(t *testing.T) {
-	for _, name := range []string{"cert-manager", "cert-manager-webhook"} {
+	for _, name := range []string{"cert-manager", "cert-manager-webhook", "cert-manager-cainjector"} {
 		t.Run(name, func(t *testing.T) { testClusterSSHCertManagerResources(t, name) })
 	}
 }
@@ -131,6 +131,9 @@ func testClusterSSHCertManagerResources(t *testing.T, name string) {
 			if name == "cert-manager-webhook" {
 				got = value.Requirements.CertManagerWebhookResources
 			}
+			if name == "cert-manager-cainjector" {
+				got = value.Requirements.CertManagerCainjectorResources
+			}
 			if (err == nil) != valid || (valid && got != wanted) {
 				t.Fatal("unsafe operator budget", err, got, wanted)
 			}
@@ -146,7 +149,7 @@ func testClusterSSHCertManagerResources(t *testing.T, name string) {
 }
 
 func TestClusterSSHCertManagerResourceBudgetRejectsProjection(t *testing.T) {
-	for _, name := range []string{"cert-manager", "cert-manager-webhook"} {
+	for _, name := range []string{"cert-manager", "cert-manager-webhook", "cert-manager-cainjector"} {
 		t.Run(name, func(t *testing.T) { testClusterSSHCertManagerResourceBudgetRejectsProjection(t, name) })
 	}
 }
@@ -190,7 +193,7 @@ func testClusterSSHCertManagerResourceBudgetRejectsProjection(t *testing.T, name
 }
 
 func TestClusterSSHCertManagerResourceScopeDrift(t *testing.T) {
-	for _, name := range []string{"cert-manager", "cert-manager-webhook"} {
+	for _, name := range []string{"cert-manager", "cert-manager-webhook", "cert-manager-cainjector"} {
 		t.Run(name, func(t *testing.T) { testClusterSSHCertManagerResourceScopeDrift(t, name) })
 	}
 }

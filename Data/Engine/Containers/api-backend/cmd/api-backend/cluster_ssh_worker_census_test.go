@@ -82,7 +82,7 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			_, _, snapshot := sshBrokerFixture(t)
 			snapshot.DesiredWorkerSites = []int64{}
-			wantCPU, wantMemory := uint64(2305), uint64(5<<30+1264<<20)
+			wantCPU, wantMemory := uint64(2365), uint64(5<<30+1408<<20)
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

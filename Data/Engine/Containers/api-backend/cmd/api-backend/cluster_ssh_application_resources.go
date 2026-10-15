@@ -138,7 +138,7 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 	var postgres clusterSSHApplicationResource
 	var operator clusterSSHCNPGOperatorResources
 	var upgrade clusterSSHSystemUpgradeResources
-	var certManager, webhook clusterSSHCertManagerResources
+	var certManager, webhook, cainjector clusterSSHCertManagerResources
 	var snapshot clusterSSHSnapshotResources
 	var workers []clusterSSHSiteWorkerResource
 	var sites []int64
@@ -154,7 +154,7 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		var ok bool
 		cpu, memory, ok = clusterSSHDesiredWorkerWorkloadBudget(v)
 		if err != nil || !ok || !clusterSSHSourceObservationRE.MatchString(v.Storage.Observation) ||
-			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || upgrade != v.Storage.Requirements.SystemUpgradeResources || snapshot != v.Storage.Requirements.SnapshotResources || certManager != v.Storage.Requirements.CertManagerResources || webhook != v.Storage.Requirements.CertManagerWebhookResources || observation != v.Storage.Observation)) {
+			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || upgrade != v.Storage.Requirements.SystemUpgradeResources || snapshot != v.Storage.Requirements.SnapshotResources || certManager != v.Storage.Requirements.CertManagerResources || webhook != v.Storage.Requirements.CertManagerWebhookResources || cainjector != v.Storage.Requirements.CertManagerCainjectorResources || observation != v.Storage.Observation)) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		retained, observation = slices.Clone(values), v.Storage.Observation
@@ -164,6 +164,7 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		snapshot = v.Storage.Requirements.SnapshotResources
 		certManager = v.Storage.Requirements.CertManagerResources
 		webhook = v.Storage.Requirements.CertManagerWebhookResources
+		cainjector = v.Storage.Requirements.CertManagerCainjectorResources
 		workers = slices.Clone(v.Storage.Requirements.SiteWorkers)
 		sites, policy = slices.Clone(v.DesiredWorkerSites), v.Storage.Requirements.WorkerPolicy
 		return v.Expected, v.Settings, nil

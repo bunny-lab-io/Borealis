@@ -82,18 +82,16 @@ func clusterSSHCertManagerSpecImages(spec map[string]any, name string, pod bool)
 	}
 	return image, solver, nil
 }
-func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHCertManagerImages) (clusterSSHCertManagerImages, clusterSSHCertManagerResources, clusterSSHCertManagerResources, error) {
-	fail := func() (clusterSSHCertManagerImages, clusterSSHCertManagerResources, clusterSSHCertManagerResources, error) {
-		return clusterSSHCertManagerImages{}, clusterSSHCertManagerResources{}, clusterSSHCertManagerResources{}, clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHCertManagerImages) (clusterSSHCertManagerImages, clusterSSHCertManagerResources, clusterSSHCertManagerResources, clusterSSHCertManagerResources, error) {
+	fail := func() (clusterSSHCertManagerImages, clusterSSHCertManagerResources, clusterSSHCertManagerResources, clusterSSHCertManagerResources, error) {
+		return clusterSSHCertManagerImages{}, clusterSSHCertManagerResources{}, clusterSSHCertManagerResources{}, clusterSSHCertManagerResources{}, clusterbootstrap.ErrPreparationConfig
 	}
-	var controllerPlan, webhookPlan clusterSSHCertManagerResources
+	var controllerPlan, webhookPlan, cainjectorPlan clusterSSHCertManagerResources
 	if !images.configuredValid() || readList == nil {
 		return fail()
 	}
 	for _, name := range clusterSSHCertManagerDeployments {
 		role, label := clusterSSHCertManagerRole(name)
-		var plan clusterSSHCertManagerResources
-		bounded := name == "cert-manager" || name == "cert-manager-webhook"
 		object, err := read(clusterSSHCertManagerDeploymentPrefix + name)
 		id, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "cert-manager")
 		image, solver, configErr := clusterSSHCertManagerTemplateImages(object, name)
@@ -110,12 +108,9 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 		if image != configured {
 			return fail()
 		}
-		if bounded {
-			var valid bool
-			plan, valid = clusterSSHCertManagerResourcePlan(object, "cert-manager-"+role)
-			if !valid {
-				return fail()
-			}
+		plan, valid := clusterSSHCertManagerResourcePlan(object, "cert-manager-"+role)
+		if !valid {
+			return fail()
 		}
 		spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
 		args := spec["containers"].([]any)[0].(map[string]any)["args"]
@@ -124,11 +119,9 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 			if err != nil || gotImage != image || gotSolver != solver {
 				return false
 			}
-			if bounded {
-				resources, ok := clusterSSHCertManagerResourceSpec(spec, pod, "cert-manager-"+role)
-				if !ok || resources != plan.Envelope {
-					return false
-				}
+			resources, ok := clusterSSHCertManagerResourceSpec(spec, pod, "cert-manager-"+role)
+			if !ok || resources != plan.Envelope {
+				return false
 			}
 			// Kubernetes preserves declared argument text in admitted Pod specs. A
 			// still-reviewed but different startup configuration requires new evidence.
@@ -139,14 +132,12 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 			if err != nil {
 				return nil, err
 			}
-			if bounded {
-				for _, pod := range pods {
-					if !clusterSSHBoundedPodResources(plan.Envelope, pod, "cert-manager-"+role, "") {
-						return nil, clusterbootstrap.ErrPreparationConfig
-					}
+			for _, pod := range pods {
+				if !clusterSSHBoundedPodResources(plan.Envelope, pod, "cert-manager-"+role, "") {
+					return nil, clusterbootstrap.ErrPreparationConfig
 				}
-				plan.Observed += uint64(len(pods))
 			}
+			plan.Observed += uint64(len(pods))
 			return pods, nil
 		}
 		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, id, image, clusterSSHLonghornDeploymentWorkload{
@@ -169,15 +160,16 @@ func observeClusterSSHCertManagerRuntime(read func(string) (map[string]any, erro
 		case "cert-manager":
 			images.ControllerResolved, controllerPlan = resolved, plan
 		case "cert-manager-cainjector":
-			images.CainjectorResolved = resolved
+			images.CainjectorResolved, cainjectorPlan = resolved, plan
 		case "cert-manager-webhook":
 			images.WebhookResolved, webhookPlan = resolved, plan
 		}
 	}
 	_, _, controllerOK := controllerPlan.budget("cert-manager-controller")
 	_, _, webhookOK := webhookPlan.budget("cert-manager-webhook")
-	if !images.valid() || !controllerOK || !webhookOK {
+	_, _, cainjectorOK := cainjectorPlan.budget("cert-manager-cainjector")
+	if !images.valid() || !controllerOK || !webhookOK || !cainjectorOK {
 		return fail()
 	}
-	return images, controllerPlan, webhookPlan, nil
+	return images, controllerPlan, webhookPlan, cainjectorPlan, nil
 }

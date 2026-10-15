@@ -10,7 +10,7 @@ type clusterSSHCertManagerResources struct {
 }
 
 func (v clusterSSHCertManagerResources) budget(name string) (cpu, memory uint64, ok bool) {
-	if !textInSet(name, "cert-manager-controller", "cert-manager-webhook") || v.Envelope.Name != name || !clusterSSHWorkloadResourceValid(v.Envelope) || v.Replicas == 0 || v.Replicas > clusterSSHLonghornDeploymentPodLimit || v.Observed == 0 || v.Observed > clusterSSHLonghornDeploymentPodLimit || v.Surge != (v.Replicas+3)/4 {
+	if !textInSet(name, "cert-manager-controller", "cert-manager-webhook", "cert-manager-cainjector") || v.Envelope.Name != name || !clusterSSHWorkloadResourceValid(v.Envelope) || v.Replicas == 0 || v.Replicas > clusterSSHLonghornDeploymentPodLimit || v.Observed == 0 || v.Observed > clusterSSHLonghornDeploymentPodLimit || v.Surge != (v.Replicas+3)/4 {
 		return 0, 0, false
 	}
 	for n := uint64(0); n < max(v.Replicas+v.Surge, v.Observed); n++ {
@@ -30,7 +30,7 @@ func (v clusterSSHCertManagerResources) budget(name string) (cpu, memory uint64,
 // Added hard placement, scheduling or Pod resource contracts need separate proof.
 func clusterSSHCertManagerResourceSpec(spec map[string]any, pod bool, name string) (clusterSSHApplicationResource, bool) {
 	selector := clusterSSHStorageMap(spec, "nodeSelector")
-	if !textInSet(name, "cert-manager-controller", "cert-manager-webhook") || len(selector) != 1 || selector["kubernetes.io/os"] != "linux" || !clusterSSHStorageEmptyMap(spec["affinity"]) ||
+	if !textInSet(name, "cert-manager-controller", "cert-manager-webhook", "cert-manager-cainjector") || len(selector) != 1 || selector["kubernetes.io/os"] != "linux" || !clusterSSHStorageEmptyMap(spec["affinity"]) ||
 		!clusterSSHStorageEmptyList(spec["topologySpreadConstraints"]) || !clusterSSHStorageEmptyList(spec["schedulingGates"]) ||
 		!clusterSSHStorageEmptyMap(spec["resources"]) || !clusterSSHStorageEmptyMap(spec["overhead"]) ||
 		!clusterSSHStorageEmptyList(spec["resourceClaims"]) || !clusterSSHStorageEmptyText(spec["runtimeClassName"]) ||

@@ -87,7 +87,7 @@ func TestClusterSSHPostgresResources(t *testing.T) {
 			}
 			if valid {
 				cpu, memory, ok := clusterSSHNodeWorkloadBudget(got.Requirements)
-				if !ok || cpu != 2180+uint64(len(f.a.Source.Members))*100 || memory != (5<<30+880<<20)+uint64(len(f.a.Source.Members))*(128<<20) || got.Requirements.PostgresResources != sshPostgresResourceValue(t) {
+				if !ok || cpu != 2240+uint64(len(f.a.Source.Members))*100 || memory != (5<<30+1024<<20)+uint64(len(f.a.Source.Members))*(128<<20) || got.Requirements.PostgresResources != sshPostgresResourceValue(t) {
 					t.Fatal("wrong one-instance combined budget", cpu, memory, ok)
 				}
 			}
