@@ -22,6 +22,7 @@ SPEC.loader.exec_module(RENDERER)
 BOUNDS = {"requests": {"cpu": "100m", "memory": "64Mi"}, "limits": {"cpu": "0.2", "memory": "128Mi"}}
 CERT_BOUNDS = {"requests": {"cpu": "50m", "memory": "32Mi"}, "limits": {"cpu": "0.1", "memory": "64Mi"}}
 WEBHOOK_BOUNDS = {"requests": {"cpu": "20m", "memory": "16Mi"}, "limits": {"cpu": "0.075", "memory": "48Mi"}}
+CAINJECTOR_BOUNDS = {"requests": {"cpu": "30m", "memory": "24Mi"}, "limits": {"cpu": "0.15", "memory": "72Mi"}}
 MANIFEST = """apiVersion: v1
 kind: Namespace
 metadata:
@@ -81,7 +82,14 @@ spec:
     spec:
       containers:
         - name: cert-manager-cainjector
-          resources: {}
+          image: quay.io/jetstack/cert-manager-cainjector:v1.21.1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unrelated
+data:
+  resources: unchanged
 """
 
 
@@ -166,12 +174,36 @@ class SystemUpgradeResourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             render(CERT_MANIFEST, '{}')
         with self.assertRaises(ValueError):
-            RENDERER.render_cert_manager_deployment(CERT_MANIFEST, json.dumps(BOUNDS), "cert-manager-cainjector")
+            RENDERER.render_cert_manager_deployment(CERT_MANIFEST, json.dumps(BOUNDS), "unknown")
+
+    def test_cainjector_render_preserves_other_objects_and_rejects_drift(self):
+        render = RENDERER.render_cert_manager_cainjector
+        rendered = list(yaml.safe_load_all(render(CERT_MANIFEST, json.dumps(CAINJECTOR_BOUNDS))))
+        resources = rendered[2]["spec"]["template"]["spec"]["containers"][0].pop("resources")
+        self.assertEqual(resources, CAINJECTOR_BOUNDS)
+        self.assertEqual(rendered, list(yaml.safe_load_all(CERT_MANIFEST)))
+        for template in (CERT_MANIFEST.replace("  name: cert-manager-cainjector\n", "  name: other\n"),
+                         CERT_MANIFEST + "\n---\n" + CERT_MANIFEST,
+                         CERT_MANIFEST.replace("        - name: cert-manager-cainjector", "        - name: other"),
+                         render(CERT_MANIFEST, json.dumps(CAINJECTOR_BOUNDS))):
+            with self.subTest(template=template), self.assertRaises(ValueError):
+                render(template, json.dumps(CAINJECTOR_BOUNDS))
+        with self.assertRaises(ValueError):
+            render(CERT_MANIFEST, '{}')
+        # Final component failure must not emit partially bounded cert-manager YAML.
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "manifest.yaml"
+            path.write_text(CERT_MANIFEST.replace("        - name: cert-manager-cainjector", "        - name: other"))
+            result = subprocess.run([sys.executable, str(CLUSTER / "render-system-upgrade.py"),
+                                     "cert-manager-manifest", str(path), json.dumps(CERT_BOUNDS),
+                                     json.dumps(WEBHOOK_BOUNDS), json.dumps(CAINJECTOR_BOUNDS)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
 
     def test_workflow_preflight_precedes_mutation(self):
         script = (CLUSTER / "cluster-node-workflow.sh").read_text()
-        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}"', script)
-        for prefix in ('upgrade_resources="', 'cert_resources="', 'webhook_resources="'):
+        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}"', script)
+        for prefix in ('upgrade_resources="', 'cert_resources="', 'webhook_resources="', 'cainjector_resources="'):
             assignment = next(line for line in script.splitlines() if line.startswith(prefix))
             self.assertLess(script.index(assignment), script.index('install -d -m 0700'))
             with tempfile.TemporaryDirectory() as temp:
@@ -181,7 +213,7 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
 
     def test_actual_apply_path_requires_frozen_bounds_and_checksum(self):
-        for component in ("system-upgrade-controller", "cert-manager", "cert-manager-webhook"):
+        for component in ("system-upgrade-controller", "cert-manager", "cert-manager-webhook", "cert-manager-cainjector"):
             self.check_apply_path(component)
 
     def check_apply_path(self, component):
@@ -201,13 +233,15 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                 cert_source.write_text(json.dumps(CERT_BOUNDS))
                 webhook_source = deploy / "cert-manager-webhook-resources.json"
                 webhook_source.write_text(json.dumps(WEBHOOK_BOUNDS))
-                sources = {"system-upgrade-controller": upgrade_source, "cert-manager": cert_source, "cert-manager-webhook": webhook_source}
+                cainjector_source = deploy / "cert-manager-cainjector-resources.json"
+                cainjector_source.write_text(json.dumps(CAINJECTOR_BOUNDS))
+                sources = {"system-upgrade-controller": upgrade_source, "cert-manager": cert_source, "cert-manager-webhook": webhook_source, "cert-manager-cainjector": cainjector_source}
                 source = sources[component]
                 other_source = cert_source if component == "cert-manager-webhook" else webhook_source
                 template = CERT_MANIFEST if dependency == "cert-manager" else MANIFEST
                 payload = template
                 if mode == "template drift":
-                    payload = template.replace("  name: cert-manager-webhook\n", "  name: other\n") if component == "cert-manager-webhook" else template.replace("name:", "renamed:")
+                    payload = template.replace(f"  name: {component}\n", "  name: other\n") if dependency == "cert-manager" else template.replace("name:", "renamed:")
                 manifest = root / "manifest.yaml"
                 manifest.write_text(payload)
                 digest = hashlib.sha256(payload.encode()).hexdigest() if mode != "bad checksum" else "0" * 64
@@ -242,10 +276,10 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                 if mode == "other missing": other_source.unlink()
                 calls, applied = root / "calls", root / "applied.yaml"
                 command = ["bash", str(cluster / "apply-pinned-dependencies.sh")]
-                command.extend(RENDERER.resources(json.dumps(bounds)) for bounds in (BOUNDS, CERT_BOUNDS, WEBHOOK_BOUNDS))
-                if mode == "caller drift": command[{"system-upgrade-controller": 2, "cert-manager": 3, "cert-manager-webhook": 4}[component]] = '{}'
+                command.extend(RENDERER.resources(json.dumps(bounds)) for bounds in (BOUNDS, CERT_BOUNDS, WEBHOOK_BOUNDS, CAINJECTOR_BOUNDS))
+                if mode == "caller drift": command[{"system-upgrade-controller": 2, "cert-manager": 3, "cert-manager-webhook": 4, "cert-manager-cainjector": 5}[component]] = '{}'
                 if mode == "canonical rewrite": command = command[:2]  # Standalone entrypoint snapshots all files.
-                if mode == "legacy caller": command = command[:4]
+                if mode == "legacy caller": command = command[:5]
                 env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], BOREALIS_KUBECTL_BIN=str(kubectl),
                            TEST_DOWNLOAD=str(root / "downloaded"), TEST_MANIFEST=str(manifest), TEST_SOURCE=str(source), TEST_OTHER_SOURCE=str(other_source), TEST_MODE=mode, TEST_CALLS=str(calls), TEST_APPLIED=str(applied))
                 result = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -253,7 +287,7 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
                 if valid:
                     docs = list(yaml.safe_load_all(applied.read_text()))
-                    expected = ((0, CERT_BOUNDS), (1, WEBHOOK_BOUNDS)) if dependency == "cert-manager" else ((1, BOUNDS),)
+                    expected = ((0, CERT_BOUNDS), (1, WEBHOOK_BOUNDS), (2, CAINJECTOR_BOUNDS)) if dependency == "cert-manager" else ((1, BOUNDS),)
                     for index, bounds in expected:
                         container = docs[index]["spec"]["template"]["spec"]["containers"][0]
                         self.assertEqual(container.pop("resources"), bounds)

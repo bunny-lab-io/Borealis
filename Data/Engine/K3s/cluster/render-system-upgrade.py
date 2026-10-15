@@ -78,9 +78,14 @@ def render_cert_manager_webhook(manifest, bounds):
     return render_cert_manager_deployment(manifest, bounds, "cert-manager-webhook")
 
 
+def render_cert_manager_cainjector(manifest, bounds):
+    return render_cert_manager_deployment(manifest, bounds, "cert-manager-cainjector")
+
+
 def render_cert_manager_deployment(manifest, bounds, name):
     # Fixed reviewed Deployments only; never rewrite unrelated CRD/resource keys.
-    containers = {"cert-manager": "cert-manager-controller", "cert-manager-webhook": "cert-manager-webhook"}
+    containers = {"cert-manager": "cert-manager-controller", "cert-manager-webhook": "cert-manager-webhook",
+                  "cert-manager-cainjector": "cert-manager-cainjector"}
     if name not in containers:
         raise ValueError("unsupported cert-manager Deployment")
     identity = f"kind: Deployment\nmetadata:\n  name: {name}\n  namespace: cert-manager\n"
@@ -103,9 +108,10 @@ def main():
             result = read_resources(sys.argv[2])
         elif len(sys.argv) == 4 and sys.argv[1] == "manifest":
             result = render(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
-        elif len(sys.argv) == 5 and sys.argv[1] == "cert-manager-manifest":
+        elif len(sys.argv) == 6 and sys.argv[1] == "cert-manager-manifest":
             controller = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
-            result = render_cert_manager_webhook(controller, sys.argv[4])
+            webhook = render_cert_manager_webhook(controller, sys.argv[4])
+            result = render_cert_manager_cainjector(webhook, sys.argv[5])
         else:
             raise ValueError("invalid renderer arguments")
     except (ValueError, KeyError, TypeError, OSError):
