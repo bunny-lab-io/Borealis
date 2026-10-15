@@ -24,7 +24,7 @@ func clusterSSHKubeVIPPodsPathValid(path string) bool {
 // Query only the frozen active sources: replacement does not require a running
 // Pod on the failed member or a candidate. Selectors restrict transport, never
 // replace independent object ownership, node, readiness and image checks.
-func observeClusterSSHKubeVIPRuntime(readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, owner clusterSSHStorageIdentity, image string) (string, error) {
+func observeClusterSSHKubeVIPRuntime(readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, owner clusterSSHStorageIdentity, image string, resources clusterSSHApplicationResource) (string, error) {
 	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
 	if readList == nil || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
@@ -56,6 +56,10 @@ func observeClusterSSHKubeVIPRuntime(readList func(string, string, string, int) 
 			return fail()
 		}
 		spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
+		observed, bounded := clusterSSHKubeVIPResourceSpec(spec, member.Name)
+		if !bounded || observed != resources || !clusterSSHBoundedPodResources(resources, pod, "kube-vip", "") {
+			return fail()
+		}
 		if spec["nodeName"] != member.Name || spec["hostNetwork"] != true || spec["serviceAccountName"] != "kube-vip-borealis" || status["phase"] != "Running" ||
 			!clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) ||
 			!clusterSSHStorageEmptyList(status["initContainerStatuses"]) || !clusterSSHStorageEmptyList(status["ephemeralContainerStatuses"]) {

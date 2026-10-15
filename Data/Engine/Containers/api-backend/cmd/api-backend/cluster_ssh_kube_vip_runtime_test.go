@@ -15,7 +15,7 @@ func sshKubeVIPRuntimeFixture(f *sshStorageFixture) {
 		metadata := clusterSSHStorageMap(pod, "metadata")
 		metadata["labels"] = map[string]any{"app.kubernetes.io/name": "kube-vip-borealis-cluster"}
 		metadata["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": "DaemonSet", "name": "kube-vip-borealis-cluster", "uid": clusterSSHStorageMap(f.objects[clusterSSHKubeVIPPath], "metadata")["uid"], "controller": true}}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "hostNetwork": true, "serviceAccountName": "kube-vip-borealis", "containers": []any{map[string]any{"name": "kube-vip", "image": image}}}
+		pod["spec"] = map[string]any{"nodeSelector": sshKubeVIPSelector(), "affinity": sshKubeVIPAffinity(member.Name), "tolerations": sshKubeVIPTolerations(), "nodeName": member.Name, "hostNetwork": true, "serviceAccountName": "kube-vip-borealis", "containers": []any{map[string]any{"name": "kube-vip", "resources": sshKubeVIPResources(), "image": image}}}
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": "kube-vip", "image": image, "imageID": clusterSSHKubeVIPRepository + "@" + sshKubeVIPPin().ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
 		f.objects[clusterSSHKubeVIPPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}

@@ -83,6 +83,9 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			_, _, snapshot := sshBrokerFixture(t)
 			snapshot.DesiredWorkerSites = []int64{}
 			wantCPU, wantMemory := uint64(2365), uint64(5<<30+1408<<20)
+			// One kube-vip envelope per target, independent of worker demand.
+			wantCPU += 25
+			wantMemory += 128 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

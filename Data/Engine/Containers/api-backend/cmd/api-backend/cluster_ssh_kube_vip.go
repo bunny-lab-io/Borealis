@@ -15,14 +15,16 @@ var clusterSSHKubeVIPInterface = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}$`)
 // Desired configuration and active-source running image identity. Lease
 // ownership and network health remain separate; this never grants readiness.
 type clusterSSHKubeVIPConfiguration struct {
-	Image     string `json:"image"`
-	Resolved  string `json:"resolved"`
-	Address   string `json:"address"`
-	Interface string `json:"interface"`
+	Resources clusterSSHApplicationResource `json:"resources"`
+	Image     string                        `json:"image"`
+	Resolved  string                        `json:"resolved"`
+	Address   string                        `json:"address"`
+	Interface string                        `json:"interface"`
 }
 
 func (v clusterSSHKubeVIPConfiguration) valid(source clusterSSHSourceCohort) bool {
-	return v.configuredValid(source) && (clusterSSHSourceExternalImage{Configured: v.Image, Resolved: v.Resolved}).valid(clusterSSHKubeVIPRepository)
+	_, _, bounded := v.budget()
+	return bounded && v.configuredValid(source) && (clusterSSHSourceExternalImage{Configured: v.Image, Resolved: v.Resolved}).valid(clusterSSHKubeVIPRepository)
 }
 
 func (v clusterSSHKubeVIPConfiguration) configuredValid(source clusterSSHSourceCohort) bool {
@@ -82,7 +84,11 @@ func observeClusterSSHKubeVIP(read func(string) (map[string]any, error), readLis
 		return fail()
 	}
 	wanted := map[string]string{"vip_arp": "true", "port": "6443", "vip_subnet": "32", "cp_namespace": "kube-system", "vip_leaderelection": "true", "vip_leasename": "borealis-cluster-vip", "vip_leaseduration": "10", "vip_renewdeadline": "5", "vip_retryperiod": "2", "cp_enable": "true", "svc_enable": "false", "prometheus_server": ":2112"}
-	result := clusterSSHKubeVIPConfiguration{Image: clusterSSHStorageText(container, "image")}
+	resources, ok := clusterSSHKubeVIPResourcePlan(object)
+	if !ok {
+		return fail()
+	}
+	result := clusterSSHKubeVIPConfiguration{Image: clusterSSHStorageText(container, "image"), Resources: resources}
 	seen := map[string]bool{}
 	for _, raw := range env {
 		entry, ok := raw.(map[string]any)
@@ -118,7 +124,7 @@ func observeClusterSSHKubeVIP(read func(string) (map[string]any, error), readLis
 	if !result.configuredValid(source) {
 		return fail()
 	}
-	result.Resolved, err = observeClusterSSHKubeVIPRuntime(readList, source, metadata, result.Image)
+	result.Resolved, err = observeClusterSSHKubeVIPRuntime(readList, source, metadata, result.Image, resources)
 	if err != nil || !result.valid(source) {
 		return fail()
 	}

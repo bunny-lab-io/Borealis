@@ -25,9 +25,10 @@ func sshKubeVIPFixture(source clusterSSHSourceCohort) map[string]any {
 		env = append(env, map[string]any{"name": name, "value": value})
 	}
 	env = append(env, map[string]any{"name": "vip_nodename", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "spec.nodeName"}}})
-	object["spec"] = map[string]any{"template": map[string]any{"spec": map[string]any{
-		"hostNetwork": true, "serviceAccountName": "kube-vip-borealis", "automountServiceAccountToken": true,
-		"containers": []any{map[string]any{"name": "kube-vip", "image": sshKubeVIPPin().Reference, "args": []any{"manager"}, "env": env}},
+	object["spec"] = map[string]any{"updateStrategy": map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": 1}}, "template": map[string]any{"spec": map[string]any{
+		"nodeSelector": sshKubeVIPSelector(),
+		"hostNetwork":  true, "serviceAccountName": "kube-vip-borealis", "automountServiceAccountToken": true,
+		"containers": []any{map[string]any{"name": "kube-vip", "resources": sshKubeVIPResources(), "image": sshKubeVIPPin().Reference, "args": []any{"manager"}, "env": env}},
 	}}}
 	return object
 }
