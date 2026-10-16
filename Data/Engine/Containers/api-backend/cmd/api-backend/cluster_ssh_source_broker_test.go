@@ -46,7 +46,7 @@ func sshBrokerClient(t *testing.T, peers ...string) *clusterSSHSourceBrokerClien
 }
 
 func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T) {
-	for _, mode := range []string{"fresh repeated", "kube-vip resources missing", "kube-vip resources changed", "kube-vip role swapped", "cainjector resources missing", "cainjector resources changed", "cainjector replicas changed", "cainjector role swapped", "webhook resources missing", "webhook resources changed", "webhook replicas changed", "webhook role swapped", "cert-manager resources missing", "cert-manager resources changed", "cert-manager replicas changed", "snapshot resources missing", "snapshot resources changed", "snapshot replicas changed", "upgrade resources missing", "upgrade resources changed", "upgrade replicas changed", "operator resources missing", "operator resources changed", "operator replicas changed", "census missing", "census changed", "worker policy changed", "workers missing", "workers changed", "worker identity changed", "worker node invalid", "postgres resources missing", "postgres resources changed", "applications missing", "applications changed", "cert-manager runtime changed", "cert-manager runtime missing", "snapshot runtime changed", "snapshot runtime missing", "kubelet missing", "kubelet CSI missing", "kubelet CSI inode changed", "kubelet CSI mount changed", "kubelet CSI ancestry changed", "CSI peer process changed", "CSI peer and Pod changed", "kubelet executable digest", "kubelet root mismatch", "kubelet process changed", "kubelet listener changed", "kubelet root changed coherently", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "upgrade runtime changed", "CNPG runtime changed", "CNPG runtime missing", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
+	for _, mode := range []string{"fresh repeated", "prepull resources missing", "prepull resources changed", "prepull role swapped", "manager resources missing", "manager resources changed", "manager role swapped", "kube-vip resources missing", "kube-vip resources changed", "kube-vip role swapped", "cainjector resources missing", "cainjector resources changed", "cainjector replicas changed", "cainjector role swapped", "webhook resources missing", "webhook resources changed", "webhook replicas changed", "webhook role swapped", "cert-manager resources missing", "cert-manager resources changed", "cert-manager replicas changed", "snapshot resources missing", "snapshot resources changed", "snapshot replicas changed", "upgrade resources missing", "upgrade resources changed", "upgrade replicas changed", "operator resources missing", "operator resources changed", "operator replicas changed", "census missing", "census changed", "worker policy changed", "workers missing", "workers changed", "worker identity changed", "worker node invalid", "postgres resources missing", "postgres resources changed", "applications missing", "applications changed", "cert-manager runtime changed", "cert-manager runtime missing", "snapshot runtime changed", "snapshot runtime missing", "kubelet missing", "kubelet CSI missing", "kubelet CSI inode changed", "kubelet CSI mount changed", "kubelet CSI ancestry changed", "CSI peer process changed", "CSI peer and Pod changed", "kubelet executable digest", "kubelet root mismatch", "kubelet process changed", "kubelet listener changed", "kubelet root changed coherently", "kube-vip interface mismatch", "bootstrap image changed", "postgres image changed", "storage receipt changed", "storage requirements changed", "volume images changed", "driver runtime changed", "upgrade runtime changed", "CNPG runtime changed", "CNPG runtime missing", "driver init changed", "provisioner runtime changed", "resizer runtime changed", "snapshotter runtime changed", "CSI socket path changed", "attacher runtime changed", "UI runtime changed", "replica images changed", "storage missing", "storage invalid", "secret changed", "link changed", "missing sources", "extra source", "wrong source Node", "wrong source address", "wrong source ranges", "target changed", "settings invalid", "source changed", "locked before", "locked after", "wrong authority lease"} {
 		t.Run(mode, func(t *testing.T) {
 			r, current, snapshot := sshBrokerFixture(t)
 			b := newClusterSSHSourceBroker(nil, nil, r.Lease.ControllerHolder, sshBrokerTestSecret)
@@ -64,6 +64,22 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				value.Storage.Requirements.ReplicaImages = slices.Clone(snapshot.Storage.Requirements.ReplicaImages)
 				value.Storage.Requirements.LonghornPlugin = slices.Clone(snapshot.Storage.Requirements.LonghornPlugin)
 				switch mode {
+				case "manager resources missing":
+					value.Storage.Requirements.LonghornManagerResources.Manager = clusterSSHApplicationResource{}
+				case "manager resources changed":
+					if n > 1 {
+						value.Storage.Requirements.LonghornManagerResources.Manager.CPULimitMilli++
+					}
+				case "manager role swapped":
+					value.Storage.Requirements.LonghornManagerResources.Manager.Name = "postgres"
+				case "prepull resources missing":
+					value.Storage.Requirements.LonghornManagerResources.PrePull = clusterSSHApplicationResource{}
+				case "prepull resources changed":
+					if n > 1 {
+						value.Storage.Requirements.LonghornManagerResources.PrePull.CPULimitMilli++
+					}
+				case "prepull role swapped":
+					value.Storage.Requirements.LonghornManagerResources.PrePull.Name = "postgres"
 				case "kube-vip resources missing":
 					value.Storage.Requirements.KubeVIP.Resources = clusterSSHApplicationResource{}
 				case "kube-vip resources changed":
@@ -359,7 +375,7 @@ func TestClusterSSHSourceBrokerEncryptedReadAndRetainedObservation(t *testing.T)
 				started := time.Now()
 				value, err := read(context.Background())
 				expected, settings := value.Expected, value.Settings
-				wantOK := mode == "fresh repeated" || ((mode == "kube-vip resources changed" || mode == "cainjector resources changed" || mode == "cainjector replicas changed" || mode == "webhook resources changed" || mode == "webhook replicas changed" || mode == "cert-manager resources changed" || mode == "cert-manager replicas changed" || mode == "snapshot resources changed" || mode == "snapshot replicas changed" || mode == "upgrade resources changed" || mode == "upgrade replicas changed" || mode == "operator resources changed" || mode == "operator replicas changed" || mode == "census changed" || mode == "worker policy changed" || mode == "workers changed" || mode == "worker identity changed" || mode == "postgres resources changed" || mode == "applications changed" || mode == "CSI peer process changed" || mode == "CSI peer and Pod changed" || mode == "kubelet CSI inode changed" || mode == "kubelet CSI mount changed" || mode == "kubelet CSI ancestry changed" || mode == "kubelet process changed" || mode == "kubelet listener changed" || mode == "kubelet root changed coherently" || mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed" || mode == "volume images changed" || mode == "replica images changed" || mode == "provisioner runtime changed" || mode == "resizer runtime changed" || mode == "snapshotter runtime changed" || mode == "CSI socket path changed" || mode == "attacher runtime changed" || mode == "UI runtime changed" || mode == "cert-manager runtime changed" || mode == "snapshot runtime changed" || mode == "CNPG runtime changed" || mode == "upgrade runtime changed" || mode == "driver runtime changed" || mode == "driver init changed") && i == 0)
+				wantOK := mode == "fresh repeated" || ((mode == "prepull resources changed" || mode == "manager resources changed" || mode == "kube-vip resources changed" || mode == "cainjector resources changed" || mode == "cainjector replicas changed" || mode == "webhook resources changed" || mode == "webhook replicas changed" || mode == "cert-manager resources changed" || mode == "cert-manager replicas changed" || mode == "snapshot resources changed" || mode == "snapshot replicas changed" || mode == "upgrade resources changed" || mode == "upgrade replicas changed" || mode == "operator resources changed" || mode == "operator replicas changed" || mode == "census changed" || mode == "worker policy changed" || mode == "workers changed" || mode == "worker identity changed" || mode == "postgres resources changed" || mode == "applications changed" || mode == "CSI peer process changed" || mode == "CSI peer and Pod changed" || mode == "kubelet CSI inode changed" || mode == "kubelet CSI mount changed" || mode == "kubelet CSI ancestry changed" || mode == "kubelet process changed" || mode == "kubelet listener changed" || mode == "kubelet root changed coherently" || mode == "secret changed" || mode == "link changed" || mode == "postgres image changed" || mode == "bootstrap image changed" || mode == "storage receipt changed" || mode == "storage requirements changed" || mode == "volume images changed" || mode == "replica images changed" || mode == "provisioner runtime changed" || mode == "resizer runtime changed" || mode == "snapshotter runtime changed" || mode == "CSI socket path changed" || mode == "attacher runtime changed" || mode == "UI runtime changed" || mode == "cert-manager runtime changed" || mode == "snapshot runtime changed" || mode == "CNPG runtime changed" || mode == "upgrade runtime changed" || mode == "driver runtime changed" || mode == "driver init changed") && i == 0)
 				if wantOK {
 					if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) || !reflect.DeepEqual(settings, snapshot.Settings) || !slices.Equal(value.Sources, snapshot.Sources) || value.started.Before(started) || !reflect.DeepEqual(value.Storage, snapshot.Storage) {
 						t.Fatal("valid broker source rejected")
@@ -526,7 +542,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 43, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 44, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -537,11 +553,11 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 					value.Snapshot = nil
 				}
 				if mode == "legacy response" {
-					value.Version = 42
+					value.Version = 43
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					altered := bytes.Replace(raw, []byte(`"version":43`), []byte(`"version":43,"version":43`), 1)
+					altered := bytes.Replace(raw, []byte(`"version":44`), []byte(`"version":44,"version":44`), 1)
 					if bytes.Equal(raw, altered) {
 						t.Fatal("duplicate response fixture unchanged")
 					}

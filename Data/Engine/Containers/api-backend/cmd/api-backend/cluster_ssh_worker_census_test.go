@@ -86,6 +86,8 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			// One kube-vip envelope per target, independent of worker demand.
 			wantCPU += 25
 			wantMemory += 128 << 20
+			wantCPU += 155
+			wantMemory += 216 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

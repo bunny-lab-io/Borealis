@@ -168,7 +168,7 @@ print(json.dumps(sorted(v[0])))`).Output()
 }
 
 func TestClusterSSHTargetApplicationSizing(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "kube-vip missing", "kube-vip before", "kube-vip after", "kube-vip CPU fit", "kube-vip memory fit", "kube-vip CPU cap overcommit", "kube-vip role swapped", "cainjector missing", "cainjector before", "cainjector after", "cainjector CPU fit", "cainjector memory fit", "cainjector CPU cap overcommit", "cainjector role swapped", "webhook missing", "webhook before", "webhook after", "webhook CPU fit", "webhook memory fit", "webhook CPU cap overcommit", "cert-manager missing", "cert-manager before", "cert-manager after", "cert-manager CPU fit", "cert-manager memory fit", "cert-manager CPU cap overcommit", "snapshot missing", "snapshot before", "snapshot after", "snapshot CPU fit", "snapshot memory fit", "snapshot CPU cap overcommit", "upgrade missing", "upgrade before", "upgrade after", "upgrade CPU fit", "upgrade memory fit", "upgrade CPU cap overcommit", "operator missing", "operator before", "operator after", "operator CPU fit", "operator memory fit", "operator CPU cap overcommit", "census missing", "census before", "census after", "recovery CPU fit", "recovery memory fit", "policy before", "policy after", "sibling CPU", "sibling memory", "workers missing", "workers before", "workers after", "worker CPU fit", "worker memory fit", "worker CPU cap overcommit", "missing", "drift before", "drift after", "postgres missing", "postgres before", "postgres after", "receipt drift", "cancel"} {
+	for _, mode := range []string{"expansion", "replacement", "manager missing", "manager role swapped", "manager before", "manager after", "manager CPU fit", "manager memory fit", "manager CPU cap overcommit", "prepull missing", "prepull role swapped", "prepull before", "prepull after", "prepull CPU fit", "prepull memory fit", "prepull CPU cap overcommit", "kube-vip missing", "kube-vip before", "kube-vip after", "kube-vip CPU fit", "kube-vip memory fit", "kube-vip CPU cap overcommit", "kube-vip role swapped", "cainjector missing", "cainjector before", "cainjector after", "cainjector CPU fit", "cainjector memory fit", "cainjector CPU cap overcommit", "cainjector role swapped", "webhook missing", "webhook before", "webhook after", "webhook CPU fit", "webhook memory fit", "webhook CPU cap overcommit", "cert-manager missing", "cert-manager before", "cert-manager after", "cert-manager CPU fit", "cert-manager memory fit", "cert-manager CPU cap overcommit", "snapshot missing", "snapshot before", "snapshot after", "snapshot CPU fit", "snapshot memory fit", "snapshot CPU cap overcommit", "upgrade missing", "upgrade before", "upgrade after", "upgrade CPU fit", "upgrade memory fit", "upgrade CPU cap overcommit", "operator missing", "operator before", "operator after", "operator CPU fit", "operator memory fit", "operator CPU cap overcommit", "census missing", "census before", "census after", "recovery CPU fit", "recovery memory fit", "policy before", "policy after", "sibling CPU", "sibling memory", "workers missing", "workers before", "workers after", "worker CPU fit", "worker memory fit", "worker CPU cap overcommit", "missing", "drift before", "drift after", "postgres missing", "postgres before", "postgres after", "receipt drift", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			values := sshApplicationResourceValues(t)
@@ -178,6 +178,9 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 			}
 			operator := sshCNPGResourceValue(t)
 			upgrade := sshSystemUpgradeResourceValue(t)
+			manager := sshLonghornManagerResourceValue(t)
+			values[0].CPURequestMilli -= 155
+			values[0].MemoryLimitBytes -= 216 << 20
 			kubeVIP := sshKubeVIPResourceValue(t)
 			values[0].CPURequestMilli -= 25
 			values[0].MemoryLimitBytes -= 128 << 20
@@ -218,6 +221,44 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 			reads, consumed := 0, false
 			source := func(context.Context) (clusterSSHPreparationSnapshot, error) {
 				reads++
+				if mode == "manager missing" {
+					manager.Manager = clusterSSHApplicationResource{}
+				}
+				if mode == "manager role swapped" {
+					manager.Manager.Name = "postgres"
+				}
+				if (mode == "manager before" && reads == 2) || (mode == "manager after" && consumed) {
+					manager.Manager.CPULimitMilli++
+				}
+				if mode == "manager CPU fit" {
+					manager.Manager.CPURequestMilli++
+				}
+				if mode == "manager memory fit" {
+					manager.Manager.MemoryLimitBytes++
+				}
+				if mode == "manager CPU cap overcommit" {
+					manager.Manager.CPULimitMilli = 64000
+				}
+
+				if mode == "prepull missing" {
+					manager.PrePull = clusterSSHApplicationResource{}
+				}
+				if mode == "prepull role swapped" {
+					manager.PrePull.Name = "postgres"
+				}
+				if (mode == "prepull before" && reads == 2) || (mode == "prepull after" && consumed) {
+					manager.PrePull.CPULimitMilli++
+				}
+				if mode == "prepull CPU fit" {
+					manager.PrePull.CPURequestMilli++
+				}
+				if mode == "prepull memory fit" {
+					manager.PrePull.MemoryLimitBytes++
+				}
+				if mode == "prepull CPU cap overcommit" {
+					manager.PrePull.CPULimitMilli = 64000
+				}
+
 				if mode == "kube-vip missing" {
 					kubeVIP = clusterSSHApplicationResource{}
 				}
@@ -382,7 +423,7 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 						values[0].CPURequestMilli -= 50
 					}
 				}
-				return clusterSSHPreparationSnapshot{DesiredWorkerSites: sites, Expected: e, Settings: settings, Storage: clusterSSHStorageSnapshot{Observation: observation, Requirements: clusterSSHStorageRequirements{KubeVIP: clusterSSHKubeVIPConfiguration{Resources: kubeVIP}, CertManagerCainjectorResources: cainjector, CertManagerWebhookResources: webhook, CertManagerResources: certManager, SnapshotResources: snapshotResources, SystemUpgradeResources: upgrade, CNPGOperatorResources: operator, WorkerPolicy: policy, SiteWorkers: workers, Applications: values, PostgresResources: postgres}}}, err
+				return clusterSSHPreparationSnapshot{DesiredWorkerSites: sites, Expected: e, Settings: settings, Storage: clusterSSHStorageSnapshot{Observation: observation, Requirements: clusterSSHStorageRequirements{LonghornManagerResources: manager, KubeVIP: clusterSSHKubeVIPConfiguration{Resources: kubeVIP}, CertManagerCainjectorResources: cainjector, CertManagerWebhookResources: webhook, CertManagerResources: certManager, SnapshotResources: snapshotResources, SystemUpgradeResources: upgrade, CNPGOperatorResources: operator, WorkerPolicy: policy, SiteWorkers: workers, Applications: values, PostgresResources: postgres}}}, err
 			}
 			err := runClusterSSHNetworkTargets(ctx, f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
 				return withClusterSSHTargetApplicationSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error {
@@ -393,8 +434,8 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 					return nil
 				})
 			})
-			ok := mode == "kube-vip CPU cap overcommit" || mode == "cainjector CPU cap overcommit" || mode == "webhook CPU cap overcommit" || mode == "cert-manager CPU cap overcommit" || mode == "snapshot CPU cap overcommit" || mode == "upgrade CPU cap overcommit" || mode == "expansion" || mode == "replacement" || mode == "worker CPU cap overcommit" || mode == "operator CPU cap overcommit"
-			if (err == nil) != ok || consumed != (ok || mode == "kube-vip after" || mode == "cainjector after" || mode == "webhook after" || mode == "cert-manager after" || mode == "snapshot after" || mode == "upgrade after" || mode == "operator after" || mode == "census after" || mode == "policy after" || mode == "drift after" || mode == "postgres after" || mode == "workers after" || mode == "cancel") {
+			ok := mode == "prepull CPU cap overcommit" || mode == "manager CPU cap overcommit" || mode == "kube-vip CPU cap overcommit" || mode == "cainjector CPU cap overcommit" || mode == "webhook CPU cap overcommit" || mode == "cert-manager CPU cap overcommit" || mode == "snapshot CPU cap overcommit" || mode == "upgrade CPU cap overcommit" || mode == "expansion" || mode == "replacement" || mode == "worker CPU cap overcommit" || mode == "operator CPU cap overcommit"
+			if (err == nil) != ok || consumed != (ok || mode == "prepull after" || mode == "manager after" || mode == "kube-vip after" || mode == "cainjector after" || mode == "webhook after" || mode == "cert-manager after" || mode == "snapshot after" || mode == "upgrade after" || mode == "operator after" || mode == "census after" || mode == "policy after" || mode == "drift after" || mode == "postgres after" || mode == "workers after" || mode == "cancel") {
 				t.Fatal("unsafe application sizing boundary", err, consumed)
 			}
 			if ok && reads < 5 {

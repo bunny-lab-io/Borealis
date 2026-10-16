@@ -284,7 +284,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.LonghornManagerImages, err = observeClusterSSHLonghornManagerImages(read, readList, source, result.Requirements.LonghornDriverImages)
+	result.Requirements.LonghornManagerImages, result.Requirements.LonghornManagerResources, err = observeClusterSSHLonghornManagerImages(read, readList, source, result.Requirements.LonghornDriverImages)
 	if err != nil {
 		return fail()
 	}

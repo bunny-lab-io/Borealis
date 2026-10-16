@@ -28,10 +28,10 @@ func sshLonghornManagerRuntimeFixture(f *sshStorageFixture) {
 					image = c["image"].(string)
 				}
 			}
-			containers = append(containers, map[string]any{"name": name, "image": image})
+			containers = append(containers, map[string]any{"name": name, "image": image, "resources": sshLonghornManagerResources(name)})
 			statuses = append(statuses, map[string]any{"name": name, "image": image, "imageID": "docker.io/longhornio/" + role + "@" + sshLonghornDriverPin(role).ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}})
 		}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": containers}
+		pod["spec"] = map[string]any{"priorityClassName": "longhorn-critical", "priority": 1000000000, "affinity": sshKubeVIPAffinity(member.Name), "tolerations": sshKubeVIPTolerations()[:6], "nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": containers}
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": statuses}
 		f.objects[clusterSSHLonghornManagerPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}

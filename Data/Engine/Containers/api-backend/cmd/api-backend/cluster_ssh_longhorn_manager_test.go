@@ -59,9 +59,9 @@ func sshLonghornManagerFixture(f *sshStorageFixture) {
 		mounts = append(mounts, value)
 	}
 	object := sshStorageObject("apps/v1", "DaemonSet", "longhorn-system", "longhorn-manager")
-	object["spec"] = map[string]any{"template": map[string]any{"spec": map[string]any{"serviceAccountName": "longhorn-service-account", "containers": []any{
-		map[string]any{"name": "longhorn-manager", "image": sshLonghornDriverPin("longhorn-manager").Reference, "command": command, "env": env, "volumeMounts": mounts},
-		map[string]any{"name": "pre-pull-share-manager-image", "image": sshLonghornDriverPin("longhorn-share-manager").Reference, "command": []any{"sh", "-c", "echo share-manager image pulled && sleep infinity"}},
+	object["spec"] = map[string]any{"updateStrategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": "100%"}}, "template": map[string]any{"spec": map[string]any{"priorityClassName": "longhorn-critical", "serviceAccountName": "longhorn-service-account", "containers": []any{
+		map[string]any{"name": "longhorn-manager", "resources": sshLonghornManagerResources("longhorn-manager"), "image": sshLonghornDriverPin("longhorn-manager").Reference, "command": command, "env": env, "volumeMounts": mounts},
+		map[string]any{"name": "pre-pull-share-manager-image", "resources": sshLonghornManagerResources("pre-pull-share-manager-image"), "image": sshLonghornDriverPin("longhorn-share-manager").Reference, "command": []any{"sh", "-c", "echo share-manager image pulled && sleep infinity"}},
 	}}}}
 	f.objects[clusterSSHLonghornManagerPath] = object
 	for _, item := range [][2]string{{"default-engine-image", "longhorn-engine"}, {"support-bundle-manager-image", "support-bundle-kit"}} {

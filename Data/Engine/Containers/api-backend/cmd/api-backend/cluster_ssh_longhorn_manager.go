@@ -44,13 +44,17 @@ func (images clusterSSHLonghornManagerImages) configuredValid() bool {
 
 // Desired configuration, active image Settings and manager Pod image IDs.
 // Existing engine generations, mount safety and workload readiness remain separate.
-func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHLonghornManagerImages, error) {
-	fail := func() (clusterSSHLonghornManagerImages, error) {
-		return clusterSSHLonghornManagerImages{}, clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHLonghornManagerImages, clusterSSHLonghornManagerResources, error) {
+	fail := func() (clusterSSHLonghornManagerImages, clusterSSHLonghornManagerResources, error) {
+		return clusterSSHLonghornManagerImages{}, clusterSSHLonghornManagerResources{}, clusterbootstrap.ErrPreparationConfig
 	}
 	object, err := read(clusterSSHLonghornManagerPath)
 	id, ok := clusterSSHStorageMetadata(object, "apps/v1", "DaemonSet", "longhorn-system")
 	if err != nil || !ok || id.Name != "longhorn-manager" || !driver.valid() {
+		return fail()
+	}
+	resources, valid := clusterSSHLonghornManagerResourcePlan(object)
+	if !valid {
 		return fail()
 	}
 	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec")
@@ -86,11 +90,11 @@ func observeClusterSSHLonghornManagerImages(read func(string) (map[string]any, e
 			return fail()
 		}
 	}
-	images.ManagerResolved, images.ShareResolved, err = observeClusterSSHLonghornManagerRuntime(readList, source, id, images)
+	images.ManagerResolved, images.ShareResolved, err = observeClusterSSHLonghornManagerRuntime(readList, source, id, images, resources)
 	if err != nil || !images.valid() {
 		return fail()
 	}
-	return images, nil
+	return images, resources, nil
 }
 
 func clusterSSHLonghornManagerCommand(container map[string]any) (clusterSSHLonghornManagerImages, bool) {

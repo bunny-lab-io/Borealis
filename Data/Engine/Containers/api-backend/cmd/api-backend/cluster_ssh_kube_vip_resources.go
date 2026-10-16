@@ -56,7 +56,7 @@ func clusterSSHKubeVIPResourceSpec(spec map[string]any, node string) (clusterSSH
 			return clusterSSHApplicationResource{}, false
 		}
 	} else {
-		if !clusterSSHStorageName(node) || spec["nodeName"] != node || !clusterSSHKubeVIPNodeAffinity(spec["affinity"], node) || !clusterSSHKubeVIPTolerations(spec["tolerations"]) {
+		if !clusterSSHStorageName(node) || spec["nodeName"] != node || !clusterSSHDaemonSetNodeAffinity(spec["affinity"], node) || !clusterSSHDaemonSetTolerations(spec["tolerations"], true) {
 			return clusterSSHApplicationResource{}, false
 		}
 	}
@@ -71,7 +71,7 @@ func clusterSSHKubeVIPResourceSpec(spec map[string]any, node string) (clusterSSH
 	return clusterSSHWorkloadResources("kube-vip", container["resources"])
 }
 
-func clusterSSHKubeVIPNodeAffinity(raw any, node string) bool {
+func clusterSSHDaemonSetNodeAffinity(raw any, node string) bool {
 	if !clusterSSHStorageName(node) {
 		return false
 	}
@@ -80,9 +80,13 @@ func clusterSSHKubeVIPNodeAffinity(raw any, node string) bool {
 	return err == nil && string(canonical) == `{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchFields":[{"key":"metadata.name","operator":"In","values":[`+string(name)+`]}]}]}}}`
 }
 
-func clusterSSHKubeVIPTolerations(raw any) bool {
+func clusterSSHDaemonSetTolerations(raw any, hostNetwork bool) bool {
+	count := 6
+	if hostNetwork {
+		count++
+	}
 	values, ok := raw.([]any)
-	if !ok || len(values) != 7 {
+	if !ok || len(values) != count {
 		return false
 	}
 	seen := map[string]bool{}
@@ -93,7 +97,11 @@ func clusterSSHKubeVIPTolerations(raw any) bool {
 		switch key {
 		case "node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable":
 			effect = "NoExecute"
-		case "node.kubernetes.io/disk-pressure", "node.kubernetes.io/memory-pressure", "node.kubernetes.io/pid-pressure", "node.kubernetes.io/unschedulable", "node.kubernetes.io/network-unavailable":
+		case "node.kubernetes.io/disk-pressure", "node.kubernetes.io/memory-pressure", "node.kubernetes.io/pid-pressure", "node.kubernetes.io/unschedulable":
+		case "node.kubernetes.io/network-unavailable":
+			if !hostNetwork {
+				return false
+			}
 		default:
 			return false
 		}

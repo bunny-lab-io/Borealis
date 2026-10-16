@@ -24,7 +24,7 @@ func clusterSSHLonghornManagerPodsPathValid(path string) bool {
 // Query only the frozen active sources: replacement does not require a running
 // Pod on the failed member or a candidate. Selectors restrict transport, never
 // replace independent object ownership, node, readiness and image checks.
-func observeClusterSSHLonghornManagerRuntime(readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, owner clusterSSHStorageIdentity, images clusterSSHLonghornManagerImages) (string, string, error) {
+func observeClusterSSHLonghornManagerRuntime(readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, owner clusterSSHStorageIdentity, images clusterSSHLonghornManagerImages, resources clusterSSHLonghornManagerResources) (string, string, error) {
 	fail := func() (string, string, error) { return "", "", clusterbootstrap.ErrPreparationConfig }
 	if readList == nil || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
@@ -41,6 +41,9 @@ func observeClusterSSHLonghornManagerRuntime(readList func(string, string, strin
 			return fail()
 		}
 		pod := pods[0]
+		if !clusterSSHLonghornManagerPodResources(resources, pod, member.Name) {
+			return fail()
+		}
 		id, ok := clusterSSHStorageMetadata(pod, "v1", "Pod", "longhorn-system")
 		metadata := clusterSSHStorageMap(pod, "metadata")
 		if !ok || ids[id.UID] || clusterSSHStorageMap(metadata, "labels")["app"] != "longhorn-manager" {
