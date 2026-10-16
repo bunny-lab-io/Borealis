@@ -23,6 +23,8 @@ BOUNDS = {"requests": {"cpu": "100m", "memory": "64Mi"}, "limits": {"cpu": "0.2"
 CERT_BOUNDS = {"requests": {"cpu": "50m", "memory": "32Mi"}, "limits": {"cpu": "0.1", "memory": "64Mi"}}
 WEBHOOK_BOUNDS = {"requests": {"cpu": "20m", "memory": "16Mi"}, "limits": {"cpu": "0.075", "memory": "48Mi"}}
 CAINJECTOR_BOUNDS = {"requests": {"cpu": "30m", "memory": "24Mi"}, "limits": {"cpu": "0.15", "memory": "72Mi"}}
+MANAGER_BOUNDS = {"requests": {"cpu": "150m", "memory": "96Mi"}, "limits": {"cpu": "0.4", "memory": "192Mi"}}
+PREPULL_BOUNDS = {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"cpu": "0.025", "memory": "24Mi"}}
 MANIFEST = """apiVersion: v1
 kind: Namespace
 metadata:
@@ -83,6 +85,39 @@ spec:
       containers:
         - name: cert-manager-cainjector
           image: quay.io/jetstack/cert-manager-cainjector:v1.21.1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unrelated
+data:
+  resources: unchanged
+"""
+
+
+LONGHORN_MANIFEST = """apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: longhorn-manager
+  name: longhorn-manager
+  namespace: longhorn-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: longhorn-manager
+        image: docker.io/longhornio/longhorn-manager:v1.12.0
+        securityContext:
+          privileged: true
+      - name: pre-pull-share-manager-image
+        image: docker.io/longhornio/longhorn-share-manager:v1.12.0
+        command: ["sh", "-c", "echo share-manager image pulled && sleep infinity"]
+      priorityClassName: longhorn-critical
+      serviceAccountName: longhorn-service-account
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 100%
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -200,10 +235,46 @@ class SystemUpgradeResourceTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(result.stdout, "")
 
+    def test_longhorn_render_preserves_other_fields_and_requires_both_bounds(self):
+        render = RENDERER.render_longhorn_manager
+        rendered = list(yaml.safe_load_all(render(LONGHORN_MANIFEST, json.dumps(MANAGER_BOUNDS), json.dumps(PREPULL_BOUNDS))))
+        containers = rendered[0]["spec"]["template"]["spec"]["containers"]
+        self.assertEqual(containers[0].pop("resources"), MANAGER_BOUNDS)
+        self.assertEqual(containers[1].pop("resources"), PREPULL_BOUNDS)
+        self.assertEqual(rendered, list(yaml.safe_load_all(LONGHORN_MANIFEST)))
+        for template in (LONGHORN_MANIFEST.replace("kind: DaemonSet", "kind: Deployment"),
+                         LONGHORN_MANIFEST.replace("  namespace: longhorn-system", "  namespace: other"),
+                         LONGHORN_MANIFEST.replace("  name: longhorn-manager\n", "  name: other\n"),
+                         LONGHORN_MANIFEST.replace("      - name: longhorn-manager", "      - name: other"),
+                         LONGHORN_MANIFEST.replace("      - name: pre-pull-share-manager-image", "      - name: other"),
+                         LONGHORN_MANIFEST + "\n---\n" + LONGHORN_MANIFEST,
+                         render(LONGHORN_MANIFEST, json.dumps(MANAGER_BOUNDS), json.dumps(PREPULL_BOUNDS))):
+            with self.subTest(template=template), self.assertRaises(ValueError):
+                render(template, json.dumps(MANAGER_BOUNDS), json.dumps(PREPULL_BOUNDS))
+        for manager, prepull in (("{}", json.dumps(PREPULL_BOUNDS)), (json.dumps(MANAGER_BOUNDS), "{}")):
+            with self.assertRaises(ValueError):
+                render(LONGHORN_MANIFEST, manager, prepull)
+
+    def test_longhorn_cli_never_emits_partially_bounded_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "manifest.yaml"
+            for mode in ("valid", "missing prepull", "invalid prepull"):
+                path.write_text(LONGHORN_MANIFEST.replace("      - name: pre-pull-share-manager-image", "      - name: other") if mode == "missing prepull" else LONGHORN_MANIFEST)
+                result = subprocess.run([sys.executable, str(CLUSTER / "render-system-upgrade.py"),
+                                         "longhorn-manager-manifest", str(path), json.dumps(MANAGER_BOUNDS),
+                                         "{}" if mode == "invalid prepull" else json.dumps(PREPULL_BOUNDS)], capture_output=True, text=True)
+                if mode == "valid":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    containers = list(yaml.safe_load_all(result.stdout))[0]["spec"]["template"]["spec"]["containers"]
+                    self.assertEqual([c["resources"] for c in containers], [MANAGER_BOUNDS, PREPULL_BOUNDS])
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+
     def test_workflow_preflight_precedes_mutation(self):
         script = (CLUSTER / "cluster-node-workflow.sh").read_text()
-        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}"', script)
-        for prefix in ('upgrade_resources="', 'cert_resources="', 'webhook_resources="', 'cainjector_resources="'):
+        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" "${manager_resources}" "${prepull_resources}"', script)
+        for prefix in ('upgrade_resources="', 'cert_resources="', 'webhook_resources="', 'cainjector_resources="', 'manager_resources="', 'prepull_resources="'):
             assignment = next(line for line in script.splitlines() if line.startswith(prefix))
             self.assertLess(script.index(assignment), script.index('install -d -m 0700'))
             with tempfile.TemporaryDirectory() as temp:
@@ -213,11 +284,11 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
 
     def test_actual_apply_path_requires_frozen_bounds_and_checksum(self):
-        for component in ("system-upgrade-controller", "cert-manager", "cert-manager-webhook", "cert-manager-cainjector"):
+        for component in ("system-upgrade-controller", "cert-manager", "cert-manager-webhook", "cert-manager-cainjector", "longhorn-manager", "pre-pull-share-manager-image"):
             self.check_apply_path(component)
 
     def check_apply_path(self, component):
-        dependency = "system-upgrade-controller" if component == "system-upgrade-controller" else "cert-manager"
+        dependency = "longhorn" if component in ("longhorn-manager", "pre-pull-share-manager-image") else ("system-upgrade-controller" if component == "system-upgrade-controller" else "cert-manager")
         for mode in ("valid", "canonical rewrite", "missing", "invalid", "caller drift", "download drift", "removed during download", "bad checksum", "template drift", "other missing", "other download drift", "legacy caller"):
             with self.subTest(component=component, mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = pathlib.Path(temp)
@@ -235,10 +306,14 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                 webhook_source.write_text(json.dumps(WEBHOOK_BOUNDS))
                 cainjector_source = deploy / "cert-manager-cainjector-resources.json"
                 cainjector_source.write_text(json.dumps(CAINJECTOR_BOUNDS))
-                sources = {"system-upgrade-controller": upgrade_source, "cert-manager": cert_source, "cert-manager-webhook": webhook_source, "cert-manager-cainjector": cainjector_source}
+                manager_source = deploy / "longhorn-manager-resources.json"
+                manager_source.write_text(json.dumps(MANAGER_BOUNDS))
+                prepull_source = deploy / "longhorn-pre-pull-resources.json"
+                prepull_source.write_text(json.dumps(PREPULL_BOUNDS))
+                sources = {"system-upgrade-controller": upgrade_source, "cert-manager": cert_source, "cert-manager-webhook": webhook_source, "cert-manager-cainjector": cainjector_source, "longhorn-manager": manager_source, "pre-pull-share-manager-image": prepull_source}
                 source = sources[component]
                 other_source = cert_source if component == "cert-manager-webhook" else webhook_source
-                template = CERT_MANIFEST if dependency == "cert-manager" else MANIFEST
+                template = LONGHORN_MANIFEST if dependency == "longhorn" else (CERT_MANIFEST if dependency == "cert-manager" else MANIFEST)
                 payload = template
                 if mode == "template drift":
                     payload = template.replace(f"  name: {component}\n", "  name: other\n") if dependency == "cert-manager" else template.replace("name:", "renamed:")
@@ -276,10 +351,10 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                 if mode == "other missing": other_source.unlink()
                 calls, applied = root / "calls", root / "applied.yaml"
                 command = ["bash", str(cluster / "apply-pinned-dependencies.sh")]
-                command.extend(RENDERER.resources(json.dumps(bounds)) for bounds in (BOUNDS, CERT_BOUNDS, WEBHOOK_BOUNDS, CAINJECTOR_BOUNDS))
-                if mode == "caller drift": command[{"system-upgrade-controller": 2, "cert-manager": 3, "cert-manager-webhook": 4, "cert-manager-cainjector": 5}[component]] = '{}'
+                command.extend(RENDERER.resources(json.dumps(bounds)) for bounds in (BOUNDS, CERT_BOUNDS, WEBHOOK_BOUNDS, CAINJECTOR_BOUNDS, MANAGER_BOUNDS, PREPULL_BOUNDS))
+                if mode == "caller drift": command[{"system-upgrade-controller": 2, "cert-manager": 3, "cert-manager-webhook": 4, "cert-manager-cainjector": 5, "longhorn-manager": 6, "pre-pull-share-manager-image": 7}[component]] = '{}'
                 if mode == "canonical rewrite": command = command[:2]  # Standalone entrypoint snapshots all files.
-                if mode == "legacy caller": command = command[:5]
+                if mode == "legacy caller": command = command[:6]
                 env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], BOREALIS_KUBECTL_BIN=str(kubectl),
                            TEST_DOWNLOAD=str(root / "downloaded"), TEST_MANIFEST=str(manifest), TEST_SOURCE=str(source), TEST_OTHER_SOURCE=str(other_source), TEST_MODE=mode, TEST_CALLS=str(calls), TEST_APPLIED=str(applied))
                 result = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -287,12 +362,15 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
                 if valid:
                     docs = list(yaml.safe_load_all(applied.read_text()))
-                    expected = ((0, CERT_BOUNDS), (1, WEBHOOK_BOUNDS), (2, CAINJECTOR_BOUNDS)) if dependency == "cert-manager" else ((1, BOUNDS),)
-                    for index, bounds in expected:
-                        container = docs[index]["spec"]["template"]["spec"]["containers"][0]
+                    expected = ((0, 0, CERT_BOUNDS), (1, 0, WEBHOOK_BOUNDS), (2, 0, CAINJECTOR_BOUNDS)) if dependency == "cert-manager" else (((0, 0, MANAGER_BOUNDS), (0, 1, PREPULL_BOUNDS)) if dependency == "longhorn" else ((1, 0, BOUNDS),))
+                    for index, container_index, bounds in expected:
+                        container = docs[index]["spec"]["template"]["spec"]["containers"][container_index]
                         self.assertEqual(container.pop("resources"), bounds)
                     self.assertEqual(docs, list(yaml.safe_load_all(template)))
                     self.assertEqual(calls.read_text().count('apply '), 1)
+                    if dependency == "longhorn":
+                        self.assertTrue(calls.read_text().splitlines()[0].startswith('apply -f '))
+                        self.assertNotIn('--server-side', calls.read_text())
                 else:
                     self.assertFalse(calls.exists(), result.stderr)
                     self.assertFalse(applied.exists())

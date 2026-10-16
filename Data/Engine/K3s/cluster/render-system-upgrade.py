@@ -102,6 +102,28 @@ def render_cert_manager_deployment(manifest, bounds, name):
     return "\n---\n".join(documents)
 
 
+def render_longhorn_manager(manifest, manager_bounds, prepull_bounds):
+    # Caller verifies the lock checksum. Edit only the two persistent containers
+    # in the fixed DaemonSet; preserve all storage, privilege and rollout fields.
+    documents = manifest.split("\n---\n")
+    identity = "  name: longhorn-manager\n  namespace: longhorn-system\nspec:\n"
+    matches = [i for i, document in enumerate(documents)
+               if "kind: DaemonSet\nmetadata:\n" in document and identity in document]
+    if len(matches) != 1:
+        raise ValueError("unexpected pinned Longhorn manager DaemonSet")
+    index = matches[0]
+    document = documents[index]
+    if "        resources:" in document:
+        raise ValueError("unexpected bounded Longhorn manager template")
+    for name, bounds in (("longhorn-manager", manager_bounds), ("pre-pull-share-manager-image", prepull_bounds)):
+        marker = f"      - name: {name}\n"
+        if document.count(marker) != 1:
+            raise ValueError("unexpected pinned Longhorn manager container")
+        document = document.replace(marker, marker + "        resources: " + resources(bounds) + "\n")
+    documents[index] = document
+    return "\n---\n".join(documents)
+
+
 def main():
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "config":
@@ -112,6 +134,8 @@ def main():
             controller = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
             webhook = render_cert_manager_webhook(controller, sys.argv[4])
             result = render_cert_manager_cainjector(webhook, sys.argv[5])
+        elif len(sys.argv) == 5 and sys.argv[1] == "longhorn-manager-manifest":
+            result = render_longhorn_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3], sys.argv[4])
         else:
             raise ValueError("invalid renderer arguments")
     except (ValueError, KeyError, TypeError, OSError):

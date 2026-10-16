@@ -11,6 +11,8 @@ resource_source="${repo_root}/Engine/Deploy/system-upgrade-resources.json"
 cert_resource_source="${repo_root}/Engine/Deploy/cert-manager-controller-resources.json"
 webhook_resource_source="${repo_root}/Engine/Deploy/cert-manager-webhook-resources.json"
 cainjector_resource_source="${repo_root}/Engine/Deploy/cert-manager-cainjector-resources.json"
+manager_resource_source="${repo_root}/Engine/Deploy/longhorn-manager-resources.json"
+prepull_resource_source="${repo_root}/Engine/Deploy/longhorn-pre-pull-resources.json"
 resource_renderer="${script_dir}/render-system-upgrade.py"
 # Validate before downloading or applying any dependency; caller may freeze an
 # earlier workflow observation. Never source configuration as shell code.
@@ -18,7 +20,9 @@ upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")
 cert_resources="$(python3 "${resource_renderer}" config "${cert_resource_source}")"
 webhook_resources="$(python3 "${resource_renderer}" config "${webhook_resource_source}")"
 cainjector_resources="$(python3 "${resource_renderer}" config "${cainjector_resource_source}")"
-[[ "$#" -eq 0 || ( "$#" -eq 4 && "$1" == "${upgrade_resources}" && "$2" == "${cert_resources}" && "$3" == "${webhook_resources}" && "$4" == "${cainjector_resources}" ) ]] || {
+manager_resources="$(python3 "${resource_renderer}" config "${manager_resource_source}")"
+prepull_resources="$(python3 "${resource_renderer}" config "${prepull_resource_source}")"
+[[ "$#" -eq 0 || ( "$#" -eq 6 && "$1" == "${upgrade_resources}" && "$2" == "${cert_resources}" && "$3" == "${webhook_resources}" && "$4" == "${cainjector_resources}" && "$5" == "${manager_resources}" && "$6" == "${prepull_resources}" ) ]] || {
   printf 'Controller resource source changed before dependency apply.\n' >&2
   exit 1
 }
@@ -45,12 +49,17 @@ apply_manifest() {
   elif [[ "${name}" == "cert-manager" ]]; then
     python3 "${resource_renderer}" cert-manager-manifest "${target}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" > "${target}.bounded"
     target="${target}.bounded"
+  elif [[ "${name}" == "longhorn" ]]; then
+    python3 "${resource_renderer}" longhorn-manager-manifest "${target}" "${manager_resources}" "${prepull_resources}" > "${target}.bounded"
+    target="${target}.bounded"
   fi
   current_upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")"
   current_cert_resources="$(python3 "${resource_renderer}" config "${cert_resource_source}")"
   current_webhook_resources="$(python3 "${resource_renderer}" config "${webhook_resource_source}")"
   current_cainjector_resources="$(python3 "${resource_renderer}" config "${cainjector_resource_source}")"
-  [[ "${current_upgrade_resources}" == "${upgrade_resources}" && "${current_cert_resources}" == "${cert_resources}" && "${current_webhook_resources}" == "${webhook_resources}" && "${current_cainjector_resources}" == "${cainjector_resources}" ]] || {
+  current_manager_resources="$(python3 "${resource_renderer}" config "${manager_resource_source}")"
+  current_prepull_resources="$(python3 "${resource_renderer}" config "${prepull_resource_source}")"
+  [[ "${current_upgrade_resources}" == "${upgrade_resources}" && "${current_cert_resources}" == "${cert_resources}" && "${current_webhook_resources}" == "${webhook_resources}" && "${current_cainjector_resources}" == "${cainjector_resources}" && "${current_manager_resources}" == "${manager_resources}" && "${current_prepull_resources}" == "${prepull_resources}" ]] || {
     printf 'Controller resource source changed during dependency preparation.\n' >&2
     exit 1
   }
