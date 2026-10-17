@@ -45,6 +45,26 @@ if [[ "${operation}" == "redeploy" ]]; then
   exit 0
 fi
 
+# Reuse the deployed Engine renderer's calculated caps and existing requests.
+# Validate before cluster configuration, service restarts or Kubernetes writes.
+render_postgres_manifest() {
+  k3s kubectl -n "${namespace}" get statefulset/postgres-db -o json \
+    | python3 "${script_dir}/render-postgres.py" "${script_dir}/postgres.yaml" "${active_size}"
+}
+postgres_manifest="$(render_postgres_manifest)"
+
+# Source-owned operator bounds must exist before conversion mutates this host.
+upgrade_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/system-upgrade-resources.json")"
+cert_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/cert-manager-controller-resources.json")"
+webhook_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/cert-manager-webhook-resources.json")"
+cainjector_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/cert-manager-cainjector-resources.json")"
+
+manager_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-manager-resources.json")"
+prepull_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-pre-pull-resources.json")"
+ui_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-ui-resources.json")"
+driver_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-driver-deployer-resources.json")"
+wait_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-driver-wait-resources.json")"
+
 python3 - "${cluster_vip}" "${management_cidr}" <<'PY'
 import ipaddress, sys
 cluster = ipaddress.ip_address(sys.argv[1])
@@ -74,7 +94,7 @@ for attempt in {1..120}; do
   sleep 2
 done
 
-"${script_dir}/apply-pinned-dependencies.sh"
+"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" "${manager_resources}" "${prepull_resources}" "${ui_resources}" "${driver_resources}" "${wait_resources}"
 k3s kubectl wait --for=condition=Established crd/volumesnapshotclasses.snapshot.storage.k8s.io --timeout=2m
 k3s kubectl wait --for=condition=Established crd/volumesnapshotcontents.snapshot.storage.k8s.io --timeout=2m
 k3s kubectl wait --for=condition=Established crd/volumesnapshots.snapshot.storage.k8s.io --timeout=2m
@@ -123,6 +143,9 @@ for attempt in {1..60}; do
 done
 k3s kubectl --server="https://${cluster_vip}:6443" get --raw=/readyz >/dev/null
 
+current_postgres_manifest="$(render_postgres_manifest)"
+[[ "${current_postgres_manifest}" == "${postgres_manifest}" ]] || { printf 'PostgreSQL resource source changed during cluster enable; retry after source stabilizes.\n' >&2; exit 1; }
+
 postgres_user="$(awk -F= '$1 == "POSTGRES_USER" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
 postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
 postgres_database="$(awk -F= '$1 == "POSTGRES_DB" {print substr($0, index($0, "=") + 1); exit}' "${repo_root}/Engine/Deploy/runtime.env")"
@@ -131,26 +154,7 @@ k3s kubectl -n "${namespace}" create secret generic borealis-postgres-app \
   --from-literal=username="${postgres_user}" --from-literal=password="${postgres_password}" \
   --dry-run=client -o yaml | k3s kubectl apply -f -
 
-postgres_manifest="$(mktemp)"
-python3 - "${script_dir}/postgres.yaml" "${postgres_manifest}" "${active_size}" <<'PY'
-import pathlib, sys
-source, target, size = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
-text = source.read_text(encoding="utf-8").replace("instances: 3", f"instances: {size}", 1)
-marker = "    # BOREALIS_SYNCHRONOUS_CONFIGURATION"
-sync = ""
-if size == 3:
-    sync = "\n".join((
-        "    synchronous:",
-        "      method: any",
-        "      number: 1",
-        "      dataDurability: required",
-    ))
-if marker not in text:
-    raise SystemExit("CloudNativePG synchronous configuration marker missing")
-target.write_text(text.replace(marker, sync), encoding="utf-8")
-PY
-k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f "${postgres_manifest}"
-find "$(dirname -- "${postgres_manifest}")" -maxdepth 1 -type f -name "$(basename -- "${postgres_manifest}")" -delete
+printf '%s\n' "${postgres_manifest}" | k3s kubectl apply --server-side --field-manager=borealis-cluster-bootstrap -f -
 k3s kubectl -n "${namespace}" wait --for=condition=Ready "cluster/borealis-postgres" --timeout=10m
 
 migration_dir="${repo_root}/Engine/Backups/ClusterMigration"
