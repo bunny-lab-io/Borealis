@@ -6,8 +6,10 @@ const clusterSSHLonghornUIPath = "/apis/apps/v1/namespaces/longhorn-system/deplo
 
 // Observe desired configuration and owned running images. EmptyDir demand and
 // effective loaded inputs remain separate evidence; this grants no readiness.
-func observeClusterSSHLonghornUIImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (string, string, error) {
-	fail := func() (string, string, error) { return "", "", clusterbootstrap.ErrPreparationConfig }
+func observeClusterSSHLonghornUIImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (string, string, clusterSSHLonghornUIResources, error) {
+	fail := func() (string, string, clusterSSHLonghornUIResources, error) {
+		return "", "", clusterSSHLonghornUIResources{}, clusterbootstrap.ErrPreparationConfig
+	}
 	object, err := read(clusterSSHLonghornUIPath)
 	metadata, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 	if err != nil || !ok || metadata.Name != "longhorn-ui" {
@@ -17,11 +19,15 @@ func observeClusterSSHLonghornUIImage(read func(string) (map[string]any, error),
 	if err != nil {
 		return fail()
 	}
-	resolved, err := observeClusterSSHLonghornUIRuntime(read, readList, source, metadata, image)
+	plan, valid := clusterSSHLonghornUIResourcePlan(object)
+	if !valid {
+		return fail()
+	}
+	resolved, plan, err := observeClusterSSHLonghornUIRuntime(read, readList, source, metadata, image, plan)
 	if err != nil {
 		return fail()
 	}
-	return image, resolved, nil
+	return image, resolved, plan, nil
 }
 
 func clusterSSHLonghornUITemplateImage(object map[string]any) (string, error) {

@@ -136,6 +136,7 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 	source clusterSSHPreparationSnapshotRead, consume func(context.Context, []clusterSSHTargetHostEvidence) error) error {
 	var retained []clusterSSHApplicationResource
 	var manager clusterSSHLonghornManagerResources
+	var ui clusterSSHLonghornUIResources
 	var postgres, kubeVIP clusterSSHApplicationResource
 	var operator clusterSSHCNPGOperatorResources
 	var upgrade clusterSSHSystemUpgradeResources
@@ -155,12 +156,13 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		var ok bool
 		cpu, memory, ok = clusterSSHDesiredWorkerWorkloadBudget(v)
 		if err != nil || !ok || !clusterSSHSourceObservationRE.MatchString(v.Storage.Observation) ||
-			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || upgrade != v.Storage.Requirements.SystemUpgradeResources || snapshot != v.Storage.Requirements.SnapshotResources || certManager != v.Storage.Requirements.CertManagerResources || webhook != v.Storage.Requirements.CertManagerWebhookResources || cainjector != v.Storage.Requirements.CertManagerCainjectorResources || kubeVIP != v.Storage.Requirements.KubeVIP.Resources || manager != v.Storage.Requirements.LonghornManagerResources || observation != v.Storage.Observation)) {
+			(retained != nil && (!slices.Equal(retained, values) || !slices.Equal(workers, v.Storage.Requirements.SiteWorkers) || !slices.Equal(sites, v.DesiredWorkerSites) || policy != v.Storage.Requirements.WorkerPolicy || postgres != v.Storage.Requirements.PostgresResources || operator != v.Storage.Requirements.CNPGOperatorResources || upgrade != v.Storage.Requirements.SystemUpgradeResources || snapshot != v.Storage.Requirements.SnapshotResources || certManager != v.Storage.Requirements.CertManagerResources || webhook != v.Storage.Requirements.CertManagerWebhookResources || cainjector != v.Storage.Requirements.CertManagerCainjectorResources || kubeVIP != v.Storage.Requirements.KubeVIP.Resources || manager != v.Storage.Requirements.LonghornManagerResources || ui != v.Storage.Requirements.LonghornUIResources || observation != v.Storage.Observation)) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		retained, observation = slices.Clone(values), v.Storage.Observation
 		postgres = v.Storage.Requirements.PostgresResources
 		manager = v.Storage.Requirements.LonghornManagerResources
+		ui = v.Storage.Requirements.LonghornUIResources
 		kubeVIP = v.Storage.Requirements.KubeVIP.Resources
 		operator = v.Storage.Requirements.CNPGOperatorResources
 		upgrade = v.Storage.Requirements.SystemUpgradeResources

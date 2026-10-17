@@ -23,7 +23,7 @@ func sshLonghornUIRuntimeFixture(f *sshStorageFixture) {
 		meta := clusterSSHStorageMap(pod, "metadata")
 		meta["labels"] = map[string]any{"app": "longhorn-ui"}
 		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "longhorn-ui-abcdef", "uid": clusterSSHStorageMap(rs, "metadata")["uid"], "controller": true}}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-ui-service-account", "containers": []any{map[string]any{"name": "longhorn-ui", "image": image}}}
+		pod["spec"] = map[string]any{"affinity": sshLonghornUIResourceAffinity(), "priorityClassName": "longhorn-critical", "priority": 1000000000, "nodeName": member.Name, "serviceAccountName": "longhorn-ui-service-account", "containers": []any{map[string]any{"name": "longhorn-ui", "resources": sshLonghornUIResources(), "image": image}}}
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": "longhorn-ui", "image": image, "imageID": "docker.io/longhornio/longhorn-ui@" + sshLonghornDriverPin("longhorn-ui").ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
 		f.objects[clusterSSHLonghornUIPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}

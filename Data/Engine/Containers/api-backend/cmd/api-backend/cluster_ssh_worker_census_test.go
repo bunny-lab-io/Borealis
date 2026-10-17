@@ -88,6 +88,8 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			wantMemory += 128 << 20
 			wantCPU += 155
 			wantMemory += 216 << 20
+			wantCPU += 45
+			wantMemory += 120 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

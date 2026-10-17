@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -15,8 +16,9 @@ func sshLonghornUIFixture() map[string]any {
 		mounts = append(mounts, map[string]any{"name": entry[0], "mountPath": entry[1]})
 		volumes = append(volumes, map[string]any{"name": entry[0], "emptyDir": map[string]any{}})
 	}
-	object["spec"] = map[string]any{"template": map[string]any{"spec": map[string]any{
-		"containers": []any{map[string]any{"name": "longhorn-ui", "image": sshLonghornDriverPin("longhorn-ui").Reference,
+	object["spec"] = map[string]any{"replicas": json.Number("2"), "template": map[string]any{"spec": map[string]any{
+		"serviceAccountName": "longhorn-ui-service-account", "priorityClassName": "longhorn-critical", "affinity": sshLonghornUIResourceAffinity(),
+		"containers": []any{map[string]any{"name": "longhorn-ui", "resources": sshLonghornUIResources(), "image": sshLonghornDriverPin("longhorn-ui").Reference,
 			"env":          []any{map[string]any{"name": "LONGHORN_MANAGER_IP", "value": "http://longhorn-backend:9500"}, map[string]any{"name": "LONGHORN_UI_PORT", "value": "8000"}},
 			"volumeMounts": mounts}}, "volumes": volumes,
 	}}}
