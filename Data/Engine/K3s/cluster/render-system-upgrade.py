@@ -124,6 +124,24 @@ def render_longhorn_manager(manifest, manager_bounds, prepull_bounds):
     return "\n---\n".join(documents)
 
 
+def render_longhorn_ui(manifest, bounds):
+    # Fixed checksum-verified Deployment only. Preserve replicas, soft placement,
+    # service account, nginx configuration, mounts and every other Longhorn object.
+    documents = manifest.split("\n---\n")
+    identity = "  name: longhorn-ui\n  namespace: longhorn-system\nspec:\n"
+    matches = [i for i, document in enumerate(documents)
+               if "kind: Deployment\nmetadata:\n" in document and identity in document]
+    if len(matches) != 1:
+        raise ValueError("unexpected pinned Longhorn UI Deployment")
+    index = matches[0]
+    document = documents[index]
+    marker = "      - name: longhorn-ui\n"
+    if document.count(marker) != 1 or "        resources:" in document:
+        raise ValueError("unexpected pinned Longhorn UI container")
+    documents[index] = document.replace(marker, marker + "        resources: " + resources(bounds) + "\n")
+    return "\n---\n".join(documents)
+
+
 def main():
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "config":
@@ -134,8 +152,9 @@ def main():
             controller = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
             webhook = render_cert_manager_webhook(controller, sys.argv[4])
             result = render_cert_manager_cainjector(webhook, sys.argv[5])
-        elif len(sys.argv) == 5 and sys.argv[1] == "longhorn-manager-manifest":
-            result = render_longhorn_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3], sys.argv[4])
+        elif len(sys.argv) == 6 and sys.argv[1] == "longhorn-manifest":
+            manager = render_longhorn_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3], sys.argv[4])
+            result = render_longhorn_ui(manager, sys.argv[5])
         else:
             raise ValueError("invalid renderer arguments")
     except (ValueError, KeyError, TypeError, OSError):

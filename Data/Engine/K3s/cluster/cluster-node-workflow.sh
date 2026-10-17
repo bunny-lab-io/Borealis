@@ -61,6 +61,7 @@ cainjector_resources="$(python3 "${script_dir}/render-system-upgrade.py" config 
 
 manager_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-manager-resources.json")"
 prepull_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-pre-pull-resources.json")"
+ui_resources="$(python3 "${script_dir}/render-system-upgrade.py" config "${repo_root}/Engine/Deploy/longhorn-ui-resources.json")"
 
 python3 - "${cluster_vip}" "${management_cidr}" <<'PY'
 import ipaddress, sys
@@ -91,7 +92,7 @@ for attempt in {1..120}; do
   sleep 2
 done
 
-"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" "${manager_resources}" "${prepull_resources}"
+"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" "${manager_resources}" "${prepull_resources}" "${ui_resources}"
 k3s kubectl wait --for=condition=Established crd/volumesnapshotclasses.snapshot.storage.k8s.io --timeout=2m
 k3s kubectl wait --for=condition=Established crd/volumesnapshotcontents.snapshot.storage.k8s.io --timeout=2m
 k3s kubectl wait --for=condition=Established crd/volumesnapshots.snapshot.storage.k8s.io --timeout=2m
