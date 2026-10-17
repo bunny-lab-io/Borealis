@@ -142,6 +142,27 @@ def render_longhorn_ui(manifest, bounds):
     return "\n---\n".join(documents)
 
 
+def render_longhorn_driver(manifest, driver_bounds, wait_bounds):
+    # Checksum-verified Deployment only; keep the sequential wait init, driver
+    # command/image inputs, placement, service account and rollout unchanged.
+    documents = manifest.split("\n---\n")
+    identity = "kind: Deployment\nmetadata:\n  name: longhorn-driver-deployer\n  namespace: longhorn-system\n"
+    matches = [i for i, document in enumerate(documents) if identity in document]
+    if len(matches) != 1:
+        raise ValueError("unexpected pinned Longhorn driver Deployment")
+    index = matches[0]
+    document = documents[index]
+    if "          resources:" in document:
+        raise ValueError("unexpected bounded Longhorn driver template")
+    for name, bounds in (("longhorn-driver-deployer", driver_bounds), ("wait-longhorn-manager", wait_bounds)):
+        marker = f"        - name: {name}\n"
+        if document.count(marker) != 1:
+            raise ValueError("unexpected pinned Longhorn driver container")
+        document = document.replace(marker, marker + "          resources: " + resources(bounds) + "\n")
+    documents[index] = document
+    return "\n---\n".join(documents)
+
+
 def main():
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "config":
@@ -152,9 +173,10 @@ def main():
             controller = render_cert_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])
             webhook = render_cert_manager_webhook(controller, sys.argv[4])
             result = render_cert_manager_cainjector(webhook, sys.argv[5])
-        elif len(sys.argv) == 6 and sys.argv[1] == "longhorn-manifest":
+        elif len(sys.argv) == 8 and sys.argv[1] == "longhorn-manifest":
             manager = render_longhorn_manager(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3], sys.argv[4])
-            result = render_longhorn_ui(manager, sys.argv[5])
+            ui = render_longhorn_ui(manager, sys.argv[5])
+            result = render_longhorn_driver(ui, sys.argv[6], sys.argv[7])
         else:
             raise ValueError("invalid renderer arguments")
     except (ValueError, KeyError, TypeError, OSError):

@@ -14,6 +14,8 @@ cainjector_resource_source="${repo_root}/Engine/Deploy/cert-manager-cainjector-r
 manager_resource_source="${repo_root}/Engine/Deploy/longhorn-manager-resources.json"
 prepull_resource_source="${repo_root}/Engine/Deploy/longhorn-pre-pull-resources.json"
 ui_resource_source="${repo_root}/Engine/Deploy/longhorn-ui-resources.json"
+driver_resource_source="${repo_root}/Engine/Deploy/longhorn-driver-deployer-resources.json"
+wait_resource_source="${repo_root}/Engine/Deploy/longhorn-driver-wait-resources.json"
 resource_renderer="${script_dir}/render-system-upgrade.py"
 # Validate before downloading or applying any dependency; caller may freeze an
 # earlier workflow observation. Never source configuration as shell code.
@@ -24,7 +26,9 @@ cainjector_resources="$(python3 "${resource_renderer}" config "${cainjector_reso
 manager_resources="$(python3 "${resource_renderer}" config "${manager_resource_source}")"
 prepull_resources="$(python3 "${resource_renderer}" config "${prepull_resource_source}")"
 ui_resources="$(python3 "${resource_renderer}" config "${ui_resource_source}")"
-[[ "$#" -eq 0 || ( "$#" -eq 7 && "$1" == "${upgrade_resources}" && "$2" == "${cert_resources}" && "$3" == "${webhook_resources}" && "$4" == "${cainjector_resources}" && "$5" == "${manager_resources}" && "$6" == "${prepull_resources}" && "$7" == "${ui_resources}" ) ]] || {
+driver_resources="$(python3 "${resource_renderer}" config "${driver_resource_source}")"
+wait_resources="$(python3 "${resource_renderer}" config "${wait_resource_source}")"
+[[ "$#" -eq 0 || ( "$#" -eq 9 && "$1" == "${upgrade_resources}" && "$2" == "${cert_resources}" && "$3" == "${webhook_resources}" && "$4" == "${cainjector_resources}" && "$5" == "${manager_resources}" && "$6" == "${prepull_resources}" && "$7" == "${ui_resources}" && "$8" == "${driver_resources}" && "$9" == "${wait_resources}" ) ]] || {
   printf 'Controller resource source changed before dependency apply.\n' >&2
   exit 1
 }
@@ -52,7 +56,7 @@ apply_manifest() {
     python3 "${resource_renderer}" cert-manager-manifest "${target}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" > "${target}.bounded"
     target="${target}.bounded"
   elif [[ "${name}" == "longhorn" ]]; then
-    python3 "${resource_renderer}" longhorn-manifest "${target}" "${manager_resources}" "${prepull_resources}" "${ui_resources}" > "${target}.bounded"
+    python3 "${resource_renderer}" longhorn-manifest "${target}" "${manager_resources}" "${prepull_resources}" "${ui_resources}" "${driver_resources}" "${wait_resources}" > "${target}.bounded"
     target="${target}.bounded"
   fi
   current_upgrade_resources="$(python3 "${resource_renderer}" config "${resource_source}")"
@@ -62,7 +66,9 @@ apply_manifest() {
   current_manager_resources="$(python3 "${resource_renderer}" config "${manager_resource_source}")"
   current_prepull_resources="$(python3 "${resource_renderer}" config "${prepull_resource_source}")"
   current_ui_resources="$(python3 "${resource_renderer}" config "${ui_resource_source}")"
-  [[ "${current_upgrade_resources}" == "${upgrade_resources}" && "${current_cert_resources}" == "${cert_resources}" && "${current_webhook_resources}" == "${webhook_resources}" && "${current_cainjector_resources}" == "${cainjector_resources}" && "${current_manager_resources}" == "${manager_resources}" && "${current_prepull_resources}" == "${prepull_resources}" && "${current_ui_resources}" == "${ui_resources}" ]] || {
+  current_driver_resources="$(python3 "${resource_renderer}" config "${driver_resource_source}")"
+  current_wait_resources="$(python3 "${resource_renderer}" config "${wait_resource_source}")"
+  [[ "${current_upgrade_resources}" == "${upgrade_resources}" && "${current_cert_resources}" == "${cert_resources}" && "${current_webhook_resources}" == "${webhook_resources}" && "${current_cainjector_resources}" == "${cainjector_resources}" && "${current_manager_resources}" == "${manager_resources}" && "${current_prepull_resources}" == "${prepull_resources}" && "${current_ui_resources}" == "${ui_resources}" && "${current_driver_resources}" == "${driver_resources}" && "${current_wait_resources}" == "${wait_resources}" ]] || {
     printf 'Controller resource source changed during dependency preparation.\n' >&2
     exit 1
   }
