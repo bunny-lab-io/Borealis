@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -11,9 +12,9 @@ import (
 
 func sshLonghornAttacherDeploymentFixture() map[string]any {
 	object := sshStorageObject("apps/v1", "Deployment", "longhorn-system", "csi-attacher")
-	object["spec"] = map[string]any{"replicas": 3, "template": map[string]any{"spec": map[string]any{
-		"serviceAccountName": "longhorn-service-account",
-		"containers": []any{map[string]any{"name": "csi-attacher", "image": sshLonghornDriverPin("csi-attacher").Reference,
+	object["spec"] = map[string]any{"replicas": json.Number("3"), "strategy": map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": json.Number("1")}}, "template": map[string]any{"spec": map[string]any{
+		"affinity": sshLonghornAttacherResourceAffinity(), "priorityClassName": "longhorn-critical", "serviceAccountName": "longhorn-service-account",
+		"containers": []any{map[string]any{"name": "csi-attacher", "resources": sshLonghornAttacherResources(), "image": sshLonghornDriverPin("csi-attacher").Reference,
 			"args":         sshLonghornCSIStartupArgs("csi-attacher"),
 			"env":          sshLonghornCSIStartupEnv(),
 			"volumeMounts": []any{map[string]any{"name": "socket-dir", "mountPath": "/csi/"}},
@@ -45,9 +46,9 @@ func sshLonghornAttacherRuntimeFixture(f *sshStorageFixture) {
 		meta := clusterSSHStorageMap(pod, "metadata")
 		meta["labels"] = map[string]any{"app": "csi-attacher"}
 		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "csi-attacher-abcdef", "uid": clusterSSHStorageMap(rs, "metadata")["uid"], "controller": true}}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": "csi-attacher", "image": image, "args": sshLonghornCSIStartupArgs("csi-attacher"), "env": sshLonghornCSIStartupEnv()}}}
+		pod["spec"] = map[string]any{"affinity": sshLonghornAttacherResourceAffinity(), "priorityClassName": "longhorn-critical", "priority": 1000000000, "nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": "csi-attacher", "resources": sshLonghornAttacherResources(), "image": image, "args": sshLonghornCSIStartupArgs("csi-attacher"), "env": sshLonghornCSIStartupEnv()}}}
 		sshLonghornCSISocketPodFixture(pod)
-		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": "csi-attacher", "image": image, "imageID": "docker.io/longhornio/csi-attacher@" + sshLonghornDriverPin("csi-attacher").ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
+		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": "csi-attacher", "resources": sshLonghornAttacherResources(), "image": image, "imageID": "docker.io/longhornio/csi-attacher@" + sshLonghornDriverPin("csi-attacher").ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
 		f.objects[clusterSSHLonghornAttacherPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}
 }

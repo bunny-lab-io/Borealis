@@ -44,9 +44,9 @@ func clusterSSHLonghornAttacherTemplateImage(object map[string]any) (string, err
 	return image, nil
 }
 
-func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHSourceExternalImage, string, error) {
-	fail := func() (clusterSSHSourceExternalImage, string, error) {
-		return clusterSSHSourceExternalImage{}, "", clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages) (clusterSSHSourceExternalImage, string, clusterSSHLonghornAttacherResources, error) {
+	fail := func() (clusterSSHSourceExternalImage, string, clusterSSHLonghornAttacherResources, error) {
+		return clusterSSHSourceExternalImage{}, "", clusterSSHLonghornAttacherResources{}, clusterbootstrap.ErrPreparationConfig
 	}
 	object, err := read(clusterSSHLonghornAttacherPath)
 	owner, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
@@ -58,16 +58,36 @@ func observeClusterSSHLonghornAttacherImage(read func(string) (map[string]any, e
 	if err != nil || !socketOK || image != driver.Attacher {
 		return fail()
 	}
-	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
+	plan, valid := clusterSSHLonghornAttacherResourcePlan(object)
+	if !valid || readList == nil {
+		return fail()
+	}
+	checkedList := func(path, kind, namespace string, limit int) ([]map[string]any, error) {
+		pods, err := readList(path, kind, namespace, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, pod := range pods {
+			if !clusterSSHBoundedPodResources(plan.Envelope, pod, "csi-attacher", "") {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
+		}
+		plan.Observed += uint64(len(pods))
+		return pods, nil
+	}
+	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 		namespace: "longhorn-system", labelKey: "app",
 		name: "csi-attacher", serviceAccount: "longhorn-service-account", repository: clusterSSHLonghornAttacherRepository,
-		specValid:      clusterSSHLonghornCSISocketMatches(socket),
+		specValid: func(spec map[string]any, pod bool) bool {
+			envelope, ok := clusterSSHLonghornAttacherResourceSpec(spec, pod)
+			return ok && envelope == plan.Envelope && clusterSSHLonghornCSISocketMatches(socket)(spec, pod)
+		},
 		containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, "csi-attacher") },
 		podsPath:       clusterSSHLonghornAttacherPodsPath, replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
 		replicaSetPathValid: clusterSSHLonghornAttacherReplicaSetPathValid, templateImage: clusterSSHLonghornAttacherTemplateImage,
 	})
-	if err != nil {
+	if _, _, valid := plan.budget(); err != nil || !valid {
 		return fail()
 	}
-	return clusterSSHSourceExternalImage{Configured: image, Resolved: resolved}, socket, nil
+	return clusterSSHSourceExternalImage{Configured: image, Resolved: resolved}, socket, plan, nil
 }
