@@ -29,9 +29,9 @@ func sshLonghornDriverRuntimeFixture(f *sshStorageFixture) {
 		meta := clusterSSHStorageMap(pod, "metadata")
 		meta["labels"] = map[string]any{"app": "longhorn-driver-deployer"}
 		meta["ownerReferences"] = []any{map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "longhorn-driver-deployer-abcdef", "uid": clusterSSHStorageMap(rs, "metadata")["uid"], "controller": true}}
-		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": "longhorn-driver-deployer", "image": image}}}
+		pod["spec"] = map[string]any{"priorityClassName": "longhorn-critical", "priority": 1000000000, "nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": "longhorn-driver-deployer", "resources": sshLonghornDriverResources(false), "image": image}}}
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": "longhorn-driver-deployer", "image": image, "imageID": "docker.io/longhornio/longhorn-manager@" + sshLonghornDriverPin("longhorn-manager").ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
-		clusterSSHStorageMap(pod, "spec")["initContainers"] = []any{map[string]any{"name": "wait-longhorn-manager", "image": image}}
+		clusterSSHStorageMap(pod, "spec")["initContainers"] = []any{map[string]any{"name": "wait-longhorn-manager", "resources": sshLonghornDriverResources(true), "image": image}}
 		clusterSSHStorageMap(pod, "status")["initContainerStatuses"] = []any{map[string]any{"name": "wait-longhorn-manager", "image": image, "imageID": "docker.io/longhornio/longhorn-manager@" + sshLonghornDriverPin("longhorn-manager").ManifestDigest, "ready": false, "started": false, "state": map[string]any{"terminated": map[string]any{"exitCode": 0, "startedAt": "2026-10-01T00:00:00Z", "finishedAt": "2026-10-01T00:00:01Z"}}}}
 		f.objects[clusterSSHLonghornDriverPodsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}

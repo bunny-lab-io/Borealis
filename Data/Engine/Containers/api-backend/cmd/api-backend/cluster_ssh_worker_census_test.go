@@ -90,6 +90,9 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			wantMemory += 216 << 20
 			wantCPU += 45
 			wantMemory += 120 << 20
+			// Driver: two rollout slots, each max(main, sequential wait-init).
+			wantCPU += 50
+			wantMemory += 112 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

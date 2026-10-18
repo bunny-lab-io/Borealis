@@ -54,9 +54,9 @@ func clusterSSHLonghornImageValid(reference, role string) bool {
 	return false
 }
 
-func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHLonghornDriverImages, error) {
-	fail := func() (clusterSSHLonghornDriverImages, error) {
-		return clusterSSHLonghornDriverImages{}, clusterbootstrap.ErrPreparationConfig
+func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort) (clusterSSHLonghornDriverImages, clusterSSHLonghornDriverResources, error) {
+	fail := func() (clusterSSHLonghornDriverImages, clusterSSHLonghornDriverResources, error) {
+		return clusterSSHLonghornDriverImages{}, clusterSSHLonghornDriverResources{}, clusterbootstrap.ErrPreparationConfig
 	}
 	object, err := read(clusterSSHLonghornDriverPath)
 	metadata, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
@@ -67,11 +67,15 @@ func observeClusterSSHLonghornDriverImages(read func(string) (map[string]any, er
 	if err != nil {
 		return fail()
 	}
-	images.Resolved, images.InitResolved, err = observeClusterSSHLonghornDriverRuntime(read, readList, source, metadata, images)
+	plan, valid := clusterSSHLonghornDriverResourcePlan(object)
+	if !valid {
+		return fail()
+	}
+	images.Resolved, images.InitResolved, plan, err = observeClusterSSHLonghornDriverRuntime(read, readList, source, metadata, images, plan)
 	if err != nil || !images.valid() {
 		return fail()
 	}
-	return images, nil
+	return images, plan, nil
 }
 
 func clusterSSHLonghornDriverTemplateImages(object map[string]any) (clusterSSHLonghornDriverImages, error) {

@@ -268,7 +268,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.LonghornDriverImages, err = observeClusterSSHLonghornDriverImages(read, readList, source)
+	result.Requirements.LonghornDriverImages, result.Requirements.LonghornDriverResources, err = observeClusterSSHLonghornDriverImages(read, readList, source)
 	if err != nil {
 		return fail()
 	}

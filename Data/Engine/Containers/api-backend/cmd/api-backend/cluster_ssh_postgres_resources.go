@@ -215,6 +215,18 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 	if !ok {
 		return 0, 0, false
 	}
+	driverCPU, driverMemory, valid := r.LonghornDriverResources.budget()
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, driverCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, driverMemory)
+	if !ok {
+		return 0, 0, false
+	}
 	workerCPU, workerMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)
 	if !valid {
 		return 0, 0, false

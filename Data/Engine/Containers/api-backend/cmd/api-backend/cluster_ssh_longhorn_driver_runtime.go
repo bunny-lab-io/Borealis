@@ -29,10 +29,12 @@ func clusterSSHLonghornDriverReplicaSetPathValid(path string) bool {
 }
 
 // Deployment scheduling is not per-node. Require some owned running evidence,
-// but no desired replica count or Pod on a failed member/candidate. All returned
+// without requiring every desired replica or a Pod on a failed member/candidate. All returned
 // active-source Pods must pass; selectors never replace object checks.
-func observeClusterSSHLonghornDriverRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, deployment clusterSSHStorageIdentity, images clusterSSHLonghornDriverImages) (string, string, error) {
-	fail := func() (string, string, error) { return "", "", clusterbootstrap.ErrPreparationConfig }
+func observeClusterSSHLonghornDriverRuntime(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, deployment clusterSSHStorageIdentity, images clusterSSHLonghornDriverImages, plan clusterSSHLonghornDriverResources) (string, string, clusterSSHLonghornDriverResources, error) {
+	fail := func() (string, string, clusterSSHLonghornDriverResources, error) {
+		return "", "", clusterSSHLonghornDriverResources{}, clusterbootstrap.ErrPreparationConfig
+	}
 	image := images.Manager
 	if read == nil || readList == nil || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
@@ -73,12 +75,16 @@ func observeClusterSSHLonghornDriverRuntime(read func(string) (map[string]any, e
 				set, valid = clusterSSHStorageMetadata(object, "apps/v1", "ReplicaSet", "longhorn-system")
 				parent, owned := clusterSSHLonghornUIOwner(object, "Deployment")
 				configured, configErr := clusterSSHLonghornDriverTemplateImages(object)
-				if err != nil || !valid || set.Name != owner.Name || setIDs[set.UID] || !owned || parent.Name != deployment.Name || parent.UID != deployment.UID || configErr != nil || configured != images {
+				main, wait, resourcesOK := clusterSSHLonghornDriverResourceSpec(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false)
+				if err != nil || !valid || set.Name != owner.Name || setIDs[set.UID] || !owned || parent.Name != deployment.Name || parent.UID != deployment.UID || configErr != nil || configured != images || !resourcesOK || main != plan.Main || wait != plan.Wait {
 					return fail()
 				}
 				sets[owner.Name], setIDs[set.UID] = set, true
 			}
 			if set.UID != owner.UID {
+				return fail()
+			}
+			if !clusterSSHLonghornDriverPodResources(plan, pod) {
 				return fail()
 			}
 			spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
@@ -135,10 +141,11 @@ func observeClusterSSHLonghornDriverRuntime(read func(string) (map[string]any, e
 			resolved = current
 		}
 	}
-	if resolved == "" {
+	plan.Observed = uint64(count)
+	if _, _, valid := plan.budget(); resolved == "" || !valid {
 		return fail()
 	}
-	return resolved, initResolved, nil
+	return resolved, initResolved, plan, nil
 }
 
 // A completed ordinary init is not a running sidecar: do not require its

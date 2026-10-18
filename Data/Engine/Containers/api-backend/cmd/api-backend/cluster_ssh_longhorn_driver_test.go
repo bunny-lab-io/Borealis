@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -28,10 +29,11 @@ func sshLonghornDriverFixture() map[string]any {
 		env = append(env, map[string]any{"name": image[0], "value": sshLonghornDriverPin(image[1]).Reference})
 	}
 	object := sshStorageObject("apps/v1", "Deployment", "longhorn-system", "longhorn-driver-deployer")
-	object["spec"] = map[string]any{"template": map[string]any{"spec": map[string]any{
-		"containers": []any{map[string]any{"name": "longhorn-driver-deployer", "image": manager, "env": env,
+	object["spec"] = map[string]any{"replicas": json.Number("1"), "template": map[string]any{"spec": map[string]any{
+		"priorityClassName": "longhorn-critical", "serviceAccountName": "longhorn-service-account",
+		"containers": []any{map[string]any{"name": "longhorn-driver-deployer", "resources": sshLonghornDriverResources(false), "image": manager, "env": env,
 			"command": []any{"longhorn-manager", "-d", "deploy-driver", "--manager-image", manager, "--manager-url", "http://longhorn-backend:9500/v1"}}},
-		"initContainers": []any{map[string]any{"name": "wait-longhorn-manager", "image": manager,
+		"initContainers": []any{map[string]any{"name": "wait-longhorn-manager", "resources": sshLonghornDriverResources(true), "image": manager,
 			"command": []any{"sh", "-c", `while [ $(curl -m 1 -s -o /dev/null -w "%{http_code}" http://longhorn-backend:9500/v1) != "200" ]; do echo waiting; sleep 2; done`}}},
 	}}}
 	return object
