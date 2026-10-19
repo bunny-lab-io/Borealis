@@ -116,6 +116,10 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
     - [Engine Runtime](Core%20Runtimes/engine-runtime.md)
     - [Agent Runtime](Core%20Runtimes/agent-runtime.md)
 
+    ### Instance-manager producer preview
+
+    Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_cluster_instance_manager_resources`. Repository policy discovers this suite under `Tests/Unit_Tests`; retained worker-domain inventory is unchanged. Cover the three-field resource contract, absent/duplicate/extra/oversized/private inputs, exact Pod CREATE namespace/role/caller scope, failing unsupported-shape branch, native CPU preservation and literal-patch idempotence. The stdlib fixture applies emitted literal JSON Patch values; it deliberately does not emulate CEL. Before workflow wiring, validate the emitted policy with the pinned Kubernetes1.36 API-server evaluator: positive V1/aio requests, native CPU above cap, V2/malformed/extra-container rejection, unrelated request exclusion, quantity normalization and reinvocation. No live Engine or installed admission policy is exercised by portable preview tests.
+
     ### Source map
 
     - Portable runners: `Tests/run-*.sh`.
