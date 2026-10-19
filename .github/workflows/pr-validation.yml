@@ -136,7 +136,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.engine_go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Allow setup, the bounded race suite, and runtime builds.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=Tests/lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
-TIMEOUT_SECONDS="${BOREALIS_ENGINE_GO_TIMEOUT_SECONDS:-900}"
+TIMEOUT_SECONDS="${BOREALIS_ENGINE_GO_TIMEOUT_SECONDS:-1800}"
 RESULT_DIR="$(result_dir_for engine-go)"
 MODULE_RELATIVE="Data/Engine/Containers/api-backend"
 MODULE_ROOT="${REPO_ROOT}/${MODULE_RELATIVE}"
@@ -26,7 +26,9 @@ run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" ve
   >"${RESULT_DIR}/engine-go-vet.log" 2>&1
 
 printf '==> Engine Go tests\n'
-TEST_FLAGS=(-count=1)
+# The complete API race suite exceeds Go's implicit 10-minute package limit.
+# Keep package timeout inside the command budget so failures retain Go stacks.
+TEST_FLAGS=(-count=1 -timeout=20m)
 case "${BOREALIS_ENGINE_GO_RACE:-0}" in
   0) ;;
   1) TEST_FLAGS+=(-race) ;;

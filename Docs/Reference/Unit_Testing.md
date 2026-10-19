@@ -43,7 +43,7 @@ Compatibility entrypoints remain supported:
 
 Engine Go SSH network-observer fixtures require Ubuntu system Python with `python3-netplan` and `python3-yaml`. CI installs these parser dependencies on its disposable runner. Local prerequisite installation is `sudo apt-get install python3-netplan python3-yaml`; tests fail clearly when bindings are missing. Fixtures read synthetic configuration under private temporary directories and never change installed networking or start services.
 
-Engine Go CI runs uncached tests with the race detector, including concurrent Aegis TLS reload. Reproduce on hosts with a C compiler using `CGO_ENABLED=1 BOREALIS_ENGINE_GO_RACE=1 ./Tests/run-engine-go.sh`. Runtime binary builds retain their documented `CGO_ENABLED=0` configuration. A normal local run without this flag is not race-detector evidence.
+Engine Go CI runs uncached tests with the race detector, including concurrent Aegis TLS reload. Reproduce on hosts with a C compiler using `CGO_ENABLED=1 BOREALIS_ENGINE_GO_RACE=1 ./Tests/run-engine-go.sh`. Runtime binary builds retain their documented `CGO_ENABLED=0` configuration. A normal local run without this flag is not race-detector evidence. The runner gives each test package 20 minutes and each Go command 30 minutes by default; CI allows 40 minutes for setup, checks and builds. `BOREALIS_ENGINE_GO_TIMEOUT_SECONDS` overrides the command limit. A smaller command limit may stop tests before Go can print timeout stacks. Individual test and operation deadlines remain unchanged.
 
 ## Engine Domains
 
