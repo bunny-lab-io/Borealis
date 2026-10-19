@@ -51,8 +51,10 @@ func clusterSSHLonghornPluginValid(members []clusterSSHLonghornPluginMember, sou
 	}
 	return true
 }
-func observeClusterSSHLonghornPlugin(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) ([]clusterSSHLonghornPluginMember, error) {
-	fail := func() ([]clusterSSHLonghornPluginMember, error) { return nil, clusterbootstrap.ErrPreparationConfig }
+func observeClusterSSHLonghornPlugin(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) ([]clusterSSHLonghornPluginMember, clusterSSHLonghornPluginResources, error) {
+	fail := func() ([]clusterSSHLonghornPluginMember, clusterSSHLonghornPluginResources, error) {
+		return nil, clusterSSHLonghornPluginResources{}, clusterbootstrap.ErrPreparationConfig
+	}
 	if read == nil || readList == nil || !driver.valid() || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
 	}
@@ -60,6 +62,10 @@ func observeClusterSSHLonghornPlugin(read func(string) (map[string]any, error), 
 	owner, ok := clusterSSHStorageMetadata(object, "apps/v1", "DaemonSet", "longhorn-system")
 	template := clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template")
 	if err != nil || !ok || owner.Name != "longhorn-csi-plugin" || clusterSSHStorageMap(clusterSSHStorageMap(template, "metadata"), "labels")["app"] != "longhorn-csi-plugin" || !clusterSSHLonghornPluginSpec(clusterSSHStorageMap(template, "spec"), false, driver, socket) {
+		return fail()
+	}
+	resources, valid := clusterSSHLonghornPluginResourcePlan(object)
+	if !valid {
 		return fail()
 	}
 	result := []clusterSSHLonghornPluginMember{}
@@ -72,6 +78,9 @@ func observeClusterSSHLonghornPlugin(read func(string) (map[string]any, error), 
 			return fail()
 		}
 		pod := pods[0]
+		if !clusterSSHLonghornPluginPodResources(resources, pod, member.Name) {
+			return fail()
+		}
 		id, ok := clusterSSHStorageMetadata(pod, "v1", "Pod", "longhorn-system")
 		meta, spec, status := clusterSSHStorageMap(pod, "metadata"), clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
 		if !ok || clusterSSHStorageMap(meta, "labels")["app"] != "longhorn-csi-plugin" || spec["nodeName"] != member.Name || !clusterSSHLonghornPluginSpec(spec, true, driver, socket) || status["phase"] != "Running" || !clusterSSHStorageEmptyList(status["initContainerStatuses"]) || !clusterSSHStorageEmptyList(status["ephemeralContainerStatuses"]) {
@@ -147,7 +156,7 @@ func observeClusterSSHLonghornPlugin(read func(string) (map[string]any, error), 
 	if !clusterSSHLonghornPluginValid(result, source, driver) {
 		return fail()
 	}
-	return result, nil
+	return result, resources, nil
 }
 
 // Pinned v1.12 plugin constructor. Only the existing baseline is accepted;

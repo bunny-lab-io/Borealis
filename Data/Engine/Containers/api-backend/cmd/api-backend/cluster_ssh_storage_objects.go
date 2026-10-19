@@ -273,6 +273,7 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
+	LonghornPluginResources        clusterSSHLonghornPluginResources      `json:"longhorn_plugin_resources"`
 	LonghornSnapshotterResources   clusterSSHLonghornSnapshotterResources `json:"longhorn_snapshotter_resources"`
 	LonghornResizerResources       clusterSSHLonghornResizerResources     `json:"longhorn_resizer_resources"`
 	LonghornProvisionerResources   clusterSSHLonghornProvisionerResources `json:"longhorn_provisioner_resources"`

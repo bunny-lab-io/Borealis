@@ -32,7 +32,7 @@ func sshLonghornPluginFixture(f *sshStorageFixture) {
 	}
 	containers := []any{}
 	for _, name := range []string{"longhorn-csi-plugin", "node-driver-registrar", "longhorn-liveness-probe"} {
-		c := map[string]any{"name": name, "image": driver.Liveness, "args": []any{"--v=4", "--csi-address=/csi/csi.sock"}, "volumeMounts": []any{map[string]any{"name": "socket-dir", "mountPath": "/csi/"}}}
+		c := map[string]any{"name": name, "resources": sshLonghornPluginResources(name), "image": driver.Liveness, "args": []any{"--v=4", "--csi-address=/csi/csi.sock"}, "volumeMounts": []any{map[string]any{"name": "socket-dir", "mountPath": "/csi/"}}}
 		hook := ""
 		if name == "longhorn-csi-plugin" {
 			c["image"] = driver.Manager
@@ -62,9 +62,9 @@ func sshLonghornPluginFixture(f *sshStorageFixture) {
 		}
 		containers = append(containers, c)
 	}
-	template := map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "longhorn-csi-plugin"}}, "spec": map[string]any{"serviceAccountName": "longhorn-service-account", "containers": containers, "volumes": volumes}}
+	template := map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "longhorn-csi-plugin"}}, "spec": map[string]any{"priorityClassName": "longhorn-critical", "serviceAccountName": "longhorn-service-account", "containers": containers, "volumes": volumes}}
 	ds := sshStorageObject("apps/v1", "DaemonSet", "longhorn-system", "longhorn-csi-plugin")
-	ds["spec"] = map[string]any{"template": template}
+	ds["spec"] = map[string]any{"updateStrategy": map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": json.Number("1")}}, "template": template}
 	f.objects[clusterSSHLonghornPluginPath] = ds
 	for _, member := range f.a.Source.Members {
 		pod := sshStorageObject("v1", "Pod", "longhorn-system", "longhorn-csi-plugin-"+member.Name)
@@ -76,6 +76,7 @@ func sshLonghornPluginFixture(f *sshStorageFixture) {
 		var podSpec map[string]any
 		_ = json.Unmarshal(raw, &podSpec)
 		podSpec["nodeName"] = member.Name
+		podSpec["priority"], podSpec["affinity"], podSpec["tolerations"] = 1000000000, sshKubeVIPAffinity(member.Name), sshKubeVIPTolerations()[:6]
 		pod["spec"] = podSpec
 		statuses := []any{}
 		for i, raw := range containers {
