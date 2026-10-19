@@ -273,6 +273,7 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
+	LonghornResizerResources       clusterSSHLonghornResizerResources     `json:"longhorn_resizer_resources"`
 	LonghornProvisionerResources   clusterSSHLonghornProvisionerResources `json:"longhorn_provisioner_resources"`
 	LonghornAttacherResources      clusterSSHLonghornAttacherResources    `json:"longhorn_attacher_resources"`
 	LonghornDriverResources        clusterSSHLonghornDriverResources      `json:"longhorn_driver_resources"`

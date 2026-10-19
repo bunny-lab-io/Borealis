@@ -81,8 +81,9 @@ func (v clusterSSHLonghornCSIImages) valid(driver clusterSSHLonghornDriverImages
 		v.Resizer.valid(clusterSSHLonghornResizer.repository()) && v.Resizer.Configured == driver.Resizer &&
 		v.Snapshotter.valid(clusterSSHLonghornSnapshotter.repository()) && v.Snapshotter.Configured == driver.Snapshotter
 }
-func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) (clusterSSHLonghornCSIImages, clusterSSHLonghornProvisionerResources, error) {
+func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) (clusterSSHLonghornCSIImages, clusterSSHLonghornProvisionerResources, clusterSSHLonghornResizerResources, error) {
 	var provisioner clusterSSHLonghornProvisionerResources
+	var resizer clusterSSHLonghornResizerResources
 	result := clusterSSHLonghornCSIImages{}
 	for _, input := range []struct {
 		role       clusterSSHLonghornCSIRole
@@ -98,7 +99,7 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 		owner, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 		image, imageErr := role.templateImage(object)
 		if err != nil || !ok || owner.Name != string(role) || imageErr != nil || image != input.configured || !clusterSSHLonghornCSISocketMatches(socket)(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false) {
-			return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
+			return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterSSHLonghornResizerResources{}, clusterbootstrap.ErrPreparationConfig
 		}
 		checkedList := readList
 		specValid := clusterSSHLonghornCSISocketMatches(socket)
@@ -106,7 +107,7 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 			var valid bool
 			provisioner, valid = clusterSSHLonghornProvisionerResourcePlan(object)
 			if !valid || readList == nil {
-				return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
+				return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterSSHLonghornResizerResources{}, clusterbootstrap.ErrPreparationConfig
 			}
 			checkedList = func(path, kind, namespace string, limit int) ([]map[string]any, error) {
 				pods, err := readList(path, kind, namespace, limit)
@@ -126,6 +127,30 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 				return valid && envelope == provisioner.Envelope && clusterSSHLonghornCSISocketMatches(socket)(spec, pod)
 			}
 		}
+		if role == clusterSSHLonghornResizer {
+			var valid bool
+			resizer, valid = clusterSSHLonghornResizerResourcePlan(object)
+			if !valid || readList == nil {
+				return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterSSHLonghornResizerResources{}, clusterbootstrap.ErrPreparationConfig
+			}
+			checkedList = func(path, kind, namespace string, limit int) ([]map[string]any, error) {
+				pods, err := readList(path, kind, namespace, limit)
+				if err != nil {
+					return nil, err
+				}
+				for _, pod := range pods {
+					if !clusterSSHBoundedPodResources(resizer.Envelope, pod, "csi-resizer", "") {
+						return nil, clusterbootstrap.ErrPreparationConfig
+					}
+				}
+				resizer.Observed += uint64(len(pods))
+				return pods, nil
+			}
+			specValid = func(spec map[string]any, pod bool) bool {
+				envelope, valid := clusterSSHLonghornResizerResourceSpec(spec, pod)
+				return valid && envelope == resizer.Envelope && clusterSSHLonghornCSISocketMatches(socket)(spec, pod)
+			}
+		}
 		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 			namespace: "longhorn-system", labelKey: "app",
 			name: string(role), serviceAccount: "longhorn-service-account", repository: role.repository(), replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
@@ -134,12 +159,15 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 			podsPath:       role.podsPath, replicaSetPathValid: role.replicaSetPathValid, templateImage: role.templateImage,
 		})
 		if err != nil {
-			return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
+			return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterSSHLonghornResizerResources{}, clusterbootstrap.ErrPreparationConfig
 		}
 		*input.output = clusterSSHSourceExternalImage{Configured: image, Resolved: resolved}
 	}
 	if _, _, valid := provisioner.budget(); !valid {
-		return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
+		return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterSSHLonghornResizerResources{}, clusterbootstrap.ErrPreparationConfig
 	}
-	return result, provisioner, nil
+	if _, _, valid := resizer.budget(); !valid {
+		return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterSSHLonghornResizerResources{}, clusterbootstrap.ErrPreparationConfig
+	}
+	return result, provisioner, resizer, nil
 }
