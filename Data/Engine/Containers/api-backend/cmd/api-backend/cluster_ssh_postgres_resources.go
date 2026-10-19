@@ -263,6 +263,18 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 	if !ok {
 		return 0, 0, false
 	}
+	snapshotterCPU, snapshotterMemory, valid := r.LonghornSnapshotterResources.budget()
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, snapshotterCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, snapshotterMemory)
+	if !ok {
+		return 0, 0, false
+	}
 	workerCPU, workerMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)
 	if !valid {
 		return 0, 0, false

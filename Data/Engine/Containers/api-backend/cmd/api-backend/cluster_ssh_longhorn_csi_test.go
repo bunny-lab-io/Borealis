@@ -43,6 +43,14 @@ func sshLonghornCSIDeploymentFixture(role clusterSSHLonghornCSIRole) map[string]
 		pod["affinity"], pod["priorityClassName"] = sshLonghornResizerResourceAffinity(), "longhorn-critical"
 		pod["containers"].([]any)[0].(map[string]any)["resources"] = sshLonghornResizerResources()
 	}
+	if role == clusterSSHLonghornSnapshotter {
+		spec := clusterSSHStorageMap(object, "spec")
+		spec["replicas"] = json.Number("3")
+		spec["strategy"] = map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": json.Number("1")}}
+		pod := clusterSSHStorageMap(clusterSSHStorageMap(spec, "template"), "spec")
+		pod["affinity"], pod["priorityClassName"] = sshLonghornSnapshotterResourceAffinity(), "longhorn-critical"
+		pod["containers"].([]any)[0].(map[string]any)["resources"] = sshLonghornSnapshotterResources()
+	}
 	return object
 }
 func sshLonghornCSIContainer(f *sshStorageFixture, role clusterSSHLonghornCSIRole) map[string]any {
@@ -87,6 +95,12 @@ func sshLonghornCSIRuntimeFixture(f *sshStorageFixture, role clusterSSHLonghornC
 			spec["affinity"], spec["priorityClassName"], spec["priority"] = sshLonghornResizerResourceAffinity(), "longhorn-critical", 1000000000
 			spec["containers"].([]any)[0].(map[string]any)["resources"] = sshLonghornResizerResources()
 			clusterSSHStorageMap(pod, "status")["containerStatuses"].([]any)[0].(map[string]any)["resources"] = sshLonghornResizerResources()
+		}
+		if role == clusterSSHLonghornSnapshotter {
+			spec := clusterSSHStorageMap(pod, "spec")
+			spec["affinity"], spec["priorityClassName"], spec["priority"] = sshLonghornSnapshotterResourceAffinity(), "longhorn-critical", 1000000000
+			spec["containers"].([]any)[0].(map[string]any)["resources"] = sshLonghornSnapshotterResources()
+			clusterSSHStorageMap(pod, "status")["containerStatuses"].([]any)[0].(map[string]any)["resources"] = sshLonghornSnapshotterResources()
 		}
 		f.objects[role.podsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}

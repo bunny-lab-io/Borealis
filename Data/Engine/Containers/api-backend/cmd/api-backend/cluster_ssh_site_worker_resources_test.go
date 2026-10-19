@@ -162,7 +162,7 @@ func TestClusterSSHSiteWorkerResources(t *testing.T) {
 					count = 0
 				}
 				cpu, memory, ok := clusterSSHNodeWorkloadBudget(got.Requirements)
-				if !ok || cpu != 2240+25+155+45+50+120+160+200+uint64(len(f.a.Source.Members))*100+uint64(count)*25 || memory != (5<<30+1024<<20+128<<20+216<<20+120<<20+112<<20+288<<20+384<<20+480<<20)+uint64(len(f.a.Source.Members))*(128<<20)+uint64(count)*(256<<20) || len(got.Requirements.SiteWorkers) != count {
+				if !ok || cpu != 2240+25+155+45+50+120+160+200+240+uint64(len(f.a.Source.Members))*100+uint64(count)*25 || memory != (5<<30+1024<<20+128<<20+216<<20+120<<20+112<<20+288<<20+384<<20+480<<20+576<<20)+uint64(len(f.a.Source.Members))*(128<<20)+uint64(count)*(256<<20) || len(got.Requirements.SiteWorkers) != count {
 					t.Fatal("incorrect combined budget", cpu, memory, count, ok)
 				}
 				for p := range f.calls {
