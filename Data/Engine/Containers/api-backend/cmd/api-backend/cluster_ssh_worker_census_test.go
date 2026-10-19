@@ -96,6 +96,9 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			// Attacher: three replicas plus one declared surge slot.
 			wantCPU += 120
 			wantMemory += 288 << 20
+			// Provisioner: three replicas plus one default surge slot.
+			wantCPU += 160
+			wantMemory += 384 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

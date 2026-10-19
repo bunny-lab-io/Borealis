@@ -81,7 +81,8 @@ func (v clusterSSHLonghornCSIImages) valid(driver clusterSSHLonghornDriverImages
 		v.Resizer.valid(clusterSSHLonghornResizer.repository()) && v.Resizer.Configured == driver.Resizer &&
 		v.Snapshotter.valid(clusterSSHLonghornSnapshotter.repository()) && v.Snapshotter.Configured == driver.Snapshotter
 }
-func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) (clusterSSHLonghornCSIImages, error) {
+func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, driver clusterSSHLonghornDriverImages, socket string) (clusterSSHLonghornCSIImages, clusterSSHLonghornProvisionerResources, error) {
+	var provisioner clusterSSHLonghornProvisionerResources
 	result := clusterSSHLonghornCSIImages{}
 	for _, input := range []struct {
 		role       clusterSSHLonghornCSIRole
@@ -97,19 +98,48 @@ func observeClusterSSHLonghornCSIImages(read func(string) (map[string]any, error
 		owner, ok := clusterSSHStorageMetadata(object, "apps/v1", "Deployment", "longhorn-system")
 		image, imageErr := role.templateImage(object)
 		if err != nil || !ok || owner.Name != string(role) || imageErr != nil || image != input.configured || !clusterSSHLonghornCSISocketMatches(socket)(clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(object, "spec"), "template"), "spec"), false) {
-			return clusterSSHLonghornCSIImages{}, clusterbootstrap.ErrPreparationConfig
+			return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
 		}
-		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, readList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
+		checkedList := readList
+		specValid := clusterSSHLonghornCSISocketMatches(socket)
+		if role == clusterSSHLonghornProvisioner {
+			var valid bool
+			provisioner, valid = clusterSSHLonghornProvisionerResourcePlan(object)
+			if !valid || readList == nil {
+				return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
+			}
+			checkedList = func(path, kind, namespace string, limit int) ([]map[string]any, error) {
+				pods, err := readList(path, kind, namespace, limit)
+				if err != nil {
+					return nil, err
+				}
+				for _, pod := range pods {
+					if !clusterSSHBoundedPodResources(provisioner.Envelope, pod, "csi-provisioner", "") {
+						return nil, clusterbootstrap.ErrPreparationConfig
+					}
+				}
+				provisioner.Observed += uint64(len(pods))
+				return pods, nil
+			}
+			specValid = func(spec map[string]any, pod bool) bool {
+				envelope, valid := clusterSSHLonghornProvisionerResourceSpec(spec, pod)
+				return valid && envelope == provisioner.Envelope && clusterSSHLonghornCSISocketMatches(socket)(spec, pod)
+			}
+		}
+		resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 			namespace: "longhorn-system", labelKey: "app",
 			name: string(role), serviceAccount: "longhorn-service-account", repository: role.repository(), replicaSetPrefix: clusterSSHLonghornAttacherReplicaSetPrefix,
-			specValid:      clusterSSHLonghornCSISocketMatches(socket),
+			specValid:      specValid,
 			containerValid: func(c map[string]any) bool { return clusterSSHLonghornCSIStartup(c, string(role)) },
 			podsPath:       role.podsPath, replicaSetPathValid: role.replicaSetPathValid, templateImage: role.templateImage,
 		})
 		if err != nil {
-			return clusterSSHLonghornCSIImages{}, clusterbootstrap.ErrPreparationConfig
+			return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
 		}
 		*input.output = clusterSSHSourceExternalImage{Configured: image, Resolved: resolved}
 	}
-	return result, nil
+	if _, _, valid := provisioner.budget(); !valid {
+		return clusterSSHLonghornCSIImages{}, clusterSSHLonghornProvisionerResources{}, clusterbootstrap.ErrPreparationConfig
+	}
+	return result, provisioner, nil
 }

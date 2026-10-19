@@ -273,43 +273,44 @@ func (v clusterSSHStorageVolume) engineImagesValid() bool {
 }
 
 type clusterSSHStorageRequirements struct {
-	LonghornAttacherResources      clusterSSHLonghornAttacherResources `json:"longhorn_attacher_resources"`
-	LonghornDriverResources        clusterSSHLonghornDriverResources   `json:"longhorn_driver_resources"`
-	LonghornUIResources            clusterSSHLonghornUIResources       `json:"longhorn_ui_resources"`
-	LonghornManagerResources       clusterSSHLonghornManagerResources  `json:"longhorn_manager_resources"`
-	WorkerPolicy                   clusterSSHWorkerPolicy              `json:"worker_policy"`
-	SiteWorkers                    []clusterSSHSiteWorkerResource      `json:"site_workers"`
-	PostgresResources              clusterSSHApplicationResource       `json:"postgres_resources"`
-	Applications                   []clusterSSHApplicationResource     `json:"applications"`
-	LonghornPlugin                 []clusterSSHLonghornPluginMember    `json:"longhorn_plugin"`
-	LonghornCSISocketPath          string                              `json:"longhorn_csi_socket_path"`
-	LonghornCSIImages              clusterSSHLonghornCSIImages         `json:"longhorn_csi_images"`
-	ReplicaImages                  []clusterSSHStorageReplicaImage     `json:"replica_images"`
-	KubeVIP                        clusterSSHKubeVIPConfiguration      `json:"kube_vip"`
-	CertManagerWebhookResources    clusterSSHCertManagerResources      `json:"cert_manager_webhook_resources"`
-	CertManagerCainjectorResources clusterSSHCertManagerResources      `json:"cert_manager_cainjector_resources"`
-	CertManagerResources           clusterSSHCertManagerResources      `json:"cert_manager_resources"`
-	SnapshotResources              clusterSSHSnapshotResources         `json:"snapshot_resources"`
-	SystemUpgradeResources         clusterSSHSystemUpgradeResources    `json:"system_upgrade_resources"`
-	CNPGOperatorResources          clusterSSHCNPGOperatorResources     `json:"cnpg_operator_resources"`
-	CNPGOperatorResolved           string                              `json:"cnpg_operator_resolved"`
-	CNPGOperatorImage              string                              `json:"cnpg_operator_image"`
-	SnapshotControllerImage        string                              `json:"snapshot_controller_image"`
-	SnapshotControllerResolved     string                              `json:"snapshot_controller_resolved"`
-	SystemUpgradeImages            clusterSSHSystemUpgradeImages       `json:"system_upgrade_images"`
-	LonghornAttacherImage          clusterSSHSourceExternalImage       `json:"longhorn_attacher_image"`
-	LonghornUIResolved             string                              `json:"longhorn_ui_resolved"`
-	LonghornUIImage                string                              `json:"longhorn_ui_image"`
-	LonghornManagerImages          clusterSSHLonghornManagerImages     `json:"longhorn_manager_images"`
-	LonghornDriverImages           clusterSSHLonghornDriverImages      `json:"longhorn_driver_images"`
-	CertManagerImages              clusterSSHCertManagerImages         `json:"cert_manager_images"`
-	ArtifactReplicaBytes           uint64                              `json:"artifact_replica_bytes"`
-	PostgresInstanceBytes          uint64                              `json:"postgres_instance_bytes"`
-	ConfiguredPostgresInstances    int64                               `json:"configured_postgres_instances"`
-	PostgresImage                  clusterSSHPostgresImage             `json:"postgres_image"`
-	Volumes                        []clusterSSHStorageVolume           `json:"volumes"`
-	Policy                         clusterSSHStoragePolicy             `json:"policy"`
-	observation                    string                              // Private provenance from the complete source object set; never imported.
+	LonghornProvisionerResources   clusterSSHLonghornProvisionerResources `json:"longhorn_provisioner_resources"`
+	LonghornAttacherResources      clusterSSHLonghornAttacherResources    `json:"longhorn_attacher_resources"`
+	LonghornDriverResources        clusterSSHLonghornDriverResources      `json:"longhorn_driver_resources"`
+	LonghornUIResources            clusterSSHLonghornUIResources          `json:"longhorn_ui_resources"`
+	LonghornManagerResources       clusterSSHLonghornManagerResources     `json:"longhorn_manager_resources"`
+	WorkerPolicy                   clusterSSHWorkerPolicy                 `json:"worker_policy"`
+	SiteWorkers                    []clusterSSHSiteWorkerResource         `json:"site_workers"`
+	PostgresResources              clusterSSHApplicationResource          `json:"postgres_resources"`
+	Applications                   []clusterSSHApplicationResource        `json:"applications"`
+	LonghornPlugin                 []clusterSSHLonghornPluginMember       `json:"longhorn_plugin"`
+	LonghornCSISocketPath          string                                 `json:"longhorn_csi_socket_path"`
+	LonghornCSIImages              clusterSSHLonghornCSIImages            `json:"longhorn_csi_images"`
+	ReplicaImages                  []clusterSSHStorageReplicaImage        `json:"replica_images"`
+	KubeVIP                        clusterSSHKubeVIPConfiguration         `json:"kube_vip"`
+	CertManagerWebhookResources    clusterSSHCertManagerResources         `json:"cert_manager_webhook_resources"`
+	CertManagerCainjectorResources clusterSSHCertManagerResources         `json:"cert_manager_cainjector_resources"`
+	CertManagerResources           clusterSSHCertManagerResources         `json:"cert_manager_resources"`
+	SnapshotResources              clusterSSHSnapshotResources            `json:"snapshot_resources"`
+	SystemUpgradeResources         clusterSSHSystemUpgradeResources       `json:"system_upgrade_resources"`
+	CNPGOperatorResources          clusterSSHCNPGOperatorResources        `json:"cnpg_operator_resources"`
+	CNPGOperatorResolved           string                                 `json:"cnpg_operator_resolved"`
+	CNPGOperatorImage              string                                 `json:"cnpg_operator_image"`
+	SnapshotControllerImage        string                                 `json:"snapshot_controller_image"`
+	SnapshotControllerResolved     string                                 `json:"snapshot_controller_resolved"`
+	SystemUpgradeImages            clusterSSHSystemUpgradeImages          `json:"system_upgrade_images"`
+	LonghornAttacherImage          clusterSSHSourceExternalImage          `json:"longhorn_attacher_image"`
+	LonghornUIResolved             string                                 `json:"longhorn_ui_resolved"`
+	LonghornUIImage                string                                 `json:"longhorn_ui_image"`
+	LonghornManagerImages          clusterSSHLonghornManagerImages        `json:"longhorn_manager_images"`
+	LonghornDriverImages           clusterSSHLonghornDriverImages         `json:"longhorn_driver_images"`
+	CertManagerImages              clusterSSHCertManagerImages            `json:"cert_manager_images"`
+	ArtifactReplicaBytes           uint64                                 `json:"artifact_replica_bytes"`
+	PostgresInstanceBytes          uint64                                 `json:"postgres_instance_bytes"`
+	ConfiguredPostgresInstances    int64                                  `json:"configured_postgres_instances"`
+	PostgresImage                  clusterSSHPostgresImage                `json:"postgres_image"`
+	Volumes                        []clusterSSHStorageVolume              `json:"volumes"`
+	Policy                         clusterSSHStoragePolicy                `json:"policy"`
+	observation                    string                                 // Private provenance from the complete source object set; never imported.
 }
 
 func clusterSSHStorageBoundVolume(claim, pv, volume map[string]any) (clusterSSHStorageVolume, error) {

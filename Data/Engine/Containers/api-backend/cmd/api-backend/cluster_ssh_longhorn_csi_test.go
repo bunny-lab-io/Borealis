@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -26,6 +27,14 @@ func sshLonghornCSIDeploymentFixture(role clusterSSHLonghornCSIRole) map[string]
 		}},
 		"volumes": []any{map[string]any{"name": "socket-dir", "hostPath": map[string]any{"path": "/var/lib/kubelet/plugins/driver.longhorn.io", "type": "DirectoryOrCreate"}}},
 	}}}
+	if role == clusterSSHLonghornProvisioner {
+		spec := clusterSSHStorageMap(object, "spec")
+		spec["replicas"] = json.Number("3")
+		spec["strategy"] = map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": json.Number("1")}}
+		pod := clusterSSHStorageMap(clusterSSHStorageMap(spec, "template"), "spec")
+		pod["affinity"], pod["priorityClassName"] = sshLonghornProvisionerResourceAffinity(), "longhorn-critical"
+		pod["containers"].([]any)[0].(map[string]any)["resources"] = sshLonghornProvisionerResources()
+	}
 	return object
 }
 func sshLonghornCSIContainer(f *sshStorageFixture, role clusterSSHLonghornCSIRole) map[string]any {
@@ -59,6 +68,12 @@ func sshLonghornCSIRuntimeFixture(f *sshStorageFixture, role clusterSSHLonghornC
 		pod["spec"] = map[string]any{"nodeName": member.Name, "serviceAccountName": "longhorn-service-account", "containers": []any{map[string]any{"name": string(role), "image": image, "args": sshLonghornCSIStartupArgs(string(role)), "env": sshLonghornCSIStartupEnv()}}}
 		sshLonghornCSISocketPodFixture(pod)
 		pod["status"] = map[string]any{"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "containerStatuses": []any{map[string]any{"name": string(role), "image": image, "imageID": role.repository() + "@" + sshLonghornDriverPin(string(role)).ManifestDigest, "ready": true, "started": true, "state": map[string]any{"running": map[string]any{"startedAt": "2026-10-01T00:00:00Z"}}}}}
+		if role == clusterSSHLonghornProvisioner {
+			spec := clusterSSHStorageMap(pod, "spec")
+			spec["affinity"], spec["priorityClassName"], spec["priority"] = sshLonghornProvisionerResourceAffinity(), "longhorn-critical", 1000000000
+			spec["containers"].([]any)[0].(map[string]any)["resources"] = sshLonghornProvisionerResources()
+			clusterSSHStorageMap(pod, "status")["containerStatuses"].([]any)[0].(map[string]any)["resources"] = sshLonghornProvisionerResources()
+		}
 		f.objects[role.podsPath(member.Name)] = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{"resourceVersion": "1"}, "items": []any{pod}}
 	}
 }
