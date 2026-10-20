@@ -15,6 +15,7 @@ Repeated entries are intentional when multiple Engine containers install the sam
 - `Data/Engine/Containers/compose.yaml`
 - `Data/Engine/Containers/*/Dockerfile`
 - `Data/Engine/Containers/api-backend/go.mod`
+- `Tests/tools/admissionpolicy/go.mod`
 - `Data/Engine/Containers/api-backend/build-api-backend.sh`
 - `Data/Engine/Containers/site-worker/data/engine-requirements.txt`
 - `Data/Engine/Containers/site-worker/data/engine-worker-requirements.txt`
@@ -194,6 +195,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
 | shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing; release workflow builds exact-source node-manager archive verifier and production Go application binaries) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine validation only | Go toolchain 1.26.8 (isolated admission-policy tests; not Engine runtime toolchain) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | Go standard library/runtime (compiled into `borealis-node-manager` in central SSH bootstrap release assets) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | shared-engine | Host systemd manager, `systemd-run`, `systemctl` and `busctl` (Ubuntu-provided; systemd255 baseline for central SSH supervision/watchdogs, read-only networkd ownership and persistent startup-wiring queries) | [LGPL-2.1-or-later](https://github.com/systemd/systemd/blob/v255/LICENSE.LGPL2.1) |
 | shared-engine | iproute2 `ip` (Ubuntu host-provided; read-only SSH and node-manager IPv4 address/link/route/rule observations) | [GPL-2.0-or-later](https://github.com/iproute2/iproute2/blob/main/COPYING) |
@@ -205,6 +207,88 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | GitHub CLI (GitHub-hosted runner tool used to validate draft releases and upload Engine release assets) | [MIT](https://github.com/cli/cli/blob/trunk/LICENSE) |
 | shared-engine | ShellCheck (Ubuntu runner package used for shell validation) | [GPL-3.0-only](https://github.com/koalaman/shellcheck/blob/master/LICENSE) |
 | shared-engine | PowerShell (GitHub runner parser used for `.ps1` syntax validation) | [MIT](https://github.com/PowerShell/PowerShell/blob/master/LICENSE.txt) |
+
+## Engine Admission-policy Test Dependencies
+
+Isolated `Tests/tools/admissionpolicy` module uses Kubernetes1.36.3's compiler, matchers and JSON patcher. These libraries run only in portable validation; Engine application modules and runtime images do not include them. Inventory includes every direct and indirect module requirement; `go.sum` locks downloaded content.
+
+| Service / Runtime Area | Software | License |
+| --- | --- | --- |
+| Engine validation only | k8s.io/api v0.36.3 | [Apache-2.0](https://pkg.go.dev/k8s.io/api@v0.36.3?tab=licenses) |
+| Engine validation only | k8s.io/apimachinery v0.36.3 | [Apache-2.0](https://pkg.go.dev/k8s.io/apimachinery@v0.36.3?tab=licenses) |
+| Engine validation only | k8s.io/apiserver v0.36.3 | [Apache-2.0](https://pkg.go.dev/k8s.io/apiserver@v0.36.3?tab=licenses) |
+| Engine validation only | k8s.io/client-go v0.36.3 | [Apache-2.0](https://pkg.go.dev/k8s.io/client-go@v0.36.3?tab=licenses) |
+| Engine validation only | cel.dev/expr v0.25.1 | [Apache-2.0](https://pkg.go.dev/cel.dev/expr@v0.25.1?tab=licenses) |
+| Engine validation only | github.com/antlr4-go/antlr/v4 v4.13.0 | [BSD-3-Clause](https://pkg.go.dev/github.com/antlr4-go/antlr/v4@v4.13.0?tab=licenses) |
+| Engine validation only | github.com/beorn7/perks v1.0.1 | [MIT](https://pkg.go.dev/github.com/beorn7/perks@v1.0.1?tab=licenses) |
+| Engine validation only | github.com/blang/semver/v4 v4.0.0 | [MIT](https://pkg.go.dev/github.com/blang/semver/v4@v4.0.0?tab=licenses) |
+| Engine validation only | github.com/cenkalti/backoff/v5 v5.0.3 | [MIT](https://pkg.go.dev/github.com/cenkalti/backoff/v5@v5.0.3?tab=licenses) |
+| Engine validation only | github.com/cespare/xxhash/v2 v2.3.0 | [MIT](https://pkg.go.dev/github.com/cespare/xxhash/v2@v2.3.0?tab=licenses) |
+| Engine validation only | github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc | [ISC](https://pkg.go.dev/github.com/davecgh/go-spew@v1.1.2-0.20180830191138-d8f796af33cc?tab=licenses) |
+| Engine validation only | github.com/emicklei/go-restful/v3 v3.13.0 | [MIT](https://pkg.go.dev/github.com/emicklei/go-restful/v3@v3.13.0?tab=licenses) |
+| Engine validation only | github.com/felixge/httpsnoop v1.0.4 | [MIT](https://pkg.go.dev/github.com/felixge/httpsnoop@v1.0.4?tab=licenses) |
+| Engine validation only | github.com/fsnotify/fsnotify v1.9.0 | [BSD-3-Clause](https://pkg.go.dev/github.com/fsnotify/fsnotify@v1.9.0?tab=licenses) |
+| Engine validation only | github.com/fxamacker/cbor/v2 v2.9.0 | [MIT](https://pkg.go.dev/github.com/fxamacker/cbor/v2@v2.9.0?tab=licenses) |
+| Engine validation only | github.com/go-logr/logr v1.4.3 | [Apache-2.0](https://pkg.go.dev/github.com/go-logr/logr@v1.4.3?tab=licenses) |
+| Engine validation only | github.com/go-logr/stdr v1.2.2 | [Apache-2.0](https://pkg.go.dev/github.com/go-logr/stdr@v1.2.2?tab=licenses) |
+| Engine validation only | github.com/go-openapi/jsonpointer v0.21.0 | [Apache-2.0](https://pkg.go.dev/github.com/go-openapi/jsonpointer@v0.21.0?tab=licenses) |
+| Engine validation only | github.com/go-openapi/jsonreference v0.20.2 | [Apache-2.0](https://pkg.go.dev/github.com/go-openapi/jsonreference@v0.20.2?tab=licenses) |
+| Engine validation only | github.com/go-openapi/swag v0.23.0 | [Apache-2.0](https://pkg.go.dev/github.com/go-openapi/swag@v0.23.0?tab=licenses) |
+| Engine validation only | github.com/google/cel-go v0.26.0 | [Apache-2.0](https://pkg.go.dev/github.com/google/cel-go@v0.26.0?tab=licenses) |
+| Engine validation only | github.com/google/gnostic-models v0.7.0 | [Apache-2.0](https://pkg.go.dev/github.com/google/gnostic-models@v0.7.0?tab=licenses) |
+| Engine validation only | github.com/google/uuid v1.6.0 | [BSD-3-Clause](https://pkg.go.dev/github.com/google/uuid@v1.6.0?tab=licenses) |
+| Engine validation only | github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 | [BSD-3-Clause](https://pkg.go.dev/github.com/grpc-ecosystem/grpc-gateway/v2@v2.27.7?tab=licenses) |
+| Engine validation only | github.com/inconshreveable/mousetrap v1.1.0 | [Apache-2.0](https://pkg.go.dev/github.com/inconshreveable/mousetrap@v1.1.0?tab=licenses) |
+| Engine validation only | github.com/josharian/intern v1.0.0 | [MIT](https://pkg.go.dev/github.com/josharian/intern@v1.0.0?tab=licenses) |
+| Engine validation only | github.com/json-iterator/go v1.1.12 | [MIT](https://pkg.go.dev/github.com/json-iterator/go@v1.1.12?tab=licenses) |
+| Engine validation only | github.com/mailru/easyjson v0.7.7 | [MIT](https://pkg.go.dev/github.com/mailru/easyjson@v0.7.7?tab=licenses) |
+| Engine validation only | github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd | [Apache-2.0](https://pkg.go.dev/github.com/modern-go/concurrent@v0.0.0-20180306012644-bacd9c7ef1dd?tab=licenses) |
+| Engine validation only | github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee | [Apache-2.0](https://pkg.go.dev/github.com/modern-go/reflect2@v1.0.3-0.20250322232337-35a7c28c31ee?tab=licenses) |
+| Engine validation only | github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 | [BSD-3-Clause](https://pkg.go.dev/github.com/munnerz/goautoneg@v0.0.0-20191010083416-a7dc8b61c822?tab=licenses) |
+| Engine validation only | github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 | [BSD-2-Clause](https://pkg.go.dev/github.com/pmezard/go-difflib@v1.0.1-0.20181226105442-5d4384ee4fb2?tab=licenses) |
+| Engine validation only | github.com/prometheus/client_golang v1.23.2 | [Apache-2.0](https://pkg.go.dev/github.com/prometheus/client_golang@v1.23.2?tab=licenses) |
+| Engine validation only | github.com/prometheus/client_model v0.6.2 | [Apache-2.0](https://pkg.go.dev/github.com/prometheus/client_model@v0.6.2?tab=licenses) |
+| Engine validation only | github.com/prometheus/common v0.67.5 | [Apache-2.0](https://pkg.go.dev/github.com/prometheus/common@v0.67.5?tab=licenses) |
+| Engine validation only | github.com/prometheus/procfs v0.19.2 | [Apache-2.0](https://pkg.go.dev/github.com/prometheus/procfs@v0.19.2?tab=licenses) |
+| Engine validation only | github.com/spf13/cobra v1.10.2 | [Apache-2.0](https://pkg.go.dev/github.com/spf13/cobra@v1.10.2?tab=licenses) |
+| Engine validation only | github.com/spf13/pflag v1.0.9 | [BSD-3-Clause](https://pkg.go.dev/github.com/spf13/pflag@v1.0.9?tab=licenses) |
+| Engine validation only | github.com/stoewer/go-strcase v1.3.0 | [MIT](https://pkg.go.dev/github.com/stoewer/go-strcase@v1.3.0?tab=licenses) |
+| Engine validation only | github.com/x448/float16 v0.8.4 | [MIT](https://pkg.go.dev/github.com/x448/float16@v0.8.4?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/auto/sdk v1.2.1 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/auto/sdk@v1.2.1?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.65.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/otel v1.41.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/otel@v1.41.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.40.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.40.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.40.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.40.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/otel/metric v1.41.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/otel/metric@v1.41.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/otel/sdk v1.40.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/otel/sdk@v1.40.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/otel/trace v1.41.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/otel/trace@v1.41.0?tab=licenses) |
+| Engine validation only | go.opentelemetry.io/proto/otlp v1.9.0 | [Apache-2.0](https://pkg.go.dev/go.opentelemetry.io/proto/otlp@v1.9.0?tab=licenses) |
+| Engine validation only | go.yaml.in/yaml/v2 v2.4.3 | [Apache-2.0 AND MIT](https://pkg.go.dev/go.yaml.in/yaml/v2@v2.4.3?tab=licenses) |
+| Engine validation only | go.yaml.in/yaml/v3 v3.0.4 | [Apache-2.0 AND MIT](https://pkg.go.dev/go.yaml.in/yaml/v3@v3.0.4?tab=licenses) |
+| Engine validation only | golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/exp@v0.0.0-20251219203646-944ab1f22d93?tab=licenses) |
+| Engine validation only | golang.org/x/net v0.49.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/net@v0.49.0?tab=licenses) |
+| Engine validation only | golang.org/x/oauth2 v0.34.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/oauth2@v0.34.0?tab=licenses) |
+| Engine validation only | golang.org/x/sync v0.19.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/sync@v0.19.0?tab=licenses) |
+| Engine validation only | golang.org/x/sys v0.40.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/sys@v0.40.0?tab=licenses) |
+| Engine validation only | golang.org/x/term v0.39.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/term@v0.39.0?tab=licenses) |
+| Engine validation only | golang.org/x/text v0.33.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/text@v0.33.0?tab=licenses) |
+| Engine validation only | golang.org/x/time v0.14.0 | [BSD-3-Clause](https://pkg.go.dev/golang.org/x/time@v0.14.0?tab=licenses) |
+| Engine validation only | google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409 | [Apache-2.0](https://pkg.go.dev/google.golang.org/genproto/googleapis/api@v0.0.0-20260128011058-8636f8732409?tab=licenses) |
+| Engine validation only | google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409 | [Apache-2.0](https://pkg.go.dev/google.golang.org/genproto/googleapis/rpc@v0.0.0-20260128011058-8636f8732409?tab=licenses) |
+| Engine validation only | google.golang.org/grpc v1.79.3 | [Apache-2.0](https://pkg.go.dev/google.golang.org/grpc@v1.79.3?tab=licenses) |
+| Engine validation only | google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af | [BSD-3-Clause](https://pkg.go.dev/google.golang.org/protobuf@v1.36.12-0.20260120151049-f2248ac996af?tab=licenses) |
+| Engine validation only | gopkg.in/evanphx/json-patch.v4 v4.13.0 | [BSD-3-Clause](https://pkg.go.dev/gopkg.in/evanphx/json-patch.v4@v4.13.0?tab=licenses) |
+| Engine validation only | gopkg.in/inf.v0 v0.9.1 | [BSD-3-Clause](https://pkg.go.dev/gopkg.in/inf.v0@v0.9.1?tab=licenses) |
+| Engine validation only | gopkg.in/yaml.v3 v3.0.1 | [Apache-2.0 AND MIT](https://pkg.go.dev/gopkg.in/yaml.v3@v3.0.1?tab=licenses) |
+| Engine validation only | k8s.io/component-base v0.36.3 | [Apache-2.0](https://pkg.go.dev/k8s.io/component-base@v0.36.3?tab=licenses) |
+| Engine validation only | k8s.io/klog/v2 v2.140.0 | [Apache-2.0](https://pkg.go.dev/k8s.io/klog/v2@v2.140.0?tab=licenses) |
+| Engine validation only | k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a | [Apache-2.0](https://pkg.go.dev/k8s.io/kube-openapi@v0.0.0-20260317180543-43fb72c5454a?tab=licenses) |
+| Engine validation only | k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 | [Apache-2.0](https://pkg.go.dev/k8s.io/utils@v0.0.0-20260210185600-b8788abfbbc2?tab=licenses) |
+| Engine validation only | sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.34.0 | [Apache-2.0](https://pkg.go.dev/sigs.k8s.io/apiserver-network-proxy/konnectivity-client@v0.34.0?tab=licenses) |
+| Engine validation only | sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 | [Apache-2.0](https://pkg.go.dev/sigs.k8s.io/json@v0.0.0-20250730193827-2d320260d730?tab=licenses) |
+| Engine validation only | sigs.k8s.io/randfill v1.0.0 | [Apache-2.0](https://pkg.go.dev/sigs.k8s.io/randfill@v1.0.0?tab=licenses) |
+| Engine validation only | sigs.k8s.io/structured-merge-diff/v6 v6.3.3 | [Apache-2.0](https://pkg.go.dev/sigs.k8s.io/structured-merge-diff/v6@v6.3.3?tab=licenses) |
+| Engine validation only | sigs.k8s.io/yaml v1.6.0 | [Apache-2.0 AND MIT](https://pkg.go.dev/sigs.k8s.io/yaml@v1.6.0?tab=licenses) |
 
 ## Maintenance Notes
 

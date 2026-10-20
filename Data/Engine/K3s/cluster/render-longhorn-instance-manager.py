@@ -76,10 +76,11 @@ def render(bounds):
         'variables.supported ? [\n'
         f'  JSONPatch{{op: "add", path: "/spec/containers/0/resources/requests/memory", value: {memory}}},\n'
         f'  JSONPatch{{op: "add", path: "/spec/containers/0/resources/limits", value: {limits}}}\n'
-        '] : [JSONPatch{op: "test", path: "/spec/containers", value: []}]'
+        '] : {}["unsupported instance-manager resource shape or bounds"]'
     )
-    # The failure branch tests an impossible valid Pod shape. With failurePolicy
-    # Fail, malformed selected requests are rejected, not admitted unbounded.
+    # Missing-key access deliberately raises a CEL evaluation error, which
+    # failurePolicy Fail rejects. A failed JSON Patch test is only a no-op in
+    # Kubernetes and would admit an unbounded Pod; never use it for rejection.
     policy = {
         "apiVersion": "admissionregistration.k8s.io/v1", "kind": "MutatingAdmissionPolicy",
         "metadata": {"name": NAME},
@@ -99,7 +100,10 @@ def render(bounds):
     binding = {
         "apiVersion": "admissionregistration.k8s.io/v1", "kind": "MutatingAdmissionPolicyBinding",
         "metadata": {"name": NAME},
-        "spec": {"policyName": NAME, "matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": NAMESPACE}}}},
+        "spec": {"policyName": NAME, "matchResources": {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": NAMESPACE}},
+            "objectSelector": {},
+        }},
     }
     return json.dumps({"apiVersion": "v1", "kind": "List", "items": [policy, binding]}, sort_keys=True, indent=2)
 

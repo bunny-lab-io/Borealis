@@ -19,6 +19,7 @@ Run commands from repository root.
 # Integration and build lanes.
 ./Tests/run-database-postgres.sh
 ./Tests/run-k3s-policy.sh
+./Tests/run-admission-policy.sh # Offline Kubernetes policy evaluation.
 ./Tests/run-containers.sh        # Images affected by current worktree.
 ./Tests/run-containers.sh --all  # Every production image.
 ./Tests/run-migration-helpers.sh
@@ -84,6 +85,7 @@ Runners keep dependencies, compiled output, caches, virtual environments, and re
 
 - Agent: Go 1.22.12.
 - Engine API: Go 1.25.12.
+- Admission-policy tests: Go 1.26.8 and Python 3. Set `BOREALIS_ADMISSION_GO_BIN` to its executable when using multiple Go versions; Engine runtime toolchain stays unchanged.
 - WebUI: Node.js 22 and npm.
 - Site-worker Python and docs: Python 3 with `venv`.
 - Repository policy: ShellCheck, PowerShell, Node.js, `actionlint`, and dependencies in `Tests/requirements-policy.txt`.
@@ -118,7 +120,12 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
 
     ### Instance-manager producer preview
 
-    Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_cluster_instance_manager_resources`. Repository policy discovers this suite under `Tests/Unit_Tests`; retained worker-domain inventory is unchanged. Cover the three-field resource contract, absent/duplicate/extra/oversized/private inputs, exact Pod CREATE namespace/role/caller scope, failing unsupported-shape branch, native CPU preservation and literal-patch idempotence. The stdlib fixture applies emitted literal JSON Patch values; it deliberately does not emulate CEL. Before workflow wiring, validate the emitted policy with the pinned Kubernetes1.36 API-server evaluator: positive V1/aio requests, native CPU above cap, V2/malformed/extra-container rejection, unrelated request exclusion, quantity normalization and reinvocation. No live Engine or installed admission policy is exercised by portable preview tests.
+    Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_cluster_instance_manager_resources` for the strict three-field input, privacy, scope and literal-patch contracts. Repository policy discovers this suite under `Tests/Unit_Tests`; retained worker-domain inventory is unchanged.
+
+    Run `./Tests/run-admission-policy.sh` for actual Kubernetes1.36.3 CEL evaluation. The isolated `Tests/tools/admissionpolicy` Go module renders current Python output, decodes typed v1 policy/binding objects, and uses pinned upstream compiler, request matchers and JSON patcher against synthetic Pods. Cases cover V1/aio mutation, native CPU preservation/cap boundaries, missing resources, V2/extra/init/ephemeral containers, unsupported resource models, conflicting bounds, caller/namespace/role/operation exclusions, normalized quantities and repeat admission. Regression proof records that a failed JSON Patch `test` is a successful no-op; rejection must instead raise a CEL evaluation error under `failurePolicy: Fail`. Required suites cannot be missing or skipped. The existing runtime-policy CI lane and full portable runner include this check; module tidy/format and locked checksums are enforced.
+
+    Tests run in process without starting an API server, opening a client connection or installing admission objects. They prove compiler/matcher/patch behavior, not API persistence, admission-chain ordering or live Longhorn readiness. Policy-before-Longhorn installation, frozen source checks and resource-consumer evidence remain separate implementation gates.
+
 
     ### Source map
 

@@ -76,6 +76,7 @@ def main() -> int:
 
     go_dependencies = go_requirements(ROOT / "Data/Agent/go.mod")
     go_dependencies += go_requirements(ROOT / "Data/Engine/Containers/api-backend/go.mod")
+    go_dependencies += go_requirements(ROOT / "Tests/tools/admissionpolicy/go.mod")
     for name, version, source in go_dependencies:
         if f"{name} {version}".lower() not in lower_sbom:
             failures.append(f"SBOM GO FAIL: {source} declares {name} {version}")

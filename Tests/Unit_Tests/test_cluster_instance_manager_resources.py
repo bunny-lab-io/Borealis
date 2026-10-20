@@ -71,7 +71,7 @@ class InstanceManagerResourcesTests(unittest.TestCase):
         self.assertEqual(supported.count(".compareTo("), 4)
         expression = spec["mutations"][0]["jsonPatch"]["expression"]
         self.assertTrue(expression.startswith("variables.supported ? ["))
-        self.assertTrue(expression.endswith('] : [JSONPatch{op: "test", path: "/spec/containers", value: []}]'))
+        self.assertTrue(expression.endswith('] : {}["unsupported instance-manager resource shape or bounds"]'))
 
     def test_patch_payload_preserves_native_cpu_and_other_pod_fields(self):
         for cpu in ("1m", "1200m", "1"):
