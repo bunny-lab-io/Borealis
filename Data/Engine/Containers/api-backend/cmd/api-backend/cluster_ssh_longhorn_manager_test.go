@@ -132,6 +132,12 @@ func TestClusterSSHLonghornManagerSourceConfiguration(t *testing.T) {
 					}
 					ref := "docker.io/longhornio/" + role + "@" + digest
 					sshLonghornManagerSetImage(f, role, ref)
+					if role == "longhorn-instance-manager" {
+						clusterSSHStorageMap(sshInstanceOwner(f, 0), "spec")["image"] = ref
+						pod := sshInstancePod(f, 0)
+						clusterSSHStorageMap(pod, "spec")["containers"].([]any)[0].(map[string]any)["image"] = ref
+						clusterSSHStorageMap(pod, "status")["containerStatuses"].([]any)[0].(map[string]any)["image"] = ref
+					}
 					if role == "longhorn-manager" {
 						driver := sshLonghornDriverContainer(f)
 						driver["image"], driver["command"].([]any)[4] = ref, ref

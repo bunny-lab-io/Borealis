@@ -188,8 +188,8 @@ def validate_cluster_controller_contract() -> None:
     namespace_rules = [rule for rule in rules if "namespaces" in (rule.get("resources") or [])]
     if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}]:
         fail("cluster controller namespace read must stay limited to kube-system identity")
-    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "*"} for rule in rules):
-        fail("cluster controller must not gain cluster-wide Secret, ConfigMap, DaemonSet, ReplicaSet or Pod-log access")
+    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "instancemanagers", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings", "*"} or ("longhorn.io" in rule.get("apiGroups", []) and "nodes" in rule.get("resources", [])) for rule in rules):
+        fail("cluster controller must not gain broad private configuration, owner or admission policy access")
     source_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
     expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env", "borealis-job-scheduler-runtime-env"], "verbs": ["get"]}
     if len(source_roles) != 1 or source_roles[0].get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or source_roles[0].get("rules") != [expected_source_rule]:
@@ -206,16 +206,25 @@ def validate_cluster_controller_contract() -> None:
         "storage-reserved-percentage-for-default-disk", "storage-minimal-available-percentage", "storage-over-provisioning-percentage",
         "default-replica-count", "replica-soft-anti-affinity", "replica-zone-soft-anti-affinity", "replica-disk-soft-anti-affinity",
         "allow-empty-node-selector-volume", "allow-empty-disk-selector-volume", "disable-scheduling-on-cordoned-node", "replica-auto-balance",
-        "default-engine-image", "support-bundle-manager-image",
+        "default-engine-image", "support-bundle-manager-image", "guaranteed-instance-manager-cpu",
     ]
     storage_rule = {"apiGroups": ["longhorn.io"], "resources": ["settings"], "resourceNames": storage_settings, "verbs": ["get"]}
     manager_rule = {"apiGroups": ["apps"], "resources": ["daemonsets"], "resourceNames": ["longhorn-manager", "longhorn-csi-plugin"], "verbs": ["get"]}
     ui_owner_rule = {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}
-    if len(storage_roles) != 1 or storage_roles[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_roles[0].get("rules") != [storage_rule, manager_rule, ui_owner_rule]:
-        fail("storage policy Role must allow only fixed Longhorn setting/manager/plugin GETs and namespaced ReplicaSet GETs")
+    instance_rule = {"apiGroups": ["longhorn.io"], "resources": ["instancemanagers", "nodes"], "verbs": ["get"]}
+    if len(storage_roles) != 1 or storage_roles[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_roles[0].get("rules") != [storage_rule, manager_rule, ui_owner_rule, instance_rule]:
+        fail("storage policy Role must allow only fixed Longhorn setting/manager/plugin GETs and namespaced ReplicaSet/InstanceManager/Node GETs")
     storage_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-storage-policy"]
     if len(storage_bindings) != 1 or storage_bindings[0].get("metadata") != {"name": "borealis-cluster-storage-policy", "namespace": "longhorn-system"} or storage_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-storage-policy"} or storage_bindings[0].get("subjects") != binding.get("subjects"):
         fail("storage policy RoleBinding must bind only controller ServiceAccount")
+    instance_role_name = "borealis-cluster-instance-manager-policy"
+    instance_policy_roles = [item for item in objects if item.get("kind") == "ClusterRole" and (item.get("metadata") or {}).get("name") == instance_role_name]
+    instance_policy_rule = {"apiGroups": ["admissionregistration.k8s.io"], "resources": ["mutatingadmissionpolicies", "mutatingadmissionpolicybindings"], "resourceNames": ["borealis-longhorn-instance-manager-bounds"], "verbs": ["get"]}
+    if len(instance_policy_roles) != 1 or instance_policy_roles[0].get("metadata") != {"name": instance_role_name} or instance_policy_roles[0].get("rules") != [instance_policy_rule]:
+        fail("instance-manager protection requires only fixed-name policy/binding GET")
+    instance_policy_bindings = [item for item in objects if item.get("kind") == "ClusterRoleBinding" and (item.get("metadata") or {}).get("name") == instance_role_name]
+    if len(instance_policy_bindings) != 1 or instance_policy_bindings[0].get("metadata") != {"name": instance_role_name} or instance_policy_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": instance_role_name} or instance_policy_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("instance-manager policy reads must bind only existing controller ServiceAccount")
     upgrade_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-upgrade-settings"]
     upgrade_rule = {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["default-controller-env"], "verbs": ["get"]}
     if len(upgrade_roles) != 1 or upgrade_roles[0].get("metadata") != {"name": "borealis-cluster-upgrade-settings", "namespace": "system-upgrade"} or upgrade_roles[0].get("rules") != [upgrade_rule, {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]}]:

@@ -62,7 +62,7 @@ class ClusterStorageRBACTests(unittest.TestCase):
             for field in ("apiGroups", "resources", "resourceNames"):
                 mutations[f"rule {index} wildcard {field}"] = lambda role, i=index, f=field: role["rules"][i].update({f: ["*"]})
             mutations[f"rule {index} unrestricted names"] = lambda role, i=index: role["rules"][i].pop("resourceNames")
-        for setting in ("default-engine-image", "support-bundle-manager-image"):
+        for setting in ("default-engine-image", "support-bundle-manager-image", "guaranteed-instance-manager-cpu"):
             mutations[f"missing {setting}"] = lambda role, s=setting: role["rules"][0]["resourceNames"].remove(s)
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -71,6 +71,48 @@ class ClusterStorageRBACTests(unittest.TestCase):
                 mutate(role)
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     self.validate(objects)
+
+    def test_instance_manager_reads_reject_permission_drift(self):
+        for kind, name, index in (
+            ("Role", "borealis-cluster-storage-policy", 3),
+            ("ClusterRole", "borealis-cluster-instance-manager-policy", 0),
+        ):
+            mutations = {
+                "missing read": lambda role: role["rules"].pop(index),
+                "duplicate rule": lambda role: role["rules"].append(copy.deepcopy(role["rules"][index])),
+                "wrong group": lambda role: role["rules"][index].update(apiGroups=[""]),
+                "extra resource": lambda role: role["rules"][index]["resources"].append("secrets"),
+            }
+            for verb in ("list", "watch", "create", "patch", "update", "delete", "*"):
+                mutations[verb] = lambda role, v=verb: role["rules"][index]["verbs"].append(v)
+            if kind == "ClusterRole":
+                mutations["unrestricted names"] = lambda role: role["rules"][index].pop("resourceNames")
+                mutations["other name"] = lambda role: role["rules"][index]["resourceNames"].append("other")
+            else:
+                mutations["wrong namespace"] = lambda role: role["metadata"].update(namespace="default")
+                mutations["cluster-wide"] = lambda role: role.update(kind="ClusterRole")
+            for label, mutate in mutations.items():
+                with self.subTest(kind=kind, label=label):
+                    objects = copy.deepcopy(self.objects)
+                    role = next(item for item in objects if item.get("kind") == kind and item["metadata"]["name"] == name)
+                    mutate(role)
+                    with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                        self.validate(objects)
+
+    def test_instance_policy_binding_rejects_scope_drift(self):
+        for mutate in (
+            lambda item: item["subjects"][0].update(name="other"),
+            lambda item: item["subjects"][0].update(namespace="default"),
+            lambda item: item["subjects"].append({"kind": "Group", "name": "system:authenticated"}),
+            lambda item: item["roleRef"].update(name="other"),
+            lambda item: item["roleRef"].update(kind="Role"),
+            lambda item: item.update(kind="RoleBinding"),
+        ):
+            objects = copy.deepcopy(self.objects)
+            binding = next(item for item in objects if item.get("kind") == "ClusterRoleBinding" and item["metadata"]["name"] == "borealis-cluster-instance-manager-policy")
+            mutate(binding)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.validate(objects)
 
     def test_ui_replicaset_role_rejects_permission_drift(self):
         mutations = {
