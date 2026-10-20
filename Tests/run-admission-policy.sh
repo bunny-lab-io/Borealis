@@ -30,7 +30,7 @@ import pathlib
 import sys
 
 rows = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
-required = {"TestInstanceManagerBounds", "TestInstanceManagerRejectsUnsupported",
+required = {"TestInstanceManagerProbe", "TestInstanceManagerBounds", "TestInstanceManagerRejectsUnsupported",
             "TestInstanceManagerExcludesOtherRequests", "TestFailedJSONPatchTestDoesNotReject"}
 passed = {row.get("Test") for row in rows if row.get("Action") == "pass"}
 if required - passed or any(row.get("Action") in {"skip", "fail"} for row in rows):

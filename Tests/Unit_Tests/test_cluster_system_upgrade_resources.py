@@ -27,6 +27,7 @@ MANAGER_BOUNDS = {"requests": {"cpu": "150m", "memory": "96Mi"}, "limits": {"cpu
 PREPULL_BOUNDS = {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"cpu": "0.025", "memory": "24Mi"}}
 UI_BOUNDS = {"requests": {"cpu": "15m", "memory": "20Mi"}, "limits": {"cpu": "0.08", "memory": "40Mi"}}
 DRIVER_BOUNDS = {"requests": {"cpu": "25m", "memory": "28Mi"}, "limits": {"cpu": "0.09", "memory": "56Mi"}}
+INSTANCE_BOUNDS = {"requests": {"memory": "40Mi"}, "limits": {"cpu": "0.5", "memory": "80Mi"}}
 WAIT_BOUNDS = {"requests": {"cpu": "10m", "memory": "12Mi"}, "limits": {"cpu": "0.04", "memory": "36Mi"}}
 MANIFEST = """apiVersion: v1
 kind: Namespace
@@ -450,8 +451,8 @@ class SystemUpgradeResourceTests(unittest.TestCase):
 
     def test_workflow_preflight_precedes_mutation(self):
         script = (CLUSTER / "cluster-node-workflow.sh").read_text()
-        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" "${manager_resources}" "${prepull_resources}" "${ui_resources}" "${driver_resources}" "${wait_resources}"', script)
-        for prefix in ('upgrade_resources="', 'cert_resources="', 'webhook_resources="', 'cainjector_resources="', 'manager_resources="', 'prepull_resources="', 'ui_resources="', 'driver_resources="', 'wait_resources="'):
+        self.assertIn('"${script_dir}/apply-pinned-dependencies.sh" "${upgrade_resources}" "${cert_resources}" "${webhook_resources}" "${cainjector_resources}" "${manager_resources}" "${prepull_resources}" "${ui_resources}" "${driver_resources}" "${wait_resources}" "${instance_resources}"', script)
+        for prefix in ('upgrade_resources="', 'cert_resources="', 'webhook_resources="', 'cainjector_resources="', 'manager_resources="', 'prepull_resources="', 'ui_resources="', 'driver_resources="', 'wait_resources="', 'instance_resources="'):
             assignment = next(line for line in script.splitlines() if line.startswith(prefix))
             self.assertLess(script.index(assignment), script.index('install -d -m 0700'))
             with tempfile.TemporaryDirectory() as temp:
@@ -464,14 +465,20 @@ class SystemUpgradeResourceTests(unittest.TestCase):
         for component in ("system-upgrade-controller", "cert-manager", "cert-manager-webhook", "cert-manager-cainjector", "longhorn-manager", "pre-pull-share-manager-image", "longhorn-ui", "longhorn-driver-deployer", "wait-longhorn-manager"):
             self.check_apply_path(component)
 
+    def test_instance_policy_installation_gate(self):
+        self.check_apply_path("instance-manager")
+
     def check_apply_path(self, component):
-        dependency = "longhorn" if component in ("longhorn-manager", "pre-pull-share-manager-image", "longhorn-ui", "longhorn-driver-deployer", "wait-longhorn-manager") else ("system-upgrade-controller" if component == "system-upgrade-controller" else "cert-manager")
-        for mode in ("valid", "canonical rewrite", "missing", "invalid", "caller drift", "download drift", "removed during download", "bad checksum", "template drift", "other missing", "other download drift", "UI download drift", "driver download drift", "wait download drift", "legacy caller", "legacy six-source caller", "legacy seven-source caller", "legacy eight-source caller"):
+        dependency = "longhorn" if component in ("longhorn-manager", "pre-pull-share-manager-image", "longhorn-ui", "longhorn-driver-deployer", "wait-longhorn-manager", "instance-manager") else ("system-upgrade-controller" if component == "system-upgrade-controller" else "cert-manager")
+        modes = ("valid", "canonical rewrite", "missing", "invalid", "caller drift", "download drift", "removed during download", "bad checksum", "template drift", "other missing", "other download drift", "UI download drift", "driver download drift", "wait download drift", "legacy caller", "legacy six-source caller", "legacy seven-source caller", "legacy eight-source caller", "legacy nine-source caller", "instance download drift")
+        if component == "instance-manager":
+            modes += ("policy failure", "probe delayed", "probe unbounded", "probe error", "probe malformed", "probe mismatch", "instance drift after policy", "instance drift after probe")
+        for mode in modes:
             with self.subTest(component=component, mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = pathlib.Path(temp)
                 cluster = root / "Data/Engine/K3s/cluster"
                 cluster.mkdir(parents=True)
-                for name in ("apply-pinned-dependencies.sh", "render-system-upgrade.py"):
+                for name in ("apply-pinned-dependencies.sh", "render-system-upgrade.py", "render-longhorn-instance-manager.py"):
                     (cluster / name).write_text((CLUSTER / name).read_text())
                 deploy = root / "Engine/Deploy"
                 deploy.mkdir(parents=True)
@@ -493,7 +500,9 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                 driver_source.write_text(json.dumps(DRIVER_BOUNDS))
                 wait_source = deploy / "longhorn-driver-wait-resources.json"
                 wait_source.write_text(json.dumps(WAIT_BOUNDS))
-                sources = {"system-upgrade-controller": upgrade_source, "cert-manager": cert_source, "cert-manager-webhook": webhook_source, "cert-manager-cainjector": cainjector_source, "longhorn-manager": manager_source, "pre-pull-share-manager-image": prepull_source, "longhorn-ui": ui_source, "longhorn-driver-deployer": driver_source, "wait-longhorn-manager": wait_source}
+                instance_source = deploy / "longhorn-instance-manager-resources.json"
+                instance_source.write_text(json.dumps(INSTANCE_BOUNDS))
+                sources = {"instance-manager": instance_source, "system-upgrade-controller": upgrade_source, "cert-manager": cert_source, "cert-manager-webhook": webhook_source, "cert-manager-cainjector": cainjector_source, "longhorn-manager": manager_source, "pre-pull-share-manager-image": prepull_source, "longhorn-ui": ui_source, "longhorn-driver-deployer": driver_source, "wait-longhorn-manager": wait_source}
                 source = sources[component]
                 other_source = cert_source if component == "cert-manager-webhook" else webhook_source
                 template = LONGHORN_MANIFEST if dependency == "longhorn" else (CERT_MANIFEST if dependency == "cert-manager" else MANIFEST)
@@ -522,14 +531,44 @@ if mode=='other download drift': pathlib.Path(os.environ['TEST_OTHER_SOURCE']).w
 if mode=='UI download drift': pathlib.Path(os.environ['TEST_UI_SOURCE']).write_text('{}')
 if mode=='driver download drift': pathlib.Path(os.environ['TEST_DRIVER_SOURCE']).write_text('{}')
 if mode=='wait download drift': pathlib.Path(os.environ['TEST_WAIT_SOURCE']).write_text('{}')
+if mode=='instance download drift': pathlib.Path(os.environ['TEST_INSTANCE_SOURCE']).write_text('{}')
 ''')
                 kubectl = binaries / "kubectl"
                 kubectl.write_text('''#!/usr/bin/env python3
-import os,pathlib,sys
+import json,os,pathlib,sys
 args=sys.argv[1:]
 with open(os.environ['TEST_CALLS'],'a') as stream: stream.write(' '.join(args)+'\\n')
-if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathlib.Path(args[args.index('-f')+1]).read_bytes())
+mode=os.environ['TEST_MODE']
+source=pathlib.Path(os.environ['TEST_INSTANCE_SOURCE'])
+if args[0]=='apply':
+ data=pathlib.Path(args[args.index('-f')+1]).read_bytes()
+ if 'instance-policy.json' in args[-1]:
+  if mode=='policy failure': sys.exit(1)
+  pathlib.Path(os.environ['TEST_POLICY']).write_bytes(data)
+  if mode=='instance drift after policy': source.write_text('{}')
+ else: pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(data)
+elif 'create' in args:
+ assert '--dry-run=server' in args
+ assert '--as=system:serviceaccount:longhorn-system:longhorn-service-account' in args
+ assert '--request-timeout=5s' in args
+ assert pathlib.Path(os.environ['TEST_POLICY']).exists()
+ count=pathlib.Path(os.environ['TEST_PROBES'])
+ n=int(count.read_text())+1 if count.exists() else 1
+ count.write_text(str(n))
+ if mode=='probe error': sys.exit(1)
+ if mode=='probe malformed': print('{}');sys.exit(0)
+ pod=json.loads(pathlib.Path(args[args.index('-f')+1]).read_text())
+ if mode!='probe unbounded' and not (mode=='probe delayed' and n==1):
+  bounds=json.loads(source.read_text())
+  bounds['requests']['cpu']='1m'
+  pod['spec']['containers'][0]['resources']=bounds
+ if mode=='probe mismatch': pod['spec']['containers'][0]['resources']['limits']['memory']='81Mi'
+ if mode=='instance drift after probe': source.write_text('{}')
+ print(json.dumps(pod))
 ''')
+                sleep = binaries / "sleep"
+                sleep.write_text("#!/bin/sh\nexit 0\n")
+                sleep.chmod(0o755)
                 curl.chmod(0o755)
                 kubectl.chmod(0o755)
                 if mode == "missing": source.unlink()
@@ -538,16 +577,18 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                 calls, applied = root / "calls", root / "applied.yaml"
                 command = ["bash", str(cluster / "apply-pinned-dependencies.sh")]
                 command.extend(RENDERER.resources(json.dumps(bounds)) for bounds in (BOUNDS, CERT_BOUNDS, WEBHOOK_BOUNDS, CAINJECTOR_BOUNDS, MANAGER_BOUNDS, PREPULL_BOUNDS, UI_BOUNDS, DRIVER_BOUNDS, WAIT_BOUNDS))
-                if mode == "caller drift": command[{"system-upgrade-controller": 2, "cert-manager": 3, "cert-manager-webhook": 4, "cert-manager-cainjector": 5, "longhorn-manager": 6, "pre-pull-share-manager-image": 7, "longhorn-ui": 8, "longhorn-driver-deployer": 9, "wait-longhorn-manager": 10}[component]] = '{}'
+                command.append(json.dumps(INSTANCE_BOUNDS, sort_keys=True, separators=(",", ":")))
+                if mode == "caller drift": command[{"system-upgrade-controller": 2, "cert-manager": 3, "cert-manager-webhook": 4, "cert-manager-cainjector": 5, "longhorn-manager": 6, "pre-pull-share-manager-image": 7, "longhorn-ui": 8, "longhorn-driver-deployer": 9, "wait-longhorn-manager": 10, "instance-manager": 11}[component]] = '{}'
                 if mode == "canonical rewrite": command = command[:2]  # Standalone entrypoint snapshots all files.
                 if mode == "legacy caller": command = command[:6]
                 if mode == "legacy six-source caller": command = command[:8]  # UI evidence cannot be omitted.
                 if mode == "legacy seven-source caller": command = command[:9]
                 if mode == "legacy eight-source caller": command = command[:10]
+                if mode == "legacy nine-source caller": command = command[:11]
                 env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], BOREALIS_KUBECTL_BIN=str(kubectl),
-                           TEST_DOWNLOAD=str(root / "downloaded"), TEST_MANIFEST=str(manifest), TEST_SOURCE=str(source), TEST_OTHER_SOURCE=str(other_source), TEST_UI_SOURCE=str(ui_source), TEST_DRIVER_SOURCE=str(driver_source), TEST_WAIT_SOURCE=str(wait_source), TEST_MODE=mode, TEST_CALLS=str(calls), TEST_APPLIED=str(applied))
+                           TEST_INSTANCE_SOURCE=str(instance_source), TEST_POLICY=str(root / "policy.json"), TEST_PROBES=str(root / "probes"), TEST_DOWNLOAD=str(root / "downloaded"), TEST_MANIFEST=str(manifest), TEST_SOURCE=str(source), TEST_OTHER_SOURCE=str(other_source), TEST_UI_SOURCE=str(ui_source), TEST_DRIVER_SOURCE=str(driver_source), TEST_WAIT_SOURCE=str(wait_source), TEST_MODE=mode, TEST_CALLS=str(calls), TEST_APPLIED=str(applied))
                 result = subprocess.run(command, env=env, capture_output=True, text=True)
-                valid = mode in ("valid", "canonical rewrite")
+                valid = mode in ("valid", "canonical rewrite", "probe delayed")
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
                 if valid:
                     docs = list(yaml.safe_load_all(applied.read_text()))
@@ -558,12 +599,26 @@ if args[0]=='apply': pathlib.Path(os.environ['TEST_APPLIED']).write_bytes(pathli
                     if dependency == "longhorn":
                         self.assertEqual(docs[3]["spec"]["template"]["spec"]["initContainers"][0].pop("resources"), WAIT_BOUNDS)
                     self.assertEqual(docs, list(yaml.safe_load_all(template)))
-                    self.assertEqual(calls.read_text().count('apply '), 1)
+                    self.assertEqual(calls.read_text().count('apply '), 2 if dependency == 'longhorn' else 1)
                     if dependency == "longhorn":
-                        self.assertTrue(calls.read_text().splitlines()[0].startswith('apply -f '))
-                        self.assertNotIn('--server-side', calls.read_text())
+                        entries = calls.read_text().splitlines()
+                        self.assertTrue(entries[0].startswith('apply --server-side --field-manager=borealis-cluster-bootstrap -f '))
+                        probe_index = next(i for i, line in enumerate(entries) if 'create --dry-run=server' in line)
+                        manifest_index = next(i for i, line in enumerate(entries) if line.startswith('apply -f '))
+                        self.assertLess(probe_index, manifest_index)
+                        policy = json.loads((root / 'policy.json').read_text())
+                        self.assertEqual([item['kind'] for item in policy['items']], ['MutatingAdmissionPolicy', 'MutatingAdmissionPolicyBinding'])
+                        self.assertIn('"memory": "80Mi"', policy['items'][0]['spec']['mutations'][0]['jsonPatch']['expression'])
+                        self.assertEqual((root / 'probes').read_text(), '2' if mode == 'probe delayed' else '1')
                 else:
-                    self.assertFalse(calls.exists(), result.stderr)
+                    gate_failure = mode.startswith("probe ") or mode.startswith("instance drift after") or mode == "policy failure"
+                    if gate_failure:
+                        self.assertTrue(calls.exists(), result.stderr)
+                        self.assertNotIn('apply -f ', calls.read_text())
+                        if mode in ("probe unbounded", "probe error", "probe malformed", "probe mismatch"):
+                            self.assertEqual((root / 'probes').read_text(), '15')
+                    else:
+                        self.assertFalse(calls.exists(), result.stderr)
                     self.assertFalse(applied.exists())
-                    if mode in ("missing", "invalid", "caller drift", "other missing", "legacy caller", "legacy six-source caller", "legacy seven-source caller", "legacy eight-source caller"):
+                    if mode in ("missing", "invalid", "caller drift", "other missing", "legacy caller", "legacy six-source caller", "legacy seven-source caller", "legacy eight-source caller", "legacy nine-source caller"):
                         self.assertFalse((root / "downloaded").exists())

@@ -21,6 +21,25 @@ BOUNDS = {"requests": {"memory": "64Mi"}, "limits": {"cpu": "1.5", "memory": "12
 
 
 class InstanceManagerResourcesTests(unittest.TestCase):
+    def test_probe_verifier_requires_admitted_frozen_bounds(self):
+        bounds = json.dumps(BOUNDS)
+        probe = json.loads(RENDERER.render_probe())
+        with self.assertRaises(ValueError):
+            RENDERER.verify_probe(bounds, json.dumps(probe))
+        resources = probe["spec"]["containers"][0]["resources"]
+        resources["requests"]["memory"] = "67108864"
+        resources["limits"] = {"cpu": "1500m", "memory": "134217728"}
+        self.assertEqual(RENDERER.verify_probe(bounds, json.dumps(probe)), "")
+        for section, field, value in (("requests", "cpu", "2m"), ("requests", "memory", "65Mi"),
+                                      ("limits", "cpu", "2"), ("limits", "memory", "129Mi")):
+            changed = copy.deepcopy(probe)
+            changed["spec"]["containers"][0]["resources"][section][field] = value
+            with self.subTest(section=section, field=field), self.assertRaises(ValueError):
+                RENDERER.verify_probe(bounds, json.dumps(changed))
+        for raw in ("{}", "null", "[]", '{"kind":"Pod","kind":"Pod"}', 'x' * (2 * 1024 * 1024 + 1)):
+            with self.subTest(raw=raw[:40]), self.assertRaises((ValueError, KeyError, TypeError)):
+                RENDERER.verify_probe(bounds, raw)
+
     def test_config_contract_and_quantities(self):
         self.assertEqual(json.loads(RENDERER.resources(json.dumps(BOUNDS))), BOUNDS)
         bad = ["null", "[]", "{}", '{"requests":{},"requests":{},"limits":{}}']

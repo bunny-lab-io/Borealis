@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render review-only instance-manager admission objects; never contact Kubernetes."""
+"""Render instance-manager admission objects and verify offline probe responses."""
 
 import importlib.util
 import json
@@ -108,13 +108,56 @@ def render(bounds):
     return json.dumps({"apiVersion": "v1", "kind": "List", "items": [policy, binding]}, sort_keys=True, indent=2)
 
 
+def render_probe():
+    # Synthetic CREATE input only: caller must use server dry-run. No sizing
+    # defaults, image pull, scheduled workload or stored Pod is introduced.
+    return json.dumps({
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {"generateName": "borealis-instance-manager-admission-check-",
+                     "namespace": NAMESPACE, "labels": {
+                         "longhorn.io/component": "instance-manager",
+                         "longhorn.io/data-engine": "v1",
+                         "longhorn.io/instance-manager-type": "aio"}},
+        "spec": {"serviceAccountName": ACCOUNT, "containers": [{
+            "name": "instance-manager", "image": "registry.k8s.io/pause:3.10.2",
+            "resources": {"requests": {"cpu": "1m"}},
+        }]},
+    })
+
+
+def verify_probe(bounds, raw):
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("probe response exceeds bound")
+    pod = json.loads(raw, object_pairs_hook=_HELPERS_MODULE.unique_object)
+    expected = json.loads(bounds)
+    if (pod["apiVersion"] != "v1" or pod["kind"] != "Pod"
+            or pod["metadata"]["namespace"] != NAMESPACE
+            or pod["spec"]["serviceAccountName"] != ACCOUNT
+            or len(pod["spec"]["containers"]) != 1
+            or pod["spec"]["containers"][0]["name"] != "instance-manager"):
+        raise ValueError("unexpected probe identity")
+    actual = pod["spec"]["containers"][0]["resources"]
+    if set(actual["requests"]) != {"cpu", "memory"} or set(actual["limits"]) != {"cpu", "memory"}:
+        raise ValueError("unexpected probe resources")
+    cpu, memory = _HELPERS_MODULE.cpu_milli, _HELPERS_MODULE.memory_bytes
+    if (cpu(actual["requests"]["cpu"]) != 1
+            or memory(actual["requests"]["memory"]) != memory(expected["requests"]["memory"])
+            or cpu(actual["limits"]["cpu"]) != cpu(expected["limits"]["cpu"])
+            or memory(actual["limits"]["memory"]) != memory(expected["limits"]["memory"])):
+        raise ValueError("probe bounds mismatch")
+    return ""
+
+
 def main():
     try:
-        if len(sys.argv) != 3 or sys.argv[1] not in {"config", "policy"}:
+        if len(sys.argv) != 3 or sys.argv[1] not in {"config", "policy", "probe", "verify-probe"}:
             raise ValueError("invalid arguments")
         bounds = read_resources(sys.argv[2])
-        result = bounds if sys.argv[1] == "config" else render(bounds)
-    except (ValueError, KeyError, TypeError, OSError, RecursionError):
+        if sys.argv[1] == "verify-probe":
+            result = verify_probe(bounds, sys.stdin.buffer.read(2 * 1024 * 1024 + 1))
+        else:
+            result = {"config": lambda: bounds, "policy": lambda: render(bounds), "probe": render_probe}[sys.argv[1]]()
+    except (ValueError, KeyError, TypeError, IndexError, OSError, RecursionError):
         print("Instance-manager rendering failed: require valid memory request and CPU/memory caps; CPU request is owned by Longhorn.", file=sys.stderr)
         return 1
     sys.stdout.write(result)

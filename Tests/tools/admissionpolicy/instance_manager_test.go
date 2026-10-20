@@ -45,6 +45,7 @@ func (c criteria) GetParsedObjectSelector() (labels.Selector, error) {
 }
 
 type evaluator struct {
+	configPath string
 	compiler   *plugincel.CompositedCompiler
 	policy     admissionv1.MutatingAdmissionPolicy
 	binding    admissionv1.MutatingAdmissionPolicyBinding
@@ -73,7 +74,7 @@ func newEvaluator(t *testing.T) *evaluator {
 	if len(bundle.Items) != 2 {
 		t.Fatalf("expected policy and binding, got %d", len(bundle.Items))
 	}
-	e := &evaluator{}
+	e := &evaluator{configPath: config}
 	if err := json.Unmarshal(bundle.Items[0], &e.policy); err != nil {
 		t.Fatal(err)
 	}
@@ -310,5 +311,39 @@ func TestFailedJSONPatchTestDoesNotReject(t *testing.T) {
 	_, _, err = e.apply(pod, producer, admission.Create)
 	if err == nil || !strings.Contains(err.Error(), "no such key: unsupported instance-manager resource shape or bounds") {
 		t.Fatalf("expected explicit guard error, got %v", err)
+	}
+}
+
+func TestInstanceManagerProbe(t *testing.T) {
+	e := newEvaluator(t)
+	renderer := "../../../Data/Engine/K3s/cluster/render-longhorn-instance-manager.py"
+	raw, err := exec.Command("python3", renderer, "probe", e.configPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("render probe: %v: %s", err, raw)
+	}
+	verify := func(input []byte) error {
+		command := exec.Command("python3", renderer, "verify-probe", e.configPath)
+		command.Stdin = strings.NewReader(string(input))
+		return command.Run()
+	}
+	if verify(raw) == nil {
+		t.Fatal("unmutated probe accepted")
+	}
+	var pod corev1.Pod
+	if err := json.Unmarshal(raw, &pod); err != nil {
+		t.Fatal(err)
+	}
+	// API server resolves generateName before admission; no object is persisted.
+	pod.Name = pod.GenerateName + "synthetic"
+	got, matched, err := e.apply(&pod, producer, admission.Create)
+	if err != nil || !matched {
+		t.Fatalf("probe admission matched=%v: %v", matched, err)
+	}
+	admitted, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verify(admitted); err != nil {
+		t.Fatalf("real evaluator output rejected by setup gate: %v", err)
 	}
 }
