@@ -52,6 +52,9 @@ func main() {
 	}
 
 	if apiDBHealthcheckMode() {
+		if err := holdProcessIdentityConsumer(cfg); err != nil {
+			log.Fatalf("identity consumer startup blocked: %v", err)
+		}
 		if err := runGoAPIDBHealthcheck(rootCtx, cfg); err != nil {
 			log.Printf("Go api-backend DB healthcheck failed: %v", err)
 			os.Exit(1)
@@ -94,6 +97,11 @@ func main() {
 		return
 	}
 
+	// Both API and scheduler can retain session/signing keys. Acquire before
+	// their first key read; controller/operator and HTTP-only probes do not.
+	if err := holdProcessIdentityConsumer(cfg); err != nil {
+		log.Fatalf("identity consumer startup blocked: %v", err)
+	}
 	if schedulerManagerMode() {
 		if err := runGoJobSchedulerManager(rootCtx, cfg); err != nil {
 			log.Fatalf("Go job-scheduler manager exited: %v", err)
