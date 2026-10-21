@@ -108,6 +108,9 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			// Three persistent CSI node-plugin containers, once per target.
 			wantCPU += 95
 			wantMemory += 168 << 20
+			// One bounded instance-manager memory cap per joining target.
+			// Native CPU remains outside this partial subtotal.
+			wantMemory += 128 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}

@@ -27,6 +27,8 @@ Standalone deployments detect host CPU and RAM, score them separately, and selec
 
 Borealis writes profile tuning into `Engine/Deploy/compose.env` and applies database plus site-worker scheduled task-slot settings through K3s workload manifests. This sizing profile is separate from the network mode selected during install.
 
+The CPU and RAM bands below describe current automatic profile selection. They are not validated minimum or recommended hardware for SSH cluster onboarding. Homelab's open lower band does not establish a safe minimum. Endpoint counts and storage ranges are planning estimates; actual workload, replica, installation, scratch, free-space and inode requirements still need measurement.
+
 === "Homelab"
     | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -55,6 +57,14 @@ Borealis writes profile tuning into `Engine/Deploy/compose.env` and applies data
 !!! info "Scheduled task slots"
 
     Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
+
+### Cluster onboarding profile checks
+
+The SSH onboarding preview recognizes the four existing sizing profiles: Homelab, Small Business, MSP / Production and Enterprise. Enterprise Clustered is a roadmap placeholder, not another selectable profile. Joining hosts inherit the source profile and reference memory; larger hosts keep that tuning.
+
+Scheduled task slots must match the inherited profile: **5, 8, 12 or 16**, respectively. A conflicting source value blocks the inherited hardware check because deployment would replace it with the profile value. If this check blocks, verify the source profile and scheduled task slots, reconcile conflicting source configuration through an approved maintenance procedure, then inspect the targets again. An omitted optional slot setting continues to derive from the inherited profile. Existing service-limit checks remain in force; this rule does not qualify other tuning overrides or bound the total number of workers.
+
+Validated onboarding hardware minimums, workload recommendations, complete allowed tuning and release/profile capacity budgets remain pending. Meeting a selection band or passing this check does not authorize preparation or admission. See [Managing Engine Clusters](managing-engine-clusters.md) for current readiness gates.
 
 ## Profile-Managed Container Limits
 `Engine.sh` writes least-privilege runtime settings during every deploy. Normal Engine services and K3s pods run as the `borealis-engine` system user/group where supported, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, profile-scaled CPU/memory caps, and fixed read-only host timezone data. PostgreSQL runs in K3s as the official non-root PostgreSQL UID on a Longhorn-backed PVC so imported database state keeps compatible ownership. Limits are caps, not reservations. K3s `remote-desktop-guacd` stays ClusterIP-only and does not mount the Docker socket.
@@ -355,6 +365,7 @@ After deployment finishes:
     - `load_profile_tuning` keeps actual host observations separate from the reference memory used for PostgreSQL buffers/cache and profile defaults. Target CPU/memory ranks must support inherited rank, reference memory must support that rank, and inherited PostgreSQL memory cap must fit actual target RAM. A CPU-limited source can have more RAM than necessary; a smaller target may retain exact capped tuning when these checks pass.
     - Both sizing fields persist through generated runtime/compose environments and existing runtime Secret mirroring. Local host telemetry cannot replace the retained memory reference during subsequent redeploys. Existing explicit service-limit settings keep their documented precedence; full aggregate capacity/storage checks remain separate prerequisites. This runtime consumer does not publish a release, deliver SSH configuration, authorize preparation or qualify enrollment by itself.
     - The central SSH capacity gate uses fresh CPU/RAM from every original target and requires the source's explicit effective PostgreSQL cap, preserving service-limit precedence without inventing release defaults. It rechecks the entire source configuration around observation and consumption. It mirrors `load_profile_tuning`'s pre-override computed-profile guard and checks the explicit effective cap; both must fit. Aggregate workload/storage qualification and preparation authorization remain separate. [Cluster guidance](managing-engine-clusters.md) owns this gate's lifecycle and supported quantity contract.
+    - `PreparationConfiguration.Sizing` also rejects an explicitly supplied `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY` that differs from inherited rank's existing 5/8/12/16 slots. `Engine.sh` renders this field directly from `PROFILE_SITE_WORKER_CONCURRENCY`, so a conflicting source value cannot be inherited faithfully. Generic configuration import retains its syntax contract; missing optional slots derive as before. This is a tuning-compatibility check, not a worker-capacity allowance. No observer, authority or readiness gate is replaced. `TestPreparationSizingScheduledTuningRuntimeParity` executes isolated production Bash sizing functions for all ranks and checks the actual environment-rendering binding; native scope tests reject mismatch and source drift before consumption.
     - `Tests/Unit_Tests/test_engine_cluster_recovery.py` exercises actual Bash library functions for all profiles, larger targets, capped memory, unchanged standalone detection, missing/malformed/insufficient contracts, inherited prejoin configuration and subsequent host telemetry changes. Go sizing tests independently compare profile boundaries, inherited shared-buffer clamps plus extra memory, pre-override rejection and effective quantity conversion with isolated pure functions extracted from `Engine.sh`; they do not execute its startup or deployment path. No lab runtime is modified.
 
     ### Configuration precedence

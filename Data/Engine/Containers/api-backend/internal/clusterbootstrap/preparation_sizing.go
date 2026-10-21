@@ -33,9 +33,20 @@ func (c *PreparationConfiguration) Sizing() (PreparationSizing, error) {
 	if err != nil || !value.valid() {
 		return PreparationSizing{}, ErrPreparationConfig
 	}
+	// Engine.sh renders this field from the inherited profile, even when an
+	// explicit value was supplied. Accepting a different source value would
+	// silently change tuning on the joining host. Absence retains the existing
+	// optional-setting contract: derive from the same inherited profile.
+	if slots, supplied := c.wire.Runtime["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"]; supplied && slots != sizingScheduledSlots[value.rank] {
+		return PreparationSizing{}, ErrPreparationConfig
+	}
 	return value, nil
 }
 
+var sizingScheduledSlots = [...]string{"5", "8", "12", "16"}
+
+// These are existing profile selection thresholds, not validated operational
+// hardware minimums. Rank zero deliberately has no published safe floor.
 var sizingMinimumCPU = [...]uint32{1, 8, 16, 24}
 var sizingMinimumMiB = [...]uint64{1, 16384, 32768, 65536}
 

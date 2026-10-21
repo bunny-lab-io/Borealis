@@ -10,13 +10,19 @@ import (
 )
 
 func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "smaller than source", "consumer copy", "CPU low", "sibling RAM low", "computed cap too large", "cap too large", "cap missing", "source error", "source binding", "source drift early", "source drift before consume", "source drift after consume", "source drift final", "source alias", "claim lost", "host drift", "cancel source", "cancel consumer", "consumer error", "ignored failure", "nil source", "nil consumer", "partial cohort"} {
+	for _, mode := range []string{"scheduled profile match", "scheduled profile mismatch", "scheduled profile drift", "expansion", "replacement", "smaller than source", "consumer copy", "CPU low", "sibling RAM low", "computed cap too large", "cap too large", "cap missing", "source error", "source binding", "source drift early", "source drift before consume", "source drift after consume", "source drift final", "source alias", "claim lost", "host drift", "cancel source", "cancel consumer", "consumer error", "ignored failure", "nil source", "nil consumer", "partial cohort"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			settings := sshPreparationRuntimeFixture()
 			settings["BOREALIS_CLUSTER_SIZING_RANK"] = "1"
 			settings["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = "16384"
 			settings["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "4g"
+			if strings.HasPrefix(mode, "scheduled profile") {
+				settings["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] = "8"
+			}
+			if mode == "scheduled profile mismatch" {
+				settings["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] = "12"
+			}
 			if mode == "smaller than source" {
 				settings["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = "131072"
 			}
@@ -76,6 +82,9 @@ func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
 					// retaining this alias instead of owned bytes would miss drift.
 					settings["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "5g"
 				}
+				if mode == "scheduled profile drift" && reads == 3 {
+					settings["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] = "12"
+				}
 				if mode == "cancel source" {
 					cancel()
 					select {
@@ -130,7 +139,7 @@ func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
 				}
 				return err
 			})
-			wantSuccess := mode == "expansion" || mode == "replacement" || mode == "smaller than source" || mode == "consumer copy"
+			wantSuccess := mode == "scheduled profile match" || mode == "expansion" || mode == "replacement" || mode == "smaller than source" || mode == "consumer copy"
 			if (err == nil) != wantSuccess {
 				t.Fatal("unsafe sizing decision", err)
 			}

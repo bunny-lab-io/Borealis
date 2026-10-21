@@ -287,6 +287,15 @@ func clusterSSHNodeWorkloadBudget(r clusterSSHStorageRequirements) (cpu, memory 
 	if !ok {
 		return 0, 0, false
 	}
+	// Charge one bounded V1/aio process group per target. CPU stays outside this
+	// partial subtotal until target allocatable/override policy is bound.
+	if !r.LonghornInstanceManagerResources.valid() {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, r.LonghornInstanceManagerResources.MemoryLimitBytes)
+	if !ok {
+		return 0, 0, false
+	}
 	workerCPU, workerMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)
 	if !valid {
 		return 0, 0, false

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"math"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -65,10 +64,13 @@ func clusterSSHInstanceNativeCPU(read func(string) (map[string]any, error), memb
 	return uint64(value), value > 0 && value <= float64(clusterSSHCapacityLimit)
 }
 
-// Observation-only gate. Full policy, owner, node, setting and Pod receipts join
-// existing authority-bound rereads. No target demand or readiness is inferred.
-func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHLonghornManagerImages) error {
-	fail := func() error { return clusterbootstrap.ErrPreparationConfig }
+// Full policy, owner, node, setting and Pod receipts join authority-bound
+// rereads. Project only validated bounds/global CPU policy, never source CPU
+// requests or node overrides as target defaults.
+func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHLonghornManagerImages) (clusterSSHInstanceManagerResources, error) {
+	fail := func() (clusterSSHInstanceManagerResources, error) {
+		return clusterSSHInstanceManagerResources{}, clusterbootstrap.ErrPreparationConfig
+	}
 	if read == nil || readList == nil || len(source.Members) < 1 || len(source.Members) > 2 || !images.valid() {
 		return fail()
 	}
@@ -95,8 +97,8 @@ func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error)
 			return fail()
 		}
 	}
-	percentage, err := strconv.ParseFloat(text, 64)
-	if err != nil || percentage < 0 || percentage > 40 {
+	percentage, valid := clusterSSHInstancePercentage(text)
+	if !valid {
 		return fail()
 	}
 	seenNodes, seenPods, seenOwners, seenContainers := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -171,5 +173,5 @@ func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error)
 			return fail()
 		}
 	}
-	return nil
+	return clusterSSHInstanceManagerResources{MemoryRequestBytes: bounds.MemoryRequestBytes, MemoryLimitBytes: bounds.MemoryLimitBytes, CPULimitMilli: bounds.CPULimitMilli, CPUPercentage: text}, nil
 }

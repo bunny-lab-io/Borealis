@@ -119,6 +119,46 @@ func TestPreparationSizingRequiresOwnedExplicitConfiguration(t *testing.T) {
 	}
 }
 
+func TestPreparationSizingScheduledTuningRuntimeParity(t *testing.T) {
+	functions := []string{"profile_rank_for_cpu", "profile_rank_for_memory", "profile_name_for_rank",
+		"clamp_mib", "format_pg_memory_mib", "format_docker_memory_mib", "load_profile_tuning"}
+	for rank, reference := range []string{"8192", "16384", "32768", "65536"} {
+		rankText := strconv.Itoa(rank)
+		t.Run(rankText, func(t *testing.T) {
+			// Read actual profile tuning from isolated production Bash functions.
+			// A larger joining host must still use the inherited profile's slots.
+			want := preparationSizingBash(t, functions, `
+load_profile_tuning 64 262144 "$1" "$2"
+printf '%s\n' "$PROFILE_SITE_WORKER_CONCURRENCY"
+`, rankText, reference)
+			for _, supplied := range []string{"", want, "0", "1", "5", "8", "12", "16", "999999999"} {
+				e, runtime := preparationFixture()
+				runtime["BOREALIS_CLUSTER_SIZING_RANK"] = rankText
+				runtime["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = reference
+				runtime["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "32g"
+				if supplied != "" {
+					runtime["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] = supplied
+				}
+				c, err := NewPreparationConfiguration(e, runtime)
+				if err != nil {
+					t.Fatal("generic configuration compatibility changed", err)
+				}
+				s, err := c.Sizing()
+				valid := supplied == "" || supplied == want
+				if (err == nil) != valid || (valid && (s.rank != rank || s.Fits(64, 262144*1024) != nil)) {
+					t.Fatalf("profile %d scheduled slots %q differ from runtime %q", rank, supplied, want)
+				}
+			}
+		})
+	}
+	// The generated runtime must continue selecting profile slots, rather than
+	// loading an arbitrary retained or ambient override after this gate.
+	raw, err := os.ReadFile("../../../../../../Engine.sh")
+	if err != nil || strings.Count(string(raw), "\nBOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=${PROFILE_SITE_WORKER_CONCURRENCY}\n") != 1 {
+		t.Fatal("scheduled slot rendering contract changed", err)
+	}
+}
+
 // Extract only these pure functions. Never source or run Engine.sh startup,
 // deployment, runtime detection or host mutation from a portable Go test.
 func preparationSizingBash(t *testing.T, names []string, script string, args ...string) string {
