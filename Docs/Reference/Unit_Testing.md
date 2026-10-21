@@ -99,6 +99,8 @@ Run `./Tests/run-database-postgres.sh` when changing cluster membership, control
 
 Every required database test must run and pass. Missing tests, skipped tests or subtests, and incomplete results fail the lane. Keep the reported result directory when investigating a failure; CI retains database logs for successful and failed runs.
 
+The required Go database package has an explicit 15-minute suite limit. Each runner command retains its default 20-minute limit, and CI allows 25 minutes for setup and validation. `BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS` overrides the command limit; setting it below the package limit can stop Go before timeout diagnostics finish. Individual operation deadlines and all required assertions remain unchanged.
+
 ## CI Boundary
 
 Normal pull requests validate deterministic repository behavior. Full Engine deploy, live K3s readiness, Longhorn persistence, public DNS, TLS issuance, real Agent enrollment, browser interaction, and remote-device networking remain deployment or Tier 3 qualification responsibilities.

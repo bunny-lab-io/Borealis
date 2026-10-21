@@ -88,10 +88,13 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   exit 1
 fi
 
+# Required authority/drift cases cumulatively exceed Go's implicit 10-minute
+# package limit. Keep a bounded package timeout inside the default command
+# budget so Go can emit diagnostics; individual operation deadlines stay fixed.
 if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
-  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json ./cmd/api-backend \
+  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json -timeout=15m ./cmd/api-backend \
   -run "${TEST_PATTERN}" -count=1 \
   >"${RESULT_DIR}/postgres-go-results.jsonl" 2>"${RESULT_DIR}/postgres-go-stderr.log"; then
   tail -n 160 "${RESULT_DIR}/postgres-go-results.jsonl" "${RESULT_DIR}/postgres-go-stderr.log" >&2 || true
