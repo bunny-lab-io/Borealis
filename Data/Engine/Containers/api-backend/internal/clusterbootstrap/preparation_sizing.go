@@ -45,6 +45,34 @@ func (c *PreparationConfiguration) Sizing() (PreparationSizing, error) {
 
 var sizingScheduledSlots = [...]string{"5", "8", "12", "16"}
 
+// SmallBusinessApplicationLimits selects only the declared application budget
+// qualified against Engine.sh. Explicit effective limits are required: missing
+// settings cannot borrow this release's defaults. This is not a worker,
+// infrastructure, host-reserve or complete allowed-tuning contract.
+func (c *PreparationConfiguration) SmallBusinessApplicationLimits() error {
+	sizing, err := c.Sizing()
+	if err != nil || sizing.rank != 1 || sizing.referenceMiB != 16384 || c.wire.Runtime["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] != "8" {
+		return ErrPreparationConfig
+	}
+	for _, service := range []struct {
+		name string
+		mib  uint64
+		cpu  float64
+	}{
+		{"API_BACKEND", 1024, 2}, {"JOB_SCHEDULER", 512, 1.5},
+		{"WEBUI_FRONTEND", 512, 1}, {"TRAEFIK_EDGE", 512, 1.5},
+		{"POSTGRES_DB", 6144, 2}, {"REMOTE_DESKTOP_GUACD", 512, 1},
+		{"WIREGUARD_TUNNEL", 256, 1},
+	} {
+		memory, memoryErr := preparationMemoryBytes(c.wire.Runtime["BOREALIS_"+service.name+"_MEMORY_LIMIT"])
+		cpu, cpuErr := strconv.ParseFloat(c.wire.Runtime["BOREALIS_"+service.name+"_CPU_LIMIT"], 64)
+		if memoryErr != nil || cpuErr != nil || memory != service.mib<<20 || cpu != service.cpu {
+			return ErrPreparationConfig
+		}
+	}
+	return nil
+}
+
 // These are existing profile selection thresholds, not validated operational
 // hardware minimums. Rank zero deliberately has no published safe floor.
 var sizingMinimumCPU = [...]uint32{1, 8, 16, 24}

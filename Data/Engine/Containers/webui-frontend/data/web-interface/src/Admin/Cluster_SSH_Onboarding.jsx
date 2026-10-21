@@ -15,7 +15,7 @@ const clearCredentials = (targets) => targets.forEach((target) => {
 
 const qualificationChecks = {
   source_inputs: ["Source release and storage policy", "Check the source release, unlocked credentials and storage health before starting another inspection."],
-  host_profile: ["Inherited hardware requirements", "Targets must support the source Engine's CPU and memory profile."],
+  host_profile: ["Inherited profile and application budget", "Preview currently checks Small Business with 16 GiB source tuning, eight scheduled slots and explicit default application CPU/memory caps. Review source deployment settings, workload limits and target hardware before retrying."],
   replica_capacity: ["Replica storage and rebuild space", "Each target needs space for its replicas, bootstrap copies, application images and rebuild headroom. Existing storage needs a separate recovery plan."],
   network_boot: ["Persistent network configuration", "The Engine could not establish supported persistent network ownership. Review host configuration before retrying."],
   network_arp: ["Local network reachability", "Check the management network, peer identities and cluster virtual IP ownership."],

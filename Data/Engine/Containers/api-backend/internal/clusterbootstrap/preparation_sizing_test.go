@@ -29,6 +29,71 @@ func preparationSizingFixture(t *testing.T, rank int, reference, cap string) Pre
 	return s
 }
 
+func TestPreparationSizingSmallBusinessApplicationLimits(t *testing.T) {
+	functions := []string{"profile_rank_for_cpu", "profile_rank_for_memory", "profile_name_for_rank",
+		"clamp_mib", "format_pg_memory_mib", "format_docker_memory_mib", "load_profile_tuning"}
+	output := preparationSizingBash(t, functions, `load_profile_tuning 32 131072 1 16384
+for service in API_BACKEND JOB_SCHEDULER WEBUI_FRONTEND TRAEFIK_EDGE POSTGRES_DB REMOTE_DESKTOP_GUACD WIREGUARD_TUNNEL; do
+  for resource in CPU MEMORY; do
+    variable="PROFILE_${service}_${resource}_LIMIT"
+    printf 'BOREALIS_%s_%s_LIMIT=%s\n' "$service" "$resource" "${!variable}"
+  done
+done
+printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\nBOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=%s\n' "$PROFILE_RANK" "$PROFILE_CLUSTER_SIZING_MEMORY_MIB" "$PROFILE_SITE_WORKER_CONCURRENCY"
+`)
+	e, settings := preparationFixture()
+	keys := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatal("invalid runtime profile output")
+		}
+		settings[key] = value
+		keys = append(keys, key)
+	}
+	check := func() error {
+		c, err := NewPreparationConfiguration(e, settings)
+		if err != nil {
+			return err
+		}
+		return c.SmallBusinessApplicationLimits()
+	}
+	if err := check(); err != nil || len(keys) != 17 {
+		t.Fatal("actual inherited profile defaults rejected", err)
+	}
+	for _, key := range keys {
+		value := settings[key]
+		delete(settings, key)
+		if check() == nil {
+			t.Fatal("missing effective setting accepted", key)
+		}
+		settings[key] = "9"
+		if strings.HasSuffix(key, "MEMORY_LIMIT") {
+			settings[key] = "9Gi"
+		}
+		if check() == nil {
+			t.Fatal("unsupported override accepted", key)
+		}
+		settings[key] = value
+	}
+	// Equivalent quantities preserve the contract; smaller/larger overrides do not.
+	settings["BOREALIS_API_BACKEND_MEMORY_LIMIT"] = "1024Mi"
+	settings["BOREALIS_API_BACKEND_CPU_LIMIT"] = "2.000000"
+	if check() != nil {
+		t.Fatal("equivalent effective limits rejected")
+	}
+	for _, cpu := range []string{"1.999999", "2.000001"} {
+		settings["BOREALIS_API_BACKEND_CPU_LIMIT"] = cpu
+		if check() == nil {
+			t.Fatal("rounded CPU override accepted")
+		}
+	}
+	var absent *PreparationConfiguration
+	if absent.SmallBusinessApplicationLimits() == nil || new(PreparationConfiguration).SmallBusinessApplicationLimits() == nil {
+		t.Fatal("unselected configuration accepted")
+	}
+}
+
 func TestPreparationSizingProfileBoundaries(t *testing.T) {
 	for rank, minimum := range []struct {
 		cpu uint32

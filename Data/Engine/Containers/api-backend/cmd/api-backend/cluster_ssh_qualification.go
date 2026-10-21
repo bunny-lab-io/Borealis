@@ -131,7 +131,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		}
 		report.Checks[stage].State = "passed"
 		stage = 1
-		if err := withClusterSSHTargetApplicationSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error { return nil }); err != nil {
+		if err := withClusterSSHTargetProfileSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error { return nil }); err != nil {
 			return err
 		}
 		report.Checks[stage].State = "passed"

@@ -12,23 +12,99 @@ import (
 	"time"
 )
 
+func sshSmallBusinessSettings() map[string]string {
+	settings := sshPreparationRuntimeFixture()
+	settings["BOREALIS_CLUSTER_SIZING_RANK"] = "1"
+	settings["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = "16384"
+	settings["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] = "8"
+	for service, limits := range map[string][2]string{
+		"API_BACKEND": {"1g", "2.00"}, "JOB_SCHEDULER": {"512m", "1.50"},
+		"WEBUI_FRONTEND": {"512m", "1.00"}, "TRAEFIK_EDGE": {"512m", "1.50"},
+		"POSTGRES_DB": {"6144m", "2.00"}, "REMOTE_DESKTOP_GUACD": {"512m", "1.00"},
+		"WIREGUARD_TUNNEL": {"256m", "1.00"},
+	} {
+		settings["BOREALIS_"+service+"_MEMORY_LIMIT"] = limits[0]
+		settings["BOREALIS_"+service+"_CPU_LIMIT"] = limits[1]
+	}
+	return settings
+}
+
+func TestClusterSSHTargetProfileSizing(t *testing.T) {
+	for _, mode := range []string{"expansion", "replacement", "missing cap", "override", "other profile", "template mismatch", "postgres mismatch", "missing infrastructure", "source identity", "settings drift before", "settings drift after", "template drift before", "template drift after", "receipt drift", "unrelated setting drift", "nil source"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
+			snapshot := clusterSSHPreparationSnapshot{Settings: sshSmallBusinessSettings(), Storage: sshStorageSnapshotFixture(t, f.a), DesiredWorkerSites: []int64{}}
+			snapshot.Storage.Requirements.Applications = clusterSSHSmallBusinessApplications()
+			snapshot.Storage.Requirements.PostgresResources = clusterSSHSmallBusinessPostgres()
+			if cpu, memory, valid := clusterSSHDesiredWorkerWorkloadBudget(snapshot); !valid {
+				t.Fatalf("incomplete baseline workload fixture: %d %d", cpu, memory)
+			}
+			consumed, reads := false, 0
+			var source clusterSSHPreparationSnapshotRead = func(context.Context) (clusterSSHPreparationSnapshot, error) {
+				reads++
+				e, err := buildClusterSSHPreparationExpected(f.a.Cohort, f.a.Source, f.a.Lease, f.a.Baseline, f.a.K3sVersion, f.sources[0].PodCIDR, f.sources[0].ServiceCIDR)
+				snapshot.Expected = e
+				switch mode {
+				case "missing cap":
+					delete(snapshot.Settings, "BOREALIS_API_BACKEND_MEMORY_LIMIT")
+				case "override":
+					snapshot.Settings["BOREALIS_API_BACKEND_MEMORY_LIMIT"] = "2g"
+				case "other profile":
+					snapshot.Settings["BOREALIS_CLUSTER_SIZING_RANK"] = "0"
+				case "template mismatch":
+					snapshot.Storage.Requirements.Applications[0].CPURequestMilli++
+				case "postgres mismatch":
+					snapshot.Storage.Requirements.PostgresResources.MemoryLimitBytes++
+				case "missing infrastructure":
+					snapshot.Storage.Requirements.LonghornInstanceManagerResources = clusterSSHInstanceManagerResources{}
+				case "source identity":
+					snapshot.Expected.Source.SourceSHA = strings.Repeat("e", 40)
+				}
+				if (mode == "settings drift before" && reads == 2) || (mode == "settings drift after" && consumed) {
+					snapshot.Settings["BOREALIS_API_BACKEND_CPU_LIMIT"] = "3.00"
+				}
+				if (mode == "template drift before" && reads == 2) || (mode == "template drift after" && consumed) {
+					snapshot.Storage.Requirements.Applications[0].MemoryLimitBytes++
+				}
+				if mode == "receipt drift" && reads == 2 {
+					snapshot.Storage.Observation = strings.Repeat("e", 64)
+				}
+				if mode == "unrelated setting drift" && reads == 2 {
+					snapshot.Settings["BOREALIS_DB_POOL_SIZE"] = "13"
+				}
+				return snapshot, err
+			}
+			if mode == "nil source" {
+				source = nil
+			}
+			err := runClusterSSHNetworkTargets(context.Background(), f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+				return withClusterSSHTargetProfileSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error {
+					consumed = true
+					return nil
+				})
+			})
+			valid := mode == "expansion" || mode == "replacement"
+			if (err == nil) != valid || (valid && !consumed) {
+				t.Fatal("profile qualification result", consumed, err)
+			}
+			if !valid && !strings.HasSuffix(mode, "after") && consumed {
+				t.Fatal("unqualified budget consumed")
+			}
+			if strings.HasSuffix(mode, "after") && !consumed {
+				t.Fatal("test did not reach post-consumption recheck")
+			}
+		})
+	}
+}
+
 // Qualification of declared application demand only. This does not supply
 // infrastructure/worker/reserve allowances or authorize a hardware minimum.
 // Run real profile selection, quantity conversion, manifest and CNPG rendering
 // with synthetic private configuration; never read a deployed Engine or K3s.
 func TestClusterSSHSmallBusinessApplicationBudget(t *testing.T) {
 	const root = "../../../../../.."
-	want := []clusterSSHApplicationResource{
-		{"api-backend", 75, 2000, 192 << 20, 1024 << 20},
-		{"borealis-cluster-controller", 50, 500, 64 << 20, 256 << 20},
-		{"borealis-operator", 25, 250, 48 << 20, 160 << 20},
-		{"job-scheduler", 50, 1500, 128 << 20, 512 << 20},
-		{"remote-desktop-guacd", 25, 1000, 64 << 20, 512 << 20},
-		{"traefik-edge", 25, 1500, 96 << 20, 512 << 20},
-		{"webui-frontend", 50, 1000, 128 << 20, 512 << 20},
-		{"wireguard-tunnel", 25, 1000, 48 << 20, 256 << 20},
-	}
-	wantPostgres := clusterSSHApplicationResource{"postgres-db", 100, 2000, 256 << 20, 6144 << 20}
+	want := clusterSSHSmallBusinessApplications()
+	wantPostgres := clusterSSHSmallBusinessPostgres()
 	for _, host := range []struct {
 		name, cpu, memory string
 		valid             bool
@@ -116,7 +192,7 @@ print(json.dumps({'applications':apps,'postgres':postgres[0]['spec']['template']
 				t.Fatalf("Small Business application budget drift: %v: got %+v; want %+v", err, values, want)
 			}
 			for _, raw := range append(rendered.CNPG, rendered.Postgres) {
-				postgres, valid := clusterSSHWorkloadResources("postgres-db", raw)
+				postgres, valid := clusterSSHWorkloadResources("postgres", raw)
 				if !valid || postgres != wantPostgres {
 					t.Fatalf("PostgreSQL/CNPG inherited budget drift: got %+v; want %+v", postgres, wantPostgres)
 				}
