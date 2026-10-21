@@ -1005,6 +1005,28 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
     - `cluster_ssh_target_sizing.go` requires complete original-target reader scope and the existing fresh preparation/source broker callback. It independently rebuilds the expected source/cohort/anchor binding, owns canonical configuration bytes and checks full configuration equality before target acquisition, before consumption, after consumption and after final native observations. Every source check is bracketed by all-target authority refresh; the original joined heartbeat stays active. Fresh CPU/RAM comes from the host-evidence scope above, including both complete initial rounds and the final round. Insufficient siblings, settings drift, changed host facts, lost claims, independent-context cancellation and ignored failures fence the whole scope.
     - Source reads and consumers must honor cancellation and join child work. Success reserves no host resources and creates no durable qualification, SQL write, new public API or production preparation transition. Storage, aggregate workload/replica fit, remaining boot/network/clean-host/takeover checks, guarded confirmation and immutable preparation/admission remain separate prerequisites. See [deployment sizing inheritance](deploying-the-engine.md) for the runtime consumer and [test guidance](../Reference/Unit_Testing.md) for profile/quantity parity and native cohort coverage.
 
+    ### Small Business declared application budget
+
+    `TestClusterSSHSmallBusinessApplicationBudget` qualifies the repository's declared application subtotal for **Small Business, rank 1, inherited reference memory 16384 MiB, production WebUI, default service limits and eight scheduled slots**. This is one configuration, not every rank-1 memory reference or override. `Tests/render-k3s-manifests.sh <temporary-directory> small-business` runs existing profile tuning, quantity conversion and production manifest renderers against synthetic private configuration. Its default fixture mode remains available for general K3s policy checks.
+
+    | Workload | CPU request (mCPU) | CPU cap (mCPU) | Memory request (MiB) | Memory cap (MiB) |
+    | --- | ---: | ---: | ---: | ---: |
+    | api-backend | 75 | 2000 | 192 | 1024 |
+    | borealis-cluster-controller | 50 | 500 | 64 | 256 |
+    | borealis-operator | 25 | 250 | 48 | 160 |
+    | job-scheduler | 50 | 1500 | 128 | 512 |
+    | remote-desktop-guacd | 25 | 1000 | 64 | 512 |
+    | traefik-edge | 25 | 1500 | 96 | 512 |
+    | webui-frontend | 50 | 1000 | 128 | 512 |
+    | wireguard-tunnel | 25 | 1000 | 48 | 256 |
+    | Eight deployments, one copy each | **325** | **8750** | **768** | **3744** |
+    | One PostgreSQL instance | 100 | 2000 | 256 | 6144 |
+    | Combined application subtotal | **425** | **10750** | **1024** | **9888** |
+
+    The test feeds rendered deployments through the existing application observer and budget calculator, checks every request/cap against this contract, and verifies PostgreSQL resources survive actual CNPG rendering for one and three instances. Synthetic Kubernetes UIDs/resource versions supply API-assigned identity only. Existing placement-parity coverage checks one active copy per target; this subtotal is not the generic controller Deployment's replica total. A 32-CPU/128-GiB joining fixture retains the same rank/reference and subtotal; 7-CPU and 16383-MiB fixtures fail the inherited profile check. Fixture hardware establishes test inputs, not qualified minimums.
+
+    CPU caps may overcommit. Memory caps are a conservative simultaneous envelope, not measured working sets, reservations or free RAM. This evidence excludes site workers, infrastructure, host/runtime reserves, startup/rollout overlap, placement feasibility, failure/replacement load and measured storage. Fixture images are never pulled or run; no released image set, runtime performance or safe hardware floor is qualified. Runtime source/release binding and unsupported-override rejection must be integrated before this subtotal can replace any mandatory observation. Existing observers, drift checks and controller readiness gates remain required.
+
     ### Application and database workload subtotal
 
     - `cluster_ssh_application_resources.go` reads the eight canonical `borealis` Deployment templates from `reconcile-node-workloads.py` through fixed named GETs under existing controller Deployment authority. The renderer copies one active replica of each onto every joining Engine; a zero-replica generic template still contributes one planned replica. Expansion and replacement use the same subtotal, with no candidate or failed-node Pod prerequisite. Full-object receipts join existing source observations and are rechecked around consumption.
