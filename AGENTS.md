@@ -28,6 +28,22 @@ unshare --user --map-root-user --net sh -c \
 
 Setting is host-wide security relaxation and resets after reboot unless separately persisted. Do not run VS Code or Codex as root. Apply only on operator-approved development host; never change production host or unrelated infrastructure for Codex sandbox access.
 
+## Dedicated Development Workstation Boundary
+Codex and future agents use dedicated Linux workstation outside Borealis cluster as source-development and control host.
+
+Allowed on workstation:
+* Edit, review, test, build, commit, and push repository code.
+* Run non-deployment validation, CI-equivalent checks, and disposable test fixtures documented for development hosts.
+
+Never deploy or run Borealis Engine on workstation. Do not install or start Engine runtime, K3s, cluster workloads, or persistent Borealis services there. Do not use workstation as Engine member, onboarding target, disposable qualification node, or source of live capacity evidence.
+
+Disposable Engine lab nodes are remote targets:
+* `borealis-engine-01` / `192.168.3.252`
+* `borealis-engine-02` / `192.168.3.251`
+* `borealis-engine-03` / `192.168.3.250`
+
+Access all three through SSH from workstation for separately authorized inspection, deployment, runtime repair, and qualification. Never edit deployed checkout as development source. Before any command that can install, deploy, start, stop, restart, reconfigure, or qualify Engine runtime, verify local hostname is not an Engine node, identify exact remote target, and confirm applicable authorization and documented procedure. Repository implementation authorization does not authorize remote runtime action.
+
 ## Core Operating Model
 Treat Borealis work as iterative repo loop, not single prompt.
 
