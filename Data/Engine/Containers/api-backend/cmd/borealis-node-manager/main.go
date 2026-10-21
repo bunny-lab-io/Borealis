@@ -261,13 +261,14 @@ func client(args []string) {
 	clusterVIP := flags.String("cluster-vip", "", "Borealis Cluster Virtual IP")
 	operationID := flags.String("operation-id", "", "Removal operation UUID")
 	nodeID := flags.String("node-id", "", "Durable removal target UUID")
-	removalNodeName := flags.String("node-name", "", "Expected removal target node name")
+	removalNodeName := flags.String("node-name", "", "Expected target node name")
 	nodeUID := flags.String("node-uid", "", "Expected Kubernetes Node UID")
 	etcdMemberName := flags.String("etcd-member-name", "", "Expected K3s etcd member name")
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
 		"PrepareApplicationRestore": true,
+		"InspectIdentityConsumers":  true,
 		"ReconcileVIPPlacement":     true,
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
@@ -306,6 +307,14 @@ func client(args []string) {
 		}
 	}
 	var removalTarget memberRemovalIdentity
+	var identityTarget identityConsumerTarget
+	if strings.TrimSpace(*verb) == "InspectIdentityConsumers" {
+		var err error
+		identityTarget, err = parseIdentityConsumerTarget(params, *removalNodeName)
+		if err != nil {
+			fatalf("invalid identity consumer target")
+		}
+	}
 	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
 		var err error
 		removalTarget, err = removalIdentity(params, *removalNodeName)
@@ -343,6 +352,11 @@ func client(args []string) {
 	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
 		if err := validateRemovalAcknowledgement(responseRaw, removalTarget); err != nil {
 			fatalf("node-manager removal acknowledgement rejected: %v", err)
+		}
+	}
+	if strings.TrimSpace(*verb) == "InspectIdentityConsumers" {
+		if err := validateIdentityConsumerAcknowledgement(responseRaw, identityTarget); err != nil {
+			fatalf("node-manager identity consumer acknowledgement rejected")
 		}
 	}
 	fmt.Println(string(responseRaw))
@@ -511,7 +525,7 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
-	case "InspectSourceNetwork", "InspectVIPNetwork":
+	case "InspectSourceNetwork", "InspectVIPNetwork", "InspectIdentityConsumers":
 		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
@@ -557,6 +571,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
 		return m.inspectHealth(ctx)
+	case "InspectIdentityConsumers":
+		return m.inspectIdentityConsumers(ctx, request.Params)
 	case "InspectSourceNetwork":
 		if len(request.Params) != 0 {
 			return nil, clusterbootstrap.ErrPreparationConfig

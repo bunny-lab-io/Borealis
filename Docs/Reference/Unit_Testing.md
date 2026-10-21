@@ -149,6 +149,8 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
 
     ### Validation selection
 
+    - Shared-identity recovery prerequisite: `go -C Data/Engine/Containers/api-backend test ./cmd/borealis-node-manager -run '^TestIdentityConsumers' -count=1`. Fixtures cover exact internal command/target binding, drained Node rereads, active/candidate/terminating consumer Pods, cross-namespace identity hostPath mounts, incomplete/changed evidence, cancellation, private errors, bounded output and legacy acknowledgement rejection. Full node-manager tests and vet cover integration. These are read-only synthetic observations, not runtime-process fencing, key migration or cross-replica authentication proof; ordinary rollout drain behavior remains unchanged.
+
     - M1 profile tuning: run `go -C Data/Engine/Containers/api-backend test ./internal/clusterbootstrap -run '^TestPreparationSizing' -count=1` and `go -C Data/Engine/Containers/api-backend test ./cmd/api-backend -run '^TestClusterSSHTargetSizing' -count=1`. Scheduled-slot compatibility is compared against isolated `Engine.sh` functions for all four inherited ranks; mismatch and source drift fail before the native consumer. Existing boundary, computed/effective-cap, scope and authority tests remain. These tests establish profile compatibility, not operational hardware minimums, recommended capacity or admission readiness.
 
     - Use `Tests/helpers/changed_paths.py` for stable CI group selection.
