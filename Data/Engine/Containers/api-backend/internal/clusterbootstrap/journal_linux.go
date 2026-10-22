@@ -471,8 +471,8 @@ func (j *MutationJournal) reconcileLocked(ctx context.Context, step, inputSHA256
 	return result, nil
 }
 
-// Close blocks until an active Apply/Reconcile callback has returned. It does
-// not erase journal outcomes or authorize cleanup of installed target state.
+// Close blocks until an active mutation, reconciliation or domain release has
+// returned. It does not erase outcomes or independently authorize cleanup.
 func (j *MutationJournal) Close() error {
 	if j == nil {
 		return nil

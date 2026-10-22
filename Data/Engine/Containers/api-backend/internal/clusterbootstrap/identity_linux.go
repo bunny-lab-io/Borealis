@@ -120,3 +120,54 @@ func (j *MutationJournal) ReconcileJoinedIdentity(ctx context.Context, install e
 		return material.Digest(), nil
 	}, "applied")
 }
+
+// ReleaseJoinedIdentity removes the restart marker only after the exact outer
+// install result is durably applied and every prior supervised executor remains
+// quiescent. It does not start consumers or expose a remote mutation command.
+func (j *MutationJournal) ReleaseJoinedIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	if j == nil {
+		return "", ErrMutationJournal
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.authority(ctx) != nil {
+		return "", ErrSessionAuthority
+	}
+	install, inputSHA256, err := j.joinedIdentityRequest(ctx, install, material)
+	if err != nil {
+		return "", err
+	}
+	record, ok := j.state.Steps["install_identity"]
+	if !ok || record.InputSHA256 != inputSHA256 {
+		return "", ErrMutationJournal
+	}
+	if record.State != "applied" {
+		return "", ErrMutationUnknown
+	}
+	if record.ResultSHA256 != material.Digest() {
+		return "", ErrMutationJournal
+	}
+	// Normal successful installation releases its own marker. Recovery release
+	// requires a distinct executor that can independently prove the producer dead.
+	if record.Executor == j.executor {
+		return "", ErrMutationUnknown
+	}
+	if err := j.priorExecutorsQuiescent(ctx); err != nil {
+		return "", err
+	}
+	quiesced := install.Quiesced
+	install.Quiesced = func() error {
+		if err := j.priorExecutorsQuiescent(ctx); err != nil {
+			return err
+		}
+		if err := quiesced(); err != nil {
+			return err
+		}
+		return j.priorExecutorsQuiescent(ctx)
+	}
+	state, err := install.ReleaseFencedCommitted(material)
+	if err != nil {
+		return "", ErrMutationUnknown
+	}
+	return state, nil
+}

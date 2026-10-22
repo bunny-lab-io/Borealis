@@ -452,3 +452,185 @@ func TestJoinedIdentityReconciliationRejectsIncompleteOrChangedProof(t *testing.
 		})
 	}
 }
+
+func TestJoinedIdentityReleaseRequiresAppliedProofAndIsIdempotent(t *testing.T) {
+	j, root, install, material := joinedIdentityCommittedUnknown(t, "inner_committed")
+	markerPath := filepath.Join(install.Root, joinedIdentityRecoveryMarker)
+	journalPath := filepath.Join(install.Journal, "journal.json")
+	journalBefore, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.ReleaseJoinedIdentity(context.Background(), install, material); err != ErrMutationUnknown {
+		t.Fatal("uncertain outer intent authorized restart")
+	}
+	identityConsumerBlocked(t, install.Root)
+	if _, err := j.ReconcileJoinedIdentity(context.Background(), install, material); err != nil {
+		t.Fatal(err)
+	}
+	state, err := j.ReleaseJoinedIdentity(context.Background(), install, material)
+	if err != nil || state != "released" {
+		t.Fatalf("committed identity release failed: %s %v", state, err)
+	}
+	if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("successful release retained restart marker")
+	}
+	consumer, err := engineidentity.AcquireConsumer(install.Root)
+	if err != nil {
+		t.Fatal("released identity still blocked consumer startup")
+	}
+	consumer.Close()
+	journalAfter, err := os.ReadFile(journalPath)
+	if err != nil || !bytes.Equal(journalBefore, journalAfter) {
+		t.Fatal("release changed committed inner journal")
+	}
+	current, err := engineidentity.Load(install.Root)
+	if err != nil || !current.Equal(material) {
+		t.Fatal("release changed committed identity")
+	}
+	record := readMutationFixture(t, root).Steps["install_identity"]
+	if record.State != "applied" || record.ResultSHA256 != material.Digest() {
+		t.Fatal("release changed outer identity result")
+	}
+	if state, err := j.ReleaseJoinedIdentity(context.Background(), install, material); err != nil || state != "already_released" {
+		t.Fatalf("released identity was not idempotent: %s %v", state, err)
+	}
+}
+
+func TestJoinedIdentityReleaseFailureRetainsOrRestoresMarker(t *testing.T) {
+	for _, kind := range []string{"identity", "inner_journal", "marker", "material", "authority", "quiescence", "same_producer", "producer_live", "authority_after_unlink", "quiescence_after_unlink"} {
+		t.Run(kind, func(t *testing.T) {
+			j, root, install, material := joinedIdentityCommittedUnknown(t, "inner_committed")
+			if _, err := j.ReconcileJoinedIdentity(context.Background(), install, material); err != nil {
+				t.Fatal(err)
+			}
+			markerPath := filepath.Join(install.Root, joinedIdentityRecoveryMarker)
+			markerBefore, err := os.ReadFile(markerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "identity":
+				if err := os.WriteFile(filepath.Join(install.Root, engineidentity.EngineSecretPath), []byte("changed-identity-material-that-is-long-enough\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "inner_journal":
+				path := filepath.Join(install.Journal, "journal.json")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var record map[string]any
+				if json.Unmarshal(raw, &record) != nil {
+					t.Fatal("fixture journal decode failed")
+				}
+				record["state"] = "prepared"
+				raw, _ = json.Marshal(record)
+				if err := os.WriteFile(path, raw, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "marker":
+				if err := os.WriteFile(markerPath, []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "material":
+				material = joinedIdentityMaterial(t)
+			case "authority":
+				install.Check = func() error { return errors.New("original source changed") }
+			case "quiescence":
+				install.Quiesced = func() error { return errors.New("legacy consumer state unknown") }
+			case "same_producer":
+				j.executor = j.state.Steps["install_identity"].Executor
+			case "producer_live":
+				j.quiescent = func(context.Context, ExecutorIdentity) error { return ErrExecutorContainment }
+			case "authority_after_unlink":
+				install.Check = func() error {
+					if _, err := os.Stat(markerPath); errors.Is(err, os.ErrNotExist) {
+						return errors.New("authority lost after marker unlink")
+					}
+					return nil
+				}
+			case "quiescence_after_unlink":
+				install.Quiesced = func() error {
+					if _, err := os.Stat(markerPath); errors.Is(err, os.ErrNotExist) {
+						return errors.New("legacy process state changed after marker unlink")
+					}
+					return nil
+				}
+			}
+			_, err = j.ReleaseJoinedIdentity(context.Background(), install, material)
+			want := ErrMutationUnknown
+			if kind == "material" {
+				want = ErrMutationJournal
+			}
+			if err != want {
+				t.Fatalf("unsafe release returned %v, want %v", err, want)
+			}
+			if readMutationFixture(t, root).Steps["install_identity"].State != "applied" {
+				t.Fatal("failed release changed applied outer result")
+			}
+			markerAfter, err := os.ReadFile(markerPath)
+			if err != nil {
+				t.Fatal("failed release left startup unblocked")
+			}
+			if kind == "authority_after_unlink" || kind == "quiescence_after_unlink" {
+				if !bytes.Equal(markerBefore, markerAfter) {
+					t.Fatal("failed post-unlink check did not restore exact marker")
+				}
+			}
+			identityConsumerBlocked(t, install.Root)
+		})
+	}
+}
+
+func TestJoinedIdentityCloseCannotReleaseLocksDuringMarkerRelease(t *testing.T) {
+	j, _, install, material := joinedIdentityCommittedUnknown(t, "inner_committed")
+	if _, err := j.ReconcileJoinedIdentity(context.Background(), install, material); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(install.Root, joinedIdentityRecoveryMarker)
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	paused := false
+	install.Check = func() error {
+		if _, err := os.Stat(markerPath); errors.Is(err, os.ErrNotExist) && !paused {
+			paused = true
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { _, err := j.ReleaseJoinedIdentity(context.Background(), install, material); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release did not reach post-unlink boundary")
+	}
+	identityConsumerBlocked(t, install.Root)
+	closed := make(chan error, 1)
+	go func() { closed <- j.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("close released host lock during marker release")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	consumer, err := engineidentity.AcquireConsumer(install.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Close()
+}
