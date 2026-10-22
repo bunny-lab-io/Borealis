@@ -19,6 +19,13 @@ func sessionFixture() SessionRequest {
 			Address: "192.168.3.251", Port: 22, Hostname: "engine-02", MachineID: strings.Repeat("a", 32), HostKeyAlgorithm: "ssh-ed25519", HostKeyFingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32))}}
 }
 
+func identityRecoverySessionFixture() SessionRequest {
+	r := sessionFixture()
+	r.Action = "verify_identity_recovery"
+	r.IdentityRecovery = &IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-777777777777"}
+	return r
+}
+
 type sessionFixtureClient struct {
 	in   *io.PipeWriter
 	out  *io.PipeReader
@@ -27,13 +34,17 @@ type sessionFixtureClient struct {
 }
 
 func newSessionFixture(t *testing.T, verify func(context.Context, SessionRequest) error) *sessionFixtureClient {
+	return newSessionFixtureRequest(t, sessionFixture(), verify)
+}
+
+func newSessionFixtureRequest(t *testing.T, request SessionRequest, verify func(context.Context, SessionRequest) error) *sessionFixtureClient {
 	t.Helper()
 	in, writer := io.Pipe()
 	reader, out := io.Pipe()
 	c := &sessionFixtureClient{in: writer, out: reader, done: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	go func() {
-		c.err = serveSession(ctx, in, out, sessionFixture().Nonce, verify, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 100 * time.Millisecond})
+		c.err = serveSession(ctx, in, out, request.Nonce, verify, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 100 * time.Millisecond})
 		close(c.done)
 	}()
 	t.Cleanup(func() {
@@ -50,8 +61,11 @@ func newSessionFixture(t *testing.T, verify func(context.Context, SessionRequest
 }
 
 func (c *sessionFixtureClient) start(t *testing.T, password string) SessionMessage {
+	return c.startRequest(t, password, sessionFixture())
+}
+
+func (c *sessionFixtureClient) startRequest(t *testing.T, password string, r SessionRequest) SessionMessage {
 	t.Helper()
-	r := sessionFixture()
 	preamble, _ := SessionPreamble(r.Nonce)
 	if _, err := io.WriteString(c.in, password+preamble); err != nil {
 		t.Fatal(err)
@@ -64,6 +78,25 @@ func (c *sessionFixtureClient) start(t *testing.T, password string) SessionMessa
 		t.Fatal("request rejected")
 	}
 	return c.challenge(t)
+}
+
+func TestBootstrapSessionBindsReadOnlyIdentityRecoveryCompletion(t *testing.T) {
+	request := identityRecoverySessionFixture()
+	c := newSessionFixtureRequest(t, request, func(_ context.Context, observed SessionRequest) error {
+		if observed.Action != request.Action || observed.IdentityRecovery == nil || *observed.IdentityRecovery != *request.IdentityRecovery {
+			return errors.New("identity recovery binding changed")
+		}
+		return nil
+	})
+	challenge := c.startRequest(t, "", request)
+	c.heartbeat(t, challenge)
+	var done SessionMessage
+	if ReadSessionFrame(c.out, &done) != nil || done.State != "verified" || done.IdentityRecovery == nil || *done.IdentityRecovery != *request.IdentityRecovery {
+		t.Fatal("identity recovery completion not bound to exact request")
+	}
+	if err := c.result(t); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (c *sessionFixtureClient) challenge(t *testing.T) SessionMessage {
@@ -132,7 +165,7 @@ func TestBootstrapSessionRequiresFreshChallengesAndExactCompletion(t *testing.T)
 }
 
 func TestBootstrapSessionStopsOnExpiredReplayedAndDisconnectedAuthority(t *testing.T) {
-	for _, mode := range []string{"missing initial confirmation", "expired", "replayed", "wrong nonce", "disconnect", "blocked output"} {
+	for _, mode := range []string{"missing initial confirmation", "expired", "replayed", "wrong nonce", "heartbeat payload", "disconnect", "blocked output"} {
 		t.Run(mode, func(t *testing.T) {
 			var called atomic.Bool
 			stopped := make(chan struct{})
@@ -153,6 +186,12 @@ func TestBootstrapSessionStopsOnExpiredReplayedAndDisconnectedAuthority(t *testi
 					case "wrong nonce":
 						next.Nonce = strings.Repeat("0", 64)
 						c.heartbeat(t, next)
+					case "heartbeat payload":
+						next.State = "heartbeat"
+						next.IdentityRecovery = identityRecoverySessionFixture().IdentityRecovery
+						if WriteSessionFrame(c.in, next) != nil {
+							t.Fatal("malformed heartbeat unavailable")
+						}
 					case "disconnect":
 						_ = c.in.Close()
 					}
@@ -186,6 +225,28 @@ func TestBootstrapSessionRejectsInvalidFramingAndWriteActions(t *testing.T) {
 		changed.Action = action
 		if changed.Validate() == nil {
 			t.Fatal("unimplemented host mutation authorized")
+		}
+	}
+	for _, mode := range []string{"valid", "missing", "verify field", "source", "source target", "source uid", "target uid", "same uid"} {
+		changed := identityRecoverySessionFixture()
+		switch mode {
+		case "missing":
+			changed.IdentityRecovery = nil
+		case "verify field":
+			changed.Action = "verify"
+		case "source":
+			changed.IdentityRecovery.SourceID = "00000000-0000-0000-0000-000000000000"
+		case "source target":
+			changed.IdentityRecovery.SourceID = changed.Binding.TargetID
+		case "source uid":
+			changed.IdentityRecovery.SourceNodeUID = "not-a-node-uid"
+		case "target uid":
+			changed.IdentityRecovery.TargetNodeUID = "not-a-node-uid"
+		case "same uid":
+			changed.IdentityRecovery.TargetNodeUID = changed.IdentityRecovery.SourceNodeUID
+		}
+		if (changed.Validate() == nil) != (mode == "valid") {
+			t.Fatalf("identity recovery validation boundary failed: %s", mode)
 		}
 	}
 	var valid bytes.Buffer

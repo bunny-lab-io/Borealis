@@ -22,6 +22,7 @@ import (
 )
 
 var errBootstrapHostVerification = errors.New("bootstrap executable or observed host identity differs from authorized target")
+var errBootstrapIdentityRecovery = errors.New("identity recovery qualification evidence unavailable or changed")
 
 func bootstrapSession(args []string) {
 	nonce := bootstrapSessionNonce(args)
@@ -70,14 +71,50 @@ func bootstrapSessionContained(args []string) {
 		fatalf("bootstrap executor context invalid")
 	}
 	defer guard.Close()
-	if err := clusterbootstrap.ServeSupervisedSession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionHost, guard.ObserveDeadline); err != nil {
+	if err := clusterbootstrap.ServeSupervisedSession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionRequest, guard.ObserveDeadline); err != nil {
 		fatalf("bootstrap-session verification failed; session data withheld")
 	}
 }
 
-// Only public host-key/machine metadata and this executable are read. No
-// installed manager token, kubeconfig, Engine secrets or local auth setup is
-// involved. This command has no prepare/join/identity-write dispatch surface.
+type bootstrapSessionObservers struct {
+	host      func(context.Context, clusterbootstrap.SessionRequest) error
+	consumers func(context.Context, identityConsumerTarget) error
+	runtime   func(context.Context, clusterbootstrap.SessionRequest) error
+}
+
+func verifyBootstrapSessionRequest(ctx context.Context, request clusterbootstrap.SessionRequest) error {
+	return verifyBootstrapSessionRequestWith(ctx, request, bootstrapSessionObservers{
+		host: verifyBootstrapSessionHost,
+		consumers: func(ctx context.Context, target identityConsumerTarget) error {
+			_, err := observeIdentityConsumers(ctx, target, identityConsumerCommand)
+			return err
+		},
+		runtime: func(ctx context.Context, request clusterbootstrap.SessionRequest) error {
+			return observeIdentityHostRuntime(ctx, defaultRepoRoot, request, actionRuntimeID, actionRuntimeID)
+		},
+	})
+}
+
+func verifyBootstrapSessionRequestWith(ctx context.Context, request clusterbootstrap.SessionRequest, observers bootstrapSessionObservers) error {
+	if request.Validate() != nil || observers.host == nil || ctx.Err() != nil || observers.host(ctx, request) != nil || ctx.Err() != nil {
+		return errBootstrapHostVerification
+	}
+	if request.Action == "verify" {
+		return nil
+	}
+	if request.Action != "verify_identity_recovery" || request.IdentityRecovery == nil || observers.consumers == nil || observers.runtime == nil {
+		return errBootstrapIdentityRecovery
+	}
+	target := identityConsumerTarget{NodeName: request.Binding.Hostname, NodeUID: request.IdentityRecovery.TargetNodeUID}
+	if observers.consumers(ctx, target) != nil || ctx.Err() != nil || observers.runtime(ctx, request) != nil || ctx.Err() != nil ||
+		observers.consumers(ctx, target) != nil || ctx.Err() != nil {
+		return errBootstrapIdentityRecovery
+	}
+	return nil
+}
+
+// This host verifier reads only public host-key/machine metadata and its own
+// executable. It never reads installed manager credentials or Engine secrets.
 func verifyBootstrapSessionHost(ctx context.Context, request clusterbootstrap.SessionRequest) error {
 	if request.Validate() != nil || ctx.Err() != nil {
 		return errBootstrapHostVerification

@@ -26,11 +26,12 @@ const (
 )
 
 var (
-	ErrSessionProtocol  = errors.New("node bootstrap session protocol invalid; remote data withheld")
-	ErrSessionAuthority = errors.New("node bootstrap session authority expired or rejected")
-	sessionUUID         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	sessionHostname     = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
-	sessionMachineID    = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	ErrSessionProtocol   = errors.New("node bootstrap session protocol invalid; remote data withheld")
+	ErrSessionAuthority  = errors.New("node bootstrap session authority expired or rejected")
+	sessionUUID          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	sessionKubernetesUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	sessionHostname      = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
+	sessionMachineID     = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
 // SessionBinding identifies the exact worker claim and observed SSH host.
@@ -73,34 +74,67 @@ func (b SessionBinding) Validate() error {
 	return ErrSessionProtocol
 }
 
-// SessionRequest initially permits only verification. Preparation, identity
-// writes and join are deliberately absent until their journals/fences exist.
+// IdentityRecoveryRequest binds read-only recovery qualification to the
+// original source member and exact existing target Node. No identity digest or
+// private material crosses this public request.
+type IdentityRecoveryRequest struct {
+	SourceID      string `json:"source_node_id"`
+	SourceNodeUID string `json:"source_node_uid"`
+	TargetNodeUID string `json:"target_node_uid"`
+}
+
+func (r IdentityRecoveryRequest) Validate(binding SessionBinding) error {
+	if !sessionUUID.MatchString(r.SourceID) || r.SourceID == "00000000-0000-0000-0000-000000000000" ||
+		!sessionKubernetesUID.MatchString(r.SourceNodeUID) || !sessionKubernetesUID.MatchString(r.TargetNodeUID) ||
+		r.SourceID == binding.TargetID || r.SourceNodeUID == r.TargetNodeUID || binding.Validate() != nil {
+		return ErrSessionProtocol
+	}
+	return nil
+}
+
+// SessionRequest permits host verification and fixed read-only identity
+// recovery qualification. Preparation, identity writes, marker release and
+// join remain absent until their complete journaled dispatch contracts exist.
 type SessionRequest struct {
-	Protocol           int            `json:"protocol"`
-	Action             string         `json:"action"`
-	Nonce              string         `json:"nonce"`
-	Binding            SessionBinding `json:"binding"`
-	Repository         string         `json:"repository"`
-	Release            string         `json:"release"`
-	SourceSHA          string         `json:"source_sha"`
-	ManagerSHA256      string         `json:"manager_sha256"`
-	AllowQualification bool           `json:"allow_qualification"`
+	Protocol           int                      `json:"protocol"`
+	Action             string                   `json:"action"`
+	Nonce              string                   `json:"nonce"`
+	Binding            SessionBinding           `json:"binding"`
+	Repository         string                   `json:"repository"`
+	Release            string                   `json:"release"`
+	SourceSHA          string                   `json:"source_sha"`
+	ManagerSHA256      string                   `json:"manager_sha256"`
+	AllowQualification bool                     `json:"allow_qualification"`
+	IdentityRecovery   *IdentityRecoveryRequest `json:"identity_recovery,omitempty"`
 }
 
 func (r SessionRequest) Validate() error {
-	if r.Protocol != 1 || r.Action != "verify" || !digestPattern.MatchString(r.Nonce) || !digestPattern.MatchString(r.ManagerSHA256) || r.Binding.Validate() != nil {
+	if r.Protocol != 1 || !digestPattern.MatchString(r.Nonce) || !digestPattern.MatchString(r.ManagerSHA256) || r.Binding.Validate() != nil {
+		return ErrSessionProtocol
+	}
+	switch r.Action {
+	case "verify":
+		if r.IdentityRecovery != nil {
+			return ErrSessionProtocol
+		}
+	case "verify_identity_recovery":
+		if r.IdentityRecovery == nil || r.IdentityRecovery.Validate(r.Binding) != nil {
+			return ErrSessionProtocol
+		}
+	default:
 		return ErrSessionProtocol
 	}
 	return (Expected{r.Repository, r.Release, r.SourceSHA, r.AllowQualification}).Validate()
 }
 
 type SessionMessage struct {
-	Protocol      int             `json:"protocol"`
-	State         string          `json:"state"`
-	Nonce         string          `json:"nonce"`
-	Binding       *SessionBinding `json:"binding,omitempty"`
-	SourceSHA     string          `json:"source_sha,omitempty"`
-	ManagerSHA256 string          `json:"manager_sha256,omitempty"`
+	Protocol         int                      `json:"protocol"`
+	State            string                   `json:"state"`
+	Nonce            string                   `json:"nonce"`
+	Binding          *SessionBinding          `json:"binding,omitempty"`
+	SourceSHA        string                   `json:"source_sha,omitempty"`
+	ManagerSHA256    string                   `json:"manager_sha256,omitempty"`
+	IdentityRecovery *IdentityRecoveryRequest `json:"identity_recovery,omitempty"`
 }
 
 // WriteSessionFrame uses length framing so sudo's optional unread password line
@@ -330,7 +364,7 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 		case <-readFailed:
 			return ErrSessionProtocol
 		case message := <-frames:
-			if !pending || message.Protocol != 1 || message.State != "heartbeat" || message.Nonce != challenge || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || !time.Now().Before(deadline) {
+			if !pending || message.Protocol != 1 || message.State != "heartbeat" || message.Nonce != challenge || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil || !time.Now().Before(deadline) {
 				return ErrSessionAuthority
 			}
 			pending = false
@@ -348,7 +382,7 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 			if err != nil || ctx.Err() != nil || !time.Now().Before(deadline) {
 				return ErrSessionAuthority
 			}
-			return WriteSessionFrame(output, SessionMessage{Protocol: 1, State: "verified", Nonce: nonce, Binding: &request.Binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256})
+			return WriteSessionFrame(output, SessionMessage{Protocol: 1, State: "verified", Nonce: nonce, Binding: &request.Binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256, IdentityRecovery: request.IdentityRecovery})
 		case <-ticker.C:
 			if !pending && issue() != nil {
 				return ErrSessionProtocol

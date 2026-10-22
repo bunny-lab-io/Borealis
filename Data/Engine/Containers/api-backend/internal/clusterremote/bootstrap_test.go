@@ -73,6 +73,44 @@ func TestBootstrapAuthorityTimeoutJoinsCallback(t *testing.T) {
 	}
 }
 
+func TestIdentityRecoveryAuthorityBracketsSourceAndNodeProof(t *testing.T) {
+	for _, mode := range []string{"valid", "controller first", "source", "controller final", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if mode == "canceled" {
+				cancel()
+			}
+			var order []string
+			controllers := 0
+			check := identityRecoveryAuthority(func(context.Context) error {
+				controllers++
+				order = append(order, "controller")
+				if mode == "controller first" && controllers == 1 || mode == "controller final" && controllers == 2 {
+					return errors.New("private controller failure")
+				}
+				return nil
+			}, func(context.Context) error {
+				order = append(order, "source-node")
+				if mode == "source" {
+					return errors.New("private source failure")
+				}
+				return nil
+			})
+			err := check(ctx)
+			if (err == nil) != (mode == "valid") {
+				t.Fatalf("authority composition failed: %v", err)
+			}
+			if mode == "valid" && strings.Join(order, ",") != "controller,source-node,controller" {
+				t.Fatalf("source proof not bracketed by controller: %v", order)
+			}
+			if mode == "canceled" && len(order) != 0 {
+				t.Fatalf("canceled authority invoked callbacks: %v", order)
+			}
+		})
+	}
+}
+
 func bootstrapBinding(server *fakeSSH) clusterbootstrap.SessionBinding {
 	return clusterbootstrap.SessionBinding{ClusterID: "11111111-1111-4111-8111-111111111111", OperationID: "22222222-2222-4222-8222-222222222222", TargetID: "33333333-3333-4333-8333-333333333333", HolderID: "44444444-4444-4444-8444-444444444444", Generation: 7, OperationAttempt: 2,
 		Address: server.target.Address, Port: server.target.Port, Hostname: "engine-02", MachineID: strings.Repeat("a", 32), HostKeyAlgorithm: server.key.Algorithm, HostKeyFingerprint: server.key.Fingerprint}
@@ -226,6 +264,92 @@ func TestBootstrapSSHDeliveryAndAuthorityFences(t *testing.T) {
 	}
 }
 
+func TestBootstrapIdentityRecoveryRequestAndCompletionAreBound(t *testing.T) {
+	manager := bytes.Repeat([]byte("immutable recovery verifier\x00"), 1000)
+	hash := sha256.Sum256(manager)
+	digest := hex.EncodeToString(hash[:])
+	expected := clusterbootstrap.Expected{Repository: "bunny-lab-io/Borealis", Release: "2026.09.999-rc.1", SourceSHA: strings.Repeat("a", 40), AllowQualification: true}
+	path := filepath.Join(t.TempDir(), "manager")
+	if err := os.WriteFile(path, manager, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-777777777777"}
+	for _, mode := range []string{"valid", "missing recovery", "changed recovery"} {
+		t.Run(mode, func(t *testing.T) {
+			var server *fakeSSH
+			server = newFakeSSH(t, "bootstrap-identity", func(command string, channel ssh.Channel) uint32 {
+				var nonce string
+				for _, match := range regexp.MustCompile(`'([a-f0-9]{64})'`).FindAllStringSubmatch(command, -1) {
+					if match[1] != digest {
+						nonce = match[1]
+					}
+				}
+				if nonce == "" || command != bootstrapCommand(int64(len(manager)), digest, nonce) {
+					return 1
+				}
+				input := bufio.NewReader(channel)
+				received := make([]byte, len(manager))
+				if _, err := io.ReadFull(input, received); err != nil || !bytes.Equal(received, manager) {
+					return 1
+				}
+				if password, err := input.ReadString('\n'); err != nil || password != "unused-sudo-fixture\n" {
+					return 1
+				}
+				preamble, _ := clusterbootstrap.SessionPreamble(nonce)
+				if line, err := input.ReadString('\n'); err != nil || line != preamble {
+					return 1
+				}
+				if clusterbootstrap.WriteSessionFrame(channel, clusterbootstrap.SessionMessage{Protocol: 1, State: "ready", Nonce: nonce}) != nil {
+					return 1
+				}
+				var request clusterbootstrap.SessionRequest
+				if clusterbootstrap.ReadSessionFrame(input, &request) != nil || request.Action != "verify_identity_recovery" || request.IdentityRecovery == nil || *request.IdentityRecovery != recovery {
+					return 1
+				}
+				challenge := strings.Repeat("d", 64)
+				if clusterbootstrap.WriteSessionFrame(channel, clusterbootstrap.SessionMessage{Protocol: 1, State: "challenge", Nonce: challenge}) != nil {
+					return 1
+				}
+				var heartbeat clusterbootstrap.SessionMessage
+				if clusterbootstrap.ReadSessionFrame(input, &heartbeat) != nil || heartbeat != (clusterbootstrap.SessionMessage{Protocol: 1, State: "heartbeat", Nonce: challenge}) {
+					return 1
+				}
+				response := recovery
+				var responseRecovery *clusterbootstrap.IdentityRecoveryRequest
+				if mode != "missing recovery" {
+					if mode == "changed recovery" {
+						response.TargetNodeUID = "88888888-8888-4888-8888-888888888888"
+					}
+					responseRecovery = &response
+				}
+				binding := request.Binding
+				if clusterbootstrap.WriteSessionFrame(channel, clusterbootstrap.SessionMessage{Protocol: 1, State: "verified", Nonce: nonce, Binding: &binding, SourceSHA: expected.SourceSHA, ManagerSHA256: digest, IdentityRecovery: responseRecovery}) != nil {
+					return 1
+				}
+				return 0
+			})
+			credential, err := PasswordCredential("operator", server.password)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer credential.Destroy()
+			client, err := server.transport.Connect(context.Background(), server.target, server.key, credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			result, err := client.verifyBootstrapExecutableRequest(context.Background(), path, expected, digest, int64(len(manager)), bootstrapBinding(server), &recovery, []byte("unused-sudo-fixture"), func(context.Context) error { return nil })
+			if mode == "valid" {
+				if err != nil || result.IdentityRecovery == nil || *result.IdentityRecovery != recovery {
+					t.Fatalf("valid recovery verification failed: %v", err)
+				}
+			} else if err != ErrBootstrapVerification || result != (clusterbootstrap.SessionMessage{}) {
+				t.Fatalf("unbound recovery completion accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestBootstrapPublicDeliveryRequiresVerifiedBundle(t *testing.T) {
 	server := newFakeSSH(t, "normal")
 	credential, _ := PasswordCredential("operator", server.password)
@@ -238,6 +362,12 @@ func TestBootstrapPublicDeliveryRequiresVerifiedBundle(t *testing.T) {
 	for _, bundle := range []*clusterbootstrap.Bundle{nil, {}} {
 		if _, err := client.VerifyBootstrap(context.Background(), bundle, bootstrapBinding(server), nil, func(context.Context) error { t.Error("unverified bundle reached authority check"); return nil }); err != ErrBootstrapVerification {
 			t.Fatal("unverified bundle accepted")
+		}
+		recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-777777777777"}
+		if _, err := client.VerifyIdentityRecovery(context.Background(), bundle, bootstrapBinding(server), recovery, nil,
+			func(context.Context) error { t.Error("unverified bundle reached controller check"); return nil },
+			func(context.Context) error { t.Error("unverified bundle reached source/Node check"); return nil }); err != ErrBootstrapVerification {
+			t.Fatal("unverified bundle accepted for identity recovery")
 		}
 	}
 	if server.execCalls.Load() != 0 {

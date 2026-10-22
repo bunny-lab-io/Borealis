@@ -2,8 +2,10 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -13,6 +15,80 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestBootstrapSessionIdentityRecoveryComposesReadOnlyEvidence(t *testing.T) {
+	request := identityRuntimeRequestFixture()
+	request.Action = "verify_identity_recovery"
+	request.IdentityRecovery = &clusterbootstrap.IdentityRecoveryRequest{
+		SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-777777777777",
+	}
+	for _, mode := range []string{"valid", "host", "first pods", "runtime", "second pods", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if mode == "canceled" {
+				cancel()
+			}
+			var order []string
+			podCalls := 0
+			observers := bootstrapSessionObservers{
+				host: func(context.Context, clusterbootstrap.SessionRequest) error {
+					order = append(order, "host")
+					if mode == "host" {
+						return errors.New("private host failure")
+					}
+					return nil
+				},
+				consumers: func(_ context.Context, target identityConsumerTarget) error {
+					podCalls++
+					order = append(order, "pods")
+					if target.NodeName != request.Binding.Hostname || target.NodeUID != request.IdentityRecovery.TargetNodeUID {
+						t.Fatal("target Node binding changed")
+					}
+					if mode == "first pods" && podCalls == 1 || mode == "second pods" && podCalls == 2 {
+						return errors.New("private Pod failure")
+					}
+					return nil
+				},
+				runtime: func(_ context.Context, observed clusterbootstrap.SessionRequest) error {
+					order = append(order, "runtime")
+					if observed.IdentityRecovery == nil || *observed.IdentityRecovery != *request.IdentityRecovery {
+						t.Fatal("runtime lost recovery binding")
+					}
+					if mode == "runtime" {
+						return errors.New("private runtime failure")
+					}
+					return nil
+				},
+			}
+			err := verifyBootstrapSessionRequestWith(ctx, request, observers)
+			if (err == nil) != (mode == "valid") {
+				t.Fatalf("identity recovery evidence boundary failed: %v", err)
+			}
+			if mode == "valid" && strings.Join(order, ",") != "host,pods,runtime,pods" {
+				t.Fatalf("identity evidence not bracketed: %v", order)
+			}
+		})
+	}
+
+	ordinary := request
+	ordinary.Action, ordinary.IdentityRecovery = "verify", nil
+	calls := 0
+	err := verifyBootstrapSessionRequestWith(context.Background(), ordinary, bootstrapSessionObservers{
+		host: func(context.Context, clusterbootstrap.SessionRequest) error { calls++; return nil },
+		consumers: func(context.Context, identityConsumerTarget) error {
+			t.Fatal("ordinary verification inspected recovery Pods")
+			return nil
+		},
+		runtime: func(context.Context, clusterbootstrap.SessionRequest) error {
+			t.Fatal("ordinary verification inspected identity runtime")
+			return nil
+		},
+	})
+	if err != nil || calls != 1 {
+		t.Fatal("ordinary host verification changed", err)
+	}
+}
 
 func TestBootstrapHostVerificationRejectsChangedIdentity(t *testing.T) {
 	public, _, err := ed25519.GenerateKey(rand.Reader)

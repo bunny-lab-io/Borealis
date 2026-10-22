@@ -68,9 +68,38 @@ func (client *Client) VerifyBootstrap(ctx context.Context, bundle *clusterbootst
 	return client.verifyBootstrapExecutable(ctx, bundle.ManagerPath(), expected, digest, size, binding, sudoPassword, check)
 }
 
+// VerifyIdentityRecovery performs only fixed read-only qualification. The
+// controller callback proves current operation/target ownership; sourceNode
+// independently proves the original identity source and exact joined target
+// Node. Controller authority brackets that second proof on every refresh.
+func (client *Client) VerifyIdentityRecovery(ctx context.Context, bundle *clusterbootstrap.Bundle, binding clusterbootstrap.SessionBinding, recovery clusterbootstrap.IdentityRecoveryRequest, sudoPassword []byte, controller, sourceNode func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
+	invalid := clusterbootstrap.SessionMessage{}
+	expected, digest, size, err := bundle.ManagerProof()
+	if err != nil || binding.Validate() != nil || recovery.Validate(binding) != nil || controller == nil || sourceNode == nil || ValidateSudoPassword(sudoPassword) != nil ||
+		binding.Address != client.target.Address || binding.Port != client.target.Port || binding.HostKeyAlgorithm != client.approved.Algorithm || binding.HostKeyFingerprint != client.approved.Fingerprint {
+		return invalid, ErrBootstrapVerification
+	}
+	check := identityRecoveryAuthority(controller, sourceNode)
+	return client.verifyBootstrapExecutableRequest(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, sudoPassword, check)
+}
+
+func identityRecoveryAuthority(controller, sourceNode func(context.Context) error) func(context.Context) error {
+	return func(checkCtx context.Context) error {
+		if controller == nil || sourceNode == nil || checkCtx.Err() != nil || controller(checkCtx) != nil || checkCtx.Err() != nil ||
+			sourceNode(checkCtx) != nil || checkCtx.Err() != nil || controller(checkCtx) != nil || checkCtx.Err() != nil {
+			return ErrBootstrapVerification
+		}
+		return nil
+	}
+}
+
 // Private transport seam permits isolated SSH fixtures without exposing an
 // unverified executable constructor. Production entry requires Bundle proof.
 func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
+	return client.verifyBootstrapExecutableRequest(ctx, managerPath, expected, digest, size, binding, nil, sudoPassword, check)
+}
+
+func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, recovery *clusterbootstrap.IdentityRecoveryRequest, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
 	invalid := clusterbootstrap.SessionMessage{}
 	ctx, cancel := context.WithTimeout(ctx, clusterbootstrap.SessionLifetime)
 	defer cancel()
@@ -93,8 +122,15 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 		return invalid, ErrBootstrapVerification
 	}
 	nonce := hex.EncodeToString(random[:])
-	request := clusterbootstrap.SessionRequest{Protocol: 1, Action: "verify", Nonce: nonce, Binding: binding, Repository: expected.Repository, Release: expected.Release,
-		SourceSHA: expected.SourceSHA, ManagerSHA256: digest, AllowQualification: expected.AllowQualification}
+	action := "verify"
+	var recoveryCopy *clusterbootstrap.IdentityRecoveryRequest
+	if recovery != nil {
+		action = "verify_identity_recovery"
+		value := *recovery
+		recoveryCopy = &value
+	}
+	request := clusterbootstrap.SessionRequest{Protocol: 1, Action: action, Nonce: nonce, Binding: binding, Repository: expected.Repository, Release: expected.Release,
+		SourceSHA: expected.SourceSHA, ManagerSHA256: digest, AllowQualification: expected.AllowQualification, IdentityRecovery: recoveryCopy}
 	if request.Validate() != nil {
 		return invalid, ErrBootstrapVerification
 	}
@@ -145,7 +181,7 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 	// Bound all stdout across the session, including repeated challenge frames.
 	output := &io.LimitedReader{R: stdout, N: MaxOutputBytes + 1}
 	var message clusterbootstrap.SessionMessage
-	if clusterbootstrap.ReadSessionFrame(output, &message) != nil || message.Protocol != 1 || message.State != "ready" || message.Nonce != nonce || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" ||
+	if clusterbootstrap.ReadSessionFrame(output, &message) != nil || message.Protocol != 1 || message.State != "ready" || message.Nonce != nonce || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil ||
 		refreshBootstrapAuthority(ctx, check) != nil || clusterbootstrap.WriteSessionFrame(stdin, request) != nil {
 		return invalid, ErrBootstrapVerification
 	}
@@ -157,7 +193,7 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 		}
 		switch message.State {
 		case "challenge":
-			if _, err := clusterbootstrap.SessionPreamble(message.Nonce); err != nil || challenges[message.Nonce] || len(challenges) >= 64 || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" {
+			if _, err := clusterbootstrap.SessionPreamble(message.Nonce); err != nil || challenges[message.Nonce] || len(challenges) >= 64 || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil {
 				return invalid, ErrBootstrapVerification
 			}
 			challenges[message.Nonce] = true
@@ -165,7 +201,7 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 				return invalid, ErrBootstrapVerification
 			}
 		case "verified":
-			if len(challenges) == 0 || message.Nonce != nonce || message.Binding == nil || *message.Binding != binding || message.SourceSHA != expected.SourceSHA || message.ManagerSHA256 != digest || refreshBootstrapAuthority(ctx, check) != nil {
+			if len(challenges) == 0 || message.Nonce != nonce || message.Binding == nil || *message.Binding != binding || message.SourceSHA != expected.SourceSHA || message.ManagerSHA256 != digest || !sameIdentityRecovery(message.IdentityRecovery, recoveryCopy) || refreshBootstrapAuthority(ctx, check) != nil {
 				return invalid, ErrBootstrapVerification
 			}
 			_ = stdin.Close()
@@ -179,6 +215,13 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 			return invalid, ErrBootstrapVerification
 		}
 	}
+}
+
+func sameIdentityRecovery(observed, expected *clusterbootstrap.IdentityRecoveryRequest) bool {
+	if observed == nil || expected == nil {
+		return observed == nil && expected == nil
+	}
+	return *observed == *expected
 }
 
 func refreshBootstrapAuthority(ctx context.Context, check func(context.Context) error) error {
