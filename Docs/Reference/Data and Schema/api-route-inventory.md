@@ -6,7 +6,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 
 | Route pattern | Class | Authentication | Source |
 | --- | --- | --- | --- |
-| `/` | `fallback` | `shared-public-gate` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:175` |
+| `/` | `fallback` | `shared-public-gate` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:183` |
 | `/api/admin/device-approvals` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:50` |
 | `/api/admin/enrollment-codes` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:48` |
 | `/api/agent/hash` | `agent` | `device-token-dpop` | `Data/Engine/Containers/api-backend/cmd/api-backend/agent_hash.go:53` |
@@ -59,21 +59,21 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/sites` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:43` |
 | `/api/sites/device_map` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/sites.go:44` |
 | `/api/software/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/software.go:35` |
-| `/api/system/go-backend/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:125` |
+| `/api/system/go-backend/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:133` |
 | `/api/user_site_assignments/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/user_site_assignments.go:43` |
 | `/api/users` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/users.go:54` |
 | `/api/users/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/users.go:55` |
 | `/api/watchdogs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:168` |
 | `/api/watchdogs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go:169` |
 | `/api/workflows/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/workflows.go:105` |
-| `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:121` |
+| `/health` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:129` |
 | `/healthz` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:223` |
 | `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:225` |
-| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:123` |
+| `/live` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:131` |
 | `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:226` |
-| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:124` |
+| `/ready` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:132` |
 | `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:224` |
-| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:122` |
+| `/startup` | `health` | `none` | `Data/Engine/Containers/api-backend/cmd/api-backend/main.go:130` |
 | `/v1/command` | `operator` | `operator-hmac` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:227` |
 | `DELETE /api/admin/enrollment-codes/{code_id}` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/admin_approvals.go:49` |
 | `GET /api/aegis/status` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/aegis.go:19` |
