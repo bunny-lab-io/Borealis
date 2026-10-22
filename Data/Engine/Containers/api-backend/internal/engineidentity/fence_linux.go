@@ -106,6 +106,22 @@ type recoveryFenceRecord struct {
 // Failure/rollback retains the marker: only verified commit under current
 // authority permits startup. No automatic takeover or marker-removal API.
 func (install Installation) InstallFenced(material *Material) (string, error) {
+	return install.installFenced(material, nil)
+}
+
+// InstallFencedJournaled retains the exclusive consumer lock and restart marker
+// until commit records the outer operation durably. commit must synchronously
+// invoke the supplied transaction exactly once, persist its successful result,
+// and return an error on uncertainty. It must not authorize or resume consumers.
+// Failure at either journal boundary retains the marker for explicit recovery.
+func (install Installation) InstallFencedJournaled(material *Material, commit func(func() (string, error)) error) (string, error) {
+	if commit == nil {
+		return "", errors.New("identity operation journal required")
+	}
+	return install.installFenced(material, commit)
+}
+
+func (install Installation) installFenced(material *Material, commit func(func() (string, error)) error) (string, error) {
 	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
 		install.Target.NodeUID == "" || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
 		return "", errors.New("joined identity recovery contract invalid")
@@ -210,7 +226,25 @@ func (install Installation) InstallFenced(material *Material) (string, error) {
 		}
 		return checkFence()
 	}
-	state, err := install.Install(material)
+	var state string
+	if commit == nil {
+		state, err = install.Install(material)
+	} else {
+		calls := 0
+		var transactionErr error
+		commitErr := commit(func() (string, error) {
+			calls++
+			if calls != 1 {
+				return "", errors.New("identity transaction cannot be replayed")
+			}
+			state, transactionErr = install.Install(material)
+			return state, transactionErr
+		})
+		if calls != 1 {
+			return state, errors.Join(commitErr, errors.New("identity operation journal did not execute exactly one transaction"))
+		}
+		err = errors.Join(commitErr, transactionErr)
+	}
 	if err != nil || (state != "committed" && state != "already_committed") {
 		return state, err
 	}
@@ -223,6 +257,11 @@ func (install Installation) InstallFenced(material *Material) (string, error) {
 	current, err := Load(install.Root)
 	if err != nil || !material.Equal(current) {
 		return state, errors.New("committed identity changed; keep target stopped")
+	}
+	// File verification can block on storage; do not release on authority that
+	// was current only before those reads.
+	if err := install.Check(); err != nil {
+		return state, err
 	}
 	if err := fence.root.Remove(recoveryMarker); err != nil {
 		return state, err

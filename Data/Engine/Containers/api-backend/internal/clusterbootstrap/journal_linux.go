@@ -317,6 +317,11 @@ func (j *MutationJournal) persist(ctx context.Context) error {
 func (j *MutationJournal) Apply(ctx context.Context, step, inputSHA256 string, mutate func(context.Context, *os.File) (string, error)) (string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.applyLocked(ctx, step, inputSHA256, mutate)
+}
+
+// Caller holds mu for the complete transaction and any domain finalization.
+func (j *MutationJournal) applyLocked(ctx context.Context, step, inputSHA256 string, mutate func(context.Context, *os.File) (string, error)) (string, error) {
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
@@ -345,24 +350,8 @@ func (j *MutationJournal) Apply(ctx context.Context, step, inputSHA256 string, m
 			return "", ErrMutationUnknown
 		}
 	}
-	// Earlier successful callbacks in this same executor are synchronous and
-	// must have joined their children. Every distinct prior executor, including
-	// retained absence history, must independently be observed stopped.
-	seen := map[ExecutorIdentity]bool{j.executor: true}
-	prior := make([]mutationRecord, 0, len(j.state.Steps)+len(j.state.History))
-	for _, record := range j.state.Steps {
-		prior = append(prior, record)
-	}
-	for _, attempt := range j.state.History {
-		prior = append(prior, attempt.Record)
-	}
-	for _, record := range prior {
-		if !seen[record.Executor] {
-			if j.quiescent(ctx, record.Executor) != nil || j.authority(ctx) != nil {
-				return "", ErrMutationUnknown
-			}
-			seen[record.Executor] = true
-		}
+	if err := j.priorExecutorsQuiescent(ctx); err != nil {
+		return "", err
 	}
 	if previous, ok := j.state.Steps[step]; ok {
 		j.state.History = append(j.state.History, mutationPastAttempt{Step: step, Record: previous})
@@ -401,6 +390,29 @@ func (j *MutationJournal) Apply(ctx context.Context, step, inputSHA256 string, m
 		return "", ErrMutationUnknown
 	}
 	return result, nil
+}
+
+func (j *MutationJournal) priorExecutorsQuiescent(ctx context.Context) error {
+	// Earlier successful callbacks in this same executor are synchronous and
+	// must have joined their children. Every distinct prior executor, including
+	// retained absence history, must independently be observed stopped.
+	seen := map[ExecutorIdentity]bool{j.executor: true}
+	prior := make([]mutationRecord, 0, len(j.state.Steps)+len(j.state.History))
+	for _, record := range j.state.Steps {
+		prior = append(prior, record)
+	}
+	for _, attempt := range j.state.History {
+		prior = append(prior, attempt.Record)
+	}
+	for _, record := range prior {
+		if !seen[record.Executor] {
+			if j.quiescent(ctx, record.Executor) != nil || j.authority(ctx) != nil {
+				return ErrMutationUnknown
+			}
+			seen[record.Executor] = true
+		}
+	}
+	return nil
 }
 
 // Reconcile runs a read-only proof callback against actual target state while

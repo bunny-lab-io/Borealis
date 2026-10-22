@@ -425,3 +425,46 @@ sys.stdin.read()
 		}
 	}
 }
+
+func TestIdentityFenceOuterJournalFailureNeverReleasesConsumers(t *testing.T) {
+	for _, mode := range []string{"failed_commit", "missing_transaction", "duplicate_transaction", "swallowed_transaction_error"} {
+		t.Run(mode, func(t *testing.T) {
+			install, _, material := installationFixture(t, false)
+			if mode == "swallowed_transaction_error" {
+				install.Check = func() error {
+					raw, _ := os.ReadFile(filepath.Join(install.Root, EngineSecretPath))
+					if bytes.Equal(raw, material.Files()[EngineSecretPath]) {
+						return errors.New("lost owner")
+					}
+					return nil
+				}
+			}
+			_, err := install.InstallFencedJournaled(material, func(transaction func() (string, error)) error {
+				requireStartupBlocked(t, install.Root)
+				if mode == "missing_transaction" {
+					return nil
+				}
+				state, err := transaction()
+				if mode == "swallowed_transaction_error" {
+					if err == nil {
+						t.Fatal("transaction fault not reached")
+					}
+					return nil
+				}
+				if err != nil || state != "committed" {
+					t.Fatalf("%s %v", state, err)
+				}
+				requireStartupBlocked(t, install.Root)
+				if mode == "duplicate_transaction" {
+					_, _ = transaction()
+					return nil
+				}
+				return errors.New("outer journal persistence failed")
+			})
+			if err == nil {
+				t.Fatal("invalid outer journal accepted")
+			}
+			requireStartupBlocked(t, install.Root)
+		})
+	}
+}
