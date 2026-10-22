@@ -1,10 +1,12 @@
 package engineidentity
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -119,6 +121,128 @@ func (install Installation) InstallFencedJournaled(material *Material, commit fu
 		return "", errors.New("identity operation journal required")
 	}
 	return install.installFenced(material, commit)
+}
+
+// ProveFencedCommitted reads an exact retained recovery attempt without
+// changing its files, journals or marker. It requires exclusive consumer
+// exclusion and caller-supplied authority/quiescence throughout. Success proves
+// only this committed identity effect; it never authorizes consumer restart.
+func (install Installation) ProveFencedCommitted(material *Material) error {
+	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
+		install.Target.NodeUID == "" || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
+		return errors.New("joined identity recovery proof contract invalid")
+	}
+	if err := install.Check(); err != nil {
+		return err
+	}
+	if err := install.Quiesced(); err != nil {
+		return err
+	}
+	fence, err := openIdentityFence(install.Root, true)
+	if err != nil {
+		return err
+	}
+	defer fence.Close()
+	info, err := fence.directory.Stat()
+	if err != nil {
+		return errors.New("identity directory owner differs from target runtime owner")
+	}
+	directoryOwner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(directoryOwner.Uid) != install.UID {
+		return errors.New("identity directory owner differs from target runtime owner")
+	}
+	rootPath, err := filepath.Abs(install.Root)
+	if err != nil {
+		return errors.New("identity directory invalid")
+	}
+	journalPath, err := filepath.Abs(install.Journal)
+	if err != nil || journalPath == rootPath || strings.HasPrefix(journalPath, rootPath+string(filepath.Separator)) || len(journalPath) > 1024 {
+		return errors.New("identity journal path invalid")
+	}
+	marker, err := json.Marshal(recoveryFenceRecord{1, install.Binding, install.Target, journalPath, material.Digest()})
+	if err != nil {
+		return err
+	}
+	checkFence := func() error {
+		if err := fence.check(); err != nil {
+			return err
+		}
+		info, err := fence.directory.Stat()
+		if err != nil {
+			return errors.New("identity directory owner changed")
+		}
+		directoryOwner, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || int(directoryOwner.Uid) != install.UID {
+			return errors.New("identity directory owner changed")
+		}
+		observed, metadata, err := readIdentityFile(fence.root, recoveryMarker)
+		if err != nil || !metadata.Present || metadata.UID != install.UID || metadata.GID != install.GID || !bytes.Equal(observed, marker) {
+			return errors.New("identity recovery marker does not prove requested attempt")
+		}
+		return nil
+	}
+	if err := checkFence(); err != nil {
+		return err
+	}
+	if err := install.Check(); err != nil {
+		return err
+	}
+	if err := install.Quiesced(); err != nil {
+		return err
+	}
+	backup, err := openIdentityRoot(journalPath)
+	if err != nil {
+		return errors.New("identity recovery journal unavailable")
+	}
+	defer backup.Close()
+	journalInfo, err := backup.Stat(".")
+	if err != nil || !journalInfo.IsDir() || journalInfo.Mode().Perm() != 0o700 {
+		return errors.New("identity recovery journal ownership invalid")
+	}
+	journalOwner, ok := journalInfo.Sys().(*syscall.Stat_t)
+	if !ok || int(journalOwner.Uid) != os.Geteuid() {
+		return errors.New("identity recovery journal ownership invalid")
+	}
+	raw, metadata, err := readIdentityFile(backup, "journal.json")
+	if err != nil || !metadata.Present || metadata.UID != os.Geteuid() || metadata.GID != os.Getegid() {
+		return errors.New("identity recovery journal record invalid")
+	}
+	var journal installationJournal
+	if json.Unmarshal(raw, &journal) != nil || journal.Version != 2 || journal.Binding != install.Binding ||
+		journal.Target != install.Target || journal.Incoming != material.Digest() || journal.State != "committed" || len(journal.Files) != len(identityPaths) {
+		return errors.New("identity recovery journal does not prove committed request")
+	}
+	canonical, err := json.Marshal(journal)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return errors.New("identity recovery journal encoding invalid")
+	}
+	for _, name := range identityPaths {
+		if _, ok := journal.Files[name]; !ok {
+			return errors.New("identity recovery journal inventory incomplete")
+		}
+	}
+	files := make(map[string][]byte, len(identityPaths))
+	for _, name := range identityPaths {
+		raw, metadata, err := readIdentityFile(fence.root, name)
+		if err != nil || !metadata.Present || metadata.UID != install.UID || metadata.GID != install.GID {
+			return errors.New("committed identity files changed")
+		}
+		files[name] = raw
+	}
+	current, err := ParseFiles(files)
+	if err != nil || !material.Equal(current) {
+		return errors.New("committed identity files changed")
+	}
+	if err := checkFence(); err != nil {
+		return err
+	}
+	if err := install.Quiesced(); err != nil {
+		return err
+	}
+	if err := install.Check(); err != nil {
+		return err
+	}
+	return checkFence()
 }
 
 func (install Installation) installFenced(material *Material, commit func(func() (string, error)) error) (string, error) {

@@ -2,6 +2,7 @@ package clusterbootstrap
 
 import (
 	"borealis/api-backend/internal/engineidentity"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -15,6 +16,8 @@ import (
 	"testing"
 	"time"
 )
+
+const joinedIdentityRecoveryMarker = ".borealis-identity-recovery.json"
 
 func joinedIdentityMaterial(t *testing.T) *engineidentity.Material {
 	t.Helper()
@@ -96,6 +99,39 @@ func identityConsumerBlocked(t *testing.T, root string) {
 		consumer.Close()
 		t.Fatal("consumer crossed pending journal boundary")
 	}
+}
+
+func joinedIdentityCommittedUnknown(t *testing.T, phase string) (*MutationJournal, string, engineidentity.Installation, *engineidentity.Material) {
+	t.Helper()
+	j, root, install, _, material := joinedIdentityFixture(t)
+	check := j.check
+	lost := false
+	j.check = func(ctx context.Context) error {
+		if err := check(ctx); err != nil {
+			return err
+		}
+		innerCommitted := identityJournalState(install.Journal) == "committed"
+		outerApplied := j.state.Steps["install_identity"].State == "applied"
+		lost = lost || phase == "inner_committed" && innerCommitted || phase == "outer_committed" && outerApplied
+		if lost {
+			return ErrSessionAuthority
+		}
+		return nil
+	}
+	if _, err := j.InstallJoinedIdentity(context.Background(), install, material); err == nil || !lost {
+		t.Fatal("fixture did not retain committed uncertain identity")
+	}
+	identityConsumerBlocked(t, install.Root)
+	owner, source := j.state.Owner, j.state.Source
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openTestMutationJournal(context.Background(), root, nextMutationOwner(owner), source, mutationAuthority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	return reopened, root, install, material
 }
 
 func TestJoinedIdentityBothJournalsCommitBeforeConsumerRelease(t *testing.T) {
@@ -307,5 +343,112 @@ func TestJoinedIdentityCloseCannotReleaseHostLockDuringCommit(t *testing.T) {
 	}
 	if err := <-closed; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestJoinedIdentityReconciliationProvesCommitWithoutReleasingConsumers(t *testing.T) {
+	for _, phase := range []string{"inner_committed", "outer_committed"} {
+		t.Run(phase, func(t *testing.T) {
+			j, root, install, material := joinedIdentityCommittedUnknown(t, phase)
+			markerPath := filepath.Join(install.Root, joinedIdentityRecoveryMarker)
+			markerBefore, err := os.ReadFile(markerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journalPath := filepath.Join(install.Journal, "journal.json")
+			journalBefore, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := j.ReconcileJoinedIdentity(context.Background(), install, material)
+			if err != nil || got != material.Digest() {
+				t.Fatalf("committed identity reconciliation failed: %s %v", got, err)
+			}
+			record := readMutationFixture(t, root).Steps["install_identity"]
+			if record.State != "applied" || record.ResultSHA256 != material.Digest() {
+				t.Fatal("outer result not settled from committed identity proof")
+			}
+			markerAfter, err := os.ReadFile(markerPath)
+			if err != nil || !bytes.Equal(markerBefore, markerAfter) {
+				t.Fatal("reconciliation changed or removed restart marker")
+			}
+			journalAfter, err := os.ReadFile(journalPath)
+			if err != nil || !bytes.Equal(journalBefore, journalAfter) {
+				t.Fatal("reconciliation changed inner identity journal")
+			}
+			current, err := engineidentity.Load(install.Root)
+			if err != nil || !current.Equal(material) {
+				t.Fatal("reconciliation changed committed identity")
+			}
+			identityConsumerBlocked(t, install.Root)
+			if got, err := j.ReconcileJoinedIdentity(context.Background(), install, material); err != nil || got != material.Digest() {
+				t.Fatal("repeat proof changed definitive outer result")
+			}
+			identityConsumerBlocked(t, install.Root)
+		})
+	}
+}
+
+func TestJoinedIdentityReconciliationRejectsIncompleteOrChangedProof(t *testing.T) {
+	for _, kind := range []string{"identity", "inner_journal", "marker", "missing_marker", "material", "authority", "quiescence", "producer_live"} {
+		t.Run(kind, func(t *testing.T) {
+			j, root, install, material := joinedIdentityCommittedUnknown(t, "inner_committed")
+			markerPath := filepath.Join(install.Root, joinedIdentityRecoveryMarker)
+			switch kind {
+			case "identity":
+				if err := os.WriteFile(filepath.Join(install.Root, engineidentity.EngineSecretPath), []byte("changed-identity-material-that-is-long-enough\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "inner_journal":
+				path := filepath.Join(install.Journal, "journal.json")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var record map[string]any
+				if json.Unmarshal(raw, &record) != nil {
+					t.Fatal("fixture journal decode failed")
+				}
+				record["state"] = "prepared"
+				raw, _ = json.Marshal(record)
+				if err := os.WriteFile(path, raw, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "marker":
+				if err := os.WriteFile(markerPath, []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "missing_marker":
+				if err := os.Remove(markerPath); err != nil {
+					t.Fatal(err)
+				}
+			case "material":
+				material = joinedIdentityMaterial(t)
+			case "authority":
+				install.Check = func() error { return errors.New("original source changed") }
+			case "quiescence":
+				install.Quiesced = func() error { return errors.New("legacy consumer state unknown") }
+			case "producer_live":
+				j.quiescent = func(context.Context, ExecutorIdentity) error { return ErrExecutorContainment }
+			}
+			_, err := j.ReconcileJoinedIdentity(context.Background(), install, material)
+			want := ErrMutationUnknown
+			if kind == "material" {
+				want = ErrMutationJournal
+			}
+			if err != want {
+				t.Fatalf("unsafe proof returned %v, want %v", err, want)
+			}
+			if readMutationFixture(t, root).Steps["install_identity"].State != "intent" {
+				t.Fatal("failed proof changed uncertain outer result")
+			}
+			if kind == "missing_marker" {
+				if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("read-only proof recreated missing marker")
+				}
+			} else {
+				identityConsumerBlocked(t, install.Root)
+			}
+		})
 	}
 }

@@ -432,6 +432,11 @@ func (j *MutationJournal) ReconcileAbsent(ctx context.Context, step, inputSHA256
 func (j *MutationJournal) reconcile(ctx context.Context, step, inputSHA256 string, prove func(context.Context) (string, error), resolution string) (string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.reconcileLocked(ctx, step, inputSHA256, prove, resolution)
+}
+
+// Caller holds mu for the complete proof and outcome persistence.
+func (j *MutationJournal) reconcileLocked(ctx context.Context, step, inputSHA256 string, prove func(context.Context) (string, error), resolution string) (string, error) {
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
