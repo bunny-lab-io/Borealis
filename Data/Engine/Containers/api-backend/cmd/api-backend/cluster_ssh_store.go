@@ -214,6 +214,13 @@ func (s *postgresOperatorStore) renewClusterSSHPreparationTarget(ctx context.Con
 	return s.renewClusterSSHObservationTarget(ctx, lease, sealed)
 }
 
+func (s *postgresOperatorStore) renewClusterSSHIdentityRecoveryTarget(ctx context.Context, claim clusterSSHIdentityRecoveryClaim) error {
+	if !claim.valid() {
+		return errClusterSSHCredentials
+	}
+	return s.renewClusterSSHTargetEnvelope(ctx, claim.Lease, claim.Sealed.generation, claim.Sealed.ciphertext)
+}
+
 func (s *postgresOperatorStore) renewClusterSSHObservationTarget(ctx context.Context, lease clusterSSHTargetLease, sealed sealedClusterSSHCredentials) error {
 	if !validClusterSSHObservationLease(lease) || !sealed.binding.valid() || sealed.binding.OperationID != lease.OperationID || sealed.binding.TargetID != lease.TargetID ||
 		sealed.generation == "" || len(sealed.generation) > 16<<10 || !strings.HasPrefix(sealed.ciphertext, aegisEnvelopePrefix) || len(sealed.ciphertext) > 256<<10 {
@@ -227,8 +234,10 @@ func (s *postgresOperatorStore) renewClusterSSHTargetEnvelope(ctx context.Contex
 		return errClusterUnavailable
 	}
 	// Legacy inspection entrypoints cannot bypass preparation's envelope fence.
-	if (lease.OperationStep == clusterSSHPreparationOperationStep || lease.Step == "stage_source" || lease.OperationStep == clusterSSHQualificationStep || lease.Step == "qualify") &&
-		(!validClusterSSHObservationLease(lease) || generation == "" || ciphertext == "") {
+	protected := lease.OperationStep == clusterSSHPreparationOperationStep || lease.Step == "stage_source" ||
+		lease.OperationStep == clusterSSHQualificationStep || lease.Step == "qualify" ||
+		lease.OperationStep == clusterSSHIdentityRecoveryOperationStep || lease.Step == clusterSSHIdentityRecoveryTargetStep
+	if protected && ((!validClusterSSHObservationLease(lease) && !validClusterSSHIdentityRecoveryLease(lease)) || generation == "" || ciphertext == "") {
 		return errClusterConflict
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

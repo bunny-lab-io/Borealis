@@ -20,6 +20,8 @@
     "TestClusterSSHCredentialsPostgresExpiryRotationResetAndTerminalCleanup",
     "TestClusterSSHCredentialsPostgresOperationFences",
     "TestClusterSSHCredentialsPostgresRejectsDuplicateHostsAndAegisChangeBeforeCommit",
+    "TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry",
+    "TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence",
     "TestClusterSSHNetworkTargetsPostgresOriginalClaimsAndPoolRelease",
     "TestClusterSSHNetworkTargetsPostgresOriginalEnvelopeRevocation",
     "TestClusterSSHNetworkTargetsPostgresRechecksSiblingAfterLockWait",
