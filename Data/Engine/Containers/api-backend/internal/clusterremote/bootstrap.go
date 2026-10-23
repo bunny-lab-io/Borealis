@@ -86,8 +86,8 @@ func (client *Client) VerifyIdentityRecovery(ctx context.Context, bundle *cluste
 }
 
 // DeliverIdentityRecovery carries fixed identity only after the target passes
-// read-only recovery qualification. Material remains inside the supervised SSH
-// protocol; target persistence, journal, marker and restart actions stay absent.
+// recovery qualification. Material remains inside the supervised SSH protocol;
+// target commits both journals and retains its restart marker.
 func (client *Client) DeliverIdentityRecovery(ctx context.Context, bundle *clusterbootstrap.Bundle, binding clusterbootstrap.SessionBinding, recovery clusterbootstrap.IdentityRecoveryRequest, material *engineidentity.Material, sudoPassword []byte, controller, sourceNode func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
 	invalid := clusterbootstrap.SessionMessage{}
 	expected, digest, size, err := bundle.ManagerProof()
@@ -96,7 +96,21 @@ func (client *Client) DeliverIdentityRecovery(ctx context.Context, bundle *clust
 		return invalid, ErrBootstrapVerification
 	}
 	check := identityRecoveryAuthority(controller, sourceNode)
-	return client.verifyBootstrapExecutableRequest(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, material, sudoPassword, check)
+	return client.verifyBootstrapExecutableRequestAction(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, material, "deliver_identity_recovery", sudoPassword, check)
+}
+
+// ReleaseIdentityRecovery uses a new supervised SSH executor and re-delivers
+// the exact source material so the target can reconcile both journals and
+// release only the matching restart marker. It never starts consumers.
+func (client *Client) ReleaseIdentityRecovery(ctx context.Context, bundle *clusterbootstrap.Bundle, binding clusterbootstrap.SessionBinding, recovery clusterbootstrap.IdentityRecoveryRequest, material *engineidentity.Material, sudoPassword []byte, controller, sourceNode func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
+	invalid := clusterbootstrap.SessionMessage{}
+	expected, digest, size, err := bundle.ManagerProof()
+	if err != nil || binding.Validate() != nil || recovery.Validate(binding) != nil || material == nil || controller == nil || sourceNode == nil || ValidateSudoPassword(sudoPassword) != nil ||
+		binding.Address != client.target.Address || binding.Port != client.target.Port || binding.HostKeyAlgorithm != client.approved.Algorithm || binding.HostKeyFingerprint != client.approved.Fingerprint {
+		return invalid, ErrBootstrapVerification
+	}
+	check := identityRecoveryAuthority(controller, sourceNode)
+	return client.verifyBootstrapExecutableRequestAction(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, material, "release_identity_recovery", sudoPassword, check)
 }
 
 func identityRecoveryAuthority(controller, sourceNode func(context.Context) error) func(context.Context) error {
@@ -116,6 +130,17 @@ func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath
 }
 
 func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, recovery *clusterbootstrap.IdentityRecoveryRequest, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
+	action := "verify"
+	if recovery != nil {
+		action = "verify_identity_recovery"
+		if material != nil {
+			action = "deliver_identity_recovery"
+		}
+	}
+	return client.verifyBootstrapExecutableRequestAction(ctx, managerPath, expected, digest, size, binding, recovery, material, action, sudoPassword, check)
+}
+
+func (client *Client) verifyBootstrapExecutableRequestAction(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, recovery *clusterbootstrap.IdentityRecoveryRequest, material *engineidentity.Material, action string, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
 	invalid := clusterbootstrap.SessionMessage{}
 	ctx, cancel := context.WithTimeout(ctx, clusterbootstrap.SessionLifetime)
 	defer cancel()
@@ -138,13 +163,8 @@ func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, mana
 		return invalid, ErrBootstrapVerification
 	}
 	nonce := hex.EncodeToString(random[:])
-	action := "verify"
 	var recoveryCopy *clusterbootstrap.IdentityRecoveryRequest
 	if recovery != nil {
-		action = "verify_identity_recovery"
-		if material != nil {
-			action = "deliver_identity_recovery"
-		}
 		value := *recovery
 		recoveryCopy = &value
 	}
@@ -242,7 +262,8 @@ func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, mana
 			clear(envelope)
 			material = nil // Exactly one envelope is permitted per session.
 		case "verified":
-			if len(challenges) == 0 || (request.Action == "deliver_identity_recovery" && material != nil) || message.IdentityEnvelope != nil || message.Nonce != nonce || message.Binding == nil || *message.Binding != binding || message.SourceSHA != expected.SourceSHA || message.ManagerSHA256 != digest || !sameIdentityRecovery(message.IdentityRecovery, recoveryCopy) || refreshBootstrapAuthority(ctx, check) != nil {
+			requiresMaterial := request.Action == "deliver_identity_recovery" || request.Action == "release_identity_recovery"
+			if len(challenges) == 0 || (requiresMaterial && material != nil) || message.IdentityEnvelope != nil || message.Nonce != nonce || message.Binding == nil || *message.Binding != binding || message.SourceSHA != expected.SourceSHA || message.ManagerSHA256 != digest || !sameIdentityRecovery(message.IdentityRecovery, recoveryCopy) || refreshBootstrapAuthority(ctx, check) != nil {
 				return invalid, ErrBootstrapVerification
 			}
 			_ = stdin.Close()

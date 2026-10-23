@@ -387,6 +387,12 @@ func TestBootstrapIdentityRecoveryRequestAndCompletionAreBound(t *testing.T) {
 }
 
 func TestBootstrapIdentityDeliveryWaitsForQualifiedBoundTarget(t *testing.T) {
+	for _, action := range []string{"deliver_identity_recovery", "release_identity_recovery"} {
+		t.Run(action, func(t *testing.T) { testBootstrapIdentityTransferWaitsForQualifiedBoundTarget(t, action) })
+	}
+}
+
+func testBootstrapIdentityTransferWaitsForQualifiedBoundTarget(t *testing.T, action string) {
 	manager := bytes.Repeat([]byte("immutable identity delivery verifier\x00"), 1000)
 	hash := sha256.Sum256(manager)
 	digest := hex.EncodeToString(hash[:])
@@ -423,7 +429,7 @@ func TestBootstrapIdentityDeliveryWaitsForQualifiedBoundTarget(t *testing.T) {
 			return 1
 		}
 		var request clusterbootstrap.SessionRequest
-		if clusterbootstrap.ReadSessionFrame(input, &request) != nil || request.Action != "deliver_identity_recovery" || request.IdentityRecovery == nil || *request.IdentityRecovery != recovery {
+		if clusterbootstrap.ReadSessionFrame(input, &request) != nil || request.Action != action || request.IdentityRecovery == nil || *request.IdentityRecovery != recovery {
 			return 1
 		}
 		challenge := strings.Repeat("d", 64)
@@ -466,7 +472,7 @@ func TestBootstrapIdentityDeliveryWaitsForQualifiedBoundTarget(t *testing.T) {
 	}
 	defer client.Close()
 	var checks atomic.Int64
-	result, err := client.verifyBootstrapExecutableRequest(context.Background(), path, expected, digest, int64(len(manager)), bootstrapBinding(server), &recovery, source, []byte("unused-sudo-fixture"), func(context.Context) error { checks.Add(1); return nil })
+	result, err := client.verifyBootstrapExecutableRequestAction(context.Background(), path, expected, digest, int64(len(manager)), bootstrapBinding(server), &recovery, source, action, []byte("unused-sudo-fixture"), func(context.Context) error { checks.Add(1); return nil })
 	if err != nil || result.State != "verified" || result.IdentityRecovery == nil || *result.IdentityRecovery != recovery || checks.Load() < 6 {
 		t.Fatalf("private identity delivery failed: %v checks=%d", err, checks.Load())
 	}
@@ -495,6 +501,11 @@ func TestBootstrapPublicDeliveryRequiresVerifiedBundle(t *testing.T) {
 			func(context.Context) error { t.Error("unverified bundle reached controller check"); return nil },
 			func(context.Context) error { t.Error("unverified bundle reached source/Node check"); return nil }); err != ErrBootstrapVerification {
 			t.Fatal("unverified bundle accepted for identity delivery")
+		}
+		if _, err := client.ReleaseIdentityRecovery(context.Background(), bundle, bootstrapBinding(server), recovery, remoteIdentityMaterial(t), nil,
+			func(context.Context) error { t.Error("unverified bundle reached controller check"); return nil },
+			func(context.Context) error { t.Error("unverified bundle reached source/Node check"); return nil }); err != ErrBootstrapVerification {
+			t.Fatal("unverified bundle accepted for identity release")
 		}
 	}
 	if server.execCalls.Load() != 0 {

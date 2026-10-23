@@ -122,6 +122,17 @@ func TestBootstrapSessionIdentityRecoveryComposesReadOnlyEvidence(t *testing.T) 
 	if err != nil || calls != 1 {
 		t.Fatal("ordinary host verification changed", err)
 	}
+	release := request
+	release.Action = "release_identity_recovery"
+	if err := verifyBootstrapSessionRequestWith(context.Background(), release, bootstrapSessionObservers{
+		host: func(context.Context, clusterbootstrap.SessionRequest) error { return nil },
+		consumers: func(context.Context, identityConsumerTarget) error {
+			return nil
+		},
+		runtime: func(context.Context, clusterbootstrap.SessionRequest) error { return nil },
+	}); err != nil {
+		t.Fatal("release session did not repeat recovery evidence", err)
+	}
 }
 
 func TestBootstrapIdentityReceiverBindsJournaledInstallAndRetainsRestartBoundary(t *testing.T) {
@@ -185,6 +196,32 @@ func TestBootstrapIdentityReceiverWithholdsFailedOrUnretainedOutcome(t *testing.
 			if err := receiveBootstrapIdentityMaterialWith(context.Background(), request.Nonce, func(context.Context) error { return nil },
 				request, nodeManagerIdentityMaterial(t), func(context.Context, clusterbootstrap.SessionRequest) error { return nil }, mutate); err != errBootstrapIdentityRecovery {
 				t.Fatal("receiver acknowledged non-committed identity outcome")
+			}
+		})
+	}
+}
+
+func TestBootstrapIdentityReleaseAcceptsOnlyProvenReleaseOutcome(t *testing.T) {
+	request := identityRuntimeRequestFixture()
+	request.Action = "release_identity_recovery"
+	request.IdentityRecovery = &clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-877777777777"}
+	for _, state := range []string{"released", "already_released", "committed", ""} {
+		t.Run(state, func(t *testing.T) {
+			calls := 0
+			mutate := func(ctx context.Context, root string, owner clusterbootstrap.SessionBinding, source clusterbootstrap.Expected, nonce string,
+				authority func(context.Context) error, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+				calls++
+				if root != bootstrapMutationRoot || owner != request.Binding || nonce != request.Nonce || install.Target.NodeUID != request.IdentityRecovery.TargetNodeUID ||
+					authority(ctx) != nil || install.Check() != nil || install.Quiesced() != nil || material.Digest() == "" {
+					t.Fatal("release binding or evidence changed")
+				}
+				return state, nil
+			}
+			err := releaseBootstrapIdentityMaterialWith(context.Background(), request.Nonce, func(context.Context) error { return nil }, request,
+				nodeManagerIdentityMaterial(t), func(context.Context, clusterbootstrap.SessionRequest) error { return nil }, mutate)
+			wantSuccess := state == "released" || state == "already_released"
+			if (err == nil) != wantSuccess || calls != 1 {
+				t.Fatalf("release outcome %q accepted=%t err=%v calls=%d", state, err == nil, err, calls)
 			}
 		})
 	}

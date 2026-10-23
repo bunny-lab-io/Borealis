@@ -78,7 +78,14 @@ func bootstrapSessionContained(args []string) {
 	}
 	defer guard.Close()
 	receive := func(ctx context.Context, request clusterbootstrap.SessionRequest, material *engineidentity.Material) error {
-		return receiveBootstrapIdentityMaterialWith(ctx, nonce, guard.CheckAuthority, request, material, verifyBootstrapSessionRequest, applyBootstrapIdentityMutation)
+		switch request.Action {
+		case "deliver_identity_recovery":
+			return receiveBootstrapIdentityMaterialWith(ctx, nonce, guard.CheckAuthority, request, material, verifyBootstrapSessionRequest, applyBootstrapIdentityMutation)
+		case "release_identity_recovery":
+			return releaseBootstrapIdentityMaterialWith(ctx, nonce, guard.CheckAuthority, request, material, verifyBootstrapSessionRequest, applyBootstrapIdentityRelease)
+		default:
+			return errBootstrapIdentityRecovery
+		}
 	}
 	if err := clusterbootstrap.ServeSupervisedIdentitySession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionRequest, receive, guard.ObserveDeadline); err != nil {
 		fatalf("bootstrap-session verification failed; session data withheld")
@@ -111,7 +118,7 @@ func verifyBootstrapSessionRequestWith(ctx context.Context, request clusterboots
 	if request.Action == "verify" {
 		return nil
 	}
-	if (request.Action != "verify_identity_recovery" && request.Action != "deliver_identity_recovery") || request.IdentityRecovery == nil || observers.consumers == nil || observers.runtime == nil {
+	if (request.Action != "verify_identity_recovery" && request.Action != "deliver_identity_recovery" && request.Action != "release_identity_recovery") || request.IdentityRecovery == nil || observers.consumers == nil || observers.runtime == nil {
 		return errBootstrapIdentityRecovery
 	}
 	target := identityConsumerTarget{NodeName: request.Binding.Hostname, NodeUID: request.IdentityRecovery.TargetNodeUID}
@@ -129,9 +136,41 @@ func verifyBootstrapSessionRequestWith(ctx context.Context, request clusterboots
 func receiveBootstrapIdentityMaterialWith(ctx context.Context, nonce string, authority func(context.Context) error,
 	request clusterbootstrap.SessionRequest, material *engineidentity.Material, quiesced func(context.Context, clusterbootstrap.SessionRequest) error,
 	mutate bootstrapIdentityMutation) error {
-	if ctx.Err() != nil || request.Validate() != nil || request.Action != "deliver_identity_recovery" || request.Nonce != nonce ||
-		request.IdentityRecovery == nil || material == nil || material.Digest() == "" || authority == nil || quiesced == nil || mutate == nil {
+	source, install, err := bootstrapIdentityInstallation(ctx, nonce, "deliver_identity_recovery", authority, request, material, quiesced)
+	if err != nil || mutate == nil {
 		return errBootstrapIdentityRecovery
+	}
+	state, err := mutate(ctx, bootstrapMutationRoot, request.Binding, source, nonce, authority, install, material)
+	if err != nil || (state != "committed" && state != "already_committed") {
+		return errBootstrapIdentityRecovery
+	}
+	return nil
+}
+
+// releaseBootstrapIdentityMaterialWith is reachable only through a later
+// supervised session. It reuses exact install binding and accepts only marker
+// release outcomes; consumer restart remains absent.
+func releaseBootstrapIdentityMaterialWith(ctx context.Context, nonce string, authority func(context.Context) error,
+	request clusterbootstrap.SessionRequest, material *engineidentity.Material, quiesced func(context.Context, clusterbootstrap.SessionRequest) error,
+	mutate bootstrapIdentityMutation) error {
+	source, install, err := bootstrapIdentityInstallation(ctx, nonce, "release_identity_recovery", authority, request, material, quiesced)
+	if err != nil || mutate == nil {
+		return errBootstrapIdentityRecovery
+	}
+	state, err := mutate(ctx, bootstrapMutationRoot, request.Binding, source, nonce, authority, install, material)
+	if err != nil || (state != "released" && state != "already_released") {
+		return errBootstrapIdentityRecovery
+	}
+	return nil
+}
+
+func bootstrapIdentityInstallation(ctx context.Context, nonce, action string, authority func(context.Context) error,
+	request clusterbootstrap.SessionRequest, material *engineidentity.Material,
+	quiesced func(context.Context, clusterbootstrap.SessionRequest) error) (clusterbootstrap.Expected, engineidentity.Installation, error) {
+	invalidSource, invalidInstall := clusterbootstrap.Expected{}, engineidentity.Installation{}
+	if ctx.Err() != nil || request.Validate() != nil || request.Action != action || request.Nonce != nonce ||
+		request.IdentityRecovery == nil || material == nil || material.Digest() == "" || authority == nil || quiesced == nil {
+		return invalidSource, invalidInstall, errBootstrapIdentityRecovery
 	}
 	check := func() error { return authority(ctx) }
 	stopped := func() error { return quiesced(ctx, request) }
@@ -142,13 +181,10 @@ func receiveBootstrapIdentityMaterialWith(ctx context.Context, nonce string, aut
 		Target:  engineidentity.TargetBinding{ProvisioningID: request.Binding.TargetID, SSHFingerprint: request.Binding.HostKeyFingerprint, NodeUID: recovery.TargetNodeUID},
 		UID:     actionRuntimeID, GID: actionRuntimeID, Check: check, Quiesced: stopped,
 	}
-	state, err := mutate(ctx, bootstrapMutationRoot, request.Binding, clusterbootstrap.Expected{
+	source := clusterbootstrap.Expected{
 		Repository: request.Repository, Release: request.Release, SourceSHA: request.SourceSHA, AllowQualification: request.AllowQualification,
-	}, nonce, authority, install, material)
-	if err != nil || (state != "committed" && state != "already_committed") {
-		return errBootstrapIdentityRecovery
 	}
-	return nil
+	return source, install, nil
 }
 
 func applyBootstrapIdentityMutation(ctx context.Context, root string, owner clusterbootstrap.SessionBinding, source clusterbootstrap.Expected,
@@ -159,6 +195,16 @@ func applyBootstrapIdentityMutation(ctx context.Context, root string, owner clus
 	}
 	state, installErr := journal.InstallJoinedIdentity(ctx, install, material)
 	return state, errors.Join(installErr, journal.Close())
+}
+
+func applyBootstrapIdentityRelease(ctx context.Context, root string, owner clusterbootstrap.SessionBinding, source clusterbootstrap.Expected,
+	nonce string, authority func(context.Context) error, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	journal, err := clusterbootstrap.OpenMutationJournal(ctx, root, owner, source, nonce, authority)
+	if err != nil {
+		return "", err
+	}
+	state, releaseErr := journal.ReconcileAndReleaseJoinedIdentity(ctx, install, material)
+	return state, errors.Join(releaseErr, journal.Close())
 }
 
 // This host verifier reads only public host-key/machine metadata and its own

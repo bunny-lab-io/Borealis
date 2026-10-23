@@ -489,6 +489,27 @@ func TestJoinedIdentityReleaseRequiresAppliedProofAndIsIdempotent(t *testing.T) 
 	}
 }
 
+func TestJoinedIdentityCombinedReleaseReconcilesIntentAndSurvivesLostAcknowledgement(t *testing.T) {
+	for _, phase := range []string{"inner_committed", "outer_committed"} {
+		t.Run(phase, func(t *testing.T) {
+			j, _, install, material := joinedIdentityCommittedUnknown(t, phase)
+			state, err := j.ReconcileAndReleaseJoinedIdentity(context.Background(), install, material)
+			if err != nil || state != "released" {
+				t.Fatalf("combined release failed: %s %v", state, err)
+			}
+			consumer, err := engineidentity.AcquireConsumer(install.Root)
+			if err != nil {
+				t.Fatal("released identity still blocked consumer", err)
+			}
+			consumer.Close()
+			state, err = j.ReconcileAndReleaseJoinedIdentity(context.Background(), install, material)
+			if err != nil || state != "already_released" {
+				t.Fatalf("lost acknowledgement was not idempotent: %s %v", state, err)
+			}
+		})
+	}
+}
+
 func TestJoinedIdentityReleaseFailureRetainsOrRestoresMarker(t *testing.T) {
 	for _, kind := range []string{"identity", "inner_journal", "marker", "material", "authority", "quiescence", "same_producer", "producer_live", "authority_after_unlink", "quiescence_after_unlink"} {
 		t.Run(kind, func(t *testing.T) {

@@ -139,6 +139,49 @@ func (j *MutationJournal) ReleaseJoinedIdentity(ctx context.Context, install eng
 	if err != nil {
 		return "", err
 	}
+	return j.releaseJoinedIdentityLocked(ctx, install, inputSHA256, material)
+}
+
+// ReconcileAndReleaseJoinedIdentity is the fixed remote release composition.
+// An uncertain outer intent first requires exact retained-marker proof; an
+// already-applied result proceeds directly so a lost release acknowledgement
+// can prove an already-absent marker idempotently. Both paths require a
+// distinct supervised executor and never start consumers.
+func (j *MutationJournal) ReconcileAndReleaseJoinedIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	if j == nil {
+		return "", ErrMutationJournal
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.authority(ctx) != nil {
+		return "", ErrSessionAuthority
+	}
+	install, inputSHA256, err := j.joinedIdentityRequest(ctx, install, material)
+	if err != nil {
+		return "", err
+	}
+	record, ok := j.state.Steps["install_identity"]
+	if !ok || record.InputSHA256 != inputSHA256 {
+		return "", ErrMutationJournal
+	}
+	if record.State == "intent" {
+		if _, err := j.reconcileLocked(ctx, "install_identity", inputSHA256, func(context.Context) (string, error) {
+			if err := install.ProveFencedCommitted(material); err != nil {
+				return "", err
+			}
+			return material.Digest(), nil
+		}, "applied"); err != nil {
+			return "", err
+		}
+	}
+	return j.releaseJoinedIdentityLocked(ctx, install, inputSHA256, material)
+}
+
+// Caller holds j.mu and has normalized the exact joined-identity request.
+func (j *MutationJournal) releaseJoinedIdentityLocked(ctx context.Context, install engineidentity.Installation, inputSHA256 string, material *engineidentity.Material) (string, error) {
+	if j.authority(ctx) != nil {
+		return "", ErrSessionAuthority
+	}
 	record, ok := j.state.Steps["install_identity"]
 	if !ok || record.InputSHA256 != inputSHA256 {
 		return "", ErrMutationJournal

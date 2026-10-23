@@ -107,78 +107,81 @@ func newSessionFixtureIdentityRequest(t *testing.T, request SessionRequest, veri
 	return c
 }
 
-func TestBootstrapSessionDeliversBoundIdentityOnlyIntoReceiverMemory(t *testing.T) {
-	for _, mode := range []string{"valid", "wrong envelope binding", "wrong target binding"} {
-		t.Run(mode, func(t *testing.T) {
-			request := identityDeliverySessionFixture()
-			source := sessionIdentityMaterial(t)
-			received := false
-			finish := make(chan struct{})
-			c := newSessionFixtureIdentityRequest(t, request, func(context.Context, SessionRequest) error { return nil }, func(_ context.Context, observed SessionRequest, material *engineidentity.Material) error {
-				received = true
-				observedRecovery := observed.IdentityRecovery
-				observed.IdentityRecovery = nil
-				expectedRequest := request
-				expectedRequest.IdentityRecovery = nil
-				if observed != expectedRequest || !sameIdentityRecovery(observedRecovery, request.IdentityRecovery) || !material.Equal(source) {
-					return errors.New("delivered identity changed")
-				}
-				<-finish
-				return nil
-			})
-			challenge := c.startRequest(t, "", request)
-			c.heartbeat(t, challenge)
-			var ready SessionMessage
-			if ReadSessionFrame(c.out, &ready) != nil || ready.State != "identity_ready" || ready.Binding == nil || *ready.Binding != request.Binding || !sameIdentityRecovery(ready.IdentityRecovery, request.IdentityRecovery) {
-				t.Fatal("private delivery readiness not bound")
-			}
-			expected := engineidentity.Binding{ClusterID: request.Binding.ClusterID, SourceID: request.IdentityRecovery.SourceID, SourceUID: request.IdentityRecovery.SourceNodeUID}
-			if mode == "wrong envelope binding" {
-				expected.SourceUID = "88888888-8888-4888-8888-888888888888"
-			}
-			envelope, err := source.Export(expected)
-			if err != nil {
-				t.Fatal(err)
-			}
-			raw := json.RawMessage(envelope)
-			binding := request.Binding
-			if mode == "wrong target binding" {
-				binding.TargetID = "99999999-9999-4999-8999-999999999999"
-			}
-			if WriteSessionFrame(c.in, SessionMessage{Protocol: 1, State: "identity", Nonce: ready.Nonce, Binding: &binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256, IdentityRecovery: request.IdentityRecovery, IdentityEnvelope: &raw}) != nil {
-				t.Fatal("identity envelope unavailable")
-			}
-			if mode != "valid" {
-				if c.result(t) == nil || received {
-					t.Fatal("unbound identity accepted")
-				}
-				return
-			}
-			var done SessionMessage
-			released := false
-			for {
-				if ReadSessionFrame(c.out, &done) != nil {
-					t.Fatal("private identity completion unavailable")
-				}
-				if done.State == "challenge" {
-					c.heartbeat(t, done)
-					if !released {
-						close(finish)
-						released = true
+func TestBootstrapSessionDeliversBoundIdentityToInstallOrReleaseReceiver(t *testing.T) {
+	for _, action := range []string{"deliver_identity_recovery", "release_identity_recovery"} {
+		for _, mode := range []string{"valid", "wrong envelope binding", "wrong target binding"} {
+			t.Run(action+"/"+mode, func(t *testing.T) {
+				request := identityDeliverySessionFixture()
+				request.Action = action
+				source := sessionIdentityMaterial(t)
+				received := false
+				finish := make(chan struct{})
+				c := newSessionFixtureIdentityRequest(t, request, func(context.Context, SessionRequest) error { return nil }, func(_ context.Context, observed SessionRequest, material *engineidentity.Material) error {
+					received = true
+					observedRecovery := observed.IdentityRecovery
+					observed.IdentityRecovery = nil
+					expectedRequest := request
+					expectedRequest.IdentityRecovery = nil
+					if observed != expectedRequest || !sameIdentityRecovery(observedRecovery, request.IdentityRecovery) || !material.Equal(source) {
+						return errors.New("delivered identity changed")
 					}
-					continue
+					<-finish
+					return nil
+				})
+				challenge := c.startRequest(t, "", request)
+				c.heartbeat(t, challenge)
+				var ready SessionMessage
+				if ReadSessionFrame(c.out, &ready) != nil || ready.State != "identity_ready" || ready.Binding == nil || *ready.Binding != request.Binding || !sameIdentityRecovery(ready.IdentityRecovery, request.IdentityRecovery) {
+					t.Fatal("private delivery readiness not bound")
 				}
-				if done.State != "challenge" {
-					break
+				expected := engineidentity.Binding{ClusterID: request.Binding.ClusterID, SourceID: request.IdentityRecovery.SourceID, SourceUID: request.IdentityRecovery.SourceNodeUID}
+				if mode == "wrong envelope binding" {
+					expected.SourceUID = "88888888-8888-4888-8888-888888888888"
 				}
-			}
-			if done.State != "verified" || done.IdentityEnvelope != nil {
-				t.Fatal("private identity completion invalid")
-			}
-			if err := c.result(t); err != nil || !received {
-				t.Fatal("identity did not reach receiver memory", err)
-			}
-		})
+				envelope, err := source.Export(expected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw := json.RawMessage(envelope)
+				binding := request.Binding
+				if mode == "wrong target binding" {
+					binding.TargetID = "99999999-9999-4999-8999-999999999999"
+				}
+				if WriteSessionFrame(c.in, SessionMessage{Protocol: 1, State: "identity", Nonce: ready.Nonce, Binding: &binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256, IdentityRecovery: request.IdentityRecovery, IdentityEnvelope: &raw}) != nil {
+					t.Fatal("identity envelope unavailable")
+				}
+				if mode != "valid" {
+					if c.result(t) == nil || received {
+						t.Fatal("unbound identity accepted")
+					}
+					return
+				}
+				var done SessionMessage
+				released := false
+				for {
+					if ReadSessionFrame(c.out, &done) != nil {
+						t.Fatal("private identity completion unavailable")
+					}
+					if done.State == "challenge" {
+						c.heartbeat(t, done)
+						if !released {
+							close(finish)
+							released = true
+						}
+						continue
+					}
+					if done.State != "challenge" {
+						break
+					}
+				}
+				if done.State != "verified" || done.IdentityEnvelope != nil {
+					t.Fatal("private identity completion invalid")
+				}
+				if err := c.result(t); err != nil || !received {
+					t.Fatal("identity did not reach receiver memory", err)
+				}
+			})
+		}
 	}
 }
 

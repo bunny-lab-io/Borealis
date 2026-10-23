@@ -95,8 +95,9 @@ func (r IdentityRecoveryRequest) Validate(binding SessionBinding) error {
 }
 
 // SessionRequest permits host verification, fixed read-only identity recovery
-// qualification and private journaled identity delivery. Delivery writes only
-// the fixed identity allowlist and retains its restart marker. Marker release,
+// qualification and private journaled identity delivery/release. Delivery
+// writes only the fixed identity allowlist and retains its restart marker. A
+// separate supervised session may reconcile and release that exact marker;
 // consumer restart, preparation and join remain absent.
 type SessionRequest struct {
 	Protocol           int                      `json:"protocol"`
@@ -120,7 +121,7 @@ func (r SessionRequest) Validate() error {
 		if r.IdentityRecovery != nil {
 			return ErrSessionProtocol
 		}
-	case "verify_identity_recovery", "deliver_identity_recovery":
+	case "verify_identity_recovery", "deliver_identity_recovery", "release_identity_recovery":
 		if r.IdentityRecovery == nil || r.IdentityRecovery.Validate(r.Binding) != nil {
 			return ErrSessionProtocol
 		}
@@ -424,7 +425,7 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 			if err != nil || ctx.Err() != nil || !time.Now().Before(deadline) {
 				return ErrSessionAuthority
 			}
-			if phase == "verify" && request.Action == "deliver_identity_recovery" {
+			if phase == "verify" && (request.Action == "deliver_identity_recovery" || request.Action == "release_identity_recovery") {
 				if receive == nil {
 					return ErrSessionAuthority
 				}
