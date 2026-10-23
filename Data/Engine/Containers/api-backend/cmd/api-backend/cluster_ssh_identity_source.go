@@ -25,7 +25,7 @@ func withClusterSSHSourceIdentityMaterial(parent context.Context, consumer *engi
 	}
 	observe := func() ([]byte, error) {
 		value, err := authority(parent)
-		if err != nil || value.Baseline.Validate() != nil || !validClusterSSHObservationLease(value.Lease) ||
+		if err != nil || value.Baseline.Validate() != nil || (!validClusterSSHObservationLease(value.Lease) && !validClusterSSHIdentityRecoveryLease(value.Lease)) ||
 			validateClusterSSHInspectionCohort(value.Cohort, value.Source) != nil || parent.Err() != nil ||
 			value.Source.ClusterID != expected.ClusterID {
 			return nil, fail()
