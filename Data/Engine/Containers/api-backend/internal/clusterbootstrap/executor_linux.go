@@ -217,6 +217,20 @@ func (g *ExecutorGuard) ObserveDeadline(deadline time.Time) error {
 	return nil
 }
 
+// CheckAuthority exposes only the locally observed challenge lease. It does
+// not extend that lease or infer controller authority from process liveness.
+func (g *ExecutorGuard) CheckAuthority(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return ErrSessionAuthority
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ctx.Err() != nil || !g.ready || !time.Now().Before(g.deadline) {
+		return ErrSessionAuthority
+	}
+	return nil
+}
+
 func (g *ExecutorGuard) Close() {
 	g.cancel()
 	<-g.done

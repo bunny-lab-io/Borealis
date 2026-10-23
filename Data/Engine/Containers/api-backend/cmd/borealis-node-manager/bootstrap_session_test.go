@@ -124,20 +124,69 @@ func TestBootstrapSessionIdentityRecoveryComposesReadOnlyEvidence(t *testing.T) 
 	}
 }
 
-func TestBootstrapIdentityReceiverRemainsMemoryOnly(t *testing.T) {
+func TestBootstrapIdentityReceiverBindsJournaledInstallAndRetainsRestartBoundary(t *testing.T) {
 	request := identityRuntimeRequestFixture()
 	request.Action = "deliver_identity_recovery"
 	request.IdentityRecovery = &clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-877777777777"}
 	material := nodeManagerIdentityMaterial(t)
-	if err := receiveBootstrapIdentityMaterial(context.Background(), request, material); err != nil {
+	authorityCalls, quiescedCalls, mutationCalls := 0, 0, 0
+	authority := func(context.Context) error { authorityCalls++; return nil }
+	quiesced := func(_ context.Context, observed clusterbootstrap.SessionRequest) error {
+		quiescedCalls++
+		if observed != request {
+			t.Fatal("quiescence request binding changed")
+		}
+		return nil
+	}
+	mutate := func(ctx context.Context, root string, owner clusterbootstrap.SessionBinding, source clusterbootstrap.Expected, nonce string,
+		check func(context.Context) error, install engineidentity.Installation, incoming *engineidentity.Material) (string, error) {
+		mutationCalls++
+		if ctx.Err() != nil || root != bootstrapMutationRoot || owner != request.Binding || nonce != request.Nonce || incoming != material ||
+			source != (clusterbootstrap.Expected{Repository: request.Repository, Release: request.Release, SourceSHA: request.SourceSHA, AllowQualification: request.AllowQualification}) {
+			t.Fatal("outer journal binding changed")
+		}
+		wantBinding := engineidentity.Binding{ClusterID: request.Binding.ClusterID, SourceID: request.IdentityRecovery.SourceID, SourceUID: request.IdentityRecovery.SourceNodeUID}
+		wantTarget := engineidentity.TargetBinding{ProvisioningID: request.Binding.TargetID, SSHFingerprint: request.Binding.HostKeyFingerprint, NodeUID: request.IdentityRecovery.TargetNodeUID}
+		if install.Root != identityRuntimeRoot || install.Journal != filepath.Join(bootstrapMutationRoot, "identity-attempt") ||
+			install.Binding != wantBinding || install.Target != wantTarget || install.UID != actionRuntimeID || install.GID != actionRuntimeID {
+			t.Fatal("identity installation binding changed")
+		}
+		if check(ctx) != nil || install.Check() != nil || install.Quiesced() != nil {
+			t.Fatal("installation evidence callbacks failed")
+		}
+		return "committed", nil
+	}
+	if err := receiveBootstrapIdentityMaterialWith(context.Background(), request.Nonce, authority, request, material, quiesced, mutate); err != nil {
 		t.Fatal(err)
 	}
+	if authorityCalls != 2 || quiescedCalls != 1 || mutationCalls != 1 {
+		t.Fatalf("unexpected evidence calls: authority=%d quiesced=%d mutation=%d", authorityCalls, quiescedCalls, mutationCalls)
+	}
 	request.Action = "verify_identity_recovery"
-	if receiveBootstrapIdentityMaterial(context.Background(), request, material) == nil || receiveBootstrapIdentityMaterial(context.Background(), identityRuntimeRequestFixture(), nil) == nil {
+	if receiveBootstrapIdentityMaterialWith(context.Background(), request.Nonce, authority, request, material, quiesced, mutate) == nil ||
+		receiveBootstrapIdentityMaterialWith(context.Background(), identityRuntimeRequestFixture().Nonce, authority, identityRuntimeRequestFixture(), nil, quiesced, mutate) == nil {
 		t.Fatal("identity receiver accepted non-delivery action or missing material")
 	}
 	if files := material.Files(); len(files) != 4 || files[engineidentity.EngineSecretPath] == nil {
-		t.Fatal("receiver changed in-memory material")
+		t.Fatal("receiver changed delivered material")
+	}
+}
+
+func TestBootstrapIdentityReceiverWithholdsFailedOrUnretainedOutcome(t *testing.T) {
+	request := identityRuntimeRequestFixture()
+	request.Action = "deliver_identity_recovery"
+	request.IdentityRecovery = &clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-877777777777"}
+	for _, state := range []string{"", "released", "rolled_back"} {
+		t.Run(state, func(t *testing.T) {
+			mutate := func(context.Context, string, clusterbootstrap.SessionBinding, clusterbootstrap.Expected, string,
+				func(context.Context) error, engineidentity.Installation, *engineidentity.Material) (string, error) {
+				return state, nil
+			}
+			if err := receiveBootstrapIdentityMaterialWith(context.Background(), request.Nonce, func(context.Context) error { return nil },
+				request, nodeManagerIdentityMaterial(t), func(context.Context, clusterbootstrap.SessionRequest) error { return nil }, mutate); err != errBootstrapIdentityRecovery {
+				t.Fatal("receiver acknowledged non-committed identity outcome")
+			}
+		})
 	}
 }
 

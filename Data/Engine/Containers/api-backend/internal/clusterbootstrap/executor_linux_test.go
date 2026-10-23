@@ -154,6 +154,25 @@ func TestExecutorGuardRejectsInvalidDeadlinesBeforeReady(t *testing.T) {
 	}
 }
 
+func TestExecutorGuardAuthorityRequiresCurrentObservedDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	guard := newExecutorGuard(ctx, func(string) error { return nil }, time.Hour)
+	defer guard.Close()
+	if guard.CheckAuthority(ctx) != ErrSessionAuthority {
+		t.Fatal("unarmed guard granted authority")
+	}
+	if err := guard.ObserveDeadline(time.Now().Add(80 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.CheckAuthority(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if guard.CheckAuthority(context.Background()) != ErrSessionAuthority {
+		t.Fatal("cancelled guard retained authority")
+	}
+}
+
 // Tier3 helper only. Ordinary portable runs return without using systemd.
 // Explicit lab runner starts this test binary unprivileged in a disposable
 // transient unit. Only its validation directory is touched. The setsid child

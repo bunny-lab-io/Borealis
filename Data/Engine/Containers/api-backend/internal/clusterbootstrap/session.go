@@ -95,9 +95,9 @@ func (r IdentityRecoveryRequest) Validate(binding SessionBinding) error {
 }
 
 // SessionRequest permits host verification, fixed read-only identity recovery
-// qualification and private in-memory identity delivery. Preparation, identity
-// writes, marker release and join remain absent until their complete journaled
-// dispatch contracts exist.
+// qualification and private journaled identity delivery. Delivery writes only
+// the fixed identity allowlist and retains its restart marker. Marker release,
+// consumer restart, preparation and join remain absent.
 type SessionRequest struct {
 	Protocol           int                      `json:"protocol"`
 	Action             string                   `json:"action"`

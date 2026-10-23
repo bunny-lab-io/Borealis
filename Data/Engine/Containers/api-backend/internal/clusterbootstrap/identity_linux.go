@@ -55,8 +55,10 @@ func (j *MutationJournal) joinedIdentityRequest(ctx context.Context, install eng
 // identity transaction. The caller still supplies independently verified
 // original-source identity, joined Node UID, guard-capable release, stopped
 // legacy consumers and stable mount evidence through Check/Quiesced. This is
-// not a CLI dispatch or authority inferred from an SSH login/Pod inventory.
-// Unknown/applied prior attempts require explicit reconciliation, never replay.
+// not authority inferred from an SSH login/Pod inventory. Successful writes
+// retain the restart marker; a distinct supervised executor must explicitly
+// release it after re-proving both journals. Unknown/applied prior attempts
+// require explicit reconciliation, never replay.
 func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
 	if j == nil {
 		return "", ErrMutationJournal
@@ -84,7 +86,7 @@ func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install eng
 	if err := j.priorExecutorsQuiescent(ctx); err != nil {
 		return "", err
 	}
-	return install.InstallFencedJournaled(material, func(transaction func() (string, error)) error {
+	return install.InstallFencedJournaledRetained(material, func(transaction func() (string, error)) error {
 		_, err := j.applyLocked(ctx, "install_identity", inputSHA256, func(context.Context, *os.File) (string, error) {
 			state, err := transaction()
 			if err != nil || (state != "committed" && state != "already_committed") {
@@ -147,8 +149,8 @@ func (j *MutationJournal) ReleaseJoinedIdentity(ctx context.Context, install eng
 	if record.ResultSHA256 != material.Digest() {
 		return "", ErrMutationJournal
 	}
-	// Normal successful installation releases its own marker. Recovery release
-	// requires a distinct executor that can independently prove the producer dead.
+	// Marker release always requires a distinct executor that can independently
+	// prove the producer dead; successful installation deliberately retains it.
 	if record.Executor == j.executor {
 		return "", ErrMutationUnknown
 	}

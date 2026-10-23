@@ -170,19 +170,11 @@ func TestJoinedIdentityBothJournalsCommitBeforeConsumerRelease(t *testing.T) {
 	if record.State != "applied" || record.ResultSHA256 != material.Digest() {
 		t.Fatal("outer outcome not durable")
 	}
-	consumer, err := engineidentity.AcquireConsumer(install.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer.Close()
+	identityConsumerBlocked(t, install.Root)
 	if _, err := j.InstallJoinedIdentity(context.Background(), install, material); err != ErrMutationApplied {
 		t.Fatal("completed attempt replayed")
 	}
-	consumer, err = engineidentity.AcquireConsumer(install.Root)
-	if err != nil {
-		t.Fatal("repeat recreated restart marker")
-	}
-	consumer.Close()
+	identityConsumerBlocked(t, install.Root)
 }
 
 func TestJoinedIdentityLostOwnershipAcrossCommitBoundaries(t *testing.T) {

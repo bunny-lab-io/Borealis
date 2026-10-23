@@ -25,6 +25,11 @@ import (
 var errBootstrapHostVerification = errors.New("bootstrap executable or observed host identity differs from authorized target")
 var errBootstrapIdentityRecovery = errors.New("identity recovery qualification evidence unavailable or changed")
 
+const bootstrapMutationRoot = "/var/lib/borealis/cluster-bootstrap"
+
+type bootstrapIdentityMutation func(context.Context, string, clusterbootstrap.SessionBinding, clusterbootstrap.Expected, string,
+	func(context.Context) error, engineidentity.Installation, *engineidentity.Material) (string, error)
+
 func bootstrapSession(args []string) {
 	nonce := bootstrapSessionNonce(args)
 	executable, err := os.Executable()
@@ -72,7 +77,10 @@ func bootstrapSessionContained(args []string) {
 		fatalf("bootstrap executor context invalid")
 	}
 	defer guard.Close()
-	if err := clusterbootstrap.ServeSupervisedIdentitySession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionRequest, receiveBootstrapIdentityMaterial, guard.ObserveDeadline); err != nil {
+	receive := func(ctx context.Context, request clusterbootstrap.SessionRequest, material *engineidentity.Material) error {
+		return receiveBootstrapIdentityMaterialWith(ctx, nonce, guard.CheckAuthority, request, material, verifyBootstrapSessionRequest, applyBootstrapIdentityMutation)
+	}
+	if err := clusterbootstrap.ServeSupervisedIdentitySession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionRequest, receive, guard.ObserveDeadline); err != nil {
 		fatalf("bootstrap-session verification failed; session data withheld")
 	}
 }
@@ -114,14 +122,43 @@ func verifyBootstrapSessionRequestWith(ctx context.Context, request clusterboots
 	return nil
 }
 
-// receiveBootstrapIdentityMaterial proves private delivery into target memory.
-// Persistence remains unreachable until outer journal ownership, stopped
-// consumers, fixed-file transaction and rollback dispatch are integrated.
-func receiveBootstrapIdentityMaterial(ctx context.Context, request clusterbootstrap.SessionRequest, material *engineidentity.Material) error {
-	if ctx.Err() != nil || request.Action != "deliver_identity_recovery" || request.IdentityRecovery == nil || material == nil || material.Digest() == "" {
+// receiveBootstrapIdentityMaterialWith is the only delivery-to-write bridge.
+// It binds exact request identity to both journals while the supervised
+// challenge lease and repeated Pod/runtime/Pod proof remain current. Success
+// leaves the restart marker in place; this receiver cannot release or restart.
+func receiveBootstrapIdentityMaterialWith(ctx context.Context, nonce string, authority func(context.Context) error,
+	request clusterbootstrap.SessionRequest, material *engineidentity.Material, quiesced func(context.Context, clusterbootstrap.SessionRequest) error,
+	mutate bootstrapIdentityMutation) error {
+	if ctx.Err() != nil || request.Validate() != nil || request.Action != "deliver_identity_recovery" || request.Nonce != nonce ||
+		request.IdentityRecovery == nil || material == nil || material.Digest() == "" || authority == nil || quiesced == nil || mutate == nil {
+		return errBootstrapIdentityRecovery
+	}
+	check := func() error { return authority(ctx) }
+	stopped := func() error { return quiesced(ctx, request) }
+	recovery := request.IdentityRecovery
+	install := engineidentity.Installation{
+		Root: identityRuntimeRoot, Journal: filepath.Join(bootstrapMutationRoot, "identity-attempt"),
+		Binding: engineidentity.Binding{ClusterID: request.Binding.ClusterID, SourceID: recovery.SourceID, SourceUID: recovery.SourceNodeUID},
+		Target:  engineidentity.TargetBinding{ProvisioningID: request.Binding.TargetID, SSHFingerprint: request.Binding.HostKeyFingerprint, NodeUID: recovery.TargetNodeUID},
+		UID:     actionRuntimeID, GID: actionRuntimeID, Check: check, Quiesced: stopped,
+	}
+	state, err := mutate(ctx, bootstrapMutationRoot, request.Binding, clusterbootstrap.Expected{
+		Repository: request.Repository, Release: request.Release, SourceSHA: request.SourceSHA, AllowQualification: request.AllowQualification,
+	}, nonce, authority, install, material)
+	if err != nil || (state != "committed" && state != "already_committed") {
 		return errBootstrapIdentityRecovery
 	}
 	return nil
+}
+
+func applyBootstrapIdentityMutation(ctx context.Context, root string, owner clusterbootstrap.SessionBinding, source clusterbootstrap.Expected,
+	nonce string, authority func(context.Context) error, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	journal, err := clusterbootstrap.OpenMutationJournal(ctx, root, owner, source, nonce, authority)
+	if err != nil {
+		return "", err
+	}
+	state, installErr := journal.InstallJoinedIdentity(ctx, install, material)
+	return state, errors.Join(installErr, journal.Close())
 }
 
 // This host verifier reads only public host-key/machine metadata and its own

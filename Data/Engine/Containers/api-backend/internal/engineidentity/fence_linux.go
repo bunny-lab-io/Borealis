@@ -130,7 +130,7 @@ type recoveryFenceRecord struct {
 // Failure/rollback retains the marker. Normal success releases it in this call;
 // recovered attempts require the separate outer-journal-owned release path.
 func (install Installation) InstallFenced(material *Material) (string, error) {
-	return install.installFenced(material, nil)
+	return install.installFenced(material, nil, false)
 }
 
 // InstallFencedJournaled retains the exclusive consumer lock and restart marker
@@ -142,7 +142,17 @@ func (install Installation) InstallFencedJournaled(material *Material, commit fu
 	if commit == nil {
 		return "", errors.New("identity operation journal required")
 	}
-	return install.installFenced(material, commit)
+	return install.installFenced(material, commit, false)
+}
+
+// InstallFencedJournaledRetained keeps the exact restart marker after both
+// journals commit. A later supervised executor must re-prove the committed
+// state through ReleaseFencedCommitted before any consumer can start.
+func (install Installation) InstallFencedJournaledRetained(material *Material, commit func(func() (string, error)) error) (string, error) {
+	if commit == nil {
+		return "", errors.New("identity operation journal required")
+	}
+	return install.installFenced(material, commit, true)
 }
 
 type committedFenceProof struct {
@@ -398,7 +408,7 @@ func (install Installation) ReleaseFencedCommitted(material *Material) (state st
 	return "released", nil
 }
 
-func (install Installation) installFenced(material *Material, commit func(func() (string, error)) error) (string, error) {
+func (install Installation) installFenced(material *Material, commit func(func() (string, error)) error, retainMarker bool) (string, error) {
 	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
 		install.Target.NodeUID == "" || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
 		return "", errors.New("joined identity recovery contract invalid")
@@ -539,6 +549,9 @@ func (install Installation) installFenced(material *Material, commit func(func()
 	// was current only before those reads.
 	if err := install.Check(); err != nil {
 		return state, err
+	}
+	if retainMarker {
+		return state, syncDirectory(fence.root, ".")
 	}
 	if err := fence.root.Remove(recoveryMarker); err != nil {
 		return state, err

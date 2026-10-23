@@ -2084,6 +2084,9 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if err := os.Chown(defaultSecretPath, 0, actionRuntimeID); err != nil {
 		return err
 	}
+	if err := ensureBootstrapMutationRoot("/var/lib"); err != nil {
+		return err
+	}
 	// systemd requires every ReadWritePaths target to exist before ExecStart.
 	// K3s creates this leaf lazily, so joining nodes must create it explicitly.
 	if err := os.MkdirAll(k3sImageImportPath, 0o755); err != nil {
@@ -2117,6 +2120,57 @@ func installLocalNodeManagerService(repoRoot string) error {
 		return errors.New("joined node-manager revision is unavailable")
 	}
 	return replaceSecureConfig(defaultRevisionPath, []byte(strings.ToLower(strings.TrimSpace(revision))+"\n"))
+}
+
+func ensureBootstrapMutationRoot(base string) error {
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Mkdir("borealis", 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	parent, err := root.Lstat("borealis")
+	if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 || parent.Mode().Perm()&0o022 != 0 {
+		return errors.New("bootstrap journal parent must be a private root-owned directory")
+	}
+	owner, ok := parent.Sys().(*syscall.Stat_t)
+	if !ok || int(owner.Uid) != os.Geteuid() {
+		return errors.New("bootstrap journal parent must be a private root-owned directory")
+	}
+	borealis, err := root.OpenRoot("borealis")
+	if err != nil {
+		return err
+	}
+	defer borealis.Close()
+	if err := borealis.Mkdir("cluster-bootstrap", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	journal, err := borealis.Lstat("cluster-bootstrap")
+	if err != nil || !journal.IsDir() || journal.Mode()&os.ModeSymlink != 0 || journal.Mode().Perm() != 0o700 {
+		return errors.New("bootstrap journal must be a root-owned mode0700 directory")
+	}
+	owner, ok = journal.Sys().(*syscall.Stat_t)
+	if !ok || int(owner.Uid) != os.Geteuid() {
+		return errors.New("bootstrap journal must be a root-owned mode0700 directory")
+	}
+	parentDirectory, err := root.Open("borealis")
+	if err != nil {
+		return err
+	}
+	defer parentDirectory.Close()
+	journalDirectory, err := borealis.Open("cluster-bootstrap")
+	if err != nil {
+		return err
+	}
+	defer journalDirectory.Close()
+	baseDirectory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer baseDirectory.Close()
+	return errors.Join(baseDirectory.Sync(), parentDirectory.Sync(), journalDirectory.Sync())
 }
 
 func replaceExecutable(destination string, content []byte) error {
