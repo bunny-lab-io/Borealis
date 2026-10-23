@@ -2,11 +2,16 @@ package clusterremote
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -21,6 +26,37 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+func remoteIdentityMaterial(t *testing.T) *engineidentity.Material {
+	t.Helper()
+	_, jwt, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, script, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := func(key ed25519.PrivateKey) []byte {
+		raw, marshalErr := x509.MarshalPKCS8PrivateKey(key)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw})
+	}
+	public, err := x509.MarshalPKIXPublicKey(script.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := engineidentity.ParseFiles(map[string][]byte{
+		engineidentity.EngineSecretPath: []byte(strings.Repeat("s", 48)), engineidentity.AgentJWTPath: private(jwt),
+		engineidentity.ScriptKeyPath: private(script), engineidentity.ScriptPublicPath: public,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return material
+}
 
 func TestBootstrapAuthorityTimeoutJoinsCallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -338,7 +374,7 @@ func TestBootstrapIdentityRecoveryRequestAndCompletionAreBound(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			result, err := client.verifyBootstrapExecutableRequest(context.Background(), path, expected, digest, int64(len(manager)), bootstrapBinding(server), &recovery, []byte("unused-sudo-fixture"), func(context.Context) error { return nil })
+			result, err := client.verifyBootstrapExecutableRequest(context.Background(), path, expected, digest, int64(len(manager)), bootstrapBinding(server), &recovery, nil, []byte("unused-sudo-fixture"), func(context.Context) error { return nil })
 			if mode == "valid" {
 				if err != nil || result.IdentityRecovery == nil || *result.IdentityRecovery != recovery {
 					t.Fatalf("valid recovery verification failed: %v", err)
@@ -347,6 +383,92 @@ func TestBootstrapIdentityRecoveryRequestAndCompletionAreBound(t *testing.T) {
 				t.Fatalf("unbound recovery completion accepted: %v", err)
 			}
 		})
+	}
+}
+
+func TestBootstrapIdentityDeliveryWaitsForQualifiedBoundTarget(t *testing.T) {
+	manager := bytes.Repeat([]byte("immutable identity delivery verifier\x00"), 1000)
+	hash := sha256.Sum256(manager)
+	digest := hex.EncodeToString(hash[:])
+	expected := clusterbootstrap.Expected{Repository: "bunny-lab-io/Borealis", Release: "2026.09.999-rc.1", SourceSHA: strings.Repeat("a", 40), AllowQualification: true}
+	path := filepath.Join(t.TempDir(), "manager")
+	if err := os.WriteFile(path, manager, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-777777777777"}
+	source := remoteIdentityMaterial(t)
+	server := newFakeSSH(t, "bootstrap-identity-delivery", func(command string, channel ssh.Channel) uint32 {
+		var nonce string
+		for _, match := range regexp.MustCompile(`'([a-f0-9]{64})'`).FindAllStringSubmatch(command, -1) {
+			if match[1] != digest {
+				nonce = match[1]
+			}
+		}
+		input := bufio.NewReader(channel)
+		received := make([]byte, len(manager))
+		if nonce == "" || command != bootstrapCommand(int64(len(manager)), digest, nonce) {
+			return 1
+		}
+		if _, err := io.ReadFull(input, received); err != nil || !bytes.Equal(received, manager) {
+			return 1
+		}
+		if password, err := input.ReadString('\n'); err != nil || password != "unused-sudo-fixture\n" {
+			return 1
+		}
+		preamble, _ := clusterbootstrap.SessionPreamble(nonce)
+		if line, err := input.ReadString('\n'); err != nil || line != preamble {
+			return 1
+		}
+		if clusterbootstrap.WriteSessionFrame(channel, clusterbootstrap.SessionMessage{Protocol: 1, State: "ready", Nonce: nonce}) != nil {
+			return 1
+		}
+		var request clusterbootstrap.SessionRequest
+		if clusterbootstrap.ReadSessionFrame(input, &request) != nil || request.Action != "deliver_identity_recovery" || request.IdentityRecovery == nil || *request.IdentityRecovery != recovery {
+			return 1
+		}
+		challenge := strings.Repeat("d", 64)
+		if clusterbootstrap.WriteSessionFrame(channel, clusterbootstrap.SessionMessage{Protocol: 1, State: "challenge", Nonce: challenge}) != nil {
+			return 1
+		}
+		var heartbeat clusterbootstrap.SessionMessage
+		if clusterbootstrap.ReadSessionFrame(input, &heartbeat) != nil || heartbeat != (clusterbootstrap.SessionMessage{Protocol: 1, State: "heartbeat", Nonce: challenge}) {
+			return 1
+		}
+		binding := request.Binding
+		deliveryNonce := strings.Repeat("e", 64)
+		bound := clusterbootstrap.SessionMessage{Protocol: 1, State: "identity_ready", Nonce: deliveryNonce, Binding: &binding, SourceSHA: expected.SourceSHA, ManagerSHA256: digest, IdentityRecovery: &recovery}
+		if clusterbootstrap.WriteSessionFrame(channel, bound) != nil {
+			return 1
+		}
+		var identity clusterbootstrap.SessionMessage
+		if clusterbootstrap.ReadSessionFrame(input, &identity) != nil || identity.IdentityEnvelope == nil || !boundBootstrapMessage(identity, "identity", deliveryNonce, binding, expected.SourceSHA, digest, &recovery) {
+			return 1
+		}
+		material, err := engineidentity.Import(*identity.IdentityEnvelope, engineidentity.Binding{ClusterID: binding.ClusterID, SourceID: recovery.SourceID, SourceUID: recovery.SourceNodeUID})
+		clear(*identity.IdentityEnvelope)
+		if err != nil || !material.Equal(source) {
+			return 1
+		}
+		bound.State, bound.Nonce = "verified", nonce
+		if clusterbootstrap.WriteSessionFrame(channel, bound) != nil {
+			return 1
+		}
+		return 0
+	})
+	credential, err := PasswordCredential("operator", server.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credential.Destroy()
+	client, err := server.transport.Connect(context.Background(), server.target, server.key, credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var checks atomic.Int64
+	result, err := client.verifyBootstrapExecutableRequest(context.Background(), path, expected, digest, int64(len(manager)), bootstrapBinding(server), &recovery, source, []byte("unused-sudo-fixture"), func(context.Context) error { checks.Add(1); return nil })
+	if err != nil || result.State != "verified" || result.IdentityRecovery == nil || *result.IdentityRecovery != recovery || checks.Load() < 6 {
+		t.Fatalf("private identity delivery failed: %v checks=%d", err, checks.Load())
 	}
 }
 
@@ -368,6 +490,11 @@ func TestBootstrapPublicDeliveryRequiresVerifiedBundle(t *testing.T) {
 			func(context.Context) error { t.Error("unverified bundle reached controller check"); return nil },
 			func(context.Context) error { t.Error("unverified bundle reached source/Node check"); return nil }); err != ErrBootstrapVerification {
 			t.Fatal("unverified bundle accepted for identity recovery")
+		}
+		if _, err := client.DeliverIdentityRecovery(context.Background(), bundle, bootstrapBinding(server), recovery, remoteIdentityMaterial(t), nil,
+			func(context.Context) error { t.Error("unverified bundle reached controller check"); return nil },
+			func(context.Context) error { t.Error("unverified bundle reached source/Node check"); return nil }); err != ErrBootstrapVerification {
+			t.Fatal("unverified bundle accepted for identity delivery")
 		}
 	}
 	if server.execCalls.Load() != 0 {

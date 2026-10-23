@@ -2,10 +2,12 @@ package clusterremote
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -80,7 +82,21 @@ func (client *Client) VerifyIdentityRecovery(ctx context.Context, bundle *cluste
 		return invalid, ErrBootstrapVerification
 	}
 	check := identityRecoveryAuthority(controller, sourceNode)
-	return client.verifyBootstrapExecutableRequest(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, sudoPassword, check)
+	return client.verifyBootstrapExecutableRequest(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, nil, sudoPassword, check)
+}
+
+// DeliverIdentityRecovery carries fixed identity only after the target passes
+// read-only recovery qualification. Material remains inside the supervised SSH
+// protocol; target persistence, journal, marker and restart actions stay absent.
+func (client *Client) DeliverIdentityRecovery(ctx context.Context, bundle *clusterbootstrap.Bundle, binding clusterbootstrap.SessionBinding, recovery clusterbootstrap.IdentityRecoveryRequest, material *engineidentity.Material, sudoPassword []byte, controller, sourceNode func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
+	invalid := clusterbootstrap.SessionMessage{}
+	expected, digest, size, err := bundle.ManagerProof()
+	if err != nil || binding.Validate() != nil || recovery.Validate(binding) != nil || material == nil || controller == nil || sourceNode == nil || ValidateSudoPassword(sudoPassword) != nil ||
+		binding.Address != client.target.Address || binding.Port != client.target.Port || binding.HostKeyAlgorithm != client.approved.Algorithm || binding.HostKeyFingerprint != client.approved.Fingerprint {
+		return invalid, ErrBootstrapVerification
+	}
+	check := identityRecoveryAuthority(controller, sourceNode)
+	return client.verifyBootstrapExecutableRequest(ctx, bundle.ManagerPath(), expected, digest, size, binding, &recovery, material, sudoPassword, check)
 }
 
 func identityRecoveryAuthority(controller, sourceNode func(context.Context) error) func(context.Context) error {
@@ -96,10 +112,10 @@ func identityRecoveryAuthority(controller, sourceNode func(context.Context) erro
 // Private transport seam permits isolated SSH fixtures without exposing an
 // unverified executable constructor. Production entry requires Bundle proof.
 func (client *Client) verifyBootstrapExecutable(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
-	return client.verifyBootstrapExecutableRequest(ctx, managerPath, expected, digest, size, binding, nil, sudoPassword, check)
+	return client.verifyBootstrapExecutableRequest(ctx, managerPath, expected, digest, size, binding, nil, nil, sudoPassword, check)
 }
 
-func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, recovery *clusterbootstrap.IdentityRecoveryRequest, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
+func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, managerPath string, expected clusterbootstrap.Expected, digest string, size int64, binding clusterbootstrap.SessionBinding, recovery *clusterbootstrap.IdentityRecoveryRequest, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.SessionMessage, error) {
 	invalid := clusterbootstrap.SessionMessage{}
 	ctx, cancel := context.WithTimeout(ctx, clusterbootstrap.SessionLifetime)
 	defer cancel()
@@ -126,6 +142,9 @@ func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, mana
 	var recoveryCopy *clusterbootstrap.IdentityRecoveryRequest
 	if recovery != nil {
 		action = "verify_identity_recovery"
+		if material != nil {
+			action = "deliver_identity_recovery"
+		}
 		value := *recovery
 		recoveryCopy = &value
 	}
@@ -181,7 +200,7 @@ func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, mana
 	// Bound all stdout across the session, including repeated challenge frames.
 	output := &io.LimitedReader{R: stdout, N: MaxOutputBytes + 1}
 	var message clusterbootstrap.SessionMessage
-	if clusterbootstrap.ReadSessionFrame(output, &message) != nil || message.Protocol != 1 || message.State != "ready" || message.Nonce != nonce || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil ||
+	if clusterbootstrap.ReadSessionFrame(output, &message) != nil || message.Protocol != 1 || message.State != "ready" || message.Nonce != nonce || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil || message.IdentityEnvelope != nil ||
 		refreshBootstrapAuthority(ctx, check) != nil || clusterbootstrap.WriteSessionFrame(stdin, request) != nil {
 		return invalid, ErrBootstrapVerification
 	}
@@ -193,15 +212,37 @@ func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, mana
 		}
 		switch message.State {
 		case "challenge":
-			if _, err := clusterbootstrap.SessionPreamble(message.Nonce); err != nil || challenges[message.Nonce] || len(challenges) >= 64 || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil {
+			if _, err := clusterbootstrap.SessionPreamble(message.Nonce); err != nil || challenges[message.Nonce] || len(challenges) >= 64 || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil || message.IdentityEnvelope != nil {
 				return invalid, ErrBootstrapVerification
 			}
 			challenges[message.Nonce] = true
 			if refreshBootstrapAuthority(ctx, check) != nil || clusterbootstrap.WriteSessionFrame(stdin, clusterbootstrap.SessionMessage{Protocol: 1, State: "heartbeat", Nonce: message.Nonce}) != nil {
 				return invalid, ErrBootstrapVerification
 			}
+		case "identity_ready":
+			if material == nil || len(challenges) == 0 || message.IdentityEnvelope != nil || !boundBootstrapMessage(message, "identity_ready", message.Nonce, binding, expected.SourceSHA, digest, recoveryCopy) {
+				return invalid, ErrBootstrapVerification
+			}
+			if _, err := clusterbootstrap.SessionPreamble(message.Nonce); err != nil || challenges[message.Nonce] {
+				return invalid, ErrBootstrapVerification
+			}
+			if refreshBootstrapAuthority(ctx, check) != nil {
+				return invalid, ErrBootstrapVerification
+			}
+			envelope, err := material.Export(engineidentity.Binding{ClusterID: binding.ClusterID, SourceID: recoveryCopy.SourceID, SourceUID: recoveryCopy.SourceNodeUID})
+			if err != nil {
+				return invalid, ErrBootstrapVerification
+			}
+			raw := json.RawMessage(envelope)
+			identity := clusterbootstrap.SessionMessage{Protocol: 1, State: "identity", Nonce: message.Nonce, Binding: &binding, SourceSHA: expected.SourceSHA, ManagerSHA256: digest, IdentityRecovery: recoveryCopy, IdentityEnvelope: &raw}
+			if clusterbootstrap.WriteSessionFrame(stdin, identity) != nil || refreshBootstrapAuthority(ctx, check) != nil {
+				clear(envelope)
+				return invalid, ErrBootstrapVerification
+			}
+			clear(envelope)
+			material = nil // Exactly one envelope is permitted per session.
 		case "verified":
-			if len(challenges) == 0 || message.Nonce != nonce || message.Binding == nil || *message.Binding != binding || message.SourceSHA != expected.SourceSHA || message.ManagerSHA256 != digest || !sameIdentityRecovery(message.IdentityRecovery, recoveryCopy) || refreshBootstrapAuthority(ctx, check) != nil {
+			if len(challenges) == 0 || (request.Action == "deliver_identity_recovery" && material != nil) || message.IdentityEnvelope != nil || message.Nonce != nonce || message.Binding == nil || *message.Binding != binding || message.SourceSHA != expected.SourceSHA || message.ManagerSHA256 != digest || !sameIdentityRecovery(message.IdentityRecovery, recoveryCopy) || refreshBootstrapAuthority(ctx, check) != nil {
 				return invalid, ErrBootstrapVerification
 			}
 			_ = stdin.Close()
@@ -215,6 +256,11 @@ func (client *Client) verifyBootstrapExecutableRequest(ctx context.Context, mana
 			return invalid, ErrBootstrapVerification
 		}
 	}
+}
+
+func boundBootstrapMessage(message clusterbootstrap.SessionMessage, state, nonce string, binding clusterbootstrap.SessionBinding, sourceSHA, managerSHA string, recovery *clusterbootstrap.IdentityRecoveryRequest) bool {
+	return message.Protocol == 1 && message.State == state && message.Nonce == nonce && message.Binding != nil && *message.Binding == binding && message.SourceSHA == sourceSHA &&
+		message.ManagerSHA256 == managerSHA && sameIdentityRecovery(message.IdentityRecovery, recovery)
 }
 
 func sameIdentityRecovery(observed, expected *clusterbootstrap.IdentityRecoveryRequest) bool {

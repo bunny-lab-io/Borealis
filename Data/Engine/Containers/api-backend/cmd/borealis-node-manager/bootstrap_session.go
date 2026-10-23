@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -71,7 +72,7 @@ func bootstrapSessionContained(args []string) {
 		fatalf("bootstrap executor context invalid")
 	}
 	defer guard.Close()
-	if err := clusterbootstrap.ServeSupervisedSession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionRequest, guard.ObserveDeadline); err != nil {
+	if err := clusterbootstrap.ServeSupervisedIdentitySession(ctx, os.Stdin, os.Stdout, nonce, verifyBootstrapSessionRequest, receiveBootstrapIdentityMaterial, guard.ObserveDeadline); err != nil {
 		fatalf("bootstrap-session verification failed; session data withheld")
 	}
 }
@@ -102,12 +103,22 @@ func verifyBootstrapSessionRequestWith(ctx context.Context, request clusterboots
 	if request.Action == "verify" {
 		return nil
 	}
-	if request.Action != "verify_identity_recovery" || request.IdentityRecovery == nil || observers.consumers == nil || observers.runtime == nil {
+	if (request.Action != "verify_identity_recovery" && request.Action != "deliver_identity_recovery") || request.IdentityRecovery == nil || observers.consumers == nil || observers.runtime == nil {
 		return errBootstrapIdentityRecovery
 	}
 	target := identityConsumerTarget{NodeName: request.Binding.Hostname, NodeUID: request.IdentityRecovery.TargetNodeUID}
 	if observers.consumers(ctx, target) != nil || ctx.Err() != nil || observers.runtime(ctx, request) != nil || ctx.Err() != nil ||
 		observers.consumers(ctx, target) != nil || ctx.Err() != nil {
+		return errBootstrapIdentityRecovery
+	}
+	return nil
+}
+
+// receiveBootstrapIdentityMaterial proves private delivery into target memory.
+// Persistence remains unreachable until outer journal ownership, stopped
+// consumers, fixed-file transaction and rollback dispatch are integrated.
+func receiveBootstrapIdentityMaterial(ctx context.Context, request clusterbootstrap.SessionRequest, material *engineidentity.Material) error {
+	if ctx.Err() != nil || request.Action != "deliver_identity_recovery" || request.IdentityRecovery == nil || material == nil || material.Digest() == "" {
 		return errBootstrapIdentityRecovery
 	}
 	return nil

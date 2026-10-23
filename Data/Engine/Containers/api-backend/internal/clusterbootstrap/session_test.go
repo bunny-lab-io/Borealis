@@ -1,10 +1,16 @@
 package clusterbootstrap
 
 import (
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"strings"
@@ -26,6 +32,43 @@ func identityRecoverySessionFixture() SessionRequest {
 	return r
 }
 
+func identityDeliverySessionFixture() SessionRequest {
+	r := identityRecoverySessionFixture()
+	r.Action = "deliver_identity_recovery"
+	return r
+}
+
+func sessionIdentityMaterial(t *testing.T) *engineidentity.Material {
+	t.Helper()
+	_, jwt, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, script, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := func(key ed25519.PrivateKey) []byte {
+		raw, marshalErr := x509.MarshalPKCS8PrivateKey(key)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw})
+	}
+	public, err := x509.MarshalPKIXPublicKey(script.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := engineidentity.ParseFiles(map[string][]byte{
+		engineidentity.EngineSecretPath: []byte(strings.Repeat("s", 48)), engineidentity.AgentJWTPath: private(jwt),
+		engineidentity.ScriptKeyPath: private(script), engineidentity.ScriptPublicPath: public,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return material
+}
+
 type sessionFixtureClient struct {
 	in   *io.PipeWriter
 	out  *io.PipeReader
@@ -38,13 +81,17 @@ func newSessionFixture(t *testing.T, verify func(context.Context, SessionRequest
 }
 
 func newSessionFixtureRequest(t *testing.T, request SessionRequest, verify func(context.Context, SessionRequest) error) *sessionFixtureClient {
+	return newSessionFixtureIdentityRequest(t, request, verify, nil)
+}
+
+func newSessionFixtureIdentityRequest(t *testing.T, request SessionRequest, verify func(context.Context, SessionRequest) error, receive IdentityReceiver) *sessionFixtureClient {
 	t.Helper()
 	in, writer := io.Pipe()
 	reader, out := io.Pipe()
 	c := &sessionFixtureClient{in: writer, out: reader, done: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	go func() {
-		c.err = serveSession(ctx, in, out, request.Nonce, verify, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 100 * time.Millisecond})
+		c.err = serveSessionObserved(ctx, in, out, request.Nonce, verify, receive, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 100 * time.Millisecond}, nil)
 		close(c.done)
 	}()
 	t.Cleanup(func() {
@@ -58,6 +105,81 @@ func newSessionFixtureRequest(t *testing.T, request SessionRequest, verify func(
 		}
 	})
 	return c
+}
+
+func TestBootstrapSessionDeliversBoundIdentityOnlyIntoReceiverMemory(t *testing.T) {
+	for _, mode := range []string{"valid", "wrong envelope binding", "wrong target binding"} {
+		t.Run(mode, func(t *testing.T) {
+			request := identityDeliverySessionFixture()
+			source := sessionIdentityMaterial(t)
+			received := false
+			finish := make(chan struct{})
+			c := newSessionFixtureIdentityRequest(t, request, func(context.Context, SessionRequest) error { return nil }, func(_ context.Context, observed SessionRequest, material *engineidentity.Material) error {
+				received = true
+				observedRecovery := observed.IdentityRecovery
+				observed.IdentityRecovery = nil
+				expectedRequest := request
+				expectedRequest.IdentityRecovery = nil
+				if observed != expectedRequest || !sameIdentityRecovery(observedRecovery, request.IdentityRecovery) || !material.Equal(source) {
+					return errors.New("delivered identity changed")
+				}
+				<-finish
+				return nil
+			})
+			challenge := c.startRequest(t, "", request)
+			c.heartbeat(t, challenge)
+			var ready SessionMessage
+			if ReadSessionFrame(c.out, &ready) != nil || ready.State != "identity_ready" || ready.Binding == nil || *ready.Binding != request.Binding || !sameIdentityRecovery(ready.IdentityRecovery, request.IdentityRecovery) {
+				t.Fatal("private delivery readiness not bound")
+			}
+			expected := engineidentity.Binding{ClusterID: request.Binding.ClusterID, SourceID: request.IdentityRecovery.SourceID, SourceUID: request.IdentityRecovery.SourceNodeUID}
+			if mode == "wrong envelope binding" {
+				expected.SourceUID = "88888888-8888-4888-8888-888888888888"
+			}
+			envelope, err := source.Export(expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := json.RawMessage(envelope)
+			binding := request.Binding
+			if mode == "wrong target binding" {
+				binding.TargetID = "99999999-9999-4999-8999-999999999999"
+			}
+			if WriteSessionFrame(c.in, SessionMessage{Protocol: 1, State: "identity", Nonce: ready.Nonce, Binding: &binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256, IdentityRecovery: request.IdentityRecovery, IdentityEnvelope: &raw}) != nil {
+				t.Fatal("identity envelope unavailable")
+			}
+			if mode != "valid" {
+				if c.result(t) == nil || received {
+					t.Fatal("unbound identity accepted")
+				}
+				return
+			}
+			var done SessionMessage
+			released := false
+			for {
+				if ReadSessionFrame(c.out, &done) != nil {
+					t.Fatal("private identity completion unavailable")
+				}
+				if done.State == "challenge" {
+					c.heartbeat(t, done)
+					if !released {
+						close(finish)
+						released = true
+					}
+					continue
+				}
+				if done.State != "challenge" {
+					break
+				}
+			}
+			if done.State != "verified" || done.IdentityEnvelope != nil {
+				t.Fatal("private identity completion invalid")
+			}
+			if err := c.result(t); err != nil || !received {
+				t.Fatal("identity did not reach receiver memory", err)
+			}
+		})
+	}
 }
 
 func (c *sessionFixtureClient) start(t *testing.T, password string) SessionMessage {
@@ -295,7 +417,7 @@ func TestSupervisedSessionRejectsObserverBeforeVerification(t *testing.T) {
 			done := make(chan error, 1)
 			calls := 0
 			go func() {
-				done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { called.Store(true); return nil }, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error {
+				done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { called.Store(true); return nil }, nil, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error {
 					calls++
 					if !time.Now().Before(deadline) || time.Until(deadline) > 150*time.Millisecond {
 						return errors.New("invalid deadline")
@@ -350,7 +472,7 @@ func TestSupervisedSessionSharesIssuedChallengeDeadline(t *testing.T) {
 	deadlines := make(chan time.Time, 4)
 	done := make(chan error, 1)
 	go func() {
-		done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { return nil }, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error { deadlines <- deadline; return nil })
+		done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { return nil }, nil, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error { deadlines <- deadline; return nil })
 	}()
 	c := &sessionFixtureClient{in: writer, out: reader}
 	challenge := c.start(t, "")

@@ -2,9 +2,12 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"net/netip"
 	"os"
@@ -15,6 +18,37 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+func nodeManagerIdentityMaterial(t *testing.T) *engineidentity.Material {
+	t.Helper()
+	_, jwt, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, script, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := func(key ed25519.PrivateKey) []byte {
+		raw, marshalErr := x509.MarshalPKCS8PrivateKey(key)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw})
+	}
+	public, err := x509.MarshalPKIXPublicKey(script.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := engineidentity.ParseFiles(map[string][]byte{
+		engineidentity.EngineSecretPath: []byte(strings.Repeat("s", 48)), engineidentity.AgentJWTPath: private(jwt),
+		engineidentity.ScriptKeyPath: private(script), engineidentity.ScriptPublicPath: public,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return material
+}
 
 func TestBootstrapSessionIdentityRecoveryComposesReadOnlyEvidence(t *testing.T) {
 	request := identityRuntimeRequestFixture()
@@ -87,6 +121,23 @@ func TestBootstrapSessionIdentityRecoveryComposesReadOnlyEvidence(t *testing.T) 
 	})
 	if err != nil || calls != 1 {
 		t.Fatal("ordinary host verification changed", err)
+	}
+}
+
+func TestBootstrapIdentityReceiverRemainsMemoryOnly(t *testing.T) {
+	request := identityRuntimeRequestFixture()
+	request.Action = "deliver_identity_recovery"
+	request.IdentityRecovery = &clusterbootstrap.IdentityRecoveryRequest{SourceID: "55555555-5555-4555-8555-555555555555", SourceNodeUID: "66666666-6666-4666-8666-666666666666", TargetNodeUID: "77777777-7777-4777-8777-877777777777"}
+	material := nodeManagerIdentityMaterial(t)
+	if err := receiveBootstrapIdentityMaterial(context.Background(), request, material); err != nil {
+		t.Fatal(err)
+	}
+	request.Action = "verify_identity_recovery"
+	if receiveBootstrapIdentityMaterial(context.Background(), request, material) == nil || receiveBootstrapIdentityMaterial(context.Background(), identityRuntimeRequestFixture(), nil) == nil {
+		t.Fatal("identity receiver accepted non-delivery action or missing material")
+	}
+	if files := material.Files(); len(files) != 4 || files[engineidentity.EngineSecretPath] == nil {
+		t.Fatal("receiver changed in-memory material")
 	}
 }
 

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"borealis/api-backend/internal/engineidentity"
 )
 
 const (
@@ -92,9 +94,10 @@ func (r IdentityRecoveryRequest) Validate(binding SessionBinding) error {
 	return nil
 }
 
-// SessionRequest permits host verification and fixed read-only identity
-// recovery qualification. Preparation, identity writes, marker release and
-// join remain absent until their complete journaled dispatch contracts exist.
+// SessionRequest permits host verification, fixed read-only identity recovery
+// qualification and private in-memory identity delivery. Preparation, identity
+// writes, marker release and join remain absent until their complete journaled
+// dispatch contracts exist.
 type SessionRequest struct {
 	Protocol           int                      `json:"protocol"`
 	Action             string                   `json:"action"`
@@ -117,7 +120,7 @@ func (r SessionRequest) Validate() error {
 		if r.IdentityRecovery != nil {
 			return ErrSessionProtocol
 		}
-	case "verify_identity_recovery":
+	case "verify_identity_recovery", "deliver_identity_recovery":
 		if r.IdentityRecovery == nil || r.IdentityRecovery.Validate(r.Binding) != nil {
 			return ErrSessionProtocol
 		}
@@ -135,7 +138,12 @@ type SessionMessage struct {
 	SourceSHA        string                   `json:"source_sha,omitempty"`
 	ManagerSHA256    string                   `json:"manager_sha256,omitempty"`
 	IdentityRecovery *IdentityRecoveryRequest `json:"identity_recovery,omitempty"`
+	// IdentityEnvelope is allowed only in the private delivery response after
+	// target qualification. Never include this message in diagnostics or events.
+	IdentityEnvelope *json.RawMessage `json:"identity_envelope,omitempty"`
 }
+
+type IdentityReceiver func(context.Context, SessionRequest, *engineidentity.Material) error
 
 // WriteSessionFrame uses length framing so sudo's optional unread password line
 // cannot become executable input or confuse a structured request boundary.
@@ -144,6 +152,7 @@ func WriteSessionFrame(w io.Writer, value any) error {
 	if err != nil || len(raw) == 0 || len(raw) > MaxSessionFrameBytes {
 		return ErrSessionProtocol
 	}
+	defer clear(raw)
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(raw)))
 	if _, err := io.Copy(w, bytes.NewReader(header[:])); err != nil {
@@ -165,6 +174,7 @@ func ReadSessionFrame(r io.Reader, value any) error {
 		return ErrSessionProtocol
 	}
 	raw := make([]byte, size)
+	defer clear(raw)
 	if _, err := io.ReadFull(r, raw); err != nil || !validSessionJSON(raw) {
 		return ErrSessionProtocol
 	}
@@ -265,14 +275,26 @@ func ServeSupervisedSession(ctx context.Context, input io.ReadCloser, output io.
 	}
 	ctx, cancel := context.WithTimeout(ctx, SessionLifetime)
 	defer cancel()
-	return serveSessionObserved(ctx, input, output, nonce, verify, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, observe)
+	return serveSessionObserved(ctx, input, output, nonce, verify, nil, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, observe)
+}
+
+// ServeSupervisedIdentitySession adds one private, binding-checked envelope
+// after read-only target qualification. Receiver may inspect material only in
+// memory; this protocol provides no journal, file, marker or restart dispatch.
+func ServeSupervisedIdentitySession(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, receive IdentityReceiver, observe func(time.Time) error) error {
+	if receive == nil || observe == nil {
+		return ErrSessionAuthority
+	}
+	ctx, cancel := context.WithTimeout(ctx, SessionLifetime)
+	defer cancel()
+	return serveSessionObserved(ctx, input, output, nonce, verify, receive, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, observe)
 }
 
 func serveSession(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, timing sessionTiming) error {
-	return serveSessionObserved(ctx, input, output, nonce, verify, timing, nil)
+	return serveSessionObserved(ctx, input, output, nonce, verify, nil, timing, nil)
 }
 
-func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, timing sessionTiming, observe func(time.Time) error) error {
+func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, verify func(context.Context, SessionRequest) error, receive IdentityReceiver, timing sessionTiming, observe func(time.Time) error) error {
 	if input == nil || output == nil {
 		return ErrSessionProtocol
 	}
@@ -326,6 +348,8 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 	defer stopWork()
 	finished := make(chan error, 1)
 	started := false
+	phase := "verify"
+	deliveryNonce := ""
 	defer func() {
 		stopWork()
 		if started {
@@ -349,6 +373,10 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 		challenge, issued, pending = hex.EncodeToString(random[:]), time.Now(), true
 		return WriteSessionFrame(output, SessionMessage{Protocol: 1, State: "challenge", Nonce: challenge})
 	}
+	boundMessage := func(message SessionMessage, state, expectedNonce string) bool {
+		return message.Protocol == 1 && message.State == state && message.Nonce == expectedNonce && message.Binding != nil && *message.Binding == request.Binding &&
+			message.SourceSHA == request.SourceSHA && message.ManagerSHA256 == request.ManagerSHA256 && sameIdentityRecovery(message.IdentityRecovery, request.IdentityRecovery)
+	}
 	// Cancellation is independent of output writes or a slow verifier.
 	expiry := time.AfterFunc(time.Until(deadline), cancel)
 	defer expiry.Stop()
@@ -364,23 +392,52 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 		case <-readFailed:
 			return ErrSessionProtocol
 		case message := <-frames:
-			if !pending || message.Protocol != 1 || message.State != "heartbeat" || message.Nonce != challenge || message.Binding != nil || message.SourceSHA != "" || message.ManagerSHA256 != "" || message.IdentityRecovery != nil || !time.Now().Before(deadline) {
+			if pending && message.Protocol == 1 && message.State == "heartbeat" && message.Nonce == challenge && message.Binding == nil && message.SourceSHA == "" && message.ManagerSHA256 == "" && message.IdentityRecovery == nil && message.IdentityEnvelope == nil && time.Now().Before(deadline) {
+				pending = false
+				deadline = issued.Add(timing.window)
+				expiry.Reset(time.Until(deadline))
+				if observe != nil && observe(deadline) != nil {
+					return ErrSessionAuthority
+				}
+				if !started && phase == "verify" {
+					started = true
+					go func() { finished <- verify(workCtx, request) }()
+				}
+				continue
+			}
+			if phase != "await_identity" || message.IdentityEnvelope == nil || len(*message.IdentityEnvelope) == 0 || !boundMessage(message, "identity", deliveryNonce) || !time.Now().Before(deadline) {
+				if message.IdentityEnvelope != nil {
+					clear(*message.IdentityEnvelope)
+				}
 				return ErrSessionAuthority
 			}
-			pending = false
-			deadline = issued.Add(timing.window)
-			expiry.Reset(time.Until(deadline))
-			if observe != nil && observe(deadline) != nil {
+			expected := engineidentity.Binding{ClusterID: request.Binding.ClusterID, SourceID: request.IdentityRecovery.SourceID, SourceUID: request.IdentityRecovery.SourceNodeUID}
+			material, err := engineidentity.Import(*message.IdentityEnvelope, expected)
+			clear(*message.IdentityEnvelope)
+			if err != nil || receive == nil || workCtx.Err() != nil {
 				return ErrSessionAuthority
 			}
-			if !started {
-				started = true
-				go func() { finished <- verify(workCtx, request) }()
-			}
+			phase, started = "consume_identity", true
+			go func() { finished <- receive(workCtx, request, material) }()
 		case err := <-finished:
 			started = false
 			if err != nil || ctx.Err() != nil || !time.Now().Before(deadline) {
 				return ErrSessionAuthority
+			}
+			if phase == "verify" && request.Action == "deliver_identity_recovery" {
+				if receive == nil {
+					return ErrSessionAuthority
+				}
+				var random [32]byte
+				if _, err := rand.Read(random[:]); err != nil {
+					return ErrSessionProtocol
+				}
+				deliveryNonce = hex.EncodeToString(random[:])
+				phase = "await_identity"
+				if WriteSessionFrame(output, SessionMessage{Protocol: 1, State: "identity_ready", Nonce: deliveryNonce, Binding: &request.Binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256, IdentityRecovery: request.IdentityRecovery}) != nil {
+					return ErrSessionProtocol
+				}
+				continue
 			}
 			return WriteSessionFrame(output, SessionMessage{Protocol: 1, State: "verified", Nonce: nonce, Binding: &request.Binding, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256, IdentityRecovery: request.IdentityRecovery})
 		case <-ticker.C:
@@ -389,4 +446,11 @@ func serveSessionObserved(ctx context.Context, input io.ReadCloser, output io.Wr
 			}
 		}
 	}
+}
+
+func sameIdentityRecovery(observed, expected *IdentityRecoveryRequest) bool {
+	if observed == nil || expected == nil {
+		return observed == nil && expected == nil
+	}
+	return *observed == *expected
 }
