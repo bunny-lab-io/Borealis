@@ -46,6 +46,14 @@ REVIEWED_ROUTE_TESTS[(
     "POST /api/server/cluster/admissions/{id}/cancel",
     "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
 )] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_admission_test.go"
+REVIEWED_ROUTE_TESTS.update({
+    (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preflight.go"):
+        "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preflight_test.go"
+    for pattern in (
+        "POST /api/server/cluster/onboarding/host-key",
+        "POST /api/server/cluster/onboarding/inspect",
+    )
+})
 REVIEWED_ROUTE_TESTS.update(
     {
         (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/main.go"): PROBE_TEST
@@ -56,6 +64,15 @@ REVIEWED_ROUTE_TESTS[(
     "POST /internal/cluster/aegis-key",
     "Data/Engine/Containers/api-backend/cmd/api-backend/aegis_cluster_fanout.go",
 )] = AEGIS_CLUSTER_TEST
+REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/ssh-preparation-source",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+)] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_source_broker_test.go"
+REVIEWED_ROUTE_TESTS.update({
+    (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go"):
+        "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go"
+    for pattern in ("POST /internal/cluster/ssh-vip-scope", "POST /internal/cluster/ssh-vip-check")
+})
 REVIEWED_ROUTE_TESTS.update(
     {
         (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go"): (
@@ -80,6 +97,8 @@ def classify(pattern: str) -> tuple[str, str]:
         return "operator", "operator-hmac"
     if route_path.startswith("/api/internal/"):
         return "internal-scheduler", "internal-hmac"
+    if route_path in {"/internal/cluster/ssh-preparation-source", "/internal/cluster/ssh-vip-scope", "/internal/cluster/ssh-vip-check"}:
+        return "internal-cluster", "operator-derived-aead-and-target-lease"
     if route_path.startswith("/internal/cluster/"):
         return "internal-cluster", "mutual-tls"
     if route_path.startswith("/api/agent/"):

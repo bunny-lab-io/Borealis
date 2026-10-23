@@ -1,0 +1,85 @@
+{
+  "apiVersion": "v1",
+  "items": [
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "MutatingAdmissionPolicy",
+      "metadata": {
+        "name": "borealis-longhorn-instance-manager-bounds"
+      },
+      "spec": {
+        "failurePolicy": "Fail",
+        "matchConditions": [
+          {
+            "expression": "request.userInfo.username == \"system:serviceaccount:longhorn-system:longhorn-service-account\"",
+            "name": "longhorn-producer"
+          }
+        ],
+        "matchConstraints": {
+          "matchPolicy": "Exact",
+          "namespaceSelector": {
+            "matchLabels": {
+              "kubernetes.io/metadata.name": "longhorn-system"
+            }
+          },
+          "objectSelector": {
+            "matchLabels": {
+              "longhorn.io/component": "instance-manager"
+            }
+          },
+          "resourceRules": [
+            {
+              "apiGroups": [
+                ""
+              ],
+              "apiVersions": [
+                "v1"
+              ],
+              "operations": [
+                "CREATE"
+              ],
+              "resources": [
+                "pods"
+              ],
+              "scope": "Namespaced"
+            }
+          ]
+        },
+        "mutations": [
+          {
+            "jsonPatch": {
+              "expression": "variables.supported ? [\n  JSONPatch{op: \"add\", path: \"/spec/containers/0/resources/requests/memory\", value: \"@MEMORY_REQUEST@\"},\n  JSONPatch{op: \"add\", path: \"/spec/containers/0/resources/limits\", value: {\"cpu\": \"@CPU_LIMIT@\", \"memory\": \"@MEMORY_LIMIT@\"}}\n] : {}[\"unsupported instance-manager resource shape or bounds\"]"
+            },
+            "patchType": "JSONPatch"
+          }
+        ],
+        "reinvocationPolicy": "IfNeeded",
+        "variables": [
+          {
+            "expression": "object.spec.serviceAccountName == \"longhorn-service-account\" && object.metadata.labels[\"longhorn.io/data-engine\"] == \"v1\" && object.metadata.labels[\"longhorn.io/instance-manager-type\"] == \"aio\" && object.spec.containers.size() == 1 && object.spec.containers[0].name == \"instance-manager\" && (!has(object.spec.initContainers) || object.spec.initContainers.size() == 0) && (!has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.size() == 0) && !has(object.spec.resources) && !has(object.spec.overhead) && (!has(object.spec.resourceClaims) || object.spec.resourceClaims.size() == 0) && !has(object.spec.runtimeClassName) && (!has(object.spec.containers[0].resizePolicy) || object.spec.containers[0].resizePolicy.size() == 0) && !has(object.spec.containers[0].restartPolicy) && has(object.spec.containers[0].resources) && has(object.spec.containers[0].resources.requests) && \"cpu\" in object.spec.containers[0].resources.requests && object.spec.containers[0].resources.requests[\"cpu\"].matches(\"^[1-9][0-9]*m?$\") && quantity(object.spec.containers[0].resources.requests[\"cpu\"]).compareTo(quantity(\"@CPU_LIMIT@\")) <= 0 && object.spec.containers[0].resources.requests.all(k, k in [\"cpu\", \"memory\"]) && (!(\"memory\" in object.spec.containers[0].resources.requests) || quantity(object.spec.containers[0].resources.requests[\"memory\"]).compareTo(quantity(\"@MEMORY_REQUEST@\")) == 0) && (!has(object.spec.containers[0].resources.limits) || (object.spec.containers[0].resources.limits.size() == 2 && \"cpu\" in object.spec.containers[0].resources.limits && \"memory\" in object.spec.containers[0].resources.limits && quantity(object.spec.containers[0].resources.limits[\"cpu\"]).compareTo(quantity(\"@CPU_LIMIT@\")) == 0 && quantity(object.spec.containers[0].resources.limits[\"memory\"]).compareTo(quantity(\"@MEMORY_LIMIT@\")) == 0))",
+            "name": "supported"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "MutatingAdmissionPolicyBinding",
+      "metadata": {
+        "name": "borealis-longhorn-instance-manager-bounds"
+      },
+      "spec": {
+        "matchResources": {
+          "namespaceSelector": {
+            "matchLabels": {
+              "kubernetes.io/metadata.name": "longhorn-system"
+            }
+          },
+          "objectSelector": {}
+        },
+        "policyName": "borealis-longhorn-instance-manager-bounds"
+      }
+    }
+  ],
+  "kind": "List"
+}
