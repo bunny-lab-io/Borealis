@@ -79,6 +79,45 @@ func TestIdentityFenceSerializesConsumersAndInstall(t *testing.T) {
 	requireStartupAllowed(t, install.Root)
 }
 
+func TestIdentityConsumerLoadsOnlyStableFixedMaterial(t *testing.T) {
+	for _, mode := range []string{"stable", "recovery marker", "changed key", "replaced directory"} {
+		t.Run(mode, func(t *testing.T) {
+			install, material, _ := installationFixture(t, false)
+			consumer, err := AcquireConsumer(install.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer consumer.Close()
+			switch mode {
+			case "recovery marker":
+				if err := os.WriteFile(filepath.Join(install.Root, recoveryMarker), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "changed key":
+				if err := os.WriteFile(filepath.Join(install.Root, AgentJWTPath), []byte("invalid"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "replaced directory":
+				old := install.Root + "-old"
+				if err := os.Rename(install.Root, old); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(install.Root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			loaded, err := consumer.Load()
+			if mode == "stable" {
+				if err != nil || !loaded.Equal(material) {
+					t.Fatalf("stable locked material rejected: %v", err)
+				}
+			} else if err == nil || loaded != nil {
+				t.Fatal("unstable identity source accepted")
+			}
+		})
+	}
+}
+
 func TestIdentityFenceLostAuthorityRetainsMarkerAfterRollback(t *testing.T) {
 	install, _, after := installationFixture(t, false)
 	before := fileInventory(t, install.Root)

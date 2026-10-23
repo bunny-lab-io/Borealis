@@ -92,6 +92,28 @@ func AcquireConsumer(path string) (*Consumer, error) {
 	return fence, nil
 }
 
+// Load reads a stable copy of all fixed identity material through this
+// consumer's already locked directory handle. It never generates, exports or
+// persists material. Callers must keep the Consumer alive for every use.
+func (fence *Consumer) Load() (*Material, error) {
+	markerAbsent := func() bool {
+		_, err := fence.root.Lstat(recoveryMarker)
+		return errors.Is(err, os.ErrNotExist)
+	}
+	if err := fence.check(); err != nil || !markerAbsent() {
+		return nil, errors.New("identity source fence invalid")
+	}
+	first, err := loadIdentityRoot(fence.root)
+	if err != nil {
+		return nil, errors.New("fixed Engine identity unavailable")
+	}
+	second, err := loadIdentityRoot(fence.root)
+	if err != nil || !first.Equal(second) || fence.check() != nil || !markerAbsent() {
+		return nil, errors.New("fixed Engine identity changed during acquisition")
+	}
+	return first, nil
+}
+
 type recoveryFenceRecord struct {
 	Version  int           `json:"version"`
 	Binding  Binding       `json:"binding"`

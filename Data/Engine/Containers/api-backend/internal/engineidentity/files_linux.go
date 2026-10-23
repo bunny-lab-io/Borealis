@@ -108,13 +108,7 @@ func readIdentityFile(root *os.Root, name string) ([]byte, fileRecord, error) {
 		Mode: uint32(info.Mode().Perm()), Mtime: info.ModTime(), Digest: hex.EncodeToString(digest[:])}, nil
 }
 
-// Load reads only the four fixed files, without generating missing keys.
-func Load(path string) (*Material, error) {
-	root, err := openIdentityRoot(path)
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
+func loadIdentityRoot(root *os.Root) (*Material, error) {
 	files := map[string][]byte{}
 	for _, name := range identityPaths {
 		raw, _, err := readIdentityFile(root, name)
@@ -124,6 +118,18 @@ func Load(path string) (*Material, error) {
 		files[name] = raw
 	}
 	return ParseFiles(files)
+}
+
+// Load reads only the four fixed files, without generating missing keys. A
+// production key consumer must acquire its shared consumer fence before this
+// read; Consumer.Load binds the read to that already locked directory inode.
+func Load(path string) (*Material, error) {
+	root, err := openIdentityRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return loadIdentityRoot(root)
 }
 
 func syncDirectory(root *os.Root, name string) error {
