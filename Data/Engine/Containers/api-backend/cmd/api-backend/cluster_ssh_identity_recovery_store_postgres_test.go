@@ -33,8 +33,32 @@ func newSSHIdentityRecoveryStoreFixture(t *testing.T) sshIdentityRecoveryStoreFi
 	}
 	payload["ssh_identity_recovery"] = recovery
 	f.exec(t, `UPDATE engine.cluster_operations SET current_step=$2,payload_json=$3 WHERE id=$1`, f.op.ID, clusterSSHIdentityRecoveryOperationStep, marshalClusterJSON(payload))
-	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='prepared',current_step=$2,lease_holder='',lease_expires_at=0 WHERE id=$1`, f.lease.TargetID, clusterSSHIdentityRecoveryTargetStep)
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='prepared',current_step=$2,lease_holder='',lease_expires_at=0 WHERE operation_id=$1`, f.op.ID, clusterSSHIdentityRecoveryTargetStep)
 	return sshIdentityRecoveryStoreFixture{sshPreparationAuthorityFixture: f, recovery: recovery}
+}
+
+func TestClusterSSHIdentityRecoveryAuthorityPostgresBindsWholeCohort(t *testing.T) {
+	f := newSSHIdentityRecoveryStoreFixture(t)
+	claim, err := f.c.store.claimClusterSSHIdentityRecoveryTarget(f.ctx, f.op.ID, f.lease.TargetID, newClusterUUID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := newClusterSSHIdentityRecoveryAuthorityRead(f.c.store, f.aegis, claim)
+	authority, err := read(f.ctx)
+	if err != nil || !clusterSSHIdentityRecoveryAuthorityMatches(authority, claim) {
+		t.Fatalf("exact recovery authority failed: %#v %v", authority, err)
+	}
+	if f.c.store.db.Stats().InUse != 0 {
+		t.Fatal("recovery authority retained database connection")
+	}
+	var sibling string
+	if f.c.store.db.QueryRowContext(f.ctx, `SELECT id FROM engine.cluster_onboarding_targets WHERE operation_id=$1 AND id<>$2 ORDER BY id LIMIT 1`, claim.Lease.OperationID, claim.Lease.TargetID).Scan(&sibling) != nil {
+		t.Fatal("missing sibling target")
+	}
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='recovery_required' WHERE id=$1`, sibling)
+	if value, err := read(context.Background()); err == nil || !reflect.DeepEqual(value, clusterSSHPreparationAuthority{}) {
+		t.Fatalf("changed sibling authority accepted: %#v %v", value, err)
+	}
 }
 
 func TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry(t *testing.T) {

@@ -45,6 +45,32 @@ func newClusterSSHPreparationAuthorityRead(store *postgresOperatorStore, aegis *
 	}
 }
 
+// Recovery reuses the exact cohort/source/credential authority transaction,
+// but only for its separately typed mutating lease. It does not make a
+// preparation or qualification claim capable of entering identity recovery.
+func newClusterSSHIdentityRecoveryAuthorityRead(store *postgresOperatorStore, aegis *goAegisService,
+	claim clusterSSHIdentityRecoveryClaim) clusterSSHPreparationAuthorityRead {
+	return func(parent context.Context) (clusterSSHPreparationAuthority, error) {
+		fail := func() (clusterSSHPreparationAuthority, error) {
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
+		}
+		if store == nil || store.db == nil || aegis == nil || !claim.valid() || parent.Err() != nil {
+			return fail()
+		}
+		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+		defer cancel()
+		if aegis.verifyClusterSSHGeneration(ctx, claim.Sealed.generation) != nil {
+			return fail()
+		}
+		authority, err := store.loadClusterSSHPreparationAuthority(ctx, claim.Lease, claim.Baseline, claim.Sealed)
+		if err != nil || !clusterSSHIdentityRecoveryAuthorityMatches(authority, claim) ||
+			aegis.verifyClusterSSHGeneration(ctx, claim.Sealed.generation) != nil || ctx.Err() != nil {
+			return fail()
+		}
+		return authority, nil
+	}
+}
+
 func validClusterSSHPreparationLease(lease clusterSSHTargetLease) bool {
 	return validClusterSSHObservationLease(lease) && lease.OperationStep == clusterSSHPreparationOperationStep && lease.Step == "stage_source"
 }
@@ -67,7 +93,7 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	fail := func() (clusterSSHPreparationAuthority, error) {
 		return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
 	}
-	if s == nil || s.db == nil || !validClusterSSHObservationLease(lease) || baseline.Validate() != nil || ctx.Err() != nil {
+	if s == nil || s.db == nil || (!validClusterSSHObservationLease(lease) && !validClusterSSHIdentityRecoveryLease(lease)) || baseline.Validate() != nil || ctx.Err() != nil {
 		return fail()
 	}
 	var payload string
@@ -152,10 +178,13 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
   SELECT 1 FROM engine.cluster_onboarding_targets t LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
   WHERE t.operation_id=o.id AND (
    t.cluster_id=c.cluster_id AND t.operation_attempt=o.attempt AND t.credential_state='available'
-   AND t.inspected_attempt=o.attempt AND t.inspected_generation>0 AND t.inspected_at>moment.now-$13 AND t.inspected_at<=moment.now
+   AND t.inspected_attempt=o.attempt AND t.inspected_generation>0
+   AND ($15='recover_ssh_identity' OR t.inspected_at>moment.now-$13) AND t.inspected_at<=moment.now
    AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now
    AND ((t.state='queued' AND t.current_step IN ('inspection_complete',$16) AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
-    OR (t.state='running' AND t.current_step=$16 AND t.lease_holder ~ $14 AND t.lease_expires_at>moment.now AND t.lease_generation>t.inspected_generation))
+    OR (t.state='running' AND t.current_step=$16 AND t.lease_holder ~ $14 AND t.lease_expires_at>moment.now AND t.lease_generation>t.inspected_generation)
+    OR ($15='recover_ssh_identity' AND t.state='prepared' AND t.current_step IN ($16,'identity_recovery_complete')
+        AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation>=t.inspected_generation))
   ) IS NOT TRUE)`, lease.OperationID, lease.OperationAttempt, payload, proof.Source.ClusterID, clusterControllerLeaseName, lease.ControllerHolder, sealed.generation,
 		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String(), lease.OperationStep, lease.Step).Scan(&now)
 	if err != nil || tx.Commit() != nil {
