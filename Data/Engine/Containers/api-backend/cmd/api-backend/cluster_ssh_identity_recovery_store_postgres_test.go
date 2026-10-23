@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,93 @@ func TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence(t *testin
 			}
 			if f.c.store.db.Stats().InUse != 0 {
 				t.Fatal("rejected claim retained database connection")
+			}
+		})
+	}
+}
+
+func TestClusterSSHIdentityRecoverySettlementPostgresPersistsExactOutcomes(t *testing.T) {
+	for _, complete := range []bool{true, false} {
+		name := "recovery required"
+		if complete {
+			name = "complete"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSSHIdentityRecoveryStoreFixture(t)
+			claim, err := f.c.store.claimClusterSSHIdentityRecoveryTarget(f.ctx, f.op.ID, f.lease.TargetID, newClusterUUID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			settle := f.c.store.requireClusterSSHIdentityRecovery
+			wantState, wantStep, wantHolder, event := "recovery_required", clusterSSHIdentityRecoveryTargetStep, claim.Lease.Holder, "ssh_identity_recovery_required"
+			if complete {
+				settle = f.c.store.completeClusterSSHIdentityRecovery
+				wantState, wantStep, wantHolder, event = "prepared", clusterSSHIdentityRecoveryCompleteStep, "", "ssh_identity_recovered"
+			}
+			if err := settle(f.ctx, claim); err != nil {
+				t.Fatalf("settlement failed: %v", err)
+			}
+			var state, step, holder string
+			var generation, expires int64
+			if f.c.store.db.QueryRowContext(f.ctx, `SELECT state,current_step,lease_holder,lease_generation,lease_expires_at
+ FROM engine.cluster_onboarding_targets WHERE id=$1`, claim.Lease.TargetID).Scan(&state, &step, &holder, &generation, &expires) != nil ||
+				state != wantState || step != wantStep || holder != wantHolder || generation != claim.Lease.Generation || (complete && expires != 0) || (!complete && expires <= 1) {
+				t.Fatalf("wrong settlement row: state=%s step=%s holder=%s generation=%d expires=%d", state, step, holder, generation, expires)
+			}
+			if err := settle(f.ctx, claim); err != nil {
+				t.Fatalf("same settlement was not idempotent: %v", err)
+			}
+			var events int
+			if f.c.store.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$2`, claim.Lease.OperationID, event).Scan(&events) != nil || events != 1 {
+				t.Fatalf("wrong settlement event count: %d", events)
+			}
+			other := f.c.store.completeClusterSSHIdentityRecovery
+			if complete {
+				other = f.c.store.requireClusterSSHIdentityRecovery
+			}
+			if err := other(f.ctx, claim); err != errClusterConflict {
+				t.Fatalf("opposite settlement accepted: %v", err)
+			}
+			if f.c.store.db.Stats().InUse != 0 {
+				t.Fatal("settlement retained database connection")
+			}
+		})
+	}
+}
+
+func TestClusterSSHIdentityRecoverySettlementPostgresRejectsChangedAuthority(t *testing.T) {
+	for _, mode := range []string{"operation payload", "target report", "credential", "controller", "lease", "host key", "baseline"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSSHIdentityRecoveryStoreFixture(t)
+			claim, err := f.c.store.claimClusterSSHIdentityRecoveryTarget(f.ctx, f.op.ID, f.lease.TargetID, newClusterUUID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "operation payload":
+				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=jsonb_set(payload_json::jsonb,'{changed}','true'::jsonb)::text WHERE id=$1`, claim.Lease.OperationID)
+			case "target report":
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET inspection_json='{}' WHERE id=$1`, claim.Lease.TargetID)
+			case "credential":
+				f.exec(t, `UPDATE engine.cluster_onboarding_credentials SET ciphertext=$2 WHERE target_id=$1`, claim.Lease.TargetID, aegisEnvelopePrefix+"changed")
+			case "controller":
+				f.exec(t, `UPDATE engine.cluster_application_leases SET holder=$2 WHERE name=$1`, clusterControllerLeaseName, "changed-controller")
+			case "lease":
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_generation=lease_generation+1 WHERE id=$1`, claim.Lease.TargetID)
+			case "host key":
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET host_key_fingerprint=$2 WHERE id=$1`, claim.Lease.TargetID, "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+			case "baseline":
+				f.exec(t, `UPDATE engine.cluster_state SET baseline_sha=$2 WHERE id=1`, strings.Repeat("f", 40))
+			}
+			if err := f.c.store.completeClusterSSHIdentityRecovery(context.Background(), claim); err != errClusterConflict {
+				t.Fatalf("changed authority completed: %v", err)
+			}
+			var state, step string
+			if f.c.store.db.QueryRowContext(f.ctx, `SELECT state,current_step FROM engine.cluster_onboarding_targets WHERE id=$1`, claim.Lease.TargetID).Scan(&state, &step) != nil || state != "running" || step != clusterSSHIdentityRecoveryTargetStep {
+				t.Fatalf("rejected settlement changed target: %s/%s", state, step)
+			}
+			if f.c.store.db.Stats().InUse != 0 {
+				t.Fatal("rejected settlement retained database connection")
 			}
 		})
 	}

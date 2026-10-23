@@ -5,6 +5,7 @@ import (
 	"borealis/api-backend/internal/clusterremote"
 	"borealis/api-backend/internal/engineidentity"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -12,14 +13,34 @@ import (
 )
 
 type clusterSSHIdentityRecoveryWorkerStoreFake struct {
-	renew func(clusterSSHIdentityRecoveryClaim) error
-	calls atomic.Int32
+	renew     func(clusterSSHIdentityRecoveryClaim) error
+	complete  func(clusterSSHIdentityRecoveryClaim) error
+	require   func(clusterSSHIdentityRecoveryClaim) error
+	calls     atomic.Int32
+	completed atomic.Int32
+	required  atomic.Int32
 }
 
 func (s *clusterSSHIdentityRecoveryWorkerStoreFake) renewClusterSSHIdentityRecoveryTarget(_ context.Context, claim clusterSSHIdentityRecoveryClaim) error {
 	s.calls.Add(1)
 	if s.renew != nil {
 		return s.renew(claim)
+	}
+	return nil
+}
+
+func (s *clusterSSHIdentityRecoveryWorkerStoreFake) completeClusterSSHIdentityRecovery(_ context.Context, claim clusterSSHIdentityRecoveryClaim) error {
+	s.completed.Add(1)
+	if s.complete != nil {
+		return s.complete(claim)
+	}
+	return nil
+}
+
+func (s *clusterSSHIdentityRecoveryWorkerStoreFake) requireClusterSSHIdentityRecovery(_ context.Context, claim clusterSSHIdentityRecoveryClaim) error {
+	s.required.Add(1)
+	if s.require != nil {
+		return s.require(claim)
 	}
 	return nil
 }
@@ -56,7 +77,12 @@ func sshIdentityRecoveryWorkerFixture(t *testing.T) (clusterSSHIdentityRecoveryC
 	lease.Step = clusterSSHIdentityRecoveryTargetStep
 	lease.Generation = target.Generation + 1
 	recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: source.Members[0].NodeID, SourceNodeUID: source.Members[0].NodeUID, TargetNodeUID: newClusterUUID()}
-	claim := clusterSSHIdentityRecoveryClaim{Lease: lease, Key: target.Key, Recovery: recovery,
+	var payload map[string]any
+	if json.Unmarshal(sshPreparationProofPayload(t, clusterSSHParentProof{Version: 1, Cohort: cohort, Source: source}, baseline), &payload) != nil {
+		t.Fatal("parse worker payload")
+	}
+	payload["ssh_identity_recovery"] = recovery
+	claim := clusterSSHIdentityRecoveryClaim{Lease: lease, Key: target.Key, Recovery: recovery, Inspected: target, Cohort: cohort, Topology: source, payload: marshalClusterJSON(payload),
 		Source: engineidentity.Binding{ClusterID: source.ClusterID, SourceID: recovery.SourceID, SourceUID: recovery.SourceNodeUID}, Baseline: baseline,
 		Sealed: sealedClusterSSHCredentials{binding: target.Binding, generation: "generation-1", ciphertext: aegisEnvelopePrefix + "fixture"}}
 	claim.Binding = clusterbootstrap.SessionBinding{ClusterID: target.Binding.ClusterID, OperationID: lease.OperationID, TargetID: lease.TargetID,
@@ -125,22 +151,25 @@ func TestClusterSSHIdentityRecoveryWorkerComposesClaimAndSafeRelease(t *testing.
 			if err := worker.recover(context.Background(), claim, &clusterbootstrap.Bundle{}, authority, node); err != nil {
 				t.Fatalf("recovery worker failed: %v", err)
 			}
-			if opened.Load() != 2 || delivered.Load() != 1 || released.Load() != 1 || authorityCalls.Load() < 6 || nodeCalls.Load() < 3 || store.calls.Load() < 6 || aegis.checks.Load() < 12 {
-				t.Fatalf("incomplete recovery composition: open=%d deliver=%d release=%d authority=%d node=%d renew=%d aegis=%d",
-					opened.Load(), delivered.Load(), released.Load(), authorityCalls.Load(), nodeCalls.Load(), store.calls.Load(), aegis.checks.Load())
+			if opened.Load() != 2 || delivered.Load() != 1 || released.Load() != 1 || authorityCalls.Load() < 6 || nodeCalls.Load() < 3 || store.calls.Load() < 6 || aegis.checks.Load() < 12 || store.completed.Load() != 1 || store.required.Load() != 0 {
+				t.Fatalf("incomplete recovery composition: open=%d deliver=%d release=%d authority=%d node=%d renew=%d aegis=%d complete=%d required=%d",
+					opened.Load(), delivered.Load(), released.Load(), authorityCalls.Load(), nodeCalls.Load(), store.calls.Load(), aegis.checks.Load(), store.completed.Load(), store.required.Load())
 			}
 		})
 	}
 }
 
 func TestClusterSSHIdentityRecoveryWorkerFailsClosed(t *testing.T) {
-	for _, mode := range []string{"bundle", "Aegis", "renew", "authority", "target Node", "credential", "connect", "release"} {
+	for _, mode := range []string{"bundle", "Aegis", "renew", "authority", "source topology", "target Node", "credential", "connect", "release", "completion"} {
 		t.Run(mode, func(t *testing.T) {
 			claim, current, consumer := sshIdentityRecoveryWorkerFixture(t)
 			defer consumer.Close()
 			store := &clusterSSHIdentityRecoveryWorkerStoreFake{}
 			if mode == "renew" {
 				store.renew = func(clusterSSHIdentityRecoveryClaim) error { return errors.New("private renewal") }
+			}
+			if mode == "completion" {
+				store.complete = func(clusterSSHIdentityRecoveryClaim) error { return errors.New("private completion") }
 			}
 			aegis := &clusterSSHIdentityRecoveryWorkerAegisFake{envelope: clusterSSHCredentialEnvelope{Version: 1, Binding: claim.Sealed.binding,
 				Username: "nicole", Method: "password", Password: "credential-secret", SudoPassword: "sudo-secret"}}
@@ -183,6 +212,10 @@ func TestClusterSSHIdentityRecoveryWorkerFailsClosed(t *testing.T) {
 				if mode == "authority" {
 					value.Lease.Generation++
 				}
+				if mode == "source topology" {
+					value.Source.Members = append([]clusterSSHSourceMember(nil), value.Source.Members...)
+					value.Source.Members[0].BootID = newClusterUUID()
+				}
 				return value, nil
 			}
 			node := func(context.Context, clusterSSHIdentityRecoveryClaim) error {
@@ -194,6 +227,9 @@ func TestClusterSSHIdentityRecoveryWorkerFailsClosed(t *testing.T) {
 			err := worker.recover(context.Background(), claim, &clusterbootstrap.Bundle{}, authority, node)
 			if !errors.Is(err, errClusterSSHIdentityRecoveryWorker) || strings.Contains(err.Error(), "private") {
 				t.Fatalf("unsafe recovery failure: %v", err)
+			}
+			if store.required.Load() != 1 || (mode == "completion" && store.completed.Load() != 1) {
+				t.Fatalf("failure outcome not persisted: complete=%d required=%d", store.completed.Load(), store.required.Load())
 			}
 		})
 	}

@@ -22,6 +22,8 @@
     "TestClusterSSHCredentialsPostgresRejectsDuplicateHostsAndAegisChangeBeforeCommit",
     "TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry",
     "TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence",
+    "TestClusterSSHIdentityRecoverySettlementPostgresPersistsExactOutcomes",
+    "TestClusterSSHIdentityRecoverySettlementPostgresRejectsChangedAuthority",
     "TestClusterSSHNetworkTargetsPostgresOriginalClaimsAndPoolRelease",
     "TestClusterSSHNetworkTargetsPostgresOriginalEnvelopeRevocation",
     "TestClusterSSHNetworkTargetsPostgresRechecksSiblingAfterLockWait",
