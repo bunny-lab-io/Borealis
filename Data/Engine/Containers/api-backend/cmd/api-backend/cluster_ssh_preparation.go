@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// The inspection claim cannot authorize preparation. These names are reserved
-// for the future guarded transition/dispatcher; current DB claim paths still
-// reject them and bootstrap-session still accepts verify only.
+// The inspection claim cannot authorize preparation. The separate controller
+// claim consumes a persisted preparation reservation; its approval transition
+// and preparation dispatcher remain disabled.
 const clusterSSHPreparationOperationStep = "prepare_ssh_targets"
 
 // buildClusterSSHPreparationExpected binds source configuration to the exact
