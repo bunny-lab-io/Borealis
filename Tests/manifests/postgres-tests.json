@@ -36,6 +36,7 @@
     "TestClusterSSHPreparationAuthorityPostgresReadsOutsideConnection",
     "TestClusterSSHPreparationAuthorityPostgresRechecksAfterLocks",
     "TestClusterSSHPreparationAuthorityPostgresRejectsChangedCohort",
+    "TestClusterSSHPreparationCompletionPostgres",
     "TestClusterSSHPreparationRenewalPostgresBindsCiphertextAtCommit",
     "TestClusterSSHPreparationRenewalPostgresRechecksAfterLockWait",
     "TestClusterSSHPreparationScopePostgresRenewsAndFences",

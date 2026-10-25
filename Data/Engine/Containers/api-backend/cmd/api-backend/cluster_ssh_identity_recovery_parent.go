@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type clusterSSHIdentityRecoveryReservation struct {
 	Operation clusterControllerOperation
 	Baseline  clusterbootstrap.Expected
 	Proof     clusterSSHParentProof
+	Receipt   clusterSSHPreparationReceipt
 	Target    clusterSSHInspectedTarget
 	Payload   string
 }
@@ -76,6 +78,10 @@ func (c *clusterController) loadClusterSSHIdentityRecoveryReservation(ctx contex
 	if err != nil {
 		return fail()
 	}
+	receipt, err := parseClusterSSHPreparationReceipt(raw, proof)
+	if err != nil {
+		return fail()
+	}
 	var qualificationRaw json.RawMessage
 	if clusterBootstrapObject([]byte(raw), map[string]any{"ssh_qualification": &qualificationRaw}) != nil || len(qualificationRaw) == 0 {
 		return fail()
@@ -86,7 +92,7 @@ func (c *clusterController) loadClusterSSHIdentityRecoveryReservation(ctx contex
 	}
 	for _, target := range proof.Cohort.Targets {
 		if target.Binding.TargetID == targetID {
-			return clusterSSHIdentityRecoveryReservation{Operation: operation, Baseline: baseline, Proof: proof, Target: target, Payload: raw}, nil
+			return clusterSSHIdentityRecoveryReservation{Operation: operation, Baseline: baseline, Proof: proof, Receipt: receipt, Target: target, Payload: raw}, nil
 		}
 	}
 	return fail()
@@ -208,6 +214,10 @@ func (c *clusterController) commitClusterSSHIdentityRecoveryReservation(ctx cont
 		HostKeyFingerprint: reservation.Target.Key.Fingerprint}) != nil {
 		return errClusterConflict
 	}
+	receipt, err := parseClusterSSHPreparationReceipt(reservation.Payload, reservation.Proof)
+	if err != nil || !reflect.DeepEqual(receipt, reservation.Receipt) {
+		return errClusterConflict
+	}
 	var payload map[string]json.RawMessage
 	if json.Unmarshal([]byte(reservation.Payload), &payload) != nil || payload["ssh_identity_recovery"] != nil {
 		return errClusterConflict
@@ -266,13 +276,20 @@ func (c *clusterController) commitClusterSSHIdentityRecoveryReservation(ctx cont
 			return errClusterConflict
 		}
 		key := base64.StdEncoding.EncodeToString(target.Key.PublicKey)
-		if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2 AND cluster_id=$3
+		var preparedGeneration int64
+		for _, result := range reservation.Receipt.Targets {
+			if result.TargetID == target.Binding.TargetID {
+				preparedGeneration = result.Generation
+				break
+			}
+		}
+		if preparedGeneration == 0 || tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2 AND cluster_id=$3
  AND management_ip=$4 AND ssh_port=$5 AND host_key_algorithm=$6 AND host_key_fingerprint=$7 AND host_key_base64=$8 AND ordinal=$9
  AND operation_attempt=$10 AND inspected_attempt=$10 AND inspected_generation=$11 AND inspected_at=$12 AND inspection_json=$13
  AND state='prepared' AND current_step=$14 AND credential_state='available' AND lease_holder='' AND lease_expires_at=0
- AND lease_generation>=inspected_generation FOR UPDATE`, target.Binding.TargetID, reservation.Operation.ID, reservation.Proof.Source.ClusterID,
+ AND lease_generation=$15 FOR UPDATE`, target.Binding.TargetID, reservation.Operation.ID, reservation.Proof.Source.ClusterID,
 			target.Binding.Address, target.Binding.Port, target.Key.Algorithm, target.Key.Fingerprint, key, target.Ordinal,
-			reservation.Operation.Attempt, target.Generation, target.InspectedAt, string(report), clusterSSHPreparationCompleteStep).Scan(&present) != nil {
+			reservation.Operation.Attempt, target.Generation, target.InspectedAt, string(report), clusterSSHPreparationCompleteStep, preparedGeneration).Scan(&present) != nil {
 			return errClusterConflict
 		}
 	}

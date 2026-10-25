@@ -81,6 +81,17 @@ func sshIdentityRecoveryWorkerFixture(t *testing.T) (clusterSSHIdentityRecoveryC
 	if json.Unmarshal(sshPreparationProofPayload(t, clusterSSHParentProof{Version: 1, Cohort: cohort, Source: source}, baseline), &payload) != nil {
 		t.Fatal("parse worker payload")
 	}
+	confirmation := strings.Repeat("a", 64)
+	receipt := clusterSSHPreparationReceipt{Version: 1, Attempt: lease.OperationAttempt, ConfirmationSHA256: confirmation}
+	for _, prepared := range cohort.Targets {
+		preparationLease := lease
+		preparationLease.TargetID = prepared.Binding.TargetID
+		preparationLease.Generation = prepared.Generation + 1
+		preparationLease.OperationStep = clusterSSHPreparationOperationStep
+		preparationLease.Step = "stage_source"
+		receipt.Targets = append(receipt.Targets, clusterSSHPreparationResultFixture(preparationLease, confirmation))
+	}
+	payload["ssh_preparation"] = receipt
 	payload["ssh_identity_recovery"] = recovery
 	claim := clusterSSHIdentityRecoveryClaim{Lease: lease, Key: target.Key, Recovery: recovery, Inspected: target, Cohort: cohort, Topology: source, payload: marshalClusterJSON(payload),
 		Source: engineidentity.Binding{ClusterID: source.ClusterID, SourceID: recovery.SourceID, SourceUID: recovery.SourceNodeUID}, Baseline: baseline,

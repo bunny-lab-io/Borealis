@@ -213,6 +213,7 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 		source.Status != proof.Source.Status || source.HMRState != proof.Source.HMRState || source.ControlVIP != proof.Source.ControlPlaneVIP || source.EdgeVIP != proof.Source.EdgeVIP {
 		return fail()
 	}
+	queue := source
 	source.ActiveOperationID = ""
 	if count, err := source.validate(); err != nil || count != len(targets) {
 		return fail()
@@ -225,7 +226,9 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	if validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil || ctx.Err() != nil {
 		return fail()
 	}
-	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Lease: lease, Baseline: baseline, K3sVersion: version, Recovery: recovery}, nil
+	payloadDigest := sha256.Sum256([]byte(payload))
+	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Queue: queue, Lease: lease, Baseline: baseline,
+		K3sVersion: version, PayloadSHA256: hex.EncodeToString(payloadDigest[:]), Recovery: recovery, payload: payload}, nil
 }
 
 func parseClusterSSHPreparationInspection(payload []byte, lease clusterSSHTargetLease, baseline clusterbootstrap.Expected) (clusterSSHParentProof, string, error) {

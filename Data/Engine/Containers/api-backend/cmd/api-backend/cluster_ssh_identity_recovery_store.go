@@ -64,6 +64,9 @@ func (c clusterSSHIdentityRecoveryClaim) valid() bool {
 	if err != nil || !reflect.DeepEqual(proof.Cohort, c.Cohort) || !reflect.DeepEqual(proof.Source, c.Topology) {
 		return false
 	}
+	if _, err := parseClusterSSHPreparationReceipt(c.payload, proof); err != nil {
+		return false
+	}
 	parsedRecovery, parsedSource, err := parseClusterSSHIdentityRecovery(c.payload, proof, c.Inspected)
 	if err != nil || parsedRecovery != c.Recovery || parsedSource != c.Source {
 		return false
@@ -154,7 +157,12 @@ func (s *postgresOperatorStore) claimClusterSSHIdentityRecoveryTarget(ctx contex
 	if err != nil {
 		return fail()
 	}
+	receipt, err := parseClusterSSHPreparationReceipt(payload, proof)
+	if err != nil {
+		return fail()
+	}
 	var target clusterSSHInspectedTarget
+	var preparedGeneration int64
 	found := false
 	for _, candidate := range proof.Cohort.Targets {
 		if candidate.Binding.TargetID == targetID {
@@ -163,6 +171,15 @@ func (s *postgresOperatorStore) claimClusterSSHIdentityRecoveryTarget(ctx contex
 		}
 	}
 	if !found {
+		return fail()
+	}
+	for _, result := range receipt.Targets {
+		if result.TargetID == targetID {
+			preparedGeneration = result.Generation
+			break
+		}
+	}
+	if preparedGeneration == 0 {
 		return fail()
 	}
 	recovery, source, err := parseClusterSSHIdentityRecovery(payload, proof, target)
@@ -205,8 +222,10 @@ func (s *postgresOperatorStore) claimClusterSSHIdentityRecoveryTarget(ctx contex
  WHERE t.id=$2 AND t.operation_id=$1 AND t.cluster_id=$5 AND t.operation_attempt=$6
  AND t.management_ip=$7 AND t.ssh_port=$8 AND t.host_key_algorithm=$9 AND t.host_key_fingerprint=$10 AND t.host_key_base64=$11
  AND t.ordinal=$12 AND t.inspected_attempt=$6 AND t.inspected_generation=$13 AND t.inspected_at=$14 AND t.inspection_json=$15
- AND t.current_step=$16 AND t.state IN ('prepared','running','recovery_required') AND t.credential_state='available'
- AND t.lease_expires_at<=moment.now AND o.id=t.operation_id AND o.kind='ssh_onboarding' AND o.state='running'
+ AND t.current_step=$16 AND t.credential_state='available' AND t.lease_expires_at<=moment.now
+ AND ((t.state='prepared' AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=$29)
+   OR (t.state IN ('running','recovery_required') AND t.lease_holder<>'' AND t.lease_generation>$29))
+ AND o.id=t.operation_id AND o.kind='ssh_onboarding' AND o.state='running'
  AND o.current_step=$17 AND o.attempt=$6 AND o.payload_json=$18
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=t.cluster_id AND c.baseline_release=$19 AND c.baseline_sha=$20
  AND c.active_size=$21 AND c.desired_size=$22 AND c.status=$23 AND c.hmr_state=$24
@@ -217,7 +236,7 @@ func (s *postgresOperatorStore) claimClusterSSHIdentityRecoveryTarget(ctx contex
 		target.Binding.ClusterID, attempt, target.Binding.Address, target.Binding.Port, target.Key.Algorithm, target.Key.Fingerprint, key, target.Ordinal,
 		target.Generation, target.InspectedAt, string(report), clusterSSHIdentityRecoveryTargetStep, clusterSSHIdentityRecoveryOperationStep, payload,
 		baseline.Release, baseline.SourceSHA, proof.Source.ActiveSize, proof.Source.DesiredSize, proof.Source.Status, proof.Source.HMRState,
-		proof.Source.ControlPlaneVIP, proof.Source.EdgeVIP, clusterControllerLeaseName, controller).
+		proof.Source.ControlPlaneVIP, proof.Source.EdgeVIP, clusterControllerLeaseName, controller, preparedGeneration).
 		Scan(&claim.Lease.Generation, &claim.Sealed.generation, &claim.Sealed.ciphertext)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fail()

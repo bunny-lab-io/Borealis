@@ -16,26 +16,10 @@ type sshIdentityRecoveryStoreFixture struct {
 
 func newSSHIdentityRecoveryReservationFixture(t *testing.T) (sshPreparationAuthorityFixture, clusterSSHIdentityRecoveryReservation) {
 	t.Helper()
-	f := newSSHPreparationAuthorityFixture(t)
-	var raw string
-	if f.c.store.db.QueryRowContext(f.ctx, `SELECT payload_json FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&raw) != nil {
-		t.Fatal("read reservation payload")
+	f, completions := newSSHPreparationCompletionFixture(t, false)
+	if err := f.c.store.completeClusterSSHPreparation(f.ctx, completions); err != nil {
+		t.Fatal("complete reservation preparation", err)
 	}
-	var payload map[string]any
-	if json.Unmarshal([]byte(raw), &payload) != nil {
-		t.Fatal("parse reservation payload")
-	}
-	report := newClusterSSHQualificationReport(f.op.Attempt)
-	for index := 0; index < len(report.Checks)-1; index++ {
-		report.Checks[index].State = "passed"
-	}
-	payload["ssh_qualification"] = report
-	raw = marshalClusterJSON(payload)
-	f.exec(t, `UPDATE engine.cluster_operations SET state='running',current_step=$2,payload_json=$3 WHERE id=$1`,
-		f.op.ID, clusterSSHPreparationOperationStep, raw)
-	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='prepared',current_step=$2,lease_holder='',lease_expires_at=0
- WHERE operation_id=$1`, f.op.ID, clusterSSHPreparationCompleteStep)
-	f.op.State, f.op.CurrentStep, f.op.Payload = "running", clusterSSHPreparationOperationStep, payload
 	reservation, err := f.c.loadClusterSSHIdentityRecoveryReservation(f.ctx, f.op)
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +152,7 @@ func TestClusterSSHIdentityRecoveryReservationPostgres(t *testing.T) {
 		}
 	})
 
-	for _, mode := range []string{"target not drained", "source not active", "qualification blocked", "target not prepared", "credential expired", "controller changed", "operation changed", "target report changed"} {
+	for _, mode := range []string{"target not drained", "source not active", "qualification blocked", "preparation receipt missing", "preparation generation changed", "target not prepared", "credential expired", "controller changed", "operation changed", "target report changed"} {
 		t.Run(mode, func(t *testing.T) {
 			f, reservation := newSSHIdentityRecoveryReservationFixture(t)
 			mutated := false
@@ -207,6 +191,10 @@ func TestClusterSSHIdentityRecoveryReservationPostgres(t *testing.T) {
 				report.Checks[0].State = "blocked"
 				payload["ssh_qualification"] = report
 				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(payload))
+			case "preparation receipt missing":
+				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=(payload_json::jsonb-'ssh_preparation')::text WHERE id=$1`, f.op.ID)
+			case "preparation generation changed":
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_generation=lease_generation+1 WHERE id=$1`, reservation.Target.Binding.TargetID)
 			case "target not prepared":
 				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='queued' WHERE operation_id=$1`, f.op.ID)
 			case "credential expired":
@@ -236,11 +224,11 @@ func TestClusterSSHIdentityRecoveryReservationPostgres(t *testing.T) {
 
 func newSSHIdentityRecoveryStoreFixture(t *testing.T) sshIdentityRecoveryStoreFixture {
 	t.Helper()
-	f := newSSHPreparationAuthorityFixture(t)
-	authority, err := f.read(f.ctx)
-	if err != nil {
-		t.Fatal(err)
+	f, completions := newSSHPreparationCompletionFixture(t, false)
+	if err := f.c.store.completeClusterSSHPreparation(f.ctx, completions); err != nil {
+		t.Fatal("complete worker preparation", err)
 	}
+	authority := completions[0].Authority
 	source := authority.Source.Members[0]
 	recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: source.NodeID, SourceNodeUID: source.NodeUID, TargetNodeUID: newClusterUUID()}
 	var raw string
@@ -337,7 +325,7 @@ func TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry(t *testin
 }
 
 func TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence(t *testing.T) {
-	for _, mode := range []string{"operation phase", "target phase", "target state", "controller expiry", "credential expiry", "host key", "source drained", "source topology", "missing recovery", "wrong source", "wrong target Node"} {
+	for _, mode := range []string{"operation phase", "target phase", "target state", "prepared generation", "controller expiry", "credential expiry", "host key", "source drained", "source topology", "missing recovery", "wrong source", "wrong target Node"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHIdentityRecoveryStoreFixture(t)
 			switch mode {
@@ -347,6 +335,8 @@ func TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence(t *testin
 				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET current_step='qualification_complete' WHERE id=$1`, f.lease.TargetID)
 			case "target state":
 				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='joined' WHERE id=$1`, f.lease.TargetID)
+			case "prepared generation":
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_generation=lease_generation+1 WHERE id=$1`, f.lease.TargetID)
 			case "controller expiry":
 				f.exec(t, `UPDATE engine.cluster_application_leases SET expires_at=1 WHERE name=$1`, clusterControllerLeaseName)
 			case "credential expiry":
