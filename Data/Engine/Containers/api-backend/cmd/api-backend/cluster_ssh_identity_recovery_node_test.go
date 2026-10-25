@@ -29,7 +29,7 @@ func sshIdentityRecoveryKubernetesFixture(t *testing.T, claim clusterSSHIdentity
 func TestClusterSSHIdentityRecoveryNodeReadRequiresExactFreshNodes(t *testing.T) {
 	for _, mode := range []string{"success", "source UID", "source state", "source ready", "source machine", "source address", "target missing", "target UID", "target state", "target machine", "target boot", "target address", "target deleting", "duplicate machine", "duplicate ready", "paginated", "namespace drift", "private read failure", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
-			claim, _, consumer := sshIdentityRecoveryWorkerFixture(t)
+			claim, current, consumer := sshIdentityRecoveryWorkerFixture(t)
 			consumer.Close()
 			target, items := sshIdentityRecoveryKubernetesFixture(t, claim)
 			source := items[0].(map[string]any)
@@ -100,7 +100,7 @@ func TestClusterSSHIdentityRecoveryNodeReadRequiresExactFreshNodes(t *testing.T)
 			}
 			err := newClusterSSHIdentityRecoveryNodeRead(read)(ctx, claim)
 			if mode == "success" {
-				if err != nil || namespaceReads != 2 {
+				if err != nil || newClusterSSHIdentityRecoveryAuthorityNodeRead(read)(ctx, current) != nil || namespaceReads != 4 {
 					t.Fatalf("exact Node proof failed: %v reads=%d", err, namespaceReads)
 				}
 			} else if !errors.Is(err, clusterbootstrap.ErrPreparationConfig) || (err != nil && err.Error() == "private Kubernetes failure") {

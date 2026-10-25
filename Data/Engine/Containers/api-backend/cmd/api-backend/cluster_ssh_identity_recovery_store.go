@@ -35,6 +35,19 @@ type clusterSSHIdentityRecoveryClaim struct {
 	payload   string
 }
 
+// This public-only projection lets the controller independently bind its
+// Kubernetes Node reads to the exact recovery payload already locked by SQL.
+// Credential ciphertext and identity material never enter this projection.
+type clusterSSHIdentityRecoveryAuthorityBinding struct {
+	Recovery clusterbootstrap.IdentityRecoveryRequest `json:"recovery"`
+	Source   engineidentity.Binding                   `json:"source"`
+	Target   clusterSSHInspectedTarget                `json:"target"`
+}
+
+func (b clusterSSHIdentityRecoveryAuthorityBinding) matches(claim clusterSSHIdentityRecoveryClaim) bool {
+	return claim.valid() && b.Recovery == claim.Recovery && b.Source == claim.Source && reflect.DeepEqual(b.Target, claim.Inspected)
+}
+
 func validClusterSSHIdentityRecoveryLease(lease clusterSSHTargetLease) bool {
 	return clusterUUIDRE.MatchString(lease.OperationID) && clusterUUIDRE.MatchString(lease.TargetID) && clusterUUIDRE.MatchString(lease.Holder) &&
 		lease.ControllerHolder != "" && len(lease.ControllerHolder) <= 1024 && lease.Generation > 0 && lease.OperationAttempt > 0 &&

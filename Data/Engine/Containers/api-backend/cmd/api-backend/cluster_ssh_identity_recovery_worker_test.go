@@ -97,7 +97,8 @@ func sshIdentityRecoveryWorkerFixture(t *testing.T) (clusterSSHIdentityRecoveryC
 	if err != nil {
 		t.Fatal(err)
 	}
-	return claim, clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}, consumer
+	recoveryAuthority := &clusterSSHIdentityRecoveryAuthorityBinding{Recovery: recovery, Source: claim.Source, Target: target}
+	return claim, clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1", Recovery: recoveryAuthority}, consumer
 }
 
 func TestClusterSSHIdentityRecoveryWorkerComposesClaimAndSafeRelease(t *testing.T) {
@@ -113,7 +114,9 @@ func TestClusterSSHIdentityRecoveryWorkerComposesClaimAndSafeRelease(t *testing.
 			}}
 			aegis := &clusterSSHIdentityRecoveryWorkerAegisFake{envelope: clusterSSHCredentialEnvelope{Version: 1, Binding: claim.Sealed.binding,
 				Username: "nicole", Method: "password", Password: "credential-secret", SudoPassword: "sudo-secret"}}
+			var cleanup atomic.Int32
 			worker := &clusterSSHIdentityRecoveryWorker{store: store, aegis: aegis, consumer: consumer,
+				bundleClose: func(*clusterbootstrap.Bundle) error { cleanup.Add(1); return nil },
 				bundleProof: func(*clusterbootstrap.Bundle) (clusterbootstrap.Expected, error) { return claim.Baseline, nil }}
 			var opened, delivered, released, authorityCalls, nodeCalls atomic.Int32
 			worker.connect = func(_ context.Context, target clusterremote.Target, key clusterremote.HostKey, credential *clusterremote.Credential) (clusterSSHIdentityRecoveryClient, error) {
@@ -151,7 +154,7 @@ func TestClusterSSHIdentityRecoveryWorkerComposesClaimAndSafeRelease(t *testing.
 			if err := worker.recover(context.Background(), claim, &clusterbootstrap.Bundle{}, authority, node); err != nil {
 				t.Fatalf("recovery worker failed: %v", err)
 			}
-			if opened.Load() != 2 || delivered.Load() != 1 || released.Load() != 1 || authorityCalls.Load() < 6 || nodeCalls.Load() < 3 || store.calls.Load() < 6 || aegis.checks.Load() < 12 || store.completed.Load() != 1 || store.required.Load() != 0 {
+			if opened.Load() != 2 || delivered.Load() != 1 || released.Load() != 1 || authorityCalls.Load() < 6 || nodeCalls.Load() < 3 || store.calls.Load() < 6 || aegis.checks.Load() < 12 || store.completed.Load() != 1 || store.required.Load() != 0 || cleanup.Load() != 1 {
 				t.Fatalf("incomplete recovery composition: open=%d deliver=%d release=%d authority=%d node=%d renew=%d aegis=%d complete=%d required=%d",
 					opened.Load(), delivered.Load(), released.Load(), authorityCalls.Load(), nodeCalls.Load(), store.calls.Load(), aegis.checks.Load(), store.completed.Load(), store.required.Load())
 			}
@@ -160,7 +163,7 @@ func TestClusterSSHIdentityRecoveryWorkerComposesClaimAndSafeRelease(t *testing.
 }
 
 func TestClusterSSHIdentityRecoveryWorkerFailsClosed(t *testing.T) {
-	for _, mode := range []string{"bundle", "Aegis", "renew", "authority", "source topology", "target Node", "credential", "connect", "release", "completion"} {
+	for _, mode := range []string{"bundle", "cleanup", "Aegis", "renew", "authority", "source topology", "target Node", "credential", "connect", "release", "completion"} {
 		t.Run(mode, func(t *testing.T) {
 			claim, current, consumer := sshIdentityRecoveryWorkerFixture(t)
 			defer consumer.Close()
@@ -181,7 +184,15 @@ func TestClusterSSHIdentityRecoveryWorkerFailsClosed(t *testing.T) {
 					return errors.New("private credential")
 				}
 			}
+			var cleanup atomic.Int32
 			worker := &clusterSSHIdentityRecoveryWorker{store: store, aegis: aegis, consumer: consumer,
+				bundleClose: func(*clusterbootstrap.Bundle) error {
+					cleanup.Add(1)
+					if mode == "cleanup" {
+						return errors.New("private cleanup failure")
+					}
+					return nil
+				},
 				bundleProof: func(*clusterbootstrap.Bundle) (clusterbootstrap.Expected, error) {
 					if mode == "bundle" {
 						return clusterbootstrap.Expected{}, errors.New("private bundle")
@@ -230,6 +241,9 @@ func TestClusterSSHIdentityRecoveryWorkerFailsClosed(t *testing.T) {
 			}
 			if store.required.Load() != 1 || (mode == "completion" && store.completed.Load() != 1) {
 				t.Fatalf("failure outcome not persisted: complete=%d required=%d", store.completed.Load(), store.required.Load())
+			}
+			if cleanup.Load() != 1 && mode != "cleanup" || mode == "cleanup" && cleanup.Load() != 2 {
+				t.Fatalf("private bundle cleanup not completed exactly: %d", cleanup.Load())
 			}
 		})
 	}

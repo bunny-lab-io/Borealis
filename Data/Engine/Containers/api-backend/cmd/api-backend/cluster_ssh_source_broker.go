@@ -45,7 +45,7 @@ func (r clusterSSHSourceBrokerRequest) sealed() sealedClusterSSHCredentials {
 
 func (r clusterSSHSourceBrokerRequest) valid(now time.Time) bool {
 	return r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+40 &&
-		validClusterSSHObservationLease(r.Lease) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
+		(validClusterSSHObservationLease(r.Lease) || validClusterSSHIdentityRecoveryLease(r.Lease)) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
 		r.Binding.valid() && r.Binding.OperationID == r.Lease.OperationID && r.Binding.TargetID == r.Lease.TargetID &&
 		r.Generation != "" && len(r.Generation) <= 16<<10 && strings.HasPrefix(r.Ciphertext, aegisEnvelopePrefix) && len(r.Ciphertext) <= 256<<10
 }
@@ -111,6 +111,7 @@ type clusterSSHSourceBroker struct {
 	holder                        string
 	requestCipher, responseCipher cipher.AEAD
 	read                          func(context.Context, clusterSSHSourceBrokerRequest) (clusterSSHPreparationSnapshot, error)
+	readRecovery                  func(context.Context, clusterSSHSourceBrokerRequest) error
 	mu                            sync.Mutex
 	seen                          map[string]int64
 	active                        int
@@ -134,6 +135,19 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 		return runner.readSSHStoragePreparationSnapshot(ctx, authority, func(ctx context.Context, window int64) ([]int64, error) {
 			return readClusterSSHWorkerCensus(ctx, store.db, window)
 		})
+	}
+	b.readRecovery = func(ctx context.Context, request clusterSSHSourceBrokerRequest) error {
+		if !clusterControllerEligible() || runner == nil || runner.kube == nil || runner.controllerHolder != holder ||
+			request.Lease.ControllerHolder != holder || !validClusterSSHIdentityRecoveryLease(request.Lease) {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		authority, err := store.loadClusterSSHPreparationAuthority(ctx, request.Lease, request.Baseline, request.sealed())
+		if err != nil || newClusterSSHIdentityRecoveryAuthorityNodeRead(runner.kube.getJSON)(ctx, authority) != nil || ctx.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
 	}
 	return b
 }
@@ -179,7 +193,11 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	_, replay := b.seen[request.ID]
-	accepted := !replay && len(b.seen) < 128 && b.active < 2 && b.read != nil
+	handlerReady := b.read != nil
+	if validClusterSSHIdentityRecoveryLease(request.Lease) {
+		handlerReady = b.readRecovery != nil
+	}
+	accepted := !replay && len(b.seen) < 128 && b.active < 2 && handlerReady
 	if accepted {
 		b.seen[request.ID] = request.ExpiresAt
 		b.active++
@@ -194,6 +212,14 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 	ctx, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
+	if validClusterSSHIdentityRecoveryLease(request.Lease) {
+		if b.readRecovery(ctx, request) != nil || ctx.Err() != nil {
+			reply("unavailable", nil)
+			return
+		}
+		reply("recovery_node_ok", nil)
+		return
+	}
 	value, err := b.read(ctx, request)
 	if err != nil || ctx.Err() != nil {
 		reply("unavailable", nil)

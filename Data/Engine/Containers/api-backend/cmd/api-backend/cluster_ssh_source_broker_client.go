@@ -161,6 +161,47 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 	fail := func() (clusterSSHPreparationSnapshot, error) {
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
+	value, err := c.exchange(parent, request)
+	if err != nil || value.Status != "ok" || value.Snapshot == nil {
+		return fail()
+	}
+	return *value.Snapshot, nil
+}
+
+// Recovery Node reads reuse controller discovery and encrypted transport, but
+// never import broad preparation snapshots into mutating worker decisions.
+func (c *clusterSSHSourceBrokerClient) recoveryNodeRead(authority clusterSSHPreparationAuthorityRead,
+	claim clusterSSHIdentityRecoveryClaim) func(context.Context, clusterSSHIdentityRecoveryClaim) error {
+	return func(parent context.Context, current clusterSSHIdentityRecoveryClaim) error {
+		fail := func() error { return clusterbootstrap.ErrPreparationConfig }
+		if c == nil || authority == nil || !claim.valid() || !current.valid() || !reflect.DeepEqual(current, claim) || parent.Err() != nil {
+			return fail()
+		}
+		before, err := authority(parent)
+		if err != nil || !clusterSSHIdentityRecoveryAuthorityMatches(before, claim) {
+			return fail()
+		}
+		request := clusterSSHSourceBrokerRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
+			Lease: claim.Lease, Baseline: claim.Baseline, Binding: claim.Sealed.binding, Generation: claim.Sealed.generation, Ciphertext: claim.Sealed.ciphertext}
+		value, err := c.exchange(parent, request)
+		if err != nil || value.Status != "recovery_node_ok" || value.Snapshot != nil {
+			return fail()
+		}
+		after, err := authority(parent)
+		if err != nil || !clusterSSHIdentityRecoveryAuthorityMatches(after, claim) || parent.Err() != nil {
+			return fail()
+		}
+		return nil
+	}
+}
+
+func (c *clusterSSHSourceBrokerClient) exchange(parent context.Context, request clusterSSHSourceBrokerRequest) (clusterSSHSourceBrokerResponse, error) {
+	fail := func() (clusterSSHSourceBrokerResponse, error) {
+		return clusterSSHSourceBrokerResponse{}, clusterbootstrap.ErrPreparationConfig
+	}
+	if c == nil || c.peers == nil || c.httpClient == nil || !request.valid(time.Now()) || parent.Err() != nil {
+		return fail()
+	}
 	ctx, cancel := context.WithDeadline(parent, time.Unix(request.ExpiresAt, 0))
 	defer cancel()
 	peers, err := c.peers(ctx)
@@ -198,10 +239,7 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		if value.Status == "not_owner" && value.Snapshot == nil {
 			continue
 		}
-		if value.Status != "ok" || value.Snapshot == nil {
-			return fail()
-		}
-		return *value.Snapshot, nil
+		return value, nil
 	}
 	return fail()
 }

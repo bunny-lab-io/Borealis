@@ -25,6 +25,7 @@ type clusterSSHIdentityRecoveryWorker struct {
 	consumer    *engineidentity.Consumer
 	connect     func(context.Context, clusterremote.Target, clusterremote.HostKey, *clusterremote.Credential) (clusterSSHIdentityRecoveryClient, error)
 	bundleProof func(*clusterbootstrap.Bundle) (clusterbootstrap.Expected, error)
+	bundleClose func(*clusterbootstrap.Bundle) error
 }
 
 func newClusterSSHIdentityRecoveryWorker(store *postgresOperatorStore, aegis *goAegisService) *clusterSSHIdentityRecoveryWorker {
@@ -35,11 +36,13 @@ func newClusterSSHIdentityRecoveryWorker(store *postgresOperatorStore, aegis *go
 		bundleProof: func(bundle *clusterbootstrap.Bundle) (clusterbootstrap.Expected, error) {
 			expected, _, _, err := bundle.ManagerProof()
 			return expected, err
-		}}
+		},
+		bundleClose: func(bundle *clusterbootstrap.Bundle) error { return bundle.Close() }}
 }
 
 func clusterSSHIdentityRecoveryAuthorityMatches(value clusterSSHPreparationAuthority, claim clusterSSHIdentityRecoveryClaim) bool {
-	if !claim.valid() || value.Lease != claim.Lease || value.Baseline != claim.Baseline || validateClusterSSHInspectionCohort(value.Cohort, value.Source) != nil {
+	if !claim.valid() || value.Lease != claim.Lease || value.Baseline != claim.Baseline || value.Recovery == nil || !value.Recovery.matches(claim) ||
+		validateClusterSSHInspectionCohort(value.Cohort, value.Source) != nil {
 		return false
 	}
 	value.Cohort.ObservedAt, claim.Cohort.ObservedAt = 0, 0
@@ -50,16 +53,34 @@ func clusterSSHIdentityRecoveryAuthorityMatches(value clusterSSHPreparationAutho
 		claim.Lease.Generation > claim.Inspected.Generation
 }
 
-// recover composes an already-issued durable claim with private credentials,
-// source-key custody and remote journal reconciliation. Runtime queue polling,
-// result completion, consumer restart and admission intentionally remain absent.
+// recover consumes one verified bundle while composing an already-issued
+// durable claim with private credentials, source-key custody and remote journal
+// reconciliation. Private scratch must close before success; cleanup failure
+// enters the same conservative recovery-required outcome.
+// Controller transition, consumer restart and admission remain separate.
 func (w *clusterSSHIdentityRecoveryWorker) recover(parent context.Context, claim clusterSSHIdentityRecoveryClaim,
 	bundle *clusterbootstrap.Bundle, authority clusterSSHPreparationAuthorityRead, targetNode func(context.Context, clusterSSHIdentityRecoveryClaim) error) error {
 	if w == nil || w.store == nil || w.aegis == nil || w.consumer == nil || w.connect == nil || w.bundleProof == nil ||
 		!claim.valid() || bundle == nil || authority == nil || targetNode == nil {
 		return errClusterSSHIdentityRecoveryWorker
 	}
+	closed := false
+	closeBundle := w.bundleClose
+	if closeBundle == nil {
+		closeBundle = func(bundle *clusterbootstrap.Bundle) error { return bundle.Close() }
+	}
+	cleanup := func() error {
+		if closed {
+			return nil
+		}
+		err := closeBundle(bundle)
+		if err == nil {
+			closed = true
+		}
+		return err
+	}
 	fail := func() error {
+		_ = cleanup()
 		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
 		defer cancel()
 		_ = w.store.requireClusterSSHIdentityRecovery(settleCtx, claim)
@@ -124,6 +145,9 @@ func (w *clusterSSHIdentityRecoveryWorker) recover(parent context.Context, claim
 		return w.connect(connectCtx, clusterremote.Target{Address: claim.Binding.Address, Port: claim.Binding.Port}, claim.Key, credential)
 	}
 	if withClusterSSHIdentityRecoveryDispatch(ctx, w.consumer, claim.Source, authority, connect, bundle, claim.Binding, claim.Recovery, sudo, controller, node) != nil || ctx.Err() != nil {
+		return fail()
+	}
+	if cleanup() != nil {
 		return fail()
 	}
 	if w.store.completeClusterSSHIdentityRecovery(ctx, claim) != nil || ctx.Err() != nil {

@@ -29,6 +29,7 @@ type clusterSSHPreparationAuthority struct {
 	Lease      clusterSSHTargetLease
 	Baseline   clusterbootstrap.Expected
 	K3sVersion string
+	Recovery   *clusterSSHIdentityRecoveryAuthorityBinding
 }
 
 type clusterSSHPreparationAuthorityRead func(context.Context) (clusterSSHPreparationAuthority, error)

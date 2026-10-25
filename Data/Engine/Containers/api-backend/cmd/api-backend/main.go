@@ -182,11 +182,13 @@ func main() {
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
 	stopSSHInspections := func() {}
+	stopSSHIdentityRecovery := func() {}
 	if apiBackgroundLoopsEnabled() {
 		vpnRuntime.startClusterPeerReconciler(rootCtx)
 		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
 		startServerLogRetentionRuntime(rootCtx)
 		stopSSHInspections = startClusterSSHInspectionRuntime(rootCtx, auth)
+		stopSSHIdentityRecovery = startClusterSSHIdentityRecoveryRuntime(rootCtx, auth)
 	} else {
 		log.Printf("Go api-backend background loops disabled")
 	}
@@ -232,6 +234,7 @@ func main() {
 	}
 
 	// Cancel and join SSH work before Aegis listeners or database pool close.
+	stopSSHIdentityRecovery()
 	stopSSHInspections()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()

@@ -61,6 +61,30 @@ func TestClusterSSHIdentityRecoveryAuthorityPostgresBindsWholeCohort(t *testing.
 	}
 }
 
+func TestClusterSSHIdentityRecoveryRuntimePostgresSelectsOnlyReservedWork(t *testing.T) {
+	f := newSSHIdentityRecoveryStoreFixture(t)
+	pending, err := f.c.store.pendingClusterSSHIdentityRecoveries(f.ctx)
+	if err != nil || len(pending) != 1 || pending[0].OperationID != f.op.ID || pending[0].TargetID != f.targets[0].Binding.TargetID {
+		t.Fatalf("reserved recovery work not selected exactly: %#v %v", pending, err)
+	}
+	claim, err := f.c.store.claimClusterSSHIdentityRecoveryTarget(f.ctx, pending[0].OperationID, pending[0].TargetID, newClusterUUID())
+	if err != nil || !claim.valid() {
+		t.Fatalf("selected recovery work could not be claimed: %#v %v", claim, err)
+	}
+	pending, err = f.c.store.pendingClusterSSHIdentityRecoveries(f.ctx)
+	if err != nil || len(pending) != 1 || pending[0].TargetID == claim.Lease.TargetID {
+		t.Fatalf("runtime reselected leased target or lost sibling: %#v %v", pending, err)
+	}
+	f.exec(t, `UPDATE engine.cluster_operations SET current_step='prepare_ssh_targets' WHERE id=$1`, f.op.ID)
+	pending, err = f.c.store.pendingClusterSSHIdentityRecoveries(f.ctx)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("non-recovery operation exposed mutating work: %#v %v", pending, err)
+	}
+	if f.c.store.db.Stats().InUse != 0 {
+		t.Fatal("recovery runtime query retained database connection")
+	}
+}
+
 func TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry(t *testing.T) {
 	f := newSSHIdentityRecoveryStoreFixture(t)
 	holder := newClusterUUID()

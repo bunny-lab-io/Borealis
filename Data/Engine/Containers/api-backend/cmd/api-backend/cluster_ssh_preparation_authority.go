@@ -125,6 +125,23 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	if !own {
 		return fail()
 	}
+	var recovery *clusterSSHIdentityRecoveryAuthorityBinding
+	if validClusterSSHIdentityRecoveryLease(lease) {
+		for _, target := range proof.Cohort.Targets {
+			if target.Binding.TargetID != lease.TargetID {
+				continue
+			}
+			request, source, err := parseClusterSSHIdentityRecovery(payload, proof, target)
+			if err != nil {
+				return fail()
+			}
+			recovery = &clusterSSHIdentityRecoveryAuthorityBinding{Recovery: request, Source: source, Target: target}
+			break
+		}
+		if recovery == nil {
+			return fail()
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fail()
@@ -208,7 +225,7 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	if validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil || ctx.Err() != nil {
 		return fail()
 	}
-	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Lease: lease, Baseline: baseline, K3sVersion: version}, nil
+	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Lease: lease, Baseline: baseline, K3sVersion: version, Recovery: recovery}, nil
 }
 
 func parseClusterSSHPreparationInspection(payload []byte, lease clusterSSHTargetLease, baseline clusterbootstrap.Expected) (clusterSSHParentProof, string, error) {

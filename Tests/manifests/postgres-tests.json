@@ -23,6 +23,7 @@
     "TestClusterSSHIdentityRecoveryAuthorityPostgresBindsWholeCohort",
     "TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry",
     "TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence",
+    "TestClusterSSHIdentityRecoveryRuntimePostgresSelectsOnlyReservedWork",
     "TestClusterSSHIdentityRecoverySettlementPostgresPersistsExactOutcomes",
     "TestClusterSSHIdentityRecoverySettlementPostgresRejectsChangedAuthority",
     "TestClusterSSHNetworkTargetsPostgresOriginalClaimsAndPoolRelease",
