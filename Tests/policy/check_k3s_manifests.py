@@ -188,7 +188,7 @@ def validate_cluster_controller_contract() -> None:
     namespace_rules = [rule for rule in rules if "namespaces" in (rule.get("resources") or [])]
     if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}]:
         fail("cluster controller namespace read must stay limited to kube-system identity")
-    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "instancemanagers", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings", "*"} or ("longhorn.io" in rule.get("apiGroups", []) and "nodes" in rule.get("resources", [])) for rule in rules):
+    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "instancemanagers", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings", "*"} or (any(api_group == "longhorn.io" for api_group in rule.get("apiGroups", []) if isinstance(api_group, str)) and "nodes" in rule.get("resources", [])) for rule in rules):
         fail("cluster controller must not gain broad private configuration, owner or admission policy access")
     source_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
     expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env", "borealis-job-scheduler-runtime-env"], "verbs": ["get"]}

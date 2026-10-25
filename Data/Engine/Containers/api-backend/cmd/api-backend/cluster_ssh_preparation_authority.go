@@ -200,7 +200,7 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
    AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now
    AND ((t.state='queued' AND t.current_step IN ('inspection_complete',$16) AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
     OR (t.state='running' AND t.current_step=$16 AND t.lease_holder ~ $14 AND t.lease_expires_at>moment.now AND t.lease_generation>t.inspected_generation)
-    OR ($15='recover_ssh_identity' AND t.state='prepared' AND t.current_step IN ($16,'identity_recovery_complete')
+    OR ($15='recover_ssh_identity' AND t.state='prepared' AND t.current_step IN ($16,'identity_recovery_pending','identity_recovery_complete')
         AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation>=t.inspected_generation))
   ) IS NOT TRUE)`, lease.OperationID, lease.OperationAttempt, payload, proof.Source.ClusterID, clusterControllerLeaseName, lease.ControllerHolder, sealed.generation,
 		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String(), lease.OperationStep, lease.Step).Scan(&now)

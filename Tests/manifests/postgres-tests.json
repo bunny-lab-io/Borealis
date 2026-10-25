@@ -23,6 +23,7 @@
     "TestClusterSSHIdentityRecoveryAuthorityPostgresBindsWholeCohort",
     "TestClusterSSHIdentityRecoveryClaimPostgresBindsAuthorityAndRetry",
     "TestClusterSSHIdentityRecoveryClaimPostgresRejectsChangedEvidence",
+    "TestClusterSSHIdentityRecoveryReservationPostgres",
     "TestClusterSSHIdentityRecoveryRuntimePostgresSelectsOnlyReservedWork",
     "TestClusterSSHIdentityRecoverySettlementPostgresPersistsExactOutcomes",
     "TestClusterSSHIdentityRecoverySettlementPostgresRejectsChangedAuthority",

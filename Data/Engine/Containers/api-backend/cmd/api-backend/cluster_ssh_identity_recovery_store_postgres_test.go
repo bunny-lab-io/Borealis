@@ -14,6 +14,226 @@ type sshIdentityRecoveryStoreFixture struct {
 	recovery clusterbootstrap.IdentityRecoveryRequest
 }
 
+func newSSHIdentityRecoveryReservationFixture(t *testing.T) (sshPreparationAuthorityFixture, clusterSSHIdentityRecoveryReservation) {
+	t.Helper()
+	f := newSSHPreparationAuthorityFixture(t)
+	var raw string
+	if f.c.store.db.QueryRowContext(f.ctx, `SELECT payload_json FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&raw) != nil {
+		t.Fatal("read reservation payload")
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		t.Fatal("parse reservation payload")
+	}
+	report := newClusterSSHQualificationReport(f.op.Attempt)
+	for index := 0; index < len(report.Checks)-1; index++ {
+		report.Checks[index].State = "passed"
+	}
+	payload["ssh_qualification"] = report
+	raw = marshalClusterJSON(payload)
+	f.exec(t, `UPDATE engine.cluster_operations SET state='running',current_step=$2,payload_json=$3 WHERE id=$1`,
+		f.op.ID, clusterSSHPreparationOperationStep, raw)
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='prepared',current_step=$2,lease_holder='',lease_expires_at=0
+ WHERE operation_id=$1`, f.op.ID, clusterSSHPreparationCompleteStep)
+	f.op.State, f.op.CurrentStep, f.op.Payload = "running", clusterSSHPreparationOperationStep, payload
+	reservation, err := f.c.loadClusterSSHIdentityRecoveryReservation(f.ctx, f.op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, reservation
+}
+
+func clusterSSHIdentityRecoveryReservationObserver(t *testing.T, reservation clusterSSHIdentityRecoveryReservation,
+	mutate func(string, []any)) func(context.Context, string, any) error {
+	t.Helper()
+	var items []any
+	for _, member := range reservation.Proof.Source.Members {
+		node := sshSourceKubernetesFixture(member)
+		node["metadata"].(map[string]any)["labels"] = map[string]any{
+			"borealis.io/engine-node": "true", "borealis.io/application-state": "active",
+		}
+		items = append(items, node)
+	}
+	for _, target := range reservation.Proof.Cohort.Targets {
+		items = append(items, map[string]any{
+			"metadata": map[string]any{"name": target.Report.Hostname, "uid": newClusterUUID(), "labels": map[string]any{
+				"borealis.io/engine-node": "true", "borealis.io/application-state": "drained",
+			}},
+			"status": map[string]any{
+				"nodeInfo":   map[string]any{"machineID": target.Report.MachineID, "bootID": target.Report.BootID},
+				"addresses":  []any{map[string]any{"type": "InternalIP", "address": target.Binding.Address}},
+				"conditions": []any{map[string]any{"type": "Ready", "status": "False"}},
+			},
+		})
+	}
+	namespaceReads := 0
+	return func(ctx context.Context, path string, out any) error {
+		if mutate != nil {
+			mutate(path, items)
+		}
+		var value any
+		switch path {
+		case "/api/v1/namespaces/kube-system":
+			namespaceReads++
+			value = map[string]any{"metadata": map[string]any{"uid": reservation.Proof.Source.KubeSystemUID}}
+		case "/api/v1/nodes":
+			value = map[string]any{"metadata": map[string]any{"continue": ""}, "items": items}
+		default:
+			t.Fatal("unexpected recovery reservation read", path)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(raw, out); err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return nil
+	}
+}
+
+func TestClusterSSHIdentityRecoveryReservationPostgres(t *testing.T) {
+	t.Run("original controller reserves one drained target", func(t *testing.T) {
+		f, reservation := newSSHIdentityRecoveryReservationFixture(t)
+		observe := clusterSSHIdentityRecoveryReservationObserver(t, reservation, nil)
+		before := f.events(t)
+		if err := f.c.runSSHIdentityRecoveryParent(f.ctx, f.op, observe); err != nil {
+			t.Fatal(err)
+		}
+		var state, step, raw string
+		if f.c.store.db.QueryRowContext(f.ctx, `SELECT state,current_step,payload_json FROM engine.cluster_operations WHERE id=$1`, f.op.ID).
+			Scan(&state, &step, &raw) != nil || state != "running" || step != clusterSSHIdentityRecoveryOperationStep {
+			t.Fatalf("wrong recovery reservation operation: %s/%s", state, step)
+		}
+		var payload struct {
+			Recovery clusterbootstrap.IdentityRecoveryRequest `json:"ssh_identity_recovery"`
+		}
+		if json.Unmarshal([]byte(raw), &payload) != nil || payload.Recovery.SourceID != reservation.Proof.Source.Members[0].NodeID ||
+			payload.Recovery.SourceNodeUID != reservation.Proof.Source.Members[0].NodeUID || !clusterUUIDRE.MatchString(payload.Recovery.TargetNodeUID) {
+			t.Fatalf("recovery reservation lost source or target Node binding: %#v", payload.Recovery)
+		}
+		rows, err := f.c.store.db.QueryContext(f.ctx, `SELECT id,current_step,state FROM engine.cluster_onboarding_targets
+ WHERE operation_id=$1 ORDER BY ordinal`, f.op.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps := map[string]string{}
+		for rows.Next() {
+			var id, targetStep, targetState string
+			if rows.Scan(&id, &targetStep, &targetState) != nil || targetState != "prepared" {
+				rows.Close()
+				t.Fatal("reservation changed prepared target state")
+			}
+			steps[id] = targetStep
+		}
+		if rows.Err() != nil || rows.Close() != nil || steps[reservation.Target.Binding.TargetID] != clusterSSHIdentityRecoveryTargetStep {
+			t.Fatal("selected target was not reserved")
+		}
+		for id, targetStep := range steps {
+			if id != reservation.Target.Binding.TargetID && targetStep != clusterSSHIdentityRecoveryPendingStep {
+				t.Fatal("unselected target became executable")
+			}
+		}
+		pending, err := f.c.store.pendingClusterSSHIdentityRecoveries(f.ctx)
+		if err != nil || len(pending) != 1 || pending[0].TargetID != reservation.Target.Binding.TargetID {
+			t.Fatalf("worker queue did not expose exactly reserved target: %#v %v", pending, err)
+		}
+		claim, err := f.c.store.claimClusterSSHIdentityRecoveryTarget(f.ctx, f.op.ID, pending[0].TargetID, newClusterUUID())
+		if err != nil || !claim.valid() || claim.Recovery != payload.Recovery {
+			t.Fatalf("reserved target could not enter existing worker: %#v %v", claim, err)
+		}
+		authority, err := newClusterSSHIdentityRecoveryAuthorityRead(f.c.store, f.aegis, claim)(f.ctx)
+		if err != nil || !clusterSSHIdentityRecoveryAuthorityMatches(authority, claim) {
+			t.Fatalf("reserved worker lost whole-cohort authority: %#v %v", authority, err)
+		}
+		if f.events(t) != before+1 {
+			t.Fatal("reservation event was not persisted exactly once")
+		}
+		current := f.op
+		current.CurrentStep = clusterSSHIdentityRecoveryOperationStep
+		if err := f.c.runSSHIdentityRecoveryParent(f.ctx, current, nil); err != nil || f.events(t) != before+1 {
+			t.Fatalf("recovery controller advanced restart or admission: %v", err)
+		}
+		var activeSize, desiredSize, nodes int64
+		if f.c.store.db.QueryRowContext(f.ctx, `SELECT active_size,desired_size,
+ (SELECT count(*) FROM engine.cluster_nodes WHERE membership_state='Active') FROM engine.cluster_state WHERE id=1`).
+			Scan(&activeSize, &desiredSize, &nodes) != nil || activeSize != 1 || desiredSize != 1 || nodes != 1 {
+			t.Fatal("reservation changed membership")
+		}
+		if f.c.store.db.Stats().InUse != 0 {
+			t.Fatal("reservation retained database connection")
+		}
+	})
+
+	for _, mode := range []string{"target not drained", "source not active", "qualification blocked", "target not prepared", "credential expired", "controller changed", "operation changed", "target report changed"} {
+		t.Run(mode, func(t *testing.T) {
+			f, reservation := newSSHIdentityRecoveryReservationFixture(t)
+			mutated := false
+			mutate := func(path string, items []any) {
+				if mutated || path != "/api/v1/nodes" {
+					return
+				}
+				switch mode {
+				case "target not drained":
+					for _, raw := range items {
+						node := raw.(map[string]any)
+						if node["metadata"].(map[string]any)["name"] == reservation.Target.Report.Hostname {
+							node["metadata"].(map[string]any)["labels"].(map[string]any)["borealis.io/application-state"] = "active"
+						}
+					}
+				case "source not active":
+					items[0].(map[string]any)["metadata"].(map[string]any)["labels"].(map[string]any)["borealis.io/application-state"] = "drained"
+				case "controller changed":
+					f.exec(t, `UPDATE engine.cluster_application_leases SET holder=$2 WHERE name=$1`, clusterControllerLeaseName, "replacement-controller")
+				case "operation changed":
+					f.exec(t, `UPDATE engine.cluster_operations SET payload_json=jsonb_set(payload_json::jsonb,'{changed}','true'::jsonb)::text WHERE id=$1`, f.op.ID)
+				case "target report changed":
+					f.exec(t, `UPDATE engine.cluster_onboarding_targets SET inspection_json='{}' WHERE id=$1`, reservation.Target.Binding.TargetID)
+				}
+				mutated = true
+			}
+			switch mode {
+			case "qualification blocked":
+				var raw string
+				if f.c.store.db.QueryRowContext(f.ctx, `SELECT payload_json FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&raw) != nil {
+					t.Fatal("read qualification")
+				}
+				var payload map[string]any
+				_ = json.Unmarshal([]byte(raw), &payload)
+				report := newClusterSSHQualificationReport(f.op.Attempt)
+				report.Checks[0].State = "blocked"
+				payload["ssh_qualification"] = report
+				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(payload))
+			case "target not prepared":
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='queued' WHERE operation_id=$1`, f.op.ID)
+			case "credential expired":
+				f.exec(t, `UPDATE engine.cluster_onboarding_credentials SET expires_at=1 WHERE target_id=$1`, reservation.Target.Binding.TargetID)
+			}
+			before := f.events(t)
+			observe := clusterSSHIdentityRecoveryReservationObserver(t, reservation, mutate)
+			if err := f.c.runSSHIdentityRecoveryParent(context.Background(), f.op, observe); err == nil {
+				t.Fatal("unsafe identity recovery reservation accepted")
+			}
+			var step string
+			if f.c.store.db.QueryRowContext(f.ctx, `SELECT current_step FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&step) != nil ||
+				step != clusterSSHPreparationOperationStep || f.events(t) != before {
+				t.Fatal("rejected reservation changed controller state")
+			}
+			var reserved int
+			if f.c.store.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=$1
+ AND current_step IN ($2,$3)`, f.op.ID, clusterSSHIdentityRecoveryTargetStep, clusterSSHIdentityRecoveryPendingStep).Scan(&reserved) != nil || reserved != 0 {
+				t.Fatal("rejected reservation exposed worker authority")
+			}
+			if f.c.store.db.Stats().InUse != 0 {
+				t.Fatal("rejected reservation retained database connection")
+			}
+		})
+	}
+}
+
 func newSSHIdentityRecoveryStoreFixture(t *testing.T) sshIdentityRecoveryStoreFixture {
 	t.Helper()
 	f := newSSHPreparationAuthorityFixture(t)

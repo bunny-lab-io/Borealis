@@ -410,7 +410,10 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok && runner.kube != nil {
 			observe = runner.kube.getJSON
 		}
-		return c.runSSHInspectionParent(runCtx, operation, observe)
+		if textInSet(operation.CurrentStep, "preflight", clusterSSHInspectionOperationStep) {
+			return c.runSSHInspectionParent(runCtx, operation, observe)
+		}
+		return c.runSSHIdentityRecoveryParent(runCtx, operation, observe)
 	}
 	nodes, err := c.activeNodes(runCtx)
 	if err != nil {

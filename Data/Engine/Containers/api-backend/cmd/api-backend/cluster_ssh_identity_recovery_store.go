@@ -18,7 +18,9 @@ import (
 const (
 	clusterSSHIdentityRecoveryOperationStep = "recover_ssh_identity"
 	clusterSSHIdentityRecoveryTargetStep    = "recover_identity"
+	clusterSSHIdentityRecoveryPendingStep   = "identity_recovery_pending"
 	clusterSSHIdentityRecoveryCompleteStep  = "identity_recovery_complete"
+	clusterSSHPreparationCompleteStep       = "preparation_complete"
 )
 
 type clusterSSHIdentityRecoveryClaim struct {
@@ -120,9 +122,8 @@ func parseClusterSSHIdentityRecovery(raw string, proof clusterSSHParentProof, ta
 	return fail()
 }
 
-// claimClusterSSHIdentityRecoveryTarget is a reserved mutating claim. No
-// controller transition currently enters its operation/target steps. Once a
-// reviewed transition does, this claim binds one exact inspected SSH target,
+// claimClusterSSHIdentityRecoveryTarget accepts only work reserved by the
+// original controller transition. It binds one exact inspected SSH target,
 // original source Node identity, target Node UID expectation, credential
 // envelope and controller lease before any crypto or network work begins.
 func (s *postgresOperatorStore) claimClusterSSHIdentityRecoveryTarget(ctx context.Context, operationID, targetID, holder string) (clusterSSHIdentityRecoveryClaim, error) {
