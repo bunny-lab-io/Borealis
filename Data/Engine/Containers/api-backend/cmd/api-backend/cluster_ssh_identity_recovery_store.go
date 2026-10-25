@@ -321,12 +321,13 @@ func (s *postgresOperatorStore) settleClusterSSHIdentityRecovery(ctx context.Con
 			wantState, wantStep, wantHolder, wantExpiry = "prepared", clusterSSHIdentityRecoveryCompleteStep, "", false
 		}
 		var present int
-		if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets t,engine.cluster_operations o,
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets t,engine.cluster_operations o,
  engine.cluster_state c,engine.cluster_application_leases l,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a
  WHERE t.id=$1 AND t.operation_id=$2 AND t.cluster_id=$3 AND t.operation_attempt=$4 AND t.state=$5 AND t.current_step=$6
  AND t.lease_holder=$7 AND t.lease_generation=$8 AND (($9 AND t.lease_expires_at>extract(epoch FROM clock_timestamp())) OR (NOT $9 AND t.lease_expires_at=0))
  AND t.management_ip=$18 AND t.ssh_port=$19 AND t.host_key_algorithm=$20 AND t.host_key_fingerprint=$21 AND t.host_key_base64=$22
  AND t.ordinal=$23 AND t.inspected_attempt=$4 AND t.inspected_generation=$24 AND t.inspected_at=$25 AND t.inspection_json=$26
+ AND t.credential_state='available'
  AND o.id=t.operation_id AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$10 AND o.attempt=$4 AND o.payload_json=$11
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=t.cluster_id AND c.baseline_release=$12 AND c.baseline_sha=$13
 	AND c.active_size=$27 AND c.desired_size=$28 AND c.status=$29 AND c.hmr_state=$30 AND c.control_plane_vip=$31 AND c.edge_vip=$32
