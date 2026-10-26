@@ -15,10 +15,11 @@ import (
 	"time"
 )
 
-// PreparationInputs owns verified central scratch and an immutable private
-// configuration. It authorizes no host write: the receiver remains verify-only.
-// Future dispatch must independently qualify network/storage/confirmation,
-// establish its host journal and install shared identity before any consumers.
+// PreparationInputs owns verified scratch and an immutable private configuration.
+// Inputs alone authorize no host write. The explicit Linux source publisher
+// additionally requires the supervised mutation journal and current preparation
+// authority. Dispatch still owns clean-host/network/storage/confirmation proof
+// and must install shared identity before any consumers.
 type PreparationInputs struct {
 	bundle        *Bundle
 	configuration *PreparationConfiguration
@@ -161,6 +162,10 @@ func (b *Bundle) verifyPreparationSource(ctx context.Context, k3sVersion string)
 // trusted host Git again. An added hook/alternate or replaced source/binary must
 // fail even when the archive and cached identity still have the original hash.
 func verifyPreparationFiles(ctx context.Context, archive *os.File, directory string) error {
+	return verifyArchiveFiles(ctx, archive, directory, func(name string) (string, bool) { return name, true }, nil)
+}
+
+func verifyArchiveFiles(ctx context.Context, archive *os.File, directory string, selectName func(string) (string, bool), extras func(*os.Root, map[string]fs.FileInfo) error) error {
 	info, err := os.Lstat(directory)
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
 		return ErrPreparationConfig
@@ -193,13 +198,23 @@ func verifyPreparationFiles(ctx context.Context, archive *os.File, directory str
 		if err != nil {
 			return ErrPreparationConfig
 		}
+		name, selected := selectName(name)
+		if !selected {
+			return nil
+		}
+		if name == "." {
+			if h.Typeflag != tar.TypeDir || int64(info.Mode().Perm()) != h.Mode {
+				return ErrPreparationConfig
+			}
+			return nil
+		}
 		info, exists := actual[name]
 		if !exists {
 			return ErrPreparationConfig
 		}
 		delete(actual, name)
 		if h.Typeflag == tar.TypeDir {
-			if !info.IsDir() {
+			if !info.IsDir() || int64(info.Mode().Perm()) != h.Mode {
 				return ErrPreparationConfig
 			}
 			return nil
@@ -226,7 +241,13 @@ func verifyPreparationFiles(ctx context.Context, archive *os.File, directory str
 		}
 		return nil
 	})
-	if err != nil || len(actual) != 0 {
+	if err != nil {
+		return ErrPreparationConfig
+	}
+	if extras != nil && extras(root, actual) != nil {
+		return ErrPreparationConfig
+	}
+	if len(actual) != 0 {
 		return ErrPreparationConfig
 	}
 	return nil

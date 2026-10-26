@@ -317,6 +317,11 @@ func extractArchive(ctx context.Context, archive *os.File, destination string, a
 			if err := os.Mkdir(target, 0o755); err != nil {
 				return errors.New("node bootstrap directory extraction failed")
 			}
+			// Supervised SSH receiver uses umask077. Apply authenticated mode
+			// only to this newly created directory inside private scratch.
+			if err := os.Chmod(target, 0o755); err != nil {
+				return errors.New("node bootstrap directory mode failed")
+			}
 			return nil
 		}
 		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)

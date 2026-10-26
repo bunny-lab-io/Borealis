@@ -182,8 +182,9 @@ func (c *PreparationConfiguration) Digest() (string, error) {
 
 // Environment renders literal key=value lines for fixed pre-join consumers.
 // Never source/eval these bytes, place them in argv or run standalone deploy.
-// The future journal-backed writer must install both private environment files
-// and preserve the same configuration before any candidate consumers start.
+// The journal-backed source publisher installs both private environment files
+// atomically with source. Later host preparation must preserve this same
+// configuration before any candidate consumers start.
 func (c *PreparationConfiguration) Environment() ([]byte, error) {
 	if c == nil || len(c.raw) == 0 {
 		return nil, ErrPreparationConfig
