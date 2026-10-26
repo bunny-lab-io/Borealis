@@ -179,9 +179,13 @@ func (proof *committedFenceProof) close() error {
 }
 
 func (install Installation) proveFencedCommitted(material *Material, markerRequired bool) (_ *committedFenceProof, resultErr error) {
+	return install.proveFencedCommittedMode(material, markerRequired, false)
+}
+
+func (install Installation) proveFencedCommittedMode(material *Material, markerRequired, prejoin bool) (_ *committedFenceProof, resultErr error) {
 	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
-		install.Target.NodeUID == "" || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
-		return nil, errors.New("joined identity recovery proof contract invalid")
+		(install.Target.NodeUID == "") != prejoin || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
+		return nil, errors.New("identity lifecycle proof contract invalid")
 	}
 	if err := install.Check(); err != nil {
 		return nil, err
@@ -282,7 +286,7 @@ func (install Installation) proveFencedCommitted(material *Material, markerRequi
 		return nil, errors.New("identity recovery journal encoding invalid")
 	}
 	for _, name := range identityPaths {
-		if _, ok := journal.Files[name]; !ok {
+		if previous, ok := journal.Files[name]; !ok || prejoin && previous != (fileRecord{}) {
 			return nil, errors.New("identity recovery journal inventory incomplete")
 		}
 	}
@@ -365,7 +369,11 @@ func restoreRecoveryMarker(root *os.Root, marker []byte, uid, gid int) error {
 // journals. Call only from the outer-journal release contract. Any failed
 // post-unlink check restores and fsyncs the marker before consumer unlock.
 func (install Installation) ReleaseFencedCommitted(material *Material) (state string, resultErr error) {
-	proof, err := install.proveFencedCommitted(material, false)
+	return install.releaseFencedCommittedMode(material, false)
+}
+
+func (install Installation) releaseFencedCommittedMode(material *Material, prejoin bool) (state string, resultErr error) {
+	proof, err := install.proveFencedCommittedMode(material, false, prejoin)
 	if err != nil {
 		return "", err
 	}
@@ -419,9 +427,13 @@ func (install Installation) ReleaseFencedCommitted(material *Material) (state st
 }
 
 func (install Installation) installFenced(material *Material, commit func(func() (string, error)) error, retainMarker bool) (string, error) {
+	return install.installFencedMode(material, commit, retainMarker, false)
+}
+
+func (install Installation) installFencedMode(material *Material, commit func(func() (string, error)) error, retainMarker, prejoin bool) (string, error) {
 	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
-		install.Target.NodeUID == "" || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
-		return "", errors.New("joined identity recovery contract invalid")
+		(install.Target.NodeUID == "") != prejoin || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
+		return "", errors.New("identity lifecycle installation contract invalid")
 	}
 	if err := install.Check(); err != nil {
 		return "", err
@@ -459,6 +471,17 @@ func (install Installation) installFenced(material *Material, commit func(func()
 	previous, metadata, err := readIdentityFile(fence.root, recoveryMarker)
 	if err != nil {
 		return "", err
+	}
+	if prejoin {
+		if metadata.Present || commit == nil || !retainMarker {
+			return "", errors.New("pre-join identity requires new retained journaled attempt")
+		}
+		for _, name := range identityPaths {
+			if _, existing, err := readIdentityFile(fence.root, name); err != nil || existing.Present {
+				return "", errors.New("pre-join target already contains identity; explicit recovery required")
+			}
+		}
+		install.requireFresh = true
 	}
 	if metadata.Present {
 		// Exact encoding is intentional: this private marker is not an input API.

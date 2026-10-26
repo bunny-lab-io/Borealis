@@ -49,6 +49,8 @@ type Installation struct {
 	// Quiesced verifies target identity and stopped consumers even when the broader
 	// operation/authority check fails. Rollback cannot write through a lost fence.
 	Quiesced func() error
+	// Set only by the explicit pre-join fence; never inferred from missing UID.
+	requireFresh bool
 }
 
 // openIdentityRoot rejects symlinks in the supplied root path. os.Root keeps
@@ -299,6 +301,9 @@ func (install Installation) Install(material *Material) (state string, resultErr
 		return "", err
 	}
 	if len(previous) > 0 {
+		if install.requireFresh {
+			return "", errors.New("pre-join identity attempt requires explicit reconciliation")
+		}
 		// Decode into zero state. In particular an omitted fresh-node UID must
 		// not inherit the joined UID from the current request during unmarshal.
 		var retained installationJournal
@@ -334,6 +339,9 @@ func (install Installation) Install(material *Material) (state string, resultErr
 		raw, record, err := readIdentityFile(root, name)
 		if err != nil {
 			return "", err
+		}
+		if install.requireFresh && record.Present {
+			return "", errors.New("pre-join target already contains identity; explicit recovery required")
 		}
 		journal.Files[name] = record
 		if record.Present {

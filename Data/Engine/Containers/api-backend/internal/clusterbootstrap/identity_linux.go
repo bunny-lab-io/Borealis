@@ -14,10 +14,19 @@ import (
 // enclosing journal's immutable release, approved SSH target and owner claim.
 // No key bytes enter the outer ledger or public result.
 func (j *MutationJournal) joinedIdentityRequest(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (engineidentity.Installation, string, error) {
+	return j.identityRequest(ctx, install, material, false)
+}
+
+func (j *MutationJournal) identityRequest(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material, prejoin bool) (engineidentity.Installation, string, error) {
 	if material == nil || material.Digest() == "" || install.Check == nil || install.Quiesced == nil ||
-		install.Target.NodeUID == "" || install.Binding.ClusterID != j.state.Owner.ClusterID ||
+		(install.Target.NodeUID == "") != prejoin || install.Binding.ClusterID != j.state.Owner.ClusterID ||
 		install.Target.ProvisioningID != j.state.Owner.TargetID || install.Target.SSHFingerprint != j.state.Owner.HostKeyFingerprint {
 		return install, "", ErrMutationJournal
+	}
+	if prejoin {
+		if _, joined := j.state.Steps["join_cluster"]; joined || j.state.Steps["stage_source"].State != "applied" {
+			return install, "", ErrMutationJournal
+		}
 	}
 	root, err := filepath.Abs(install.Root)
 	if err != nil {
@@ -60,6 +69,10 @@ func (j *MutationJournal) joinedIdentityRequest(ctx context.Context, install eng
 // release it after re-proving both journals. Unknown/applied prior attempts
 // require explicit reconciliation, never replay.
 func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	return j.installIdentity(ctx, install, material, false)
+}
+
+func (j *MutationJournal) installIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material, prejoin bool) (string, error) {
 	if j == nil {
 		return "", ErrMutationJournal
 	}
@@ -68,7 +81,7 @@ func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install eng
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
-	install, inputSHA256, err := j.joinedIdentityRequest(ctx, install, material)
+	install, inputSHA256, err := j.identityRequest(ctx, install, material, prejoin)
 	if err != nil {
 		return "", err
 	}
@@ -83,10 +96,13 @@ func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install eng
 			return "", ErrMutationUnknown
 		}
 	}
+	if prejoin && len(j.state.Steps) != 1 {
+		return "", ErrMutationJournal // Identity precedes host preparation/import.
+	}
 	if err := j.priorExecutorsQuiescent(ctx); err != nil {
 		return "", err
 	}
-	return install.InstallFencedJournaledRetained(material, func(transaction func() (string, error)) error {
+	commit := func(transaction func() (string, error)) error {
 		_, err := j.applyLocked(ctx, "install_identity", inputSHA256, func(context.Context, *os.File) (string, error) {
 			state, err := transaction()
 			if err != nil || (state != "committed" && state != "already_committed") {
@@ -95,7 +111,11 @@ func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install eng
 			return material.Digest(), nil
 		})
 		return err
-	})
+	}
+	if prejoin {
+		return install.InstallPrejoinFencedJournaledRetained(material, commit)
+	}
+	return install.InstallFencedJournaledRetained(material, commit)
 }
 
 // ReconcileJoinedIdentity proves an uncertain identity effect from retained
@@ -103,6 +123,10 @@ func (j *MutationJournal) InstallJoinedIdentity(ctx context.Context, install eng
 // outer result. Marker removal and consumer restart require a later authorized
 // release operation and are deliberately outside reconciliation.
 func (j *MutationJournal) ReconcileJoinedIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	return j.reconcileIdentity(ctx, install, material, false)
+}
+
+func (j *MutationJournal) reconcileIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material, prejoin bool) (string, error) {
 	if j == nil {
 		return "", ErrMutationJournal
 	}
@@ -111,12 +135,16 @@ func (j *MutationJournal) ReconcileJoinedIdentity(ctx context.Context, install e
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
-	install, inputSHA256, err := j.joinedIdentityRequest(ctx, install, material)
+	install, inputSHA256, err := j.identityRequest(ctx, install, material, prejoin)
 	if err != nil {
 		return "", err
 	}
+	prove := install.ProveFencedCommitted
+	if prejoin {
+		prove = install.ProvePrejoinFencedCommitted
+	}
 	return j.reconcileLocked(ctx, "install_identity", inputSHA256, func(context.Context) (string, error) {
-		if err := install.ProveFencedCommitted(material); err != nil {
+		if err := prove(material); err != nil {
 			return "", err
 		}
 		return material.Digest(), nil
@@ -127,6 +155,10 @@ func (j *MutationJournal) ReconcileJoinedIdentity(ctx context.Context, install e
 // install result is durably applied and every prior supervised executor remains
 // quiescent. It does not start consumers or expose a remote mutation command.
 func (j *MutationJournal) ReleaseJoinedIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material) (string, error) {
+	return j.releaseIdentity(ctx, install, material, false)
+}
+
+func (j *MutationJournal) releaseIdentity(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material, prejoin bool) (string, error) {
 	if j == nil {
 		return "", ErrMutationJournal
 	}
@@ -135,11 +167,11 @@ func (j *MutationJournal) ReleaseJoinedIdentity(ctx context.Context, install eng
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
-	install, inputSHA256, err := j.joinedIdentityRequest(ctx, install, material)
+	install, inputSHA256, err := j.identityRequest(ctx, install, material, prejoin)
 	if err != nil {
 		return "", err
 	}
-	return j.releaseJoinedIdentityLocked(ctx, install, inputSHA256, material)
+	return j.releaseIdentityLocked(ctx, install, inputSHA256, material, prejoin)
 }
 
 // ReconcileAndReleaseJoinedIdentity is the fixed remote release composition.
@@ -174,11 +206,11 @@ func (j *MutationJournal) ReconcileAndReleaseJoinedIdentity(ctx context.Context,
 			return "", err
 		}
 	}
-	return j.releaseJoinedIdentityLocked(ctx, install, inputSHA256, material)
+	return j.releaseIdentityLocked(ctx, install, inputSHA256, material, false)
 }
 
-// Caller holds j.mu and has normalized the exact joined-identity request.
-func (j *MutationJournal) releaseJoinedIdentityLocked(ctx context.Context, install engineidentity.Installation, inputSHA256 string, material *engineidentity.Material) (string, error) {
+// Caller holds j.mu and has normalized the exact lifecycle-bound request.
+func (j *MutationJournal) releaseIdentityLocked(ctx context.Context, install engineidentity.Installation, inputSHA256 string, material *engineidentity.Material, prejoin bool) (string, error) {
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
@@ -191,6 +223,16 @@ func (j *MutationJournal) releaseJoinedIdentityLocked(ctx context.Context, insta
 	}
 	if record.ResultSHA256 != material.Digest() {
 		return "", ErrMutationJournal
+	}
+	if prejoin && j.state.Steps["prepare_host"].State != "applied" {
+		return "", ErrMutationJournal
+	}
+	if prejoin {
+		for _, step := range j.state.Steps {
+			if step.State != "applied" {
+				return "", ErrMutationUnknown
+			}
+		}
 	}
 	// Marker release always requires a distinct executor that can independently
 	// prove the producer dead; successful installation deliberately retains it.
@@ -210,7 +252,11 @@ func (j *MutationJournal) releaseJoinedIdentityLocked(ctx context.Context, insta
 		}
 		return j.priorExecutorsQuiescent(ctx)
 	}
-	state, err := install.ReleaseFencedCommitted(material)
+	release := install.ReleaseFencedCommitted
+	if prejoin {
+		release = install.ReleasePrejoinFencedCommitted
+	}
+	state, err := release(material)
 	if err != nil {
 		return "", ErrMutationUnknown
 	}
