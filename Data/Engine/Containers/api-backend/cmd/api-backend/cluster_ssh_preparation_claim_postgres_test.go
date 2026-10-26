@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,6 +39,13 @@ func newSSHPreparationClaimFixture(t *testing.T, replacement bool) (sshPreparati
 	if json.Unmarshal([]byte(raw), &payload) != nil {
 		t.Fatal("decode payload")
 	}
+	payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization)
+	plan, _ := clusterSSHPreparationPlanDigest(authorization)
+	var receipts [6]string
+	for i := range receipts {
+		receipts[i] = strings.Repeat("a", 64)
+	}
+	payload["ssh_preparation_readiness"] = clusterSSHPreparationReadiness(plan, receipts)
 	payload["ssh_qualification"], payload["ssh_preparation_authorization"] = report, authorization
 	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(payload))
 	for _, target := range authorization.Targets {
@@ -111,7 +119,7 @@ func TestClusterSSHPreparationClaimPostgresAtomicCohort(t *testing.T) {
 }
 
 func TestClusterSSHPreparationClaimPostgresRejectsDrift(t *testing.T) {
-	for _, mode := range []string{"missing authorization", "qualification phase", "controller", "generation", "report", "credential", "ciphertext", "aegis", "source", "missing sibling", "stale qualification", "existing claim"} {
+	for _, mode := range []string{"missing authorization", "missing confirmation", "missing readiness", "future confirmation", "qualification phase", "controller", "generation", "report", "credential", "ciphertext", "aegis", "source", "missing sibling", "stale qualification", "existing claim"} {
 		t.Run(mode, func(t *testing.T) {
 			f, authorization := newSSHPreparationClaimFixture(t, false)
 			// Mutate the target that sorts last so earlier updates must roll back.
@@ -122,6 +130,19 @@ func TestClusterSSHPreparationClaimPostgresRejectsDrift(t *testing.T) {
 			switch mode {
 			case "missing authorization":
 				delete(f.op.Payload, "ssh_preparation_authorization")
+				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
+			case "missing confirmation", "missing readiness":
+				field := "ssh_preparation_confirmation"
+				if mode == "missing readiness" {
+					field = "ssh_preparation_readiness"
+				}
+				delete(f.op.Payload, field)
+				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
+			case "future confirmation":
+				confirmation := f.op.Payload["ssh_preparation_confirmation"].(clusterSSHPreparationConfirmation)
+				confirmation.ConfirmedAt += 60
+				authorization.ConfirmationSHA256, _ = clusterSSHPreparationDigest(confirmation)
+				f.op.Payload["ssh_preparation_authorization"], f.op.Payload["ssh_preparation_confirmation"] = authorization, confirmation
 				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
 			case "qualification phase":
 				f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets' WHERE id=$1`, f.op.ID)
@@ -145,6 +166,11 @@ func TestClusterSSHPreparationClaimPostgresRejectsDrift(t *testing.T) {
 				report := f.op.Payload["ssh_qualification"].(clusterSSHQualificationReport)
 				report.ObservedAt -= clusterSSHInspectionLifetimeSeconds
 				authorization.QualificationSHA256, _ = clusterSSHPreparationDigest(report)
+				f.op.Payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization)
+				plan, _ := clusterSSHPreparationPlanDigest(authorization)
+				readiness := f.op.Payload["ssh_preparation_readiness"].(clusterSSHPreparationReadinessReceipt)
+				readiness.PlanSHA256 = plan
+				f.op.Payload["ssh_preparation_readiness"] = readiness
 				f.op.Payload["ssh_qualification"], f.op.Payload["ssh_preparation_authorization"] = report, authorization
 				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
 			case "existing claim":

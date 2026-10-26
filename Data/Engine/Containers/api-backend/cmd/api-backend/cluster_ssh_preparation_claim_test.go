@@ -34,7 +34,14 @@ func TestClusterSSHPreparationAuthorizationBindsExactReservation(t *testing.T) {
 		report.Checks[i].State = "passed"
 	}
 	authorization := sshPreparationAuthorizationFixture(t, proof, queue, &report)
-	payload := map[string]any{"ssh_preparation_authorization": authorization, "ssh_qualification": report}
+	confirmation := sshPreparationConfirmationFixture(t, &authorization)
+	plan, _ := clusterSSHPreparationPlanDigest(authorization)
+	var receipts [6]string
+	for i := range receipts {
+		receipts[i] = strings.Repeat("a", 64)
+	}
+	payload := map[string]any{"ssh_preparation_authorization": authorization, "ssh_qualification": report,
+		"ssh_preparation_confirmation": confirmation, "ssh_preparation_readiness": clusterSSHPreparationReadiness(plan, receipts)}
 	raw := marshalClusterJSON(payload)
 	if _, _, err := parseClusterSSHPreparationAuthorization(raw, proof, queue); err != nil {
 		t.Fatal("valid reservation rejected", err)

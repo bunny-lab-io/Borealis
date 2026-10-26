@@ -2,51 +2,39 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
 
 func newSSHPreparationCompletionFixture(t *testing.T, replacement bool) (sshPreparationAuthorityFixture, []clusterSSHPreparationCompletion) {
 	t.Helper()
-	f := newSSHPreparationAuthorityFixtureForTopology(t, replacement)
-	var raw string
-	if f.c.store.db.QueryRowContext(f.ctx, `SELECT payload_json FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&raw) != nil {
-		t.Fatal("read preparation payload")
+	f, snapshot, confirmation, proof := newSSHPreparationApprovalFixture(t, replacement)
+	if err := f.c.commitClusterSSHPreparationApproval(f.ctx, snapshot, confirmation, proof); err != nil {
+		t.Fatal("approve completion fixture", err)
 	}
-	var payload map[string]any
-	if json.Unmarshal([]byte(raw), &payload) != nil {
-		t.Fatal("parse preparation payload")
+	f.op.State, f.op.CurrentStep = "running", clusterSSHPreparationOperationStep
+	work, err := f.c.claimClusterSSHPreparation(f.ctx, f.op, newClusterUUID())
+	if err != nil {
+		t.Fatal("claim completion fixture", err)
 	}
-	report := newClusterSSHQualificationReport(f.op.Attempt)
-	for index := 0; index < len(report.Checks)-1; index++ {
-		report.Checks[index].State = "passed"
+	if json.Unmarshal([]byte(work.Payload), &f.op.Payload) != nil {
+		t.Fatal("completion fixture payload")
 	}
-	payload["ssh_qualification"] = report
-	raw = marshalClusterJSON(payload)
-	f.exec(t, `UPDATE engine.cluster_operations SET state='running',current_step=$2,payload_json=$3 WHERE id=$1`,
-		f.op.ID, clusterSSHPreparationOperationStep, raw)
-	confirmation := strings.Repeat("a", 64)
+	f.lease, f.sealed = work.Claims[0].Lease, work.Claims[0].Sealed
 	completions := make([]clusterSSHPreparationCompletion, 0, len(f.targets))
-	for index, target := range f.targets {
-		lease := clusterSSHTargetLease{TargetID: target.Binding.TargetID, OperationID: f.op.ID, Holder: newClusterUUID(),
-			Generation: int64(index) + 2, Step: "stage_source", ControllerHolder: f.lease.ControllerHolder,
-			OperationAttempt: f.op.Attempt, OperationStep: clusterSSHPreparationOperationStep, OperationKind: "ssh_onboarding"}
-		// Generation must advance beyond original inspection, but need not match
-		// another target's independently fenced worker generation.
-		f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='running',current_step='stage_source',lease_holder=$2,
- lease_generation=$3,lease_expires_at=$4 WHERE id=$1`, lease.TargetID, lease.Holder, lease.Generation, time.Now().Unix()+300)
-		sealed := f.targets[index].Sealed
+	for index, claim := range work.Claims {
+		lease, sealed := claim.Lease, claim.Sealed
 		authority, err := newClusterSSHPreparationAuthorityRead(f.c.store, f.aegis, lease, f.baseline, sealed)(f.ctx)
 		if err != nil {
 			t.Fatal("load completion authority", err)
 		}
-		result := clusterSSHPreparationResultFixture(lease, confirmation)
+		result := clusterSSHPreparationResultFixture(lease, work.Authorization.ConfirmationSHA256)
 		result.StageSourceSHA256 = strings.Repeat([]string{"1", "2"}[index], 64)
 		completions = append(completions, clusterSSHPreparationCompletion{Authority: authority, Sealed: sealed, Result: result})
 	}
-	f.op.State, f.op.CurrentStep, f.op.Payload = "running", clusterSSHPreparationOperationStep, payload
 	return f, completions
 }
 
@@ -55,6 +43,11 @@ func TestClusterSSHPreparationCompletionPostgres(t *testing.T) {
 		name := map[bool]string{false: "paired expansion", true: "recorded replacement"}[replacement]
 		t.Run(name, func(t *testing.T) {
 			f, completions := newSSHPreparationCompletionFixture(t, replacement)
+			// Independent authority reads may cross a database second. Exclude
+			// observation clocks only; retain exact inspected identity/timestamps.
+			if len(completions) > 1 {
+				completions[1].Authority.Cohort.ObservedAt++
+			}
 			before := f.events(t)
 			if err := f.c.store.completeClusterSSHPreparation(f.ctx, completions); err != nil {
 				t.Fatal("complete preparation", err)
@@ -111,7 +104,7 @@ func TestClusterSSHPreparationCompletionPostgres(t *testing.T) {
 		})
 	}
 
-	for _, mode := range []string{"controller", "credential", "source config", "payload digest", "missing sibling", "expired lease", "blocked qualification", "mixed confirmation"} {
+	for _, mode := range []string{"controller", "credential", "source config", "payload digest", "missing sibling", "expired lease", "blocked qualification", "mixed confirmation", "unapproved confirmation", "unreserved generation", "missing authorization"} {
 		t.Run("reject "+mode, func(t *testing.T) {
 			f, completions := newSSHPreparationCompletionFixture(t, false)
 			switch mode {
@@ -138,6 +131,23 @@ func TestClusterSSHPreparationCompletionPostgres(t *testing.T) {
 				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(payload))
 			case "mixed confirmation":
 				completions[1].Result.ConfirmationSHA256 = strings.Repeat("b", 64)
+			case "unapproved confirmation":
+				for i := range completions {
+					completions[i].Result.ConfirmationSHA256 = strings.Repeat("b", 64)
+				}
+			case "unreserved generation":
+				completions[0].Authority.Lease.Generation++
+				completions[0].Result.Generation++
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_generation=lease_generation+1 WHERE id=$1`, completions[0].Authority.Lease.TargetID)
+			case "missing authorization":
+				delete(f.op.Payload, "ssh_preparation_authorization")
+				raw := marshalClusterJSON(f.op.Payload)
+				f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, raw)
+				for i := range completions {
+					completions[i].Authority.payload = raw
+					digest := sha256.Sum256([]byte(raw))
+					completions[i].Authority.PayloadSHA256 = hex.EncodeToString(digest[:])
+				}
 			}
 			if err := f.c.store.completeClusterSSHPreparation(context.Background(), completions); err == nil {
 				t.Fatal("changed authority completed preparation")

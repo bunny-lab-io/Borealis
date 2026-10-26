@@ -11,6 +11,8 @@ func newSSHPreparationApprovalFixture(t *testing.T, replacement bool) (sshPrepar
 	t.Helper()
 	f, _ := newSSHPreparationClaimFixture(t, replacement)
 	delete(f.op.Payload, "ssh_preparation_authorization")
+	delete(f.op.Payload, "ssh_preparation_confirmation")
+	delete(f.op.Payload, "ssh_preparation_readiness")
 	f.op.State, f.op.CurrentStep = "waiting", clusterSSHQualificationStep
 	f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step=$2,payload_json=$3 WHERE id=$1`,
 		f.op.ID, clusterSSHQualificationStep, marshalClusterJSON(f.op.Payload))

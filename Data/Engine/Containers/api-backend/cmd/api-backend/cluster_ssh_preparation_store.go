@@ -116,22 +116,31 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 		first.Queue.Release != first.Baseline.Release || first.Queue.SHA != first.Baseline.SourceSHA {
 		return errClusterConflict
 	}
-	var qualificationRaw json.RawMessage
-	if clusterBootstrapObject([]byte(first.payload), map[string]any{"ssh_qualification": &qualificationRaw}) != nil || len(qualificationRaw) == 0 {
+	inspection, _, err := parseClusterSSHPreparationInspection([]byte(first.payload), first.Lease, first.Baseline)
+	if err != nil {
 		return errClusterConflict
 	}
-	qualification, err := parseClusterSSHQualificationReport(string(qualificationRaw), first.Lease.OperationAttempt)
-	if err != nil || !completedClusterSSHQualification(qualification) {
+	authorization, _, err := parseClusterSSHPreparationAuthorization(first.payload, inspection, first.Queue)
+	if err != nil {
 		return errClusterConflict
 	}
 	byTarget := make(map[string]clusterSSHPreparationCompletion, len(completions))
-	confirmation := completions[0].Result.ConfirmationSHA256
+	confirmation := authorization.ConfirmationSHA256
+	stableCohort := first.Cohort
+	stableCohort.ObservedAt = 0
+	inspectedCohort := inspection.Cohort
+	inspectedCohort.ObservedAt = 0
+	if !reflect.DeepEqual(stableCohort, inspectedCohort) || !reflect.DeepEqual(first.Source, inspection.Source) {
+		return errClusterConflict
+	}
 	for _, completion := range completions {
 		authority := completion.Authority
+		stable := authority.Cohort
+		stable.ObservedAt = 0
 		if !completion.Result.valid(authority.Lease) || completion.Result.ConfirmationSHA256 != confirmation || byTarget[authority.Lease.TargetID].Result.Version != 0 ||
 			authority.Recovery != nil || authority.payload != first.payload || authority.PayloadSHA256 != first.PayloadSHA256 ||
 			authority.Baseline != first.Baseline || authority.K3sVersion != first.K3sVersion || authority.Queue != first.Queue ||
-			!reflect.DeepEqual(authority.Cohort, first.Cohort) || !reflect.DeepEqual(authority.Source, first.Source) ||
+			validateClusterSSHInspectionCohort(authority.Cohort, authority.Source) != nil || !reflect.DeepEqual(stable, stableCohort) || !reflect.DeepEqual(authority.Source, first.Source) ||
 			authority.Lease.OperationID != first.Lease.OperationID || authority.Lease.OperationAttempt != first.Lease.OperationAttempt ||
 			authority.Lease.ControllerHolder != first.Lease.ControllerHolder || !completion.Sealed.binding.valid() ||
 			completion.Sealed.binding.OperationID != authority.Lease.OperationID || completion.Sealed.binding.TargetID != authority.Lease.TargetID ||
@@ -142,9 +151,12 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 		byTarget[authority.Lease.TargetID] = completion
 	}
 	receipt := clusterSSHPreparationReceipt{Version: 1, Attempt: first.Lease.OperationAttempt, ConfirmationSHA256: confirmation}
-	for _, target := range first.Cohort.Targets {
+	for i, target := range first.Cohort.Targets {
 		completion, ok := byTarget[target.Binding.TargetID]
-		if !ok || completion.Sealed.binding != target.Binding || completion.Authority.Lease.Generation <= target.Generation {
+		credentialDigest, err := clusterSSHPreparationDigest([]string{completion.Sealed.generation, completion.Sealed.ciphertext})
+		reserved := authorization.Targets[i]
+		if !ok || completion.Sealed.binding != target.Binding || completion.Authority.Lease.Generation != reserved.QualificationGeneration+1 ||
+			err != nil || credentialDigest != reserved.CredentialSHA256 {
 			return errClusterConflict
 		}
 		receipt.Targets = append(receipt.Targets, completion.Result)

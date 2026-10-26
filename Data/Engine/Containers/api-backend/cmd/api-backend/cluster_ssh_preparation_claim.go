@@ -58,9 +58,10 @@ func parseClusterSSHPreparationAuthorization(payload string, proof clusterSSHPar
 	fail := func() (clusterSSHPreparationAuthorization, *clusterSSHQualificationReport, error) {
 		return clusterSSHPreparationAuthorization{}, nil, errClusterConflict
 	}
-	var raw, qualificationRaw, completed, recovery json.RawMessage
+	var raw, qualificationRaw, completed, recovery, confirmationRaw, readinessRaw json.RawMessage
 	if len(payload) == 0 || len(payload) > 256<<10 || clusterBootstrapObject([]byte(payload), map[string]any{
 		"ssh_preparation_authorization": &raw, "ssh_qualification": &qualificationRaw,
+		"ssh_preparation_confirmation": &confirmationRaw, "ssh_preparation_readiness": &readinessRaw,
 		"ssh_preparation": &completed, "ssh_identity_recovery": &recovery,
 	}) != nil || len(raw) == 0 || len(raw) > 8<<10 || len(completed) != 0 || len(recovery) != 0 {
 		return fail()
@@ -90,6 +91,10 @@ func parseClusterSSHPreparationAuthorization(payload string, proof clusterSSHPar
 			reserved.CredentialSHA256 == strings.Repeat("0", 64) {
 			return fail()
 		}
+	}
+	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization)
+	if err != nil || confirmation.ConfirmedAt < qualification.ObservedAt || parseClusterSSHPreparationReadiness(readinessRaw, authorization) != nil {
+		return fail()
 	}
 	return authorization, qualification, nil
 }
@@ -149,6 +154,14 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 	}
 	var qualification *clusterSSHQualificationReport
 	work.Authorization, qualification, err = parseClusterSSHPreparationAuthorization(work.Payload, work.Proof, work.Source)
+	if err != nil {
+		return fail()
+	}
+	var confirmationRaw json.RawMessage
+	if clusterBootstrapObject([]byte(work.Payload), map[string]any{"ssh_preparation_confirmation": &confirmationRaw}) != nil {
+		return fail()
+	}
+	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, work.Authorization)
 	if err != nil {
 		return fail()
 	}
@@ -228,12 +241,13 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
  SELECT 1 FROM moment,engine.cluster_application_leases l,engine.aegis_cipher_state a
  WHERE l.name=$1 AND l.holder=$2 AND l.expires_at>moment.now AND a.id=1
  AND $3::bigint>moment.now-$4 AND $3::bigint<=moment.now
+ AND $7::bigint>moment.now-$4 AND $7::bigint<=moment.now
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t
  LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
  WHERE t.operation_id=$5 AND (t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$6
  AND t.lease_expires_at>moment.now AND t.inspected_at>moment.now-$4 AND t.inspected_at<=moment.now
  AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now) IS NOT TRUE)`, clusterControllerLeaseName,
-		c.holder, qualification.ObservedAt, clusterSSHInspectionLifetimeSeconds, operation.ID, holder).Scan(&present) != nil {
+		c.holder, qualification.ObservedAt, clusterSSHInspectionLifetimeSeconds, operation.ID, holder, confirmation.ConfirmedAt).Scan(&present) != nil {
 		return fail()
 	}
 	if tx.Commit() != nil {
