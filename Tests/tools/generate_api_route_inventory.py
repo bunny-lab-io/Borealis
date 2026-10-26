@@ -54,6 +54,14 @@ REVIEWED_ROUTE_TESTS.update({
         "POST /api/server/cluster/onboarding/inspect",
     )
 })
+REVIEWED_ROUTE_TESTS.update({
+    (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api.go"):
+        "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api_test.go"
+    for pattern in (
+        "GET /api/server/cluster/onboarding/operations/{id}/preparation-plan",
+        "POST /api/server/cluster/onboarding/operations/{id}/prepare",
+    )
+})
 REVIEWED_ROUTE_TESTS.update(
     {
         (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/main.go"): PROBE_TEST

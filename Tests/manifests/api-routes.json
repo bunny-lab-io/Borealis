@@ -927,6 +927,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "GET /api/server/cluster/onboarding/operations/{id}/preparation-plan",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api.go",
+    "line": 27,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "GET /api/server/cluster/releases",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
     "line": 119,
@@ -1662,6 +1671,15 @@
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_onboarding_test.go",
+    "test_exemption": null
+  },
+  {
+    "pattern": "POST /api/server/cluster/onboarding/operations/{id}/prepare",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api.go",
+    "line": 28,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api_test.go",
     "test_exemption": null
   },
   {

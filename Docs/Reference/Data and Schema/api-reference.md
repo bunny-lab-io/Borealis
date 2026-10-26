@@ -9,6 +9,8 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     ### API endpoints
 
     - `POST /api/server/cluster/onboarding/operations` (Admin) - queue a complete approved SSH inspection cohort using a public request UUID and one-time Linux credentials. Does not authorize preparation or joining.
+    - `GET /api/server/cluster/onboarding/operations/{id}/preparation-plan` (Admin) - read the exact current proposal digest and allowlisted approved-host identities, without credentials or mutation authority.
+    - `POST /api/server/cluster/onboarding/operations/{id}/prepare` (Admin) - record exact-plan confirmation intent. Returns202 with `state=awaiting_readiness` and `preparation_authorized=false`; it does not start installation. Exact replay retains original timestamp; changed or expired intent conflicts. [Preparation lifecycle](../../Engine/managing-engine-clusters.md#preparation-worker-lease-lifecycle) owns field validation and controller proof requirements.
     - `GET /api/server/cluster/onboarding/operations/{id}` (Admin) - recover submission receipt and read public target progress/report ownership without credential material. Exact request/response contracts and field validation live in [Managing Engine Clusters](../../Engine/managing-engine-clusters.md). Optional `qualification` contains bounded read-only check states and conditional filesystem budgets; `ready` remains false. Results grant no preparation or joining authority. See [qualification contract](../../Engine/managing-engine-clusters.md#read-only-qualification-worker-and-result-contract).
 
     ### Core
