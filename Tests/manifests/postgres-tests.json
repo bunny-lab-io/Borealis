@@ -50,6 +50,7 @@
     "TestClusterSSHParentPostgresInspectionLifecycle",
     "TestClusterSSHParentPostgresProofCommitFences",
     "TestClusterSSHPreparationAuthorityPostgresReadsOutsideConnection",
+    "TestClusterSSHPrejoinCustodyPostgresAuthorityAndPoolRelease",
     "TestClusterSSHPreparationApprovalPostgresLifecycle",
     "TestClusterSSHPreparationApprovalPostgresFreshCoordinator",
     "TestClusterSSHPreparationApprovalPostgresRejectsDrift",

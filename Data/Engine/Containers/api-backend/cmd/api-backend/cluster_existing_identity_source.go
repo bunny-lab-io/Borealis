@@ -42,8 +42,12 @@ type clusterExistingIdentitySourceCustody struct {
 }
 
 func (p clusterExistingIdentitySourceCustody) valid(plan clusterExistingIdentityPlan) bool {
+	return p.Process.valid(plan) && p.validRuntime()
+}
+
+func (p clusterExistingIdentitySourceCustody) validRuntime() bool {
 	repo, digest, ok := strings.Cut(p.Image, "@sha256:")
-	return p.Process.valid(plan) && ok && repo != "" && len(p.Image) <= 512 &&
+	return ok && repo != "" && len(p.Image) <= 512 &&
 		!strings.ContainsAny(repo, " \t\r\n") && validClusterSSHPreparationDigest(digest) &&
 		strings.HasPrefix(p.ContainerID, "containerd://") && validClusterSSHPreparationDigest(strings.TrimPrefix(p.ContainerID, "containerd://"))
 }
@@ -94,10 +98,24 @@ func readClusterExistingIdentitySourceCustody(ctx context.Context, getJSON func(
 }
 
 func clusterExistingIdentityPodCustody(pod map[string]any, plan clusterExistingIdentityPlan, process clusterExistingIdentitySourceProcess) (clusterExistingIdentitySourceCustody, error) {
+	if !process.valid(plan) {
+		return clusterExistingIdentitySourceCustody{}, errClusterConflict
+	}
+	proof, err := clusterIdentityPodCustody(pod, plan.Baseline.SourceSHA, process)
+	if err != nil || !proof.valid(plan) {
+		return clusterExistingIdentitySourceCustody{}, errClusterConflict
+	}
+	return proof, nil
+}
+
+// Shared Pod-only parser. Each caller separately proves its phase-specific
+// operation, complete Node cohort and explicit selected source identity.
+func clusterIdentityPodCustody(pod map[string]any, revision string, process clusterExistingIdentitySourceProcess) (clusterExistingIdentitySourceCustody, error) {
 	fail := func() (clusterExistingIdentitySourceCustody, error) {
 		return clusterExistingIdentitySourceCustody{}, errClusterConflict
 	}
-	if !process.valid(plan) {
+	if !clusterControllerSHARegex.MatchString(revision) || len(process.PodName) == 0 || len(process.PodName) > 253 || !clusterSSHStorageNameRE.MatchString(process.PodName) ||
+		!clusterUUIDRE.MatchString(process.PodUID) || process.PodUID == "00000000-0000-0000-0000-000000000000" || len(validateClusterNodeName("node", process.NodeName)) != 0 {
 		return fail()
 	}
 	metadata := clusterSSHStorageMap(pod, "metadata")
@@ -106,7 +124,7 @@ func clusterExistingIdentityPodCustody(pod map[string]any, plan clusterExistingI
 	spec, status := clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
 	if metadata["name"] != process.PodName || metadata["uid"] != process.PodUID || metadata["namespace"] != "borealis" || metadata["deletionTimestamp"] != nil ||
 		labels["app.kubernetes.io/name"] != "api-backend" || labels["borealis.io/engine-node"] != process.NodeName || labels["borealis.io/update-candidate"] != "false" || labels["borealis.io/traffic-state"] != "active" ||
-		annotations["borealis.io/revision"] != plan.Baseline.SourceSHA || spec["nodeName"] != process.NodeName || status["phase"] != "Running" ||
+		annotations["borealis.io/revision"] != revision || spec["nodeName"] != process.NodeName || status["phase"] != "Running" ||
 		!clusterSSHStorageEmptyList(spec["initContainers"]) || !clusterSSHStorageEmptyList(spec["ephemeralContainers"]) {
 		return fail()
 	}
@@ -202,7 +220,7 @@ func clusterExistingIdentityPodCustody(pod map[string]any, plan clusterExistingI
 		return fail()
 	}
 	proof := clusterExistingIdentitySourceCustody{Process: process, ContainerID: containerID, Image: image}
-	if !proof.valid(plan) {
+	if !proof.validRuntime() {
 		return fail()
 	}
 	return proof, nil
