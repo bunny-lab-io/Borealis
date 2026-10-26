@@ -1,6 +1,7 @@
 package clusterbootstrap
 
 import (
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -40,6 +41,10 @@ func (p *PreparationInputs) ReconcileSource(ctx context.Context, j *MutationJour
 // Caller holds journal mutex. Stable input excludes only executor ownership;
 // an expired claim may recover the same source/configuration, never substitute it.
 func (p *PreparationInputs) sourcePublicationInput(j *MutationJournal) (string, error) {
+	return p.sourcePublicationInputWithIdentityRoot(j, false)
+}
+
+func (p *PreparationInputs) sourcePublicationInputWithIdentityRoot(j *MutationJournal, identityRoot bool) (string, error) {
 	if p == nil || p.bundle == nil || p.configuration == nil || j == nil {
 		return "", ErrPreparationConfig
 	}
@@ -48,7 +53,7 @@ func (p *PreparationInputs) sourcePublicationInput(j *MutationJournal) (string, 
 		return "", ErrSessionAuthority
 	}
 	for step := range j.state.Steps {
-		if step != "stage_source" {
+		if step != "stage_source" && !(identityRoot && (step == "prepare_identity_root" || step == "prepare_runtime_identity")) {
 			return "", ErrMutationJournal
 		}
 	}
@@ -248,6 +253,10 @@ func syncSourceTree(ctx context.Context, path string) error {
 // Compare every source file, including inert Git metadata, with authenticated
 // archive. No Git command executes from the installed checkout during proof.
 func verifyPublishedSource(ctx context.Context, archive *os.File, path string, environment []byte) error {
+	return verifyPublishedSourceWithIdentityRoot(ctx, archive, path, environment, nil)
+}
+
+func verifyPublishedSourceWithIdentityRoot(ctx context.Context, archive *os.File, path string, environment []byte, identity *prejoinDirectoryProof) error {
 	root, err := imageInstallRoot(path)
 	if err != nil {
 		return ErrPreparationConfig
@@ -262,7 +271,11 @@ func verifyPublishedSource(ctx context.Context, archive *os.File, path string, e
 			return ErrPreparationConfig
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || int(stat.Uid) != os.Geteuid() || (!info.IsDir() && (!info.Mode().IsRegular() || stat.Nlink != 1)) {
+		uid := os.Geteuid()
+		if identity != nil && (name == prejoinSecretsRelative || name == prejoinSecretsRelative+"/"+engineidentity.RecoveryMarkerName) {
+			uid = identity.uid
+		}
+		if !ok || int(stat.Uid) != uid || (!info.IsDir() && (!info.Mode().IsRegular() || stat.Nlink != 1)) {
 			return ErrPreparationConfig
 		}
 		return nil
@@ -276,6 +289,9 @@ func verifyPublishedSource(ctx context.Context, archive *os.File, path string, e
 		}
 		return strings.TrimPrefix(name, "source/"), strings.HasPrefix(name, "source/")
 	}, func(root *os.Root, actual map[string]fs.FileInfo) error {
+		if identity != nil && verifyPrejoinDirectoryExtras(ctx, root, actual, *identity) != nil {
+			return ErrPreparationConfig
+		}
 		for name, mode := range map[string]os.FileMode{"Engine": 0755, "Engine/Deploy": 0700} {
 			info, ok := actual[name]
 			if !ok || !info.IsDir() || info.Mode().Perm() != mode {

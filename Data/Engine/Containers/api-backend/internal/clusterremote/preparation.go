@@ -33,6 +33,14 @@ func (client *Client) ReconcilePreparation(ctx context.Context, inputs *clusterb
 	return client.preparation(ctx, inputs, expected, "reconcile_source", sudoPassword, check)
 }
 
+func (client *Client) PrepareRuntimeIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparation(ctx, inputs, expected, "prepare_runtime_identity", sudoPassword, check)
+}
+
+func (client *Client) ReconcileRuntimeIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparation(ctx, inputs, expected, "reconcile_runtime_identity", sudoPassword, check)
+}
+
 func (client *Client) preparation(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, sudoPassword []byte, check func(context.Context) error) error {
 	binding := expected.Target

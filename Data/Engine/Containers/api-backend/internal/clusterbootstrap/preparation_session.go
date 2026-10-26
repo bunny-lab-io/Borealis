@@ -40,7 +40,12 @@ func NewPreparationSessionRequest(expected PreparationExpected, manager, nonce, 
 
 func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 	var expected PreparationExpected
-	if r.Session.Validate() != nil || r.Session.Action != "verify" || (r.Action != "stage_source" && r.Action != "reconcile_source") || len(r.ExpectedBase64) > 24<<10 {
+	if r.Session.Validate() != nil || r.Session.Action != "verify" || len(r.ExpectedBase64) > 24<<10 {
+		return expected, ErrSessionProtocol
+	}
+	switch r.Action {
+	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity":
+	default:
 		return expected, ErrSessionProtocol
 	}
 	raw, err := base64.StdEncoding.Strict().DecodeString(r.ExpectedBase64)

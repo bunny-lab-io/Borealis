@@ -10,7 +10,8 @@ import (
 	"syscall"
 )
 
-const recoveryMarker = ".borealis-identity-recovery.json"
+const RecoveryMarkerName = ".borealis-identity-recovery.json"
+const recoveryMarker = RecoveryMarkerName
 
 // Consumer holds a shared Linux flock on the secrets directory inode, including
 // through read-only bind mounts. Keep it alive until ALL key users have exited.
@@ -427,12 +428,12 @@ func (install Installation) releaseFencedCommittedMode(material *Material, prejo
 }
 
 func (install Installation) installFenced(material *Material, commit func(func() (string, error)) error, retainMarker bool) (string, error) {
-	return install.installFencedMode(material, commit, retainMarker, false)
+	return install.installFencedMode(material, commit, retainMarker, false, false)
 }
 
-func (install Installation) installFencedMode(material *Material, commit func(func() (string, error)) error, retainMarker, prejoin bool) (string, error) {
+func (install Installation) installFencedMode(material *Material, commit func(func() (string, error)) error, retainMarker, prejoin, prepared bool) (string, error) {
 	if !material.valid() || !validBinding(install.Binding) || !install.Target.valid(install.Binding) ||
-		(install.Target.NodeUID == "") != prejoin || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
+		(install.Target.NodeUID == "") != prejoin || prepared && !prejoin || install.UID < 0 || install.GID < 0 || install.Check == nil || install.Quiesced == nil {
 		return "", errors.New("identity lifecycle installation contract invalid")
 	}
 	if err := install.Check(); err != nil {
@@ -473,7 +474,7 @@ func (install Installation) installFencedMode(material *Material, commit func(fu
 		return "", err
 	}
 	if prejoin {
-		if metadata.Present || commit == nil || !retainMarker {
+		if metadata.Present != prepared || commit == nil || !retainMarker {
 			return "", errors.New("pre-join identity requires new retained journaled attempt")
 		}
 		for _, name := range identityPaths {

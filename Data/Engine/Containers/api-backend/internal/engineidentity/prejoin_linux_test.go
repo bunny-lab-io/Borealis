@@ -14,6 +14,73 @@ func prejoinCommit(transaction func() (string, error)) error {
 	return err
 }
 
+func TestPreparedPrejoinIdentityConsumesOnlyExactFreshFence(t *testing.T) {
+	for _, mode := range []string{"valid", "missing marker", "changed marker", "changed source", "joined", "no journal", "existing key", "retained journal", "authority", "quiescence"} {
+		t.Run(mode, func(t *testing.T) {
+			install, _, material := installationFixture(t, true)
+			marker, err := install.PrejoinPreparationMarker(material)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode != "missing marker" {
+				if mode == "changed marker" {
+					marker = append(marker, '\n')
+				}
+				if err := os.WriteFile(filepath.Join(install.Root, recoveryMarker), marker, 0600); err != nil {
+					t.Fatal(err)
+				}
+				requireStartupBlocked(t, install.Root)
+			}
+			commit := prejoinCommit
+			switch mode {
+			case "changed source":
+				install.Binding.SourceID = "50000000-0000-4000-8000-000000000005"
+			case "joined":
+				install.Target.NodeUID = "40000000-0000-4000-8000-000000000004"
+			case "no journal":
+				commit = nil
+			case "existing key":
+				if err := os.WriteFile(filepath.Join(install.Root, EngineSecretPath), material.Files()[EngineSecretPath], 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "retained journal":
+				if err := os.Mkdir(install.Journal, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(install.Journal, "journal.json"), []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "authority":
+				install.Check = func() error { return errors.New("lost authority") }
+			case "quiescence":
+				install.Quiesced = func() error { return errors.New("consumer present") }
+			}
+			before := fileInventory(t, install.Root)
+			state, err := install.InstallPreparedPrejoinFencedJournaledRetained(material, commit)
+			if mode != "valid" {
+				if err == nil {
+					t.Fatal("invalid prepared identity accepted", state)
+				}
+				requireInventory(t, install.Root, before)
+				return
+			}
+			if err != nil || state != "committed" || install.ProvePrejoinFencedCommitted(material) != nil {
+				t.Fatal("prepared commit failed", state, err)
+			}
+			requireStartupBlocked(t, install.Root)
+			if _, err := install.InstallPreparedPrejoinFencedJournaledRetained(material, commit); err == nil {
+				t.Fatal("prepared transaction replayed")
+			}
+			if _, err := install.InstallPrejoinFencedJournaledRetained(material, commit); err == nil {
+				t.Fatal("ordinary pre-join accepted retained marker")
+			}
+			if state, err := install.ReleasePrejoinFencedCommitted(material); err != nil || state != "released" {
+				t.Fatal("release", state, err)
+			}
+		})
+	}
+}
+
 func TestPrejoinIdentityRetainsFenceWithoutInventingNodeUID(t *testing.T) {
 	install, _, material := installationFixture(t, true)
 	if _, err := install.InstallFencedJournaledRetained(material, prejoinCommit); err == nil {

@@ -78,6 +78,10 @@ func (j *MutationJournal) installIdentity(ctx context.Context, install engineide
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.installIdentityLocked(ctx, install, material, prejoin, false)
+}
+
+func (j *MutationJournal) installIdentityLocked(ctx context.Context, install engineidentity.Installation, material *engineidentity.Material, prejoin, prepared bool) (string, error) {
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
 	}
@@ -96,7 +100,14 @@ func (j *MutationJournal) installIdentity(ctx context.Context, install engineide
 			return "", ErrMutationUnknown
 		}
 	}
-	if prejoin && len(j.state.Steps) != 1 {
+	expectedSteps := 1
+	if prepared {
+		if !prejoin || j.state.Steps["prepare_identity_root"].State != "applied" || j.state.Steps["prepare_runtime_identity"].State != "applied" {
+			return "", ErrMutationJournal
+		}
+		expectedSteps = 3
+	}
+	if prejoin && len(j.state.Steps) != expectedSteps {
 		return "", ErrMutationJournal // Identity precedes host preparation/import.
 	}
 	if err := j.priorExecutorsQuiescent(ctx); err != nil {
@@ -113,6 +124,9 @@ func (j *MutationJournal) installIdentity(ctx context.Context, install engineide
 		return err
 	}
 	if prejoin {
+		if prepared {
+			return install.InstallPreparedPrejoinFencedJournaledRetained(material, commit)
+		}
 		return install.InstallPrejoinFencedJournaledRetained(material, commit)
 	}
 	return install.InstallFencedJournaledRetained(material, commit)

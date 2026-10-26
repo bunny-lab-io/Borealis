@@ -39,7 +39,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"deliver", "reconcile", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			var server *fakeSSH
 			var consumed atomic.Bool
@@ -90,6 +90,9 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						if mode == "reconcile" {
 							wantAction = "reconcile_source"
 						}
+						if strings.HasSuffix(mode, "runtime_identity") {
+							wantAction = mode
+						}
 						if request.Action != wantAction {
 							return errors.New("wrong action")
 						}
@@ -132,6 +135,9 @@ func TestPreparationPinnedSSH(t *testing.T) {
 			if mode == "reconcile" {
 				action = "reconcile_source"
 			}
+			if strings.HasSuffix(mode, "runtime_identity") {
+				action = mode
+			}
 			if mode == "wrong host pin" {
 				expected.Target.HostKeyFingerprint = "SHA256:" + strings.Repeat("A", 43)
 			}
@@ -150,7 +156,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					return err
 				})
 			}
-			if (err == nil) != (mode == "deliver" || mode == "reconcile") {
+			if (err == nil) != (mode == "deliver" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity")) {
 				t.Fatalf("unexpected result: %v", err)
 			}
 			if err != nil && err != ErrBootstrapVerification {

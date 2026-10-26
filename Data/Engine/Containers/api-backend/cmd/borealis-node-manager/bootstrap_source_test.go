@@ -94,7 +94,7 @@ func TestBootstrapSourceNativeProofBindings(t *testing.T) {
 }
 
 func TestBootstrapSourcePaths(t *testing.T) {
-	for _, mode := range []string{"fresh", "reconcile", "occupied", "symlink", "unsafe ancestor", "file ancestor", "runtime", "missing source", "unknown action"} {
+	for _, mode := range []string{"fresh", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "missing account source", "occupied", "symlink", "unsafe ancestor", "file ancestor", "runtime", "missing source", "unknown action"} {
 		t.Run(mode, func(t *testing.T) {
 			base := t.TempDir()
 			if err := os.Mkdir(filepath.Join(base, "opt"), 0755); err != nil {
@@ -102,12 +102,15 @@ func TestBootstrapSourcePaths(t *testing.T) {
 			}
 			action := "stage_source"
 			switch mode {
-			case "reconcile", "occupied":
+			case "reconcile", "occupied", "prepare_runtime_identity", "reconcile_runtime_identity":
 				if err := os.Mkdir(filepath.Join(base, "opt", "Borealis"), 0755); err != nil {
 					t.Fatal(err)
 				}
 				if mode == "reconcile" {
 					action = "reconcile_source"
+				}
+				if strings.HasSuffix(mode, "runtime_identity") {
+					action = mode
 				}
 			case "symlink":
 				if err := os.Symlink(t.TempDir(), filepath.Join(base, "opt", "Borealis")); err != nil {
@@ -127,6 +130,8 @@ func TestBootstrapSourcePaths(t *testing.T) {
 				}
 			case "missing source":
 				action = "reconcile_source"
+			case "missing account source":
+				action = "prepare_runtime_identity"
 			case "unknown action":
 				action = "join_cluster"
 			}
@@ -136,7 +141,7 @@ func TestBootstrapSourcePaths(t *testing.T) {
 			}
 			defer root.Close()
 			err = verifyBootstrapSourcePaths(root, action, true)
-			if (err == nil) != (mode == "fresh" || mode == "reconcile") {
+			if (err == nil) != (mode == "fresh" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity")) {
 				t.Fatal("unsafe path evidence accepted", err)
 			}
 			if mode == "occupied" && verifyBootstrapSourcePaths(root, action, false) != nil {

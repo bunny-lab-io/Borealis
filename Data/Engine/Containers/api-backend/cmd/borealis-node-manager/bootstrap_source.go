@@ -63,10 +63,21 @@ func bootstrapSourceSessionContained(args []string) {
 				if err != nil {
 					return errBootstrapSource
 				}
-				if request.Action == "stage_source" {
+				switch request.Action {
+				case "stage_source":
 					_, err = inputs.PublishSource(ctx, journal)
-				} else {
+				case "reconcile_source":
 					_, err = inputs.ReconcileSource(ctx, journal)
+				case "prepare_runtime_identity":
+					_, err = inputs.PrepareRuntimeIdentity(ctx, journal, clusterbootstrap.RuntimeIdentityActions{
+						Prepare: func(ctx context.Context, lock *os.File) error {
+							return prepareBootstrapRuntimeIdentity(ctx, lock, authority)
+						}, Prove: proveBootstrapRuntimeAccount,
+					})
+				case "reconcile_runtime_identity":
+					_, err = inputs.ReconcileRuntimeIdentity(ctx, journal, proveBootstrapRuntimeAccount)
+				default:
+					err = errBootstrapSource
 				}
 				return errors.Join(err, journal.Close())
 			})
@@ -161,7 +172,7 @@ func bootstrapSourceSafeDirectory(path string) error {
 }
 
 func verifyBootstrapSourcePaths(root *os.Root, action string, destination bool) error {
-	if action != "stage_source" && action != "reconcile_source" {
+	if action != "stage_source" && action != "reconcile_source" && action != "prepare_runtime_identity" && action != "reconcile_runtime_identity" {
 		return errBootstrapSource
 	}
 	for _, path := range []string{"etc/borealis", "etc/rancher/k3s", "var/lib/rancher/k3s", "usr/local/bin/k3s", "var/lib/kubelet", "etc/kubernetes"} {
