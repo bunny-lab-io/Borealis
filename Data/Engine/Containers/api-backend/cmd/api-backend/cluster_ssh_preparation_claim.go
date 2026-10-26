@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// This reservation is written only by a future controller approval transition,
+// This reservation is written only by the guarded controller approval transition,
 // after phase-specific prerequisites and explicit confirmation. A qualification
 // report (including all currently supported checks passing) cannot create it.
 // No production writer or dispatcher is enabled by the claim consumer below.
