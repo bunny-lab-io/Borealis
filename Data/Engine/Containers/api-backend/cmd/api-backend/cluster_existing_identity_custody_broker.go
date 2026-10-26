@@ -31,7 +31,7 @@ func (r clusterExistingIdentityCustodyRequest) valid(now time.Time) bool {
 	}
 	return r.Version == 1 && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+25 &&
 		l.Generation > 0 && l.Generation < 1<<53 && l.OperationAttempt == 1 && l.OperationKind == clusterExistingIdentityKind &&
-		l.OperationStep == clusterExistingIdentityConfirmed && l.Step == clusterExistingIdentityInspect && len(l.ControllerHolder) > 0 && len(l.ControllerHolder) <= 1024 &&
+		((l.OperationStep == clusterExistingIdentityConfirmed && l.Step == clusterExistingIdentityInspect) || validClusterExistingIdentityRecoveryLease(l)) && len(l.ControllerHolder) > 0 && len(l.ControllerHolder) <= 1024 &&
 		len(r.Process.PodName) <= 253 && clusterSSHStorageNameRE.MatchString(r.Process.PodName) && len(validateClusterNodeName("node", r.Process.NodeName)) == 0
 }
 
@@ -42,7 +42,7 @@ type clusterExistingIdentityCustodyResponse struct {
 }
 
 // Only the original controller can bind API process placement to the exact
-// current read-only claim. No credential or identity bytes cross this broker.
+// current phase-specific claim. No credential or identity bytes cross here.
 func (c *clusterController) observeClusterExistingIdentityCustody(ctx context.Context, r clusterExistingIdentityCustodyRequest, getJSON func(context.Context, string, any) error) (clusterExistingIdentitySourceCustody, string, error) {
 	fail := func() (clusterExistingIdentitySourceCustody, string, error) {
 		return clusterExistingIdentitySourceCustody{}, "", errClusterConflict
@@ -50,19 +50,43 @@ func (c *clusterController) observeClusterExistingIdentityCustody(ctx context.Co
 	if c == nil || c.store == nil || r.Lease.ControllerHolder != c.holder || !r.valid(time.Now()) {
 		return fail()
 	}
-	w, err := readClusterExistingIdentityWork(ctx, c.store.db, r.Lease.OperationID, r.Lease.TargetID)
-	if err != nil || !w.claim.valid() || w.claim.Lease != r.Lease || !r.Process.valid(w.claim.Plan) {
+	var plan clusterExistingIdentityPlan
+	var authority func(context.Context) (string, error)
+	if validClusterExistingIdentityRecoveryLease(r.Lease) {
+		w, err := readClusterExistingIdentityRecoveryRow(ctx, c.store.db, r.Lease.OperationID, r.Lease.TargetID)
+		if err != nil {
+			return fail()
+		}
+		claim, err := parseClusterExistingIdentityRecoveryWork(w, r.Lease.OperationID, r.Lease.TargetID)
+		if err != nil || !claim.valid() || claim.Lease != r.Lease {
+			return fail()
+		}
+		plan = claim.Inspection.Plan
+		authority = func(ctx context.Context) (string, error) {
+			return c.store.loadClusterExistingIdentityRecovery(ctx, claim)
+		}
+	} else {
+		w, err := readClusterExistingIdentityWork(ctx, c.store.db, r.Lease.OperationID, r.Lease.TargetID)
+		if err != nil || !w.claim.valid() || w.claim.Lease != r.Lease {
+			return fail()
+		}
+		plan = w.claim.Plan
+		authority = func(ctx context.Context) (string, error) {
+			return c.store.loadClusterExistingIdentityInspection(ctx, w.claim)
+		}
+	}
+	if !r.Process.valid(plan) {
 		return fail()
 	}
-	before, err := c.store.loadClusterExistingIdentityInspection(ctx, w.claim)
+	before, err := authority(ctx)
 	if err != nil {
 		return fail()
 	}
-	proof, err := readClusterExistingIdentitySourceCustody(ctx, getJSON, w.claim.Plan, r.Process)
+	proof, err := readClusterExistingIdentitySourceCustody(ctx, getJSON, plan, r.Process)
 	if err != nil {
 		return fail()
 	}
-	after, err := c.store.loadClusterExistingIdentityInspection(ctx, w.claim)
+	after, err := authority(ctx)
 	if err != nil || before != after || ctx.Err() != nil {
 		return fail()
 	}
@@ -174,10 +198,24 @@ func newClusterExistingIdentityCustodyClient() (*clusterExistingIdentityCustodyC
 }
 
 func (c *clusterExistingIdentityCustodyClient) observe(ctx context.Context, claim clusterExistingIdentityInspectionClaim, process clusterExistingIdentitySourceProcess, authority func(context.Context) (string, error)) (clusterExistingIdentitySourceCustody, error) {
+	if !claim.valid() {
+		return clusterExistingIdentitySourceCustody{}, errClusterConflict
+	}
+	return c.observeBound(ctx, claim.Plan, claim.Lease, process, authority)
+}
+
+func (c *clusterExistingIdentityCustodyClient) observeRecovery(ctx context.Context, claim clusterExistingIdentityRecoveryClaim, process clusterExistingIdentitySourceProcess, authority func(context.Context) (string, error)) (clusterExistingIdentitySourceCustody, error) {
+	if !claim.valid() {
+		return clusterExistingIdentitySourceCustody{}, errClusterConflict
+	}
+	return c.observeBound(ctx, claim.Inspection.Plan, claim.Lease, process, authority)
+}
+
+func (c *clusterExistingIdentityCustodyClient) observeBound(ctx context.Context, plan clusterExistingIdentityPlan, lease clusterSSHTargetLease, process clusterExistingIdentitySourceProcess, authority func(context.Context) (string, error)) (clusterExistingIdentitySourceCustody, error) {
 	fail := func() (clusterExistingIdentitySourceCustody, error) {
 		return clusterExistingIdentitySourceCustody{}, errClusterConflict
 	}
-	if c == nil || c.httpClient == nil || c.peers == nil || !claim.valid() || !process.valid(claim.Plan) || authority == nil || ctx.Err() != nil {
+	if c == nil || c.httpClient == nil || c.peers == nil || !process.valid(plan) || authority == nil || ctx.Err() != nil {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -186,7 +224,10 @@ func (c *clusterExistingIdentityCustodyClient) observe(ctx context.Context, clai
 	if err != nil || !validClusterSSHPreparationDigest(before) {
 		return fail()
 	}
-	r := clusterExistingIdentityCustodyRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 20, Lease: claim.Lease, Process: process}
+	r := clusterExistingIdentityCustodyRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 20, Lease: lease, Process: process}
+	if !r.valid(time.Now()) {
+		return fail()
+	}
 	peers, err := c.peers(ctx)
 	if err != nil || len(peers) == 0 || len(peers) > 3 {
 		return fail()
@@ -218,7 +259,7 @@ func (c *clusterExistingIdentityCustodyClient) observe(ctx context.Context, clai
 		if result.Status == "not_owner" && result.Proof == nil && result.Authority == "" {
 			continue
 		}
-		if result.Status != "observed" || result.Proof == nil || !result.Proof.valid(claim.Plan) || result.Proof.Process != process || result.Authority != before {
+		if result.Status != "observed" || result.Proof == nil || !result.Proof.valid(plan) || result.Proof.Process != process || result.Authority != before {
 			return fail()
 		}
 		after, err := authority(ctx)

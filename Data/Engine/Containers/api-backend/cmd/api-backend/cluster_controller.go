@@ -390,6 +390,11 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		if recovered, recoveryErr := c.reconcileLostHMRNode(runCtx, runner); recoveryErr != nil || recovered {
 			return recoveryErr
 		}
+		if runner.kube != nil {
+			if handled, err := c.reconcileClusterExistingIdentityMutation(runCtx, runner.kube.getJSON); handled || err != nil {
+				return err
+			}
+		}
 	}
 	operation, ok, err := c.claimOperation(runCtx)
 	if err != nil || !ok {

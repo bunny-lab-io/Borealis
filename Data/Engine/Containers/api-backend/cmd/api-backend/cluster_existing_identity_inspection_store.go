@@ -91,6 +91,12 @@ func (w clusterExistingIdentityWork) matches(c clusterExistingIdentityInspection
 }
 
 func readClusterExistingIdentityWorkRow(ctx context.Context, db clusterExistingIdentityWorkReader, operation, target string) (clusterExistingIdentityWork, error) {
+	return readClusterExistingIdentityPhaseRow(ctx, db, operation, target, "waiting", clusterExistingIdentityConfirmed, clusterExistingIdentityInspect, clusterExistingIdentityObserved)
+}
+
+// Callers select fixed internal phases; inspection never broadens its reader
+// to accept a mutation phase.
+func readClusterExistingIdentityPhaseRow(ctx context.Context, db clusterExistingIdentityWorkReader, operation, target, parentState, parentStep, targetStep, settledStep string) (clusterExistingIdentityWork, error) {
 	var w clusterExistingIdentityWork
 	err := db.QueryRowContext(ctx, `SELECT o.payload_json,c.cluster_id,o.target_node_id,t.management_ip,t.ssh_port,t.host_key_algorithm,t.host_key_base64,t.host_key_fingerprint,
  p.aegis_generation,p.ciphertext,t.state,t.lease_holder,t.lease_generation,t.lease_expires_at,t.inspected_at,t.inspection_json,t.current_step,
@@ -100,13 +106,13 @@ func readClusterExistingIdentityWorkRow(ctx context.Context, db clusterExistingI
  JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
  JOIN engine.aegis_cipher_state a ON a.id=1 AND a.verification_token=p.aegis_generation
  JOIN engine.cluster_application_leases l ON l.name=$3 AND l.expires_at>extract(epoch FROM clock_timestamp())
- WHERE o.id=$1 AND t.id=$2 AND o.kind=$4 AND o.state='waiting' AND o.current_step=$5 AND o.attempt=1
+ WHERE o.id=$1 AND t.id=$2 AND o.kind=$4 AND o.state=$8 AND o.current_step=$5 AND o.attempt=1
  AND t.current_step IN ($6,$7) AND t.credential_state='available' AND t.ordinal=1
  AND p.expires_at>extract(epoch FROM clock_timestamp()) AND octet_length(o.payload_json)<=65536
  AND octet_length(p.aegis_generation)<=16384 AND octet_length(p.ciphertext)<=262144
  AND octet_length(t.inspection_json)<=32768
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets other WHERE other.operation_id=o.id AND other.id<>t.id)`,
-		operation, target, clusterControllerLeaseName, clusterExistingIdentityKind, clusterExistingIdentityConfirmed, clusterExistingIdentityInspect, clusterExistingIdentityObserved).
+		operation, target, clusterControllerLeaseName, clusterExistingIdentityKind, parentStep, targetStep, settledStep, parentState).
 		Scan(&w.claim.payload, &w.cluster, &w.member, &w.address, &w.port, &w.algorithm, &w.key, &w.fingerprint,
 			&w.claim.Sealed.generation, &w.claim.Sealed.ciphertext, &w.state, &w.holder, &w.generation, &w.expires, &w.inspectedAt, &w.inspection, &w.step, &w.now)
 	if err != nil {

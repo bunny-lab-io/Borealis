@@ -75,24 +75,35 @@ func (s *postgresOperatorStore) clusterExistingIdentityPlan(ctx context.Context,
 	}
 	p, confirmation, err := parseClusterExistingIdentityPayload([]byte(payload))
 	if err != nil || p.OperationID != id || p.TargetID != target || !((state == "waiting" && step == clusterExistingIdentityReserved && confirmation == nil) ||
-		(state == "waiting" && step == clusterExistingIdentityConfirmed && confirmation != nil) || (state == "cancelled" && step == "cancelled")) {
+		(state == "waiting" && step == clusterExistingIdentityConfirmed && confirmation != nil) ||
+		(state == "running" && step == clusterExistingIdentityRecover && confirmation != nil) ||
+		(state == "succeeded" && step == "complete" && confirmation != nil) || (state == "cancelled" && step == "cancelled")) {
 		return clusterExistingIdentityPlan{}, "", errClusterConflict
 	}
-	if state == "waiting" && confirmation != nil {
+	if (state == "waiting" || state == "running") && confirmation != nil {
 		var targetState, targetStep string
 		if s.db.QueryRowContext(ctx, `SELECT state,current_step FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2`, confirmation.RequestID, id).Scan(&targetState, &targetStep) != nil {
 			return clusterExistingIdentityPlan{}, "", errClusterConflict
 		}
 		switch {
-		case targetState == "queued" && targetStep == clusterExistingIdentityInspect:
+		case state == "waiting" && targetState == "queued" && targetStep == clusterExistingIdentityInspect:
 			state = "awaiting_identity_observation"
-		case targetState == "running" && targetStep == clusterExistingIdentityInspect:
+		case state == "waiting" && targetState == "running" && targetStep == clusterExistingIdentityInspect:
 			state = "observing_existing_identity"
-		case targetState == "prepared" && targetStep == clusterExistingIdentityObserved:
+		case state == "waiting" && targetState == "prepared" && targetStep == clusterExistingIdentityObserved:
 			state = "identity_observed"
+		case state == "running" && (targetState == "prepared" || targetState == "running") && targetStep == clusterExistingIdentityRecover:
+			state = "recovering_identity"
+		case state == "running" && targetState == "recovery_required" && targetStep == clusterExistingIdentityRecover:
+			state = "identity_recovery_required"
+		case state == "running" && targetState == "prepared" && targetStep == clusterExistingIdentityRecovered:
+			state = "identity_recovered_pending_return"
 		default:
 			return clusterExistingIdentityPlan{}, "", errClusterConflict
 		}
+	}
+	if state == "succeeded" {
+		state = "identity_recovered"
 	}
 	return p, state, nil
 }

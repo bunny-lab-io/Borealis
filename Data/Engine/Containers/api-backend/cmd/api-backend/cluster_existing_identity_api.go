@@ -80,7 +80,8 @@ func writeClusterExistingIdentityPlan(w http.ResponseWriter, status int, p clust
 	}
 	writeJSON(w, status, map[string]any{"operation_id": p.OperationID, "source_node_id": p.SourceID, "target_node_id": p.TargetID,
 		"maintenance_operation_id": p.MaintenanceID, "plan_sha256": digest, "observed_at": p.ObservedAt, "state": state,
-		"baseline_release": p.Baseline.Release, "source_sha": p.Baseline.SourceSHA, "members": members, "recovery_authorized": false})
+		"baseline_release": p.Baseline.Release, "source_sha": p.Baseline.SourceSHA, "members": members,
+		"recovery_authorized": state == "recovering_identity" || state == "identity_recovery_required"})
 }
 
 func (s *clusterExistingIdentityAPI) plan(w http.ResponseWriter, r *http.Request) {

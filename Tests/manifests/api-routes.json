@@ -1903,7 +1903,7 @@
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
     "line": 343,
     "class": "internal-cluster",
-    "authentication": "operator-derived-aead-and-existing-member-inspection-lease",
+    "authentication": "operator-derived-aead-and-existing-member-phase-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_custody_broker_test.go",
     "test_exemption": null
   },

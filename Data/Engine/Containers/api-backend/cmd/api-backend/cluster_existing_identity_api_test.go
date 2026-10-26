@@ -183,6 +183,26 @@ func TestClusterExistingIdentityAPIReadback(t *testing.T) {
 	}
 }
 
+func TestClusterExistingIdentityAPIRecoveryProjection(t *testing.T) {
+	for state, authorized := range map[string]bool{
+		"waiting": false, "awaiting_identity_observation": false, "observing_existing_identity": false,
+		"identity_observed": false, "recovering_identity": true, "identity_recovery_required": true,
+		"identity_recovered_pending_return": false, "identity_recovered": false, "unknown": false,
+	} {
+		t.Run(state, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			writeClusterExistingIdentityPlan(w, http.StatusOK, existingIdentityPlanFixture(t), state)
+			var response struct {
+				State      string `json:"state"`
+				Authorized bool   `json:"recovery_authorized"`
+			}
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.State != state || response.Authorized != authorized {
+				t.Fatal("phase projection changed authority", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestClusterExistingIdentityPlanCanonical(t *testing.T) {
 	for _, mode := range []string{"valid", "unknown", "duplicate", "alias", "member extra", "member duplicate", "unsorted", "missing source", "target source", "zero machine", "bad digest", "bad baseline"} {
 		t.Run(mode, func(t *testing.T) {

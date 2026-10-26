@@ -128,7 +128,7 @@ def classify(pattern: str) -> tuple[str, str]:
     if route_path == "/internal/cluster/existing-identity-plan":
         return "internal-cluster", "operator-derived-aead-and-controller-reservation"
     if route_path == "/internal/cluster/existing-identity-custody":
-        return "internal-cluster", "operator-derived-aead-and-existing-member-inspection-lease"
+        return "internal-cluster", "operator-derived-aead-and-existing-member-phase-lease"
     if route_path in {"/internal/cluster/ssh-preparation-source", "/internal/cluster/ssh-vip-scope", "/internal/cluster/ssh-vip-check"}:
         return "internal-cluster", "operator-derived-aead-and-target-lease"
     if route_path.startswith("/internal/cluster/"):
