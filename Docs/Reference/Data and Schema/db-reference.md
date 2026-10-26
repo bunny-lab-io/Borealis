@@ -305,6 +305,8 @@ finally:
 
 ??? example "Detailed Codex Breakdown"
 
+    - Existing-member identity inspection reuses onboarding target/credential rows without schema changes, but retains distinct `ssh_identity_recovery` parent and `inspect_existing_identity` worker contract. Claims lock controller, cluster, operation, completed maintenance, sorted members, Aegis, credential and target; only target lease changes. Parsing, canonical hashing, decryption and native/SSH proof occur outside transactions. A fresh complete snapshot is compared under locks. Expired read-only claims may advance generation; exact inspection settlement records bounded public session/custody evidence and one event, leaves target drained and parent waiting, and grants no mutation authority. Event-lock waits must not outlive lease expiry. Canonical flow and cancellation limits live in [existing-member recovery](../../Engine/managing-engine-clusters.md#existing-member-identity-recovery-reservation).
+
     ### Cluster control tables
 
     - `engine.cluster_state` stores singleton topology, VIPs, baseline release/SHA, HMR state, and active operation.

@@ -1010,7 +1010,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 348,
+    "line": 350,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1019,7 +1019,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 351,
+    "line": 353,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1028,7 +1028,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 345,
+    "line": 347,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1899,6 +1899,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "POST /internal/cluster/existing-identity-custody",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+    "line": 343,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-existing-member-inspection-lease",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_custody_broker_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "POST /internal/cluster/existing-identity-plan",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
     "line": 341,
@@ -1919,7 +1928,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-vip-check",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 344,
+    "line": 346,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",
@@ -1928,7 +1937,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-vip-scope",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 343,
+    "line": 345,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",

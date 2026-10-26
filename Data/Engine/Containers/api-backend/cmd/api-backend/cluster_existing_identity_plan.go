@@ -79,7 +79,20 @@ func (s *postgresOperatorStore) clusterExistingIdentityPlan(ctx context.Context,
 		return clusterExistingIdentityPlan{}, "", errClusterConflict
 	}
 	if state == "waiting" && confirmation != nil {
-		state = "awaiting_identity_observation"
+		var targetState, targetStep string
+		if s.db.QueryRowContext(ctx, `SELECT state,current_step FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2`, confirmation.RequestID, id).Scan(&targetState, &targetStep) != nil {
+			return clusterExistingIdentityPlan{}, "", errClusterConflict
+		}
+		switch {
+		case targetState == "queued" && targetStep == clusterExistingIdentityInspect:
+			state = "awaiting_identity_observation"
+		case targetState == "running" && targetStep == clusterExistingIdentityInspect:
+			state = "observing_existing_identity"
+		case targetState == "prepared" && targetStep == clusterExistingIdentityObserved:
+			state = "identity_observed"
+		default:
+			return clusterExistingIdentityPlan{}, "", errClusterConflict
+		}
 	}
 	return p, state, nil
 }

@@ -114,6 +114,16 @@ func (fence *Consumer) Load() (*Material, error) {
 	return first, nil
 }
 
+// LoadFrom binds an existing consumer to the exact reviewed mount path. It
+// neither opens another directory nor creates a second consumer. Native host
+// and Pod/mount proof remains the caller's separate responsibility.
+func (fence *Consumer) LoadFrom(path string) (*Material, error) {
+	if fence == nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || fence.path != path {
+		return nil, errors.New("identity source directory does not match consumer")
+	}
+	return fence.Load()
+}
+
 type recoveryFenceRecord struct {
 	Version  int           `json:"version"`
 	Binding  Binding       `json:"binding"`

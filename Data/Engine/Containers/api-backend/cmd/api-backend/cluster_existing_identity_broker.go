@@ -54,11 +54,15 @@ type clusterExistingIdentityBrokerResponse struct {
 
 // Separate key derivation and AAD prevent substitution with observation brokers.
 func clusterExistingIdentityBrokerCipher(secret, direction string) (cipher.AEAD, error) {
+	return clusterExistingIdentityScopedCipher(secret, direction, "existing-identity-plan")
+}
+
+func clusterExistingIdentityScopedCipher(secret, direction, scope string) (cipher.AEAD, error) {
 	if len(secret) < 32 || len(secret) > 4096 || (direction != "request" && direction != "response") {
 		return nil, errClusterUnavailable
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte("borealis/cluster/existing-identity-plan/v1/" + direction))
+	_, _ = mac.Write([]byte("borealis/cluster/" + scope + "/v1/" + direction))
 	key := mac.Sum(nil)
 	defer clear(key)
 	block, err := aes.NewCipher(key)
@@ -69,6 +73,10 @@ func clusterExistingIdentityBrokerCipher(secret, direction string) (cipher.AEAD,
 }
 
 func sealClusterExistingIdentityBroker(aead cipher.AEAD, value any) ([]byte, error) {
+	return sealClusterExistingIdentityScopedBroker(aead, value, clusterExistingIdentityBrokerPath)
+}
+
+func sealClusterExistingIdentityScopedBroker(aead cipher.AEAD, value any, path string) ([]byte, error) {
 	if aead == nil {
 		return nil, errClusterUnavailable
 	}
@@ -77,14 +85,18 @@ func sealClusterExistingIdentityBroker(aead cipher.AEAD, value any) ([]byte, err
 	if err != nil || len(raw)+aead.Overhead() > clusterExistingIdentityBrokerLimit {
 		return nil, errClusterUnavailable
 	}
-	return aead.Seal(nil, nil, raw, []byte(clusterExistingIdentityBrokerPath)), nil
+	return aead.Seal(nil, nil, raw, []byte(path)), nil
 }
 
 func openClusterExistingIdentityBroker(aead cipher.AEAD, wire []byte, out any) error {
+	return openClusterExistingIdentityScopedBroker(aead, wire, out, clusterExistingIdentityBrokerPath)
+}
+
+func openClusterExistingIdentityScopedBroker(aead cipher.AEAD, wire []byte, out any, path string) error {
 	if aead == nil || len(wire) > clusterExistingIdentityBrokerLimit {
 		return errClusterUnavailable
 	}
-	raw, err := aead.Open(nil, nil, wire, []byte(clusterExistingIdentityBrokerPath))
+	raw, err := aead.Open(nil, nil, wire, []byte(path))
 	defer clear(raw)
 	if err != nil || !utf8.Valid(raw) || json.Unmarshal(raw, out) != nil {
 		return errClusterUnavailable

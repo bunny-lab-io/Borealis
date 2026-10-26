@@ -118,6 +118,27 @@ func TestIdentityConsumerLoadsOnlyStableFixedMaterial(t *testing.T) {
 	}
 }
 
+func TestIdentityConsumerLoadFromExactDirectory(t *testing.T) {
+	install, material, _ := installationFixture(t, false)
+	consumer, err := AcquireConsumer(install.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	if got, err := consumer.LoadFrom(install.Root); err != nil || !got.Equal(material) {
+		t.Fatal("exact directory rejected", err)
+	}
+	for _, path := range []string{"", ".", t.TempDir(), install.Root + "/.", install.Root + "/"} {
+		if got, err := consumer.LoadFrom(path); err == nil || got != nil {
+			t.Fatal("unbound path accepted")
+		}
+	}
+	consumer.Close()
+	if got, err := consumer.LoadFrom(install.Root); err == nil || got != nil {
+		t.Fatal("closed fence accepted")
+	}
+}
+
 func TestIdentityFenceLostAuthorityRetainsMarkerAfterRollback(t *testing.T) {
 	install, _, after := installationFixture(t, false)
 	before := fileInventory(t, install.Root)

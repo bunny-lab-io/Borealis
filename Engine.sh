@@ -4435,6 +4435,14 @@ $(k3s_timezone_env_entries)
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: BOREALIS_ENGINE_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BOREALIS_ENGINE_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             - name: BOREALIS_ENGINE_MANAGEMENT_IP
               valueFrom:
                 fieldRef:

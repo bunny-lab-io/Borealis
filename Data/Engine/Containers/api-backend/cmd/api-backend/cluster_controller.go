@@ -339,6 +339,8 @@ func (c *clusterController) healthServer() *http.Server {
 	mux.HandleFunc("POST "+clusterSSHSourceBrokerPath, sourceBroker.handle)
 	identityBroker := newClusterExistingIdentityBroker(c, runner, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
 	mux.HandleFunc("POST "+clusterExistingIdentityBrokerPath, identityBroker.handle)
+	custodyBroker := newClusterExistingIdentityCustodyBroker(c, runner, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterExistingIdentityCustodyPath, custodyBroker.handle)
 	vipBroker := newClusterSSHVIPBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
 	mux.HandleFunc("POST "+clusterSSHVIPStartPath, vipBroker.start)
 	mux.HandleFunc("POST "+clusterSSHVIPCheckPath, vipBroker.check)
