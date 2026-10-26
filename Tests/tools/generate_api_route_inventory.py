@@ -55,6 +55,18 @@ REVIEWED_ROUTE_TESTS.update({
     )
 })
 REVIEWED_ROUTE_TESTS.update({
+    (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go"):
+        "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api_test.go"
+    for pattern in (
+        "POST /api/server/cluster/nodes/{id}/identity-recovery/plan",
+        "GET /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}",
+    )
+})
+REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/existing-identity-plan",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+)] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_broker_test.go"
+REVIEWED_ROUTE_TESTS.update({
     (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api.go"):
         "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api_test.go"
     for pattern in (
@@ -105,6 +117,8 @@ def classify(pattern: str) -> tuple[str, str]:
         return "operator", "operator-hmac"
     if route_path.startswith("/api/internal/"):
         return "internal-scheduler", "internal-hmac"
+    if route_path == "/internal/cluster/existing-identity-plan":
+        return "internal-cluster", "operator-derived-aead-and-controller-reservation"
     if route_path in {"/internal/cluster/ssh-preparation-source", "/internal/cluster/ssh-vip-scope", "/internal/cluster/ssh-vip-check"}:
         return "internal-cluster", "operator-derived-aead-and-target-lease"
     if route_path.startswith("/internal/cluster/"):

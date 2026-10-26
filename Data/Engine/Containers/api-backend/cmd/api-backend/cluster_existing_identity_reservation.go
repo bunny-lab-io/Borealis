@@ -37,7 +37,7 @@ type clusterExistingIdentityPlan struct {
 	MaintenanceAttempt, ObservedAt                 int64
 	Controller, ClusterID, KubeSystemUID           string
 	Baseline                                       clusterbootstrap.Expected
-	ConfigSHA256                                   string
+	ConfigSHA256, SnapshotSHA256                   string
 	Members                                        []clusterSSHSourceMember
 }
 
@@ -214,16 +214,16 @@ func observeClusterExistingIdentityNodes(ctx context.Context, getJSON func(conte
 // Reservation remains inert. No credentials, target rows, host writes, restart,
 // admission or takeover permission is created. Future dispatch must consume a
 // separately reviewed exact confirmation, SSH binding and live proof capability.
-func (c *clusterController) reserveClusterExistingIdentity(parent context.Context, id, maintenance, source, actor string, getJSON func(context.Context, string, any) error) (clusterExistingIdentityPlan, error) {
+func (c *clusterController) reserveClusterExistingIdentity(parent context.Context, id, maintenance, source, target, actor string, getJSON func(context.Context, string, any) error) (clusterExistingIdentityPlan, error) {
 	fail := func() (clusterExistingIdentityPlan, error) { return clusterExistingIdentityPlan{}, errClusterConflict }
-	if c == nil || c.store == nil || c.store.db == nil || !clusterUUIDRE.MatchString(id) || !utf8.ValidString(actor) ||
+	if c == nil || c.store == nil || c.store.db == nil || !clusterUUIDRE.MatchString(id) || !clusterUUIDRE.MatchString(target) || !utf8.ValidString(actor) ||
 		len(actor) == 0 || len(actor) > 128 || strings.TrimSpace(actor) != actor || strings.IndexFunc(actor, unicode.IsControl) >= 0 {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	snapshot, now, err := readClusterExistingIdentitySnapshot(ctx, c.store.db, c.holder, maintenance)
-	if err != nil || !snapshot.valid(source) {
+	if err != nil || snapshot.TargetID != target || !snapshot.valid(source) {
 		return fail()
 	}
 	namespace, members, err := observeClusterExistingIdentityNodes(ctx, getJSON, snapshot)
@@ -238,11 +238,15 @@ func (c *clusterController) reserveClusterExistingIdentity(parent context.Contex
 	if err != nil {
 		return fail()
 	}
+	snapshotDigest, err := clusterSSHPreparationDigest(snapshot)
+	if err != nil {
+		return fail()
+	}
 	plan := clusterExistingIdentityPlan{Version: 1, OperationID: id, SourceID: source, TargetID: snapshot.TargetID, MaintenanceID: maintenance,
 		MaintenanceAttempt: snapshot.MaintenanceAttempt, ObservedAt: now, Controller: c.holder, ClusterID: snapshot.ClusterID, KubeSystemUID: namespace,
-		Baseline: clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: snapshot.Release, SourceSHA: snapshot.SHA, AllowQualification: strings.Contains(snapshot.Release, "-rc.")}, ConfigSHA256: configDigest, Members: members}
+		Baseline: clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: snapshot.Release, SourceSHA: snapshot.SHA, AllowQualification: strings.Contains(snapshot.Release, "-rc.")}, ConfigSHA256: configDigest, SnapshotSHA256: snapshotDigest, Members: members}
 	payload, err := json.Marshal(plan)
-	if err != nil || len(payload) > 64<<10 {
+	if err != nil || !plan.valid() || len(payload) > 64<<10 {
 		return fail()
 	}
 	tx, err := c.store.db.BeginTx(ctx, nil)

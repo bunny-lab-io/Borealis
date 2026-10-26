@@ -102,7 +102,10 @@ func (f existingIdentityFixture) assertNoReservation(t *testing.T, id string) {
 func TestClusterExistingIdentityPostgresReservation(t *testing.T) {
 	f := newExistingIdentityFixture(t)
 	id := newClusterUUID()
-	plan, err := f.c.reserveClusterExistingIdentity(f.ctx, id, f.maintenance, f.source, "admin", f.read(t))
+	if owner, err := f.c.store.clusterExistingIdentityController(f.ctx); err != nil || owner != f.c.holder {
+		t.Fatal("planning lost current controller", err)
+	}
+	plan, err := f.c.reserveClusterExistingIdentity(f.ctx, id, f.maintenance, f.source, f.target, "admin", f.read(t))
 	if err != nil || plan.SourceID != f.source || plan.TargetID != f.target || plan.MaintenanceID != f.maintenance || plan.KubeSystemUID != f.namespace || len(plan.Members) != 3 {
 		t.Fatal("reserve exact existing member", err)
 	}
@@ -114,6 +117,13 @@ func TestClusterExistingIdentityPostgresReservation(t *testing.T) {
 	if json.Unmarshal([]byte(payload), &stored) != nil || !reflect.DeepEqual(plan, stored) {
 		t.Fatal("plan not retained exactly")
 	}
+	readback, status, err := f.c.store.clusterExistingIdentityPlan(f.ctx, f.target, id)
+	if err != nil || !reflect.DeepEqual(readback, plan) || status != "waiting" || f.c.store.db.Stats().InUse != 0 {
+		t.Fatal("lost acknowledgement readback", err)
+	}
+	if _, _, err := f.c.store.clusterExistingIdentityPlan(f.ctx, f.source, id); err == nil {
+		t.Fatal("readback accepted wrong target")
+	}
 	var targets int
 	if f.c.store.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=$1`, id).Scan(&targets) != nil || targets != 0 {
 		t.Fatal("existing member became onboarding target")
@@ -124,11 +134,14 @@ func TestClusterExistingIdentityPostgresReservation(t *testing.T) {
 	if pending, err := f.c.store.pendingClusterSSHIdentityRecoveries(f.ctx); err != nil || len(pending) != 0 {
 		t.Fatal("reservation became executable recovery", err)
 	}
-	if _, err := f.c.reserveClusterExistingIdentity(f.ctx, id, f.maintenance, f.source, "admin", f.read(t)); err == nil {
+	if _, err := f.c.reserveClusterExistingIdentity(f.ctx, id, f.maintenance, f.source, f.target, "admin", f.read(t)); err == nil {
 		t.Fatal("reservation replay rewrote active operation")
 	}
 	if _, err := f.c.store.cancelClusterOperation(f.ctx, "admission-test", id); err != nil {
 		t.Fatal("inert reservation cannot be cancelled", err)
+	}
+	if readback, status, err := f.c.store.clusterExistingIdentityPlan(f.ctx, f.target, id); err != nil || !reflect.DeepEqual(readback, plan) || status != "cancelled" {
+		t.Fatal("cancelled plan lost historical readback", err)
 	}
 	var application, reason string
 	if f.c.store.db.QueryRowContext(f.ctx, `SELECT application_state,drain_reason FROM engine.cluster_nodes WHERE id=$1`, f.target).Scan(&application, &reason) != nil || application != "drained" || reason != "operator maintenance" {
@@ -145,13 +158,16 @@ func TestClusterExistingIdentityPostgresReservation(t *testing.T) {
 }
 
 func TestClusterExistingIdentityPostgresRejectsDrift(t *testing.T) {
-	for _, mode := range []string{"source target", "source missing", "bad actor", "maintenance exit", "maintenance failed", "newer maintenance", "second drain", "source release", "config drift", "controller drift", "target resumed", "namespace drift", "Node UID drift", "extra node", "missing node", "wrong label", "not ready", "duplicate machine", "duplicate boot", "target address", "cancelled"} {
+	for _, mode := range []string{"wrong target", "source target", "source missing", "bad actor", "maintenance exit", "maintenance failed", "newer maintenance", "second drain", "source release", "config drift", "controller drift", "target resumed", "namespace drift", "Node UID drift", "extra node", "missing node", "wrong label", "not ready", "duplicate machine", "duplicate boot", "target address", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newExistingIdentityFixture(t)
 			id, source, actor := newClusterUUID(), f.source, "admin"
+			target := f.target
 			ctx, cancel := context.WithCancel(f.ctx)
 			defer cancel()
 			switch mode {
+			case "wrong target":
+				target = newClusterUUID()
 			case "source target":
 				source = f.target
 			case "source missing":
@@ -216,7 +232,7 @@ func TestClusterExistingIdentityPostgresRejectsDrift(t *testing.T) {
 				}
 				return base(ctx, path, out)
 			}
-			if _, err := f.c.reserveClusterExistingIdentity(ctx, id, f.maintenance, source, actor, read); err == nil {
+			if _, err := f.c.reserveClusterExistingIdentity(ctx, id, f.maintenance, source, target, actor, read); err == nil {
 				t.Fatal("unsafe reservation accepted", mode)
 			}
 			f.assertNoReservation(t, id)
@@ -257,7 +273,7 @@ func TestClusterExistingIdentityPostgresConcurrentReservation(t *testing.T) {
 				raw, _ := json.Marshal(value)
 				return json.Unmarshal(raw, out)
 			}
-			_, err := f.c.reserveClusterExistingIdentity(f.ctx, newClusterUUID(), f.maintenance, f.source, "admin", read)
+			_, err := f.c.reserveClusterExistingIdentity(f.ctx, newClusterUUID(), f.maintenance, f.source, f.target, "admin", read)
 			results <- err
 		}()
 	}
@@ -320,7 +336,7 @@ func TestClusterExistingIdentityPostgresLockWaitFence(t *testing.T) {
 					raw, _ := json.Marshal(value)
 					return json.Unmarshal(raw, out)
 				}
-				_, err := f.c.reserveClusterExistingIdentity(ctx, id, f.maintenance, f.source, "admin", read)
+				_, err := f.c.reserveClusterExistingIdentity(ctx, id, f.maintenance, f.source, f.target, "admin", read)
 				done <- err
 			}()
 			ticker := time.NewTicker(10 * time.Millisecond)

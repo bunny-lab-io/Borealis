@@ -918,6 +918,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "GET /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go",
+    "line": 61,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "GET /api/server/cluster/onboarding/operations/{id}",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_onboarding.go",
     "line": 46,
@@ -1001,7 +1010,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 346,
+    "line": 348,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1010,7 +1019,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 349,
+    "line": 351,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1019,7 +1028,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 343,
+    "line": 345,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1629,6 +1638,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "POST /api/server/cluster/nodes/{id}/identity-recovery/plan",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go",
+    "line": 60,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "POST /api/server/cluster/nodes/{id}/maintenance",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go",
     "line": 125,
@@ -1872,6 +1890,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "POST /internal/cluster/existing-identity-plan",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+    "line": 341,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-controller-reservation",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_broker_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "POST /internal/cluster/ssh-preparation-source",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
     "line": 339,
@@ -1883,7 +1910,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-vip-check",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 342,
+    "line": 344,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",
@@ -1892,7 +1919,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-vip-scope",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 341,
+    "line": 343,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",
