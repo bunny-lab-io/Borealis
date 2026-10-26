@@ -1,6 +1,7 @@
 package clusterbootstrap
 
 import (
+	"borealis/api-backend/internal/engineidentity"
 	"bufio"
 	"bytes"
 	"context"
@@ -14,26 +15,39 @@ import (
 )
 
 const PreparationChunkBytes = 12 << 10
-const MaxPreparationTransferBytes = MaxBundleBytes + MaxPreparationConfigBytes + MaxManifestBytes + 128
+const MaxPreparationTransferBytes = MaxBundleBytes + MaxPreparationConfigBytes + MaxManifestBytes + engineidentity.MaxEnvelopeBytes + 256
 const MaxPreparationSessionOutputBytes = 16 << 20
 
 // PreparationSessionRequest is separate from joined identity recovery. The
 // existing session remains verify-only here; this outer fixed action selects
-// source publication or proof-only reconciliation, never arbitrary commands.
+// source/account preparation, retained-fence pre-join identity installation or
+// proof-only reconciliation, never arbitrary commands or consumer startup.
 type PreparationSessionRequest struct {
-	Session        SessionRequest `json:"session"`
-	Action         string         `json:"action"`
-	ExpectedBase64 string         `json:"expected_base64"`
+	Session        SessionRequest          `json:"session"`
+	Action         string                  `json:"action"`
+	ExpectedBase64 string                  `json:"expected_base64"`
+	IdentitySource *engineidentity.Binding `json:"identity_source,omitempty"`
 }
 
 func NewPreparationSessionRequest(expected PreparationExpected, manager, nonce, action string) (PreparationSessionRequest, error) {
+	return newPreparationSessionRequest(expected, manager, nonce, action, nil)
+}
+
+// NewPrejoinPreparationSessionRequest carries public original-source identity,
+// never private keys or an invented target Node UID. The source binding must be
+// independently proved by the controller for every authority renewal.
+func NewPrejoinPreparationSessionRequest(expected PreparationExpected, manager, nonce, action string, source engineidentity.Binding) (PreparationSessionRequest, error) {
+	return newPreparationSessionRequest(expected, manager, nonce, action, &source)
+}
+
+func newPreparationSessionRequest(expected PreparationExpected, manager, nonce, action string, source *engineidentity.Binding) (PreparationSessionRequest, error) {
 	raw, err := json.Marshal(expected)
 	if err != nil {
 		return PreparationSessionRequest{}, ErrSessionProtocol
 	}
 	r := PreparationSessionRequest{Session: SessionRequest{Protocol: 1, Action: "verify", Nonce: nonce, Binding: expected.Target,
 		Repository: expected.Source.Repository, Release: expected.Source.Release, SourceSHA: expected.Source.SourceSHA,
-		AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw)}
+		AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source}
 	_, err = r.Expected()
 	return r, err
 }
@@ -45,6 +59,13 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 	}
 	switch r.Action {
 	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity":
+		if r.IdentitySource != nil {
+			return expected, ErrSessionProtocol
+		}
+	case "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity":
+		if r.IdentitySource == nil || validatePrejoinSource(r.Session.Binding, *r.IdentitySource) != nil {
+			return expected, ErrSessionProtocol
+		}
 	default:
 		return expected, ErrSessionProtocol
 	}
@@ -57,6 +78,14 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 		return PreparationExpected{}, ErrSessionProtocol
 	}
 	return expected, nil
+}
+
+func validatePrejoinSource(target SessionBinding, source engineidentity.Binding) error {
+	if target.Validate() != nil || source.ClusterID != target.ClusterID || !sessionUUID.MatchString(source.SourceID) ||
+		source.SourceID == "00000000-0000-0000-0000-000000000000" || source.SourceID == target.TargetID || !sessionKubernetesUID.MatchString(source.SourceUID) {
+		return ErrSessionProtocol
+	}
+	return nil
 }
 
 func (r PreparationSessionRequest) Digest() (string, error) {

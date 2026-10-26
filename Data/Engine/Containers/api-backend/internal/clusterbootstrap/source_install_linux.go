@@ -45,6 +45,10 @@ func (p *PreparationInputs) sourcePublicationInput(j *MutationJournal) (string, 
 }
 
 func (p *PreparationInputs) sourcePublicationInputWithIdentityRoot(j *MutationJournal, identityRoot bool) (string, error) {
+	return p.sourcePublicationInputForPrejoin(j, identityRoot, false)
+}
+
+func (p *PreparationInputs) sourcePublicationInputForPrejoin(j *MutationJournal, identityRoot, installed bool) (string, error) {
 	if p == nil || p.bundle == nil || p.configuration == nil || j == nil {
 		return "", ErrPreparationConfig
 	}
@@ -53,7 +57,7 @@ func (p *PreparationInputs) sourcePublicationInputWithIdentityRoot(j *MutationJo
 		return "", ErrSessionAuthority
 	}
 	for step := range j.state.Steps {
-		if step != "stage_source" && !(identityRoot && (step == "prepare_identity_root" || step == "prepare_runtime_identity")) {
+		if step != "stage_source" && !(identityRoot && (step == "prepare_identity_root" || step == "prepare_runtime_identity" || installed && step == "install_identity")) {
 			return "", ErrMutationJournal
 		}
 	}
@@ -272,7 +276,7 @@ func verifyPublishedSourceWithIdentityRoot(ctx context.Context, archive *os.File
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		uid := os.Geteuid()
-		if identity != nil && (name == prejoinSecretsRelative || name == prejoinSecretsRelative+"/"+engineidentity.RecoveryMarkerName) {
+		if identity != nil && (name == prejoinSecretsRelative || name == prejoinSecretsRelative+"/"+engineidentity.RecoveryMarkerName || identity.files != nil && strings.HasPrefix(name, prejoinSecretsRelative+"/")) {
 			uid = identity.uid
 		}
 		if !ok || int(stat.Uid) != uid || (!info.IsDir() && (!info.Mode().IsRegular() || stat.Nlink != 1)) {

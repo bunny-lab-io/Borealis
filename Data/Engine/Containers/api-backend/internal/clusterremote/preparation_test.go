@@ -2,6 +2,7 @@ package clusterremote
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bufio"
 	"bytes"
 	"context"
@@ -39,7 +40,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			var server *fakeSSH
 			var consumed atomic.Bool
@@ -81,6 +82,14 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						if err != nil || got.Target != want.Target || got.Source != want.Source || request.Session.ManagerSHA256 != digest {
 							return errors.New("private binding error")
 						}
+						if strings.Contains(mode, "prejoin") {
+							bound := engineidentity.Binding{ClusterID: want.Target.ClusterID, SourceID: "77777777-7777-4777-8777-777777777777", SourceUID: "88888888-8888-4888-8888-888888888888"}
+							if request.IdentitySource == nil || *request.IdentitySource != bound {
+								return errors.New("wrong identity source")
+							}
+						} else if request.IdentitySource != nil {
+							return errors.New("unexpected identity source")
+						}
 						if mode == "native rejection" {
 							return errors.New("private native error")
 						}
@@ -90,7 +99,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						if mode == "reconcile" {
 							wantAction = "reconcile_source"
 						}
-						if strings.HasSuffix(mode, "runtime_identity") {
+						if strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
 							wantAction = mode
 						}
 						if request.Action != wantAction {
@@ -135,7 +144,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 			if mode == "reconcile" {
 				action = "reconcile_source"
 			}
-			if strings.HasSuffix(mode, "runtime_identity") {
+			if strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
 				action = mode
 			}
 			if mode == "wrong host pin" {
@@ -148,7 +157,11 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				if mode == "truncated upload" {
 					managerPath = filepath.Join(t.TempDir(), "absent")
 				}
-				err = client.transferPreparation(ctx, managerPath, digest, int64(len(manager)), expected, action, []byte("private sudo fixture"), check, func(_ context.Context, output io.Writer) error {
+				var source *engineidentity.Binding
+				if strings.Contains(mode, "prejoin") {
+					source = &engineidentity.Binding{ClusterID: expected.Target.ClusterID, SourceID: "77777777-7777-4777-8777-777777777777", SourceUID: "88888888-8888-4888-8888-888888888888"}
+				}
+				err = client.transferPreparationWithIdentity(ctx, managerPath, digest, int64(len(manager)), expected, action, source, []byte("private sudo fixture"), check, func(_ context.Context, output io.Writer) error {
 					if mode == "producer failure" {
 						return errors.New("private producer error")
 					}
@@ -156,7 +169,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					return err
 				})
 			}
-			if (err == nil) != (mode == "deliver" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity")) {
+			if (err == nil) != (mode == "deliver" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
 				t.Fatalf("unexpected result: %v", err)
 			}
 			if err != nil && err != ErrBootstrapVerification {

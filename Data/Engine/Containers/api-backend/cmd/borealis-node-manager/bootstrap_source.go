@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"errors"
 	"io"
@@ -26,7 +27,14 @@ func bootstrapSourceSessionContained(args []string) {
 	}
 	defer guard.Close()
 	verify := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest) error {
-		return verifyBootstrapSource(ctx, request, true)
+		if verifyBootstrapSource(ctx, request, true) != nil {
+			return errBootstrapSource
+		}
+		if request.IdentitySource != nil {
+			_, err := bootstrapPrejoinQuiescence(ctx, request)
+			return err
+		}
+		return nil
 	}
 	receive := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) error {
 		expected, err := request.Expected()
@@ -43,43 +51,68 @@ func bootstrapSourceSessionContained(args []string) {
 		if err != nil {
 			return errBootstrapSource
 		}
-		return clusterbootstrap.ConsumePreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, input, check,
-			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
-				if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
+		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
+			if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
+				return errBootstrapSource
+			}
+			// The supervised root helper owns only this fixed private journal.
+			// Parent safety is checked independently before creating its leaf.
+			if bootstrapSourceSafeDirectory("/var/lib") != nil || ensureBootstrapMutationRoot("/var/lib") != nil {
+				return errBootstrapSource
+			}
+			authority := func(ctx context.Context) error {
+				if check(ctx) != nil || verifyBootstrapSource(ctx, request, false) != nil || check(ctx) != nil {
 					return errBootstrapSource
 				}
-				// The supervised root helper owns only this fixed private journal.
-				// Parent safety is checked independently before creating its leaf.
-				if bootstrapSourceSafeDirectory("/var/lib") != nil || ensureBootstrapMutationRoot("/var/lib") != nil {
-					return errBootstrapSource
-				}
-				authority := func(ctx context.Context) error {
-					if check(ctx) != nil || verifyBootstrapSource(ctx, request, false) != nil || check(ctx) != nil {
-						return errBootstrapSource
-					}
-					return nil
-				}
-				journal, err := clusterbootstrap.OpenMutationJournal(ctx, bootstrapMutationRoot, expected.Target, expected.Source, nonce, authority)
-				if err != nil {
-					return errBootstrapSource
+				return nil
+			}
+			journal, err := clusterbootstrap.OpenMutationJournal(ctx, bootstrapMutationRoot, expected.Target, expected.Source, nonce, authority)
+			if err != nil {
+				return errBootstrapSource
+			}
+			if request.IdentitySource != nil {
+				install, installErr := bootstrapPrejoinInstallation(ctx, request, authority)
+				if installErr != nil {
+					return errors.Join(installErr, journal.Close())
 				}
 				switch request.Action {
-				case "stage_source":
-					_, err = inputs.PublishSource(ctx, journal)
-				case "reconcile_source":
-					_, err = inputs.ReconcileSource(ctx, journal)
-				case "prepare_runtime_identity":
-					_, err = inputs.PrepareRuntimeIdentity(ctx, journal, clusterbootstrap.RuntimeIdentityActions{
-						Prepare: func(ctx context.Context, lock *os.File) error {
-							return prepareBootstrapRuntimeIdentity(ctx, lock, authority)
-						}, Prove: proveBootstrapRuntimeAccount,
-					})
-				case "reconcile_runtime_identity":
-					_, err = inputs.ReconcileRuntimeIdentity(ctx, journal, proveBootstrapRuntimeAccount)
+				case "prepare_prejoin_identity_root":
+					_, err = inputs.PreparePrejoinIdentityRoot(ctx, journal, install, material)
+				case "reconcile_prejoin_identity_root":
+					_, err = inputs.ReconcilePrejoinIdentityRoot(ctx, journal, install, material)
+				case "install_prejoin_identity":
+					_, err = inputs.InstallPreparedPrejoinIdentity(ctx, journal, install, material)
+				case "reconcile_prejoin_identity":
+					_, err = inputs.ReconcilePreparedPrejoinIdentity(ctx, journal, install, material)
 				default:
 					err = errBootstrapSource
 				}
 				return errors.Join(err, journal.Close())
+			}
+			switch request.Action {
+			case "stage_source":
+				_, err = inputs.PublishSource(ctx, journal)
+			case "reconcile_source":
+				_, err = inputs.ReconcileSource(ctx, journal)
+			case "prepare_runtime_identity":
+				_, err = inputs.PrepareRuntimeIdentity(ctx, journal, clusterbootstrap.RuntimeIdentityActions{
+					Prepare: func(ctx context.Context, lock *os.File) error {
+						return prepareBootstrapRuntimeIdentity(ctx, lock, authority)
+					}, Prove: proveBootstrapRuntimeAccount,
+				})
+			case "reconcile_runtime_identity":
+				_, err = inputs.ReconcileRuntimeIdentity(ctx, journal, proveBootstrapRuntimeAccount)
+			default:
+				err = errBootstrapSource
+			}
+			return errors.Join(err, journal.Close())
+		}
+		if request.IdentitySource != nil {
+			return clusterbootstrap.ConsumePrejoinPreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check, consume)
+		}
+		return clusterbootstrap.ConsumePreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, input, check,
+			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
+				return consume(ctx, inputs, nil)
 			})
 	}
 	if clusterbootstrap.ServePreparationSession(ctx, os.Stdin, os.Stdout, nonce, verify, receive, guard.ObserveDeadline) != nil {
@@ -172,7 +205,10 @@ func bootstrapSourceSafeDirectory(path string) error {
 }
 
 func verifyBootstrapSourcePaths(root *os.Root, action string, destination bool) error {
-	if action != "stage_source" && action != "reconcile_source" && action != "prepare_runtime_identity" && action != "reconcile_runtime_identity" {
+	switch action {
+	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity",
+		"prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity":
+	default:
 		return errBootstrapSource
 	}
 	for _, path := range []string{"etc/borealis", "etc/rancher/k3s", "var/lib/rancher/k3s", "usr/local/bin/k3s", "var/lib/kubelet", "etc/kubernetes"} {

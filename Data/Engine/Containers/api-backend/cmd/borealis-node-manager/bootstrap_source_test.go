@@ -94,7 +94,7 @@ func TestBootstrapSourceNativeProofBindings(t *testing.T) {
 }
 
 func TestBootstrapSourcePaths(t *testing.T) {
-	for _, mode := range []string{"fresh", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "missing account source", "occupied", "symlink", "unsafe ancestor", "file ancestor", "runtime", "missing source", "unknown action"} {
+	for _, mode := range []string{"fresh", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "missing account source", "occupied", "symlink", "unsafe ancestor", "file ancestor", "runtime", "missing source", "unknown action"} {
 		t.Run(mode, func(t *testing.T) {
 			base := t.TempDir()
 			if err := os.Mkdir(filepath.Join(base, "opt"), 0755); err != nil {
@@ -102,14 +102,14 @@ func TestBootstrapSourcePaths(t *testing.T) {
 			}
 			action := "stage_source"
 			switch mode {
-			case "reconcile", "occupied", "prepare_runtime_identity", "reconcile_runtime_identity":
+			case "reconcile", "occupied", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity":
 				if err := os.Mkdir(filepath.Join(base, "opt", "Borealis"), 0755); err != nil {
 					t.Fatal(err)
 				}
 				if mode == "reconcile" {
 					action = "reconcile_source"
 				}
-				if strings.HasSuffix(mode, "runtime_identity") {
+				if strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
 					action = mode
 				}
 			case "symlink":
@@ -141,7 +141,7 @@ func TestBootstrapSourcePaths(t *testing.T) {
 			}
 			defer root.Close()
 			err = verifyBootstrapSourcePaths(root, action, true)
-			if (err == nil) != (mode == "fresh" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity")) {
+			if (err == nil) != (mode == "fresh" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
 				t.Fatal("unsafe path evidence accepted", err)
 			}
 			if mode == "occupied" && verifyBootstrapSourcePaths(root, action, false) != nil {

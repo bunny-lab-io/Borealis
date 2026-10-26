@@ -33,7 +33,11 @@ func (p *PreparationInputs) ReconcileRuntimeIdentity(ctx context.Context, j *Mut
 }
 
 func (p *PreparationInputs) runtimeIdentityInput(j *MutationJournal, uid, gid int) (string, error) {
-	source, err := p.sourcePublicationInputWithIdentityRoot(j, true)
+	return p.runtimeIdentityInputForPrejoin(j, uid, gid, false)
+}
+
+func (p *PreparationInputs) runtimeIdentityInputForPrejoin(j *MutationJournal, uid, gid int, installed bool) (string, error) {
+	source, err := p.sourcePublicationInputForPrejoin(j, true, installed)
 	if err != nil || uid < 0 || gid < 0 {
 		return "", ErrMutationJournal
 	}

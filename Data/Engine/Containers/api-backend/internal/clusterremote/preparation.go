@@ -2,6 +2,7 @@ package clusterremote
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -43,8 +44,34 @@ func (client *Client) ReconcileRuntimeIdentity(ctx context.Context, inputs *clus
 
 func (client *Client) preparation(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, action, nil, nil, sudoPassword, check)
+}
+
+func (client *Client) PreparePrejoinIdentityRoot(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "prepare_prejoin_identity_root", &source, material, sudoPassword, check)
+}
+
+func (client *Client) ReconcilePrejoinIdentityRoot(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "reconcile_prejoin_identity_root", &source, material, sudoPassword, check)
+}
+
+func (client *Client) InstallPrejoinIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "install_prejoin_identity", &source, material, sudoPassword, check)
+}
+
+func (client *Client) ReconcilePrejoinIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "reconcile_prejoin_identity", &source, material, sudoPassword, check)
+}
+
+func (client *Client) preparationWithIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
 	binding := expected.Target
 	if client == nil || inputs == nil || expected.Validate() != nil || check == nil || ValidateSudoPassword(sudoPassword) != nil ||
+		(source == nil) != (material == nil) ||
 		binding.Address != client.target.Address || binding.Port != client.target.Port || binding.HostKeyAlgorithm != client.approved.Algorithm || binding.HostKeyFingerprint != client.approved.Fingerprint {
 		return ErrBootstrapVerification
 	}
@@ -60,12 +87,15 @@ func (client *Client) preparation(ctx context.Context, inputs *clusterbootstrap.
 	if err != nil {
 		return ErrBootstrapVerification
 	}
-	source, digest, size, err := bundle.ManagerProof()
-	if err != nil || source != expected.Source {
+	bundleSource, digest, size, err := bundle.ManagerProof()
+	if err != nil || bundleSource != expected.Source {
 		return ErrBootstrapVerification
 	}
-	return client.transferPreparation(ctx, bundle.ManagerPath(), digest, size, expected, action, sudoPassword, serialized,
+	return client.transferPreparationWithIdentity(ctx, bundle.ManagerPath(), digest, size, expected, action, source, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
+			if source != nil {
+				return inputs.WritePrejoinPreparation(ctx, expected, *source, material, output, serialized)
+			}
 			return inputs.WritePreparation(ctx, expected, output, serialized)
 		})
 }
@@ -74,6 +104,11 @@ func (client *Client) preparation(ctx context.Context, inputs *clusterbootstrap.
 // entrypoints always require a freshly verified PreparationInputs bundle.
 func (client *Client) transferPreparation(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
 	action string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error) error {
+	return client.transferPreparationWithIdentity(parent, managerPath, digest, size, expected, action, nil, sudoPassword, check, produce)
+}
+
+func (client *Client) transferPreparationWithIdentity(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error) error {
 	ctx, cancel := context.WithTimeout(parent, clusterbootstrap.SessionLifetime)
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { client.Close() })
@@ -87,6 +122,9 @@ func (client *Client) transferPreparation(parent context.Context, managerPath, d
 	}
 	nonce := hex.EncodeToString(random[:])
 	request, err := clusterbootstrap.NewPreparationSessionRequest(expected, digest, nonce, action)
+	if source != nil {
+		request, err = clusterbootstrap.NewPrejoinPreparationSessionRequest(expected, digest, nonce, action, *source)
+	}
 	if err != nil {
 		return ErrBootstrapVerification
 	}

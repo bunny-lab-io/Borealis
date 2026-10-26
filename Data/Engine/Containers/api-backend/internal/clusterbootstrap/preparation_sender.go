@@ -12,6 +12,10 @@ import (
 // Producer and refresh must honor cancellation; both finish before return.
 func ExchangePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
 	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error) error {
+	if request.IdentitySource != nil {
+		source := *request.IdentitySource
+		request.IdentitySource = &source
+	}
 	digest, err := request.Digest()
 	if err != nil || input == nil || output == nil || produce == nil || refresh == nil {
 		return ErrSessionProtocol

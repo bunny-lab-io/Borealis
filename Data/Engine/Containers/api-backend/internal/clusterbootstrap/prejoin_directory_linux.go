@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -23,6 +24,7 @@ const prejoinSecretsRelative = "Engine/Services/api-backend/secrets"
 type prejoinDirectoryProof struct {
 	uid, gid int
 	marker   []byte
+	files    map[string][]byte
 }
 
 // InstallPreparedPrejoinIdentity consumes the exact applied directory receipt
@@ -66,7 +68,25 @@ func (p *PreparationInputs) installPreparedPrejoinIdentity(ctx context.Context, 
 		verifySourceArchive(ctx, archive, p.bundle.asset) != nil || prejoinDirectoryBoundary(ctx, j, install) != nil {
 		return "", ErrPreparationConfig
 	}
-	return j.installIdentityLocked(ctx, install, material, true, true)
+	state, err := j.installIdentityLocked(ctx, install, material, true, true)
+	if err != nil {
+		return "", err
+	}
+	// The fixed-key transaction changes the permitted tree. Recheck the entire
+	// installed source/configuration plus exact new keys before acknowledging it;
+	// a committed journal alone cannot hide source drift during key publication.
+	proof.files = material.Files()
+	defer func() {
+		for _, raw := range proof.files {
+			clear(raw)
+		}
+	}()
+	if len(proof.files) != 4 || verifySourceArchive(ctx, archive, p.bundle.asset) != nil ||
+		verifyPublishedSourceWithIdentityRoot(ctx, archive, filepath.Join(parent, "Borealis"), environment, &proof) != nil ||
+		verifySourceArchive(ctx, archive, p.bundle.asset) != nil || prejoinDirectoryBoundary(ctx, j, install) != nil {
+		return "", ErrMutationUnknown
+	}
+	return state, nil
 }
 
 // PreparePrejoinIdentityRoot atomically publishes only the fixed new identity
@@ -93,8 +113,12 @@ func (p *PreparationInputs) ReconcilePrejoinIdentityRoot(ctx context.Context, j 
 // Caller holds journal mutex. Source receipt is checked against current actual
 // archive/configuration inputs, never an arbitrary successful phase label.
 func (p *PreparationInputs) prejoinDirectoryRequest(j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string) (string, prejoinDirectoryProof, error) {
+	return p.prejoinDirectoryRequestMode(j, install, material, parent, false)
+}
+
+func (p *PreparationInputs) prejoinDirectoryRequestMode(j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string, installed bool) (string, prejoinDirectoryProof, error) {
 	invalid := prejoinDirectoryProof{}
-	source, err := p.sourcePublicationInputWithIdentityRoot(j, true)
+	source, err := p.sourcePublicationInputForPrejoin(j, true, installed)
 	if err != nil || install.Check == nil || install.Quiesced == nil || install.Binding.ClusterID != j.state.Owner.ClusterID ||
 		install.Target.ProvisioningID != j.state.Owner.TargetID || install.Target.SSHFingerprint != j.state.Owner.HostKeyFingerprint ||
 		install.Root != filepath.Join(parent, "Borealis", prejoinSecretsRelative) || install.Journal != filepath.Join(j.root.Name(), "identity-attempt") {
@@ -104,7 +128,7 @@ func (p *PreparationInputs) prejoinDirectoryRequest(j *MutationJournal, install 
 	if record.State != "applied" || record.InputSHA256 != source || record.ResultSHA256 != source {
 		return "", invalid, ErrMutationJournal
 	}
-	accountInput, err := p.runtimeIdentityInput(j, install.UID, install.GID)
+	accountInput, err := p.runtimeIdentityInputForPrejoin(j, install.UID, install.GID, installed)
 	account := j.state.Steps["prepare_runtime_identity"]
 	if err != nil || account.State != "applied" || account.InputSHA256 != accountInput || account.ResultSHA256 != accountInput {
 		return "", invalid, ErrMutationJournal
@@ -122,7 +146,7 @@ func (p *PreparationInputs) prejoinDirectoryRequest(j *MutationJournal, install 
 		return "", invalid, ErrMutationJournal
 	}
 	digest := sha256.Sum256(raw)
-	return hex.EncodeToString(digest[:]), prejoinDirectoryProof{install.UID, install.GID, marker}, nil
+	return hex.EncodeToString(digest[:]), prejoinDirectoryProof{uid: install.UID, gid: install.GID, marker: marker}, nil
 }
 
 func prejoinDirectoryBoundary(ctx context.Context, j *MutationJournal, install engineidentity.Installation) error {
@@ -257,12 +281,18 @@ func (p *PreparationInputs) reconcilePrejoinIdentityRoot(ctx context.Context, j 
 }
 
 func verifyPrejoinDirectoryExtras(ctx context.Context, root *os.Root, actual map[string]fs.FileInfo, proof prejoinDirectoryProof) error {
-	for name, mode := range map[string]os.FileMode{"Engine/Services": 0755, "Engine/Services/api-backend": 0755, prejoinSecretsRelative: 0700} {
+	directories := map[string]os.FileMode{"Engine/Services": 0755, "Engine/Services/api-backend": 0755, prejoinSecretsRelative: 0700}
+	if proof.files != nil {
+		for _, relative := range []string{"Auth_Tokens", "Certificates", "Certificates/Code-Signing"} {
+			directories[prejoinSecretsRelative+"/"+relative] = 0700
+		}
+	}
+	for name, mode := range directories {
 		info, ok := actual[name]
 		if !ok || !info.IsDir() || info.Mode().Perm() != mode {
 			return ErrPreparationConfig
 		}
-		if name == prejoinSecretsRelative {
+		if name == prejoinSecretsRelative || strings.HasPrefix(name, prejoinSecretsRelative+"/") {
 			owner, ok := info.Sys().(*syscall.Stat_t)
 			if !ok || int(owner.Uid) != proof.uid || int(owner.Gid) != proof.gid {
 				return ErrPreparationConfig
@@ -271,8 +301,20 @@ func verifyPrejoinDirectoryExtras(ctx context.Context, root *os.Root, actual map
 		delete(actual, name)
 	}
 	name := prejoinSecretsRelative + "/" + engineidentity.RecoveryMarkerName
+	if verifyPrejoinPrivateFile(ctx, root, actual, proof, name, proof.marker) != nil {
+		return ErrPreparationConfig
+	}
+	for relative, raw := range proof.files {
+		if verifyPrejoinPrivateFile(ctx, root, actual, proof, prejoinSecretsRelative+"/"+relative, raw) != nil {
+			return ErrPreparationConfig
+		}
+	}
+	return nil
+}
+
+func verifyPrejoinPrivateFile(ctx context.Context, root *os.Root, actual map[string]fs.FileInfo, proof prejoinDirectoryProof, name string, expected []byte) error {
 	info, ok := actual[name]
-	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() != int64(len(proof.marker)) {
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() != int64(len(expected)) {
 		return ErrPreparationConfig
 	}
 	owner, ok := info.Sys().(*syscall.Stat_t)
@@ -288,9 +330,9 @@ func verifyPrejoinDirectoryExtras(ctx context.Context, root *os.Root, actual map
 	if err != nil || !os.SameFile(info, opened) {
 		return ErrPreparationConfig
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, int64(len(proof.marker))+1))
+	raw, err := io.ReadAll(io.LimitReader(file, int64(len(expected))+1))
 	defer clear(raw)
-	if err != nil || !bytes.Equal(raw, proof.marker) || ctx.Err() != nil {
+	if err != nil || !bytes.Equal(raw, expected) || ctx.Err() != nil {
 		return ErrPreparationConfig
 	}
 	delete(actual, name)
