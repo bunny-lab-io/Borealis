@@ -29,6 +29,13 @@ func newSSHPreparationApprovalFixture(t *testing.T, replacement bool) (sshPrepar
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Persist explicit Admin intent separately; it grants no readiness or leases.
+	f.op.Payload["ssh_preparation_request"] = confirmation
+	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
+	snapshot, _, err = f.c.loadClusterSSHPreparationApproval(f.ctx, f.op)
+	if err != nil {
+		t.Fatal("reload requested approval", err)
+	}
 	proof := clusterSSHPreparationApprovalProof{plan: plan, started: time.Now(), lifetime: f.ctx, recheck: func(context.Context) error {
 		if f.c.store.db.Stats().InUse != 0 {
 			t.Error("proof observation retained database connection")

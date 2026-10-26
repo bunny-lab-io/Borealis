@@ -9,7 +9,7 @@ import (
 
 // Operator confirmation binds one exact proposed cohort. The authenticated
 // caller supplies actor and database time; neither comes from request JSON.
-// This contract does not register a public route or establish readiness.
+// The Admin API records this intent; it does not establish readiness.
 type clusterSSHPreparationConfirmation struct {
 	Version     int    `json:"version"`
 	RequestID   string `json:"request_id"`
@@ -63,10 +63,23 @@ func (c clusterSSHPreparationConfirmation) valid(a clusterSSHPreparationAuthoriz
 }
 
 func newClusterSSHPreparationConfirmation(raw []byte, actor string, now int64, a clusterSSHPreparationAuthorization) (clusterSSHPreparationConfirmation, error) {
-	fail := func() (clusterSSHPreparationConfirmation, error) {
+	request, plan, err := parseClusterSSHPreparationRequestBody(raw)
+	if err != nil {
 		return clusterSSHPreparationConfirmation{}, errClusterConflict
 	}
-	if len(raw) == 0 || len(raw) > 4096 {
+	c := clusterSSHPreparationConfirmation{Version: 1, RequestID: request, Actor: actor, OperationID: a.OperationID,
+		Attempt: a.Attempt, PlanSHA256: plan, ConfirmedAt: now}
+	if !c.valid(a) {
+		return clusterSSHPreparationConfirmation{}, errClusterConflict
+	}
+	return c, nil
+}
+
+func parseClusterSSHPreparationRequestBody(raw []byte) (string, string, error) {
+	fail := func() (string, string, error) {
+		return "", "", errClusterConflict
+	}
+	if len(raw) == 0 || len(raw) > 4096 || !utf8.Valid(raw) {
 		return fail()
 	}
 	object, err := decodeClusterSSHObject(raw, map[string]bool{"request_id": true, "plan_sha256": true, "confirmation": true})
@@ -74,33 +87,38 @@ func newClusterSSHPreparationConfirmation(raw []byte, actor string, now int64, a
 		return fail()
 	}
 	request, err := clusterSSHString(object, "request_id", 36, false)
-	if err != nil {
+	if err != nil || !clusterUUIDRE.MatchString(request) {
 		return fail()
 	}
 	plan, err := clusterSSHString(object, "plan_sha256", 64, false)
-	if err != nil {
+	if err != nil || !validClusterSSHPreparationDigest(plan) {
 		return fail()
 	}
 	phrase, err := clusterSSHString(object, "confirmation", 32, false)
 	if err != nil || phrase != "PREPARE ENGINE NODES" {
 		return fail()
 	}
-	c := clusterSSHPreparationConfirmation{Version: 1, RequestID: request, Actor: actor, OperationID: a.OperationID,
-		Attempt: a.Attempt, PlanSHA256: plan, ConfirmedAt: now}
-	if !c.valid(a) {
-		return fail()
+	return request, plan, nil
+}
+
+func parseClusterSSHPreparationConfirmation(raw []byte, a clusterSSHPreparationAuthorization) (clusterSSHPreparationConfirmation, error) {
+	c, err := parseClusterSSHPreparationRequest(raw, a)
+	digest, digestErr := clusterSSHPreparationDigest(c)
+	if err != nil || digestErr != nil || digest != a.ConfirmationSHA256 {
+		return clusterSSHPreparationConfirmation{}, errClusterConflict
 	}
 	return c, nil
 }
 
-func parseClusterSSHPreparationConfirmation(raw []byte, a clusterSSHPreparationAuthorization) (clusterSSHPreparationConfirmation, error) {
+// An authenticated request records intent for this plan, not phase readiness.
+// Approval separately binds its digest into durable mutation authorization.
+func parseClusterSSHPreparationRequest(raw []byte, a clusterSSHPreparationAuthorization) (clusterSSHPreparationConfirmation, error) {
 	var c clusterSSHPreparationConfirmation
 	if len(raw) == 0 || len(raw) > 4096 || json.Unmarshal(raw, &c) != nil || !c.valid(a) {
 		return c, errClusterConflict
 	}
 	canonical, err := json.Marshal(c)
-	digest, digestErr := clusterSSHPreparationDigest(c)
-	if err != nil || digestErr != nil || !sameClusterSSHStoredJSON(raw, canonical, 0) || digest != a.ConfirmationSHA256 {
+	if err != nil || !sameClusterSSHStoredJSON(raw, canonical, 0) {
 		return clusterSSHPreparationConfirmation{}, errClusterConflict
 	}
 	return c, nil

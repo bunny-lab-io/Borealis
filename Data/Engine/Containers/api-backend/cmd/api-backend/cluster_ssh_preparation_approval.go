@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"slices"
 	"strings"
 	"time"
 )
@@ -46,30 +45,39 @@ func (p clusterSSHPreparationApprovalProof) valid(plan string) bool {
 // worker leases. Database time is returned for a future authenticated request
 // boundary; controller approval still requires independently fresh phase proof.
 func (c *clusterController) loadClusterSSHPreparationApproval(ctx context.Context, operation clusterControllerOperation) (clusterSSHPreparationApprovalSnapshot, int64, error) {
+	if c == nil {
+		return clusterSSHPreparationApprovalSnapshot{}, 0, errClusterConflict
+	}
+	return c.store.readClusterSSHPreparationProposal(ctx, operation, c.holder)
+}
+
+// Read-only proposal projection can be shared with the Admin API. Passing the
+// recorded owner to a read grants no controller lease or approval capability.
+func (s *postgresOperatorStore) readClusterSSHPreparationProposal(ctx context.Context, operation clusterControllerOperation, holder string) (clusterSSHPreparationApprovalSnapshot, int64, error) {
 	fail := func() (clusterSSHPreparationApprovalSnapshot, int64, error) {
 		return clusterSSHPreparationApprovalSnapshot{}, 0, errClusterConflict
 	}
-	if c == nil || c.store == nil || c.store.db == nil || ctx.Err() != nil || !clusterUUIDRE.MatchString(operation.ID) ||
+	if s == nil || s.db == nil || ctx.Err() != nil || !clusterUUIDRE.MatchString(operation.ID) ||
 		operation.Kind != "ssh_onboarding" || operation.State != "waiting" || operation.CurrentStep != clusterSSHQualificationStep ||
-		operation.Attempt < 1 || c.holder == "" || len(c.holder) > 1024 {
+		operation.Attempt < 1 || holder == "" || len(holder) > 1024 {
 		return fail()
 	}
 	var snapshot clusterSSHPreparationApprovalSnapshot
 	w := &snapshot.work
 	var now int64
-	if c.store.db.QueryRowContext(ctx, `SELECT o.payload_json,c.baseline_release,c.baseline_sha,floor(extract(epoch FROM clock_timestamp()))::bigint
+	if s.db.QueryRowContext(ctx, `SELECT o.payload_json,c.baseline_release,c.baseline_sha,floor(extract(epoch FROM clock_timestamp()))::bigint
  FROM engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step=$2 AND o.attempt=$3
  AND octet_length(o.payload_json)<=262144 AND c.id=1 AND c.active_operation_id=o.id
  AND l.name=$4 AND l.holder=$5 AND l.expires_at>extract(epoch FROM clock_timestamp())`, operation.ID, clusterSSHQualificationStep,
-		operation.Attempt, clusterControllerLeaseName, c.holder).Scan(&w.Payload, &w.Baseline.Release, &w.Baseline.SourceSHA, &now) != nil {
+		operation.Attempt, clusterControllerLeaseName, holder).Scan(&w.Payload, &w.Baseline.Release, &w.Baseline.SourceSHA, &now) != nil {
 		return fail()
 	}
 	w.Baseline.Repository, w.Baseline.AllowQualification = clusterGitHubRepo(), strings.Contains(w.Baseline.Release, "-rc.")
 	if w.Baseline.Validate() != nil {
 		return fail()
 	}
-	anchor := clusterSSHTargetLease{OperationID: operation.ID, OperationAttempt: operation.Attempt, ControllerHolder: c.holder}
+	anchor := clusterSSHTargetLease{OperationID: operation.ID, OperationAttempt: operation.Attempt, ControllerHolder: holder}
 	var version string
 	var err error
 	w.Proof, version, err = parseClusterSSHPreparationInspection([]byte(w.Payload), anchor, w.Baseline)
@@ -86,7 +94,7 @@ func (c *clusterController) loadClusterSSHPreparationApproval(ctx context.Contex
 	if err != nil || !completedClusterSSHQualification(report) || report.ObservedAt > now || now-report.ObservedAt >= clusterSSHInspectionLifetimeSeconds {
 		return fail()
 	}
-	w.Source, err = readClusterSSHQueueSource(ctx, c.store.db)
+	w.Source, err = readClusterSSHQueueSource(ctx, s.db)
 	if err != nil {
 		return fail()
 	}
@@ -104,7 +112,7 @@ func (c *clusterController) loadClusterSSHPreparationApproval(ctx context.Contex
 		return fail()
 	}
 	a := &w.Authorization
-	a.Version, a.OperationID, a.Attempt, a.ControllerHolder = 1, operation.ID, operation.Attempt, c.holder
+	a.Version, a.OperationID, a.Attempt, a.ControllerHolder = 1, operation.ID, operation.Attempt, holder
 	if a.InspectionSHA256, err = clusterSSHPreparationDigest(w.Proof); err != nil {
 		return fail()
 	}
@@ -121,7 +129,7 @@ func (c *clusterController) loadClusterSSHPreparationApproval(ctx context.Contex
 		if err != nil {
 			return fail()
 		}
-		if c.store.db.QueryRowContext(ctx, `SELECT t.lease_generation,p.aegis_generation,p.ciphertext
+		if s.db.QueryRowContext(ctx, `SELECT t.lease_generation,p.aegis_generation,p.ciphertext
  FROM engine.cluster_onboarding_targets t,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a
  WHERE t.id=$1 AND t.operation_id=$2 AND t.operation_attempt=$3 AND t.cluster_id=$4
  AND t.state='queued' AND t.current_step='qualification_complete' AND t.lease_holder='' AND t.lease_expires_at=0
@@ -166,6 +174,10 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	if json.Unmarshal([]byte(w.Payload), &payload) != nil || payload["ssh_preparation_authorization"] != nil || payload["ssh_preparation_confirmation"] != nil {
 		return errClusterConflict
 	}
+	requested, err := parseClusterSSHPreparationRequest(payload["ssh_preparation_request"], w.Authorization)
+	if err != nil || requested != confirmation {
+		return errClusterConflict
+	}
 	w.Authorization.ConfirmationSHA256, err = clusterSSHPreparationDigest(confirmation)
 	if err != nil {
 		return errClusterConflict
@@ -190,48 +202,17 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	if err != nil {
 		return errClusterConflict
 	}
-	targets := slices.Clone(w.Proof.Cohort.Targets)
-	slices.SortFunc(targets, func(a, b clusterSSHInspectedTarget) int {
-		return strings.Compare(a.Binding.TargetID, b.Binding.TargetID)
-	})
-	reports, keys, generations, credentials := map[string]string{}, map[string]string{}, map[string]int64{}, map[string]sealedClusterSSHCredentials{}
-	for i, target := range w.Proof.Cohort.Targets {
-		credential, reserved := snapshot.credentials[i], w.Authorization.Targets[i]
-		digest, err := clusterSSHPreparationDigest([]string{credential.generation, credential.ciphertext})
-		if err != nil || reserved.TargetID != target.Binding.TargetID || credential.binding != target.Binding || digest != reserved.CredentialSHA256 {
-			return errClusterConflict
-		}
-		raw, err := json.Marshal(target.Report)
-		if err != nil {
-			return errClusterConflict
-		}
-		reports[target.Binding.TargetID], keys[target.Binding.TargetID] = string(raw), base64.StdEncoding.EncodeToString(target.Key.PublicKey)
-		generations[target.Binding.TargetID], credentials[target.Binding.TargetID] = reserved.QualificationGeneration, credential
+	check, err := clusterSSHPreparationProposalCheck(snapshot)
+	if err != nil {
+		return errClusterConflict
 	}
 	tx, err := c.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errClusterUnavailable
 	}
 	defer tx.Rollback()
-	if lockClusterSSHQualification(ctx, tx, w.Authorization.OperationID, targets) != nil ||
-		checkClusterSSHQualificationSource(ctx, tx, clusterSSHQualificationWork{Proof: w.Proof, Source: w.Source}) != nil {
+	if check(ctx, tx) != nil {
 		return errClusterConflict
-	}
-	for _, target := range targets {
-		credential := credentials[target.Binding.TargetID]
-		var present int
-		if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets t,engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a
- WHERE t.id=$1 AND t.operation_id=$2 AND t.operation_attempt=$3 AND t.cluster_id=$4
- AND t.state='queued' AND t.current_step='qualification_complete' AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=$5
- AND t.inspected_generation=$6 AND t.inspected_attempt=$3 AND t.inspected_at=$7 AND t.inspection_json=$8
- AND t.management_ip=$9 AND t.ssh_port=$10 AND t.host_key_algorithm=$11 AND t.host_key_fingerprint=$12 AND t.host_key_base64=$13 AND t.ordinal=$14
- AND t.credential_state='available' AND p.target_id=t.id AND p.aegis_generation=$15 AND p.ciphertext=$16
- AND a.id=1 AND a.verification_token=p.aegis_generation`, target.Binding.TargetID, w.Authorization.OperationID, w.Authorization.Attempt,
-			target.Binding.ClusterID, generations[target.Binding.TargetID], target.Generation, target.InspectedAt, reports[target.Binding.TargetID],
-			target.Binding.Address, target.Binding.Port, target.Key.Algorithm, target.Key.Fingerprint, keys[target.Binding.TargetID], target.Ordinal,
-			credential.generation, credential.ciphertext).Scan(&present) != nil {
-			return errClusterConflict
-		}
 	}
 	var now int64
 	// All expiry checks use one fresh database clock after every row-lock wait.
@@ -246,7 +227,7 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
  WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$11 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)
  RETURNING floor(moment.now)::bigint`, w.Authorization.OperationID, clusterSSHPreparationOperationStep, string(updated), clusterSSHQualificationStep,
 		w.Authorization.Attempt, w.Payload, clusterControllerLeaseName, c.holder, qualification.ObservedAt, confirmation.ConfirmedAt,
-		clusterSSHInspectionLifetimeSeconds, len(targets)).Scan(&now) != nil || !proof.valid(plan) || ctx.Err() != nil {
+		clusterSSHInspectionLifetimeSeconds, len(w.Proof.Cohort.Targets)).Scan(&now) != nil || !proof.valid(plan) || ctx.Err() != nil {
 		return errClusterConflict
 	}
 	if insertClusterEvent(ctx, tx, w.Authorization.OperationID, "", w.Source.ClusterID, "ssh_preparation_approved", "running",
