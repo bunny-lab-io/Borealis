@@ -1005,7 +1005,7 @@ func (s *postgresOperatorStore) retryClusterOperation(ctx context.Context, actor
 
 func (s *postgresOperatorStore) cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error) {
 	result, err := s.transitionClusterOperation(ctx, actor, operationID, "cancel")
-	if err == nil && cleanText(result["kind"]) == "ssh_onboarding" {
+	if err == nil && (cleanText(result["kind"]) == "ssh_onboarding" || cleanText(result["kind"]) == clusterExistingIdentityKind) {
 		// transition has returned its pooled connection before credential cleanup.
 		err = s.cleanupClusterSSHCredentials(ctx)
 	}
@@ -1116,8 +1116,13 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 			return nil, fmt.Errorf("%w: another cluster operation is active", errClusterConflict)
 		}
 	} else {
-		if kind == clusterExistingIdentityKind && (state != "waiting" || currentStep != clusterExistingIdentityReserved) {
-			return nil, fmt.Errorf("%w: identity recovery cancellation requires untouched reservation", errClusterConflict)
+		if kind == clusterExistingIdentityKind {
+			if state != "waiting" || (currentStep != clusterExistingIdentityReserved && currentStep != clusterExistingIdentityConfirmed) {
+				return nil, fmt.Errorf("%w: identity recovery cancellation requires untouched reservation", errClusterConflict)
+			}
+			if currentStep == clusterExistingIdentityConfirmed && cancelClusterExistingIdentityConfirmation(ctx, tx, operationID) != nil {
+				return nil, errClusterConflict
+			}
 		}
 		if kind == "membership_admit" {
 			return nil, fmt.Errorf("%w: approved admission may already have joined; retry recovery instead of cancelling membership", errClusterConflict)

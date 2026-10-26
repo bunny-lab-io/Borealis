@@ -47,10 +47,14 @@ type clusterExistingIdentityReader interface {
 
 // One SQL snapshot, fully released before parsing configuration or Kubernetes IO.
 func readClusterExistingIdentitySnapshot(ctx context.Context, reader clusterExistingIdentityReader, holder, maintenance string) (clusterExistingIdentitySnapshot, int64, error) {
+	return readClusterExistingIdentitySnapshotForOperation(ctx, reader, holder, maintenance, "")
+}
+
+func readClusterExistingIdentitySnapshotForOperation(ctx context.Context, reader clusterExistingIdentityReader, holder, maintenance, operation string) (clusterExistingIdentitySnapshot, int64, error) {
 	fail := func() (clusterExistingIdentitySnapshot, int64, error) {
 		return clusterExistingIdentitySnapshot{}, 0, errClusterConflict
 	}
-	if reader == nil || holder == "" || len(holder) > 1024 || !clusterUUIDRE.MatchString(maintenance) || ctx.Err() != nil {
+	if reader == nil || holder == "" || len(holder) > 1024 || !clusterUUIDRE.MatchString(maintenance) || (operation != "" && !clusterUUIDRE.MatchString(operation)) || ctx.Err() != nil {
 		return fail()
 	}
 	rows, err := reader.QueryContext(ctx, `SELECT c.cluster_id,c.baseline_release,c.baseline_sha,c.config_json,c.control_plane_vip,l.holder,
@@ -62,14 +66,14 @@ func readClusterExistingIdentitySnapshot(ctx context.Context, reader clusterExis
  JOIN engine.cluster_operations m ON m.id=$3 AND m.kind='node_maintenance' AND m.state='succeeded' AND m.current_step='complete'
  JOIN engine.cluster_nodes n ON n.membership_state='Active'
  WHERE c.id=1 AND c.enabled=1 AND c.active_size=3 AND c.desired_size=3 AND c.status='Healthy' AND c.hmr_state='inactive'
- AND COALESCE(c.active_operation_id,'')='' AND c.control_plane_vip=c.edge_vip AND octet_length(c.config_json)<=65536
+ AND COALESCE(c.active_operation_id,'')=$4 AND c.control_plane_vip=c.edge_vip AND octet_length(c.config_json)<=65536
  AND octet_length(m.payload_json)<=65536 AND m.attempt>0 AND m.started_at>0 AND m.finished_at>=m.started_at
  AND m.finished_at<=extract(epoch FROM statement_timestamp())
- AND NOT EXISTS(SELECT 1 FROM engine.cluster_operations o WHERE o.state IN ('queued','running','waiting'))
+ AND NOT EXISTS(SELECT 1 FROM engine.cluster_operations o WHERE o.state IN ('queued','running','waiting') AND o.id<>$4)
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_operations o WHERE o.id<>m.id AND o.kind='node_maintenance' AND o.target_node_id=m.target_node_id
  AND (o.created_at>=m.started_at OR o.finished_at>=m.finished_at))
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_admissions a WHERE a.state IN ('Pending Quorum','Approved','Recovery Required'))
- ORDER BY n.id LIMIT 4`, clusterControllerLeaseName, holder, maintenance)
+ ORDER BY n.id LIMIT 4`, clusterControllerLeaseName, holder, maintenance, operation)
 	if err != nil {
 		return fail()
 	}

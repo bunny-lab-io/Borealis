@@ -63,6 +63,10 @@ REVIEWED_ROUTE_TESTS.update({
     )
 })
 REVIEWED_ROUTE_TESTS[(
+    "POST /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}/confirm",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go",
+)] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_confirmation_api_test.go"
+REVIEWED_ROUTE_TESTS[(
     "POST /internal/cluster/existing-identity-plan",
     "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
 )] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_broker_test.go"

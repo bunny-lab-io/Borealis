@@ -45,6 +45,7 @@ type clusterExistingIdentityPlanStore interface {
 type clusterExistingIdentityAPI struct {
 	auth    *authService
 	store   clusterExistingIdentityPlanStore
+	sealer  clusterSSHCredentialSealer
 	reserve func(context.Context, clusterExistingIdentityBrokerRequest) (clusterExistingIdentityPlan, error)
 	slots   chan struct{}
 }
@@ -53,12 +54,14 @@ func registerClusterExistingIdentityRoutes(mux *http.ServeMux, auth *authService
 	s := &clusterExistingIdentityAPI{auth: auth, slots: make(chan struct{}, 2)}
 	if auth != nil {
 		s.store, _ = auth.store.(clusterExistingIdentityPlanStore)
+		s.sealer, _ = auth.aegis.(clusterSSHCredentialSealer)
 	}
 	if client, err := newClusterExistingIdentityBrokerClient(); err == nil {
 		s.reserve = client.reserve
 	}
 	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/identity-recovery/plan", s.plan)
 	mux.HandleFunc("GET /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}", s.read)
+	mux.HandleFunc("POST /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}/confirm", s.confirm)
 }
 
 func writeClusterExistingIdentityPlan(w http.ResponseWriter, status int, p clusterExistingIdentityPlan, state string) {

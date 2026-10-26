@@ -73,9 +73,13 @@ func (s *postgresOperatorStore) clusterExistingIdentityPlan(ctx context.Context,
  WHERE id=$1 AND target_node_id=$2 AND kind=$3 AND octet_length(payload_json)<=65536`, id, target, clusterExistingIdentityKind).Scan(&payload, &state, &step) != nil {
 		return clusterExistingIdentityPlan{}, "", errClusterConflict
 	}
-	p, err := parseClusterExistingIdentityPlan([]byte(payload))
-	if err != nil || p.OperationID != id || p.TargetID != target || !((state == "waiting" && step == clusterExistingIdentityReserved) || (state == "cancelled" && step == "cancelled")) {
+	p, confirmation, err := parseClusterExistingIdentityPayload([]byte(payload))
+	if err != nil || p.OperationID != id || p.TargetID != target || !((state == "waiting" && step == clusterExistingIdentityReserved && confirmation == nil) ||
+		(state == "waiting" && step == clusterExistingIdentityConfirmed && confirmation != nil) || (state == "cancelled" && step == "cancelled")) {
 		return clusterExistingIdentityPlan{}, "", errClusterConflict
+	}
+	if state == "waiting" && confirmation != nil {
+		state = "awaiting_identity_observation"
 	}
 	return p, state, nil
 }

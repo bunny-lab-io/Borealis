@@ -920,7 +920,7 @@
   {
     "pattern": "GET /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go",
-    "line": 61,
+    "line": 63,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api_test.go",
@@ -1638,9 +1638,18 @@
     "test_exemption": null
   },
   {
+    "pattern": "POST /api/server/cluster/nodes/{id}/identity-recovery/operations/{operation}/confirm",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go",
+    "line": 64,
+    "class": "operator-api",
+    "authentication": "operator-session",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_confirmation_api_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "POST /api/server/cluster/nodes/{id}/identity-recovery/plan",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api.go",
-    "line": 60,
+    "line": 62,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_api_test.go",
