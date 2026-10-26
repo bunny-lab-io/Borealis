@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +33,9 @@ func newSSHPreparationApprovalFixture(t *testing.T, replacement bool) (sshPrepar
 		}
 		return nil
 	}}
+	for i := range proof.receipts {
+		proof.receipts[i] = strings.Repeat("a", 64)
+	}
 	return f, snapshot, confirmation, proof
 }
 
@@ -69,6 +73,49 @@ func TestClusterSSHPreparationApprovalPostgresLifecycle(t *testing.T) {
 			}
 			if f.c.commitClusterSSHPreparationApproval(f.ctx, snapshot, confirmation, proof) == nil || f.events(t) != before+1 {
 				t.Fatal("approval replay changed claimed operation")
+			}
+		})
+	}
+}
+
+func TestClusterSSHPreparationApprovalPostgresFreshCoordinator(t *testing.T) {
+	for _, mode := range []string{"success", "missing gate", "changed source", "changed gate"} {
+		t.Run(mode, func(t *testing.T) {
+			f, snapshot, confirmation, _ := newSSHPreparationApprovalFixture(t, false)
+			gates := sshPreparationGatesFixture()
+			calls := 0
+			gates[0] = func(context.Context, string) (string, error) {
+				calls++
+				if f.c.store.db.Stats().InUse != 0 {
+					t.Error("phase gate held connection")
+				}
+				if mode == "changed gate" && calls > 1 {
+					return strings.Repeat("f", 64), nil
+				}
+				return strings.Repeat("a", 64), nil
+			}
+			if mode == "missing gate" {
+				gates[5] = nil
+			}
+			get := func(ctx context.Context, path string, out any) error {
+				if f.c.store.db.Stats().InUse != 0 {
+					t.Error("source proof held connection")
+				}
+				if mode == "changed source" && calls > 0 {
+					return errClusterConflict
+				}
+				return f.observe(ctx, path, out)
+			}
+			err := f.c.approveClusterSSHPreparation(f.ctx, snapshot, confirmation, get, gates)
+			if (err == nil) != (mode == "success") {
+				t.Fatal("coordinator outcome", err)
+			}
+			var state string
+			if f.c.store.db.QueryRowContext(f.ctx, `SELECT state FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&state) != nil {
+				t.Fatal("parent state")
+			}
+			if (state == "running") != (mode == "success") {
+				t.Fatal("failed proof changed parent")
 			}
 		})
 	}

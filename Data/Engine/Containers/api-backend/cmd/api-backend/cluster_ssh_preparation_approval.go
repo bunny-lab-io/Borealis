@@ -24,6 +24,7 @@ func (clusterSSHPreparationApprovalSnapshot) GoString() string {
 // Only a synchronous phase-proof scope may supply this live capability. It
 // cannot be serialized, restored from a digest or inferred from qualification.
 type clusterSSHPreparationApprovalProof struct {
+	receipts [6]string
 	plan     string
 	started  time.Time
 	lifetime context.Context
@@ -31,6 +32,11 @@ type clusterSSHPreparationApprovalProof struct {
 }
 
 func (p clusterSSHPreparationApprovalProof) valid(plan string) bool {
+	for _, digest := range p.receipts {
+		if !validClusterSSHPreparationDigest(digest) {
+			return false
+		}
+	}
 	return p.plan == plan && validClusterSSHPreparationDigest(plan) && !p.started.IsZero() &&
 		time.Since(p.started) >= 0 && time.Since(p.started) < 30*time.Second && p.lifetime != nil &&
 		p.lifetime.Err() == nil && p.recheck != nil
@@ -70,10 +76,10 @@ func (c *clusterController) loadClusterSSHPreparationApproval(ctx context.Contex
 	if err != nil {
 		return fail()
 	}
-	var reportRaw, authorizationRaw, confirmationRaw, receiptRaw, recoveryRaw json.RawMessage
+	var reportRaw, authorizationRaw, confirmationRaw, receiptRaw, recoveryRaw, readinessRaw json.RawMessage
 	if clusterBootstrapObject([]byte(w.Payload), map[string]any{"ssh_qualification": &reportRaw, "ssh_preparation_authorization": &authorizationRaw,
-		"ssh_preparation_confirmation": &confirmationRaw, "ssh_preparation": &receiptRaw, "ssh_identity_recovery": &recoveryRaw}) != nil ||
-		len(authorizationRaw) != 0 || len(confirmationRaw) != 0 || len(receiptRaw) != 0 || len(recoveryRaw) != 0 {
+		"ssh_preparation_confirmation": &confirmationRaw, "ssh_preparation_readiness": &readinessRaw, "ssh_preparation": &receiptRaw, "ssh_identity_recovery": &recoveryRaw}) != nil ||
+		len(authorizationRaw) != 0 || len(confirmationRaw) != 0 || len(readinessRaw) != 0 || len(receiptRaw) != 0 || len(recoveryRaw) != 0 {
 		return fail()
 	}
 	report, err := parseClusterSSHQualificationReport(string(reportRaw), operation.Attempt)
@@ -169,6 +175,10 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 		return errClusterConflict
 	}
 	payload["ssh_preparation_confirmation"], err = json.Marshal(confirmation)
+	if err != nil {
+		return errClusterConflict
+	}
+	payload["ssh_preparation_readiness"], err = json.Marshal(clusterSSHPreparationReadiness(plan, proof.receipts))
 	if err != nil {
 		return errClusterConflict
 	}

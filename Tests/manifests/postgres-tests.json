@@ -35,6 +35,7 @@
     "TestClusterSSHParentPostgresProofCommitFences",
     "TestClusterSSHPreparationAuthorityPostgresReadsOutsideConnection",
     "TestClusterSSHPreparationApprovalPostgresLifecycle",
+    "TestClusterSSHPreparationApprovalPostgresFreshCoordinator",
     "TestClusterSSHPreparationApprovalPostgresRejectsDrift",
     "TestClusterSSHPreparationApprovalPostgresWaitFence",
     "TestClusterSSHPreparationAuthorityPostgresRechecksAfterLocks",
