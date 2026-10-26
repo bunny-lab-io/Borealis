@@ -1039,7 +1039,7 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	nextState, step, message := "", "", ""
 	retryResumeStep := ""
 	if action == "retry" {
-		if kind == "ssh_onboarding" {
+		if kind == "ssh_onboarding" || kind == clusterExistingIdentityKind {
 			return nil, fmt.Errorf("%w: SSH retry requires explicit credential resubmission and target reconciliation", errClusterConflict)
 		}
 		if kind == "hmr_start" {
@@ -1116,6 +1116,9 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 			return nil, fmt.Errorf("%w: another cluster operation is active", errClusterConflict)
 		}
 	} else {
+		if kind == clusterExistingIdentityKind && (state != "waiting" || currentStep != clusterExistingIdentityReserved) {
+			return nil, fmt.Errorf("%w: identity recovery cancellation requires untouched reservation", errClusterConflict)
+		}
 		if kind == "membership_admit" {
 			return nil, fmt.Errorf("%w: approved admission may already have joined; retry recovery instead of cancelling membership", errClusterConflict)
 		}

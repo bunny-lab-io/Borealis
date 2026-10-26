@@ -1366,6 +1366,7 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		  FROM engine.cluster_operations o
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
+		   AND o.kind<>'ssh_identity_recovery'
 		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting')
 		 FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
