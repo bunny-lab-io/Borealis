@@ -100,35 +100,48 @@ func clusterBootstrapObject(raw []byte, fields map[string]any) error {
 func prepareClusterSSHBootstrap(ctx context.Context, expected clusterbootstrap.Expected, scratchParent string) (*clusterbootstrap.Bundle, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	assets, err := resolveClusterBootstrapAssets(ctx, expected)
+	manifest, assets, err := readClusterSSHBootstrapPublication(ctx, expected)
 	if err != nil {
 		return nil, err
 	}
-	manifestAsset := assets[clusterbootstrap.ManifestName]
-	response, err := openClusterBootstrapAsset(ctx, manifestAsset)
-	if err != nil {
-		return nil, err
-	}
-	raw, readErr := io.ReadAll(io.LimitReader(response.Body, manifestAsset.Size+1))
-	_ = response.Body.Close()
-	hash := sha256.Sum256(raw)
-	if readErr != nil || int64(len(raw)) != manifestAsset.Size || "sha256:"+hex.EncodeToString(hash[:]) != manifestAsset.Digest {
-		return nil, errors.New("node bootstrap manifest asset size or digest mismatch")
-	}
-	manifest, err := clusterbootstrap.ParseManifest(raw, expected)
-	if err != nil {
-		return nil, err
-	}
-	archiveAsset := assets[clusterbootstrap.BundleName]
-	if manifest.BundleSize() != archiveAsset.Size || "sha256:"+manifest.BundleSHA256() != archiveAsset.Digest {
-		return nil, errors.New("node bootstrap manifest does not match published archive asset")
-	}
-	response, err = openClusterBootstrapAsset(ctx, archiveAsset)
+	response, err := openClusterBootstrapAsset(ctx, assets[clusterbootstrap.BundleName])
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
 	return clusterbootstrap.Stage(ctx, scratchParent, manifest, response.Body, "")
+}
+
+// Publication proof authenticates the manifest and exact archive identity. It
+// does not download, validate or execute archive contents; staging does that.
+func readClusterSSHBootstrapPublication(ctx context.Context, expected clusterbootstrap.Expected) (*clusterbootstrap.Manifest, map[string]clusterBootstrapAsset, error) {
+	assets, err := resolveClusterBootstrapAssets(ctx, expected)
+	if err != nil {
+		return nil, nil, err
+	}
+	manifestAsset := assets[clusterbootstrap.ManifestName]
+	response, err := openClusterBootstrapAsset(ctx, manifestAsset)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, manifestAsset.Size+1))
+	_ = response.Body.Close()
+	hash := sha256.Sum256(raw)
+	if readErr != nil || int64(len(raw)) != manifestAsset.Size || "sha256:"+hex.EncodeToString(hash[:]) != manifestAsset.Digest {
+		return nil, nil, errors.New("node bootstrap manifest asset size or digest mismatch")
+	}
+	manifest, err := clusterbootstrap.ParseManifest(raw, expected)
+	if err != nil {
+		return nil, nil, err
+	}
+	archiveAsset := assets[clusterbootstrap.BundleName]
+	if manifest.BundleSize() != archiveAsset.Size || "sha256:"+manifest.BundleSHA256() != archiveAsset.Digest {
+		return nil, nil, errors.New("node bootstrap manifest does not match published archive asset")
+	}
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+	return manifest, assets, nil
 }
 
 func resolveClusterBootstrapAssets(ctx context.Context, expected clusterbootstrap.Expected) (map[string]clusterBootstrapAsset, error) {
