@@ -110,6 +110,10 @@ func main() {
 		bootstrapSession(os.Args[2:])
 	case "bootstrap-session-contained":
 		bootstrapSessionContained(os.Args[2:])
+	case "bootstrap-source-session":
+		bootstrapExecutor(os.Args[2:], true)
+	case "bootstrap-source-session-contained":
+		bootstrapSourceSessionContained(os.Args[2:])
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}

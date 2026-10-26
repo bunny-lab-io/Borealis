@@ -41,17 +41,29 @@ func ExecutorUnit(nonce string) (string, error) {
 // carries the existing private stdin protocol; no credential enters the unit
 // command line, environment or journal. systemd-run waits through unit cleanup.
 func ExecutorArguments(executable, nonce string) ([]string, error) {
+	return executorArguments(executable, nonce, false)
+}
+
+func PreparationExecutorArguments(executable, nonce string) ([]string, error) {
+	return executorArguments(executable, nonce, true)
+}
+
+func executorArguments(executable, nonce string, preparation bool) ([]string, error) {
 	unit, err := ExecutorUnit(nonce)
 	if err != nil || !filepath.IsAbs(executable) || filepath.Clean(executable) != executable ||
 		strings.ContainsAny(executable, "\x00\r\n$") {
 		return nil, ErrExecutorContainment
+	}
+	verb := "bootstrap-session-contained"
+	if preparation {
+		verb = "bootstrap-source-session-contained"
 	}
 	return []string{"--quiet", "--pipe", "--wait", "--collect", "--service-type=notify", "--slice=system.slice", "--unit=" + unit,
 		"--property=Restart=no", "--property=KillMode=control-group", "--property=SendSIGKILL=yes", "--property=FinalKillSignal=SIGKILL",
 		"--property=TimeoutStartSec=20s", "--property=TimeoutStopSec=2s", "--property=RuntimeMaxSec=6min",
 		"--property=WatchdogSec=2s", "--property=WatchdogSignal=SIGKILL", "--property=NotifyAccess=main",
 		"--property=LimitCORE=0", "--property=UMask=0077", "--property=Delegate=no", "--property=ProtectControlGroups=yes",
-		"--", executable, "bootstrap-session-contained", "--nonce", nonce}, nil
+		"--", executable, verb, "--nonce", nonce}, nil
 }
 
 var executorProperties = []string{"Id", "InvocationID", "MainPID", "ControlGroup", "LoadState", "ActiveState", "SubState", "Transient",

@@ -95,6 +95,10 @@ Runners keep dependencies, compiled output, caches, virtual environments, and re
 
 Missing tools fail clearly. No required lane silently skips.
 
+Development-only CLI tools may live under `$HOME/.local/share/borealis-dev-tools/bin`; add that directory to `PATH` when using verified user-local installations. Docker Compose CLI plugin discovery uses `$HOME/.docker/cli-plugins`. Installing these validation tools does not require starting Docker, Engine, K3s or cluster workloads on the development workstation.
+
+Netplan fixtures require Ubuntu's `netplan.io`, `python3-netplan` and `python3-yaml`, matching CI. On other distributions, run the unchanged Go lane inside a disposable Ubuntu 24.04 development container with read-only source and separate writable results/cache. Use bounded tmpfs for test scratch when the container backing filesystem reports zero inode capacity; archive capacity guards intentionally reject that incomplete evidence. Disable package service startup inside the fixture. This is non-deployment validation, not an Engine container.
+
 ## PostgreSQL Validation
 
 Run `./Tests/run-database-postgres.sh` when changing cluster membership, controller recovery, operation storage, or scheduler behavior. The runner creates an isolated PostgreSQL 17 container and removes it when validation exits. It never uses the deployed Engine database.
@@ -114,6 +118,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_legacy_admission_recovery Tests.Unit_Tests.test_engine_cluster_recovery`. These repository tests use temporary files and mock host service/cluster observations; they never operate on deployed PostgreSQL or K3s. Runtime recovery still requires the immutable-release check and original controller admission gates.
 
 ??? example "Detailed Codex Breakdown"
+
+    - Supervised source transport: run `go -C Data/Engine/Containers/api-backend test -race ./internal/clusterbootstrap ./internal/clusterremote ./cmd/borealis-node-manager -run 'TestPreparation|TestConsumePreparation|TestBootstrapSource|TestExecutorLaunch' -count=1`. Real verified archive fixtures compose bounded transfer with atomic source/configuration publication. Protocol tests require native verification before private bytes, current challenge authority during transfer, exact request/helper/claim binding, complete digest and EOF before mutation, backpressure, cancellation join and private-error suppression. Pinned loopback SSH covers separate delivery/reconciliation verbs, executable/password framing, failed native/authority/producer checks, remote exit failure and stderr overflow. Native path/unit fixtures reject occupied or linked destinations, unsafe ancestors, existing runtime and active/unknown service state. Fixtures do not run systemd transient executors, contact lab nodes, deploy Engine or prove complete fresh-host qualification.
 
     - Fresh source/configuration publication: `go -C Data/Engine/Containers/api-backend test -race ./internal/clusterbootstrap -run '^TestSourcePublication|^TestPreparationInputs' -count=1`. Fixtures exercise real verified archives, atomic no-replace publication, private exact-byte environment inheritance, current claim/source binding, retained uncertain intent, post-publication authority loss, distinct-executor proof-only recovery and refusal of altered files, permissions, hardlinks, symlinks, missing environments or extra runtime state. Only temporary directories are touched; this is not remote-dispatch or live readiness evidence.
 

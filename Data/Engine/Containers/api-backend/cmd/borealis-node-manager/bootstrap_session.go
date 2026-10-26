@@ -31,6 +31,10 @@ type bootstrapIdentityMutation func(context.Context, string, clusterbootstrap.Se
 	func(context.Context) error, engineidentity.Installation, *engineidentity.Material) (string, error)
 
 func bootstrapSession(args []string) {
+	bootstrapExecutor(args, false)
+}
+
+func bootstrapExecutor(args []string, preparation bool) {
 	nonce := bootstrapSessionNonce(args)
 	executable, err := os.Executable()
 	if err != nil {
@@ -42,6 +46,9 @@ func bootstrapSession(args []string) {
 	}
 	_ = file.Close()
 	arguments, err := clusterbootstrap.ExecutorArguments(executable, nonce)
+	if preparation {
+		arguments, err = clusterbootstrap.PreparationExecutorArguments(executable, nonce)
+	}
 	if err != nil {
 		fatalf("bootstrap executor arguments invalid")
 	}

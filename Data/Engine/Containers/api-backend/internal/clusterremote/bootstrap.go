@@ -35,6 +35,10 @@ chmod 0500 "$root_stage/manager"
 `
 
 func bootstrapCommand(size int64, digest, nonce string) string {
+	return bootstrapCommandWithRoot(size, digest, nonce, bootstrapRootScript)
+}
+
+func bootstrapCommandWithRoot(size int64, digest, nonce, rootScript string) string {
 	// Values originate in a verified bundle and crypto/rand, never caller shell
 	// text. Keep every runtime path in a quoted positional argument.
 	script := fmt.Sprintf(`set -eu
@@ -51,7 +55,7 @@ if [ "$(id -u)" = 0 ]; then
   /usr/bin/timeout --signal=TERM --kill-after=2s 6m /bin/sh -c %s bootstrap-root "$user_stage/manager" '%s' '%s' '%d'
 else
   sudo -k -S -p '' -- /usr/bin/timeout --signal=TERM --kill-after=2s 6m /bin/sh -c %s bootstrap-root "$user_stage/manager" '%s' '%s' '%d'
-fi`, size, size, digest, shellConstant(bootstrapRootScript), digest, nonce, size, shellConstant(bootstrapRootScript), digest, nonce, size)
+fi`, size, size, digest, shellConstant(rootScript), digest, nonce, size, shellConstant(rootScript), digest, nonce, size)
 	return "/bin/sh -c " + shellConstant(script)
 }
 

@@ -159,7 +159,8 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | wireguard-tunnel | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
-| shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| shared-engine | Docker Compose plugin (development/CI retired-manifest validation; development tool 5.6.1) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| shared-engine | Ubuntu 24.04 container base (disposable development-only Go/Netplan validation; no Engine runtime) | Package-specific licenses; [Ubuntu licensing policy](https://ubuntu.com/legal/intellectual-property-policy) and each installed package's `/usr/share/doc/<package>/copyright` |
 | shared-engine | Docker Buildx plugin / BuildKit (local Engine build acceleration; required isolated production OCI release packaging and public external-image metadata pinning) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Zstandard `zstd` CLI (release-packaging and portable-test decoding of the checksum-pinned embedded K3s runtime; never executes K3s) | [BSD-3-Clause](https://github.com/facebook/zstd/blob/dev/LICENSE) |
 | shared-engine | curl (HTTPS transport for verified Engine release bootstrap and pinned dependency downloads) | [curl License](https://curl.se/docs/copyright.html) |
@@ -204,9 +205,10 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | PyYAML 6.0.3 (repository validation and external release-input manifest parser) | [MIT](https://github.com/yaml/pyyaml/blob/main/LICENSE) |
 | shared-engine | Zensical 0.0.55 (documentation validation and Pages build) | [MIT](https://github.com/zensical/zensical/blob/main/LICENSE) |
 | shared-engine | actionlint v1.7.7 (GitHub Actions workflow validation) | [MIT](https://github.com/rhysd/actionlint/blob/main/LICENSE.txt) |
-| shared-engine | GitHub CLI (GitHub-hosted runner tool used to validate draft releases and upload Engine release assets) | [MIT](https://github.com/cli/cli/blob/trunk/LICENSE) |
-| shared-engine | ShellCheck (Ubuntu runner package used for shell validation) | [GPL-3.0-only](https://github.com/koalaman/shellcheck/blob/master/LICENSE) |
-| shared-engine | PowerShell (GitHub runner parser used for `.ps1` syntax validation) | [MIT](https://github.com/PowerShell/PowerShell/blob/master/LICENSE.txt) |
+| shared-engine validation only | Node.js 22.23.4 and bundled npm 10.9.9 (user-local development tools; runtime container remains Node.js22 Alpine) | [Node.js MIT](https://github.com/nodejs/node/blob/v22.23.4/LICENSE), [npm Artistic-2.0](https://github.com/npm/cli/blob/v10.9.9/LICENSE) |
+| shared-engine | GitHub CLI (GitHub-hosted runner release tooling; user-local development version2.103.2) | [MIT](https://github.com/cli/cli/blob/trunk/LICENSE) |
+| shared-engine | ShellCheck (Ubuntu runner shell validation; user-local development version0.11.0) | [GPL-3.0-only](https://github.com/koalaman/shellcheck/blob/master/LICENSE) |
+| shared-engine | PowerShell (GitHub runner `.ps1` parser; user-local development version7.6.9) | [MIT](https://github.com/PowerShell/PowerShell/blob/master/LICENSE.txt) |
 
 ## Engine Admission-policy Test Dependencies
 

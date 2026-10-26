@@ -86,6 +86,10 @@ func TestExecutorLaunchUsesFixedPrivateStreamContract(t *testing.T) {
 	if args[len(args)-1] != sessionFixture().Nonce || strings.Contains(command, "--setenv") || strings.Contains(command, "--scope") || strings.Contains(command, "/bin/sh") {
 		t.Fatal("launcher changed stdin/environment/service contract")
 	}
+	preparation, err := PreparationExecutorArguments("/var/tmp/borealis-bootstrap-root.ABC1234567/manager", sessionFixture().Nonce)
+	if err != nil || strings.Join(preparation, "\n") != strings.Replace(command, "bootstrap-session-contained", "bootstrap-source-session-contained", 1) {
+		t.Fatal("source launcher changed containment contract", err)
+	}
 	for _, path := range []string{"manager", "/var/tmp/../manager", "/var/tmp/$MANAGER", "/var/tmp/a\nmanager", "/var/tmp/manager\x00"} {
 		if _, err := ExecutorArguments(path, sessionFixture().Nonce); err == nil {
 			t.Fatal("unsafe executable path accepted")
