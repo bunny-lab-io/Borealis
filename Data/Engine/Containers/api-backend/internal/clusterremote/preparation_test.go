@@ -40,7 +40,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "publish_prejoin_artifacts", "reconcile_prejoin_artifacts", "install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "publish_prejoin_artifacts", "reconcile_prejoin_artifacts", "install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			var server *fakeSSH
 			var consumed atomic.Bool
@@ -90,7 +90,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						if err != nil || got.Target != want.Target || got.Source != want.Source || request.Session.ManagerSHA256 != digest {
 							return errors.New("private binding error")
 						}
-						if strings.Contains(mode, "prejoin") {
+						if strings.Contains(mode, "prejoin") || artifactPreparationAction(mode) {
 							bound := engineidentity.Binding{ClusterID: want.Target.ClusterID, SourceID: "77777777-7777-4777-8777-777777777777", SourceUID: "88888888-8888-4888-8888-888888888888"}
 							if request.IdentitySource == nil || *request.IdentitySource != bound {
 								return errors.New("wrong identity source")
@@ -113,7 +113,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						if mode == "reconcile" {
 							wantAction = "reconcile_source"
 						}
-						if mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
+						if mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || (strings.Contains(mode, "prejoin") || artifactPreparationAction(mode)) {
 							wantAction = mode
 						}
 						if request.Action != wantAction {
@@ -164,7 +164,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 			if mode == "reconcile" {
 				action = "reconcile_source"
 			}
-			if mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
+			if mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || (strings.Contains(mode, "prejoin") || artifactPreparationAction(mode)) {
 				action = mode
 			}
 			if mode == "wrong host pin" {
@@ -178,7 +178,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					managerPath = filepath.Join(t.TempDir(), "absent")
 				}
 				var source *engineidentity.Binding
-				if strings.Contains(mode, "prejoin") {
+				if strings.Contains(mode, "prejoin") || artifactPreparationAction(mode) {
 					source = &engineidentity.Binding{ClusterID: expected.Target.ClusterID, SourceID: "77777777-7777-4777-8777-777777777777", SourceUID: "88888888-8888-4888-8888-888888888888"}
 				}
 				var progress clusterbootstrap.PreparationProgress
@@ -201,7 +201,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					t.Fatal("progress escaped remote failure or was lost", progress, err)
 				}
 			}
-			if (err == nil) != (mode == "inspect progress" || mode == "deliver" || mode == "reconcile" || mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
+			if (err == nil) != (mode == "inspect progress" || mode == "deliver" || mode == "reconcile" || mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || (strings.Contains(mode, "prejoin") || artifactPreparationAction(mode))) {
 				t.Fatalf("unexpected result: %v", err)
 			}
 			if err != nil && err != ErrBootstrapVerification {

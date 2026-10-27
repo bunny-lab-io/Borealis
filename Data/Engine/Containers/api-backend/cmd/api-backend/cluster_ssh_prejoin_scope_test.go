@@ -272,14 +272,17 @@ func TestClusterSSHPrejoinScopePreparationChallenges(t *testing.T) {
 func TestClusterSSHPrejoinBulkIdentityDeadline(t *testing.T) {
 	root, consumer, source, proof := sshPrejoinScopeFixture(t)
 	defer consumer.Close()
-	for _, flags := range [][2]bool{{false, false}, {true, false}, {true, true}} {
-		maximum := clusterSSHPrejoinDispatchBudget(flags[0], flags[1])
+	for _, flags := range [][3]bool{{false, false, false}, {true, false, false}, {true, true, false}, {true, true, true}} {
+		maximum := clusterSSHStartupDispatchBudget(flags[0], flags[1], flags[2])
 		want := 10 * time.Minute
 		if flags[0] {
 			want = 130 * time.Minute
 		}
 		if flags[1] {
 			want = 190 * time.Minute
+		}
+		if flags[2] {
+			want = 250 * time.Minute
 		}
 		if maximum != want {
 			t.Fatal("wrong bounded dispatch budget")

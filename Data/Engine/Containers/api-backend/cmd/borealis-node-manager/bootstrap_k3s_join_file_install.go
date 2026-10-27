@@ -49,7 +49,16 @@ func installBootstrapK3sJoinFiles(ctx context.Context, root *os.Root, expected c
 // This grants no retry, adoption, promotion or cleanup permission. Incomplete or
 // foreign bytes remain unknown, and old host/file proofs still reject this state.
 func verifyBootstrapK3sJoinFilePrefix(root *os.Root, expected clusterbootstrap.PreparationExpected, plan bootstrapK3sJoinFiles, complete, fresh bool) error {
+	return verifyBootstrapK3sJoinFilePhase(root, expected, plan, complete, fresh, false)
+}
+
+// Only the startup phase permits K3s's generated admin kubeconfig. It is never
+// read, exported or used as authorization; existing private inputs remain exact.
+func verifyBootstrapK3sJoinFilePhase(root *os.Root, expected clusterbootstrap.PreparationExpected, plan bootstrapK3sJoinFiles, complete, fresh, starting bool) error {
 	if root == nil || complete && fresh || len(plan.files) != 2 || plan.files[0].path != "etc/rancher/k3s/borealis-server.token" || plan.files[1].path != "etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml" {
+		return errBootstrapSource
+	}
+	if starting && (!complete || fresh) {
 		return errBootstrapSource
 	}
 	base, err := bootstrapPrejoinHostFiles(expected)
@@ -67,6 +76,17 @@ func verifyBootstrapK3sJoinFilePrefix(root *os.Root, expected clusterbootstrap.P
 	inventory := map[string]map[string]bool{
 		"etc/rancher/k3s":               {"config.yaml.d": true, "registries.yaml": false},
 		"etc/rancher/k3s/config.yaml.d": {"10-borealis.yaml": false},
+	}
+	if starting {
+		const kubeconfig = "etc/rancher/k3s/k3s.yaml"
+		if _, err := root.Lstat(kubeconfig); err == nil {
+			if verifyBootstrapK3sGeneratedConfig(root, false) != nil {
+				return errBootstrapSource
+			}
+			inventory["etc/rancher/k3s"]["k3s.yaml"] = false
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return errBootstrapSource
+		}
 	}
 	ended, pending := false, false
 	for _, file := range plan.files {
@@ -100,6 +120,24 @@ func verifyBootstrapK3sJoinFilePrefix(root *os.Root, expected clusterbootstrap.P
 		if proveBootstrapHostDirectory(root, path, entries) != nil {
 			return errBootstrapSource
 		}
+	}
+	return nil
+}
+
+// K3s writes this output during startup. Empty/missing output is transient only;
+// completed startup requires a nonempty, private, bounded regular file. No
+// content is read: kubelet mTLS and actual Node/member proof establish identity.
+func verifyBootstrapK3sGeneratedConfig(root *os.Root, complete bool) error {
+	if root == nil {
+		return errBootstrapSource
+	}
+	const path = "etc/rancher/k3s/k3s.yaml"
+	info, err := root.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) && !complete {
+		return nil
+	}
+	if err != nil || complete && info.Size() == 0 || bootstrapArtifactFileMetadata(root, path, 0600, clusterbootstrap.MaxK3sGeneratedKubeconfigBytes, false) != nil {
+		return errBootstrapSource
 	}
 	return nil
 }

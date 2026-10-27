@@ -2,6 +2,10 @@ package clusterbootstrap
 
 import "fmt"
 
+// Accepted bound for K3s's generated admin kubeconfig. Account for this private
+// output separately from the input token/YAML before starting the target.
+const MaxK3sGeneratedKubeconfigBytes = 64 << 10
+
 const PrejoinK3sJoinTokenPath = "/etc/rancher/k3s/borealis-server.token"
 const PrejoinK3sJoinConfigPath = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
 

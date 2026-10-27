@@ -28,7 +28,12 @@ func observeBootstrapJoinedK3sNode(ctx context.Context, expected clusterbootstra
 		return clusterbootstrap.K3sJoinedNode{}, errBootstrapSource
 	}
 	defer root.Close()
-	identity := func(ctx context.Context) error {
+	identity := bootstrapJoinedHostCheck(expected, check)
+	return observeBootstrapJoinedK3sNodeAt(ctx, root, expected, source, join, identity, newBootstrapJoinedNodeClient)
+}
+
+func bootstrapJoinedHostCheck(expected clusterbootstrap.PreparationExpected, check func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
 		if check == nil || ctx.Err() != nil || check(ctx) != nil {
 			return errBootstrapSource
 		}
@@ -44,7 +49,6 @@ func observeBootstrapJoinedK3sNode(ctx context.Context, expected clusterbootstra
 		}
 		return nil
 	}
-	return observeBootstrapJoinedK3sNodeAt(ctx, root, expected, source, join, identity, newBootstrapJoinedNodeClient)
 }
 
 func newBootstrapJoinedNodeClient(config *tls.Config) *http.Client {
@@ -57,15 +61,33 @@ func newBootstrapJoinedNodeClient(config *tls.Config) *http.Client {
 // All three files are 0600 in pinned K3s agent/config getHostFile/getClientCert.
 func observeBootstrapJoinedK3sNodeAt(parent context.Context, root *os.Root, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding, join *clusterbootstrap.K3sJoinMaterial,
 	check func(context.Context) error, clientFor func(*tls.Config) *http.Client) (clusterbootstrap.K3sJoinedNode, error) {
-	fail := func() (clusterbootstrap.K3sJoinedNode, error) {
-		return clusterbootstrap.K3sJoinedNode{}, errBootstrapSource
+	var result clusterbootstrap.K3sJoinedNode
+	err := withBootstrapJoinedK3sClientAt(parent, root, expected, source, join, check, clientFor, false, func(ctx context.Context, refresh func(context.Context) error, get func(context.Context, string) ([]byte, error), _ string) error {
+		var err error
+		result, err = observeBootstrapJoinedNodeWith(ctx, expected, refresh, get)
+		return err
+	})
+	if err != nil {
+		return clusterbootstrap.K3sJoinedNode{}, err
 	}
-	if root == nil || check == nil || clientFor == nil || join.Verify(parent, expected, source, check) != nil {
+	return result, nil
+}
+
+// Fixed private TLS lifetime shared by Node and etcd membership observations.
+// Callback stays synchronous; neither raw identity nor HTTP client escapes.
+func withBootstrapJoinedK3sClientAt(parent context.Context, root *os.Root, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding, join *clusterbootstrap.K3sJoinMaterial,
+	check func(context.Context) error, clientFor func(*tls.Config) *http.Client, membership bool,
+	consume func(context.Context, func(context.Context) error, func(context.Context, string) ([]byte, error), string) error) error {
+	fail := func() error { return errBootstrapSource }
+	if root == nil || check == nil || clientFor == nil || consume == nil || join.Verify(parent, expected, source, check) != nil {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	files := []bootstrapHostFile{{path: "var/lib/rancher/k3s/agent/server-ca.crt", mode: 0600}, {path: "var/lib/rancher/k3s/agent/client-kubelet.crt", mode: 0600}, {path: "var/lib/rancher/k3s/agent/client-kubelet.key", mode: 0600}}
+	if membership {
+		files = append(files, bootstrapHostFile{path: "var/lib/rancher/k3s/server/db/etcd/name", mode: 0600})
+	}
 	ancestors, err := bootstrapHostFileAncestors(root, files)
 	if err != nil {
 		return fail()
@@ -99,6 +121,13 @@ func observeBootstrapJoinedK3sNodeAt(parent context.Context, root *os.Root, expe
 			return fail()
 		}
 		originals[i] = info
+	}
+	memberName := ""
+	if membership {
+		memberName = string(files[3].data)
+		if !clusterbootstrap.ValidK3sMemberName(memberName, expected.Target.Hostname) {
+			return fail()
+		}
 	}
 	refresh := func(ctx context.Context) error {
 		if join.Verify(ctx, expected, source, check) != nil {
@@ -161,7 +190,7 @@ func observeBootstrapJoinedK3sNodeAt(parent context.Context, root *os.Root, expe
 	}
 	defer client.CloseIdleConnections()
 	get := func(ctx context.Context, path string) ([]byte, error) {
-		if path != "/version" && path != "/api/v1/nodes/"+expected.Target.Hostname || refresh(ctx) != nil {
+		if path != "/version" && path != "/api/v1/nodes/"+expected.Target.Hostname && (!membership || path != "/db/info") || refresh(ctx) != nil {
 			return nil, errBootstrapSource
 		}
 		raw, err := sourceNetworkHTTPGet(ctx, client, "https://127.0.0.1:6443", path)
@@ -171,7 +200,10 @@ func observeBootstrapJoinedK3sNodeAt(parent context.Context, root *os.Root, expe
 		}
 		return raw, nil
 	}
-	return observeBootstrapJoinedNodeWith(ctx, expected, refresh, get)
+	if consume(ctx, refresh, get, memberName) != nil || refresh(ctx) != nil {
+		return fail()
+	}
+	return nil
 }
 
 func observeBootstrapJoinedNodeWith(ctx context.Context, expected clusterbootstrap.PreparationExpected, check func(context.Context) error, get func(context.Context, string) ([]byte, error)) (clusterbootstrap.K3sJoinedNode, error) {

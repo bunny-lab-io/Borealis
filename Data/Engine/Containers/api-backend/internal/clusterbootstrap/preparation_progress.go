@@ -13,7 +13,7 @@ type PreparationProgress struct {
 
 func (p PreparationProgress) Validate() error {
 	switch p.Step {
-	case "empty", "source_absent", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s":
+	case "empty", "source_absent", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s", "start_k3s":
 		return nil
 	default:
 		return ErrSessionProtocol

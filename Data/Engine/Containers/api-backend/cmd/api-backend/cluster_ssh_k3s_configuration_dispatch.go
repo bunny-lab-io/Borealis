@@ -30,5 +30,7 @@ func clusterSSHK3sConfigurationDemands(expected clusterbootstrap.PreparationExpe
 	}
 	// Exact generated YAML plus protocol's maximum secure token. Reserve before
 	// private acquisition; do not read source credentials early to measure them.
-	return []clusterSSHFilesystemDemand{{Path: "/etc/rancher/k3s", Bytes: uint64(len(config) + clusterbootstrap.MaxK3sJoinTokenBytes), Entries: 2}}, nil
+	// K3s generates its admin kubeconfig here during startup; reserve the same
+	// private-file bound enforced by native completion, on this filesystem.
+	return []clusterSSHFilesystemDemand{{Path: "/etc/rancher/k3s", Bytes: uint64(len(config) + clusterbootstrap.MaxK3sJoinTokenBytes + clusterbootstrap.MaxK3sGeneratedKubeconfigBytes), Entries: 3}}, nil
 }

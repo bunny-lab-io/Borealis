@@ -13,6 +13,10 @@ var bootstrapK3sJoinScratch = regexp.MustCompile(`^\.borealis-k3s-join-[a-f0-9]{
 // original-source material arrives. Exact private prefix proof and journal are
 // mandatory before any effect/receipt; this grants no adoption or write replay.
 func verifyBootstrapK3sJoinObservedPrefix(root *os.Root, expected clusterbootstrap.PreparationExpected, fresh bool) error {
+	return verifyBootstrapK3sJoinObservedPhase(root, expected, fresh, false)
+}
+
+func verifyBootstrapK3sJoinObservedPhase(root *os.Root, expected clusterbootstrap.PreparationExpected, fresh, starting bool) error {
 	if root == nil {
 		return errBootstrapSource
 	}
@@ -37,6 +41,12 @@ func verifyBootstrapK3sJoinObservedPrefix(root *os.Root, expected clusterbootstr
 		}
 		for _, entry := range entries {
 			name := entry.Name()
+			if starting && directory == "etc/rancher/k3s" && name == "k3s.yaml" {
+				if fresh || verifyBootstrapK3sGeneratedConfig(root, false) != nil {
+					return errBootstrapSource
+				}
+				continue
+			}
 			if directory == "etc/rancher/k3s" && name == "config.yaml.d" {
 				if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 					return errBootstrapSource
@@ -71,6 +81,9 @@ func verifyBootstrapK3sJoinObservedPrefix(root *os.Root, expected clusterbootstr
 				}
 			}
 		}
+	}
+	if starting && (!token || !configSeen || scratch != 0) {
+		return errBootstrapSource
 	}
 	// Explicitly require baseline entries even when directory enumeration was
 	// raced; byte proof above plus final fixed-path lstat exclude disappearance.

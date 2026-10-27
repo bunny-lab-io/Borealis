@@ -77,7 +77,11 @@ func (p *PreparationInputs) prejoinHostPrefixRequest(ctx context.Context, j *Mut
 				return install, "", invalid, ErrMutationJournal
 			}
 		case "configure_k3s":
-			if maximum != 8 {
+			if maximum < 8 {
+				return install, "", invalid, ErrMutationJournal
+			}
+		case "start_k3s":
+			if maximum != 9 {
 				return install, "", invalid, ErrMutationJournal
 			}
 		default:

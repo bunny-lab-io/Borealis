@@ -144,11 +144,26 @@ func (t prejoinArtifactTargets) publishWithSource(ctx context.Context, plan prej
 }
 
 func (t prejoinArtifactTargets) prove(ctx context.Context, plan prejoinArtifactPlan, input string, check func(context.Context) error) error {
+	return t.provePhase(ctx, plan, input, check, false)
+}
+
+// Running K3s owns its datastore/payload/agent tree. All staged files and the
+// archive-only images directory remain exact; native running proof owns the
+// service/process/CA/Node/member boundary. Earlier callers never opt into this.
+func (t prejoinArtifactTargets) proveRunning(ctx context.Context, plan prejoinArtifactPlan, input string, check func(context.Context) error) error {
+	return t.provePhase(ctx, plan, input, check, true)
+}
+
+func (t prejoinArtifactTargets) provePhase(ctx context.Context, plan prejoinArtifactPlan, input string, check func(context.Context) error, running bool) error {
 	if t.system == nil || t.source == nil || len(plan.files) != 37 || !digestPattern.MatchString(plan.digest) || !digestPattern.MatchString(input) || imageBoundary(ctx, check) != nil {
 		return ErrImageArchive
 	}
 	// Exact pre-start K3s tree: no token, datastore, extra archive or subdirectory.
 	want := map[string]map[string]bool{"var/lib/rancher/k3s": {"agent": true}, "var/lib/rancher/k3s/agent": {"images": true}, "var/lib/rancher/k3s/agent/images": {}}
+	if running {
+		delete(want, "var/lib/rancher/k3s")
+		delete(want, "var/lib/rancher/k3s/agent")
+	}
 	for _, file := range plan.files {
 		if filepath.Dir(file.path) == "var/lib/rancher/k3s/agent/images" {
 			want[filepath.Dir(file.path)][filepath.Base(file.path)] = false

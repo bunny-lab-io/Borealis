@@ -12,7 +12,7 @@ import (
 )
 
 func bootstrapArtifactAction(action string) bool {
-	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || bootstrapK3sAction(action) || bootstrapK3sConfigurationAction(action)
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || bootstrapK3sAction(action) || bootstrapK3sConfigurationAction(action) || bootstrapK3sStartupAction(action)
 }
 
 var bootstrapArtifactScratch = regexp.MustCompile(`^\.borealis-artifact-[a-f0-9]{64}$`)
@@ -28,19 +28,26 @@ func verifyBootstrapArtifactPaths(root *os.Root, expected clusterbootstrap.Prepa
 	}
 	// Earlier artifact actions require actual service-file absence even when
 	// systemd still caches not-found after a foreign or interrupted file write.
-	configuration := bootstrapK3sConfigurationAction(action)
+	starting := bootstrapK3sStartupAction(action)
+	runtime := starting && !(initial && action == "start_prepared_k3s")
+	configuration := bootstrapK3sConfigurationAction(action) || starting
 	freshService := !configuration && !bootstrapK3sAction(action) || initial && action == "install_prejoin_k3s"
 	if verifyBootstrapK3sFilePrefix(root, expected, configuration, freshService) != nil {
 		return errBootstrapSource
 	}
 	for _, path := range []string{"etc/borealis", "var/lib/kubelet", "etc/kubernetes"} {
 		if !bootstrapDockerPathAbsent(root, path) {
+			if runtime && path != "etc/borealis" {
+				if _, err := bootstrapHostFileAncestors(root, []bootstrapHostFile{{path: filepath.Join(path, "observation")}}); err == nil {
+					continue
+				}
+			}
 			return errBootstrapSource
 		}
 	}
 	hostErr := proveBootstrapHostFilePrefix(root, expected, true)
 	if configuration {
-		hostErr = verifyBootstrapK3sJoinObservedPrefix(root, expected, initial && action == "configure_prejoin_k3s")
+		hostErr = verifyBootstrapK3sJoinObservedPhase(root, expected, initial && action == "configure_prejoin_k3s", runtime)
 	}
 	if absent, err := bootstrapSourcePath(root, "opt/Borealis"); err != nil || absent || hostErr != nil {
 		return errBootstrapSource
@@ -62,6 +69,11 @@ func verifyBootstrapArtifactPaths(root *os.Root, expected clusterbootstrap.Prepa
 		info, err := root.Lstat(directory)
 		if err != nil || info.Mode().Perm() != 0700 {
 			return errBootstrapSource
+		}
+		// K3s owns its payload/datastore/agent directories after startup. Keep
+		// archive directory exact; complete transaction still hashes all37 files.
+		if runtime && directory != "var/lib/rancher/k3s/agent/images" {
+			continue
 		}
 		entries, err := bootstrapArtifactDirectory(root, directory, 36)
 		if err != nil {

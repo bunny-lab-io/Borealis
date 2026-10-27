@@ -187,7 +187,7 @@ func withClusterSSHPrejoinSourceMaterial(parent context.Context, consumer *engin
 
 func withClusterSSHPrejoinSourceMaterialFor(parent context.Context, consumer *engineidentity.Consumer, root string, source clusterSSHPrejoinSource, maximum time.Duration,
 	read func(context.Context) (clusterSSHPrejoinSourceCustody, error), consume func(context.Context, *engineidentity.Material, func(context.Context) error) error) error {
-	if maximum <= 0 || maximum > 190*time.Minute {
+	if maximum <= 0 || maximum > 250*time.Minute {
 		return clusterbootstrap.ErrSessionAuthority
 	}
 	if consumer == nil || read == nil || consume == nil || parent.Err() != nil {

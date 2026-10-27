@@ -89,6 +89,16 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 					return errors.Join(installErr, journal.Close())
 				}
 				switch request.Action {
+				case "start_prepared_k3s", "reconcile_prepared_k3s_start":
+					operation := inputs.StartPreparedK3s
+					if request.Action == "reconcile_prepared_k3s_start" {
+						operation = inputs.ReconcilePreparedK3sStart
+					}
+					_, err = operation(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error {
+							return proveBootstrapPreparedK3sStartHost(ctx, expected, install.Binding, join, authority)
+						},
+						join, bootstrapNativeK3sStartActions(expected, install.Binding, join, guard, executor, authority))
 				case "publish_prejoin_artifacts":
 					_, err = inputs.PublishPrejoinArtifacts(ctx, journal, install, material, assets, request.PostgresReference,
 						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) })
@@ -174,7 +184,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			}
 			// Bulk scratch shares the qualified /opt source filesystem; the uploaded
 			// helper remains in its existing bounded private /var/tmp wrapper.
-			if bootstrapK3sConfigurationAction(request.Action) {
+			if bootstrapK3sConfigurationAction(request.Action) || bootstrapK3sStartupAction(request.Action) {
 				return clusterbootstrap.ConsumePrejoinK3sJoinPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
 			}
 			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check,
@@ -234,10 +244,16 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 			return verifyBootstrapSourcePaths(root, action, destination)
 		},
 		unit: func(ctx context.Context, unit string) error {
+			if unit == "k3s.service" && (bootstrapK3sStartupAction(request.Action) || request.Action == "inspect_preparation_progress") {
+				if request.Action == "start_prepared_k3s" && destination {
+					return observeBootstrapInertK3s(ctx, true)
+				}
+				return observeBootstrapStartingK3s(ctx, request.Action == "inspect_preparation_progress")
+			}
 			if unit == "k3s.service" && bootstrapK3sConfigurationAction(request.Action) {
 				return observeBootstrapInertK3s(ctx, true)
 			}
-			if unit == "k3s.service" && (bootstrapK3sAction(request.Action) || request.Action == "inspect_preparation_progress") {
+			if unit == "k3s.service" && bootstrapK3sAction(request.Action) {
 				return observeBootstrapInertK3s(ctx, false)
 			}
 			return observeBootstrapAbsentUnit(ctx, unit)

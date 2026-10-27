@@ -35,6 +35,10 @@ func bootstrapHostCommandLocks(t *testing.T) (*os.File, *os.File) {
 }
 
 func TestBootstrapHostCommandFixedPlan(t *testing.T) {
+	start, startErr := bootstrapHostCommandPlan(bootstrapHostStartPreparedK3s)
+	if startErr != nil || start.program != "/usr/bin/systemctl" || strings.Join(start.args, " ") != "start -- k3s.service" || start.timeout != 10*time.Minute {
+		t.Fatal("prepared startup command changed", startErr)
+	}
 	for step := bootstrapHostAPTUpdate; step <= bootstrapHostEnableFirewall; step++ {
 		spec, err := bootstrapHostCommandPlan(step)
 		if err != nil || !filepath.IsAbs(spec.program) || len(spec.args) == 0 || spec.timeout <= 0 || spec.timeout > 2*time.Minute {

@@ -22,6 +22,7 @@ const (
 	bootstrapHostEnableDocker
 	bootstrapHostEnableISCSI
 	bootstrapHostEnableFirewall
+	bootstrapHostStartPreparedK3s
 )
 
 type bootstrapHostCommandSpec struct {
@@ -62,6 +63,10 @@ func bootstrapHostCommandPlan(step bootstrapHostCommand) (bootstrapHostCommandSp
 		spec.program, spec.args = "/usr/bin/systemctl", []string{"disable", "--now", "--", unit}
 	case bootstrapHostReloadUnits:
 		spec.program, spec.args = "/usr/bin/systemctl", []string{"daemon-reload"}
+	case bootstrapHostStartPreparedK3s:
+		// First start only, under a durable startup intent and both exclusions.
+		// Timeout/transport loss is unknown; reconciliation never replays start.
+		spec.program, spec.args, spec.timeout = "/usr/bin/systemctl", []string{"start", "--", "k3s.service"}, 10*time.Minute
 	case bootstrapHostEnableDocker, bootstrapHostEnableISCSI, bootstrapHostEnableFirewall:
 		unit := "docker.service"
 		if step == bootstrapHostEnableISCSI {

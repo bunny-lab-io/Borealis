@@ -93,38 +93,51 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Joining-custody integration extends96d809660339d13e0f4214d7bfbdd51161874544;
-publication full SHA remains in #530 active handoff. Explicit joining mode crosses
-existing encrypted source/custody brokers under preparation lease only; response
-mode is authenticated and checked. One controller projection retains original
-source identity across initial/final storage and private configuration reads.
-Worker private identity scope owns/pins registered target UIDs across fresh
-responses; replacement/disappearance/ignored failure latches rejection. Initial
-kubelet status may converge without becoming final readiness evidence. Existing
-strict entrypoints, qualification/recovery, source Pod proof, Aegis/current lease,
-private data bounds and no-POST-replay remain. No runtime caller/poller enabled.
+Startup integration extends published `dc28a408b1570b03fa7cd5c71d05246df002b89e`.
+Current uncommitted work adds ninth `start_k3s` stage, fixed startup/reconciliation
+native sessions, pinned SSH transport and explicit controller dispatch using
+joining source custody. Eight prior receipts plus actual source/artifact/private
+configuration/identity proof precede first start under both exclusions. Unknown
+start is independently reconciled, never replayed; old dispatchers reject ninth
+cursor. Shared identity marker remains; import/activation still separate.
 
-Actual validation: joining integration race3 passed14.714s; full affected
-joining/prejoin-custody/source-broker/source/storage-scope/configuration selection
-race3 passed123.931s. Core registration/final-Node parser race3 passed1.136s.
-Affected API/core vet and CGO-disabled API build passed. Docs-reference/gofmt/diff and221-route checks passed. Reuse unchanged184-test repository policy from96d8096;
-new routes/dependencies/policy rules absent. No PostgreSQL evidence claimed.
-Evidence: `Unit_Test_Results/m2-joining-custody-20261027/`.
+Native completion binds exact disabled unit/PID/invocation, held proc/executable
+identity, root UID and PID1 namespaces to pinned embedded K3s server bytes.
+Loopback kubelet mTLS brackets Ready Node with actual etcd membership/name;
+learners never become voting evidence. Generated private kubeconfig is bounded,
+not exported, and included in calculated target bytes/inodes. Startup scope is
+250minutes with270-minute outer acquisition; credential/claim/watchdog limits
+remain. Production preparation polling stays disabled.
 
-Exact next action: journaled K3s startup/import under both fences and separate
-phase-aware custody, then shared-identity activation. New untracked
-`k3s_membership.go` / test parses pinned K3s loopback `/db/info`: exact uint64 IDs,
-approved peer/client URLs, target's actual etcd/name and explicit learner state;
-focused race3 passed1.046s. No native reader/caller yet. Keep these files separate
-from custody integration publication. Pinned upstream K3s v1.36.3+k3s1 and its
-k3s-io/etcd v3.6.14-k3s1 wire contract verified; no dependency added/downloaded into
-repository. Do not infer voting membership from NodeReady. Runtime start/import
-and independent native/controller settlement still unimplemented.
+Focused validation so far: membership race3 1.046s; journal startup82.809s;
+joined/startup TLS race3 2.504s; native process1.042s; native command/config/TLS5.726s;
+startup custody/old phases race3 2.984s; protocol/cursor race3 8.753s; pinned SSH
+preparation race3 3.116s; controller startup/configuration/old dispatch/material
+race3 2.174s. Final native176 tests passed14.907s with zero failures/skips. Final affected API/
+capacity/scope race3 passed3.962s. Full-module vet and both CGO-disabled builds
+passed. Repository policy passed184tests/221routes. Bootstrap first partition
+passed113 tests before default ten-minute timeout during fixture compression;
+remaining70 passed451.616s with explicit20-minute bound. Combined183 top-level
+tests passed across partitions, zero test failures/skips; initial timeout is
+retained as incomplete run, not a package pass. Reuse completed first partition. Evidence `Unit_Test_Results/m2-k3s-start-20261027/`;
+latest protocol/cursor additions have focused coverage above.
+No test suppression. Initial generated-output test exposed transient empty-file
+handling; split transient custody from completion. Initial dispatcher acquisition
+fixture falsely allowed proof without startup; model now retains actual effect.
 
-Parent96d8096 CI: Container Policy40503480857 passed; PR Validation40503480836
-pending at one check. No rerun/repeated poll/artifact download. No live runtime
-action, SSH credential use, deployment/merge/release or cleanup obligation.
-Production preparation polling stays disabled. All M1-M8 open; MVP not ready.
+Exact next action: publish validated coherent startup batch and update #530;
+then implement actual
+containerd imported-image/content/unpack proof from authenticated artifact set,
+followed by shared-identity activation and independent controller admission.
+Startup receipt alone does not establish complete paired readiness.
+
+Separate untracked next-slice `containerd_import.go` and test parse pinned ctr
+images-check output, requiring exact required target digests, complete equal
+content counts and unpacked=true. Focused race3 passed1.019s; no artifact-plan or
+native command caller yet. Exclude these two files from startup publication.
+
+No live Engine action, SSH credential use, deployment/merge/release or runtime
+cleanup. All M1-M8 remain open. No claim of Ubuntu runtime or operator readiness.
 
 ## Worker join broker checkpoint
 
