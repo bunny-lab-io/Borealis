@@ -84,10 +84,11 @@ func withSourceK3sJoinMaterialAt(ctx context.Context, root *os.Root, expected cl
 			file.Close()
 			return fail
 		}
-		raw, readErr := io.ReadAll(io.LimitReader(file, maximum+1))
+		raw := make([]byte, int(info.Size())+1)
+		n, readErr := io.ReadFull(file, raw)
 		closeErr := file.Close()
-		files[i].data = raw
-		if readErr != nil || closeErr != nil || int64(len(raw)) != info.Size() || proveBootstrapHostFile(root, files[i]) != nil || boundary(ctx) != nil {
+		files[i].data = raw[:n]
+		if readErr != io.EOF && readErr != io.ErrUnexpectedEOF || closeErr != nil || int64(n) != info.Size() || proveBootstrapHostFile(root, files[i]) != nil || boundary(ctx) != nil {
 			return fail
 		}
 	}

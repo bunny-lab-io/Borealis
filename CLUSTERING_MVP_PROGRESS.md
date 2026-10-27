@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `48c5f15664fdcc5c89e959a770645c33ffa27c55`; subsequent publication SHA stays in #530 active handoff.
+- Published base `2c1bc4ea33ed7b65c51c6e5ba2ee5f1a77ea0bcc`; subsequent publication SHA stays in #530 active handoff.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,10 +52,10 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Complete M2 runtime admission/import: seven-stage artifact/inert-service
-   installation is published. Private join material and concrete source acquisition
-   are implemented with worker broker and lazy guarded scope; add fixed target
-   join configuration, journaled admission and actual import.
+1. Complete M2 runtime admission/import: eight-stage artifact/inert-service/join
+   configuration is published. Independent native/controller Node proof and
+   separate registration-phase source observer are implemented; integrate
+   phase-bound startup custody, journaled admission and actual import.
 2. Finish M3 activation/existing-node interruption qualification. Preserve all
    original identity material and keep consumers fenced until complete proof.
 3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
@@ -93,38 +93,32 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Configuration batch extends published48c5f15664fdcc5c89e959a770645c33ffa27c55;
-publication full SHA remains in #530 active handoff. Eighth `configure_k3s`
-record now integrates fixed token/config publication, complete private framing,
-native custody, pinned SSH and lazy worker write/proof dispatch. Existing seven
-prerequisites, both fences, current claim, inactive K3s and identity marker remain
-mandatory. No write replay or consumer release. Exact YAML plus protocol maximum
-4096-byte token/two inodes are reserved on `/etc/rancher/k3s`. Private file proof
-uses one cleared allocation. Identity-material and dispatch scopes now share
-10/130/190-minute ceilings; parent/credential/lease limits remain authoritative.
+Joining-proof batch extends published2c1bc4ea33ed7b65c51c6e5ba2ee5f1a77ea0bcc;
+publication full SHA remains in #530 active handoff. Native fixed loopback reader
+uses existing kubelet mutual TLS under authenticated source CA and exact private
+file/claim custody. Controller independently checks confirmed target Node UID,
+identity, drained/ineligible labels and explicit readiness while retaining exact
+original source/namespace. Separate joining-source observer permits initial
+registration without status, preserving source Pod proof and monotonic Node UIDs.
+Strict prejoin observer is unchanged. These read-only helpers grant no startup,
+completion, membership admission or identity-marker release. No dispatch caller
+exists yet. Source token reader now uses one bounded cleared allocation.
 
-Validation: full bootstrap race178tests/837.058s; final full native race169tests/
-14.107s, both zero failures/skips. Focused native custody/pinned SSH race3 passed
-1.251s/2.924s; final source/custody/dispatch/scope API race3 passed18.433s. That API
-selection also reached six unchanged PostgreSQL subcases per repetition; they
-skipped without DSN and provide no PostgreSQL evidence. Earlier changed API-only
-race3 passed1.145s, broader dispatcher/capacity/scope race3 passed2.598s. Full-module
-vet plus final affected API vet, CGO-disabled API/native builds, repository
-policy184tests/84.716s/221routes, docs-reference/gofmt/diff checks passed. Evidence:
-`Unit_Test_Results/m2-k3s-configuration-20261027/`. All validation processes finished.
-Parent48c5f CI: Container Policy40494377355 passed; PR Validation40494377268 pending
-at single check. No manual rerun/repeated poll/artifact download.
+Actual validation: focused race3 core/API/native1.135s/1.654s/1.681s; full native
+race170top-level tests/16.421s, zero failures/skips; full-module vet and CGO-disabled API/native builds passed. Repository
+policy184tests/83.702s/221routes and docs-reference/gofmt/diff checks passed.
+Evidence: `Unit_Test_Results/m2-joining-proof-20261027/`. All validation processes finished for this batch. No new PR comments since11:54:45Z. No repeated CI poll.
 
-Exact next action: integrate independent native/controller joined-Node proof,
-then journaled membership/start/import and shared-identity activation. Separate
-uncommitted `k3s_join_node.go` / test starts that proof; focused race3 passed1.063s,
-but no caller or membership authorization exists yet. Concrete M2 failure:
-`readClusterSSHPrejoinSourceCustody` requires Node count equal original active
-members and would revoke authority when approved target first joins drained.
-Smallest remedy: separate phase-bound joining-cohort observation tied to exact
-confirmed targets/current claim and native Node UID proof. Keep prejoin observer
-strict. No production poller until full delivery/recovery is integrated. No live
-runtime action, credential use or cleanup obligation.
+Exact next action: integrate joining-phase source custody into bounded worker
+broker/scope, then journaled K3s startup/import and identity activation. Keep
+prejoin observers strict and require complete independent native/controller UID
+proof before settlement. Pinned upstreamK3s `/db/info` is read-only and permits
+loopback callers; it exposes actual etcd members/learner state without exporting
+another credential. Verify original/target addresses and target member name,
+never infer voting membership from NodeReady. Reuse exact pinned upstream source
+already read; stored in current tool session. No live action or credential use.
+Production preparation polling stays disabled until full delivery/recovery.
+All M1-M8 remain open; MVP not operator-testable. No cleanup obligation.
 
 ## Worker join broker checkpoint
 
