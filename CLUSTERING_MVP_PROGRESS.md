@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `6f567ab2f696a566b75ec2d1c641d14223f11d23`.
+- Published base `fd447882a1acc5e17d590ce63e0a3d8f4e61a9e1`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -92,13 +92,15 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Continue private source-bound K3s join-material delivery, then fixed original-
-controller admission/import and shared-identity activation. Uncommitted next-slice
-files `internal/clusterbootstrap/k3s_join_material{,_test}.go` validate secure server
-token/CA binding, exact current target/source, ownership, redaction and close;
-focused race tests passed3 (1.104s). No acquisition/transfer/runtime caller yet.
-Installation batch validation below is complete; publish that batch separately.
-Production polling remains disabled. No live runtime action taken.
+Publish validated private join-input primitives, then implement concrete source
+acquisition through original controller. Reuse bounded non-root immutable source
+Jobs and fixed authenticated node-manager socket. Send private frame only through
+internal authenticated encryption; Job termination receipt contains public digest
+of delivered ciphertext, never token/CA payload. Controller must independently
+validate actual Job/Pod identity, success and digest before exposing pending frame
+to current worker claim. HTTP callback authentication alone is not native evidence.
+Then add fixed target join configuration and journaled membership/import.
+Production polling remains disabled; no live runtime action taken.
 
 ## Interrupted-firewall continuation checkpoint
 
@@ -316,3 +318,36 @@ Production polling remains disabled. No live runtime action taken.
 - Base6f567 Container Policy40481136317 passed; PR Validation40481136369 pending at
   one check. No manual reruns/repeated polling. No new PR comments since07:58:10Z.
 - No live action, credential use or runtime cleanup obligation. M1-M8 remain open.
+
+## Private K3s join-input checkpoint
+
+- Secure server token/CA material owns buffers, validates fixed K10 server syntax
+  and exact CA hash, binds current target/source, redacts formatting and refuses
+  generic JSON. Stable effect digest survives worker takeover; export/frame still
+  requires exact current generation. Close clears token/CA and revokes capability.
+- Bounded private frame checks claim metadata before reading token/CA payload,
+  verifies trailer plus independent CA/token semantics and consumes exactly one
+  frame. Full source/identity/artifact/join composition requires EOF before native
+  consumer. Old artifact-only consumer rejects join suffix. All owned input closes.
+- Native read-only source scope permits only root-owned0600 server/token and0644
+  server/tls/server-ca.crt, with bounded reads, no symlinks/hardlinks, exact ancestor/
+  inode/mtime/owner/mode/content proof and independently supplied source authority.
+  Retained refresh/material cannot survive scope closure. No generic action or
+  live source/controller acquisition caller has been added yet.
+- Focused material/source3 passed1.236s/1.105s; complete composition plus old/new
+  receivers3 passed34.457s/bootstrap and1.117s/native. Final material/frame3 after
+  stable-effect binding passed1.227s. Full native race163 top-level passed13.822s,
+  zero failures/skips. Full-module vet, CGO-disabled node-manager build, repository
+  policy184tests/219routes, docs-reference/gofmt/diff checks passed.
+- Reuse fd447 full bootstrap167/663.565s for unchanged journal/publication core;
+  changed composition has focused old/new EOF/cleanup validation above. No broad
+  unchanged suite rerun. Evidence `Unit_Test_Results/m2-k3s-join-20261027/`.
+- Source private acquisition is required for M2 join: API worker cannot safely read
+  source root token. Smallest remedy is existing source Job/native socket plus
+  encrypted callback and independently observed public ciphertext-digest receipt.
+  No new Kubernetes privileges, plaintext Job logs or persistent credential store.
+- No live credential use, runtime action, consumer startup or cleanup obligation.
+  Actual source acquisition/admission/import and Ubuntu qualification remain open.
+
+- fd447 Container Policy40486153751 passed; PR Validation40486153793 pending at
+  one check. No manual reruns or repeated pending polls.

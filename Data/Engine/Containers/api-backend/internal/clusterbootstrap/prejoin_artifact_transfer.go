@@ -35,6 +35,22 @@ func ConsumePrejoinArtifactPreparation(ctx context.Context, parent string, expec
 func consumePrejoinArtifactPreparation(ctx context.Context, parent string, expected PreparationExpected, manager string, source engineidentity.Binding,
 	postgresReference string, input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material, *PreparationArtifacts) error,
 	receive func(context.Context, io.Reader) (*PreparationArtifacts, error)) error {
+	if consume == nil {
+		return ErrPreparationConfig
+	}
+	return consumePrejoinArtifactPreparationFrames(ctx, parent, expected, manager, source, postgresReference, input, check,
+		func(ctx context.Context, inputs *PreparationInputs, material *engineidentity.Material, artifacts *PreparationArtifacts) error {
+			var trailing [1]byte
+			if n, err := input.Read(trailing[:]); n != 0 || err != io.EOF || imageBoundary(ctx, check) != nil {
+				return ErrPreparationConfig
+			}
+			return consume(ctx, inputs, material, artifacts)
+		}, receive)
+}
+
+func consumePrejoinArtifactPreparationFrames(ctx context.Context, parent string, expected PreparationExpected, manager string, source engineidentity.Binding,
+	postgresReference string, input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material, *PreparationArtifacts) error,
+	receive func(context.Context, io.Reader) (*PreparationArtifacts, error)) error {
 	if consume == nil || receive == nil || !ValidPostgresImageReference(postgresReference) {
 		return ErrPreparationConfig
 	}
@@ -50,10 +66,6 @@ func consumePrejoinArtifactPreparation(ctx context.Context, parent string, expec
 				}
 			}()
 			if artifacts == nil || artifacts.expected != expected.Source || artifacts.k3sVersion != expected.K3sVersion || artifacts.postgresReference != postgresReference {
-				return ErrPreparationConfig
-			}
-			var trailing [1]byte
-			if n, err := input.Read(trailing[:]); n != 0 || err != io.EOF || imageBoundary(ctx, check) != nil {
 				return ErrPreparationConfig
 			}
 			if consume(ctx, inputs, material, artifacts) != nil || imageBoundary(ctx, check) != nil {
