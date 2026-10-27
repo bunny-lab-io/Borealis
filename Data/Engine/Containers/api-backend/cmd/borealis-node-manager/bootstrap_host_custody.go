@@ -11,7 +11,7 @@ import (
 )
 
 func bootstrapHostAction(action string) bool {
-	return action == "prepare_prejoin_host" || action == "reconcile_prejoin_host"
+	return action == "prepare_prejoin_host" || action == "complete_prejoin_host" || action == "reconcile_prejoin_host"
 }
 
 // Separate host-phase boundary. Earlier source/identity action allowlists stay

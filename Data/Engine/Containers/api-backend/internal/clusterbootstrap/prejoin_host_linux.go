@@ -83,7 +83,11 @@ func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJ
 }
 
 func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool) (string, error) {
-	if j == nil || actions.Prove == nil || !reconcile && (actions.Prepare == nil || actions.CheckFresh == nil) {
+	return p.prejoinHostTransaction(ctx, j, install, material, actions, parent, reconcile, nil)
+}
+
+func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool, configured func(context.Context) error) (string, error) {
+	if j == nil || actions.Prove == nil || !reconcile && (actions.Prepare == nil || configured == nil && actions.CheckFresh == nil) {
 		return "", ErrMutationJournal
 	}
 	j.mu.Lock()
@@ -92,7 +96,7 @@ func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJ
 	if err != nil {
 		return "", err
 	}
-	if !reconcile {
+	if !reconcile && configured == nil {
 		if _, exists := j.state.Steps["prepare_host"]; exists {
 			return "", ErrMutationUnknown // Existing intents need their own proof/continuation.
 		}
@@ -129,7 +133,7 @@ func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJ
 		if proveSource(ctx) != nil {
 			return ErrPreparationConfig
 		}
-		if !reconcile && (actions.CheckFresh(ctx) != nil || proveSource(ctx) != nil) {
+		if !reconcile && configured == nil && (actions.CheckFresh(ctx) != nil || proveSource(ctx) != nil) {
 			return ErrMutationUnknown // No host intent exists when fresh proof fails.
 		}
 		prove := func(ctx context.Context) (string, error) {
@@ -143,12 +147,22 @@ func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJ
 		if reconcile {
 			result, err = j.reconcileLocked(ctx, "prepare_host", input, prove, "applied")
 		} else {
-			result, err = j.applyLocked(ctx, "prepare_host", input, func(ctx context.Context, hostLock *os.File) (string, error) {
+			mutate := func(ctx context.Context, hostLock *os.File) (string, error) {
 				if proveSource(ctx) != nil || actions.Prepare(ctx, hostLock, identityLock) != nil || prejoinDirectoryBoundary(ctx, j, install) != nil {
 					return "", ErrMutationUnknown
 				}
 				return prove(ctx)
-			})
+			}
+			if configured != nil {
+				result, err = j.continuePrejoinHostLocked(ctx, input, func(ctx context.Context) error {
+					if proveSource(ctx) != nil || configured(ctx) != nil || proveSource(ctx) != nil {
+						return ErrMutationUnknown
+					}
+					return nil
+				}, mutate)
+			} else {
+				result, err = j.applyLocked(ctx, "prepare_host", input, mutate)
+			}
 		}
 		if err != nil {
 			return err

@@ -26,6 +26,7 @@ type clusterSSHPrejoinClient interface {
 	InstallPrejoinIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	PreparePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	CompletePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	Close() error
 }
@@ -281,6 +282,18 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 			// still requires an independent complete-account proof.
 			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				return c.CompleteRuntimeIdentity(checkCtx, inputs, e, sudo, check)
+			}); boundaryErr != nil {
+				return fail
+			}
+			if err, boundaryErr := run(steps[index][1]); err == nil && boundaryErr == nil {
+				return nil
+			}
+		}
+		if boundaryErr == nil && index == 4 {
+			// Fixed native continuation requires a fresh claim and independent
+			// configured-host proof. Delivery ambiguity still needs complete proof.
+			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.CompletePrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
 			}); boundaryErr != nil {
 				return fail
 			}

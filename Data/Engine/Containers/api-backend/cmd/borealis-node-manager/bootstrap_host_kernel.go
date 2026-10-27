@@ -15,6 +15,10 @@ import (
 // Read actual sysfs, never modprobe output. No module load, block-device IO,
 // multipath flush or daemon stop is permitted in prepared-state observation.
 func proveBootstrapPrejoinKernel(ctx context.Context, check func(context.Context) error) error {
+	return proveBootstrapKernel(ctx, check, false)
+}
+
+func proveBootstrapKernel(ctx context.Context, check func(context.Context) error, allowMissingISCSI bool) error {
 	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		return errBootstrapSource
 	}
@@ -33,10 +37,14 @@ func proveBootstrapPrejoinKernel(ctx context.Context, check func(context.Context
 	if statErr != nil || closeErr != nil || fs.Type != unix.SYSFS_MAGIC {
 		return errBootstrapSource
 	}
-	return proveBootstrapPrejoinKernelWith(ctx, root, check)
+	return proveBootstrapKernelWith(ctx, root, check, allowMissingISCSI)
 }
 
 func proveBootstrapPrejoinKernelWith(ctx context.Context, root *os.Root, check func(context.Context) error) error {
+	return proveBootstrapKernelWith(ctx, root, check, false)
+}
+
+func proveBootstrapKernelWith(ctx context.Context, root *os.Root, check func(context.Context) error, allowMissingISCSI bool) error {
 	if root == nil || check == nil {
 		return errBootstrapSource
 	}
@@ -73,9 +81,12 @@ func proveBootstrapPrejoinKernelWith(ctx context.Context, root *os.Root, check f
 		if boundary() != nil {
 			return errBootstrapSource
 		}
-		module, err := read("module/iscsi_tcp/initstate", 32)
-		if err != nil || module != "live\n" || boundary() != nil {
-			return errBootstrapSource
+		_, moduleErr := root.Lstat("module/iscsi_tcp")
+		if !allowMissingISCSI || !errors.Is(moduleErr, os.ErrNotExist) {
+			module, err := read("module/iscsi_tcp/initstate", 32)
+			if err != nil || module != "live\n" || boundary() != nil {
+				return errBootstrapSource
+			}
 		}
 		dir, err := root.OpenFile("class/block", os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 		if err != nil {

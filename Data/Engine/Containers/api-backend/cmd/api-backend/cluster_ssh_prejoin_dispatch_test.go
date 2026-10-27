@@ -14,11 +14,12 @@ import (
 )
 
 type sshPrejoinDispatchTestClient struct {
-	inspect  func(context.Context) (clusterbootstrap.PreparationProgress, error)
-	absent   func(context.Context) error
-	complete func(context.Context) error
-	run      func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
-	close    func() error
+	inspect      func(context.Context) (clusterbootstrap.PreparationProgress, error)
+	absent       func(context.Context) error
+	complete     func(context.Context) error
+	hostComplete func(context.Context) error
+	run          func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	close        func() error
 }
 
 func (c *sshPrejoinDispatchTestClient) InspectPreparationProgress(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ []byte, check func(context.Context) error) (clusterbootstrap.PreparationProgress, error) {
@@ -79,6 +80,16 @@ func (c *sshPrejoinDispatchTestClient) PreparePrejoinHost(ctx context.Context, p
 	return c.run(ctx, "host", p, e, source, keys, sudo, check)
 }
 
+func (c *sshPrejoinDispatchTestClient) CompletePrejoinHost(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+	if err := check(ctx); err != nil {
+		return err
+	}
+	if c.hostComplete != nil {
+		return c.hostComplete(ctx)
+	}
+	return clusterbootstrap.ErrMutationFreshClaim
+}
+
 func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinHost(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
 	return c.run(ctx, "host proof", p, e, source, keys, sudo, check)
 }
@@ -125,8 +136,8 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 						s engineidentity.Binding, k *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
 						calls = append(calls, action)
 						phaseIndex := index
-						if mode == "proof failed" && stage == 1 && index == 5 {
-							phaseIndex = 3
+						if mode == "proof failed" && (stage == 1 || stage == 4) && index == stage*2+3 {
+							phaseIndex = stage*2 + 1
 						}
 						escaped = check
 						if action != sequence[phaseIndex] || p != inputs || !reflect.DeepEqual(e, expected) || string(sudo) != string(sudoOriginal) || check(ctx) != nil {
@@ -182,7 +193,7 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 					if stage == 0 {
 						wantOpened++
 					}
-					if stage == 1 {
+					if stage == 1 || stage == 4 {
 						wantOpened += 2
 					}
 				} else if !success {
@@ -373,6 +384,10 @@ func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
 					opened++
 					return &sshPrejoinDispatchTestClient{
 						absent: func(context.Context) error { calls = append(calls, "source absent proof"); return nil },
+						hostComplete: func(context.Context) error {
+							calls = append(calls, "host completion")
+							return clusterbootstrap.ErrMutationFreshClaim
+						},
 						complete: func(context.Context) error {
 							calls = append(calls, "account completion")
 							return clusterbootstrap.ErrMutationFreshClaim
@@ -430,6 +445,9 @@ func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
 				}
 				if mode == "proof error" && index == 2 {
 					want = append(want, "account completion", "account proof")
+				}
+				if mode == "proof error" && index == 5 {
+					want = append(want, "host completion", "host proof")
 				}
 				if (err == nil) != (mode == "valid") || !reflect.DeepEqual(calls, want) || closed != opened || opened != len(want) {
 					t.Fatalf("unsafe resume: err=%v calls=%v want=%v connections=%d/%d", err, calls, want, opened, closed)
@@ -573,6 +591,81 @@ func TestClusterSSHPrejoinDispatchAccountContinuation(t *testing.T) {
 			}
 			if (err == nil) != success || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
 				t.Fatal("unsafe account continuation", calls, opened, closed, proofs, err)
+			}
+		})
+	}
+}
+
+func TestClusterSSHPrejoinDispatchHostContinuation(t *testing.T) {
+	a, source, _ := sshPrejoinSourceFixture(t, false)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := sshIdentitySourceMaterial(t, t.TempDir())
+	for _, mode := range []string{"complete", "lost acknowledgement", "not configured", "proof drift", "completion cleanup", "authority lost", "initial proof cleanup"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := []string{}
+			opened, closed, proofs := 0, 0, 0
+			ready, lost := false, false
+			current := func(context.Context) error {
+				if lost {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				return nil
+			}
+			connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+				session := opened
+				opened++
+				return &sshPrejoinDispatchTestClient{
+					inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
+						calls = append(calls, "inspect")
+						return clusterbootstrap.PreparationProgress{Step: "prepare_host"}, nil
+					},
+					hostComplete: func(context.Context) error {
+						calls = append(calls, "complete configured host")
+						if mode == "not configured" {
+							return clusterbootstrap.ErrMutationUnknown
+						}
+						ready = true
+						if mode == "authority lost" {
+							lost = true
+						}
+						if mode == "lost acknowledgement" {
+							return errors.New("unknown delivery")
+						}
+						return nil
+					},
+					run: func(ctx context.Context, action string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+						calls = append(calls, action)
+						if action == "host proof" {
+							proofs++
+							if !ready || mode == "proof drift" {
+								return clusterbootstrap.ErrMutationUnknown
+							}
+						}
+						return check(ctx)
+					},
+					close: func() error {
+						closed++
+						if mode == "completion cleanup" && session == 2 || mode == "initial proof cleanup" && session == 1 {
+							return errors.New("unknown cleanup")
+						}
+						return nil
+					},
+				}, nil
+			}
+			err := dispatchClusterSSHPrejoinIdentity(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, current)
+			want := []string{"inspect", "host proof"}
+			if mode != "initial proof cleanup" {
+				want = append(want, "complete configured host")
+			}
+			if mode != "initial proof cleanup" && mode != "completion cleanup" && mode != "authority lost" {
+				want = append(want, "host proof")
+			}
+			success := mode == "complete" || mode == "lost acknowledgement"
+			if (err == nil) != success || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
+				t.Fatal("unsafe host continuation", calls, opened, closed, proofs, err)
 			}
 		})
 	}

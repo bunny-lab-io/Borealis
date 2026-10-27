@@ -87,6 +87,8 @@ func bootstrapSourceSessionContained(args []string) {
 					_, err = inputs.ReconcilePreparedPrejoinIdentity(ctx, journal, install, material)
 				case "prepare_prejoin_host":
 					_, err = inputs.PreparePrejoinHost(ctx, journal, install, material, bootstrapNativeHostActions(expected, guard, executor, authority))
+				case "complete_prejoin_host":
+					_, err = inputs.CompletePrejoinHost(ctx, journal, install, material, bootstrapNativeHostRecovery(expected, guard, executor, authority))
 				case "reconcile_prejoin_host":
 					// Proof-only API deliberately receives no preparation callback.
 					_, err = inputs.ReconcilePrejoinHost(ctx, journal, install, material,

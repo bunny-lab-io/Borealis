@@ -15,7 +15,7 @@ import (
 func TestPrejoinPreparationRequestBindsOriginalSource(t *testing.T) {
 	expected, _ := preparationFixture()
 	source := engineidentity.Binding{ClusterID: expected.Target.ClusterID, SourceID: "77777777-7777-4777-8777-777777777777", SourceUID: "88888888-8888-4888-8888-888888888888"}
-	for _, action := range []string{"prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "reconcile_prejoin_host"} {
+	for _, action := range []string{"prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "reconcile_prejoin_host"} {
 		r, err := NewPrejoinPreparationSessionRequest(expected, strings.Repeat("a", 64), strings.Repeat("b", 64), action, source)
 		if err != nil || r.Session.Action != "verify" || r.Session.IdentityRecovery != nil {
 			t.Fatal("pre-join request crossed joined contract", err)

@@ -8,8 +8,9 @@ import (
 )
 
 // Retain successful publication identity across later package/service commands.
-// This never adopts partial files: caller must have just completed the no-replace
-// writer and independent byte proof. Restart/reconciliation uses separate proof.
+// Caller must prove exact complete files through fresh no-replace publication
+// or the journal-bound configured-host continuation. Partial/foreign files are
+// never adopted; restart/reconciliation still requires independent native proof.
 func pinBootstrapPublishedHostFiles(ctx context.Context, root *os.Root, files []bootstrapHostFile, check func(context.Context) error) (func(context.Context) error, error) {
 	if root == nil || len(files) == 0 || check == nil {
 		return nil, errBootstrapSource

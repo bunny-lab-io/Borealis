@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `5e9e469d8f451eb92a95fba6561736e68ff1940b`.
+- Published base `b7b7bf8a27311e7dac5791b0eac9c81b948b340d`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,9 +52,9 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Complete native host partial-effect recovery after independently proven
-   configured packages and exact retained repository/files, with fresh executor
-   history and both fences. No blind package/service replay.
+1. Finish bounded recovery for interrupted firewall installation and earlier
+   package/repository phases.
+   No blind package/service replay.
 2. Cover earlier host interruption classes through independently classified
    effects; unknown native state remains fenced, never guessed absent.
 3. Finish M3 activation/existing-node interruption qualification and M2 complete
@@ -81,8 +81,10 @@ provisioning, original-controller authority and all safety gates in #530.
   CachyOS workstation lacks them. Changed pinned transport tests pass. Required
   Ubuntu CI remains necessary; do not skip assertions or substitute old results.
 - Strict docs needs Python3.12 per #538; Python3.14/Docker-access constraint remains.
-- Latest pushed head workflow lookup returned no runs yet. No repeated polling or
-  artifact audit; required CI not established by local component evidence.
+- Published preflight head b7b7bf8a27311e7dac5791b0eac9c81b948b340d has
+  Container Policy pass40460624134 and PR Validation40460624165 in progress.
+  Public API confirmed delayed run creation after immediate lookup was empty.
+  These do not validate unpushed continuation changes; no pending polling.
 - Go1.25.12: `/home/nicole/.local/share/borealis-dev-tools/go1.25.12/bin/go`.
   Use GOMAXPROCS=2/-p1 and add user-local borealis-dev-tools/bin for policy tools.
 - No runtime cleanup obligation, credential use, deployed-checkout edits or live
@@ -90,10 +92,31 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Implement bounded host continuation after independently proven configured packages and
-exact repository/host-file state, retaining fresh-producer history and both
-fences. Never infer that old preflight succeeded or replay uncertain package
-commands; earlier/unknown native states remain explicit recovery work.
+Classify interrupted generated firewall effects under fresh
+producer authority, preserving foreign rules and refusing uncertain ownership.
+Complete earlier package/repository interruption handling and immutable delivery;
+production polling stays disabled until required integration is complete.
+
+## Configured-host continuation checkpoint
+
+- New fixed host continuation requires v2-fresh intent, newer claim, stopped
+  prior executors, both fences and repeated source/key/native partial proof.
+- Version4 retains host producer/proof history before effects and preserves
+  account history. No partial state is labeled absent. Exact existing files keep
+  their inodes; complete pending files promote without overwrite.
+- Native class requires configured inventory, exact repository/files, running
+  empty Docker, known services/kernel and fresh firewall. No APT/Docker replay.
+  Final independent complete-host reconciliation remains mandatory.
+- Focused race suite3 repetitions passed bootstrap97.005s/native5.189s/API2.432s/
+  remote2.425s. Full-module vet/build, policy184tests/219routes and docs-reference
+  checks passed. Full bootstrap/native race suite passed144/142top-level tests,
+  zero failures/skips (401.988s/12.883s). Retained-scratch collision/authority/
+  parent-replacement race tests passed three repetitions (5.092s).
+- Dispatcher ordering tests initially exposed newly added recovery/proof sessions;
+  exact connection/order expectations now cover both account and host recovery.
+  No failure/cleanup assertion was suppressed.
+- Evidence: ignored `Unit_Test_Results/m3-host-continuation-20261027/`.
+- No live action, credential use, runtime cleanup obligation or dependency change.
 
 ## Fresh-host intent checkpoint
 

@@ -78,7 +78,7 @@ func validMutationStep(step string) bool {
 }
 
 func (s mutationState) valid() bool {
-	if s.Version != 2 && s.Version != 3 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 7 || len(s.History) > 16 {
+	if s.Version != 2 && s.Version != 3 && s.Version != 4 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 7 || len(s.History) > 16 {
 		return false
 	}
 	pending := 0
@@ -101,7 +101,7 @@ func (s mutationState) valid() bool {
 			return false
 		}
 	}
-	continued := false
+	continued, hostContinued := false, false
 	for _, prior := range s.History {
 		r := prior.Record
 		if !validMutationStep(prior.Step) {
@@ -109,7 +109,17 @@ func (s mutationState) valid() bool {
 		}
 		if r.State == "continued" {
 			current, exists := s.Steps[prior.Step]
-			if s.Version != 3 || prior.Step != "prepare_runtime_identity" || r.ResultSHA256 != runtimeIdentityGroupOnlyDigest(r.InputSHA256) ||
+			partial := ""
+			switch prior.Step {
+			case "prepare_runtime_identity":
+				partial = runtimeIdentityGroupOnlyDigest(r.InputSHA256)
+			case "prepare_host":
+				if s.Version != 4 {
+					return false
+				}
+				partial, hostContinued = prejoinHostConfiguredDigest(r.InputSHA256), true
+			}
+			if s.Version < 3 || partial == "" || r.ResultSHA256 != partial ||
 				!exists || current.InputSHA256 != r.InputSHA256 || current.Binding.Generation <= r.Binding.Generation || current.Binding.OperationAttempt < r.Binding.OperationAttempt || current.State == "not_applied" {
 				return false
 			}
@@ -122,7 +132,7 @@ func (s mutationState) valid() bool {
 			return false
 		}
 	}
-	return pending <= 1 && (s.Version == 3) == continued
+	return pending <= 1 && (s.Version >= 3) == continued && (s.Version == 4) == hostContinued
 }
 
 func mutationFileValid(file *os.File, maxSize int64) bool {
