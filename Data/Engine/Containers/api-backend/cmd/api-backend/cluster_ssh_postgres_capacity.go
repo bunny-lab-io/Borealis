@@ -40,7 +40,7 @@ func withClusterSSHPostgresCapacityRead(ctx context.Context, source clusterSSHPo
 		return clusterbootstrap.ErrImageArchive
 	}
 	demands, err := mergeClusterSSHFilesystemDemands(base, []clusterSSHFilesystemDemand{
-		{Path: "/opt/Borealis", Bytes: measured.IncomingBytes, Entries: measured.IncomingEntries},
+		{Path: "/opt/Borealis", Bytes: measured.IncomingBytes, Entries: measured.IncomingEntries + 1},
 		{Path: "/var/lib/rancher/k3s", Bytes: measured.RuntimeBytes, Entries: measured.RuntimeEntries},
 	})
 	if err != nil {

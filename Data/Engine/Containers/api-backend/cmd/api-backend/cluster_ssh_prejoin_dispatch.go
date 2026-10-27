@@ -31,6 +31,8 @@ type clusterSSHPrejoinClient interface {
 	ResumeFreshPrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ResumeRepositoryPrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	PublishPrejoinArtifacts(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, []byte, func(context.Context) error) error
+	ReconcilePrejoinArtifacts(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, []byte, func(context.Context) error) error
 	Close() error
 }
 
@@ -67,6 +69,21 @@ func clusterSSHPrejoinDispatchKey(authority clusterSSHPreparationAuthority, sour
 func withClusterSSHPrejoinIdentityDispatch(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error) error {
+	return withClusterSSHPrejoinDispatch(parent, store, aegis, source, claim, baseline, inputs, nil, "", expected, preparation)
+}
+
+func withClusterSSHPrejoinArtifactDispatch(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
+	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error) error {
+	if artifacts == nil || !clusterbootstrap.ValidPostgresImageReference(postgresReference) {
+		return clusterbootstrap.ErrSessionAuthority
+	}
+	return withClusterSSHPrejoinDispatch(parent, store, aegis, source, claim, baseline, inputs, artifacts, postgresReference, expected, preparation)
+}
+
+func withClusterSSHPrejoinDispatch(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
+	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error) error {
 	if store == nil || store.db == nil || aegis == nil || inputs == nil || preparation == nil || !validClusterSSHPreparationLease(claim.Lease) ||
 		expected.Validate() != nil || expected.Source != baseline || parent.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
@@ -118,7 +135,7 @@ func withClusterSSHPrejoinIdentityDispatch(parent context.Context, store *postgr
 				}
 				return client, err
 			}
-			return dispatchClusterSSHPrejoinIdentity(ctx, connect, inputs, expected, source.Binding, material, sudo, check)
+			return dispatchClusterSSHPrejoinArtifacts(ctx, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, check)
 		})
 }
 
@@ -135,7 +152,16 @@ func withClusterSSHPrejoinIdentityDispatch(parent context.Context, store *postgr
 func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(context.Context) (clusterSSHPrejoinClient, error),
 	inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
 	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error) (result error) {
+	return dispatchClusterSSHPrejoinArtifacts(parent, connect, inputs, nil, "", expected, source, material, sudoPassword, current)
+}
+
+func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(context.Context) (clusterSSHPrejoinClient, error),
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
+	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error) (result error) {
 	fail := clusterbootstrap.ErrSessionAuthority
+	if artifacts != nil && !clusterbootstrap.ValidPostgresImageReference(postgresReference) || artifacts == nil && postgresReference != "" {
+		return fail
+	}
 	if connect == nil || inputs == nil || expected.Validate() != nil || material == nil || material.Digest() == "" || current == nil ||
 		clusterremote.ValidateSudoPassword(sudoPassword) != nil || source.ClusterID != expected.Target.ClusterID || source.SourceID == expected.Target.TargetID || parent.Err() != nil {
 		return fail
@@ -148,7 +174,11 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 	expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
 	sudoPassword = bytes.Clone(sudoPassword)
 	defer clear(sudoPassword)
-	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	maximum := 10 * time.Minute
+	if artifacts != nil {
+		maximum += 2 * clusterbootstrap.ArtifactPreparationLifetime
+	}
+	ctx, cancel := context.WithTimeout(parent, maximum)
 	defer cancel()
 	checkCtx, stopChecks := context.WithCancel(ctx)
 	lifetime := &clusterSSHNetworkReaderLifetime{ctx: checkCtx, cancel: stopChecks}
@@ -216,6 +246,16 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 				return c.ReconcilePrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
 			},
 		},
+	}
+	if artifacts != nil {
+		steps = append(steps, [2]action{
+			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.PublishPrejoinArtifacts(checkCtx, inputs, e, source, material, artifacts, postgresReference, sudo, check)
+			},
+			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.ReconcilePrejoinArtifacts(checkCtx, inputs, e, source, material, artifacts, postgresReference, sudo, check)
+			},
+		})
 	}
 	// Return action uncertainty separately from failed authority/cleanup. Only
 	// the former permits the next distinct proof session, never another write.
@@ -367,6 +407,11 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 		retained = 3
 	case "prepare_host":
 		retained = 4
+	case "stage_images":
+		if artifacts == nil {
+			return fail
+		}
+		retained = 5
 	}
 	if retained >= 0 {
 		if proveStep(retained) != nil {

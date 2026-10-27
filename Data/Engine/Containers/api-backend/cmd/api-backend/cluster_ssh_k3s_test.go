@@ -63,11 +63,11 @@ func TestClusterSSHK3sPublicationAndCapacity(t *testing.T) {
 				return
 			}
 			d, err := v.demands()
-			if err != nil || len(d) != 3 || d[1].Path != "/usr/local/bin" || d[1].Bytes != uint64(2*p.Binary.Size) || d[2].Bytes != uint64(2*p.Archive.Size+1024+4096+2*p.Payload.TarBytes) || d[2].Entries != uint64(8+2*(p.Payload.Entries+p.Payload.CNILinks+7)) {
+			if err != nil || len(d) != 3 || d[0].Bytes != uint64(p.Binary.Size+p.Archive.Size+2*p.Installer.Size) || d[0].Entries != 5 || d[1].Path != "/usr/local/bin" || d[1].Bytes != uint64(2*p.Binary.Size) || d[2].Bytes != uint64(2*p.Archive.Size+1024+4096+2*p.Payload.TarBytes) || d[2].Entries != uint64(8+2*(p.Payload.Entries+p.Payload.CNILinks+7)) {
 				t.Fatal("incomplete K3s demand")
 			}
 			merged, err := mergeClusterSSHFilesystemDemands(d, d)
-			if err != nil || len(merged) != 3 || merged[0].Bytes != 2*d[0].Bytes || merged[0].Entries != 8 {
+			if err != nil || len(merged) != 3 || merged[0].Bytes != 2*d[0].Bytes || merged[0].Entries != 10 {
 				t.Fatal("shared paths not summed")
 			}
 			if mode == "publication changed" {

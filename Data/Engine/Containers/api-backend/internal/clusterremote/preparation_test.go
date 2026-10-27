@@ -40,7 +40,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "publish_prejoin_artifacts", "reconcile_prejoin_artifacts", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			var server *fakeSSH
 			var consumed atomic.Bool
@@ -51,7 +51,11 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						nonce = match[1]
 					}
 				}
-				if nonce == "" || command != preparationCommand(int64(len(manager)), digest, nonce) || strings.Contains(command, "private sudo fixture") {
+				wantCommand := preparationCommand(int64(len(manager)), digest, nonce)
+				if artifactPreparationAction(mode) {
+					wantCommand = artifactPreparationCommand(int64(len(manager)), digest, nonce)
+				}
+				if nonce == "" || command != wantCommand || strings.Contains(command, "private sudo fixture") {
 					t.Error("unbound command")
 					return 1
 				}
@@ -75,7 +79,11 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					outReader.Close()
 				}()
 				defer func() { pipeReader.Close(); outWriter.Close(); <-copied; <-outputDone }()
-				err := clusterbootstrap.ServePreparationSessionWithProgress(context.Background(), pipeReader, outWriter, nonce,
+				serve := clusterbootstrap.ServePreparationSessionWithProgress
+				if artifactPreparationAction(mode) {
+					serve = clusterbootstrap.ServeArtifactPreparationSession
+				}
+				err := serve(context.Background(), pipeReader, outWriter, nonce,
 					func(_ context.Context, request clusterbootstrap.PreparationSessionRequest) error {
 						got, err := request.Expected()
 						want := preparationRemoteExpected(server)
@@ -89,6 +97,9 @@ func TestPreparationPinnedSSH(t *testing.T) {
 							}
 						} else if request.IdentitySource != nil {
 							return errors.New("unexpected identity source")
+						}
+						if artifactPreparationAction(mode) && request.PostgresReference != clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("c", 64) {
+							return errors.New("wrong postgres source")
 						}
 						if mode == "native rejection" {
 							return errors.New("private native error")
@@ -175,7 +186,11 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				if strings.HasPrefix(mode, "inspect ") {
 					result = &progress
 				}
-				err = client.transferPreparationWithResult(ctx, managerPath, digest, int64(len(manager)), expected, action, source, []byte("private sudo fixture"), check, func(_ context.Context, output io.Writer) error {
+				pg := ""
+				if artifactPreparationAction(mode) {
+					pg = clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("c", 64)
+				}
+				err = client.transferPreparationArtifactResult(ctx, managerPath, digest, int64(len(manager)), expected, action, source, pg, []byte("private sudo fixture"), check, func(_ context.Context, output io.Writer) error {
 					if mode == "producer failure" {
 						return errors.New("private producer error")
 					}
@@ -196,5 +211,19 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				t.Fatal("successful result without complete payload")
 			}
 		})
+	}
+}
+
+func TestArtifactPreparationCommandBoundaries(t *testing.T) {
+	digest, nonce := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	command := artifactPreparationCommand(123, digest, nonce)
+	quotedSudo := shellConstant("sudo -k -S -p ''")
+	for _, required := range []string{"bootstrap-artifact-session --nonce", "--kill-after=2s 32m", quotedSudo[1 : len(quotedSudo)-1], digest, nonce} {
+		if !strings.Contains(command, required) {
+			t.Fatal("artifact command missing fixed boundary", required)
+		}
+	}
+	if strings.Count(command, "--kill-after=2s 32m") != 2 || strings.Contains(command, "--kill-after=2s 6m") || strings.Contains(preparationCommand(123, digest, nonce), "32m") {
+		t.Fatal("artifact lifetime leaked across command classes")
 	}
 }

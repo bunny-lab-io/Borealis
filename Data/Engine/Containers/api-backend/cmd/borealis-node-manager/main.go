@@ -114,6 +114,10 @@ func main() {
 		bootstrapExecutor(os.Args[2:], true)
 	case "bootstrap-source-session-contained":
 		bootstrapSourceSessionContained(os.Args[2:])
+	case "bootstrap-artifact-session":
+		bootstrapExecutorFor(os.Args[2:], true, true)
+	case "bootstrap-artifact-session-contained":
+		bootstrapSourceSessionContainedFor(os.Args[2:], true)
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}

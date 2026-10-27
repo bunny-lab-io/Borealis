@@ -122,6 +122,12 @@ func verifyBootstrapProgressPaths(root *os.Root, expected clusterbootstrap.Prepa
 	if root == nil || expected.Validate() != nil {
 		return errBootstrapSource
 	}
+	if !bootstrapDockerPathAbsent(root, "var/lib/rancher/k3s") || !bootstrapDockerPathAbsent(root, "usr/local/bin/k3s") {
+		// Cursor grants no mutation or completed effect; source/host/identity
+		// reconciliation cannot accept these later paths. Artifact reconciliation
+		// independently proves all prerequisites and exact complete bytes.
+		return verifyBootstrapArtifactPaths(root, expected, "reconcile_prejoin_artifacts", false)
+	}
 	for _, path := range []string{"etc/borealis", "var/lib/rancher/k3s", "usr/local/bin/k3s", "var/lib/kubelet", "etc/kubernetes"} {
 		if !bootstrapDockerPathAbsent(root, path) {
 			return errBootstrapSource

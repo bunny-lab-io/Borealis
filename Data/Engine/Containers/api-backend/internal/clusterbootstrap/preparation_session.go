@@ -23,10 +23,11 @@ const MaxPreparationSessionOutputBytes = 16 << 20
 // source/account preparation, retained-fence pre-join identity installation or
 // proof-only reconciliation, never arbitrary commands or consumer startup.
 type PreparationSessionRequest struct {
-	Session        SessionRequest          `json:"session"`
-	Action         string                  `json:"action"`
-	ExpectedBase64 string                  `json:"expected_base64"`
-	IdentitySource *engineidentity.Binding `json:"identity_source,omitempty"`
+	Session           SessionRequest          `json:"session"`
+	Action            string                  `json:"action"`
+	ExpectedBase64    string                  `json:"expected_base64"`
+	IdentitySource    *engineidentity.Binding `json:"identity_source,omitempty"`
+	PostgresReference string                  `json:"postgres_reference,omitempty"`
 }
 
 func NewPreparationSessionRequest(expected PreparationExpected, manager, nonce, action string) (PreparationSessionRequest, error) {
@@ -41,13 +42,24 @@ func NewPrejoinPreparationSessionRequest(expected PreparationExpected, manager, 
 }
 
 func newPreparationSessionRequest(expected PreparationExpected, manager, nonce, action string, source *engineidentity.Binding) (PreparationSessionRequest, error) {
+	return preparationSessionRequestWithArtifacts(expected, manager, nonce, action, source, "")
+}
+
+func NewArtifactPreparationSessionRequest(expected PreparationExpected, manager, nonce, action string, source engineidentity.Binding, postgresReference string) (PreparationSessionRequest, error) {
+	if !artifactPreparationAction(action) {
+		return PreparationSessionRequest{}, ErrSessionProtocol
+	}
+	return preparationSessionRequestWithArtifacts(expected, manager, nonce, action, &source, postgresReference)
+}
+
+func preparationSessionRequestWithArtifacts(expected PreparationExpected, manager, nonce, action string, source *engineidentity.Binding, postgresReference string) (PreparationSessionRequest, error) {
 	raw, err := json.Marshal(expected)
 	if err != nil {
 		return PreparationSessionRequest{}, ErrSessionProtocol
 	}
 	r := PreparationSessionRequest{Session: SessionRequest{Protocol: 1, Action: "verify", Nonce: nonce, Binding: expected.Target,
 		Repository: expected.Source.Repository, Release: expected.Source.Release, SourceSHA: expected.Source.SourceSHA,
-		AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source}
+		AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source, PostgresReference: postgresReference}
 	_, err = r.Expected()
 	return r, err
 }
@@ -57,13 +69,20 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 	if r.Session.Validate() != nil || r.Session.Action != "verify" || len(r.ExpectedBase64) > 24<<10 {
 		return expected, ErrSessionProtocol
 	}
+	if artifactPreparationAction(r.Action) {
+		if !ValidPostgresImageReference(r.PostgresReference) {
+			return expected, ErrSessionProtocol
+		}
+	} else if r.PostgresReference != "" {
+		return expected, ErrSessionProtocol
+	}
 	switch r.Action {
 	case "stage_source", "reconcile_source", "reconcile_source_absent", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "inspect_preparation_progress":
 		if r.IdentitySource != nil {
 			return expected, ErrSessionProtocol
 		}
 	case "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity",
-		"prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host":
+		"prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "publish_prejoin_artifacts", "reconcile_prejoin_artifacts":
 		if r.IdentitySource == nil || validatePrejoinSource(r.Session.Binding, *r.IdentitySource) != nil {
 			return expected, ErrSessionProtocol
 		}
@@ -154,6 +173,18 @@ func servePreparationSession(parent context.Context, input io.ReadCloser, output
 
 func servePreparationSessionWithProgress(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
 	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error, timing sessionTiming) error {
+	return servePreparationSessionProfile(parent, input, output, nonce, verify, receive, observe, timing, preparationProfile(false))
+}
+
+func ServeArtifactPreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error) error {
+	ctx, cancel := context.WithTimeout(parent, ArtifactPreparationLifetime)
+	defer cancel()
+	return servePreparationSessionProfile(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, preparationProfile(true))
+}
+
+func servePreparationSessionProfile(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error, timing sessionTiming, profile preparationTransportProfile) error {
 	if input == nil || output == nil || verify == nil || receive == nil || observe == nil || !digestPattern.MatchString(nonce) {
 		return ErrSessionProtocol
 	}
@@ -175,7 +206,7 @@ func servePreparationSessionWithProgress(parent context.Context, input io.ReadCl
 		return ErrSessionProtocol
 	}
 	digest, err := request.Digest()
-	if err != nil || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || artifactPreparationAction(request.Action) != profile.artifacts {
 		return ErrSessionProtocol
 	}
 	frames := make(chan PreparationSessionFrame)
@@ -184,7 +215,7 @@ func servePreparationSessionWithProgress(parent context.Context, input io.ReadCl
 		defer close(readDone)
 		for {
 			var frame PreparationSessionFrame
-			if ReadSessionFrame(reader, &frame) != nil {
+			if readSessionFrameBounded(reader, &frame, profile.frame) != nil {
 				return
 			}
 			select {
@@ -276,11 +307,11 @@ func servePreparationSessionWithProgress(parent context.Context, input io.ReadCl
 			}
 			switch frame.State {
 			case "chunk":
-				if len(frame.Data) == 0 || len(frame.Data) > base64.StdEncoding.EncodedLen(PreparationChunkBytes) {
+				if len(frame.Data) == 0 || len(frame.Data) > base64.StdEncoding.EncodedLen(profile.chunk) {
 					return ErrSessionProtocol
 				}
 				data, err := base64.StdEncoding.Strict().DecodeString(frame.Data)
-				if err != nil || len(data) == 0 || base64.StdEncoding.EncodeToString(data) != frame.Data || total+int64(len(data)) > MaxPreparationTransferBytes {
+				if err != nil || len(data) == 0 || base64.StdEncoding.EncodeToString(data) != frame.Data || total+int64(len(data)) > profile.bytes {
 					clear(data)
 					return ErrSessionProtocol
 				}

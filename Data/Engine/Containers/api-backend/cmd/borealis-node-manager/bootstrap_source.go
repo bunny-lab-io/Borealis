@@ -18,10 +18,18 @@ import (
 var errBootstrapSource = errors.New("source preparation evidence unavailable or changed; private data withheld")
 
 func bootstrapSourceSessionContained(args []string) {
+	bootstrapSourceSessionContainedFor(args, false)
+}
+
+func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 	nonce := bootstrapSessionNonce(args)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	guard, executor, err := clusterbootstrap.NewExecutorGuard(ctx, nonce)
+	newGuard := clusterbootstrap.NewExecutorGuard
+	if artifacts {
+		newGuard = clusterbootstrap.NewArtifactExecutorGuard
+	}
+	guard, executor, err := newGuard(ctx, nonce)
 	if err != nil {
 		fatalf("source preparation executor invalid")
 	}
@@ -52,7 +60,7 @@ func bootstrapSourceSessionContained(args []string) {
 		if err != nil {
 			return errBootstrapSource
 		}
-		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
+		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts) error {
 			if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
 				return errBootstrapSource
 			}
@@ -67,7 +75,11 @@ func bootstrapSourceSessionContained(args []string) {
 				}
 				return nil
 			}
-			journal, err := clusterbootstrap.OpenMutationJournal(ctx, bootstrapMutationRoot, expected.Target, expected.Source, nonce, authority)
+			openJournal := clusterbootstrap.OpenMutationJournal
+			if artifacts {
+				openJournal = clusterbootstrap.OpenArtifactMutationJournal
+			}
+			journal, err := openJournal(ctx, bootstrapMutationRoot, expected.Target, expected.Source, nonce, authority)
 			if err != nil {
 				return errBootstrapSource
 			}
@@ -77,6 +89,12 @@ func bootstrapSourceSessionContained(args []string) {
 					return errors.Join(installErr, journal.Close())
 				}
 				switch request.Action {
+				case "publish_prejoin_artifacts":
+					_, err = inputs.PublishPrejoinArtifacts(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) })
+				case "reconcile_prejoin_artifacts":
+					_, err = inputs.ReconcilePrejoinArtifacts(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) })
 				case "prepare_prejoin_identity_root":
 					_, err = inputs.PreparePrejoinIdentityRoot(ctx, journal, install, material)
 				case "reconcile_prejoin_identity_root":
@@ -134,15 +152,29 @@ func bootstrapSourceSessionContained(args []string) {
 			}
 			return errors.Join(err, journal.Close())
 		}
+		if artifacts {
+			if request.IdentitySource == nil || !bootstrapArtifactAction(request.Action) || bootstrapSourceSafeDirectory("/opt") != nil {
+				return errBootstrapSource
+			}
+			// Bulk scratch shares the qualified /opt source filesystem; the uploaded
+			// helper remains in its existing bounded private /var/tmp wrapper.
+			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
+		}
 		if request.IdentitySource != nil {
-			return clusterbootstrap.ConsumePrejoinPreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check, consume)
+			return clusterbootstrap.ConsumePrejoinPreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check, func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
+				return consume(ctx, inputs, material, nil)
+			})
 		}
 		return clusterbootstrap.ConsumePreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, input, check,
 			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
-				return consume(ctx, inputs, nil)
+				return consume(ctx, inputs, nil, nil)
 			})
 	}
-	if clusterbootstrap.ServePreparationSessionWithProgress(ctx, os.Stdin, os.Stdout, nonce, verify,
+	serve := clusterbootstrap.ServePreparationSessionWithProgress
+	if artifacts {
+		serve = clusterbootstrap.ServeArtifactPreparationSession
+	}
+	if serve(ctx, os.Stdin, os.Stdout, nonce, verify,
 		func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationProgress, error) {
 			err := receive(ctx, request, input)
 			return progress, err
@@ -170,6 +202,9 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 		paths: func(action string, destination bool) error {
 			if action == "inspect_preparation_progress" {
 				return verifyBootstrapProgressPaths(root, expected)
+			}
+			if bootstrapArtifactAction(action) {
+				return verifyBootstrapArtifactPaths(root, expected, action, destination)
 			}
 			if bootstrapHostAction(action) {
 				return verifyBootstrapHostPaths(root, expected, action, destination)

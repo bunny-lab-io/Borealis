@@ -127,6 +127,20 @@ func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinHost(ctx context.Context,
 	return c.run(ctx, "host proof", p, e, source, keys, sudo, check)
 }
 
+func (c *sshPrejoinDispatchTestClient) PublishPrejoinArtifacts(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgres string, sudo []byte, check func(context.Context) error) error {
+	if artifacts == nil || !clusterbootstrap.ValidPostgresImageReference(postgres) {
+		return clusterbootstrap.ErrImageArchive
+	}
+	return c.run(ctx, "artifacts", p, e, source, keys, sudo, check)
+}
+
+func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinArtifacts(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgres string, sudo []byte, check func(context.Context) error) error {
+	if artifacts == nil || !clusterbootstrap.ValidPostgresImageReference(postgres) {
+		return clusterbootstrap.ErrImageArchive
+	}
+	return c.run(ctx, "artifacts proof", p, e, source, keys, sudo, check)
+}
+
 func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 	a, source, _ := sshPrejoinSourceFixture(t, false)
 	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")

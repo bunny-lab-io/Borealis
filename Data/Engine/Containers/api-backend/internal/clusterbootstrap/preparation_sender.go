@@ -43,7 +43,8 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 	if err != nil || input == nil || output == nil || produce == nil || refresh == nil {
 		return ErrSessionProtocol
 	}
-	ctx, cancel := context.WithTimeout(parent, SessionLifetime)
+	profile := preparationProfile(artifactPreparationAction(request.Action))
+	ctx, cancel := context.WithTimeout(parent, profile.lifetime)
 	completed := false
 	stop := context.AfterFunc(ctx, func() { input.Close(); output.Close() })
 	defer func() {
@@ -70,7 +71,7 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 	if _, err := io.WriteString(output, preamble); err != nil {
 		return ErrSessionProtocol
 	}
-	reader := &io.LimitedReader{R: input, N: MaxPreparationSessionOutputBytes + 1}
+	reader := &io.LimitedReader{R: input, N: profile.output + 1}
 	var ready PreparationSessionFrame
 	if ReadSessionFrame(reader, &ready) != nil || ready != (PreparationSessionFrame{Protocol: 1, State: "ready", Nonce: request.Session.Nonce}) {
 		return ErrSessionProtocol
@@ -144,7 +145,7 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 		go func() {
 			defer close(chunkDone)
 			for {
-				data := make([]byte, PreparationChunkBytes)
+				data := make([]byte, profile.chunk)
 				n, err := io.ReadFull(pipeReader, data)
 				if err == io.ErrUnexpectedEOF {
 					err = io.EOF
@@ -190,14 +191,14 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 			}
 			eof = chunk.err == io.EOF
 			total += int64(len(chunk.data))
-			if total > MaxPreparationTransferBytes {
+			if total > profile.bytes {
 				clear(chunk.data)
 				return ErrSessionProtocol
 			}
 			if len(chunk.data) > 0 {
 				frame := PreparationSessionFrame{Protocol: 1, State: "chunk", Nonce: request.Session.Nonce, RequestSHA256: digest, Sequence: sequence, Data: base64.StdEncoding.EncodeToString(chunk.data)}
 				clear(chunk.data)
-				if WriteSessionFrame(output, frame) != nil {
+				if writeSessionFrameBounded(output, frame, profile.frame) != nil {
 					return ErrSessionProtocol
 				}
 				awaitingAck = true
@@ -211,7 +212,7 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 				return ErrSessionProtocol
 			}
 			if frame.State == "challenge" {
-				if frame.Sequence != 0 || !digestPattern.MatchString(frame.Nonce) || seenChallenges[frame.Nonce] || len(seenChallenges) >= 64 {
+				if frame.Sequence != 0 || !digestPattern.MatchString(frame.Nonce) || seenChallenges[frame.Nonce] || len(seenChallenges) >= profile.challenges {
 					return ErrSessionProtocol
 				}
 				seenChallenges[frame.Nonce] = true

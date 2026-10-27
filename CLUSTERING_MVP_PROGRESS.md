@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `595dae1572d212f8df343ff08331e5a05c1190a4`.
+- Published base `22b7bcc2753ec38921a833030e9180fed9dca8df`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -220,7 +220,7 @@ Production polling stays disabled until required integration completes.
   authority/custody/parent/cancellation remain checked. Source-drift-before-promotion
   regression passed1.010s; aggregate/full-stream/old-consumer suite22.827s; native
   bounded custody1.089s. First broad run interrupted for this necessary throughput
-  correction (no failure claimed); final bootstrap race regression running. Full native race156top-level tests
+  correction (no failure claimed); final bootstrap race regression passed568.563s (see JSON summary for count). Full native race156top-level tests
   passed15.916s with zero failures/skips. Policy184tests/219routes, final full-module
   vet, CGO-disabled node-manager build and docs-reference/diff checks passed.
   Evidence: `Unit_Test_Results/m2-complete-artifacts-20261027/`.
@@ -235,3 +235,49 @@ Production polling stays disabled until required integration completes.
   acknowledged chunks/output cap must be sized for complete dependency payloads.
 - Current complete-artifact batch ready for publication after focused validation. No live Engine action, credential
   use, K3s startup/import, public route/schema/dependency change or runtime cleanup.
+
+## In-flight artifact session integration
+
+- Published complete-artifact checkpoint22b7bcc has full bootstrap163/native156
+  top-level race tests, zero failures/skips,568.563s/15.916s; focused journal/stream,
+  full-module vet/build/policy evidence above. No live action.
+- Fixed publish/reconcile artifact session binds independently selected PostgreSQL
+  digest and original identity. Ordinary action limits stay unchanged. Artifact
+  class uses256KiB chunks/512KiB frames, bounded complete-cohort bytes,128MiB
+  acknowledgements,30-minute session/31-minute systemd maximum/32-minute shell
+  maximum. Existing20-second authority lease and2-second watchdog stay unchanged;
+  ordinary/artifact executors reject each other's runtime ceiling/request class.
+- Native session receives bulk scratch under qualified /opt before journaled
+  publication/reconciliation. Verified helper upload retains existing private
+  /var/tmp wrapper. Pinned SSH uses fixed artifact verb and aggregate input.
+- API acquisition now stages K3s and owns all four families under original
+  source/claim scopes. Worker budget includes all three K3s assets and their owned
+  directory. Target budgets retain archive generations and add final installer,
+  bounded manifest and owned set directories. Existing exact low-space/source-
+  drift assertions updated for added bytes/entries, never suppressed.
+- Six-stage dispatcher writes then independently proves artifacts, including lost
+  acknowledgements. Retained stage_images runs proof only; old prefix rejects that
+  cursor. Partial/unknown publication, authority or cleanup failure stops progress.
+  Extended90-minute acquisition/70-minute dispatch ceilings do not extend any
+  credential expiry, claim/controller authority or short renewal deadline.
+- Focused3 bootstrap28.253s/native1.492s/API4.182s passed. Remote shell-quoting
+  fixture corrected to compare encoded literal and both timeout branches; final
+  pinned SSH/command suite3 passed2.681s. Full native race passed14.306s; final
+  full-module vet/build and repository policy184tests/219routes passed before last
+  small capacity changes. Docs reference/diff passed. No new full bootstrap rerun:
+  prior full suite applies only to unchanged artifact primitives, new protocol
+  changes have focused coverage and require current batch CI.
+- Final target-capacity suite3 passed20.487s,18top-level executions/zero skips
+  or failures; external capacity suite3 passed2.376s. Final API vet passed. Evidence:
+  Unit_Test_Results/m2-artifact-session-20261027/. Validation processes finished.
+  Session/API/capacity batch based on22b7bcc ready for publication. Parent CI:
+  Container Policy40477223891 passed; PR Validation40477223875 pending at one check.
+  New batch requires its own CI; no pending poll or manual rerun.
+- Exact next action: publish fixed artifact session/dispatcher batch, then inspect
+  pinned installer contract and existing native join path (main.go around1985),
+  implement journaled immutable K3s installation/import using original-controller
+  authority and existing shared-identity fences. Legacy manual join downloads an
+  installer and starts K3s directly; do not call it from immutable preparation.
+  Preserve prepared source, calculated budgets and separate reconciliation.
+  Production preparation polling disabled. No Engine changes/credentials used,
+  no dependency/schema/public route changes, no runtime cleanup obligation.

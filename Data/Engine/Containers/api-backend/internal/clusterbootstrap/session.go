@@ -149,8 +149,12 @@ type IdentityReceiver func(context.Context, SessionRequest, *engineidentity.Mate
 // WriteSessionFrame uses length framing so sudo's optional unread password line
 // cannot become executable input or confuse a structured request boundary.
 func WriteSessionFrame(w io.Writer, value any) error {
+	return writeSessionFrameBounded(w, value, MaxSessionFrameBytes)
+}
+
+func writeSessionFrameBounded(w io.Writer, value any, bound int) error {
 	raw, err := json.Marshal(value)
-	if err != nil || len(raw) == 0 || len(raw) > MaxSessionFrameBytes {
+	if err != nil || len(raw) == 0 || len(raw) > bound {
 		return ErrSessionProtocol
 	}
 	defer clear(raw)
@@ -166,12 +170,16 @@ func WriteSessionFrame(w io.Writer, value any) error {
 }
 
 func ReadSessionFrame(r io.Reader, value any) error {
+	return readSessionFrameBounded(r, value, MaxSessionFrameBytes)
+}
+
+func readSessionFrameBounded(r io.Reader, value any, bound int) error {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return ErrSessionProtocol
 	}
 	size := binary.BigEndian.Uint32(header[:])
-	if size == 0 || size > MaxSessionFrameBytes {
+	if size == 0 || uint64(size) > uint64(bound) {
 		return ErrSessionProtocol
 	}
 	raw := make([]byte, size)

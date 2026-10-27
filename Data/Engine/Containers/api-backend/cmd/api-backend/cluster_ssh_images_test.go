@@ -107,8 +107,8 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 					}
 					for _, v := range out {
 						p := clusterbootstrap.K3sPins()
-						k3sBytes := uint64(3*p.Binary.Size + 3*p.Archive.Size + 1024 + 4096 + 14*4096 + p.Installer.Size + 2*p.Payload.TarBytes + 4096*2*(p.Payload.Entries+p.Payload.CNILinks+7))
-						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+10+9*7)+k3sBytes+externalBudget+1100+11*4096 {
+						k3sBytes := uint64(3*p.Binary.Size + 3*p.Archive.Size + 1024 + 4096 + 15*4096 + 2*p.Installer.Size + 2*p.Payload.TarBytes + 4096*2*(p.Payload.Entries+p.Payload.CNILinks+7))
+						if !v.Fits || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+clusterbootstrap.MaxImageInventoryBytes+9*(3*8192+1024+4096)+4096*(2*clusterbootstrap.MaxEntries+12+9*7)+k3sBytes+externalBudget+1100+12*4096 {
 							t.Fatal("image bytes missing from shared filesystem budget")
 						}
 					}
@@ -171,7 +171,7 @@ func TestClusterSSHImageInventoryPublicationAndDemand(t *testing.T) {
 				return
 			}
 			d, err := v.demands()
-			if err != nil || len(d) != 2 || d[0].Path != "/opt/Borealis" || d[0].Bytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+9*8192 || d[1].Path != "/var/lib/rancher/k3s" || d[1].Bytes != 9*(2*8192+1024+4096) {
+			if err != nil || len(d) != 2 || d[0].Path != "/opt/Borealis" || d[0].Bytes != 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+clusterbootstrap.MaxImageInventoryBytes+9*8192 || d[1].Path != "/var/lib/rancher/k3s" || d[1].Bytes != 9*(2*8192+1024+4096) {
 				t.Fatal("incomplete or discounted image demand")
 			}
 			if mode == "asset ID drift" {

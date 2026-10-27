@@ -14,7 +14,7 @@ import (
 func addExternalReleaseFixture(t *testing.T, f *bootstrapReleaseFixture) uint64 {
 	t.Helper()
 	var proofs []clusterbootstrap.ExternalImageProof
-	var budget uint64
+	budget := uint64(4096) // Owned external-set directory.
 	for i, pin := range clusterbootstrap.ExternalImagePins() {
 		p := clusterbootstrap.ExternalImageProof{Reference: pin.Reference, IndexDigest: pin.IndexDigest, ManifestDigest: pin.ManifestDigest, ConfigDigest: pin.ConfigDigest, ArchiveSHA256: strings.Repeat("a", 64), ContentBytes: pin.IndexBytes + pin.ManifestBytes + pin.ConfigBytes + pin.LayerBlobBytes, ContentEntries: int64(3 + pin.LayerCount)}
 		remaining := pin.LayerBlobBytes

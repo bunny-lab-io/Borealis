@@ -133,7 +133,7 @@ func (v clusterSSHExternalInventory) demands() ([]clusterSSHFilesystemDemand, er
 		}
 	}
 	return []clusterSSHFilesystemDemand{
-		{Path: "/opt/Borealis", Bytes: stage, Entries: uint64(len(v.inventory.Images()))},
+		{Path: "/opt/Borealis", Bytes: stage, Entries: uint64(1 + len(v.inventory.Images()))},
 		{Path: "/var/lib/rancher/k3s", Bytes: runtime, Entries: runtimeEntries},
 	}, nil
 }

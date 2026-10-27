@@ -160,7 +160,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 // fence; changing the target phase inside consume invalidates this scope.
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.ImageSet, *clusterbootstrap.ExternalImageSet, *clusterbootstrap.PostgresImage, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -170,7 +170,7 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
 	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
-	return runClusterSSHPreparationScope(parent, 5*time.Second, leaseCheck, func(ctx context.Context) (result error) {
+	return runClusterSSHArtifactPreparationScope(parent, 5*time.Second, leaseCheck, func(ctx context.Context) (result error) {
 		snapshotRead := client.snapshotRead(authority, lease, baseline, sealed)
 		initial, err := snapshotRead(ctx)
 		read := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
@@ -239,11 +239,29 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 			return clusterbootstrap.ErrImageArchive
 		}
 		// Compose target demands separately from physically reserved PostgreSQL
-		// acquisition scratch. K3s metadata remains conditional until bulk staging.
+		// acquisition scratch. Complete K3s assets remain owned through consumption.
 		k3s, err := resolveClusterSSHK3sInventory(ctx, expected.Source, expected.K3sVersion)
 		if err != nil {
 			return err
 		}
+		k3sInputs, err := k3s.stage(ctx, scratchParent, checks.Inputs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if k3sInputs.Close() != nil {
+				result = clusterbootstrap.ErrImageArchive
+			}
+		}()
+		artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected.Source, expected.K3sVersion, initial.Storage.Requirements.PostgresImage.Resolved, images, k3sInputs, externalImages, postgresImage, checks.Inputs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if artifacts.Close() != nil {
+				result = clusterbootstrap.ErrImageArchive
+			}
+		}()
 		appDemand, err := inventory.demands()
 		if err != nil {
 			return err
@@ -266,11 +284,11 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 		}
 		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checks.Inputs, baseDemand,
 			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
-				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, capacity)
+				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, k3s, capacity)
 				if err != nil {
 					return err
 				}
-				if err := consume(ctx, inputs, images, externalImages, postgresImage, capacity, expected, checks); err != nil {
+				if err := consume(ctx, inputs, artifacts, initial.Storage.Requirements.PostgresImage.Resolved, capacity, expected, checks); err != nil {
 					return err
 				}
 				fresh, err := inputs.StorageDemand(ctx, expected, checks.Inputs)

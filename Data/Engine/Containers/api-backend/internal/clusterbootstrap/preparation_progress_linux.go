@@ -24,7 +24,7 @@ func (j *MutationJournal) preparationProgressLocked(ctx context.Context, sourceI
 	if j.authority(ctx) != nil || !digestPattern.MatchString(sourceInput) || !j.state.valid() {
 		return invalid, ErrSessionAuthority
 	}
-	steps := [...]string{"stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host"}
+	steps := [...]string{"stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images"}
 	if len(j.state.Steps) > len(steps) {
 		return invalid, ErrMutationJournal
 	}

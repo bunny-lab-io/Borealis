@@ -53,7 +53,7 @@ func TestClusterSSHPostgresCapacityScope(t *testing.T) {
 			}
 			err := withClusterSSHPostgresCapacityRead(ctx, source, read, check, base, func(ctx context.Context, c clusterSSHPreparedImageCapacity) error {
 				consumed++
-				if c.PostgresWorkerPeakBytes != 190 || c.PostgresWorkerPeakEntries != 5 || !reflect.DeepEqual(c.Target, []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 600, Entries: 3}, {Path: "/var/lib/rancher/k3s", Bytes: 3000, Entries: 30}}) {
+				if c.PostgresWorkerPeakBytes != 190 || c.PostgresWorkerPeakEntries != 5 || !reflect.DeepEqual(c.Target, []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 600, Entries: 4}, {Path: "/var/lib/rancher/k3s", Bytes: 3000, Entries: 30}}) {
 					t.Fatal("worker/target budgets mixed")
 				}
 				if mode == "consumer failure" {
@@ -92,7 +92,7 @@ func TestClusterSSHPostgresCapacitySharedFilesystem(t *testing.T) {
 		e := sshCapacityEvidence()
 		e.Paths = append(e.Paths, clusterremote.FilesystemPath{Path: "/var/lib/rancher/k3s", Ancestor: "/var/lib", Filesystem: "root"})
 		budgets, err := calculateClusterSSHStorageCapacity(storage, e, c.Target)
-		if err != nil || len(budgets) != 1 || budgets[0].OtherBytes != 1100+11*4096 || budgets[0].ReplicaBytes != storage.ArtifactReplicaBytes+storage.PostgresInstanceBytes {
+		if err != nil || len(budgets) != 1 || budgets[0].OtherBytes != 1100+12*4096 || budgets[0].ReplicaBytes != storage.ArtifactReplicaBytes+storage.PostgresInstanceBytes {
 			t.Fatal("shared space, allocation reserve or PGDATA accounting changed", err)
 		}
 		// Worker scratch is not a target filesystem charge; PGDATA remains volume demand.

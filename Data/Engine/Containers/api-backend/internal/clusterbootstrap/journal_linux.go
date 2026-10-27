@@ -156,6 +156,14 @@ func OpenMutationJournal(ctx context.Context, path string, owner SessionBinding,
 	}, observeExecutorQuiescent)
 }
 
+// Artifact sessions use their fixed longer runtime ceiling, while retaining
+// identical watchdog, lease, exclusion and stopped-producer checks.
+func OpenArtifactMutationJournal(ctx context.Context, path string, owner SessionBinding, source Expected, nonce string, check func(context.Context) error) (*MutationJournal, error) {
+	return openMutationJournal(ctx, path, owner, source, check, func(ctx context.Context) (ExecutorIdentity, error) {
+		return currentExecutorFor(ctx, nonce, true)
+	}, observeExecutorQuiescent)
+}
+
 // Injectable observers stay package-private for isolated portable fixtures.
 // Production always verifies actual supervision and kernel/manager quiescence.
 func openMutationJournal(ctx context.Context, path string, owner SessionBinding, source Expected, check func(context.Context) error,

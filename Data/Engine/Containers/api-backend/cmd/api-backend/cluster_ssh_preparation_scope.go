@@ -17,10 +17,21 @@ type clusterSSHPreparationChecks struct {
 // ctx and join their descendants before returning; the scope never abandons a
 // work goroutine or reports success while cleanup is still running.
 func runClusterSSHPreparationScope(parent context.Context, interval time.Duration, check func(context.Context) error, work func(context.Context) error) (result error) {
+	return runClusterSSHPreparationScopeFor(parent, interval, 10*time.Minute, check, work)
+}
+
+// Complete artifact acquisition plus two independently supervised delivery/proof
+// sessions need a larger outer budget. Claim/source/credential expiry and every
+// short renewal remain authoritative; this ceiling extends none of them.
+func runClusterSSHArtifactPreparationScope(parent context.Context, interval time.Duration, check func(context.Context) error, work func(context.Context) error) error {
+	return runClusterSSHPreparationScopeFor(parent, interval, 90*time.Minute, check, work)
+}
+
+func runClusterSSHPreparationScopeFor(parent context.Context, interval, maximum time.Duration, check func(context.Context) error, work func(context.Context) error) (result error) {
 	if parent.Err() != nil || check == nil || work == nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
-	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, maximum)
 	defer cancel()
 	lifetime := ctx
 	if check(ctx) != nil || ctx.Err() != nil {

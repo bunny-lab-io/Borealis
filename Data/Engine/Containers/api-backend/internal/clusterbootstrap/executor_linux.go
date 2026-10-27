@@ -49,6 +49,14 @@ func PreparationExecutorArguments(executable, nonce string) ([]string, error) {
 }
 
 func executorArguments(executable, nonce string, preparation bool) ([]string, error) {
+	return executorArgumentsFor(executable, nonce, preparation, false)
+}
+
+func ArtifactPreparationExecutorArguments(executable, nonce string) ([]string, error) {
+	return executorArgumentsFor(executable, nonce, true, true)
+}
+
+func executorArgumentsFor(executable, nonce string, preparation, artifacts bool) ([]string, error) {
 	unit, err := ExecutorUnit(nonce)
 	if err != nil || !filepath.IsAbs(executable) || filepath.Clean(executable) != executable ||
 		strings.ContainsAny(executable, "\x00\r\n$") {
@@ -58,9 +66,13 @@ func executorArguments(executable, nonce string, preparation bool) ([]string, er
 	if preparation {
 		verb = "bootstrap-source-session-contained"
 	}
+	runtimeMaximum := "6min"
+	if artifacts {
+		verb, runtimeMaximum = "bootstrap-artifact-session-contained", "31min"
+	}
 	return []string{"--quiet", "--pipe", "--wait", "--collect", "--service-type=notify", "--slice=system.slice", "--unit=" + unit,
 		"--property=Restart=no", "--property=KillMode=control-group", "--property=SendSIGKILL=yes", "--property=FinalKillSignal=SIGKILL",
-		"--property=TimeoutStartSec=20s", "--property=TimeoutStopSec=2s", "--property=RuntimeMaxSec=6min",
+		"--property=TimeoutStartSec=20s", "--property=TimeoutStopSec=2s", "--property=RuntimeMaxSec=" + runtimeMaximum,
 		"--property=WatchdogSec=2s", "--property=WatchdogSignal=SIGKILL", "--property=NotifyAccess=main",
 		"--property=LimitCORE=0", "--property=UMask=0077", "--property=Delegate=no", "--property=ProtectControlGroups=yes",
 		"--", executable, verb, "--nonce", nonce}, nil
@@ -100,6 +112,10 @@ func executorPropertyMapFor(raw []byte, properties []string) (map[string]string,
 }
 
 func verifyExecutorIdentity(nonce, invocation, boot, cgroup string, pid int, values map[string]string) (ExecutorIdentity, error) {
+	return verifyExecutorIdentityFor(nonce, invocation, boot, cgroup, pid, values, false)
+}
+
+func verifyExecutorIdentityFor(nonce, invocation, boot, cgroup string, pid int, values map[string]string, artifacts bool) (ExecutorIdentity, error) {
 	unit, err := ExecutorUnit(nonce)
 	invalid := ExecutorIdentity{}
 	if err != nil || pid < 1 || !sessionMachineID.MatchString(invocation) || invocation == strings.Repeat("0", 32) || !sessionUUID.MatchString(boot) {
@@ -109,9 +125,13 @@ func verifyExecutorIdentity(nonce, invocation, boot, cgroup string, pid int, val
 	if cgroup != "0::"+group+"\n" {
 		return invalid, ErrExecutorContainment
 	}
+	runtimeMaximum := "6min"
+	if artifacts {
+		runtimeMaximum = "31min"
+	}
 	for key, want := range map[string]string{"Id": unit, "InvocationID": invocation, "MainPID": strconv.Itoa(pid), "ControlGroup": group,
 		"LoadState": "loaded", "Transient": "yes", "Type": "notify", "NotifyAccess": "main", "KillMode": "control-group", "SendSIGKILL": "yes",
-		"FinalKillSignal": "9", "WatchdogSignal": "9", "WatchdogUSec": "2s", "TimeoutStopUSec": "2s", "RuntimeMaxUSec": "6min", "Restart": "no", "Delegate": "no", "ProtectControlGroups": "yes"} {
+		"FinalKillSignal": "9", "WatchdogSignal": "9", "WatchdogUSec": "2s", "TimeoutStopUSec": "2s", "RuntimeMaxUSec": runtimeMaximum, "Restart": "no", "Delegate": "no", "ProtectControlGroups": "yes"} {
 		if values[key] != want {
 			return invalid, ErrExecutorContainment
 		}
@@ -123,6 +143,10 @@ func verifyExecutorIdentity(nonce, invocation, boot, cgroup string, pid int, val
 }
 
 func currentExecutor(ctx context.Context, nonce string) (ExecutorIdentity, error) {
+	return currentExecutorFor(ctx, nonce, false)
+}
+
+func currentExecutorFor(ctx context.Context, nonce string, artifacts bool) (ExecutorIdentity, error) {
 	invalid := ExecutorIdentity{}
 	unit, err := ExecutorUnit(nonce)
 	if err != nil || os.Getenv("NOTIFY_SOCKET") != "/run/systemd/notify" || os.Getenv("WATCHDOG_USEC") != "2000000" ||
@@ -152,7 +176,7 @@ func currentExecutor(ctx context.Context, nonce string) (ExecutorIdentity, error
 	if err != nil || len(cgroup) > 1024 {
 		return invalid, ErrExecutorContainment
 	}
-	return verifyExecutorIdentity(nonce, os.Getenv("INVOCATION_ID"), strings.TrimSpace(string(boot)), string(cgroup), os.Getpid(), values)
+	return verifyExecutorIdentityFor(nonce, os.Getenv("INVOCATION_ID"), strings.TrimSpace(string(boot)), string(cgroup), os.Getpid(), values, artifacts)
 }
 
 // ExecutorGuard feeds systemd only while the session's current authority
@@ -170,7 +194,15 @@ type ExecutorGuard struct {
 }
 
 func NewExecutorGuard(ctx context.Context, nonce string) (*ExecutorGuard, ExecutorIdentity, error) {
-	identity, err := currentExecutor(ctx, nonce)
+	return newExecutorGuardFor(ctx, nonce, false)
+}
+
+func NewArtifactExecutorGuard(ctx context.Context, nonce string) (*ExecutorGuard, ExecutorIdentity, error) {
+	return newExecutorGuardFor(ctx, nonce, true)
+}
+
+func newExecutorGuardFor(ctx context.Context, nonce string, artifacts bool) (*ExecutorGuard, ExecutorIdentity, error) {
+	identity, err := currentExecutorFor(ctx, nonce, artifacts)
 	if err != nil {
 		return nil, ExecutorIdentity{}, err
 	}

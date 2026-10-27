@@ -120,10 +120,10 @@ func (v clusterSSHK3sInventory) demands() ([]clusterSSHFilesystemDemand, error) 
 	payloadBytes := 2 * p.Payload.TarBytes
 	payloadEntries := 2 * (p.Payload.Entries + p.Payload.CNILinks + 7)
 	// Bounds were checked by the private inventory parser. Keep every incoming
-	// input, two image-archive generations, full content store and each expanded
+	// input and published installer, two image-archive generations, full content store and each expanded
 	// layer; do not discount duplicate layers or retained deployed content.
 	return []clusterSSHFilesystemDemand{
-		{Path: "/opt/Borealis", Bytes: uint64(p.Binary.Size + a.ArchiveBytes + p.Installer.Size), Entries: 4},
+		{Path: "/opt/Borealis", Bytes: uint64(p.Binary.Size + a.ArchiveBytes + 2*p.Installer.Size), Entries: 5},
 		{Path: "/usr/local/bin", Bytes: uint64(2 * p.Binary.Size), Entries: 2},
 		{Path: "/var/lib/rancher/k3s", Bytes: uint64(2*a.ArchiveBytes + a.ContentBytes + a.ExpandedBytes + payloadBytes), Entries: uint64(2 + a.ContentEntries + a.ExpandedEntries + payloadEntries)},
 	}, nil

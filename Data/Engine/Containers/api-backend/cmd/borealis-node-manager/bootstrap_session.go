@@ -35,6 +35,10 @@ func bootstrapSession(args []string) {
 }
 
 func bootstrapExecutor(args []string, preparation bool) {
+	bootstrapExecutorFor(args, preparation, false)
+}
+
+func bootstrapExecutorFor(args []string, preparation, artifacts bool) {
 	nonce := bootstrapSessionNonce(args)
 	executable, err := os.Executable()
 	if err != nil {
@@ -49,12 +53,19 @@ func bootstrapExecutor(args []string, preparation bool) {
 	if preparation {
 		arguments, err = clusterbootstrap.PreparationExecutorArguments(executable, nonce)
 	}
+	if artifacts {
+		arguments, err = clusterbootstrap.ArtifactPreparationExecutorArguments(executable, nonce)
+	}
 	if err != nil {
 		fatalf("bootstrap executor arguments invalid")
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	ctx, timeout := context.WithTimeout(ctx, 6*time.Minute+5*time.Second)
+	maximum := 6*time.Minute + 5*time.Second
+	if artifacts {
+		maximum = 31*time.Minute + 5*time.Second
+	}
+	ctx, timeout := context.WithTimeout(ctx, maximum)
 	defer timeout()
 	command := exec.CommandContext(ctx, "/usr/bin/systemd-run", arguments...)
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}

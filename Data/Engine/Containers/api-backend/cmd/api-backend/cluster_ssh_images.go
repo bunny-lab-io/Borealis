@@ -141,11 +141,12 @@ func (v clusterSSHImageInventory) demands() ([]clusterSSHFilesystemDemand, error
 			return nil, clusterbootstrap.ErrImageArchive
 		}
 	}
-	if !add(&stage, 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes) {
+	if !add(&stage, 2*clusterbootstrap.MaxExpandedBytes+clusterbootstrap.MaxBundleBytes+clusterbootstrap.MaxImageInventoryBytes) {
 		return nil, clusterbootstrap.ErrImageArchive
 	}
-	// Two bounded bootstrap expansions, bootstrap archive and image archives.
-	stageEntries := uint64(2*clusterbootstrap.MaxEntries + 1 + len(v.inventory.Images()))
+	// Two bounded bootstrap expansions, bootstrap archive and image archives;
+	// include owned application-set directory and published image manifest.
+	stageEntries := uint64(2*clusterbootstrap.MaxEntries + 3 + len(v.inventory.Images()))
 	return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: stage, Entries: stageEntries}, {Path: "/var/lib/rancher/k3s", Bytes: runtime, Entries: runtimeEntries}}, nil
 }
 

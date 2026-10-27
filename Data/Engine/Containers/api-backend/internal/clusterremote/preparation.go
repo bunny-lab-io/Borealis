@@ -20,6 +20,13 @@ func preparationCommand(size int64, digest, nonce string) string {
 	return bootstrapCommandWithRoot(size, digest, nonce, strings.Replace(bootstrapRootScript, "bootstrap-session --nonce", "bootstrap-source-session --nonce", 1))
 }
 
+// Fixed artifact command extends only its outer containment budget. The root
+// helper still uses the same private upload, digest pin, sudo and cleanup path.
+func artifactPreparationCommand(size int64, digest, nonce string) string {
+	command := bootstrapCommandWithRoot(size, digest, nonce, strings.Replace(bootstrapRootScript, "bootstrap-session --nonce", "bootstrap-artifact-session --nonce", 1))
+	return strings.ReplaceAll(command, "--kill-after=2s 6m", "--kill-after=2s 32m")
+}
+
 // DeliverPreparation publishes source/configuration only. Controller must hold
 // exact preparation authority and all native qualification scopes in check.
 // Failed/unknown delivery must never be retried as a new write; use separate
@@ -128,6 +135,33 @@ func (client *Client) InspectPreparationProgress(ctx context.Context, inputs *cl
 
 func (client *Client) preparationWithResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
+	return client.preparationWithArtifactsResult(ctx, inputs, expected, action, source, material, nil, "", sudoPassword, check, progress)
+}
+
+func (client *Client) PublishPrejoinArtifacts(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithArtifactsResult(ctx, inputs, expected, "publish_prejoin_artifacts", &source, material, artifacts, postgresReference, sudoPassword, check, nil)
+}
+
+func (client *Client) ReconcilePrejoinArtifacts(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithArtifactsResult(ctx, inputs, expected, "reconcile_prejoin_artifacts", &source, material, artifacts, postgresReference, sudoPassword, check, nil)
+}
+
+func artifactPreparationAction(action string) bool {
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts"
+}
+
+func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
+	sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
+	if artifactPreparationAction(action) {
+		if artifacts == nil || source == nil || material == nil || !clusterbootstrap.ValidPostgresImageReference(postgresReference) {
+			return ErrBootstrapVerification
+		}
+	} else if artifacts != nil || postgresReference != "" {
+		return ErrBootstrapVerification
+	}
 	binding := expected.Target
 	if client == nil || inputs == nil || expected.Validate() != nil || check == nil || ValidateSudoPassword(sudoPassword) != nil ||
 		(source == nil) != (material == nil) ||
@@ -150,8 +184,11 @@ func (client *Client) preparationWithResult(ctx context.Context, inputs *cluster
 	if err != nil || bundleSource != expected.Source {
 		return ErrBootstrapVerification
 	}
-	return client.transferPreparationWithResult(ctx, bundle.ManagerPath(), digest, size, expected, action, source, sudoPassword, serialized,
+	return client.transferPreparationArtifactResult(ctx, bundle.ManagerPath(), digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
+			if artifacts != nil {
+				return inputs.WritePrejoinArtifactPreparation(ctx, expected, *source, material, artifacts, postgresReference, output, serialized)
+			}
 			if source != nil {
 				return inputs.WritePrejoinPreparation(ctx, expected, *source, material, output, serialized)
 			}
@@ -173,10 +210,19 @@ func (client *Client) transferPreparationWithIdentity(parent context.Context, ma
 
 func (client *Client) transferPreparationWithResult(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress) error {
+	return client.transferPreparationArtifactResult(parent, managerPath, digest, size, expected, action, source, "", sudoPassword, check, produce, progress)
+}
+
+func (client *Client) transferPreparationArtifactResult(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, postgresReference string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress) error {
 	if (action == "inspect_preparation_progress") != (progress != nil) {
 		return ErrBootstrapVerification
 	}
-	ctx, cancel := context.WithTimeout(parent, clusterbootstrap.SessionLifetime)
+	lifetime := clusterbootstrap.SessionLifetime
+	if artifactPreparationAction(action) {
+		lifetime = clusterbootstrap.ArtifactPreparationLifetime
+	}
+	ctx, cancel := context.WithTimeout(parent, lifetime)
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { client.Close() })
 	defer stop()
@@ -191,6 +237,11 @@ func (client *Client) transferPreparationWithResult(parent context.Context, mana
 	request, err := clusterbootstrap.NewPreparationSessionRequest(expected, digest, nonce, action)
 	if source != nil {
 		request, err = clusterbootstrap.NewPrejoinPreparationSessionRequest(expected, digest, nonce, action, *source)
+	}
+	if artifactPreparationAction(action) && source != nil {
+		request, err = clusterbootstrap.NewArtifactPreparationSessionRequest(expected, digest, nonce, action, *source, postgresReference)
+	} else if postgresReference != "" {
+		return ErrBootstrapVerification
 	}
 	if err != nil {
 		return ErrBootstrapVerification
@@ -217,7 +268,11 @@ func (client *Client) transferPreparationWithResult(parent context.Context, mana
 	}
 	defer stdin.Close()
 	stdout, err := session.StdoutPipe()
-	if err != nil || session.Start(preparationCommand(size, digest, nonce)) != nil {
+	command := preparationCommand(size, digest, nonce)
+	if artifactPreparationAction(action) {
+		command = artifactPreparationCommand(size, digest, nonce)
+	}
+	if err != nil || session.Start(command) != nil {
 		return ErrBootstrapVerification
 	}
 	buffer := make([]byte, 128<<10)
