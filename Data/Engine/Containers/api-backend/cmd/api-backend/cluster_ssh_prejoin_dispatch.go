@@ -28,6 +28,8 @@ type clusterSSHPrejoinClient interface {
 	PreparePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	CompletePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	CompletePrejoinFirewall(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	ResumeFreshPrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	ResumeRepositoryPrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	Close() error
 }
@@ -310,6 +312,34 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 			// still requires a newer claim before any continuation effect.
 			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				return c.CompletePrejoinFirewall(checkCtx, inputs, e, source, material, sudo, check)
+			}); boundaryErr != nil {
+				return fail
+			}
+			err, boundaryErr = run(steps[index][1])
+			if boundaryErr != nil {
+				return fail
+			}
+			if err == nil {
+				return nil
+			}
+			// No uncertain package repair: native fresh proof must show no
+			// Docker/repository/host-file effects and a configured dpkg inventory.
+			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.ResumeFreshPrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
+			}); boundaryErr != nil {
+				return fail
+			}
+			err, boundaryErr = run(steps[index][1])
+			if boundaryErr != nil {
+				return fail
+			}
+			if err == nil {
+				return nil
+			}
+			// Exact retained repository prefix, configured base inventory and
+			// absent Docker only. Native proof rejects unknown package state.
+			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.ResumeRepositoryPrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
 			}); boundaryErr != nil {
 				return fail
 			}

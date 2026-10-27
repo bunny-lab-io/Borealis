@@ -83,10 +83,10 @@ func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJ
 }
 
 func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool) (string, error) {
-	return p.prejoinHostTransaction(ctx, j, install, material, actions, parent, reconcile, nil, false)
+	return p.prejoinHostTransaction(ctx, j, install, material, actions, parent, reconcile, nil, hostContinuationNone)
 }
 
-func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool, configured func(context.Context) error, firewallOnly bool) (string, error) {
+func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool, configured func(context.Context) error, continuation prejoinHostContinuation) (string, error) {
 	if j == nil || actions.Prove == nil || !reconcile && (actions.Prepare == nil || configured == nil && actions.CheckFresh == nil) {
 		return "", ErrMutationJournal
 	}
@@ -155,8 +155,16 @@ func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *Mutat
 			}
 			if configured != nil {
 				continueHost := j.continuePrejoinHostLocked
-				if firewallOnly {
+				switch continuation {
+				case hostContinuationConfigured:
+				case hostContinuationFirewall:
 					continueHost = j.continuePrejoinFirewallLocked
+				case hostContinuationFresh:
+					continueHost = j.continueFreshPrejoinHostLocked
+				case hostContinuationRepository:
+					continueHost = j.continueRepositoryPrejoinHostLocked
+				default:
+					return ErrMutationJournal
 				}
 				result, err = continueHost(ctx, input, func(ctx context.Context) error {
 					if proveSource(ctx) != nil || configured(ctx) != nil || proveSource(ctx) != nil {

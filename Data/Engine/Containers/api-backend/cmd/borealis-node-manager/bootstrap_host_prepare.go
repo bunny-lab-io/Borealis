@@ -16,6 +16,16 @@ import (
 // and identity-prefix checks deliberately still reject prepared host files.
 func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
 	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) clusterbootstrap.PrejoinHostActions {
+	return bootstrapNativeHostActionsFor(expected, guard, identity, check, false)
+}
+
+func bootstrapNativeRepositoryHostActions(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
+	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) clusterbootstrap.PrejoinHostActions {
+	return bootstrapNativeHostActionsFor(expected, guard, identity, check, true)
+}
+
+func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
+	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error, repositoryContinuation bool) clusterbootstrap.PrejoinHostActions {
 	callerCheck := check
 	check = func(ctx context.Context) error {
 		if guard == nil || callerCheck == nil || ctx.Err() != nil || guard.CheckAuthority(ctx) != nil ||
@@ -34,7 +44,10 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 				return errBootstrapSource
 			}
 			defer root.Close()
-			_, err = observeBootstrapFreshHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit)
+			_, err = observeBootstrapEarlyHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit, repositoryContinuation)
+			if err == nil && repositoryContinuation {
+				err = proveBootstrapFreshFirewall(ctx, check, readBootstrapHostFirewall)
+			}
 			return err
 		},
 		Prepare: func(ctx context.Context, hostLock, identityLock *os.File) error {
@@ -65,9 +78,9 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 			command := func(ctx context.Context, step bootstrapHostCommand, host, identityFile *os.File) error {
 				return runBootstrapHostCommand(ctx, step, host, identityFile, guard, identity, boundary)
 			}
-			return prepareBootstrapNativeHostWith(ctx, expected, hostLock, identityLock, boundary, bootstrapNativeHostOperations{
+			return prepareBootstrapNativeHostPhaseWith(ctx, expected, hostLock, identityLock, boundary, repositoryContinuation, bootstrapNativeHostOperations{
 				preflight: func(ctx context.Context) error {
-					clean, err = observeBootstrapFreshHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit)
+					clean, err = observeBootstrapEarlyHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit, repositoryContinuation)
 					return err
 				},
 				base: func(ctx context.Context) error {
@@ -84,7 +97,12 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 					return proveBootstrapFreshFirewall(ctx, check, readBootstrapHostFirewall)
 				},
 				repository: func(ctx context.Context) error {
-					if installBootstrapDockerRepositoryWith(ctx, root, expected, check, readBootstrapDockerProbe, downloadBootstrapDockerKey) != nil {
+					if repositoryContinuation {
+						err = completeBootstrapDockerRepositoryWith(ctx, root, expected, check, readBootstrapDockerProbe)
+					} else {
+						err = installBootstrapDockerRepositoryWith(ctx, root, expected, check, readBootstrapDockerProbe, downloadBootstrapDockerKey)
+					}
+					if err != nil {
 						return errBootstrapSource
 					}
 					key, _, err := readBootstrapDockerFile(root, "etc/apt/keyrings/docker.asc", bootstrapDockerKeyLimit)
@@ -129,11 +147,27 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 // The pre-intent call cannot install packages, publish files or start services.
 func observeBootstrapFreshHost(ctx context.Context, root *os.Root, expected clusterbootstrap.PreparationExpected, check func(context.Context) error,
 	read func(context.Context, string) ([]byte, error), absentUnit func(context.Context, string) error) (bootstrapDockerHost, error) {
+	return observeBootstrapEarlyHost(ctx, root, expected, check, read, absentUnit, false)
+}
+
+func observeBootstrapEarlyHost(ctx context.Context, root *os.Root, expected clusterbootstrap.PreparationExpected, check func(context.Context) error,
+	read func(context.Context, string) ([]byte, error), absentUnit func(context.Context, string) error, repositoryContinuation bool) (bootstrapDockerHost, error) {
 	invalid := bootstrapDockerHost{}
 	if expected.Validate() != nil || root == nil || check == nil || read == nil || absentUnit == nil || ctx.Err() != nil || check(ctx) != nil {
 		return invalid, errBootstrapSource
 	}
-	clean, err := observeBootstrapDockerHost(ctx, root, nil, check, read)
+	var clean bootstrapDockerHost
+	var err error
+	if repositoryContinuation {
+		var prefix bootstrapDockerRepositoryPrefix
+		prefix, err = observeBootstrapDockerRepositoryPrefix(ctx, root, expected, check, read)
+		clean = prefix.host
+	} else {
+		clean, err = observeBootstrapDockerHost(ctx, root, nil, check, read)
+		if err == nil {
+			err = proveBootstrapDockerScratchAbsent(ctx, root, check)
+		}
+	}
 	if err != nil || preflightBootstrapHostFiles(ctx, root, expected, check) != nil || absentUnit(ctx, "borealis-k3s-api-firewall.service") != nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
 		return invalid, errBootstrapSource
 	}
@@ -147,6 +181,11 @@ type bootstrapNativeHostOperations struct {
 
 func prepareBootstrapNativeHostWith(ctx context.Context, expected clusterbootstrap.PreparationExpected, hostLock, identityLock *os.File,
 	check func(context.Context) error, o bootstrapNativeHostOperations) error {
+	return prepareBootstrapNativeHostPhaseWith(ctx, expected, hostLock, identityLock, check, false, o)
+}
+
+func prepareBootstrapNativeHostPhaseWith(ctx context.Context, expected clusterbootstrap.PreparationExpected, hostLock, identityLock *os.File,
+	check func(context.Context) error, repositoryContinuation bool, o bootstrapNativeHostOperations) error {
 	if expected.Validate() != nil || hostLock == nil || identityLock == nil || check == nil || o.command == nil ||
 		o.preflight == nil || o.base == nil || o.repository == nil || o.files == nil || o.multipath == nil || o.firewall == nil || o.prove == nil {
 		return errBootstrapSource
@@ -162,13 +201,21 @@ func prepareBootstrapNativeHostWith(ctx context.Context, expected clusterbootstr
 	// Never replay a failed stage or acknowledge command success as host proof.
 	// Package effects precede generated configuration; the firewall starts last,
 	// after Docker so Docker's iptables changes cannot invalidate its prefix.
-	for _, step := range []func(context.Context) error{
-		o.preflight, command(bootstrapHostAPTUpdate), command(bootstrapHostInstallBase), o.base,
+	steps := []func(context.Context) error{o.preflight}
+	if !repositoryContinuation {
+		steps = append(steps, command(bootstrapHostAPTUpdate), command(bootstrapHostInstallBase), o.base)
+	} else {
+		// Base packages already supply iptables. Preserve the pre-Docker
+		// fresh-filter proof otherwise performed by the base-package phase.
+		steps = append(steps, o.firewall)
+	}
+	steps = append(steps,
 		o.repository, command(bootstrapHostAPTUpdate), command(bootstrapHostInstallDocker), o.files,
 		command(bootstrapHostLoadISCSI), o.multipath, command(bootstrapHostReloadUnits),
 		command(bootstrapHostEnableDocker), command(bootstrapHostEnableISCSI), o.firewall,
 		command(bootstrapHostEnableFirewall), o.prove,
-	} {
+	)
+	for _, step := range steps {
 		if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil || step(ctx) != nil ||
 			ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
 			return errBootstrapSource

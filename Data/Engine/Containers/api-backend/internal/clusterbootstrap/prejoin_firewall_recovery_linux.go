@@ -33,7 +33,7 @@ func (p *PreparationInputs) completePrejoinFirewall(ctx context.Context, j *Muta
 	if actions.ProvePartial == nil || actions.Complete == nil || actions.Prove == nil {
 		return "", ErrMutationJournal
 	}
-	return p.prejoinHostTransaction(ctx, j, install, material, PrejoinHostActions{Prepare: actions.Complete, Prove: actions.Prove}, parent, false, actions.ProvePartial, true)
+	return p.prejoinHostTransaction(ctx, j, install, material, PrejoinHostActions{Prepare: actions.Complete, Prove: actions.Prove}, parent, false, actions.ProvePartial, hostContinuationFirewall)
 }
 
 func (j *MutationJournal) continuePrejoinFirewallLocked(ctx context.Context, input string, partial func(context.Context) error, complete func(context.Context, *os.File) (string, error)) (string, error) {

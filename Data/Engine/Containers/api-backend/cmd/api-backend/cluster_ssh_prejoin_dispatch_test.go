@@ -14,11 +14,13 @@ import (
 )
 
 type sshPrejoinDispatchTestClient struct {
+	repositoryResume func(context.Context) error
 	inspect          func(context.Context) (clusterbootstrap.PreparationProgress, error)
 	absent           func(context.Context) error
 	complete         func(context.Context) error
 	hostComplete     func(context.Context) error
 	firewallComplete func(context.Context) error
+	freshResume      func(context.Context) error
 	run              func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	close            func() error
 }
@@ -79,6 +81,26 @@ func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinIdentity(ctx context.Cont
 
 func (c *sshPrejoinDispatchTestClient) PreparePrejoinHost(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
 	return c.run(ctx, "host", p, e, source, keys, sudo, check)
+}
+
+func (c *sshPrejoinDispatchTestClient) ResumeFreshPrejoinHost(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+	if err := check(ctx); err != nil {
+		return err
+	}
+	if c.freshResume != nil {
+		return c.freshResume(ctx)
+	}
+	return clusterbootstrap.ErrMutationFreshClaim
+}
+
+func (c *sshPrejoinDispatchTestClient) ResumeRepositoryPrejoinHost(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+	if err := check(ctx); err != nil {
+		return err
+	}
+	if c.repositoryResume != nil {
+		return c.repositoryResume(ctx)
+	}
+	return clusterbootstrap.ErrMutationFreshClaim
 }
 
 func (c *sshPrejoinDispatchTestClient) CompletePrejoinFirewall(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
@@ -147,7 +169,7 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 						s engineidentity.Binding, k *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
 						calls = append(calls, action)
 						phaseIndex := index
-						if mode == "proof failed" && (stage == 1 || stage == 4) && (index == stage*2+3 || stage == 4 && index == stage*2+5) {
+						if mode == "proof failed" && (stage == 1 || stage == 4) && (index == stage*2+3 || stage == 4 && (index == stage*2+5 || index == stage*2+7 || index == stage*2+9)) {
 							phaseIndex = stage*2 + 1
 						}
 						escaped = check
@@ -208,7 +230,7 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 						wantOpened += 2
 					}
 					if stage == 4 {
-						wantOpened += 4
+						wantOpened += 8
 					}
 				} else if !success {
 					wantOpened = stage*2 + 2
@@ -398,6 +420,14 @@ func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
 					opened++
 					return &sshPrejoinDispatchTestClient{
 						absent: func(context.Context) error { calls = append(calls, "source absent proof"); return nil },
+						freshResume: func(context.Context) error {
+							calls = append(calls, "fresh continuation")
+							return clusterbootstrap.ErrMutationFreshClaim
+						},
+						repositoryResume: func(context.Context) error {
+							calls = append(calls, "repository continuation")
+							return clusterbootstrap.ErrMutationFreshClaim
+						},
 						firewallComplete: func(context.Context) error {
 							calls = append(calls, "firewall completion")
 							return clusterbootstrap.ErrMutationFreshClaim
@@ -465,7 +495,7 @@ func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
 					want = append(want, "account completion", "account proof")
 				}
 				if mode == "proof error" && index == 5 {
-					want = append(want, "host completion", "host proof", "firewall completion", "host proof")
+					want = append(want, "host completion", "host proof", "firewall completion", "host proof", "fresh continuation", "host proof", "repository continuation", "host proof")
 				}
 				if (err == nil) != (mode == "valid") || !reflect.DeepEqual(calls, want) || closed != opened || opened != len(want) {
 					t.Fatalf("unsafe resume: err=%v calls=%v want=%v connections=%d/%d", err, calls, want, opened, closed)
@@ -640,6 +670,14 @@ func TestClusterSSHPrejoinDispatchHostContinuation(t *testing.T) {
 						calls = append(calls, "inspect")
 						return clusterbootstrap.PreparationProgress{Step: "prepare_host"}, nil
 					},
+					freshResume: func(context.Context) error {
+						calls = append(calls, "fresh continuation")
+						return clusterbootstrap.ErrMutationFreshClaim
+					},
+					repositoryResume: func(context.Context) error {
+						calls = append(calls, "repository continuation")
+						return clusterbootstrap.ErrMutationFreshClaim
+					},
 					firewallComplete: func(context.Context) error {
 						calls = append(calls, "complete firewall")
 						return clusterbootstrap.ErrMutationFreshClaim
@@ -686,7 +724,7 @@ func TestClusterSSHPrejoinDispatchHostContinuation(t *testing.T) {
 				want = append(want, "host proof")
 			}
 			if mode == "not configured" || mode == "proof drift" {
-				want = append(want, "complete firewall", "host proof")
+				want = append(want, "complete firewall", "host proof", "fresh continuation", "host proof", "repository continuation", "host proof")
 			}
 			success := mode == "complete" || mode == "lost acknowledgement"
 			if (err == nil) != success || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
@@ -725,6 +763,14 @@ func TestClusterSSHPrejoinDispatchFirewallContinuation(t *testing.T) {
 					hostComplete: func(context.Context) error {
 						calls = append(calls, "configured rejected")
 						return clusterbootstrap.ErrMutationUnknown
+					},
+					freshResume: func(context.Context) error {
+						calls = append(calls, "fresh continuation")
+						return clusterbootstrap.ErrMutationFreshClaim
+					},
+					repositoryResume: func(context.Context) error {
+						calls = append(calls, "repository continuation")
+						return clusterbootstrap.ErrMutationFreshClaim
 					},
 					firewallComplete: func(context.Context) error {
 						calls = append(calls, "complete interrupted firewall")
@@ -768,9 +814,192 @@ func TestClusterSSHPrejoinDispatchFirewallContinuation(t *testing.T) {
 				want = append(want, "host proof")
 			}
 
+			if mode == "not owned" || mode == "proof drift" {
+				want = append(want, "fresh continuation", "host proof", "repository continuation", "host proof")
+			}
 			success := mode == "complete" || mode == "lost acknowledgement"
 			if (err == nil) != success || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
 				t.Fatal("unsafe firewall continuation", calls, opened, closed, proofs, err)
+			}
+		})
+	}
+}
+
+func TestClusterSSHPrejoinDispatchFreshContinuation(t *testing.T) {
+	a, source, _ := sshPrejoinSourceFixture(t, false)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := sshIdentitySourceMaterial(t, t.TempDir())
+	for _, mode := range []string{"complete", "lost acknowledgement", "not fresh", "proof drift", "completion cleanup", "authority lost", "initial proof cleanup"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := []string{}
+			opened, closed, proofs := 0, 0, 0
+			ready, lost := false, false
+			current := func(context.Context) error {
+				if lost {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				return nil
+			}
+			connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+				session := opened
+				opened++
+				return &sshPrejoinDispatchTestClient{
+					inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
+						calls = append(calls, "inspect")
+						return clusterbootstrap.PreparationProgress{Step: "prepare_host"}, nil
+					},
+					hostComplete: func(context.Context) error {
+						calls = append(calls, "configured rejected")
+						return clusterbootstrap.ErrMutationUnknown
+					},
+					firewallComplete: func(context.Context) error {
+						calls = append(calls, "firewall rejected")
+						return clusterbootstrap.ErrMutationUnknown
+					},
+					repositoryResume: func(context.Context) error {
+						calls = append(calls, "repository rejected")
+						return clusterbootstrap.ErrMutationUnknown
+					},
+					freshResume: func(context.Context) error {
+						calls = append(calls, "resume clean host")
+						if mode == "not fresh" {
+							return clusterbootstrap.ErrMutationUnknown
+						}
+						ready = true
+						if mode == "authority lost" {
+							lost = true
+						}
+						if mode == "lost acknowledgement" {
+							return errors.New("unknown delivery")
+						}
+						return nil
+					},
+					run: func(ctx context.Context, action string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+						calls = append(calls, action)
+						if action == "host proof" {
+							proofs++
+							if !ready || mode == "proof drift" {
+								return clusterbootstrap.ErrMutationUnknown
+							}
+						}
+						return check(ctx)
+					},
+					close: func() error {
+						closed++
+						if mode == "completion cleanup" && session == 6 || mode == "initial proof cleanup" && session == 1 {
+							return errors.New("unknown cleanup")
+						}
+						return nil
+					},
+				}, nil
+			}
+			err := dispatchClusterSSHPrejoinIdentity(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, current)
+			want := []string{"inspect", "host proof"}
+			if mode != "initial proof cleanup" {
+				want = append(want, "configured rejected", "host proof", "firewall rejected", "host proof", "resume clean host")
+			}
+			if mode != "initial proof cleanup" && mode != "completion cleanup" && mode != "authority lost" {
+				want = append(want, "host proof")
+			}
+
+			if mode == "not fresh" || mode == "proof drift" {
+				want = append(want, "repository rejected", "host proof")
+			}
+			success := mode == "complete" || mode == "lost acknowledgement"
+			if (err == nil) != success || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
+				t.Fatal("unsafe fresh continuation", calls, opened, closed, proofs, err)
+			}
+		})
+	}
+}
+
+func TestClusterSSHPrejoinDispatchRepositoryContinuation(t *testing.T) {
+	a, source, _ := sshPrejoinSourceFixture(t, false)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := sshIdentitySourceMaterial(t, t.TempDir())
+	for _, mode := range []string{"complete", "lost acknowledgement", "not repository", "proof drift", "completion cleanup", "authority lost", "initial proof cleanup"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := []string{}
+			opened, closed, proofs := 0, 0, 0
+			ready, lost := false, false
+			current := func(context.Context) error {
+				if lost {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				return nil
+			}
+			connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+				session := opened
+				opened++
+				return &sshPrejoinDispatchTestClient{
+					inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
+						calls = append(calls, "inspect")
+						return clusterbootstrap.PreparationProgress{Step: "prepare_host"}, nil
+					},
+					hostComplete: func(context.Context) error {
+						calls = append(calls, "configured rejected")
+						return clusterbootstrap.ErrMutationUnknown
+					},
+					firewallComplete: func(context.Context) error {
+						calls = append(calls, "firewall rejected")
+						return clusterbootstrap.ErrMutationUnknown
+					},
+
+					freshResume: func(context.Context) error {
+						calls = append(calls, "fresh rejected")
+						return clusterbootstrap.ErrMutationUnknown
+					},
+					repositoryResume: func(context.Context) error {
+						calls = append(calls, "resume repository host")
+						if mode == "not repository" {
+							return clusterbootstrap.ErrMutationUnknown
+						}
+						ready = true
+						if mode == "authority lost" {
+							lost = true
+						}
+						if mode == "lost acknowledgement" {
+							return errors.New("unknown delivery")
+						}
+						return nil
+					},
+					run: func(ctx context.Context, action string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+						calls = append(calls, action)
+						if action == "host proof" {
+							proofs++
+							if !ready || mode == "proof drift" {
+								return clusterbootstrap.ErrMutationUnknown
+							}
+						}
+						return check(ctx)
+					},
+					close: func() error {
+						closed++
+						if mode == "completion cleanup" && session == 8 || mode == "initial proof cleanup" && session == 1 {
+							return errors.New("unknown cleanup")
+						}
+						return nil
+					},
+				}, nil
+			}
+			err := dispatchClusterSSHPrejoinIdentity(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, current)
+			want := []string{"inspect", "host proof"}
+			if mode != "initial proof cleanup" {
+				want = append(want, "configured rejected", "host proof", "firewall rejected", "host proof", "fresh rejected", "host proof", "resume repository host")
+			}
+			if mode != "initial proof cleanup" && mode != "completion cleanup" && mode != "authority lost" {
+				want = append(want, "host proof")
+			}
+
+			success := mode == "complete" || mode == "lost acknowledgement"
+			if (err == nil) != success || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
+				t.Fatal("unsafe repository continuation", calls, opened, closed, proofs, err)
 			}
 		})
 	}

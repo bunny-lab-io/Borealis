@@ -11,7 +11,7 @@ import (
 )
 
 func bootstrapHostAction(action string) bool {
-	return action == "prepare_prejoin_host" || action == "complete_prejoin_host" || action == "complete_prejoin_firewall" || action == "reconcile_prejoin_host"
+	return action == "prepare_prejoin_host" || action == "complete_prejoin_host" || action == "complete_prejoin_firewall" || action == "resume_fresh_prejoin_host" || action == "resume_repository_prejoin_host" || action == "reconcile_prejoin_host"
 }
 
 // Separate host-phase boundary. Earlier source/identity action allowlists stay
@@ -22,7 +22,7 @@ func verifyBootstrapHostPaths(root *os.Root, expected clusterbootstrap.Preparati
 	if root == nil || expected.Validate() != nil || !bootstrapHostAction(action) {
 		return errBootstrapSource
 	}
-	if action == "prepare_prejoin_host" && initial {
+	if (action == "prepare_prejoin_host" || action == "resume_fresh_prejoin_host" || action == "resume_repository_prejoin_host") && initial {
 		if verifyBootstrapSourcePaths(root, "install_prejoin_identity", true) != nil ||
 			preflightBootstrapHostFiles(context.Background(), root, expected, func(context.Context) error { return nil }) != nil {
 			return errBootstrapSource

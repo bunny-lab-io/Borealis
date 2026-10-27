@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `43b98a9f3793c01be964c18d4e6ad1e2aa2eae8c`.
+- Published base `00730a75a41fcc5898e98aa661fb7f0192f8382a`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,12 +52,13 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Finish bounded recovery for earlier package/repository phases.
-   No blind package/service replay.
-2. Cover earlier host interruption classes through independently classified
-   effects; unknown native state remains fenced, never guessed absent.
-3. Finish M3 activation/existing-node interruption qualification and M2 complete
-   immutable artifact delivery/import. Preserve all original identity material.
+1. Complete M2 immutable artifact delivery/import: K3s staging and framed transfer
+   are in flight; compose application, static external and source-bound PostgreSQL
+   inputs under existing complete capacity/source/claim scopes.
+2. Finish M3 activation/existing-node interruption qualification. Preserve all
+   original identity material and keep consumers fenced until complete proof.
+3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
+   fenced; no blind package/service replay or guessed absence.
 4. Finish M1 supported-profile budgets, worker bounds, measured requirements and
    phase-correct readiness using existing calculated sizing.
 5. Exercise M4 central WebUI paired expansion through original controller with
@@ -80,11 +81,9 @@ provisioning, original-controller authority and all safety gates in #530.
   CachyOS workstation lacks them. Changed pinned transport tests pass. Required
   Ubuntu CI remains necessary; do not skip assertions or substitute old results.
 - Strict docs needs Python3.12 per #538; Python3.14/Docker-access constraint remains.
-- Published configured-host head43b98a9f3793c01be964c18d4e6ad1e2aa2eae8c:
-  Container Policy40462375531 passed. PR Validation40462375542 passed policy,
-  strict docs, PostgreSQL, WebUI, containers, Agent/Linux/Windows, Python,
-  migration and architecture lanes; Engine Go still running at single check.
-  This validates only that published code, not unpushed firewall changes.
+- Published firewall head00730a75a41fcc5898e98aa661fb7f0192f8382a:
+  Container Policy40465290725 passed; PR Validation40465290746 still running at
+  single check. These results do not validate current recovery/K3s changes.
   No repeated pending polling or artifact downloads.
 - Go1.25.12: `/home/nicole/.local/share/borealis-dev-tools/go1.25.12/bin/go`.
   Use GOMAXPROCS=2/-p1 and add user-local borealis-dev-tools/bin for policy tools.
@@ -93,12 +92,10 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Implement fresh-claim continuation for a retained v2-fresh host intent only when
-current full fresh-host checks prove configured package inventory, absent Docker
-runtime/repository and absent generated host files. Retain old producer/history;
-never label partial base-package effects absent or repair unknown dpkg state.
-Reuse fixed native preparation after this explicit bounded proof. Then handle
-exact repository partial effects and complete immutable artifact delivery.
+Finish and publish K3s input staging/framed transfer already in working tree,
+then implement complete static-external/PostgreSQL transfer and compose complete
+immutable artifact delivery/import. Preserve original-controller/source authority,
+complete capacity reservations, source/identity custody and both fences.
 Production polling stays disabled until required integration completes.
 
 ## Interrupted-firewall continuation checkpoint
@@ -160,3 +157,35 @@ Production polling stays disabled until required integration completes.
   documentation-reference/diff checks passed. All existing host tests passed
   (bootstrap138.660s/native1.104s); one justified repeat recovered lost exit status.
 - Evidence: ignored `Unit_Test_Results/m3-host-fresh-intent-20261027/`.
+
+## Early host continuation checkpoint
+
+- Fixed fresh and repository continuation actions require retained v2-fresh intent,
+  current configured inventory, absent Docker/runtime consumers, source/key custody,
+  both fences, strictly newer generation and stopped prior producers. Version4
+  preserves every class-specific producer proof. No partial effect is called absent.
+- Repository recovery accepts only exact ordered published/full-scratch key/source
+  bytes. It preserves inodes, promotes without overwrite and completes missing
+  suffix without download. Fixed Docker phase skips base installation and retains
+  pre-Docker fresh-filter proof. Partial/foreign scratch and uncertain dpkg reject.
+- Focused race suite3 passed bootstrap185.702s/native4.162s/API2.591s/remote2.613s.
+  Full bootstrap/native race suites passed149/155top-level tests, zero failures or
+  skips (486.856s/13.681s). Full-module vet plus final native vet, CGO-disabled
+  build, repository policy184tests/219routes, docs references/gofmt/diff passed.
+- Initial policy attempt lacked Go on PATH; rerun with documented Go/bin tools
+  passed. Initial dispatcher fixture failed on added fallback sessions; corrected
+  exact ordering/session assertions and reran. No assertions/tests suppressed.
+- Evidence: `Unit_Test_Results/m3-early-host-recovery-20261027/`. Recovery validation
+  processes finished. No live Engine action, credential use or runtime cleanup.
+
+## In-flight immutable K3s delivery
+
+- While recovery regression ran, implemented separate uncommitted K3s staging and
+  framed transfer. Three inert files reserve capacity before first fetch; pinned
+  hashes and independent archive measurement gate success. No executable path or
+  host action escapes. Receiver binds exact release/version and leaves next frame.
+- Focused K3s/parser/acquisition race tests3 passed bootstrap1.324s/API1.273s.
+  These are synthetic pinned fixtures, not real release download/live qualification.
+- Files: new `internal/clusterbootstrap/k3s_stage*.go`, `k3s_transfer*.go`, private
+  parser seam in `k3s_inputs.go`, and API `cluster_ssh_k3s_stage.go`. Remain unpushed
+  while early-host recovery checkpoint publishes. Exact next action above.

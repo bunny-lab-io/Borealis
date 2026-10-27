@@ -44,8 +44,15 @@ type bootstrapDockerHost struct {
 // Existing source/identity/K3s/consumer custody is still the caller's contract.
 func observeBootstrapDockerHost(ctx context.Context, root *os.Root, installed []bootstrapHostFile,
 	check func(context.Context) error, read func(context.Context, string) ([]byte, error)) (bootstrapDockerHost, error) {
+	return observeBootstrapDockerHostPrefix(ctx, root, installed, nil, check, read)
+}
+
+// Pending files are accepted only by the independently classified repository
+// continuation. Ordinary fresh publication retains its original absence rules.
+func observeBootstrapDockerHostPrefix(ctx context.Context, root *os.Root, installed, pending []bootstrapHostFile,
+	check func(context.Context) error, read func(context.Context, string) ([]byte, error)) (bootstrapDockerHost, error) {
 	invalid := bootstrapDockerHost{}
-	if root == nil || check == nil || read == nil || len(installed) > 2 {
+	if root == nil || check == nil || read == nil || len(installed) > 2 || len(pending) > 1 {
 		return invalid, errBootstrapSource
 	}
 	boundary := func() error {
@@ -80,7 +87,12 @@ func observeBootstrapDockerHost(ctx context.Context, root *os.Root, installed []
 				return invalid, errBootstrapSource
 			}
 		}
-		current.sources, err = bootstrapDockerSources(root, len(installed) == 2)
+		for _, file := range pending {
+			if proveBootstrapHostFile(root, file) != nil {
+				return invalid, errBootstrapSource
+			}
+		}
+		current.sources, err = bootstrapDockerSourcesWithPending(root, len(installed) == 2, pending)
 		if err != nil {
 			return invalid, errBootstrapSource
 		}
@@ -209,6 +221,10 @@ func readBootstrapDockerFile(root *os.Root, path string, limit int64) ([]byte, b
 }
 
 func bootstrapDockerSources(root *os.Root, installed bool) (map[string]bootstrapDockerFileState, error) {
+	return bootstrapDockerSourcesWithPending(root, installed, nil)
+}
+
+func bootstrapDockerSourcesWithPending(root *os.Root, installed bool, pending []bootstrapHostFile) (map[string]bootstrapDockerFileState, error) {
 	if _, err := bootstrapHostFileAncestors(root, []bootstrapHostFile{{path: "etc/apt/sources.list"}}); err != nil {
 		return nil, errBootstrapSource
 	}
@@ -234,7 +250,15 @@ func bootstrapDockerSources(root *os.Root, installed bool) (map[string]bootstrap
 			if installed && entry.Name() == "docker.sources" {
 				continue // Caller independently proves this call's exact new file.
 			}
-			paths = append(paths, filepath.Join(dirPath, entry.Name()))
+			skip := false
+			for _, file := range pending {
+				if file.path == filepath.Join(dirPath, entry.Name()) && proveBootstrapHostFile(root, file) == nil {
+					skip = true
+				}
+			}
+			if !skip {
+				paths = append(paths, filepath.Join(dirPath, entry.Name()))
+			}
 		}
 	}
 	result := map[string]bootstrapDockerFileState{}

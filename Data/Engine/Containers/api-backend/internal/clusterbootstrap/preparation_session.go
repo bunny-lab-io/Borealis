@@ -63,7 +63,7 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 			return expected, ErrSessionProtocol
 		}
 	case "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity",
-		"prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "reconcile_prejoin_host":
+		"prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host":
 		if r.IdentitySource == nil || validatePrejoinSource(r.Session.Binding, *r.IdentitySource) != nil {
 			return expected, ErrSessionProtocol
 		}

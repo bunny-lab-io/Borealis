@@ -87,6 +87,16 @@ func (client *Client) PreparePrejoinHost(ctx context.Context, inputs *clusterboo
 	return client.preparationWithIdentity(ctx, inputs, expected, "prepare_prejoin_host", &source, material, sudoPassword, check)
 }
 
+func (client *Client) ResumeFreshPrejoinHost(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "resume_fresh_prejoin_host", &source, material, sudoPassword, check)
+}
+
+func (client *Client) ResumeRepositoryPrejoinHost(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "resume_repository_prejoin_host", &source, material, sudoPassword, check)
+}
+
 func (client *Client) CompletePrejoinFirewall(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
 	return client.preparationWithIdentity(ctx, inputs, expected, "complete_prejoin_firewall", &source, material, sudoPassword, check)

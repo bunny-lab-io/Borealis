@@ -34,7 +34,7 @@ func (p *PreparationInputs) completePrejoinHost(ctx context.Context, j *Mutation
 	if actions.ProveConfigured == nil || actions.Complete == nil || actions.Prove == nil {
 		return "", ErrMutationJournal
 	}
-	return p.prejoinHostTransaction(ctx, j, install, material, PrejoinHostActions{Prepare: actions.Complete, Prove: actions.Prove}, parent, false, actions.ProveConfigured, false)
+	return p.prejoinHostTransaction(ctx, j, install, material, PrejoinHostActions{Prepare: actions.Complete, Prove: actions.Prove}, parent, false, actions.ProveConfigured, hostContinuationConfigured)
 }
 
 // Called only inside the source/key-verified transaction holding BOTH fences.
@@ -44,7 +44,7 @@ func (j *MutationJournal) continuePrejoinHostLocked(ctx context.Context, input s
 }
 
 func (j *MutationJournal) continuePrejoinHostClassLocked(ctx context.Context, input, partial string, configured func(context.Context) error, complete func(context.Context, *os.File) (string, error)) (string, error) {
-	if partial != prejoinHostConfiguredDigest(input) && partial != prejoinHostFirewallDigest(input) {
+	if partial != prejoinHostConfiguredDigest(input) && partial != prejoinHostFirewallDigest(input) && partial != prejoinHostFreshDigest(input) && partial != prejoinHostRepositoryDigest(input) {
 		return "", ErrMutationJournal
 	}
 	const step = "prepare_host"

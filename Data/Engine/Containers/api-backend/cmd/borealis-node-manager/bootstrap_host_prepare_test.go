@@ -185,3 +185,64 @@ func TestBootstrapNativeHostBaseInventory(t *testing.T) {
 		}
 	}
 }
+
+func TestBootstrapRepositoryHostOrderingAndFailure(t *testing.T) {
+	want := []string{"preflight", "firewall", "repository", "command1", "command3", "files",
+		"command4", "multipath", "command7", "command8", "command9", "firewall", "command10", "prove"}
+	for failAt := -1; failAt < len(want); failAt++ {
+		for _, failure := range []string{"error", "cancel", "authority"} {
+			t.Run(fmt.Sprintf("%d/%s", failAt, failure), func(t *testing.T) {
+				host, identity := bootstrapHostCommandLocks(t)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var got []string
+				lost := false
+				check := func(context.Context) error {
+					if lost {
+						return errors.New("private authority")
+					}
+					return nil
+				}
+				call := func(name string) func(context.Context) error {
+					return func(context.Context) error {
+						got = append(got, name)
+						if len(got)-1 == failAt {
+							switch failure {
+							case "error":
+								return errors.New("private command diagnostics")
+							case "cancel":
+								cancel()
+							case "authority":
+								lost = true
+							}
+						}
+						return nil
+					}
+				}
+				o := bootstrapNativeHostOperations{preflight: call("preflight"), base: call("base"), repository: call("repository"),
+					files: call("files"), multipath: call("multipath"), firewall: call("firewall"), prove: call("prove"),
+					command: func(ctx context.Context, step bootstrapHostCommand, h, i *os.File) error {
+						if h != host || i != identity {
+							t.Fatal("borrowed locks replaced")
+						}
+						return call(fmt.Sprintf("command%d", step))(ctx)
+					},
+				}
+				err := prepareBootstrapNativeHostPhaseWith(ctx, bootstrapHostFilesFixture(), host, identity, check, true, o)
+				prefix := want
+				if failAt >= 0 {
+					prefix = want[:failAt+1]
+				}
+				if !reflect.DeepEqual(got, prefix) || (err == nil) != (failAt < 0) || err != nil && err != errBootstrapSource {
+					t.Fatal("wrong order, replay, missing proof or leaked diagnostics", got, err)
+				}
+				if _, err := host.Stat(); err != nil {
+					t.Fatal("borrowed host lock closed")
+				}
+				if _, err := identity.Stat(); err != nil {
+					t.Fatal("borrowed identity lock closed")
+				}
+			})
+		}
+	}
+}
