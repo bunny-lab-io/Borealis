@@ -71,7 +71,7 @@ func stableMutationBinding(b SessionBinding) SessionBinding {
 
 func validMutationStep(step string) bool {
 	switch step {
-	case "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "join_cluster":
+	case "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "join_cluster":
 		return true
 	}
 	return false

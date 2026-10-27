@@ -18,7 +18,7 @@ func TestClusterSSHArtifactDispatch(t *testing.T) {
 	keys := sshIdentitySourceMaterial(t, t.TempDir())
 	// Transport seam only. Production native sender rejects these inert objects.
 	inputs := &clusterbootstrap.PreparationInputs{}
-	for _, mode := range []string{"complete", "lost acknowledgement", "incomplete publication", "resume host", "resume artifacts", "prefix rejects artifacts", "authority loss", "cleanup loss"} {
+	for _, mode := range []string{"complete", "lost acknowledgement", "incomplete publication", "resume host", "resume artifacts", "prefix rejects artifacts", "authority loss", "cleanup loss", "resume k3s", "prefix rejects k3s", "k3s lost acknowledgement", "incomplete k3s"} {
 		t.Run(mode, func(t *testing.T) {
 			artifacts := &clusterbootstrap.PreparationArtifacts{}
 			pg := clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("a", 64)
@@ -29,7 +29,10 @@ func TestClusterSSHArtifactDispatch(t *testing.T) {
 			if mode == "resume artifacts" || mode == "prefix rejects artifacts" {
 				step = "stage_images"
 			}
-			if mode == "prefix rejects artifacts" {
+			if mode == "resume k3s" || mode == "prefix rejects k3s" {
+				step = "install_k3s"
+			}
+			if mode == "prefix rejects artifacts" || mode == "prefix rejects k3s" {
 				artifacts = nil
 				pg = ""
 			}
@@ -62,7 +65,7 @@ func TestClusterSSHArtifactDispatch(t *testing.T) {
 						if p != inputs || !reflect.DeepEqual(e, expected) || string(sudo) != "private fixture" || current(ctx) != nil {
 							t.Fatal("binding drift")
 						}
-						if strings.HasPrefix(action, "artifacts") && (s != source.Binding || !k.Equal(keys)) {
+						if (strings.HasPrefix(action, "artifacts") || strings.HasPrefix(action, "k3s")) && (s != source.Binding || !k.Equal(keys)) {
 							t.Fatal("artifact source identity lost")
 						}
 						if action == "artifacts" {
@@ -77,12 +80,15 @@ func TestClusterSSHArtifactDispatch(t *testing.T) {
 						if action == "artifacts proof" && mode == "incomplete publication" {
 							return clusterbootstrap.ErrMutationUnknown
 						}
+						if action == "k3s" && (mode == "k3s lost acknowledgement" || mode == "incomplete k3s") || action == "k3s proof" && mode == "incomplete k3s" {
+							return clusterbootstrap.ErrMutationUnknown
+						}
 						return nil
 					},
 				}, nil
 			}
 			err := dispatchClusterSSHPrejoinArtifacts(context.Background(), connect, inputs, artifacts, pg, expected, source.Binding, keys, []byte("private fixture"), check)
-			success := mode == "complete" || mode == "lost acknowledgement" || mode == "resume host" || mode == "resume artifacts"
+			success := mode == "complete" || mode == "lost acknowledgement" || mode == "resume host" || mode == "resume artifacts" || mode == "resume k3s" || mode == "k3s lost acknowledgement"
 			if (err == nil) != success || opened != closed {
 				t.Fatal("wrong outcome/cleanup", err, opened, closed)
 			}
@@ -92,10 +98,17 @@ func TestClusterSSHArtifactDispatch(t *testing.T) {
 				want = []string{"host proof", "artifacts", "artifacts proof"}
 			case "resume artifacts":
 				want = []string{"artifacts proof"}
-			case "prefix rejects artifacts":
+			case "prefix rejects artifacts", "prefix rejects k3s":
 				want = nil
 			case "authority loss", "cleanup loss":
 				want = want[:len(want)-1]
+			}
+			if success || mode == "incomplete k3s" {
+				if mode == "resume k3s" {
+					want = []string{"k3s proof"}
+				} else {
+					want = append(want, "k3s", "k3s proof")
+				}
 			}
 			if !reflect.DeepEqual(calls, want) {
 				t.Fatal("write replayed or proof skipped", calls, want)

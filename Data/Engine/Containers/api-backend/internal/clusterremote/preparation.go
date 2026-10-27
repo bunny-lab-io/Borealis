@@ -148,8 +148,18 @@ func (client *Client) ReconcilePrejoinArtifacts(ctx context.Context, inputs *clu
 	return client.preparationWithArtifactsResult(ctx, inputs, expected, "reconcile_prejoin_artifacts", &source, material, artifacts, postgresReference, sudoPassword, check, nil)
 }
 
+func (client *Client) InstallPrejoinK3s(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithArtifactsResult(ctx, inputs, expected, "install_prejoin_k3s", &source, material, artifacts, postgresReference, sudoPassword, check, nil)
+}
+
+func (client *Client) ReconcilePrejoinK3s(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithArtifactsResult(ctx, inputs, expected, "reconcile_prejoin_k3s", &source, material, artifacts, postgresReference, sudoPassword, check, nil)
+}
+
 func artifactPreparationAction(action string) bool {
-	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts"
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s"
 }
 
 func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,

@@ -12,7 +12,7 @@ import (
 )
 
 func bootstrapArtifactAction(action string) bool {
-	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts"
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || bootstrapK3sAction(action)
 }
 
 var bootstrapArtifactScratch = regexp.MustCompile(`^\.borealis-artifact-[a-f0-9]{64}$`)
@@ -24,6 +24,12 @@ var bootstrapArtifactSuffix = regexp.MustCompile(`^[a-f0-9]{16}\.tar$`)
 // Existing source/host actions retain their own stricter absence boundaries.
 func verifyBootstrapArtifactPaths(root *os.Root, expected clusterbootstrap.PreparationExpected, action string, initial bool) error {
 	if root == nil || expected.Validate() != nil || !bootstrapArtifactAction(action) {
+		return errBootstrapSource
+	}
+	// Earlier artifact actions require actual service-file absence even when
+	// systemd still caches not-found after a foreign or interrupted file write.
+	freshService := !bootstrapK3sAction(action) || initial && action == "install_prejoin_k3s"
+	if verifyBootstrapK3sFilePrefix(root, expected, false, freshService) != nil {
 		return errBootstrapSource
 	}
 	for _, path := range []string{"etc/borealis", "var/lib/kubelet", "etc/kubernetes"} {

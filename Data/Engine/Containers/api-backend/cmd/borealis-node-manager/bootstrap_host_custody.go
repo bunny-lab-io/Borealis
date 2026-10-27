@@ -126,7 +126,7 @@ func verifyBootstrapProgressPaths(root *os.Root, expected clusterbootstrap.Prepa
 		// Cursor grants no mutation or completed effect; source/host/identity
 		// reconciliation cannot accept these later paths. Artifact reconciliation
 		// independently proves all prerequisites and exact complete bytes.
-		return verifyBootstrapArtifactPaths(root, expected, "reconcile_prejoin_artifacts", false)
+		return verifyBootstrapArtifactPaths(root, expected, "reconcile_prejoin_k3s", false)
 	}
 	for _, path := range []string{"etc/borealis", "var/lib/rancher/k3s", "usr/local/bin/k3s", "var/lib/kubelet", "etc/kubernetes"} {
 		if !bootstrapDockerPathAbsent(root, path) {

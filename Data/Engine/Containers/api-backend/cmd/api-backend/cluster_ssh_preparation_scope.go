@@ -24,7 +24,7 @@ func runClusterSSHPreparationScope(parent context.Context, interval time.Duratio
 // sessions need a larger outer budget. Claim/source/credential expiry and every
 // short renewal remain authoritative; this ceiling extends none of them.
 func runClusterSSHArtifactPreparationScope(parent context.Context, interval time.Duration, check func(context.Context) error, work func(context.Context) error) error {
-	return runClusterSSHPreparationScopeFor(parent, interval, 90*time.Minute, check, work)
+	return runClusterSSHPreparationScopeFor(parent, interval, 150*time.Minute, check, work)
 }
 
 func runClusterSSHPreparationScopeFor(parent context.Context, interval, maximum time.Duration, check func(context.Context) error, work func(context.Context) error) (result error) {

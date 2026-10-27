@@ -10,7 +10,7 @@ import (
 )
 
 func TestBootstrapArtifactCustody(t *testing.T) {
-	for _, mode := range []string{"fresh", "directory prefix", "archive prefix", "all archives", "binary scratch", "binary chmod", "binary final", "early binary", "foreign archive", "duplicate role", "extra token", "unsafe parent", "unsafe archive", "linked archive", "foreign scratch", "two scratch", "binary plus scratch", "host changed", "earlier action", "existing fresh"} {
+	for _, mode := range []string{"fresh", "directory prefix", "archive prefix", "all archives", "binary scratch", "binary chmod", "binary final", "early binary", "foreign archive", "duplicate role", "extra token", "unsafe parent", "unsafe archive", "linked archive", "foreign scratch", "two scratch", "binary plus scratch", "host changed", "earlier action", "existing fresh", "installed service", "runtime service", "runtime fresh service"} {
 		t.Run(mode, func(t *testing.T) {
 			root := bootstrapHostCustodyFixture(t)
 			expected := bootstrapHostFilesFixture()
@@ -95,11 +95,25 @@ func TestBootstrapArtifactCustody(t *testing.T) {
 				write("etc/rancher/k3s/registries.yaml", []byte("changed"), 0600)
 			case "earlier action":
 				action = "reconcile_prejoin_host"
+			case "installed service", "runtime service", "runtime fresh service":
+				files, err := bootstrapPrejoinK3sFiles(expected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, file := range files {
+					write(file.path, file.data, file.mode)
+				}
+				if mode == "runtime service" {
+					action = "reconcile_prejoin_k3s"
+				}
+				if mode == "runtime fresh service" {
+					action, initial = "install_prejoin_k3s", true
+				}
 			case "existing fresh":
 				action, initial = "publish_prejoin_artifacts", true
 			}
 			err := verifyBootstrapArtifactPaths(root, expected, action, initial)
-			valid := mode == "fresh" || mode == "directory prefix" || mode == "archive prefix" || mode == "all archives" || mode == "binary scratch" || mode == "binary chmod" || mode == "binary final"
+			valid := mode == "fresh" || mode == "directory prefix" || mode == "archive prefix" || mode == "all archives" || mode == "binary scratch" || mode == "binary chmod" || mode == "binary final" || mode == "runtime service"
 			if (err == nil) != valid {
 				t.Fatal("incorrect bounded custody", err)
 			}

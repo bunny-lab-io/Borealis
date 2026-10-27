@@ -33,6 +33,8 @@ type clusterSSHPrejoinClient interface {
 	ReconcilePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	PublishPrejoinArtifacts(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, []byte, func(context.Context) error) error
 	ReconcilePrejoinArtifacts(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, []byte, func(context.Context) error) error
+	InstallPrejoinK3s(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, []byte, func(context.Context) error) error
+	ReconcilePrejoinK3s(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, []byte, func(context.Context) error) error
 	Close() error
 }
 
@@ -176,7 +178,7 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 	defer clear(sudoPassword)
 	maximum := 10 * time.Minute
 	if artifacts != nil {
-		maximum += 2 * clusterbootstrap.ArtifactPreparationLifetime
+		maximum += 4 * clusterbootstrap.ArtifactPreparationLifetime
 	}
 	ctx, cancel := context.WithTimeout(parent, maximum)
 	defer cancel()
@@ -254,6 +256,14 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 			},
 			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				return c.ReconcilePrejoinArtifacts(checkCtx, inputs, e, source, material, artifacts, postgresReference, sudo, check)
+			},
+		})
+		steps = append(steps, [2]action{
+			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.InstallPrejoinK3s(checkCtx, inputs, e, source, material, artifacts, postgresReference, sudo, check)
+			},
+			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.ReconcilePrejoinK3s(checkCtx, inputs, e, source, material, artifacts, postgresReference, sudo, check)
 			},
 		})
 	}
@@ -412,6 +422,11 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 			return fail
 		}
 		retained = 5
+	case "install_k3s":
+		if artifacts == nil {
+			return fail
+		}
+		retained = 6
 	}
 	if retained >= 0 {
 		if proveStep(retained) != nil {

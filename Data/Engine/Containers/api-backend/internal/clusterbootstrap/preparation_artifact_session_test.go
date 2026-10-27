@@ -27,6 +27,21 @@ func artifactSessionRequestFixture(t *testing.T) PreparationSessionRequest {
 func TestArtifactPreparationRequestAndLimits(t *testing.T) {
 	r := artifactSessionRequestFixture(t)
 	original, _ := r.Digest()
+	for _, action := range []string{"install_prejoin_k3s", "reconcile_prejoin_k3s"} {
+		changed := r
+		changed.Action = action
+		digest, err := changed.Digest()
+		if err != nil || digest == original || !artifactPreparationAction(action) {
+			t.Fatal("fixed K3s action lost artifact binding", action, err)
+		}
+		expected, err := changed.Expected()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewPrejoinPreparationSessionRequest(expected, r.Session.ManagerSHA256, r.Session.Nonce, action, *r.IdentitySource); err == nil {
+			t.Fatal("K3s action accepted without complete artifact identity")
+		}
+	}
 	for _, mode := range []string{"different postgres", "missing postgres", "tag postgres", "different repository", "missing identity", "old action"} {
 		changed := r
 		switch mode {

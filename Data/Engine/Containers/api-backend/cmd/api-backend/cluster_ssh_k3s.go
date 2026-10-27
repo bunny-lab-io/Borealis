@@ -126,5 +126,8 @@ func (v clusterSSHK3sInventory) demands() ([]clusterSSHFilesystemDemand, error) 
 		{Path: "/opt/Borealis", Bytes: uint64(p.Binary.Size + a.ArchiveBytes + 2*p.Installer.Size), Entries: 5},
 		{Path: "/usr/local/bin", Bytes: uint64(2 * p.Binary.Size), Entries: 2},
 		{Path: "/var/lib/rancher/k3s", Bytes: uint64(2*a.ArchiveBytes + a.ContentBytes + a.ExpandedBytes + payloadBytes), Entries: uint64(2 + a.ContentEntries + a.ExpandedEntries + payloadEntries)},
+		// Exact service bytes plus the private empty environment; no assumption
+		// that /etc shares the artifact or binary filesystem.
+		{Path: "/etc/systemd/system", Bytes: uint64(len(clusterbootstrap.PrejoinK3sServiceUnit)), Entries: 2},
 	}, nil
 }

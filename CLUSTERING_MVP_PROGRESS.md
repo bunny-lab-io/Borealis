@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `22b7bcc2753ec38921a833030e9180fed9dca8df`.
+- Published base `6f567ab2f696a566b75ec2d1c641d14223f11d23`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,9 +52,9 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Complete M2 immutable artifact delivery/import: per-family streams are implemented;
-   compose application, K3s, static external and source-bound PostgreSQL inputs
-   under existing complete capacity/source/claim scopes.
+1. Complete M2 runtime installation/import: complete artifact transfer, publication
+   and six-stage dispatch are published at6f567ab. Finish fixed inert K3s installation,
+   then original-controller admission and actual import under existing scopes.
 2. Finish M3 activation/existing-node interruption qualification. Preserve all
    original identity material and keep consumers fenced until complete proof.
 3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
@@ -92,11 +92,13 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Compose complete source-bound application/K3s/static-external/PostgreSQL artifact
-transfer using implemented guarded streams; then connect fixed journaled
-publication/import. Preserve original-controller/source authority,
-complete capacity reservations, source/identity custody and both fences.
-Production polling stays disabled until required integration completes.
+Continue private source-bound K3s join-material delivery, then fixed original-
+controller admission/import and shared-identity activation. Uncommitted next-slice
+files `internal/clusterbootstrap/k3s_join_material{,_test}.go` validate secure server
+token/CA binding, exact current target/source, ownership, redaction and close;
+focused race tests passed3 (1.104s). No acquisition/transfer/runtime caller yet.
+Installation batch validation below is complete; publish that batch separately.
+Production polling remains disabled. No live runtime action taken.
 
 ## Interrupted-firewall continuation checkpoint
 
@@ -281,3 +283,36 @@ Production polling stays disabled until required integration completes.
   Preserve prepared source, calculated budgets and separate reconciliation.
   Production preparation polling disabled. No Engine changes/credentials used,
   no dependency/schema/public route changes, no runtime cleanup obligation.
+
+## Inert K3s installation checkpoint
+
+- `install_prejoin_k3s` / `reconcile_prejoin_k3s` append seventh journal stage
+  `install_k3s`, reusing complete authenticated artifact input. Exact six prior
+  receipts and actual37-file/source/identity/host proof precede fresh intent.
+- Fixed native publication stages empty0600 environment then0644 service with no
+  replacement. Pinned installer is not executed: its unconditional disable/removal
+  violates fresh publication. Native adapter only daemon-reloads under both fences;
+  it never enables/starts/imports/joins or releases identity consumers.
+- Separate executor proves actual loaded, disabled, inactive service, fixed fragment,
+  no drop-ins/jobs/PIDs, exact files and complete prerequisites. Partial state stays
+  fenced. Older actions require actual unit/scratch absence even with stale systemd
+  cache. Seven-stage dispatcher handles lost acknowledgement and retained cursor.
+- Calculated demand adds exact unit bytes/two inodes on `/etc/systemd/system`;
+  acquisition/dispatch ceilings150/130minutes preserve credential/lease expiry.
+- Focused initial journal/native race passed97.297s/1.128s. Final protocol/SSH/native/
+  dispatch focused3 passed12.830s/2.666s/1.369s/2.569s; added request-boundary3 passed
+  1.107s. Final capacity/scope3 passed20.217s:15 non-PostgreSQL top-level executions.
+  Regex also selected unchanged PostgreSQL scope suite:24 subcases skipped because
+  no DSN; this is not PostgreSQL validation. Required CI remains responsible for it.
+  Initial capacity fixture omitted new `/etc` path; fixed evidence path and exact
+  aggregate bytes/inodes, preserving low-space/drift assertions.
+- Full bootstrap race167 top-level tests passed663.565s, zero failures/skips.
+  Final native race161 passed13.839s, zero failures/skips after stricter file absence.
+  Full-module vet, CGO-disabled node-manager build, policy184tests/219routes and
+  documentation reference checks passed. No dependency/public route/schema change.
+- Evidence: `Unit_Test_Results/m2-k3s-runtime-20261027/`. Immutable upstream installer
+  v1.36.3+k3s1 hash verified46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad;
+  never executed. Actual Ubuntu systemd and end-to-end import remain unverified.
+- Base6f567 Container Policy40481136317 passed; PR Validation40481136369 pending at
+  one check. No manual reruns/repeated polling. No new PR comments since07:58:10Z.
+- No live action, credential use or runtime cleanup obligation. M1-M8 remain open.

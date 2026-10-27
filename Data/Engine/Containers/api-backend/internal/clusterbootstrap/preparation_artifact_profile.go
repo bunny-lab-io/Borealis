@@ -5,7 +5,7 @@ import "time"
 const ArtifactPreparationLifetime = 30 * time.Minute
 
 func artifactPreparationAction(action string) bool {
-	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts"
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s"
 }
 
 type preparationTransportProfile struct {

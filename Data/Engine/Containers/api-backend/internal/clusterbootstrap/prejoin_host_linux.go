@@ -53,11 +53,15 @@ func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJ
 // Artifact publication extends only this exact prefix. Earlier host actions
 // retain their original phase boundary and cannot replay after image effects.
 func (p *PreparationInputs) prejoinHostPhaseRequest(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string, artifacts bool) (engineidentity.Installation, string, prejoinDirectoryProof, error) {
-	invalid := prejoinDirectoryProof{}
 	maximum := 5
 	if artifacts {
 		maximum = 6
 	}
+	return p.prejoinHostPrefixRequest(ctx, j, install, material, parent, maximum)
+}
+
+func (p *PreparationInputs) prejoinHostPrefixRequest(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string, maximum int) (engineidentity.Installation, string, prejoinDirectoryProof, error) {
+	invalid := prejoinDirectoryProof{}
 	if j == nil || len(j.state.Steps) < 4 || len(j.state.Steps) > maximum {
 		return install, "", invalid, ErrMutationJournal
 	}
@@ -65,7 +69,11 @@ func (p *PreparationInputs) prejoinHostPhaseRequest(ctx context.Context, j *Muta
 		switch step {
 		case "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host":
 		case "stage_images":
-			if !artifacts {
+			if maximum < 6 {
+				return install, "", invalid, ErrMutationJournal
+			}
+		case "install_k3s":
+			if maximum != 7 {
 				return install, "", invalid, ErrMutationJournal
 			}
 		default:

@@ -95,6 +95,12 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				case "reconcile_prejoin_artifacts":
 					_, err = inputs.ReconcilePrejoinArtifacts(ctx, journal, install, material, assets, request.PostgresReference,
 						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) })
+				case "install_prejoin_k3s":
+					_, err = inputs.InstallPrejoinK3s(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) }, bootstrapNativeK3sActions(expected, guard, executor, authority))
+				case "reconcile_prejoin_k3s":
+					_, err = inputs.ReconcilePrejoinK3s(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) }, bootstrapNativeK3sActions(expected, guard, executor, authority).Prove)
 				case "prepare_prejoin_identity_root":
 					_, err = inputs.PreparePrejoinIdentityRoot(ctx, journal, install, material)
 				case "reconcile_prejoin_identity_root":
@@ -211,7 +217,12 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 			}
 			return verifyBootstrapSourcePaths(root, action, destination)
 		},
-		unit: observeBootstrapAbsentUnit,
+		unit: func(ctx context.Context, unit string) error {
+			if unit == "k3s.service" && (bootstrapK3sAction(request.Action) || request.Action == "inspect_preparation_progress") {
+				return observeBootstrapInertK3s(ctx, false)
+			}
+			return observeBootstrapAbsentUnit(ctx, unit)
+		},
 	})
 }
 

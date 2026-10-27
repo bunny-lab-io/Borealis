@@ -34,21 +34,32 @@ func (p *PreparationInputs) ReconcilePrejoinArtifacts(ctx context.Context, j *Mu
 }
 
 func (p *PreparationInputs) prejoinArtifactsTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool) (string, error) {
+	return p.prejoinArtifactPhaseTransaction(ctx, j, install, material, artifacts, postgresReference, proveHost, parent, systemPath, reconcile, nil)
+}
+
+func (p *PreparationInputs) prejoinArtifactPhaseTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions) (string, error) {
 	if p == nil || j == nil || artifacts == nil || proveHost == nil || !ValidPostgresImageReference(postgresReference) {
 		return "", ErrMutationJournal
+	}
+	step, maximum := "stage_images", 6
+	if runtime != nil {
+		step, maximum = "install_k3s", 7
+		if runtime.Prove == nil || !reconcile && (runtime.CheckFresh == nil || runtime.Install == nil) {
+			return "", ErrMutationJournal
+		}
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	artifacts.mu.Lock()
 	defer artifacts.mu.Unlock()
-	install, hostInput, identity, err := p.prejoinHostPhaseRequest(ctx, j, install, material, parent, true)
+	install, hostInput, identity, err := p.prejoinHostPrefixRequest(ctx, j, install, material, parent, maximum)
 	host := j.state.Steps["prepare_host"]
 	if err != nil || host.State != "applied" || host.InputSHA256 != hostInput || host.ResultSHA256 != hostInput ||
 		artifacts.expected != p.configuration.wire.Expected.Source || artifacts.k3sVersion != p.configuration.wire.Expected.K3sVersion || artifacts.postgresReference != postgresReference {
 		return "", ErrMutationJournal
 	}
 	if !reconcile {
-		if _, exists := j.state.Steps["stage_images"]; exists {
+		if _, exists := j.state.Steps[step]; exists {
 			return "", ErrMutationUnknown
 		}
 	}
@@ -64,7 +75,16 @@ func (p *PreparationInputs) prejoinArtifactsTransaction(ctx context.Context, j *
 		return "", ErrMutationJournal
 	}
 	sum := sha256.Sum256(raw)
-	input := hex.EncodeToString(sum[:])
+	artifactInput := hex.EncodeToString(sum[:])
+	input := artifactInput
+	if runtime != nil {
+		prior := j.state.Steps["stage_images"]
+		if prior.State != "applied" || prior.InputSHA256 != artifactInput || prior.ResultSHA256 != artifactInput {
+			return "", ErrMutationJournal
+		}
+		digest := sha256.Sum256([]byte("prejoin-k3s-installation-v1\x00" + artifactInput))
+		input = hex.EncodeToString(digest[:])
+	}
 	archive, err := os.Open(p.bundle.ArchivePath())
 	if err != nil {
 		return "", ErrPreparationConfig
@@ -92,7 +112,7 @@ func (p *PreparationInputs) prejoinArtifactsTransaction(ctx context.Context, j *
 	}
 	defer source.Close()
 	targets := prejoinArtifactTargets{system, source}
-	extras := prejoinArtifactSourceProof{input: input, plan: plan}
+	extras := prejoinArtifactSourceProof{input: artifactInput, plan: plan}
 	proveSource := func(ctx context.Context) error {
 		if prejoinDirectoryBoundary(ctx, j, install) != nil || verifySourceArchive(ctx, archive, p.bundle.asset) != nil ||
 			verifyPublishedSourceWithArtifacts(ctx, archive, filepath.Join(parent, "Borealis"), environment, &identity, &extras) != nil ||
@@ -103,29 +123,43 @@ func (p *PreparationInputs) prejoinArtifactsTransaction(ctx context.Context, j *
 	}
 	boundary := func(ctx context.Context) error { return prejoinDirectoryBoundary(ctx, j, install) }
 	result := ""
-	err = install.WithPrejoinFencedCommitted(material, func(_ *os.File) error {
-		// No child process is started: both exclusion descriptors remain held by
-		// this process for every native filesystem effect and proof.
+	err = install.WithPrejoinFencedCommitted(material, func(identityLock *os.File) error {
+		// Both fences stay held. Artifact publication starts no child; the
+		// fixed runtime adapter must borrow both descriptors for daemon-reload.
 		if proveSource(ctx) != nil || proveHost(ctx) != nil {
 			return ErrMutationUnknown
 		}
-		if !reconcile && (targets.fresh(ctx, plan, input, boundary) != nil || proveHost(ctx) != nil) {
+		if runtime != nil {
+			if targets.prove(ctx, plan, artifactInput, boundary) != nil || !reconcile && runtime.CheckFresh(ctx) != nil {
+				return ErrMutationUnknown
+			}
+		} else if !reconcile && (targets.fresh(ctx, plan, artifactInput, boundary) != nil || proveHost(ctx) != nil) {
 			return ErrMutationUnknown
 		}
 		prove := func(ctx context.Context) (string, error) {
-			if proveSource(ctx) != nil || proveHost(ctx) != nil || targets.prove(ctx, plan, input, boundary) != nil ||
-				proveHost(ctx) != nil || targets.prove(ctx, plan, input, boundary) != nil ||
+			if proveSource(ctx) != nil || proveHost(ctx) != nil || targets.prove(ctx, plan, artifactInput, boundary) != nil ||
+				proveHost(ctx) != nil || targets.prove(ctx, plan, artifactInput, boundary) != nil ||
 				p.Verify(ctx, p.configuration.wire.Expected, j.authority) != nil || proveSource(ctx) != nil {
+				return "", ErrMutationUnknown
+			}
+			if runtime != nil && (runtime.Prove(ctx) != nil || proveSource(ctx) != nil || runtime.Prove(ctx) != nil) {
 				return "", ErrMutationUnknown
 			}
 			return input, nil
 		}
 		var err error
 		if reconcile {
-			result, err = j.reconcileLocked(ctx, "stage_images", input, prove, "applied")
+			result, err = j.reconcileLocked(ctx, step, input, prove, "applied")
 		} else {
-			result, err = j.applyLocked(ctx, "stage_images", input, func(ctx context.Context, _ *os.File) (string, error) {
-				if proveSource(ctx) != nil || proveHost(ctx) != nil || targets.publishWithSource(ctx, plan, input, boundary, proveSource) != nil {
+			result, err = j.applyLocked(ctx, step, input, func(ctx context.Context, hostLock *os.File) (string, error) {
+				if proveSource(ctx) != nil || proveHost(ctx) != nil {
+					return "", ErrMutationUnknown
+				}
+				if runtime != nil {
+					if targets.prove(ctx, plan, artifactInput, boundary) != nil || runtime.CheckFresh(ctx) != nil || runtime.Install(ctx, hostLock, identityLock) != nil {
+						return "", ErrMutationUnknown
+					}
+				} else if targets.publishWithSource(ctx, plan, artifactInput, boundary, proveSource) != nil {
 					return "", ErrMutationUnknown
 				}
 				return prove(ctx)
