@@ -107,6 +107,14 @@ func TestClusterSSHPrejoinCustodyPostgresAuthorityAndPoolRelease(t *testing.T) {
 				if f.c.store.db.Stats().InUse != 0 || !material.Equal(want) {
 					t.Fatal("material or connection custody failed")
 				}
+				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := clusterSSHPrejoinDispatchKey(a, source, work.Claims[0], work.Baseline, expected)
+				if err != nil || key.Validate() != nil || key.Fingerprint != work.Claims[0].Sealed.binding.Fingerprint {
+					t.Fatal("dispatch changed approved target pin", err)
+				}
 				if mode == "final authority drift" {
 					f.exec(t, `UPDATE engine.cluster_application_leases SET holder='replacement' WHERE name=$1`, clusterControllerLeaseName)
 					// Deliberately ignore a failed challenge: scope must still fail.

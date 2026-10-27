@@ -1,0 +1,303 @@
+package main
+
+import (
+	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+)
+
+type sshPrejoinDispatchTestClient struct {
+	run   func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	close func() error
+}
+
+func (c *sshPrejoinDispatchTestClient) Close() error { return c.close() }
+func (c *sshPrejoinDispatchTestClient) DeliverPreparation(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "source", p, e, engineidentity.Binding{}, nil, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) ReconcilePreparation(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "source proof", p, e, engineidentity.Binding{}, nil, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) PrepareRuntimeIdentity(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "account", p, e, engineidentity.Binding{}, nil, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) ReconcileRuntimeIdentity(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "account proof", p, e, engineidentity.Binding{}, nil, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) PreparePrejoinIdentityRoot(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "directory", p, e, source, keys, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinIdentityRoot(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "directory proof", p, e, source, keys, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) InstallPrejoinIdentity(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "keys", p, e, source, keys, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinIdentity(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "keys proof", p, e, source, keys, sudo, check)
+}
+
+func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
+	a, source, _ := sshPrejoinSourceFixture(t, false)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := sshIdentitySourceMaterial(t, t.TempDir())
+	inputs := &clusterbootstrap.PreparationInputs{} // Transport seam only; native methods reject this inert fixture.
+	sequence := []string{"source", "source proof", "account", "account proof", "directory", "directory proof", "keys", "keys proof"}
+	for _, mode := range []string{"success", "write uncertain", "already closed", "connection lost", "connection with client", "nil connection", "proof failed", "close failed", "ignored authority failure", "cancelled"} {
+		for stage := 0; stage < 4; stage++ {
+			t.Run(fmt.Sprintf("%s/%d", mode, stage), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				opened, closed, calls := 0, 0, []string{}
+				failed := false
+				current := func(context.Context) error {
+					if failed {
+						return errors.New("private revoked controller")
+					}
+					return nil
+				}
+				var escaped func(context.Context) error
+				sudoOriginal := []byte("private test sudo")
+				connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+					index := opened
+					opened++
+					client := &sshPrejoinDispatchTestClient{}
+					client.close = func() error {
+						closed++
+						if mode == "close failed" && index == stage*2 {
+							return errors.New("private close failed")
+						}
+						if mode == "already closed" && index == stage*2 {
+							return fmt.Errorf("closed protocol connection: %w", net.ErrClosed)
+						}
+						return nil
+					}
+					client.run = func(ctx context.Context, action string, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected,
+						s engineidentity.Binding, k *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+						calls = append(calls, action)
+						escaped = check
+						if action != sequence[index] || p != inputs || !reflect.DeepEqual(e, expected) || string(sudo) != string(sudoOriginal) || check(ctx) != nil {
+							t.Fatal("dispatch binding/order changed")
+						}
+						if index >= 4 {
+							if s != source.Binding || !k.Equal(keys) {
+								t.Fatal("source identity changed")
+							}
+						} else if s != (engineidentity.Binding{}) || k != nil {
+							t.Fatal("source/account session received identity envelope")
+						}
+						// Adapters cannot redefine retained expected/sudo for later sessions.
+						e.PeerAddresses[0] = "changed"
+						sudo[0] = 'X'
+						if index == stage*2 {
+							switch mode {
+							case "write uncertain", "already closed":
+								return errors.New("private lost write acknowledgement")
+							case "ignored authority failure":
+								failed = true
+								_ = check(context.Background())
+								failed = false // Restoring proof must not erase failed boundary.
+							case "cancelled":
+								cancel()
+							}
+						}
+						if mode == "proof failed" && index == stage*2+1 {
+							return errors.New("private partial effect cannot be proven")
+						}
+						return nil
+					}
+					if index == stage*2 {
+						switch mode {
+						case "connection lost":
+							return nil, errors.New("private connection failed")
+						case "nil connection":
+							return nil, nil
+						case "connection with client":
+							return client, errors.New("private connection failed")
+						}
+					}
+					return client, nil
+				}
+				err := dispatchClusterSSHPrejoinIdentity(ctx, connect, inputs, expected, source.Binding, keys, sudoOriginal, current)
+				success := slices.Contains([]string{"success", "write uncertain", "already closed", "connection lost", "connection with client", "nil connection"}, mode)
+				if (err == nil) != success || err != nil && err != clusterbootstrap.ErrSessionAuthority {
+					t.Fatal("wrong uncertain dispatch result", err)
+				}
+				wantOpened := 8
+				if mode == "proof failed" {
+					wantOpened = stage*2 + 2
+				} else if !success {
+					wantOpened = stage*2 + 1
+				}
+				wantClosed := wantOpened
+				if mode == "connection lost" || mode == "nil connection" {
+					wantClosed--
+				}
+				if opened != wantOpened || closed != wantClosed || string(sudoOriginal) != "private test sudo" {
+					t.Fatal("unsafe progression, cleanup or caller mutation", opened, closed, calls)
+				}
+				if escaped != nil && escaped(context.Background()) != clusterbootstrap.ErrSessionAuthority {
+					t.Fatal("dispatch check escaped lifetime")
+				}
+			})
+		}
+	}
+}
+
+func TestClusterSSHPrejoinDispatchAuthorityBinding(t *testing.T) {
+	for _, mode := range []string{"valid", "source", "phase", "holder", "baseline", "boot", "namespace", "network", "peer", "sealed target", "key", "cohort"} {
+		t.Run(mode, func(t *testing.T) {
+			a, source, _ := sshPrejoinSourceFixture(t, false)
+			expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := clusterSSHNetworkTargetClaim{Lease: a.Lease, Sealed: sealedClusterSSHCredentials{binding: a.Cohort.Targets[0].Binding}}
+			switch mode {
+			case "source":
+				source.Binding.SourceUID = newClusterUUID()
+			case "phase":
+				a.Lease.Step = "qualify"
+			case "holder":
+				claim.Lease.Holder = newClusterUUID()
+			case "baseline":
+				a.Baseline.Release = "2026.09.999-rc.2"
+			case "boot":
+				expected.TargetBootID = newClusterUUID()
+			case "namespace":
+				expected.KubeSystemUID = newClusterUUID()
+			case "network":
+				expected.ControlPlaneVIP = "192.168.3.100"
+			case "peer":
+				expected.PeerAddresses[0] = "192.168.3.100"
+			case "sealed target":
+				claim.Sealed.binding.TargetID = newClusterUUID()
+			case "key":
+				a.Cohort.Targets[0].Key.PublicKey = []byte("bad-key")
+			case "cohort":
+				a.Cohort.Targets[1].Report.BootID = newClusterUUID()
+			}
+			key, err := clusterSSHPrejoinDispatchKey(a, source, claim, expected.Source, expected)
+			if (err == nil) != (mode == "valid") {
+				t.Fatal("incorrect dispatch binding decision", err)
+			}
+			if err == nil {
+				key.PublicKey[0] ^= 1
+				if a.Cohort.Targets[0].Key.Validate() != nil {
+					t.Fatal("returned pin aliases authority")
+				}
+			}
+		})
+	}
+}
+
+func TestClusterSSHPrejoinDispatchRejectsInvalidBoundary(t *testing.T) {
+	for _, mode := range []string{"inputs", "expected", "material", "empty material", "current", "source cluster", "source target", "source UID", "sudo", "cancelled"} {
+		t.Run(mode, func(t *testing.T) {
+			a, source, _ := sshPrejoinSourceFixture(t, false)
+			expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := sshIdentitySourceMaterial(t, t.TempDir())
+			inputs := &clusterbootstrap.PreparationInputs{}
+			current := func(context.Context) error { t.Error("invalid input reached authority"); return nil }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var sudo []byte
+			switch mode {
+			case "inputs":
+				inputs = nil
+			case "expected":
+				expected.TargetBootID = ""
+			case "material":
+				keys = nil
+			case "empty material":
+				keys = &engineidentity.Material{}
+			case "current":
+				current = nil
+			case "source cluster":
+				source.Binding.ClusterID = newClusterUUID()
+			case "source target":
+				source.Binding.SourceID = expected.Target.TargetID
+			case "source UID":
+				source.Binding.SourceUID = "00000000-0000-0000-0000-000000000000"
+			case "sudo":
+				sudo = []byte("secret\ncommand")
+			case "cancelled":
+				cancel()
+			}
+			err = dispatchClusterSSHPrejoinIdentity(ctx, func(context.Context) (clusterSSHPrejoinClient, error) {
+				t.Error("invalid boundary reached SSH")
+				return nil, nil
+			}, inputs, expected, source.Binding, keys, sudo, current)
+			if err != clusterbootstrap.ErrSessionAuthority {
+				t.Fatal("invalid boundary accepted", err)
+			}
+		})
+	}
+}
+
+func TestClusterSSHPrejoinDispatchWithinMaterialScope(t *testing.T) {
+	for _, drift := range []bool{false, true} {
+		t.Run(fmt.Sprint(drift), func(t *testing.T) {
+			a, source, pod := sshPrejoinSourceFixture(t, false)
+			expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := clusterIdentityPodCustody(pod, a.Baseline.SourceSHA, source.Process)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof := clusterSSHPrejoinSourceCustody{Source: source, Pod: p, AuthoritySHA256: strings.Repeat("a", 64)}
+			root := t.TempDir()
+			want := sshIdentitySourceMaterial(t, root)
+			consumer, err := engineidentity.AcquireConsumer(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer consumer.Close()
+			opened, closed := 0, 0
+			read := func(context.Context) (clusterSSHPrejoinSourceCustody, error) { return proof, nil }
+			err = withClusterSSHPrejoinSourceMaterial(context.Background(), consumer, root, source, read,
+				func(ctx context.Context, keys *engineidentity.Material, refresh func(context.Context) error) error {
+					connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+						opened++
+						return &sshPrejoinDispatchTestClient{close: func() error { closed++; return nil },
+							run: func(ctx context.Context, action string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected,
+								_ engineidentity.Binding, material *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+								if check(ctx) != nil {
+									return clusterbootstrap.ErrSessionAuthority
+								}
+								if material != nil && !material.Equal(want) {
+									t.Fatal("scope changed source material")
+								}
+								if drift && action == "keys" {
+									sshIdentitySourceMaterial(t, root)
+								}
+								return nil
+							}}, nil
+					}
+					return dispatchClusterSSHPrejoinIdentity(ctx, connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, refresh)
+				})
+			wantSessions := 8
+			if drift {
+				wantSessions = 7
+			}
+			if (err == nil) == drift || opened != wantSessions || closed != opened {
+				t.Fatal("source drift progressed or leaked session", err, opened, closed)
+			}
+		})
+	}
+}
