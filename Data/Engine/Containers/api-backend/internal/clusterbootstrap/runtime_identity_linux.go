@@ -64,6 +64,10 @@ func runtimeIdentityInputFromSource(j *MutationJournal, source string, uid, gid 
 }
 
 func (p *PreparationInputs) prepareRuntimeIdentity(ctx context.Context, j *MutationJournal, actions RuntimeIdentityActions, parent string, uid, gid int, reconcile bool) (string, error) {
+	return p.runtimeIdentityTransaction(ctx, j, actions, parent, uid, gid, reconcile, nil)
+}
+
+func (p *PreparationInputs) runtimeIdentityTransaction(ctx context.Context, j *MutationJournal, actions RuntimeIdentityActions, parent string, uid, gid int, reconcile bool, groupOnly func(context.Context) error) (string, error) {
 	if j == nil || actions.Prove == nil || !reconcile && actions.Prepare == nil {
 		return "", ErrMutationJournal
 	}
@@ -109,10 +113,26 @@ func (p *PreparationInputs) prepareRuntimeIdentity(ctx context.Context, j *Mutat
 	if reconcile {
 		return j.reconcileLocked(ctx, "prepare_runtime_identity", input, prove, "applied")
 	}
-	return j.applyLocked(ctx, "prepare_runtime_identity", input, func(ctx context.Context, lock *os.File) (string, error) {
+	mutate := func(ctx context.Context, lock *os.File) (string, error) {
 		if actions.Prepare(ctx, lock) != nil || j.authority(ctx) != nil {
 			return "", ErrSessionAuthority
 		}
 		return prove(ctx)
-	})
+	}
+	if groupOnly != nil {
+		result, err := j.continueRuntimeIdentityLocked(ctx, input, func(ctx context.Context) error {
+			if proveSource(ctx) != nil || groupOnly(ctx) != nil || proveSource(ctx) != nil {
+				return ErrMutationUnknown
+			}
+			return nil
+		}, mutate)
+		if err != nil {
+			return "", err
+		}
+		if _, err := prove(ctx); err != nil {
+			return "", ErrMutationUnknown
+		}
+		return result, nil
+	}
+	return j.applyLocked(ctx, "prepare_runtime_identity", input, mutate)
 }

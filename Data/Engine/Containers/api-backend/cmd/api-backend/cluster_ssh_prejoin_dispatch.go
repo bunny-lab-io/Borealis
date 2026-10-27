@@ -19,6 +19,7 @@ type clusterSSHPrejoinClient interface {
 	ReconcilePreparationAbsent(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	ReconcilePreparation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	PrepareRuntimeIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
+	CompleteRuntimeIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	ReconcileRuntimeIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	PreparePrejoinIdentityRoot(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinIdentityRoot(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
@@ -273,6 +274,19 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 		err, boundaryErr := run(steps[index][1])
 		if err == nil && boundaryErr == nil {
 			return nil
+		}
+		if boundaryErr == nil && index == 1 {
+			// Only the native fresh-claim/group-only contract can transfer
+			// intent before completing the missing user. Ambiguous completion
+			// still requires an independent complete-account proof.
+			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.CompleteRuntimeIdentity(checkCtx, inputs, e, sudo, check)
+			}); boundaryErr != nil {
+				return fail
+			}
+			if err, boundaryErr := run(steps[index][1]); err == nil && boundaryErr == nil {
+				return nil
+			}
 		}
 		if boundaryErr == nil && index == 0 {
 			// Failed completion is not absence. A separate fixed proof may

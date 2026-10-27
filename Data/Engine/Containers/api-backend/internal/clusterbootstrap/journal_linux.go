@@ -78,7 +78,7 @@ func validMutationStep(step string) bool {
 }
 
 func (s mutationState) valid() bool {
-	if s.Version != 2 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 7 || len(s.History) > 16 {
+	if s.Version != 2 && s.Version != 3 || s.Owner.Validate() != nil || s.Source.Validate() != nil || s.Steps == nil || s.History == nil || len(s.Steps) > 7 || len(s.History) > 16 {
 		return false
 	}
 	pending := 0
@@ -101,17 +101,28 @@ func (s mutationState) valid() bool {
 			return false
 		}
 	}
+	continued := false
 	for _, prior := range s.History {
 		r := prior.Record
 		if !validMutationStep(prior.Step) {
 			return false
 		}
-		if r.State != "not_applied" || !r.Executor.valid() || r.Binding.Validate() != nil || stableMutationBinding(r.Binding) != stableMutationBinding(s.Owner) ||
+		if r.State == "continued" {
+			current, exists := s.Steps[prior.Step]
+			if s.Version != 3 || prior.Step != "prepare_runtime_identity" || r.ResultSHA256 != runtimeIdentityGroupOnlyDigest(r.InputSHA256) ||
+				!exists || current.InputSHA256 != r.InputSHA256 || current.Binding.Generation <= r.Binding.Generation || current.Binding.OperationAttempt < r.Binding.OperationAttempt || current.State == "not_applied" {
+				return false
+			}
+			continued = true
+		} else if r.State != "not_applied" {
+			return false
+		}
+		if !r.Executor.valid() || r.Binding.Validate() != nil || stableMutationBinding(r.Binding) != stableMutationBinding(s.Owner) ||
 			r.Binding.Generation >= s.Owner.Generation || r.Binding.OperationAttempt > s.Owner.OperationAttempt || !digestPattern.MatchString(r.InputSHA256) || !digestPattern.MatchString(r.ResultSHA256) {
 			return false
 		}
 	}
-	return pending <= 1
+	return pending <= 1 && (s.Version == 3) == continued
 }
 
 func mutationFileValid(file *os.File, maxSize int64) bool {
@@ -361,7 +372,18 @@ func (j *MutationJournal) applyLocked(ctx context.Context, step, inputSHA256 str
 		j.failed = true
 		return "", err
 	}
+	return j.executeIntentLocked(ctx, step, mutate)
+}
+
+// Caller has just persisted the exact current executor's intent under mu.
+// Ordinary application and the narrowly scoped account continuation share the
+// same inherited-lock and durable completion boundary.
+func (j *MutationJournal) executeIntentLocked(ctx context.Context, step string, mutate func(context.Context, *os.File) (string, error)) (string, error) {
 	if j.authority(ctx) != nil {
+		return "", ErrMutationUnknown
+	}
+	intent, exists := j.state.Steps[step]
+	if !exists || intent.State != "intent" || intent.Binding != j.state.Owner || intent.Executor != j.executor || mutate == nil {
 		return "", ErrMutationUnknown
 	}
 	// Pass a duplicate open-file description to every subprocess via ExtraFiles.

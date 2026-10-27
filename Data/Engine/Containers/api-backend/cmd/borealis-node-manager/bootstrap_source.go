@@ -111,6 +111,14 @@ func bootstrapSourceSessionContained(args []string) {
 						return prepareBootstrapRuntimeIdentity(ctx, lock, authority)
 					}, Prove: proveBootstrapRuntimeAccount,
 				})
+			case "complete_runtime_identity":
+				_, err = inputs.CompleteRuntimeIdentity(ctx, journal, clusterbootstrap.RuntimeIdentityRecoveryActions{
+					ProveGroupOnly: proveBootstrapRuntimeGroupOnly,
+					CompleteUser: func(ctx context.Context, lock *os.File) error {
+						return completeBootstrapRuntimeIdentity(ctx, lock, authority)
+					},
+					Prove: proveBootstrapRuntimeAccount,
+				})
 			case "reconcile_runtime_identity":
 				_, err = inputs.ReconcileRuntimeIdentity(ctx, journal, proveBootstrapRuntimeAccount)
 			default:
@@ -228,7 +236,7 @@ func bootstrapSourceSafeDirectory(path string) error {
 
 func verifyBootstrapSourcePaths(root *os.Root, action string, destination bool) error {
 	switch action {
-	case "stage_source", "reconcile_source", "reconcile_source_absent", "prepare_runtime_identity", "reconcile_runtime_identity",
+	case "stage_source", "reconcile_source", "reconcile_source_absent", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity",
 		"prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity":
 	default:
 		return errBootstrapSource

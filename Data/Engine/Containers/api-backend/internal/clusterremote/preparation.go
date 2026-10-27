@@ -45,6 +45,12 @@ func (client *Client) PrepareRuntimeIdentity(ctx context.Context, inputs *cluste
 	return client.preparation(ctx, inputs, expected, "prepare_runtime_identity", sudoPassword, check)
 }
 
+// CompleteRuntimeIdentity is fixed group-only forward recovery. Native journal
+// requires a newer claim and durably retains the old producer before useradd.
+func (client *Client) CompleteRuntimeIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparation(ctx, inputs, expected, "complete_runtime_identity", sudoPassword, check)
+}
+
 func (client *Client) ReconcileRuntimeIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, sudoPassword []byte, check func(context.Context) error) error {
 	return client.preparation(ctx, inputs, expected, "reconcile_runtime_identity", sudoPassword, check)
 }
