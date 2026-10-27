@@ -38,6 +38,8 @@ func (r clusterSSHPrejoinCustodyRequest) valid(now time.Time) bool {
 }
 
 type clusterSSHPrejoinCustodyResponse struct {
+	Joining    bool              `json:",omitempty"`
+	Registered map[string]string `json:",omitempty"`
 	Version    int
 	ID, Status string
 	Proof      *clusterSSHPrejoinSourceCustody
@@ -47,6 +49,7 @@ type clusterSSHPrejoinCustodyBroker struct {
 	holder                        string
 	requestCipher, responseCipher cipher.AEAD
 	read                          func(context.Context, clusterSSHPrejoinCustodyRequest) (clusterSSHPrejoinSourceCustody, error)
+	readJoining                   func(context.Context, clusterSSHPrejoinCustodyRequest) (clusterSSHJoiningSourceCustody, error)
 	mu                            sync.Mutex
 	seen                          map[string]int64
 	active                        int
@@ -70,6 +73,18 @@ func newClusterSSHPrejoinCustodyBroker(store *postgresOperatorStore, runner *kub
 		}
 		return readClusterSSHPrejoinSourceCustody(ctx, r.Source, read, runner.kube.getJSON)
 	}
+	b.readJoining = func(ctx context.Context, r clusterSSHPrejoinCustodyRequest) (clusterSSHJoiningSourceCustody, error) {
+		if !clusterControllerEligible() || store == nil || store.db == nil || runner == nil || runner.kube == nil || runner.controllerHolder != holder ||
+			r.Request.Lease.ControllerHolder != holder || !r.Request.Joining || !r.valid(time.Now()) {
+			return clusterSSHJoiningSourceCustody{}, clusterbootstrap.ErrSessionAuthority
+		}
+		read := func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			return store.loadClusterSSHPreparationAuthority(ctx, r.Request.Lease, r.Request.Baseline, r.Request.sealed())
+		}
+		return readClusterSSHJoiningSourceCustody(ctx, r.Source, read, runner.kube.getJSON)
+	}
 	return b
 }
 
@@ -92,9 +107,9 @@ func (b *clusterSSHPrejoinCustodyBroker) handle(w http.ResponseWriter, r *http.R
 		fail(401)
 		return
 	}
-	reply := func(status string, proof *clusterSSHPrejoinSourceCustody) {
+	reply := func(status string, proof *clusterSSHPrejoinSourceCustody, registered map[string]string) {
 		wire, err := sealClusterSSHVIP(b.responseCipher, clusterSSHPrejoinCustodyPath,
-			clusterSSHPrejoinCustodyResponse{Version: 1, ID: request.Request.ID, Status: status, Proof: proof}, clusterSSHSourceBrokerLimit)
+			clusterSSHPrejoinCustodyResponse{Joining: request.Request.Joining, Registered: registered, Version: 1, ID: request.Request.ID, Status: status, Proof: proof}, clusterSSHSourceBrokerLimit)
 		if err != nil {
 			fail(503)
 			return
@@ -103,7 +118,7 @@ func (b *clusterSSHPrejoinCustodyBroker) handle(w http.ResponseWriter, r *http.R
 		_, _ = w.Write(wire)
 	}
 	if request.Request.Lease.ControllerHolder != b.holder {
-		reply("not_owner", nil)
+		reply("not_owner", nil, nil)
 		return
 	}
 	b.mu.Lock()
@@ -113,14 +128,14 @@ func (b *clusterSSHPrejoinCustodyBroker) handle(w http.ResponseWriter, r *http.R
 		}
 	}
 	_, replay := b.seen[request.Request.ID]
-	accepted := b.seen != nil && !replay && len(b.seen) < 128 && b.active < 2 && b.read != nil
+	accepted := b.seen != nil && !replay && len(b.seen) < 128 && b.active < 2 && ((!request.Request.Joining && b.read != nil) || (request.Request.Joining && b.readJoining != nil))
 	if accepted {
 		b.seen[request.Request.ID] = request.Request.ExpiresAt
 		b.active++
 	}
 	b.mu.Unlock()
 	if !accepted {
-		reply("unavailable", nil)
+		reply("unavailable", nil, nil)
 		return
 	}
 	defer func() { b.mu.Lock(); b.active--; b.mu.Unlock() }()
@@ -129,15 +144,23 @@ func (b *clusterSSHPrejoinCustodyBroker) handle(w http.ResponseWriter, r *http.R
 	ctx, stop := context.WithTimeout(ctx, 15*time.Second)
 	defer stop()
 	if ctx.Err() != nil {
-		reply("unavailable", nil)
+		reply("unavailable", nil, nil)
 		return
 	}
-	proof, err := b.read(ctx, request)
+	var proof clusterSSHPrejoinSourceCustody
+	var registered map[string]string
+	if request.Request.Joining {
+		var observed clusterSSHJoiningSourceCustody
+		observed, err = b.readJoining(ctx, request)
+		proof, registered = observed.Original, observed.Registered
+	} else {
+		proof, err = b.read(ctx, request)
+	}
 	if err != nil || ctx.Err() != nil || !proof.valid(request.Source) {
-		reply("unavailable", nil)
+		reply("unavailable", nil, nil)
 		return
 	}
-	reply("observed", &proof)
+	reply("observed", &proof, registered)
 }
 
 type clusterSSHPrejoinCustodyClient struct{ clusterSSHSourceBrokerClient }
@@ -163,8 +186,19 @@ func newClusterSSHPrejoinCustodyClient() (*clusterSSHPrejoinCustodyClient, error
 // Aegis check. Broker authority alone cannot keep a locked worker alive.
 func (c *clusterSSHPrejoinCustodyClient) observe(parent context.Context, source clusterSSHPrejoinSource, lease clusterSSHTargetLease,
 	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, authority clusterSSHPreparationAuthorityRead) (clusterSSHPrejoinSourceCustody, error) {
-	fail := func() (clusterSSHPrejoinSourceCustody, error) {
-		return clusterSSHPrejoinSourceCustody{}, clusterbootstrap.ErrSessionAuthority
+	value, err := c.observePhase(parent, source, lease, baseline, sealed, authority, false)
+	return value.Original, err
+}
+
+func (c *clusterSSHPrejoinCustodyClient) observeJoining(parent context.Context, source clusterSSHPrejoinSource, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, authority clusterSSHPreparationAuthorityRead) (clusterSSHJoiningSourceCustody, error) {
+	return c.observePhase(parent, source, lease, baseline, sealed, authority, true)
+}
+
+func (c *clusterSSHPrejoinCustodyClient) observePhase(parent context.Context, source clusterSSHPrejoinSource, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, authority clusterSSHPreparationAuthorityRead, joining bool) (clusterSSHJoiningSourceCustody, error) {
+	fail := func() (clusterSSHJoiningSourceCustody, error) {
+		return clusterSSHJoiningSourceCustody{}, clusterbootstrap.ErrSessionAuthority
 	}
 	if c == nil || c.httpClient == nil || c.peers == nil || authority == nil || parent.Err() != nil {
 		return fail()
@@ -180,7 +214,7 @@ func (c *clusterSSHPrejoinCustodyClient) observe(parent context.Context, source 
 	if err != nil {
 		return fail()
 	}
-	request := clusterSSHPrejoinCustodyRequest{Source: source, Request: clusterSSHSourceBrokerRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 20,
+	request := clusterSSHPrejoinCustodyRequest{Source: source, Request: clusterSSHSourceBrokerRequest{Joining: joining, Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 20,
 		Lease: lease, Baseline: baseline, Binding: sealed.binding, Generation: sealed.generation, Ciphertext: sealed.ciphertext}}
 	if !request.valid(time.Now()) {
 		return fail()
@@ -211,10 +245,10 @@ func (c *clusterSSHPrejoinCustodyClient) observe(parent context.Context, source 
 		closeErr := res.Body.Close()
 		var response clusterSSHPrejoinCustodyResponse
 		if readErr != nil || closeErr != nil || res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || res.Header.Get("Content-Encoding") != "" ||
-			openClusterSSHVIP(c.responseCipher, clusterSSHPrejoinCustodyPath, raw, &response, clusterSSHSourceBrokerLimit) != nil || response.Version != 1 || response.ID != request.Request.ID || ctx.Err() != nil {
+			openClusterSSHVIP(c.responseCipher, clusterSSHPrejoinCustodyPath, raw, &response, clusterSSHSourceBrokerLimit) != nil || response.Version != 1 || response.ID != request.Request.ID || response.Joining != joining || ctx.Err() != nil {
 			return fail()
 		}
-		if response.Status == "not_owner" && response.Proof == nil {
+		if response.Status == "not_owner" && response.Proof == nil && response.Registered == nil {
 			continue
 		}
 		if response.Status != "observed" || response.Proof == nil || !response.Proof.valid(source) || response.Proof.AuthoritySHA256 != digest {
@@ -229,7 +263,10 @@ func (c *clusterSSHPrejoinCustodyClient) observe(parent context.Context, source 
 		if err != nil || afterDigest != digest {
 			return fail()
 		}
-		return *response.Proof, nil
+		if !validClusterSSHRegisteredTargets(before, response.Registered, joining) {
+			return fail()
+		}
+		return clusterSSHJoiningSourceCustody{Original: *response.Proof, Registered: response.Registered}, nil
 	}
 	return fail()
 }

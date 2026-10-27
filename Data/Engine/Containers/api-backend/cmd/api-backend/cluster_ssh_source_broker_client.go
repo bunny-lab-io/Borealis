@@ -87,6 +87,13 @@ func (c *clusterSSHSourceBrokerClient) preparationRead(authority clusterSSHPrepa
 // old configuration response cannot stand in for fresh source link identity.
 func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparationAuthorityRead, lease clusterSSHTargetLease,
 	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) clusterSSHPreparationSnapshotRead {
+	return c.snapshotReadFor(authority, lease, baseline, sealed, false)
+}
+
+// Joining is selected only by the separate membership preparation scope. It
+// never changes the default source reader or qualification/recovery contracts.
+func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPreparationAuthorityRead, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, joining bool) clusterSSHPreparationSnapshotRead {
 	gate := make(chan struct{}, 1)
 	retained := ""
 	var retainedSources []clusterbootstrap.SourceNetwork
@@ -112,7 +119,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotRead(authority clusterSSHPreparat
 		if err != nil || before.Lease != lease || before.Baseline != baseline {
 			return fail()
 		}
-		request := clusterSSHSourceBrokerRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
+		request := clusterSSHSourceBrokerRequest{Joining: joining, Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
 			Lease: lease, Baseline: baseline, Binding: sealed.binding, Generation: sealed.generation, Ciphertext: sealed.ciphertext}
 		if !request.valid(time.Now()) {
 			return fail()
@@ -233,7 +240,7 @@ func (c *clusterSSHSourceBrokerClient) exchange(parent context.Context, request 
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 52 || value.ID != request.ID || ctx.Err() != nil {
+			value.Version != 52 || value.ID != request.ID || value.Joining != request.Joining || ctx.Err() != nil {
 			return fail()
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil {

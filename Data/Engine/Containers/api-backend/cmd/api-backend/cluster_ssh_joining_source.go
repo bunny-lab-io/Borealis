@@ -52,60 +52,9 @@ func readClusterSSHJoiningSourceCustody(parent context.Context, source clusterSS
 		if path != "/api/v1/nodes" {
 			return getJSON(ctx, path, out)
 		}
-		var list struct {
-			APIVersion string `json:"apiVersion"`
-			Kind       string `json:"kind"`
-			Metadata   struct {
-				Continue string `json:"continue"`
-			} `json:"metadata"`
-			Items *[]json.RawMessage `json:"items"`
-		}
-		if getJSON(ctx, path, &list) != nil || list.APIVersion != "v1" || list.Kind != "NodeList" || list.Metadata.Continue != "" || list.Items == nil ||
-			len(*list.Items) < len(frozen.Source.Members) || len(*list.Items) > len(frozen.Source.Members)+len(frozen.Cohort.Targets) {
-			return clusterbootstrap.ErrSessionAuthority
-		}
-		originals := []json.RawMessage{}
-		current := map[string]string{}
-		names, uids := map[string]bool{}, map[string]bool{}
-		for _, raw := range *list.Items {
-			var node struct {
-				APIVersion string `json:"apiVersion"`
-				Kind       string `json:"kind"`
-				Metadata   struct {
-					Name string `json:"name"`
-					UID  string `json:"uid"`
-				} `json:"metadata"`
-			}
-			if len(raw) > 128<<10 || json.Unmarshal(raw, &node) != nil || node.APIVersion != "v1" || node.Kind != "Node" || names[node.Metadata.Name] || uids[node.Metadata.UID] {
-				return clusterbootstrap.ErrSessionAuthority
-			}
-			names[node.Metadata.Name], uids[node.Metadata.UID] = true, true
-			original := false
-			for _, member := range frozen.Source.Members {
-				if node.Metadata.Name == member.Name {
-					original = true
-					break
-				}
-			}
-			if original {
-				originals = append(originals, raw)
-				continue
-			}
-			found := false
-			for _, target := range frozen.Cohort.Targets {
-				if node.Metadata.Name != target.Report.Hostname {
-					continue
-				}
-				identity := clusterbootstrap.K3sJoinedNodeIdentity{Hostname: target.Report.Hostname, MachineID: target.Report.MachineID, BootID: target.Report.BootID, Address: target.Binding.Address, K3sVersion: frozen.K3sVersion}
-				uid, err := clusterbootstrap.ParseK3sRegisteringNode(raw, identity)
-				if err != nil {
-					return clusterbootstrap.ErrSessionAuthority
-				}
-				current[target.Binding.TargetID], found = uid, true
-			}
-			if !found {
-				return clusterbootstrap.ErrSessionAuthority
-			}
+		originals, current, err := projectClusterSSHJoiningNodes(ctx, frozen, getJSON)
+		if err != nil {
+			return err
 		}
 		// Registration may grow during startup, never disappear or change UID.
 		for id, uid := range registered {
@@ -125,4 +74,69 @@ func readClusterSSHJoiningSourceCustody(parent context.Context, source clusterSS
 		return fail()
 	}
 	return clusterSSHJoiningSourceCustody{proof, registered}, nil
+}
+
+// Shared read-only projection for joining custody and preparation snapshots.
+// Every unrecorded Node rejects before original-source observers see the list.
+func projectClusterSSHJoiningNodes(ctx context.Context, frozen clusterSSHPreparationAuthority, getJSON func(context.Context, string, any) error) ([]json.RawMessage, map[string]string, error) {
+	var list struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Metadata   struct {
+			Continue string `json:"continue"`
+		} `json:"metadata"`
+		Items *[]json.RawMessage `json:"items"`
+	}
+	if getJSON(ctx, "/api/v1/nodes", &list) != nil || list.APIVersion != "v1" || list.Kind != "NodeList" || list.Metadata.Continue != "" || list.Items == nil ||
+		len(*list.Items) < len(frozen.Source.Members) || len(*list.Items) > len(frozen.Source.Members)+len(frozen.Cohort.Targets) {
+		return nil, nil, clusterbootstrap.ErrSessionAuthority
+	}
+	originals := []json.RawMessage{}
+	current := map[string]string{}
+	names, uids := map[string]bool{}, map[string]bool{}
+	for _, raw := range *list.Items {
+		var node struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Metadata   struct {
+				Name   string            `json:"name"`
+				UID    string            `json:"uid"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		}
+		if len(raw) > 128<<10 || json.Unmarshal(raw, &node) != nil || node.APIVersion != "v1" || node.Kind != "Node" || names[node.Metadata.Name] || uids[node.Metadata.UID] {
+			return nil, nil, clusterbootstrap.ErrSessionAuthority
+		}
+		names[node.Metadata.Name], uids[node.Metadata.UID] = true, true
+		original := false
+		for _, member := range frozen.Source.Members {
+			if node.Metadata.Name == member.Name {
+				original = true
+				break
+			}
+		}
+		if original {
+			if node.Metadata.Labels["borealis.io/engine-node"] != "true" || node.Metadata.Labels["borealis.io/application-state"] != "active" {
+				return nil, nil, clusterbootstrap.ErrSessionAuthority
+			}
+			originals = append(originals, raw)
+			continue
+		}
+		found := false
+		for _, target := range frozen.Cohort.Targets {
+			if node.Metadata.Name != target.Report.Hostname {
+				continue
+			}
+			identity := clusterbootstrap.K3sJoinedNodeIdentity{Hostname: target.Report.Hostname, MachineID: target.Report.MachineID, BootID: target.Report.BootID, Address: target.Binding.Address, K3sVersion: frozen.K3sVersion}
+			uid, err := clusterbootstrap.ParseK3sRegisteringNode(raw, identity)
+			if err != nil {
+				return nil, nil, clusterbootstrap.ErrSessionAuthority
+			}
+			current[target.Binding.TargetID], found = uid, true
+		}
+		if !found {
+			return nil, nil, clusterbootstrap.ErrSessionAuthority
+		}
+	}
+	return originals, current, nil
 }

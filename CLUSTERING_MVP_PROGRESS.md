@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `2c1bc4ea33ed7b65c51c6e5ba2ee5f1a77ea0bcc`; subsequent publication SHA stays in #530 active handoff.
+- Published base `96d809660339d13e0f4214d7bfbdd51161874544`; subsequent publication SHA stays in #530 active handoff.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -93,32 +93,38 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Joining-proof batch extends published2c1bc4ea33ed7b65c51c6e5ba2ee5f1a77ea0bcc;
-publication full SHA remains in #530 active handoff. Native fixed loopback reader
-uses existing kubelet mutual TLS under authenticated source CA and exact private
-file/claim custody. Controller independently checks confirmed target Node UID,
-identity, drained/ineligible labels and explicit readiness while retaining exact
-original source/namespace. Separate joining-source observer permits initial
-registration without status, preserving source Pod proof and monotonic Node UIDs.
-Strict prejoin observer is unchanged. These read-only helpers grant no startup,
-completion, membership admission or identity-marker release. No dispatch caller
-exists yet. Source token reader now uses one bounded cleared allocation.
+Joining-custody integration extends96d809660339d13e0f4214d7bfbdd51161874544;
+publication full SHA remains in #530 active handoff. Explicit joining mode crosses
+existing encrypted source/custody brokers under preparation lease only; response
+mode is authenticated and checked. One controller projection retains original
+source identity across initial/final storage and private configuration reads.
+Worker private identity scope owns/pins registered target UIDs across fresh
+responses; replacement/disappearance/ignored failure latches rejection. Initial
+kubelet status may converge without becoming final readiness evidence. Existing
+strict entrypoints, qualification/recovery, source Pod proof, Aegis/current lease,
+private data bounds and no-POST-replay remain. No runtime caller/poller enabled.
 
-Actual validation: focused race3 core/API/native1.135s/1.654s/1.681s; full native
-race170top-level tests/16.421s, zero failures/skips; full-module vet and CGO-disabled API/native builds passed. Repository
-policy184tests/83.702s/221routes and docs-reference/gofmt/diff checks passed.
-Evidence: `Unit_Test_Results/m2-joining-proof-20261027/`. All validation processes finished for this batch. No new PR comments since11:54:45Z. No repeated CI poll.
+Actual validation: joining integration race3 passed14.714s; full affected
+joining/prejoin-custody/source-broker/source/storage-scope/configuration selection
+race3 passed123.931s. Core registration/final-Node parser race3 passed1.136s.
+Affected API/core vet and CGO-disabled API build passed. Docs-reference/gofmt/diff and221-route checks passed. Reuse unchanged184-test repository policy from96d8096;
+new routes/dependencies/policy rules absent. No PostgreSQL evidence claimed.
+Evidence: `Unit_Test_Results/m2-joining-custody-20261027/`.
 
-Exact next action: integrate joining-phase source custody into bounded worker
-broker/scope, then journaled K3s startup/import and identity activation. Keep
-prejoin observers strict and require complete independent native/controller UID
-proof before settlement. Pinned upstreamK3s `/db/info` is read-only and permits
-loopback callers; it exposes actual etcd members/learner state without exporting
-another credential. Verify original/target addresses and target member name,
-never infer voting membership from NodeReady. Reuse exact pinned upstream source
-already read; stored in current tool session. No live action or credential use.
-Production preparation polling stays disabled until full delivery/recovery.
-All M1-M8 remain open; MVP not operator-testable. No cleanup obligation.
+Exact next action: journaled K3s startup/import under both fences and separate
+phase-aware custody, then shared-identity activation. New untracked
+`k3s_membership.go` / test parses pinned K3s loopback `/db/info`: exact uint64 IDs,
+approved peer/client URLs, target's actual etcd/name and explicit learner state;
+focused race3 passed1.046s. No native reader/caller yet. Keep these files separate
+from custody integration publication. Pinned upstream K3s v1.36.3+k3s1 and its
+k3s-io/etcd v3.6.14-k3s1 wire contract verified; no dependency added/downloaded into
+repository. Do not infer voting membership from NodeReady. Runtime start/import
+and independent native/controller settlement still unimplemented.
+
+Parent96d8096 CI: Container Policy40503480857 passed; PR Validation40503480836
+pending at one check. No rerun/repeated poll/artifact download. No live runtime
+action, SSH credential use, deployment/merge/release or cleanup obligation.
+Production preparation polling stays disabled. All M1-M8 open; MVP not ready.
 
 ## Worker join broker checkpoint
 

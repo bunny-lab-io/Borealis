@@ -272,6 +272,12 @@ func withClusterSSHPrejoinProcessIdentity(ctx context.Context, store *postgresOp
 func withClusterSSHPrejoinProcessIdentityFor(ctx context.Context, store *postgresOperatorStore, aegis *goAegisService,
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, maximum time.Duration,
 	consume func(context.Context, *engineidentity.Material, func(context.Context) error) error) error {
+	return withClusterSSHProcessIdentityPhase(ctx, store, aegis, source, claim, baseline, maximum, false, consume)
+}
+
+func withClusterSSHProcessIdentityPhase(ctx context.Context, store *postgresOperatorStore, aegis *goAegisService,
+	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, maximum time.Duration, joining bool,
+	consume func(context.Context, *engineidentity.Material, func(context.Context) error) error) error {
 	if processIdentityConsumer == nil || !clusterSSHPrejoinLocalProcessMatches(source) || !validClusterSSHPreparationLease(claim.Lease) {
 		return clusterbootstrap.ErrSessionAuthority
 	}
@@ -285,6 +291,14 @@ func withClusterSSHPrejoinProcessIdentityFor(ctx context.Context, store *postgre
 			return clusterSSHPrejoinSourceCustody{}, clusterbootstrap.ErrSessionAuthority
 		}
 		return client.observe(ctx, source, claim.Lease, baseline, claim.Sealed, authority)
+	}
+	if joining {
+		read = newClusterSSHJoiningCustodyRead(func(ctx context.Context) (clusterSSHJoiningSourceCustody, error) {
+			if !clusterSSHPrejoinLocalProcessMatches(source) {
+				return clusterSSHJoiningSourceCustody{}, clusterbootstrap.ErrSessionAuthority
+			}
+			return client.observeJoining(ctx, source, claim.Lease, baseline, claim.Sealed, authority)
+		})
 	}
 	return withClusterSSHPrejoinSourceMaterialFor(ctx, processIdentityConsumer, clusterExistingIdentitySourceRoot, source, maximum, read, consume)
 }

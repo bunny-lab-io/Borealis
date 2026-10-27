@@ -161,6 +161,15 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
 	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	return withClusterSSHPreparationSourceFor(parent, scratchParent, store, aegis, lease, baseline, sealed, false, consume)
+}
+
+// Separate explicit joining scope permits approved drained registrations while
+// retaining original source/configuration/storage proof. It grants no start;
+// the native journal must independently prove its complete configuration prefix.
+func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
+	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, joining bool,
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -171,7 +180,7 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
 	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
 	return runClusterSSHArtifactPreparationScope(parent, 5*time.Second, leaseCheck, func(ctx context.Context) (result error) {
-		snapshotRead := client.snapshotRead(authority, lease, baseline, sealed)
+		snapshotRead := client.snapshotReadFor(authority, lease, baseline, sealed, joining)
 		initial, err := snapshotRead(ctx)
 		read := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
 			value, err := snapshotRead(ctx)

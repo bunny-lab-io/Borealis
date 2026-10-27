@@ -66,9 +66,26 @@ func ParseK3sRegisteringNode(raw []byte, expected K3sJoinedNodeIdentity) (string
 				if json.Unmarshal(observed[key], &entries) != nil {
 					return fail()
 				}
-				if len(entries) != 0 {
-					status[key] = entries
+				wanted := "InternalIP"
+				fallback := map[string]string{"type": wanted, "address": expected.Address}
+				if key == "conditions" {
+					wanted = "Ready"
+					fallback = map[string]string{"type": wanted, "status": "Unknown"}
 				}
+				present := false
+				for _, entry := range entries {
+					fields, err := sourceJSONObject(entry, 128<<10)
+					var kind string
+					if err != nil || json.Unmarshal(fields["type"], &kind) != nil {
+						return fail()
+					}
+					present = present || kind == wanted
+				}
+				if !present {
+					raw, _ := json.Marshal(fallback)
+					entries = append(entries, raw)
+				}
+				status[key] = entries
 			}
 		}
 	}

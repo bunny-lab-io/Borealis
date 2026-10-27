@@ -26,6 +26,7 @@ const (
 // These wire types are used only inside authenticated encryption. Neither the
 // sealed credential nor source settings belong in generic JSON responses/logs.
 type clusterSSHSourceBrokerRequest struct {
+	Joining    bool                        `json:"joining,omitempty"`
 	Version    int                         `json:"version"`
 	ID         string                      `json:"id"`
 	ExpiresAt  int64                       `json:"expires_at"`
@@ -51,13 +52,14 @@ func (r clusterSSHSourceBrokerRequest) valid(now time.Time) bool {
 // Existing broker requests retain their forty-second ceiling. Persisted claim,
 // credential expiry and Aegis authority remain independently authoritative.
 func (r clusterSSHSourceBrokerRequest) validWithin(now time.Time, seconds int64) bool {
-	return seconds > 0 && seconds <= 90 && r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+seconds &&
+	return (!r.Joining || validClusterSSHPreparationLease(r.Lease)) && seconds > 0 && seconds <= 90 && r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+seconds &&
 		(validClusterSSHObservationLease(r.Lease) || validClusterSSHIdentityRecoveryLease(r.Lease)) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
 		r.Binding.valid() && r.Binding.OperationID == r.Lease.OperationID && r.Binding.TargetID == r.Lease.TargetID &&
 		r.Generation != "" && len(r.Generation) <= 16<<10 && strings.HasPrefix(r.Ciphertext, aegisEnvelopePrefix) && len(r.Ciphertext) <= 256<<10
 }
 
 type clusterSSHSourceBrokerResponse struct {
+	Joining  bool                           `json:"joining,omitempty"`
 	Version  int                            `json:"version"`
 	ID       string                         `json:"id"`
 	Status   string                         `json:"status"`
@@ -139,7 +141,7 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 			defer cancel()
 			return store.loadClusterSSHPreparationAuthority(ctx, request.Lease, request.Baseline, request.sealed())
 		}
-		return runner.readSSHStoragePreparationSnapshot(ctx, authority, func(ctx context.Context, window int64) ([]int64, error) {
+		return runner.readSSHStoragePreparationSnapshotFor(ctx, authority, request.Joining, func(ctx context.Context, window int64) ([]int64, error) {
 			return readClusterSSHWorkerCensus(ctx, store.db, window)
 		})
 	}
@@ -178,7 +180,7 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	reply := func(status string, snapshot *clusterSSHPreparationSnapshot) {
-		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Version: 52, ID: request.ID, Status: status, Snapshot: snapshot})
+		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Joining: request.Joining, Version: 52, ID: request.ID, Status: status, Snapshot: snapshot})
 		if err != nil {
 			fail(http.StatusServiceUnavailable)
 			return

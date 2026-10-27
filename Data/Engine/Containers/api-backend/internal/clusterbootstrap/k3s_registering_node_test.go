@@ -6,7 +6,7 @@ import (
 )
 
 func TestK3sRegisteringNode(t *testing.T) {
-	for _, mode := range []string{"complete", "missing status", "empty status", "empty info", "empty identity", "pending", "wrong boot", "wrong address", "active", "missing label", "deleted", "alias info", "alias machine", "duplicate ready", "null status"} {
+	for _, mode := range []string{"complete", "missing status", "empty status", "empty info", "empty identity", "partial addresses", "partial conditions", "pending", "wrong boot", "wrong address", "active", "missing label", "deleted", "alias info", "alias machine", "duplicate ready", "null status"} {
 		t.Run(mode, func(t *testing.T) {
 			expected, raw := joinedNodeFixture(t)
 			identity := K3sJoinedNodeIdentity{expected.Target.Hostname, expected.Target.MachineID, expected.TargetBootID, expected.Target.Address, expected.K3sVersion}
@@ -26,6 +26,10 @@ func TestK3sRegisteringNode(t *testing.T) {
 				status["nodeInfo"] = map[string]any{}
 			case "empty identity":
 				info["bootID"] = ""
+			case "partial addresses":
+				status["addresses"] = status["addresses"].([]any)[:1]
+			case "partial conditions":
+				status["conditions"] = []any{map[string]any{"type": "MemoryPressure", "status": "False"}}
 			case "pending":
 				status["conditions"].([]any)[0].(map[string]any)["status"] = "False"
 			case "wrong boot":
@@ -51,7 +55,7 @@ func TestK3sRegisteringNode(t *testing.T) {
 			}
 			raw, _ = json.Marshal(node)
 			uid, err := ParseK3sRegisteringNode(raw, identity)
-			valid := mode == "complete" || mode == "missing status" || mode == "empty status" || mode == "empty info" || mode == "empty identity" || mode == "pending"
+			valid := mode == "complete" || mode == "missing status" || mode == "empty status" || mode == "empty info" || mode == "empty identity" || mode == "partial addresses" || mode == "partial conditions" || mode == "pending"
 			if (err == nil) != valid || valid && uid != meta["uid"] || !valid && uid != "" {
 				t.Fatal("unsafe registration projection", err)
 			}

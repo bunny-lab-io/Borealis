@@ -16,7 +16,11 @@ type clusterSSHStorageSnapshot struct {
 }
 
 func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx context.Context, authority clusterSSHPreparationAuthorityRead, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
-	if census == nil || authority == nil {
+	return r.readSSHStoragePreparationSnapshotFor(ctx, authority, false, census)
+}
+
+func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx context.Context, authority clusterSSHPreparationAuthorityRead, joining bool, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
+	if census == nil || authority == nil || r == nil || r.kube == nil || r.namespace != "borealis" {
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	censusGate := make(chan struct{}, 1)
@@ -47,8 +51,22 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 		}
 		return current, nil
 	}
+	getStorage := r.kube.getClusterSSHStorageJSON
+	getPreparation := r.kube.getClusterSSHPreparationJSON
+	if joining {
+		// One projection owns monotonic target UID observations across initial,
+		// configuration and final storage reads; independent wrappers would lose
+		// evidence of replacement between those phases.
+		projected := newClusterSSHJoiningProjection(scopedAuthority, func(ctx context.Context, path string, out any) error {
+			if path == clusterSSHRuntimeSecretPath {
+				return r.kube.getClusterSSHPreparationJSON(ctx, path, out)
+			}
+			return r.kube.getClusterSSHStorageJSON(ctx, path, out)
+		})
+		getStorage, getPreparation = projected, projected
+	}
 	var value clusterSSHPreparationSnapshot
-	err := r.withSSHSourceStorage(ctx, scopedAuthority, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
+	err := withClusterSSHSourceStorage(ctx, scopedAuthority, getStorage, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
 		case censusGate <- struct{}{}:
 			policy = storage.WorkerPolicy
@@ -68,7 +86,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 			return current, nil
 		}
 		var err error
-		value, err = newClusterSSHPreparationSnapshotRead(boundAuthority, r.kube.getClusterSSHPreparationJSON, r.newSSHSourceNetworkRead(boundAuthority))(ctx)
+		value, err = newClusterSSHPreparationSnapshotRead(boundAuthority, getPreparation, r.newSSHSourceNetworkRead(boundAuthority))(ctx)
 		if err != nil || !storage.KubeVIP.matchesNetworks(value.Sources) || !storage.csiSocketMatchesNetworks(value.Sources) || checks.Authority(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
