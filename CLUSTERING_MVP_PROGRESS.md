@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `00730a75a41fcc5898e98aa661fb7f0192f8382a`.
+- Published base `1ea826d167037af09152fef3f48b7d9bfae56150`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,9 +52,9 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Complete M2 immutable artifact delivery/import: K3s staging and framed transfer
-   are in flight; compose application, static external and source-bound PostgreSQL
-   inputs under existing complete capacity/source/claim scopes.
+1. Complete M2 immutable artifact delivery/import: per-family streams are implemented;
+   compose application, K3s, static external and source-bound PostgreSQL inputs
+   under existing complete capacity/source/claim scopes.
 2. Finish M3 activation/existing-node interruption qualification. Preserve all
    original identity material and keep consumers fenced until complete proof.
 3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
@@ -81,9 +81,9 @@ provisioning, original-controller authority and all safety gates in #530.
   CachyOS workstation lacks them. Changed pinned transport tests pass. Required
   Ubuntu CI remains necessary; do not skip assertions or substitute old results.
 - Strict docs needs Python3.12 per #538; Python3.14/Docker-access constraint remains.
-- Published firewall head00730a75a41fcc5898e98aa661fb7f0192f8382a:
-  Container Policy40465290725 passed; PR Validation40465290746 still running at
-  single check. These results do not validate current recovery/K3s changes.
+- Published early-host recovery head1ea826d167037af09152fef3f48b7d9bfae56150:
+  Container Policy40468656513 passed; PR Validation40468656463 still running at
+  single check. These results do not validate current artifact-stream changes.
   No repeated pending polling or artifact downloads.
 - Go1.25.12: `/home/nicole/.local/share/borealis-dev-tools/go1.25.12/bin/go`.
   Use GOMAXPROCS=2/-p1 and add user-local borealis-dev-tools/bin for policy tools.
@@ -92,9 +92,9 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Finish and publish K3s input staging/framed transfer already in working tree,
-then implement complete static-external/PostgreSQL transfer and compose complete
-immutable artifact delivery/import. Preserve original-controller/source authority,
+Compose complete source-bound application/K3s/static-external/PostgreSQL artifact
+transfer using implemented guarded streams; then connect fixed journaled
+publication/import. Preserve original-controller/source authority,
 complete capacity reservations, source/identity custody and both fences.
 Production polling stays disabled until required integration completes.
 
@@ -178,14 +178,27 @@ Production polling stays disabled until required integration completes.
 - Evidence: `Unit_Test_Results/m3-early-host-recovery-20261027/`. Recovery validation
   processes finished. No live Engine action, credential use or runtime cleanup.
 
-## In-flight immutable K3s delivery
+## Immutable artifact stream checkpoint
 
-- While recovery regression ran, implemented separate uncommitted K3s staging and
-  framed transfer. Three inert files reserve capacity before first fetch; pinned
-  hashes and independent archive measurement gate success. No executable path or
-  host action escapes. Receiver binds exact release/version and leaves next frame.
-- Focused K3s/parser/acquisition race tests3 passed bootstrap1.324s/API1.273s.
-  These are synthetic pinned fixtures, not real release download/live qualification.
-- Files: new `internal/clusterbootstrap/k3s_stage*.go`, `k3s_transfer*.go`, private
-  parser seam in `k3s_inputs.go`, and API `cluster_ssh_k3s_stage.go`. Remain unpushed
-  while early-host recovery checkpoint publishes. Exact next action above.
+- K3s acquisition now reserves binary/installer/archive before first fetch, verifies
+  pinned bytes and independently measures archive content. API adapter refreshes
+  immutable release assets around guarded acquisition. No executable path escapes.
+- Framed receivers cover K3s, all23 static external images and dynamic PostgreSQL.
+  Each binds independently expected source/version/digest, reserves owned scratch,
+  hashes/measures actual contents and leaves next protocol frame untouched.
+  PostgreSQL rejects malformed metadata before archive IO; no sender measurement
+  can substitute for actual manifest/platform/layer proof.
+- Focused combined race suite3 passed bootstrap8.789s/API7.947s. Earlier K3s suite3
+  passed1.324s/1.273s. Public compiled-pin paths reject synthetic fixtures. These
+  prove component behavior, not real immutable release delivery or live readiness.
+- Full-module vet, CGO-disabled node-manager build, repository policy184tests/
+  219routes, docs references/gofmt/diff checks passed. Relevant parser/staging/
+  transfer/acquisition regression ran in focused suite; unchanged full bootstrap/
+  native evidence remains at recovery checkpoint above. New full CI required.
+- Evidence: `Unit_Test_Results/m2-k3s-staging-20261027/`; validation processes
+  finished. No live Engine action, credential use, runtime cleanup, dependency
+  or public route change.
+- Separate next-slice work already started: uncommitted `artifact_set.go` owns
+  all four families and checks complete matching source bindings. Not yet tested
+  or transported; finish aggregate frame/receiver and focused ownership/cleanup
+  tests, then native journaled publication/import. No partial set grants readiness.

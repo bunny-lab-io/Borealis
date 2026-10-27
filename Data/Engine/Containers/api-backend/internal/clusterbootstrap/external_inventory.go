@@ -23,11 +23,14 @@ type ExternalImageInventory struct {
 }
 
 func ParseExternalImageInventory(raw []byte, expected Expected) (*ExternalImageInventory, error) {
+	return parseExternalImageInventory(raw, expected, ExternalImagePins())
+}
+
+func parseExternalImageInventory(raw []byte, expected Expected, pins []ExternalImagePin) (*ExternalImageInventory, error) {
 	if expected.Validate() != nil || len(raw) == 0 || len(raw) > MaxImageInventoryBytes || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "images"}, nil) != nil {
 		return nil, ErrImageArchive
 	}
 	var wire externalInventoryWire
-	pins := ExternalImagePins()
 	if imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.Release || wire.SourceSHA != expected.SourceSHA || wire.Platform != "linux-amd64" || len(wire.Images) != len(pins) || len(pins) != 23 {
 		return nil, ErrImageArchive
 	}

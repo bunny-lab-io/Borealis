@@ -227,7 +227,10 @@ type K3sInventory struct {
 }
 
 func ParseK3sInventory(raw []byte, expected Expected, version string) (*K3sInventory, error) {
-	p := K3sPins()
+	return parseK3sInventory(raw, expected, version, K3sPins())
+}
+
+func parseK3sInventory(raw []byte, expected Expected, version string, p K3sInputPins) (*K3sInventory, error) {
 	x := p.Payload
 	if x.Offset < 0 || x.CompressedBytes < 1 || x.CompressedBytes > 128<<20 || x.Offset > p.Binary.Size-x.CompressedBytes || !digestPattern.MatchString(x.SHA256) || !digestPattern.MatchString(x.TarSHA256) || x.TarBytes < 1024 || x.TarBytes > 1<<30 || x.FileBytes < 1 || x.FileBytes > x.TarBytes || x.Entries < 1 || x.Entries > 10000 || x.CNILinks < 0 || x.CNILinks > x.Entries {
 		return nil, ErrImageArchive
