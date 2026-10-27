@@ -235,7 +235,7 @@ func TestClusterSSHPrejoinSourceMaterial(t *testing.T) {
 				}
 				return proof, nil
 			}
-			err = withClusterSSHPrejoinSourceMaterial(ctx, consumer, root, source, read, func(_ context.Context, got *engineidentity.Material) error {
+			err = withClusterSSHPrejoinSourceMaterial(ctx, consumer, root, source, read, func(_ context.Context, got *engineidentity.Material, _ func(context.Context) error) error {
 				used = true
 				if !got.Equal(want) {
 					t.Fatal("wrong source material")
@@ -246,7 +246,7 @@ func TestClusterSSHPrejoinSourceMaterial(t *testing.T) {
 				return nil
 			})
 			if mode == "valid" {
-				if err != nil || !used || calls != 3 {
+				if err != nil || !used || calls != 4 {
 					t.Fatal("valid material rejected", err, calls)
 				}
 			} else {

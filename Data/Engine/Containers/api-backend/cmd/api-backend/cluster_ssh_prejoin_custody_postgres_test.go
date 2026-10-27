@@ -102,18 +102,21 @@ func TestClusterSSHPrejoinCustodyPostgresAuthorityAndPoolRelease(t *testing.T) {
 			}
 			defer consumer.Close()
 			used := false
-			err = withClusterSSHPrejoinSourceMaterial(f.ctx, consumer, root, source, read, func(ctx context.Context, material *engineidentity.Material) error {
+			err = withClusterSSHPrejoinSourceMaterial(f.ctx, consumer, root, source, read, func(ctx context.Context, material *engineidentity.Material, refresh func(context.Context) error) error {
 				used = true
 				if f.c.store.db.Stats().InUse != 0 || !material.Equal(want) {
 					t.Fatal("material or connection custody failed")
 				}
 				if mode == "final authority drift" {
 					f.exec(t, `UPDATE engine.cluster_application_leases SET holder='replacement' WHERE name=$1`, clusterControllerLeaseName)
+					// Deliberately ignore a failed challenge: scope must still fail.
+					_ = refresh(ctx)
+					return nil
 				}
-				return nil
+				return refresh(ctx)
 			})
 			if mode == "expansion" || mode == "replacement" {
-				if err != nil || !used || pods != 6 {
+				if err != nil || !used || pods != 12 {
 					t.Fatal("valid custody rejected", err, used, pods)
 				}
 			} else {

@@ -176,13 +176,17 @@ func readClusterSSHPrejoinSourceCustody(parent context.Context, source clusterSS
 }
 
 // The worker's source-directory consumer stays locked for this synchronous
-// scope. Its authenticated custody adapter must independently bind the complete
-// current preparation authority to this exact API process on every call.
-func withClusterSSHPrejoinSourceMaterial(ctx context.Context, consumer *engineidentity.Consumer, root string, source clusterSSHPrejoinSource,
-	read func(context.Context) (clusterSSHPrejoinSourceCustody, error), consume func(context.Context, *engineidentity.Material) error) error {
-	if consumer == nil || read == nil || consume == nil || ctx.Err() != nil {
+// scope. Refresh is a synchronous, scope-owned capability for transport
+// challenges: it re-proves custody AND the actual held-directory material.
+// Failed or escaped refreshes cannot authorize acknowledgement. The consumer
+// must honor cancellation and join its transport before returning.
+func withClusterSSHPrejoinSourceMaterial(parent context.Context, consumer *engineidentity.Consumer, root string, source clusterSSHPrejoinSource,
+	read func(context.Context) (clusterSSHPrejoinSourceCustody, error), consume func(context.Context, *engineidentity.Material, func(context.Context) error) error) error {
+	if consumer == nil || read == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	defer cancel()
 	before, err := read(ctx)
 	if err != nil || !before.valid(source) || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
@@ -195,11 +199,48 @@ func withClusterSSHPrejoinSourceMaterial(ctx context.Context, consumer *engineid
 	if err != nil || after != before || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
-	if consume(ctx, keys) != nil || ctx.Err() != nil {
+	current, err := consumer.LoadFrom(root)
+	if err != nil || !keys.Equal(current) || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
-	last, err := read(ctx)
-	if err != nil || last != before || ctx.Err() != nil {
+	// Serializing native reads also bounds contention with concurrent challenge
+	// callers. Each challenge inherits the existing three-second transport
+	// budget; no caller can replace the enclosing scope with Background().
+	gate := make(chan struct{}, 1)
+	check := func(parent context.Context) error {
+		bound, stop := context.WithTimeout(parent, 3*time.Second)
+		defer stop()
+		select {
+		case gate <- struct{}{}:
+			defer func() { <-gate }()
+		case <-bound.Done():
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		for i := 0; i < 2; i++ {
+			proof, err := read(bound)
+			if err != nil || proof != before || bound.Err() != nil {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			current, err := consumer.LoadFrom(root)
+			if err != nil || !keys.Equal(current) || bound.Err() != nil {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+		}
+		return nil
+	}
+	readerCtx, cancelReaders := context.WithCancel(ctx)
+	lifetime := &clusterSSHNetworkReaderLifetime{ctx: readerCtx, cancel: cancelReaders}
+	defer lifetime.close()
+	refresh := func(caller context.Context) error {
+		if lifetime.run(caller, check) != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		return nil
+	}
+	consumeErr := consume(readerCtx, keys, refresh)
+	// Invalidate the capability and join active reads before final proof. A
+	// consumer returning with a read in flight fails even if that read succeeds.
+	if lifetime.close() != nil || consumeErr != nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
 	return nil
@@ -216,7 +257,7 @@ func clusterSSHPrejoinLocalProcessMatches(source clusterSSHPrejoinSource) bool {
 
 func withClusterSSHPrejoinProcessIdentity(ctx context.Context, store *postgresOperatorStore, aegis *goAegisService,
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
-	consume func(context.Context, *engineidentity.Material) error) error {
+	consume func(context.Context, *engineidentity.Material, func(context.Context) error) error) error {
 	if processIdentityConsumer == nil || !clusterSSHPrejoinLocalProcessMatches(source) || !validClusterSSHPreparationLease(claim.Lease) {
 		return clusterbootstrap.ErrSessionAuthority
 	}
