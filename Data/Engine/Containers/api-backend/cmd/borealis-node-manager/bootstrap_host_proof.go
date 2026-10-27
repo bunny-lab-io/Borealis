@@ -14,6 +14,7 @@ func proveBootstrapPreparedHost(ctx context.Context, expected clusterbootstrap.P
 		return errBootstrapSource
 	}
 	return proveBootstrapPreparedHostWith(ctx, expected, check, bootstrapPreparedHostObservers{
+		repository:   func(ctx context.Context) error { return proveBootstrapDockerRepository(ctx, expected, check) },
 		files:        func(ctx context.Context) error { return proveBootstrapPrejoinHostFiles(ctx, expected, check) },
 		dependencies: func(ctx context.Context) error { return proveBootstrapPrejoinDependencies(ctx, check) },
 		kernel:       func(ctx context.Context) error { return proveBootstrapPrejoinKernel(ctx, check) },
@@ -22,11 +23,11 @@ func proveBootstrapPreparedHost(ctx context.Context, expected clusterbootstrap.P
 }
 
 type bootstrapPreparedHostObservers struct {
-	files, dependencies, kernel, firewall func(context.Context) error
+	repository, files, dependencies, kernel, firewall func(context.Context) error
 }
 
 func proveBootstrapPreparedHostWith(ctx context.Context, expected clusterbootstrap.PreparationExpected, check func(context.Context) error, observers bootstrapPreparedHostObservers) error {
-	if expected.Validate() != nil || check == nil || observers.files == nil || observers.dependencies == nil || observers.kernel == nil || observers.firewall == nil {
+	if expected.Validate() != nil || check == nil || observers.repository == nil || observers.files == nil || observers.dependencies == nil || observers.kernel == nil || observers.firewall == nil {
 		return errBootstrapSource
 	}
 	boundary := func() error {
@@ -36,7 +37,7 @@ func proveBootstrapPreparedHostWith(ctx context.Context, expected clusterbootstr
 		return nil
 	}
 	for pass := 0; pass < 2; pass++ {
-		for _, observe := range []func(context.Context) error{observers.files, observers.dependencies, observers.kernel, observers.firewall} {
+		for _, observe := range []func(context.Context) error{observers.repository, observers.files, observers.dependencies, observers.kernel, observers.firewall} {
 			if boundary() != nil || observe(ctx) != nil || boundary() != nil {
 				return errBootstrapSource
 			}
@@ -44,7 +45,7 @@ func proveBootstrapPreparedHostWith(ctx context.Context, expected clusterbootstr
 	}
 	// Files bracket final loaded-state proof; no successful command can hide
 	// changes to baseline, mirrors, script or unit during native observation.
-	if observers.files(ctx) != nil || boundary() != nil {
+	if observers.repository(ctx) != nil || boundary() != nil || observers.files(ctx) != nil || boundary() != nil {
 		return errBootstrapSource
 	}
 	return nil

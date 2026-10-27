@@ -155,3 +155,61 @@ func TestBootstrapHostFirewallOutputBound(t *testing.T) {
 		t.Fatal("non-fixed command accepted", err)
 	}
 }
+
+func TestBootstrapFreshFirewall(t *testing.T) {
+	for _, mode := range []string{"valid", "chain", "reference", "unknown", "empty", "truncated", "overflow", "control", "policies", "drift", "aliased drift", "cancel", "authority"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			raw := []byte("-P INPUT ACCEPT\n-P FORWARD DROP\n-P OUTPUT ACCEPT\n-N OTHER\n-A INPUT -j OTHER\n")
+			switch mode {
+			case "chain":
+				raw = append(raw, []byte("-N BOREALIS-K3S-API\n")...)
+			case "reference":
+				raw = append(raw, []byte("-A OUTPUT -j BOREALIS-K3S-API\n")...)
+			case "empty":
+				raw = nil
+			case "truncated":
+				raw = raw[:len(raw)-1]
+			case "overflow":
+				raw = []byte(strings.Repeat("x", bootstrapHostFirewallLimit+1) + "\n")
+			case "control":
+				raw = append(raw, []byte("-A INPUT --comment \r\n")...)
+			case "policies":
+				raw = []byte("-P INPUT ACCEPT\n-P OUTPUT ACCEPT\n")
+			}
+			calls := 0
+			read := func(_ context.Context, chain string) ([]byte, error) {
+				calls++
+				if chain != "filter" {
+					t.Fatal("did not observe whole table")
+				}
+				if mode == "unknown" {
+					return nil, errors.New("private")
+				}
+				if mode == "cancel" {
+					cancel()
+				}
+				if calls == 2 {
+					if mode == "drift" {
+						return []byte("-P INPUT DROP\n-P FORWARD DROP\n-P OUTPUT ACCEPT\n"), nil
+					}
+					if mode == "aliased drift" {
+						raw[len(raw)-2] = 'X'
+					}
+				}
+				return raw, nil
+			}
+			check := func(context.Context) error {
+				if mode == "authority" {
+					return errors.New("private")
+				}
+				return nil
+			}
+			err := proveBootstrapFreshFirewall(ctx, check, read)
+			if (err == nil) != (mode == "valid") || err != nil && err != errBootstrapSource {
+				t.Fatal(err)
+			}
+		})
+	}
+}

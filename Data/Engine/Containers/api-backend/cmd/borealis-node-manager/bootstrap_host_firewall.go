@@ -59,14 +59,18 @@ func proveBootstrapPrejoinFirewallWith(ctx context.Context, expected clusterboot
 }
 
 func readBootstrapHostFirewall(parent context.Context, chain string) ([]byte, error) {
-	if chain != "INPUT" && chain != bootstrapHostFirewallChain {
+	if chain != "INPUT" && chain != bootstrapHostFirewallChain && chain != "filter" {
 		return nil, errBootstrapSource
 	}
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	// Fixed command, fixed chains, no shell. Prevent automatic module loading:
 	// observation cannot turn a missing filter table into a prepared host.
-	command := exec.CommandContext(ctx, "/usr/sbin/iptables", "--wait", "2", "--modprobe=/bin/false", "--table", "filter", "--list-rules", chain)
+	args := []string{"--wait", "2", "--modprobe=/bin/false", "--table", "filter", "--list-rules"}
+	if chain != "filter" {
+		args = append(args, chain)
+	}
+	command := exec.CommandContext(ctx, "/usr/sbin/iptables", args...)
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
 	command.WaitDelay = 250 * time.Millisecond
 	output := &bootstrapHostFirewallOutput{}
@@ -75,6 +79,51 @@ func readBootstrapHostFirewall(parent context.Context, chain string) ([]byte, er
 		return nil, errBootstrapSource
 	}
 	return output.buffer.Bytes(), nil
+}
+
+// The generated script flushes its named chain. Fresh preparation must prove
+// no preexisting chain/reference before invoking it; command failure is unknown,
+// never absence. Read the complete bounded filter table twice without autoload.
+func proveBootstrapFreshFirewall(ctx context.Context, check func(context.Context) error, read func(context.Context, string) ([]byte, error)) error {
+	if check == nil || read == nil {
+		return errBootstrapSource
+	}
+	var previous []byte
+	for pass := 0; pass < 2; pass++ {
+		if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
+			return errBootstrapSource
+		}
+		raw, err := read(ctx, "filter")
+		if err != nil || len(raw) == 0 || len(raw) > bootstrapHostFirewallLimit || raw[len(raw)-1] != '\n' ||
+			bytes.Contains(raw, []byte(bootstrapHostFirewallChain)) || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
+			return errBootstrapSource
+		}
+		for _, value := range raw {
+			if value != '\n' && (value < ' ' || value > '~') {
+				return errBootstrapSource
+			}
+		}
+		lines := strings.Split(string(raw[:len(raw)-1]), "\n")
+		if len(lines) < 3 {
+			return errBootstrapSource
+		}
+		for i, chain := range []string{"INPUT", "FORWARD", "OUTPUT"} {
+			if lines[i] != "-P "+chain+" ACCEPT" && lines[i] != "-P "+chain+" DROP" {
+				return errBootstrapSource
+			}
+		}
+		for _, line := range lines[3:] {
+			if !strings.HasPrefix(line, "-N ") && !strings.HasPrefix(line, "-A ") {
+				return errBootstrapSource
+			}
+		}
+		if pass == 0 {
+			previous = bytes.Clone(raw)
+		} else if !bytes.Equal(previous, raw) {
+			return errBootstrapSource
+		}
+	}
+	return nil
 }
 
 type bootstrapHostFirewallOutput struct{ buffer bytes.Buffer }

@@ -59,28 +59,11 @@ func observeBootstrapDockerHost(ctx context.Context, root *os.Root, installed []
 		if boundary() != nil {
 			return invalid, errBootstrapSource
 		}
-		current := bootstrapDockerHost{probes: map[string]string{}}
-		osPath := "etc/os-release"
-		info, err := root.Lstat(osPath)
+		current, err := observeBootstrapDockerPlatform(root)
 		if err != nil {
 			return invalid, errBootstrapSource
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			current.osLink, err = root.Readlink(osPath)
-			if err != nil || current.osLink != "../usr/lib/os-release" {
-				return invalid, errBootstrapSource
-			}
-			osPath = "usr/lib/os-release"
-		}
-		raw, state, err := readBootstrapDockerFile(root, osPath, 16384)
-		if err != nil {
-			return invalid, errBootstrapSource
-		}
-		current.os = state
-		current.suite, err = bootstrapDockerRelease(raw)
-		if err != nil {
-			return invalid, errBootstrapSource
-		}
+		current.probes = map[string]string{}
 		for _, path := range []string{"etc/docker", "etc/containerd", "var/lib/docker", "var/lib/containerd", "run/docker", "run/docker.sock", "run/containerd",
 			"usr/bin/docker", "usr/bin/dockerd", "usr/bin/containerd", "usr/bin/runc", "usr/local/bin/docker", "usr/local/bin/dockerd", "usr/local/bin/containerd", "usr/local/bin/runc",
 			"etc/apt/keyrings/docker.gpg", "etc/apt/trusted.gpg.d/docker.asc", "etc/apt/trusted.gpg.d/docker.gpg"} {
