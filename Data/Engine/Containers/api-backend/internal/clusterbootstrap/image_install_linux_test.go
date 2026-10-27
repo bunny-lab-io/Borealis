@@ -12,13 +12,23 @@ import (
 
 func stagedImagesFixture(t *testing.T) (*ImageSet, Expected) {
 	t.Helper()
+	expected, _ := imageInventoryFixture(t)
+	return stagedImagesForSourceFixture(t, expected)
+}
+
+func stagedImagesForSourceFixture(t *testing.T, expected Expected) (*ImageSet, Expected) {
+	t.Helper()
 	ctx := context.Background()
-	expected, wire := imageInventoryFixture(t)
+	wire := imageInventoryWire{Version: 1, Repository: expected.Repository, Release: expected.Release, SourceSHA: expected.SourceSHA, Platform: "linux-amd64"}
 	archives := map[string][]byte{}
-	for i, proof := range wire.Images {
-		raw := imageFixture(t, "gzip", proof.Role)
-		archives[proof.Role] = raw
-		wire.Images[i], _ = InspectImageArchive(ctx, bytes.NewReader(raw), int64(len(raw)), proof.Role, expected.SourceSHA)
+	for _, role := range ImageRoles() {
+		raw := imageFixtureForSource(t, "gzip", role, expected.SourceSHA)
+		archives[role] = raw
+		proof, err := InspectImageArchive(ctx, bytes.NewReader(raw), int64(len(raw)), role, expected.SourceSHA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire.Images = append(wire.Images, proof)
 	}
 	raw, _ := json.Marshal(wire)
 	inventory, err := ParseImageInventory(raw, expected)

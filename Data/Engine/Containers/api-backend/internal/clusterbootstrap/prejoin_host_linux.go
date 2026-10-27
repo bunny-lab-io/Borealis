@@ -47,13 +47,27 @@ func (p *PreparationInputs) ReconcilePrejoinHost(ctx context.Context, j *Mutatio
 }
 
 func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string) (engineidentity.Installation, string, prejoinDirectoryProof, error) {
+	return p.prejoinHostPhaseRequest(ctx, j, install, material, parent, false)
+}
+
+// Artifact publication extends only this exact prefix. Earlier host actions
+// retain their original phase boundary and cannot replay after image effects.
+func (p *PreparationInputs) prejoinHostPhaseRequest(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string, artifacts bool) (engineidentity.Installation, string, prejoinDirectoryProof, error) {
 	invalid := prejoinDirectoryProof{}
-	if j == nil || len(j.state.Steps) < 4 || len(j.state.Steps) > 5 {
+	maximum := 5
+	if artifacts {
+		maximum = 6
+	}
+	if j == nil || len(j.state.Steps) < 4 || len(j.state.Steps) > maximum {
 		return install, "", invalid, ErrMutationJournal
 	}
 	for step := range j.state.Steps {
 		switch step {
 		case "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host":
+		case "stage_images":
+			if !artifacts {
+				return install, "", invalid, ErrMutationJournal
+			}
 		default:
 			return install, "", invalid, ErrMutationJournal
 		}

@@ -17,6 +17,11 @@ const imageTestSHA = "0123456789abcdef0123456789abcdef01234567"
 
 func imageFixture(t *testing.T, mode, role string) []byte {
 	t.Helper()
+	return imageFixtureForSource(t, mode, role, imageTestSHA)
+}
+
+func imageFixtureForSource(t *testing.T, mode, role, source string) []byte {
+	t.Helper()
 	var layer bytes.Buffer
 	tw := tar.NewWriter(&layer)
 	name := "etc/example"
@@ -68,7 +73,7 @@ func imageFixture(t *testing.T, mode, role string) []byte {
 		}
 		return b
 	}
-	arch, sha := "amd64", imageTestSHA
+	arch, sha := "amd64", source
 	if mode == "architecture" {
 		arch = "arm64"
 	}
@@ -96,7 +101,7 @@ func imageFixture(t *testing.T, mode, role string) []byte {
 	}
 	manifest := encode(map[string]any{"schemaVersion": 2, "mediaType": ociManifestType, "config": desc(config, ociConfigType), "layers": []any{desc(layerData, media)}})
 	md := desc(manifest, ociManifestType)
-	ref := ImageReference(role, imageTestSHA)
+	ref := ImageReference(role, source)
 	if mode == "reference" {
 		ref += "-other"
 	}

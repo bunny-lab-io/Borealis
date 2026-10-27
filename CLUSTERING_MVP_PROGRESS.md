@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `1ea826d167037af09152fef3f48b7d9bfae56150`.
+- Published base `595dae1572d212f8df343ff08331e5a05c1190a4`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -202,3 +202,36 @@ Production polling stays disabled until required integration completes.
   all four families and checks complete matching source bindings. Not yet tested
   or transported; finish aggregate frame/receiver and focused ownership/cleanup
   tests, then native journaled publication/import. No partial set grants readiness.
+
+## In-flight complete artifact composition
+
+- Aggregate ownership/frame/receiver and full source/configuration/identity/artifact
+  composition implemented. Four families authenticate before mutation; exact EOF,
+  independently selected PostgreSQL digest and reviewed K3s pins remain mandatory.
+- Fixed37-file publication covers34 archives, pinned K3s binary, private installer
+  and application manifest. Exact source extras, safe parent/inode ownership,
+  no-replace writes, physical allocation and retained interrupted scratch tested.
+- Journaled publication requires exact five prerequisite receipts, retains both
+  exclusions and persists `stage_images` before effects. Independent reconciliation
+  accepts only complete actual files under stopped-producer proof; no retry of
+  partial effects. Earlier phases reject six-step journals and generated extras.
+- Final focused publication/journal race passed69.640s after moving full source
+  content proof to file creation/promotion/publication boundaries. Per-chunk
+  authority/custody/parent/cancellation remain checked. Source-drift-before-promotion
+  regression passed1.010s; aggregate/full-stream/old-consumer suite22.827s; native
+  bounded custody1.089s. First broad run interrupted for this necessary throughput
+  correction (no failure claimed); final bootstrap race regression running. Full native race156top-level tests
+  passed15.916s with zero failures/skips. Policy184tests/219routes, final full-module
+  vet, CGO-disabled node-manager build and docs-reference/diff checks passed.
+  Evidence: `Unit_Test_Results/m2-complete-artifacts-20261027/`.
+- Published base595dae CI both passed: Engine Container Policy40470272295 and
+  Pull Request Validation40470272345. This is unchanged dependency-stream evidence,
+  not validation of current uncommitted composition/publication.
+- Exact next action: finish combined private transfer tests and affected package
+  regression; publish coherent complete-artifact primitives, then wire fixed
+  native session/SSH/dispatcher `stage_images` and read-only reconciliation.
+  Bounded native inert-artifact custody is implemented/tested; new action still needs independent PostgreSQL source binding,
+  six-step progress cursor and bounded large-stream transport. Existing12KiB
+  acknowledged chunks/output cap must be sized for complete dependency payloads.
+- Current complete-artifact batch ready for publication after focused validation. No live Engine action, credential
+  use, K3s startup/import, public route/schema/dependency change or runtime cleanup.

@@ -270,6 +270,10 @@ func verifyPublishedSource(ctx context.Context, archive *os.File, path string, e
 }
 
 func verifyPublishedSourceWithIdentityRoot(ctx context.Context, archive *os.File, path string, environment []byte, identity *prejoinDirectoryProof) error {
+	return verifyPublishedSourceWithArtifacts(ctx, archive, path, environment, identity, nil)
+}
+
+func verifyPublishedSourceWithArtifacts(ctx context.Context, archive *os.File, path string, environment []byte, identity *prejoinDirectoryProof, artifacts *prejoinArtifactSourceProof) error {
 	root, err := imageInstallRoot(path)
 	if err != nil {
 		return ErrPreparationConfig
@@ -303,6 +307,9 @@ func verifyPublishedSourceWithIdentityRoot(ctx context.Context, archive *os.File
 		return strings.TrimPrefix(name, "source/"), strings.HasPrefix(name, "source/")
 	}, func(root *os.Root, actual map[string]fs.FileInfo) error {
 		if identity != nil && verifyPrejoinDirectoryExtras(ctx, root, actual, *identity) != nil {
+			return ErrPreparationConfig
+		}
+		if artifacts != nil && artifacts.consume(ctx, root, actual) != nil {
 			return ErrPreparationConfig
 		}
 		for name, mode := range map[string]os.FileMode{"Engine": 0755, "Engine/Deploy": 0700} {

@@ -44,6 +44,22 @@ func (p *PreparationInputs) WritePrejoinPreparation(ctx context.Context, expecte
 // source bundle. A failed consumer leaves its own durable mutation fences intact.
 func ConsumePrejoinPreparation(ctx context.Context, parent string, expected PreparationExpected, manager string, source engineidentity.Binding,
 	input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material) error) (result error) {
+	if consume == nil {
+		return ErrPreparationConfig
+	}
+	return consumePrejoinPreparationFrames(ctx, parent, expected, manager, source, input, check, func(ctx context.Context, inputs *PreparationInputs, material *engineidentity.Material) error {
+		var trailing [1]byte
+		if n, err := input.Read(trailing[:]); n != 0 || err != io.EOF || imageBoundary(ctx, check) != nil {
+			return ErrPreparationConfig
+		}
+		return consume(ctx, inputs, material)
+	})
+}
+
+// Private composition seam: caller must consume its fixed suffix and exact EOF
+// before invoking any mutation. Ordinary pre-join input remains EOF-strict.
+func consumePrejoinPreparationFrames(ctx context.Context, parent string, expected PreparationExpected, manager string, source engineidentity.Binding,
+	input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material) error) (result error) {
 	if !digestPattern.MatchString(manager) || consume == nil || validatePrejoinSource(expected.Target, source) != nil {
 		return ErrPreparationConfig
 	}
@@ -72,10 +88,6 @@ func ConsumePrejoinPreparation(ctx context.Context, parent string, expected Prep
 	}
 	material, err := engineidentity.Import(raw, source)
 	if err != nil {
-		return ErrPreparationConfig
-	}
-	var trailing [1]byte
-	if n, err := input.Read(trailing[:]); n != 0 || err != io.EOF || imageBoundary(ctx, check) != nil {
 		return ErrPreparationConfig
 	}
 	if consume(ctx, inputs, material) != nil || imageBoundary(ctx, check) != nil {
