@@ -78,6 +78,14 @@ REVIEWED_ROUTE_TESTS[(
     "POST /internal/cluster/ssh-prejoin-custody",
     "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
 )] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_prejoin_custody_broker_test.go"
+REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/ssh-k3s-join",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+)] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_join_broker_test.go"
+REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/k3s-join-result",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
+)] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_join_source_test.go"
 REVIEWED_ROUTE_TESTS.update({
     (pattern, "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api.go"):
         "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_api_test.go"
@@ -135,6 +143,10 @@ def classify(pattern: str) -> tuple[str, str]:
         return "internal-cluster", "operator-derived-aead-and-existing-member-phase-lease"
     if route_path == "/internal/cluster/ssh-prejoin-custody":
         return "internal-cluster", "operator-derived-aead-and-preparation-phase-lease"
+    if route_path == "/internal/cluster/ssh-k3s-join":
+        return "internal-cluster", "operator-derived-aead-and-confirmed-source-preparation-lease"
+    if route_path == "/internal/cluster/k3s-join-result":
+        return "internal-cluster", "operator-derived-aead-and-pending-native-job-receipt"
     if route_path in {"/internal/cluster/ssh-preparation-source", "/internal/cluster/ssh-vip-scope", "/internal/cluster/ssh-vip-check"}:
         return "internal-cluster", "operator-derived-aead-and-target-lease"
     if route_path.startswith("/internal/cluster/"):

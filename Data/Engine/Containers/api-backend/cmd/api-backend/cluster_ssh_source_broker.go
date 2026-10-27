@@ -44,7 +44,14 @@ func (r clusterSSHSourceBrokerRequest) sealed() sealedClusterSSHCredentials {
 }
 
 func (r clusterSSHSourceBrokerRequest) valid(now time.Time) bool {
-	return r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+40 &&
+	return r.validWithin(now, 40)
+}
+
+// Only the separate source-Job broker opts into a longer transport window.
+// Existing broker requests retain their forty-second ceiling. Persisted claim,
+// credential expiry and Aegis authority remain independently authoritative.
+func (r clusterSSHSourceBrokerRequest) validWithin(now time.Time, seconds int64) bool {
+	return seconds > 0 && seconds <= 90 && r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+seconds &&
 		(validClusterSSHObservationLease(r.Lease) || validClusterSSHIdentityRecoveryLease(r.Lease)) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
 		r.Binding.valid() && r.Binding.OperationID == r.Lease.OperationID && r.Binding.TargetID == r.Lease.TargetID &&
 		r.Generation != "" && len(r.Generation) <= 16<<10 && strings.HasPrefix(r.Ciphertext, aegisEnvelopePrefix) && len(r.Ciphertext) <= 256<<10

@@ -199,6 +199,11 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
 			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
 		}
+		joinClient, err := newClusterSSHJoinBrokerClient()
+		if err != nil {
+			return clusterbootstrap.ErrK3sJoinMaterial
+		}
+		checks.K3sJoin = newClusterSSHPreparationJoinRead(ctx, joinClient, expected, initial.Sources, lease, baseline, sealed, authority, checks.Authority)
 		inventory, err := resolveClusterSSHImageInventory(ctx, expected.Source)
 		if err != nil {
 			return err

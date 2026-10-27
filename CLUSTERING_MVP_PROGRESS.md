@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `4f9839473b84f02e7a59211348095f0df2b00f7b`; subsequent publication SHA stays in #530 active handoff.
+- Published base `89297e2b9e6744ac905e1eb0dfa567db74d22a6f`; subsequent publication SHA stays in #530 active handoff.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -54,8 +54,8 @@ provisioning, original-controller authority and all safety gates in #530.
 
 1. Complete M2 runtime admission/import: seven-stage artifact/inert-service
    installation is published. Private join material and concrete source acquisition
-   are implemented; wire worker broker into current preparation scope, then fixed
-   target join configuration, journaled admission and actual import.
+   are implemented with worker broker and lazy guarded scope; add fixed target
+   join configuration, journaled admission and actual import.
 2. Finish M3 activation/existing-node interruption qualification. Preserve all
    original identity material and keep consumers fenced until complete proof.
 3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
@@ -93,14 +93,43 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Publish validated concrete source acquisition, then add worker-facing encrypted
-broker using existing SQL/Aegis preparation authority and source delivery registry.
-Register fixed callback beside broker on original controller; extend only this
-request's bounded deadline to cover immutable source Job, preserving short existing
-broker limits. Worker must recheck current claim/source before and after acquisition
-and own/clear material through preparation scope. Then integrate fixed target join
-configuration and journaled membership/import. Production polling stays disabled.
+Publish validated worker broker/scope integration, then implement fixed target
+K3s join configuration under existing seven-stage prejoin journal and both fences.
+Use current private join material, canonical control VIP/server URL, fixed root-only
+token path and existing drained/ineligible labels. No installer, startup or consumer
+release during configuration. Extend exact native custody/proof and separate
+reconciliation; account for fixed files in calculated storage. Then journaled
+membership/start/import and identity activation. Production polling stays disabled.
 No live runtime action taken.
+
+## Worker join broker checkpoint
+
+- Separate encrypted internal broker and private source callback share original
+  controller listener. New request max90seconds permits bounded immutable Job;
+  existing source broker remains40seconds. Exact current SQL/Aegis credential,
+  lease and confirmed original source remain mandatory. Two active requests and
+  bounded replay memory; only authenticated not-owner can select another peer.
+- Worker independently validates source/claim/unlocked Aegis and exact private
+  frame/EOF before scoped use. Material closes before return. Existing reader
+  lifetime cancels/joins active refreshes, latches ignored failure, rejects
+  escaped checks and fails if consumer returns with refresh still in flight.
+- Preparation factory exposes lazy K3sJoin capability with owned source snapshots
+  and linked caller/preparation cancellation. Earlier artifact/service stages do
+  not acquire token. Target join phase has no implementation/caller yet.
+- Focused broker/source-broker/custody/scope race suite3 passed50.210s. Final
+  broker/worker/route suite3 passed2.150s after borrowed-reader integration,
+  unfinished-check coverage and exact internal route registration. Full-module vet and CGO-disabled API build passed;
+  docs-reference/gofmt/diff passed. Policy184tests passed82.999s; its final route
+  gate caught new registration/inventory drift. Fixed registration and regenerated
+  both new internal contracts; route gate221 and focused route-evidence2tests
+  passed separately. No unchanged broad policy rerun. Publication in #530.
+  Evidence: `Unit_Test_Results/m2-k3s-join-broker-20261027/`.
+- Native/bootstrap code unchanged in this batch; reuse source acquisition native
+  race166/14.094s and existing private frame/journal evidence. SQL unchanged;
+  focused command excludes PostgreSQL tests rather than reporting skips as pass.
+- Parent89297 Container Policy40491791218 passed; PR Validation40491791219 pending
+  at one check. PR comments unchanged since07:58:10Z. No repeated CI polling or
+  unchanged artifact downloads. No runtime action, credential use or cleanup.
 
 ## Private source acquisition checkpoint
 
@@ -123,7 +152,7 @@ No live runtime action taken.
   Evidence: `Unit_Test_Results/m2-k3s-source-acquisition-20261027/`.
 - Base4f983 Container Policy40489019847 passed; PR Validation40489020019 pending
   at one check. No manual reruns, repeated pending polls or artifact downloads.
-- Worker broker/preparation scope remains unwired. No live acquisition, runtime
+- Worker broker/preparation scope integration follows this checkpoint. No live acquisition, runtime
   qualification or readiness claim; all M1-M8 remain open.
 
 ## Interrupted-firewall continuation checkpoint

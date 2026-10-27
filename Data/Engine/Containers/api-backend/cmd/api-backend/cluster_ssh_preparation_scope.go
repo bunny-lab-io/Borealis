@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 type clusterSSHPreparationChecks struct {
 	Inputs    func(context.Context) error
 	Authority func(context.Context) error
+	K3sJoin   func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error
 }
 
 // One scope owns acquisition and synchronous consumption. Callers must honor
