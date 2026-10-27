@@ -19,8 +19,11 @@ import (
 // Current source, target, boot, mount and account custody remain mandatory in
 // Installation.Check/Quiesced throughout the native adapter's work.
 type PrejoinHostActions struct {
-	Prepare func(ctx context.Context, hostLock, identityLock *os.File) error
-	Prove   func(context.Context) error
+	// CheckFresh is read-only and runs under both fences before durable intent.
+	// Prepare must repeat its initial checks before any native host mutation.
+	CheckFresh func(context.Context) error
+	Prepare    func(ctx context.Context, hostLock, identityLock *os.File) error
+	Prove      func(context.Context) error
 }
 
 // PreparePrejoinHost commits only after exact prerequisite receipts, current
@@ -71,7 +74,7 @@ func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJ
 	}
 	raw, err := json.Marshal(struct {
 		Domain, Source, Directory, Identity string
-	}{"prejoin-host-preparation-v1", source, rootInput, identityInput})
+	}{"prejoin-host-preparation-v2-fresh", source, rootInput, identityInput})
 	if err != nil {
 		return install, "", invalid, ErrMutationJournal
 	}
@@ -80,7 +83,7 @@ func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJ
 }
 
 func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool) (string, error) {
-	if j == nil || actions.Prove == nil || !reconcile && actions.Prepare == nil {
+	if j == nil || actions.Prove == nil || !reconcile && (actions.Prepare == nil || actions.CheckFresh == nil) {
 		return "", ErrMutationJournal
 	}
 	j.mu.Lock()
@@ -88,6 +91,11 @@ func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJ
 	install, input, proof, err := p.prejoinHostRequest(ctx, j, install, material, parent)
 	if err != nil {
 		return "", err
+	}
+	if !reconcile {
+		if _, exists := j.state.Steps["prepare_host"]; exists {
+			return "", ErrMutationUnknown // Existing intents need their own proof/continuation.
+		}
 	}
 	if p.Verify(ctx, p.configuration.wire.Expected, j.authority) != nil || prejoinDirectoryBoundary(ctx, j, install) != nil || j.priorExecutorsQuiescent(ctx) != nil {
 		return "", ErrSessionAuthority
@@ -120,6 +128,9 @@ func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJ
 	err = install.WithPrejoinFencedCommitted(material, func(identityLock *os.File) error {
 		if proveSource(ctx) != nil {
 			return ErrPreparationConfig
+		}
+		if !reconcile && (actions.CheckFresh(ctx) != nil || proveSource(ctx) != nil) {
+			return ErrMutationUnknown // No host intent exists when fresh proof fails.
 		}
 		prove := func(ctx context.Context) (string, error) {
 			if proveSource(ctx) != nil || actions.Prove(ctx) != nil || proveSource(ctx) != nil || actions.Prove(ctx) != nil ||

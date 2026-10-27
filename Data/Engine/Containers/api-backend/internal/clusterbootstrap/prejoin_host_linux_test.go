@@ -63,6 +63,14 @@ func TestPrejoinHostIntentAndIndependentReconciliation(t *testing.T) {
 				return check(ctx)
 			}
 			actions := PrejoinHostActions{
+				CheckFresh: func(context.Context) error {
+					if _, exists := readMutationFixture(t, root).Steps["prepare_host"]; exists {
+						t.Fatal("fresh proof followed durable intent")
+					}
+					requirePrejoinHostLock(t, j.lock, j.lock.Name())
+					identityConsumerBlocked(t, install.Root)
+					return nil
+				},
 				Prepare: func(_ context.Context, hostLock, identityLock *os.File) error {
 					calls++
 					record := readMutationFixture(t, root).Steps["prepare_host"]
@@ -150,11 +158,11 @@ func TestPrejoinHostIntentAndIndependentReconciliation(t *testing.T) {
 }
 
 func TestPrejoinHostRejectsInvalidPrerequisites(t *testing.T) {
-	for _, mode := range []string{"source receipt", "account receipt", "directory receipt", "identity receipt", "missing identity", "source bytes", "key bytes", "marker absent", "joined", "claim", "source selection", "later phase", "authority", "quiescence", "old executor active", "no prepare", "no proof"} {
+	for _, mode := range []string{"source receipt", "account receipt", "directory receipt", "identity receipt", "missing identity", "source bytes", "key bytes", "marker absent", "joined", "claim", "source selection", "later phase", "authority", "quiescence", "old executor active", "no fresh proof", "no prepare", "no proof"} {
 		t.Run(mode, func(t *testing.T) {
 			p, j, _, parent, install, material := prejoinHostFixture(t)
 			calls := 0
-			actions := PrejoinHostActions{Prepare: func(context.Context, *os.File, *os.File) error { calls++; return nil }, Prove: func(context.Context) error { calls++; return nil }}
+			actions := PrejoinHostActions{CheckFresh: func(context.Context) error { calls++; return nil }, Prepare: func(context.Context, *os.File, *os.File) error { calls++; return nil }, Prove: func(context.Context) error { calls++; return nil }}
 			var err error
 			switch mode {
 			case "source receipt", "account receipt", "directory receipt", "identity receipt":
@@ -187,6 +195,8 @@ func TestPrejoinHostRejectsInvalidPrerequisites(t *testing.T) {
 				record.Executor.InvocationID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 				j.state.Steps["install_identity"] = record
 				j.quiescent = func(context.Context, ExecutorIdentity) error { return ErrExecutorContainment }
+			case "no fresh proof":
+				actions.CheckFresh = nil
 			case "no prepare":
 				actions.Prepare = nil
 			case "no proof":
@@ -223,7 +233,7 @@ func TestPrejoinHostRejectsDriftDuringEffects(t *testing.T) {
 			} else if mode == "quiescence" {
 				install.Quiesced = check
 			}
-			actions := PrejoinHostActions{Prove: func(context.Context) error { return nil }, Prepare: func(context.Context, *os.File, *os.File) error {
+			actions := PrejoinHostActions{CheckFresh: func(context.Context) error { return nil }, Prove: func(context.Context) error { return nil }, Prepare: func(context.Context, *os.File, *os.File) error {
 				switch mode {
 				case "source":
 					return os.WriteFile(filepath.Join(parent, "Borealis", "Engine.sh"), []byte("changed"), 0755)

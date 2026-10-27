@@ -25,6 +25,18 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 		return nil
 	}
 	return clusterbootstrap.PrejoinHostActions{
+		CheckFresh: func(ctx context.Context) error {
+			if os.Geteuid() != 0 || os.Getegid() != 0 {
+				return errBootstrapSource
+			}
+			root, err := os.OpenRoot("/")
+			if err != nil {
+				return errBootstrapSource
+			}
+			defer root.Close()
+			_, err = observeBootstrapFreshHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit)
+			return err
+		},
 		Prepare: func(ctx context.Context, hostLock, identityLock *os.File) error {
 			if os.Geteuid() != 0 || os.Getegid() != 0 || guard == nil || check == nil {
 				return errBootstrapSource
@@ -55,12 +67,8 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 			}
 			return prepareBootstrapNativeHostWith(ctx, expected, hostLock, identityLock, boundary, bootstrapNativeHostOperations{
 				preflight: func(ctx context.Context) error {
-					clean, err = observeBootstrapDockerHost(ctx, root, nil, check, readBootstrapDockerProbe)
-					if err != nil || preflightBootstrapHostFiles(ctx, root, expected, check) != nil ||
-						observeBootstrapAbsentUnit(ctx, "borealis-k3s-api-firewall.service") != nil {
-						return errBootstrapSource
-					}
-					return nil
+					clean, err = observeBootstrapFreshHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit)
+					return err
 				},
 				base: func(ctx context.Context) error {
 					after, err := observeBootstrapDockerHost(ctx, root, nil, check, readBootstrapDockerProbe)
@@ -115,6 +123,21 @@ func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, g
 		},
 		Prove: func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, check) },
 	}
+}
+
+// Same fixed read-only preflight before durable intent and again before effects.
+// The pre-intent call cannot install packages, publish files or start services.
+func observeBootstrapFreshHost(ctx context.Context, root *os.Root, expected clusterbootstrap.PreparationExpected, check func(context.Context) error,
+	read func(context.Context, string) ([]byte, error), absentUnit func(context.Context, string) error) (bootstrapDockerHost, error) {
+	invalid := bootstrapDockerHost{}
+	if expected.Validate() != nil || root == nil || check == nil || read == nil || absentUnit == nil || ctx.Err() != nil || check(ctx) != nil {
+		return invalid, errBootstrapSource
+	}
+	clean, err := observeBootstrapDockerHost(ctx, root, nil, check, read)
+	if err != nil || preflightBootstrapHostFiles(ctx, root, expected, check) != nil || absentUnit(ctx, "borealis-k3s-api-firewall.service") != nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
+		return invalid, errBootstrapSource
+	}
+	return clean, nil
 }
 
 type bootstrapNativeHostOperations struct {
