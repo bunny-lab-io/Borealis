@@ -136,11 +136,15 @@ func proveBootstrapHostFile(root *os.Root, expected bootstrapHostFile) error {
 		file.Close()
 		return errBootstrapSource
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(file, int64(len(expected.data))+1))
+	// A fixed allocation avoids abandoned growth copies when this shared proof
+	// checks private join tokens. Clear every owned byte on all exits.
+	raw := make([]byte, len(expected.data)+1)
+	defer clear(raw)
+	n, readErr := io.ReadFull(file, raw)
 	last, statErr := file.Stat()
 	closeErr := file.Close()
 	after, pathErr := root.Lstat(expected.path)
-	if readErr != nil || statErr != nil || closeErr != nil || pathErr != nil || !bytes.Equal(raw, expected.data) ||
+	if (readErr != io.EOF && readErr != io.ErrUnexpectedEOF) || n != len(expected.data) || statErr != nil || closeErr != nil || pathErr != nil || !bytes.Equal(raw[:n], expected.data) ||
 		!metadata(last) || !metadata(after) || !os.SameFile(held, last) || !os.SameFile(held, after) ||
 		!held.ModTime().Equal(last.ModTime()) || !held.ModTime().Equal(after.ModTime()) {
 		return errBootstrapSource

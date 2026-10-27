@@ -86,13 +86,22 @@ func withClusterSSHPrejoinArtifactDispatch(parent context.Context, store *postgr
 func withClusterSSHPrejoinDispatch(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error) error {
+	return withClusterSSHPrejoinConfigurationDispatch(parent, store, aegis, source, claim, baseline, inputs, artifacts, postgresReference, expected, preparation, nil)
+}
+
+// Optional private join acquisition runs only at configuration, after installed
+// service proof. Existing prefix entrypoints retain their seven-step boundary.
+func withClusterSSHPrejoinConfigurationDispatch(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
+	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error,
+	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error) error {
 	if store == nil || store.db == nil || aegis == nil || inputs == nil || preparation == nil || !validClusterSSHPreparationLease(claim.Lease) ||
 		expected.Validate() != nil || expected.Source != baseline || parent.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
 	expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed)
-	return withClusterSSHPrejoinProcessIdentity(parent, store, aegis, source, claim, baseline,
+	return withClusterSSHPrejoinProcessIdentityFor(parent, store, aegis, source, claim, baseline, clusterSSHPrejoinDispatchBudget(artifacts != nil, joinRead != nil),
 		func(ctx context.Context, material *engineidentity.Material, sourceRefresh func(context.Context) error) error {
 			readKey := func(ctx context.Context) (clusterremote.HostKey, error) {
 				if sourceRefresh(ctx) != nil || preparation(ctx) != nil || ctx.Err() != nil {
@@ -137,7 +146,7 @@ func withClusterSSHPrejoinDispatch(parent context.Context, store *postgresOperat
 				}
 				return client, err
 			}
-			return dispatchClusterSSHPrejoinArtifacts(ctx, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, check)
+			return dispatchClusterSSHPrejoinConfiguration(ctx, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, check, joinRead)
 		})
 }
 
@@ -160,7 +169,17 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(context.Context) (clusterSSHPrejoinClient, error),
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
 	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error) (result error) {
+	return dispatchClusterSSHPrejoinConfiguration(parent, connect, inputs, artifacts, postgresReference, expected, source, material, sudoPassword, current, nil)
+}
+
+func dispatchClusterSSHPrejoinConfiguration(parent context.Context, connect func(context.Context) (clusterSSHPrejoinClient, error),
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
+	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error,
+	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error) (result error) {
 	fail := clusterbootstrap.ErrSessionAuthority
+	if joinRead != nil && artifacts == nil {
+		return fail
+	}
 	if artifacts != nil && !clusterbootstrap.ValidPostgresImageReference(postgresReference) || artifacts == nil && postgresReference != "" {
 		return fail
 	}
@@ -176,10 +195,7 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 	expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
 	sudoPassword = bytes.Clone(sudoPassword)
 	defer clear(sudoPassword)
-	maximum := 10 * time.Minute
-	if artifacts != nil {
-		maximum += 4 * clusterbootstrap.ArtifactPreparationLifetime
-	}
+	maximum := clusterSSHPrejoinDispatchBudget(artifacts != nil, joinRead != nil)
 	ctx, cancel := context.WithTimeout(parent, maximum)
 	defer cancel()
 	checkCtx, stopChecks := context.WithCancel(ctx)
@@ -266,6 +282,36 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 				return c.ReconcilePrejoinK3s(checkCtx, inputs, e, source, material, artifacts, postgresReference, sudo, check)
 			},
 		})
+	}
+	if joinRead != nil {
+		configuration := func(reconcile bool) action {
+			return func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				target, ok := c.(clusterSSHK3sConfigurationClient)
+				if !ok {
+					return fail
+				}
+				return joinRead(checkCtx, source, func(ctx context.Context, join *clusterbootstrap.K3sJoinMaterial, refresh func(context.Context) error) error {
+					bound := func(ctx context.Context) error {
+						if check(ctx) != nil || refresh == nil || refresh(ctx) != nil {
+							return fail
+						}
+						return nil
+					}
+					if join.Verify(ctx, e, source, bound) != nil {
+						return fail
+					}
+					operation := target.ConfigurePrejoinK3s
+					if reconcile {
+						operation = target.ReconcilePrejoinK3sConfiguration
+					}
+					if operation(ctx, inputs, e, source, material, artifacts, postgresReference, join, sudo, bound) != nil || bound(ctx) != nil {
+						return fail
+					}
+					return nil
+				})
+			}
+		}
+		steps = append(steps, [2]action{configuration(false), configuration(true)})
 	}
 	// Return action uncertainty separately from failed authority/cleanup. Only
 	// the former permits the next distinct proof session, never another write.
@@ -427,6 +473,11 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 			return fail
 		}
 		retained = 6
+	case "configure_k3s":
+		if joinRead == nil {
+			return fail
+		}
+		retained = 7
 	}
 	if retained >= 0 {
 		if proveStep(retained) != nil {
@@ -446,4 +497,18 @@ func dispatchClusterSSHPrejoinArtifacts(parent context.Context, connect func(con
 		return fail
 	}
 	return nil
+}
+
+// The identity-material scope and dispatcher must share this ceiling; a hidden
+// ten-minute parent must not truncate otherwise bounded bulk sessions. This
+// grants no extension to credential expiry, leases or per-command deadlines.
+func clusterSSHPrejoinDispatchBudget(artifacts, configuration bool) time.Duration {
+	maximum := 10 * time.Minute
+	if artifacts {
+		maximum += 4 * clusterbootstrap.ArtifactPreparationLifetime
+		if configuration {
+			maximum += 2 * clusterbootstrap.ArtifactPreparationLifetime
+		}
+	}
+	return maximum
 }

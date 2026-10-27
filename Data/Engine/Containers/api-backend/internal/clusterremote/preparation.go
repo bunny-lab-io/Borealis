@@ -159,12 +159,22 @@ func (client *Client) ReconcilePrejoinK3s(ctx context.Context, inputs *clusterbo
 }
 
 func artifactPreparationAction(action string) bool {
-	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s"
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s" || action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration"
 }
 
 func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
 	sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
+	return client.preparationWithK3sJoinResult(ctx, inputs, expected, action, source, material, artifacts, postgresReference, nil, sudoPassword, check, progress)
+}
+
+func (client *Client) preparationWithK3sJoinResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
+	join *clusterbootstrap.K3sJoinMaterial, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
+	configuration := action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration"
+	if configuration != (join != nil) {
+		return ErrBootstrapVerification
+	}
 	if artifactPreparationAction(action) {
 		if artifacts == nil || source == nil || material == nil || !clusterbootstrap.ValidPostgresImageReference(postgresReference) {
 			return ErrBootstrapVerification
@@ -196,6 +206,9 @@ func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs
 	}
 	return client.transferPreparationArtifactResult(ctx, bundle.ManagerPath(), digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
+			if join != nil {
+				return inputs.WritePrejoinK3sJoinPreparation(ctx, expected, *source, material, artifacts, postgresReference, join, output, serialized)
+			}
 			if artifacts != nil {
 				return inputs.WritePrejoinArtifactPreparation(ctx, expected, *source, material, artifacts, postgresReference, output, serialized)
 			}

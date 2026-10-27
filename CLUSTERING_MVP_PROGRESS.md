@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `89297e2b9e6744ac905e1eb0dfa567db74d22a6f`; subsequent publication SHA stays in #530 active handoff.
+- Published base `48c5f15664fdcc5c89e959a770645c33ffa27c55`; subsequent publication SHA stays in #530 active handoff.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -93,14 +93,38 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Publish validated worker broker/scope integration, then implement fixed target
-K3s join configuration under existing seven-stage prejoin journal and both fences.
-Use current private join material, canonical control VIP/server URL, fixed root-only
-token path and existing drained/ineligible labels. No installer, startup or consumer
-release during configuration. Extend exact native custody/proof and separate
-reconciliation; account for fixed files in calculated storage. Then journaled
-membership/start/import and identity activation. Production polling stays disabled.
-No live runtime action taken.
+Configuration batch extends published48c5f15664fdcc5c89e959a770645c33ffa27c55;
+publication full SHA remains in #530 active handoff. Eighth `configure_k3s`
+record now integrates fixed token/config publication, complete private framing,
+native custody, pinned SSH and lazy worker write/proof dispatch. Existing seven
+prerequisites, both fences, current claim, inactive K3s and identity marker remain
+mandatory. No write replay or consumer release. Exact YAML plus protocol maximum
+4096-byte token/two inodes are reserved on `/etc/rancher/k3s`. Private file proof
+uses one cleared allocation. Identity-material and dispatch scopes now share
+10/130/190-minute ceilings; parent/credential/lease limits remain authoritative.
+
+Validation: full bootstrap race178tests/837.058s; final full native race169tests/
+14.107s, both zero failures/skips. Focused native custody/pinned SSH race3 passed
+1.251s/2.924s; final source/custody/dispatch/scope API race3 passed18.433s. That API
+selection also reached six unchanged PostgreSQL subcases per repetition; they
+skipped without DSN and provide no PostgreSQL evidence. Earlier changed API-only
+race3 passed1.145s, broader dispatcher/capacity/scope race3 passed2.598s. Full-module
+vet plus final affected API vet, CGO-disabled API/native builds, repository
+policy184tests/84.716s/221routes, docs-reference/gofmt/diff checks passed. Evidence:
+`Unit_Test_Results/m2-k3s-configuration-20261027/`. All validation processes finished.
+Parent48c5f CI: Container Policy40494377355 passed; PR Validation40494377268 pending
+at single check. No manual rerun/repeated poll/artifact download.
+
+Exact next action: integrate independent native/controller joined-Node proof,
+then journaled membership/start/import and shared-identity activation. Separate
+uncommitted `k3s_join_node.go` / test starts that proof; focused race3 passed1.063s,
+but no caller or membership authorization exists yet. Concrete M2 failure:
+`readClusterSSHPrejoinSourceCustody` requires Node count equal original active
+members and would revoke authority when approved target first joins drained.
+Smallest remedy: separate phase-bound joining-cohort observation tied to exact
+confirmed targets/current claim and native Node UID proof. Keep prejoin observer
+strict. No production poller until full delivery/recovery is integrated. No live
+runtime action, credential use or cleanup obligation.
 
 ## Worker join broker checkpoint
 

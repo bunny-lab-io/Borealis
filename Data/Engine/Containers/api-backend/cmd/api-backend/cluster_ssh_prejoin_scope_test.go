@@ -268,3 +268,47 @@ func TestClusterSSHPrejoinScopePreparationChallenges(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterSSHPrejoinBulkIdentityDeadline(t *testing.T) {
+	root, consumer, source, proof := sshPrejoinScopeFixture(t)
+	defer consumer.Close()
+	for _, flags := range [][2]bool{{false, false}, {true, false}, {true, true}} {
+		maximum := clusterSSHPrejoinDispatchBudget(flags[0], flags[1])
+		want := 10 * time.Minute
+		if flags[0] {
+			want = 130 * time.Minute
+		}
+		if flags[1] {
+			want = 190 * time.Minute
+		}
+		if maximum != want {
+			t.Fatal("wrong bounded dispatch budget")
+		}
+		read := func(context.Context) (clusterSSHPrejoinSourceCustody, error) { return proof, nil }
+		for _, parentLimit := range []time.Duration{0, time.Minute} {
+			parent := context.Background()
+			cancel := func() {}
+			if parentLimit != 0 {
+				parent, cancel = context.WithTimeout(parent, parentLimit)
+			}
+			invoked := false
+			err := withClusterSSHPrejoinSourceMaterialFor(parent, consumer, root, source, maximum, read, func(ctx context.Context, _ *engineidentity.Material, check func(context.Context) error) error {
+				invoked = true
+				deadline, ok := ctx.Deadline()
+				remaining := time.Until(deadline)
+				bound := want
+				if parentLimit != 0 {
+					bound = parentLimit
+				}
+				if !ok || remaining > bound || remaining < bound-time.Second {
+					t.Fatal("private scope truncated or extended parent", remaining, bound)
+				}
+				return check(ctx)
+			})
+			cancel()
+			if err != nil || !invoked {
+				t.Fatal("valid bulk scope failed", err)
+			}
+		}
+	}
+}

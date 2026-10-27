@@ -60,7 +60,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		if err != nil {
 			return errBootstrapSource
 		}
-		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts) error {
+		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts, join *clusterbootstrap.K3sJoinMaterial) error {
 			if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
 				return errBootstrapSource
 			}
@@ -101,6 +101,16 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				case "reconcile_prejoin_k3s":
 					_, err = inputs.ReconcilePrejoinK3s(ctx, journal, install, material, assets, request.PostgresReference,
 						func(ctx context.Context) error { return proveBootstrapPreparedHost(ctx, expected, authority) }, bootstrapNativeK3sActions(expected, guard, executor, authority).Prove)
+				case "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration":
+					operation := inputs.ConfigurePrejoinK3s
+					if request.Action == "reconcile_prejoin_k3s_configuration" {
+						operation = inputs.ReconcilePrejoinK3sConfiguration
+					}
+					_, err = operation(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error {
+							return proveBootstrapPreparedK3sJoinHost(ctx, expected, install.Binding, join, authority)
+						},
+						join, bootstrapNativeK3sJoinActions(expected, install.Binding, join, guard, executor, authority))
 				case "prepare_prejoin_identity_root":
 					_, err = inputs.PreparePrejoinIdentityRoot(ctx, journal, install, material)
 				case "reconcile_prejoin_identity_root":
@@ -164,16 +174,22 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			}
 			// Bulk scratch shares the qualified /opt source filesystem; the uploaded
 			// helper remains in its existing bounded private /var/tmp wrapper.
-			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
+			if bootstrapK3sConfigurationAction(request.Action) {
+				return clusterbootstrap.ConsumePrejoinK3sJoinPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
+			}
+			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check,
+				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts) error {
+					return consume(ctx, inputs, material, assets, nil)
+				})
 		}
 		if request.IdentitySource != nil {
 			return clusterbootstrap.ConsumePrejoinPreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check, func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
-				return consume(ctx, inputs, material, nil)
+				return consume(ctx, inputs, material, nil, nil)
 			})
 		}
 		return clusterbootstrap.ConsumePreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, input, check,
 			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
-				return consume(ctx, inputs, nil, nil)
+				return consume(ctx, inputs, nil, nil, nil)
 			})
 	}
 	serve := clusterbootstrap.ServePreparationSessionWithProgress
@@ -218,6 +234,9 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 			return verifyBootstrapSourcePaths(root, action, destination)
 		},
 		unit: func(ctx context.Context, unit string) error {
+			if unit == "k3s.service" && bootstrapK3sConfigurationAction(request.Action) {
+				return observeBootstrapInertK3s(ctx, true)
+			}
 			if unit == "k3s.service" && (bootstrapK3sAction(request.Action) || request.Action == "inspect_preparation_progress") {
 				return observeBootstrapInertK3s(ctx, false)
 			}

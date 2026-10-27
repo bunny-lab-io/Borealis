@@ -40,7 +40,7 @@ const (
 	memberFencePath     = "/etc/borealis/k3s-member-removal-fence.json"
 	memberFenceDropIn   = "/etc/systemd/system/k3s.service.d/90-borealis-member-removal-fence.conf"
 	k3sRegistriesPath   = "/etc/rancher/k3s/registries.yaml"
-	k3sJoinConfigPath   = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
+	k3sJoinConfigPath   = clusterbootstrap.PrejoinK3sJoinConfigPath
 	k3sImageImportPath  = "/var/lib/rancher/k3s/agent/images"
 	shutdownHandoffWait = 25 * time.Second
 	shutdownHandoffPoll = 250 * time.Millisecond

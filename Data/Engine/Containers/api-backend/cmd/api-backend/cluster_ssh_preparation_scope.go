@@ -22,11 +22,11 @@ func runClusterSSHPreparationScope(parent context.Context, interval time.Duratio
 	return runClusterSSHPreparationScopeFor(parent, interval, 10*time.Minute, check, work)
 }
 
-// Complete artifact acquisition plus two independently supervised delivery/proof
+// Complete artifact acquisition plus six independently supervised delivery/proof
 // sessions need a larger outer budget. Claim/source/credential expiry and every
 // short renewal remain authoritative; this ceiling extends none of them.
 func runClusterSSHArtifactPreparationScope(parent context.Context, interval time.Duration, check func(context.Context) error, work func(context.Context) error) error {
-	return runClusterSSHPreparationScopeFor(parent, interval, 150*time.Minute, check, work)
+	return runClusterSSHPreparationScopeFor(parent, interval, 210*time.Minute, check, work)
 }
 
 func runClusterSSHPreparationScopeFor(parent context.Context, interval, maximum time.Duration, check func(context.Context) error, work func(context.Context) error) (result error) {

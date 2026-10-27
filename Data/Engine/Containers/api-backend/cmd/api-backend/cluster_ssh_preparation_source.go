@@ -279,7 +279,11 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 		if err != nil {
 			return err
 		}
-		baseDemand, err := mergeClusterSSHFilesystemDemands(appDemand, externalDemand, k3sDemand)
+		joinDemand, err := clusterSSHK3sConfigurationDemands(expected)
+		if err != nil {
+			return err
+		}
+		baseDemand, err := mergeClusterSSHFilesystemDemands(appDemand, externalDemand, k3sDemand, joinDemand)
 		if err != nil {
 			return err
 		}
