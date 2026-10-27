@@ -62,7 +62,8 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 		if r.IdentitySource != nil {
 			return expected, ErrSessionProtocol
 		}
-	case "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity":
+	case "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity",
+		"prepare_prejoin_host", "reconcile_prejoin_host":
 		if r.IdentitySource == nil || validatePrejoinSource(r.Session.Binding, *r.IdentitySource) != nil {
 			return expected, ErrSessionProtocol
 		}

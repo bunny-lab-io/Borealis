@@ -22,6 +22,8 @@ type clusterSSHPrejoinClient interface {
 	ReconcilePrejoinIdentityRoot(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	InstallPrejoinIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	PreparePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	ReconcilePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	Close() error
 }
 
@@ -54,7 +56,7 @@ func clusterSSHPrejoinDispatchKey(authority clusterSSHPreparationAuthority, sour
 // Production prefix assembly selects no source and accepts no alternate path,
 // command, transport or SSH pin. Full preparation caller owns the inputs and
 // readiness/lease scope; prefix success is not a completion receipt. This has
-// no polling caller until host preparation and failure recovery are complete.
+// no polling caller until complete delivery and failure recovery are integrated.
 func withClusterSSHPrejoinIdentityDispatch(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error) error {
@@ -113,7 +115,7 @@ func withClusterSSHPrejoinIdentityDispatch(parent context.Context, store *postgr
 		})
 }
 
-// This is only the pre-join prefix, not complete host preparation. It creates
+// This is the source/account/identity/host prefix, not complete image delivery. It creates
 // no settlement receipt, releases no marker and activates no worker/poller.
 // Caller must retain verified inputs and source material inside their owned
 // scopes, supply exact current preparation/domain/custody checks, and connect
@@ -197,6 +199,14 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 			},
 			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				return c.ReconcilePrejoinIdentity(checkCtx, inputs, e, source, material, sudo, check)
+			},
+		},
+		{
+			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.PreparePrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
+			},
+			func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.ReconcilePrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
 			},
 		},
 	}

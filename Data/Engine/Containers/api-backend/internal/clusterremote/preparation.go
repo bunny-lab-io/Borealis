@@ -67,6 +67,18 @@ func (client *Client) ReconcilePrejoinIdentity(ctx context.Context, inputs *clus
 	return client.preparationWithIdentity(ctx, inputs, expected, "reconcile_prejoin_identity", &source, material, sudoPassword, check)
 }
 
+// Host effects retain the same original-source material and both target fences.
+// Reconciliation is a distinct supervised proof session, never a write retry.
+func (client *Client) PreparePrejoinHost(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "prepare_prejoin_host", &source, material, sudoPassword, check)
+}
+
+func (client *Client) ReconcilePrejoinHost(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithIdentity(ctx, inputs, expected, "reconcile_prejoin_host", &source, material, sudoPassword, check)
+}
+
 func (client *Client) preparationWithIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
 	binding := expected.Target

@@ -21,7 +21,7 @@ func bootstrapSourceSessionContained(args []string) {
 	nonce := bootstrapSessionNonce(args)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	guard, _, err := clusterbootstrap.NewExecutorGuard(ctx, nonce)
+	guard, executor, err := clusterbootstrap.NewExecutorGuard(ctx, nonce)
 	if err != nil {
 		fatalf("source preparation executor invalid")
 	}
@@ -84,6 +84,12 @@ func bootstrapSourceSessionContained(args []string) {
 					_, err = inputs.InstallPreparedPrejoinIdentity(ctx, journal, install, material)
 				case "reconcile_prejoin_identity":
 					_, err = inputs.ReconcilePreparedPrejoinIdentity(ctx, journal, install, material)
+				case "prepare_prejoin_host":
+					_, err = inputs.PreparePrejoinHost(ctx, journal, install, material, bootstrapNativeHostActions(expected, guard, executor, authority))
+				case "reconcile_prejoin_host":
+					// Proof-only API deliberately receives no preparation callback.
+					_, err = inputs.ReconcilePrejoinHost(ctx, journal, install, material,
+						bootstrapNativeHostActions(expected, guard, executor, authority).Prove)
 				default:
 					err = errBootstrapSource
 				}
@@ -120,11 +126,12 @@ func bootstrapSourceSessionContained(args []string) {
 	}
 }
 
-// This is a narrow source-publication boundary, not complete host qualification.
+// Source/identity phases keep their narrow paths; host actions select an exact
+// generated-file prefix without permitting K3s or identity-consumer startup.
 // Controller still owns network/storage/cohort/configuration/admission proof.
-// No services, installation scripts, Docker, K3s or identity consumers run here.
 func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, destination bool) error {
-	if _, err := request.Expected(); err != nil || ctx.Err() != nil {
+	expected, err := request.Expected()
+	if err != nil || ctx.Err() != nil {
 		return errBootstrapSource
 	}
 	root, err := os.OpenRoot("/")
@@ -136,6 +143,9 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 		host: verifyBootstrapSessionHost,
 		boot: readBootstrapSourceBoot,
 		paths: func(action string, destination bool) error {
+			if bootstrapHostAction(action) {
+				return verifyBootstrapHostPaths(root, expected, action, destination)
+			}
 			return verifyBootstrapSourcePaths(root, action, destination)
 		},
 		unit: observeBootstrapAbsentUnit,

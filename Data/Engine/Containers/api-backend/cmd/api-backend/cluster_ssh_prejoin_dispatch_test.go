@@ -44,6 +44,14 @@ func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinIdentity(ctx context.Cont
 	return c.run(ctx, "keys proof", p, e, source, keys, sudo, check)
 }
 
+func (c *sshPrejoinDispatchTestClient) PreparePrejoinHost(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "host", p, e, source, keys, sudo, check)
+}
+
+func (c *sshPrejoinDispatchTestClient) ReconcilePrejoinHost(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, keys *engineidentity.Material, sudo []byte, check func(context.Context) error) error {
+	return c.run(ctx, "host proof", p, e, source, keys, sudo, check)
+}
+
 func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 	a, source, _ := sshPrejoinSourceFixture(t, false)
 	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
@@ -52,9 +60,9 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 	}
 	keys := sshIdentitySourceMaterial(t, t.TempDir())
 	inputs := &clusterbootstrap.PreparationInputs{} // Transport seam only; native methods reject this inert fixture.
-	sequence := []string{"source", "source proof", "account", "account proof", "directory", "directory proof", "keys", "keys proof"}
+	sequence := []string{"source", "source proof", "account", "account proof", "directory", "directory proof", "keys", "keys proof", "host", "host proof"}
 	for _, mode := range []string{"success", "write uncertain", "already closed", "connection lost", "connection with client", "nil connection", "proof failed", "close failed", "ignored authority failure", "cancelled"} {
-		for stage := 0; stage < 4; stage++ {
+		for stage := 0; stage < 5; stage++ {
 			t.Run(fmt.Sprintf("%s/%d", mode, stage), func(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
@@ -133,7 +141,7 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 				if (err == nil) != success || err != nil && err != clusterbootstrap.ErrSessionAuthority {
 					t.Fatal("wrong uncertain dispatch result", err)
 				}
-				wantOpened := 8
+				wantOpened := 10
 				if mode == "proof failed" {
 					wantOpened = stage*2 + 2
 				} else if !success {
@@ -291,7 +299,7 @@ func TestClusterSSHPrejoinDispatchWithinMaterialScope(t *testing.T) {
 					}
 					return dispatchClusterSSHPrejoinIdentity(ctx, connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, refresh)
 				})
-			wantSessions := 8
+			wantSessions := 10
 			if drift {
 				wantSessions = 7
 			}

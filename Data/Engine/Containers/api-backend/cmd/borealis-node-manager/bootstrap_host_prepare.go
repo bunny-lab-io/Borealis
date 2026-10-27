@@ -11,8 +11,8 @@ import (
 
 // Only PreparationInputs.PreparePrejoinHost may consume this adapter: it must
 // retain source/account/identity custody, durable prepare_host intent and BOTH
-// locks. No wire action or production dispatcher enables it yet. In particular,
-// the caller's custody check must use the separate host phase; earlier source
+// locks. Only the fixed supervised host action selects it; no poller invokes
+// preparation yet. The caller's custody check uses the separate host phase; earlier source
 // and identity-prefix checks deliberately still reject prepared host files.
 func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
 	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) clusterbootstrap.PrejoinHostActions {
