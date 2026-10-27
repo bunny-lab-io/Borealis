@@ -58,7 +58,7 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 		return expected, ErrSessionProtocol
 	}
 	switch r.Action {
-	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity":
+	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity", "inspect_preparation_progress":
 		if r.IdentitySource != nil {
 			return expected, ErrSessionProtocol
 		}
@@ -110,12 +110,25 @@ type PreparationSessionFrame struct {
 	RequestSHA256 string `json:"request_sha256,omitempty"`
 	Sequence      int64  `json:"sequence,omitempty"`
 	Data          string `json:"data,omitempty"`
+	JournalStep   string `json:"journal_step,omitempty"`
 }
 
 func (PreparationSessionFrame) String() string   { return "preparation frame [private data withheld]" }
 func (PreparationSessionFrame) GoString() string { return "preparation frame [private data withheld]" }
 
 type PreparationSessionReceiver func(context.Context, PreparationSessionRequest, io.Reader) error
+
+type PreparationSessionProgressReceiver func(context.Context, PreparationSessionRequest, io.Reader) (PreparationProgress, error)
+
+// ServePreparationSessionWithProgress adds only a bounded journal cursor to the
+// inspection action. Other actions must return the zero cursor. The cursor is
+// emitted only after complete private transfer, EOF and successful processing.
+func ServePreparationSessionWithProgress(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error) error {
+	ctx, cancel := context.WithTimeout(parent, SessionLifetime)
+	defer cancel()
+	return servePreparationSessionWithProgress(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second})
+}
 
 // ServePreparationSession maintains challenge authority while the receiver
 // consumes a bounded, backpressured stream. Only one unacknowledged chunk may
@@ -130,6 +143,17 @@ func ServePreparationSession(parent context.Context, input io.ReadCloser, output
 
 func servePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
 	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionReceiver, observe func(time.Time) error, timing sessionTiming) error {
+	if receive == nil {
+		return ErrSessionProtocol
+	}
+	return servePreparationSessionWithProgress(parent, input, output, nonce, verify,
+		func(ctx context.Context, request PreparationSessionRequest, stream io.Reader) (PreparationProgress, error) {
+			return PreparationProgress{}, receive(ctx, request, stream)
+		}, observe, timing)
+}
+
+func servePreparationSessionWithProgress(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error, timing sessionTiming) error {
 	if input == nil || output == nil || verify == nil || receive == nil || observe == nil || !digestPattern.MatchString(nonce) {
 		return ErrSessionProtocol
 	}
@@ -173,7 +197,11 @@ func servePreparationSession(parent context.Context, input io.ReadCloser, output
 	defer func() { cancel(); input.Close(); <-readDone }()
 	chunks := make(chan []byte)
 	chunkReader := &preparationChunkReader{ctx: ctx, chunks: chunks}
-	finished := make(chan error, 1)
+	type receiverResult struct {
+		progress PreparationProgress
+		err      error
+	}
+	finished := make(chan receiverResult, 1)
 	working := false
 	defer func() {
 		cancel()
@@ -224,7 +252,7 @@ func servePreparationSession(parent context.Context, input io.ReadCloser, output
 			}
 			sequence++
 		case frame := <-frames:
-			if frame.Protocol != 1 || frame.RequestSHA256 != digest || !time.Now().Before(deadline) {
+			if frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.JournalStep != "" || !time.Now().Before(deadline) {
 				return ErrSessionProtocol
 			}
 			if frame.State == "heartbeat" {
@@ -239,7 +267,7 @@ func servePreparationSession(parent context.Context, input io.ReadCloser, output
 				}
 				if phase == "verify" && !working {
 					working = true
-					go func() { finished <- verify(ctx, request) }()
+					go func() { finished <- receiverResult{err: verify(ctx, request)} }()
 				}
 				continue
 			}
@@ -267,17 +295,17 @@ func servePreparationSession(parent context.Context, input io.ReadCloser, output
 			default:
 				return ErrSessionProtocol
 			}
-		case err := <-finished:
+		case result := <-finished:
 			working = false
-			if err != nil || ctx.Err() != nil || !time.Now().Before(deadline) {
+			if result.err != nil || ctx.Err() != nil || !time.Now().Before(deadline) {
 				return ErrSessionAuthority
 			}
 			if phase == "verify" {
 				phase, working = "receiving", true
 				go func() {
-					err := receive(ctx, request, chunkReader)
+					progress, err := receive(ctx, request, chunkReader)
 					clear(chunkReader.current)
-					finished <- err
+					finished <- receiverResult{progress, err}
 				}()
 				if send("source_ready", 0) != nil {
 					return ErrSessionProtocol
@@ -287,7 +315,14 @@ func servePreparationSession(parent context.Context, input io.ReadCloser, output
 			if phase != "processing" || !chunkReader.eof {
 				return ErrSessionProtocol
 			}
-			return send("verified", sequence)
+			if request.Action == "inspect_preparation_progress" {
+				if result.progress.Validate() != nil {
+					return ErrSessionProtocol
+				}
+			} else if result.progress != (PreparationProgress{}) {
+				return ErrSessionProtocol
+			}
+			return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "verified", Nonce: nonce, RequestSHA256: digest, Sequence: sequence, JournalStep: result.progress.Step})
 		case <-ticker.C:
 			if !pendingChallenge && issue() != nil {
 				return ErrSessionProtocol

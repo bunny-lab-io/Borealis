@@ -20,6 +20,52 @@ func bootstrapHostCustodyFixture(t *testing.T) *os.Root {
 	return root
 }
 
+func TestBootstrapPreparationProgressPaths(t *testing.T) {
+	expected := bootstrapHostFilesFixture()
+	for _, mode := range []string{"empty", "source", "prepared", "runtime", "foreign K3s", "symlink", "unsafe parent"} {
+		t.Run(mode, func(t *testing.T) {
+			root := bootstrapHostCustodyFixture(t)
+			switch mode {
+			case "empty":
+				if err := root.Remove("opt/Borealis"); err != nil {
+					t.Fatal(err)
+				}
+			case "prepared":
+				if err := installBootstrapPrejoinHostFilesWith(context.Background(), root, expected, func(context.Context) error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+			case "runtime":
+				if err := os.MkdirAll(filepath.Join(root.Name(), "var/lib/rancher/k3s"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign K3s":
+				if err := os.MkdirAll(filepath.Join(root.Name(), "etc/rancher/k3s"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root.Name(), "etc/rancher/k3s/token"), []byte("foreign"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := root.Remove("opt/Borealis"); err != nil {
+					t.Fatal(err)
+				}
+				if err := root.Symlink(t.TempDir(), "opt/Borealis"); err != nil {
+					t.Fatal(err)
+				}
+			case "unsafe parent":
+				if err := root.Chmod("opt", 0777); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := verifyBootstrapProgressPaths(root, expected)
+			valid := mode == "empty" || mode == "source" || mode == "prepared"
+			if (err == nil) != valid {
+				t.Fatal("incorrect progress custody", err)
+			}
+		})
+	}
+}
+
 func TestBootstrapHostCustodyActualPublication(t *testing.T) {
 	root := bootstrapHostCustodyFixture(t)
 	expected := bootstrapHostFilesFixture()

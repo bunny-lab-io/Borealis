@@ -81,6 +81,20 @@ func (client *Client) ReconcilePrejoinHost(ctx context.Context, inputs *clusterb
 
 func (client *Client) preparationWithIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparationWithResult(ctx, inputs, expected, action, source, material, sudoPassword, check, nil)
+}
+
+func (client *Client) InspectPreparationProgress(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	sudoPassword []byte, check func(context.Context) error) (clusterbootstrap.PreparationProgress, error) {
+	var progress clusterbootstrap.PreparationProgress
+	if err := client.preparationWithResult(ctx, inputs, expected, "inspect_preparation_progress", nil, nil, sudoPassword, check, &progress); err != nil {
+		return clusterbootstrap.PreparationProgress{}, err
+	}
+	return progress, nil
+}
+
+func (client *Client) preparationWithResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, material *engineidentity.Material, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
 	binding := expected.Target
 	if client == nil || inputs == nil || expected.Validate() != nil || check == nil || ValidateSudoPassword(sudoPassword) != nil ||
 		(source == nil) != (material == nil) ||
@@ -103,13 +117,13 @@ func (client *Client) preparationWithIdentity(ctx context.Context, inputs *clust
 	if err != nil || bundleSource != expected.Source {
 		return ErrBootstrapVerification
 	}
-	return client.transferPreparationWithIdentity(ctx, bundle.ManagerPath(), digest, size, expected, action, source, sudoPassword, serialized,
+	return client.transferPreparationWithResult(ctx, bundle.ManagerPath(), digest, size, expected, action, source, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
 			if source != nil {
 				return inputs.WritePrejoinPreparation(ctx, expected, *source, material, output, serialized)
 			}
 			return inputs.WritePreparation(ctx, expected, output, serialized)
-		})
+		}, progress)
 }
 
 // Package-private executable seam supports pinned loopback SSH fixtures. Public
@@ -121,6 +135,14 @@ func (client *Client) transferPreparation(parent context.Context, managerPath, d
 
 func (client *Client) transferPreparationWithIdentity(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error) error {
+	return client.transferPreparationWithResult(parent, managerPath, digest, size, expected, action, source, sudoPassword, check, produce, nil)
+}
+
+func (client *Client) transferPreparationWithResult(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress) error {
+	if (action == "inspect_preparation_progress") != (progress != nil) {
+		return ErrBootstrapVerification
+	}
 	ctx, cancel := context.WithTimeout(parent, clusterbootstrap.SessionLifetime)
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { client.Close() })
@@ -191,12 +213,21 @@ func (client *Client) transferPreparationWithIdentity(parent context.Context, ma
 	// Closing the session releases a blocked stdout reader on cancellation.
 	input := preparationSSHOutput{Reader: stdout, close: func() error { return session.Close() }}
 	output := preparationSSHInput{Writer: stdin, close: func() error { return client.Close() }}
-	if clusterbootstrap.ExchangePreparationSession(ctx, input, output, request, produce, check) != nil {
+	var cursor clusterbootstrap.PreparationProgress
+	if progress != nil {
+		cursor, err = clusterbootstrap.ExchangePreparationProgressSession(ctx, input, output, request, produce, check)
+	} else {
+		err = clusterbootstrap.ExchangePreparationSession(ctx, input, output, request, produce, check)
+	}
+	if err != nil {
 		return ErrBootstrapVerification
 	}
 	_ = stdin.Close()
 	if session.Wait() != nil || diagnostics.overflow || refreshBootstrapAuthority(ctx, check) != nil {
 		return ErrBootstrapVerification
+	}
+	if progress != nil {
+		*progress = cursor
 	}
 	return nil
 }

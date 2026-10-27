@@ -14,8 +14,19 @@ import (
 )
 
 type sshPrejoinDispatchTestClient struct {
-	run   func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
-	close func() error
+	inspect func(context.Context) (clusterbootstrap.PreparationProgress, error)
+	run     func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	close   func() error
+}
+
+func (c *sshPrejoinDispatchTestClient) InspectPreparationProgress(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ []byte, check func(context.Context) error) (clusterbootstrap.PreparationProgress, error) {
+	if err := check(ctx); err != nil {
+		return clusterbootstrap.PreparationProgress{}, err
+	}
+	if c.inspect != nil {
+		return c.inspect(ctx)
+	}
+	return clusterbootstrap.PreparationProgress{Step: "empty"}, nil
 }
 
 func (c *sshPrejoinDispatchTestClient) Close() error { return c.close() }
@@ -77,7 +88,7 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 				var escaped func(context.Context) error
 				sudoOriginal := []byte("private test sudo")
 				connect := func(context.Context) (clusterSSHPrejoinClient, error) {
-					index := opened
+					index := opened - 1 // First connection only inspects progress.
 					opened++
 					client := &sshPrejoinDispatchTestClient{}
 					client.close = func() error {
@@ -141,11 +152,11 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 				if (err == nil) != success || err != nil && err != clusterbootstrap.ErrSessionAuthority {
 					t.Fatal("wrong uncertain dispatch result", err)
 				}
-				wantOpened := 10
+				wantOpened := 11
 				if mode == "proof failed" {
-					wantOpened = stage*2 + 2
+					wantOpened = stage*2 + 3
 				} else if !success {
-					wantOpened = stage*2 + 1
+					wantOpened = stage*2 + 2
 				}
 				wantClosed := wantOpened
 				if mode == "connection lost" || mode == "nil connection" {
@@ -299,13 +310,90 @@ func TestClusterSSHPrejoinDispatchWithinMaterialScope(t *testing.T) {
 					}
 					return dispatchClusterSSHPrejoinIdentity(ctx, connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, refresh)
 				})
-			wantSessions := 10
+			wantSessions := 11
 			if drift {
-				wantSessions = 7
+				wantSessions = 8
 			}
 			if (err == nil) == drift || opened != wantSessions || closed != opened {
 				t.Fatal("source drift progressed or leaked session", err, opened, closed)
 			}
 		})
+	}
+}
+
+func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
+	a, source, _ := sshPrejoinSourceFixture(t, false)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := sshIdentitySourceMaterial(t, t.TempDir())
+	sequence := []string{"source", "source proof", "account", "account proof", "directory", "directory proof", "keys", "keys proof", "host", "host proof"}
+	for index, step := range []string{"empty", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host"} {
+		for _, mode := range []string{"valid", "query error", "query close", "invalid cursor", "proof error", "proof close"} {
+			t.Run(step+"/"+mode, func(t *testing.T) {
+				calls := []string{}
+				proofSession := 1
+				if index == 0 {
+					proofSession = 2
+				}
+				opened, closed := 0, 0
+				connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+					session := opened
+					opened++
+					return &sshPrejoinDispatchTestClient{
+						inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
+							calls = append(calls, "inspect")
+							if session != 0 {
+								t.Fatal("inspection repeated")
+							}
+							cursor := clusterbootstrap.PreparationProgress{Step: step}
+							if mode == "query error" {
+								return cursor, errors.New("unreadable journal")
+							}
+							if mode == "invalid cursor" {
+								cursor.Step = "join_cluster"
+							}
+							return cursor, nil
+						},
+						run: func(ctx context.Context, action string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+							calls = append(calls, action)
+							if check(ctx) != nil {
+								t.Fatal("authority absent")
+							}
+							if mode == "proof error" && strings.HasSuffix(action, "proof") {
+								return errors.New("partial effect")
+							}
+							return nil
+						},
+						close: func() error {
+							closed++
+							if mode == "query close" && session == 0 || mode == "proof close" && session == proofSession {
+								return errors.New("cleanup uncertain")
+							}
+							return nil
+						},
+					}, nil
+				}
+				err := dispatchClusterSSHPrejoinIdentity(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, func(context.Context) error { return nil })
+				want := []string{"inspect"}
+				if mode == "valid" || mode == "proof error" || mode == "proof close" {
+					start := 0
+					if index > 0 {
+						start = (index-1)*2 + 1
+					}
+					if mode == "valid" {
+						want = append(want, sequence[start:]...)
+					} else if index == 0 {
+						want = append(want, "source", "source proof")
+					} else {
+						want = append(want, sequence[start])
+					}
+				}
+				if (err == nil) != (mode == "valid") || !reflect.DeepEqual(calls, want) || closed != opened || opened != len(want) {
+					t.Fatalf("unsafe resume: err=%v calls=%v want=%v connections=%d/%d", err, calls, want, opened, closed)
+				}
+			})
+		}
 	}
 }

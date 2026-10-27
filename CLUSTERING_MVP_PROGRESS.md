@@ -21,7 +21,7 @@ one/three-Engine topology, calculated provisioning, authority and safety gates.
 ## Current verified state
 
 - Branch/PR: `issue/cluster-central-ssh-onboarding`, [#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base: `81465ef2704005eda513ef223370a9c9052909f5`.
+- Published base: `c93617f6d1d777344f67b6e61a212d57e64b25f5`.
 - Ordered native host adapter and independent repository/host proof implemented;
   fixed supervised host transport and five-stage preparation prefix now wired;
   production polling remains disabled pending complete delivery and recovery.
@@ -33,9 +33,9 @@ one/three-Engine topology, calculated provisioning, authority and safety gates.
 
 ## Ordered remaining work
 
-1. Add independently verified preparation progress/resume contract so restarting
-   dispatch does not replay completed source/account/identity/host stages. Keep
-   earlier phase-specific proofs strict.
+1. Finish validation/publication of implemented journal progress/resume path;
+   then add explicit source-publication absence proof and fresh-claim retry.
+   Preserve earlier phase-specific proofs and existing not_applied history.
 2. Complete safe partial-effect forward recovery and remaining delivery dispatch;
    qualify interruption and existing-node identity recovery.
 3. Finish M1 supported-profile budgets, worker bounds, measured requirements,
@@ -66,13 +66,12 @@ one/three-Engine topology, calculated provisioning, authority and safety gates.
 
 ## Exact next action
 
-Publish host custody/transport checkpoint, then implement explicit verified
-progress and resumed preparation without replaying earlier completed prefixes.
-Current dispatcher always starts source; strict journal phase proofs correctly
-reject an already-advanced target. Add bounded progress proof, not fallthrough
-from failed observation. Start with `internal/clusterbootstrap/journal_linux.go`,
-`preparation_session.go`, `cmd/borealis-node-manager/bootstrap_source.go` and
-`cmd/api-backend/cluster_ssh_prejoin_dispatch.go`.
+Retained-preparation cursor/resume integration validated; publish checkpoint, then implement
+safe partial-effect recovery: first distinguish and prove absent or completed
+source/account effects under a fresh stopped-producer claim; never rerun uncertain
+package/service work. Keep journal history and independent source/identity custody.
+Remaining native host partial-effect forward recovery and complete delivery remain
+required before production polling.
 
 ## In-flight work
 
@@ -87,7 +86,15 @@ from failed observation. Start with `internal/clusterbootstrap/journal_linux.go`
 - Full clusterremote race suite failed on missing Ubuntu Netplan bindings/native
   generator in CachyOS environment. Assertions unchanged; required Ubuntu CI
   lane remains pending. Strict documentation build likewise needs Python3.12.
-- Host custody/transport checkpoint prepared for publication; no live evidence.
+- Host custody/transport checkpoint published at base above; no live evidence.
 - Fresh lab SSH credentials supplied in conversation, intentionally absent from
   this file/repository. They do not remove exact-target runtime safety gates.
 - No live runtime action or cleanup obligation.
+
+- Current in-flight resume integration: source-bound ordered journal cursor,
+  fixed supervised inspection, bounded terminal protocol result, pinned SSH
+  transport and dispatcher resume after independent last-stage reconciliation.
+  Focused race suite passed three repetitions across bootstrap/remote/native/API
+  (24.044s/2.194s/1.072s/2.178s); full-module vet, binary build, repository policy
+  and docs-reference checks passed. Full bootstrap/native race suite passed with zero failures/skips;
+  no live qualification performed.

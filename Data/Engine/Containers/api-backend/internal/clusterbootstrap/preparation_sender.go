@@ -12,6 +12,29 @@ import (
 // Producer and refresh must honor cancellation; both finish before return.
 func ExchangePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
 	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error) error {
+	if request.Action == "inspect_preparation_progress" {
+		return ErrSessionProtocol
+	}
+	return exchangePreparationSession(parent, input, output, request, produce, refresh, nil)
+}
+
+// ExchangePreparationProgressSession returns a bound cursor only after complete
+// transfer, terminal frame/EOF and final authority proof. Caller still verifies
+// remote exit and runs separate domain reconciliation before advancing a stage.
+func ExchangePreparationProgressSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
+	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error) (PreparationProgress, error) {
+	var progress PreparationProgress
+	if request.Action != "inspect_preparation_progress" {
+		return progress, ErrSessionProtocol
+	}
+	if err := exchangePreparationSession(parent, input, output, request, produce, refresh, &progress); err != nil {
+		return PreparationProgress{}, err
+	}
+	return progress, nil
+}
+
+func exchangePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
+	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress) error {
 	if request.IdentitySource != nil {
 		source := *request.IdentitySource
 		request.IdentitySource = &source
@@ -184,7 +207,7 @@ func ExchangePreparationSession(parent context.Context, input io.ReadCloser, out
 				}
 			}
 		case frame, ok := <-frames:
-			if !ok || frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.Data != "" {
+			if !ok || frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.Data != "" || frame.State != "verified" && frame.JournalStep != "" {
 				return ErrSessionProtocol
 			}
 			if frame.State == "challenge" {
@@ -221,6 +244,14 @@ func ExchangePreparationSession(parent context.Context, input io.ReadCloser, out
 					return ErrSessionProtocol
 				}
 			case "verified":
+				cursor := PreparationProgress{Step: frame.JournalStep}
+				if progress != nil {
+					if cursor.Validate() != nil {
+						return ErrSessionProtocol
+					}
+				} else if frame.JournalStep != "" {
+					return ErrSessionProtocol
+				}
 				if !sentEnd || awaitingAck || frame.Sequence != sequence {
 					return ErrSessionProtocol
 				}
@@ -231,6 +262,9 @@ func ExchangePreparationSession(parent context.Context, input io.ReadCloser, out
 				// remote exit status. The response reader already consumed EOF.
 				stop()
 				completed = true
+				if progress != nil {
+					*progress = cursor
+				}
 				return nil
 			default:
 				return ErrSessionProtocol

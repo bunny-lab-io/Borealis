@@ -114,3 +114,25 @@ func proveBootstrapHostFilePrefix(root *os.Root, expected clusterbootstrap.Prepa
 	}
 	return nil
 }
+
+// Inspection accepts bounded possible preparation state only to read the
+// journal cursor. It grants no writes or completed-effect proof. Subsequent
+// phase reconciliation must independently prove source/account/keys/host state.
+func verifyBootstrapProgressPaths(root *os.Root, expected clusterbootstrap.PreparationExpected) error {
+	if root == nil || expected.Validate() != nil {
+		return errBootstrapSource
+	}
+	for _, path := range []string{"etc/borealis", "var/lib/rancher/k3s", "usr/local/bin/k3s", "var/lib/kubelet", "etc/kubernetes"} {
+		if !bootstrapDockerPathAbsent(root, path) {
+			return errBootstrapSource
+		}
+	}
+	absent, err := bootstrapSourcePath(root, "opt/Borealis")
+	if err != nil {
+		return errBootstrapSource
+	}
+	if absent {
+		return verifyBootstrapSourcePaths(root, "stage_source", true)
+	}
+	return proveBootstrapHostFilePrefix(root, expected, false)
+}

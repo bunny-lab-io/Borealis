@@ -14,6 +14,7 @@ import (
 )
 
 type clusterSSHPrejoinClient interface {
+	InspectPreparationProgress(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) (clusterbootstrap.PreparationProgress, error)
 	DeliverPreparation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	ReconcilePreparation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	PrepareRuntimeIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
@@ -246,7 +247,36 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 		}
 		return err, nil
 	}
-	for _, step := range steps {
+	// Inspection is a cursor, not completion proof. A failed query never becomes
+	// an empty journal. Reconcile exactly its retained stage in a new executor
+	// before any later write; actual source/account/key/host proof remains there.
+	var progress clusterbootstrap.PreparationProgress
+	if err, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+		var err error
+		progress, err = c.InspectPreparationProgress(checkCtx, inputs, e, sudo, check)
+		return err
+	}); err != nil || boundaryErr != nil || progress.Validate() != nil {
+		return fail
+	}
+	retained := -1
+	switch progress.Step {
+	case "stage_source":
+		retained = 0
+	case "prepare_runtime_identity":
+		retained = 1
+	case "prepare_identity_root":
+		retained = 2
+	case "install_identity":
+		retained = 3
+	case "prepare_host":
+		retained = 4
+	}
+	if retained >= 0 {
+		if err, boundaryErr := run(steps[retained][1]); err != nil || boundaryErr != nil {
+			return fail
+		}
+	}
+	for _, step := range steps[retained+1:] {
 		if _, boundaryErr := run(step[0]); boundaryErr != nil {
 			return fail
 		}

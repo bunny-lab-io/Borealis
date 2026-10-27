@@ -40,7 +40,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "reconcile_prejoin_host", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "reconcile_prejoin_host", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			var server *fakeSSH
 			var consumed atomic.Bool
@@ -75,7 +75,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					outReader.Close()
 				}()
 				defer func() { pipeReader.Close(); outWriter.Close(); <-copied; <-outputDone }()
-				err := clusterbootstrap.ServePreparationSession(context.Background(), pipeReader, outWriter, nonce,
+				err := clusterbootstrap.ServePreparationSessionWithProgress(context.Background(), pipeReader, outWriter, nonce,
 					func(_ context.Context, request clusterbootstrap.PreparationSessionRequest) error {
 						got, err := request.Expected()
 						want := preparationRemoteExpected(server)
@@ -94,8 +94,11 @@ func TestPreparationPinnedSSH(t *testing.T) {
 							return errors.New("private native error")
 						}
 						return nil
-					}, func(_ context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) error {
+					}, func(_ context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationProgress, error) {
 						wantAction := "stage_source"
+						if strings.HasPrefix(mode, "inspect ") {
+							wantAction = "inspect_preparation_progress"
+						}
 						if mode == "reconcile" {
 							wantAction = "reconcile_source"
 						}
@@ -103,20 +106,23 @@ func TestPreparationPinnedSSH(t *testing.T) {
 							wantAction = mode
 						}
 						if request.Action != wantAction {
-							return errors.New("wrong action")
+							return clusterbootstrap.PreparationProgress{}, errors.New("wrong action")
 						}
 						got, err := io.ReadAll(io.LimitReader(input, int64(len(payload))+1))
 						if err != nil || !bytes.Equal(got, payload) {
-							return errors.New("private payload mismatch")
+							return clusterbootstrap.PreparationProgress{}, errors.New("private payload mismatch")
 						}
 						consumed.Store(true)
 						if mode == "stderr overflow" {
 							_, _ = channel.Stderr().Write(bytes.Repeat([]byte("x"), MaxOutputBytes+1))
-							return errors.New("overflow")
+							return clusterbootstrap.PreparationProgress{}, errors.New("overflow")
 						}
-						return nil
+						if strings.HasPrefix(mode, "inspect ") && mode != "inspect missing cursor" {
+							return clusterbootstrap.PreparationProgress{Step: "prepare_host"}, nil
+						}
+						return clusterbootstrap.PreparationProgress{}, nil
 					}, func(time.Time) error { return nil })
-				if err != nil || mode == "remote failure" {
+				if err != nil || mode == "remote failure" || mode == "inspect remote failure" {
 					return 1
 				}
 				return 0
@@ -141,6 +147,9 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				return nil
 			}
 			action := "stage_source"
+			if strings.HasPrefix(mode, "inspect ") {
+				action = "inspect_preparation_progress"
+			}
 			if mode == "reconcile" {
 				action = "reconcile_source"
 			}
@@ -161,15 +170,23 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				if strings.Contains(mode, "prejoin") {
 					source = &engineidentity.Binding{ClusterID: expected.Target.ClusterID, SourceID: "77777777-7777-4777-8777-777777777777", SourceUID: "88888888-8888-4888-8888-888888888888"}
 				}
-				err = client.transferPreparationWithIdentity(ctx, managerPath, digest, int64(len(manager)), expected, action, source, []byte("private sudo fixture"), check, func(_ context.Context, output io.Writer) error {
+				var progress clusterbootstrap.PreparationProgress
+				var result *clusterbootstrap.PreparationProgress
+				if strings.HasPrefix(mode, "inspect ") {
+					result = &progress
+				}
+				err = client.transferPreparationWithResult(ctx, managerPath, digest, int64(len(manager)), expected, action, source, []byte("private sudo fixture"), check, func(_ context.Context, output io.Writer) error {
 					if mode == "producer failure" {
 						return errors.New("private producer error")
 					}
 					_, err := io.Copy(output, bytes.NewReader(payload))
 					return err
-				})
+				}, result)
+				if result != nil && (err == nil && progress.Step != "prepare_host" || err != nil && progress != (clusterbootstrap.PreparationProgress{})) {
+					t.Fatal("progress escaped remote failure or was lost", progress, err)
+				}
 			}
-			if (err == nil) != (mode == "deliver" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
+			if (err == nil) != (mode == "inspect progress" || mode == "deliver" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
 				t.Fatalf("unexpected result: %v", err)
 			}
 			if err != nil && err != ErrBootstrapVerification {

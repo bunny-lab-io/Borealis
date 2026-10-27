@@ -21,7 +21,7 @@ func TestPreparationSessionRejectsForgedStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest, _ := request.Digest()
-	for _, mode := range []string{"sequence", "nonce", "request digest", "protocol", "base64", "oversized chunk", "empty end", "duplicate chunk", "heartbeat replay", "missing heartbeat"} {
+	for _, mode := range []string{"journal step", "sequence", "nonce", "request digest", "protocol", "base64", "oversized chunk", "empty end", "duplicate chunk", "heartbeat replay", "missing heartbeat"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -66,6 +66,8 @@ func TestPreparationSessionRejectsForgedStream(t *testing.T) {
 			}
 			frame = PreparationSessionFrame{Protocol: 1, State: "chunk", Nonce: request.Session.Nonce, RequestSHA256: digest, Data: base64.StdEncoding.EncodeToString([]byte("private fixture"))}
 			switch mode {
+			case "journal step":
+				frame.JournalStep = "prepare_host"
 			case "sequence":
 				frame.Sequence = 1
 			case "nonce":

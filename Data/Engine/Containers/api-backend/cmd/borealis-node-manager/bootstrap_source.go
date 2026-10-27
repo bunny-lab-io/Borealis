@@ -36,6 +36,7 @@ func bootstrapSourceSessionContained(args []string) {
 		}
 		return nil
 	}
+	var progress clusterbootstrap.PreparationProgress
 	receive := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) error {
 		expected, err := request.Expected()
 		if err != nil || request.Session.Nonce != nonce {
@@ -96,6 +97,8 @@ func bootstrapSourceSessionContained(args []string) {
 				return errors.Join(err, journal.Close())
 			}
 			switch request.Action {
+			case "inspect_preparation_progress":
+				progress, err = inputs.InspectPreparationProgress(ctx, journal)
 			case "stage_source":
 				_, err = inputs.PublishSource(ctx, journal)
 			case "reconcile_source":
@@ -121,7 +124,11 @@ func bootstrapSourceSessionContained(args []string) {
 				return consume(ctx, inputs, nil)
 			})
 	}
-	if clusterbootstrap.ServePreparationSession(ctx, os.Stdin, os.Stdout, nonce, verify, receive, guard.ObserveDeadline) != nil {
+	if clusterbootstrap.ServePreparationSessionWithProgress(ctx, os.Stdin, os.Stdout, nonce, verify,
+		func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationProgress, error) {
+			err := receive(ctx, request, input)
+			return progress, err
+		}, guard.ObserveDeadline) != nil {
 		fatalf("source preparation failed; inspect journal before any write retry")
 	}
 }
@@ -143,6 +150,9 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 		host: verifyBootstrapSessionHost,
 		boot: readBootstrapSourceBoot,
 		paths: func(action string, destination bool) error {
+			if action == "inspect_preparation_progress" {
+				return verifyBootstrapProgressPaths(root, expected)
+			}
 			if bootstrapHostAction(action) {
 				return verifyBootstrapHostPaths(root, expected, action, destination)
 			}
