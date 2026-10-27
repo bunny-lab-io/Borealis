@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"strings"
 	"testing"
@@ -23,16 +24,16 @@ func newSSHPreparationWorkerFixture(t *testing.T, replacement bool) (sshPreparat
 }
 
 func TestClusterSSHPreparationWorkerPostgres(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "missing dispatcher", "missing sibling", "wrong envelope", "qualification lease", "dispatch failure", "wrong result", "wrong confirmation", "controller loss", "aegis lock", "ignored boundary failure", "cancelled", "cleanup failure"} {
+	for _, mode := range []string{"expansion", "replacement", "wrong source", "missing dispatcher", "missing sibling", "wrong envelope", "qualification lease", "dispatch failure", "wrong result", "wrong confirmation", "controller loss", "aegis lock", "ignored boundary failure", "cancelled", "cleanup failure"} {
 		t.Run(mode, func(t *testing.T) {
 			f, work := newSSHPreparationWorkerFixture(t, mode == "replacement")
 			ctx, cancel := context.WithCancel(f.ctx)
 			defer cancel()
 			calls := 0
 			var escaped func(context.Context) error
-			dispatch := func(ctx context.Context, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, confirmation string,
+			dispatch := func(ctx context.Context, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, confirmation string, source engineidentity.Binding,
 				check func(context.Context) error) (clusterSSHPreparationResult, error) {
-				if baseline != work.Baseline || claim != work.Claims[calls] || f.c.store.db.Stats().InUse != 0 {
+				if source != work.IdentitySource || baseline != work.Baseline || claim != work.Claims[calls] || f.c.store.db.Stats().InUse != 0 {
 					t.Error("dispatch changed input, order, or retained database connection")
 				}
 				calls++
@@ -69,6 +70,8 @@ func TestClusterSSHPreparationWorkerPostgres(t *testing.T) {
 				return result, nil
 			}
 			switch mode {
+			case "wrong source":
+				work.IdentitySource.SourceUID = newClusterUUID()
 			case "missing dispatcher":
 				dispatch = nil
 			case "missing sibling":
@@ -96,6 +99,9 @@ func TestClusterSSHPreparationWorkerPostgres(t *testing.T) {
 			if err == nil || f.events(t) != before {
 				t.Fatal("failed worker settled")
 			}
+			if mode == "wrong source" && calls != 0 {
+				t.Fatal("substituted source reached dispatcher")
+			}
 			var retained int
 			if err := f.c.store.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets
  WHERE operation_id=$1 AND state='running' AND current_step='stage_source' AND lease_holder<>''`, f.op.ID).Scan(&retained); err != nil || retained != len(f.targets) {
@@ -111,7 +117,7 @@ func TestClusterSSHPreparationWorkerPostgres(t *testing.T) {
 
 func TestClusterSSHPreparationWorkerPostgresRenewsCohort(t *testing.T) {
 	f, work := newSSHPreparationWorkerFixture(t, false)
-	dispatch := func(ctx context.Context, claim clusterSSHNetworkTargetClaim, _ clusterbootstrap.Expected, confirmation string,
+	dispatch := func(ctx context.Context, claim clusterSSHNetworkTargetClaim, _ clusterbootstrap.Expected, confirmation string, source engineidentity.Binding,
 		_ func(context.Context) error) (clusterSSHPreparationResult, error) {
 		// Force both claims near expiry while dispatcher is busy. The sibling
 		// not yet dispatched must receive heartbeats too, with a one-slot pool.

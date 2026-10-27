@@ -65,6 +65,7 @@
     "TestClusterSSHPreparationWorkerPostgresRenewsCohort",
     "TestClusterSSHPreparationPublicationPostgresProposalFence",
     "TestClusterSSHPreparationRequestPostgresIntentAndReplay",
+    "TestClusterSSHPreparationSelectedSourcePostgres",
     "TestClusterSSHPreparationRequestPostgresWaitFence",
     "TestClusterSSHPreparationRenewalPostgresBindsCiphertextAtCommit",
     "TestClusterSSHPreparationRenewalPostgresRechecksAfterLockWait",

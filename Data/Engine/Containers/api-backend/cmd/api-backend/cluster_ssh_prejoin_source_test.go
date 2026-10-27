@@ -32,6 +32,7 @@ func sshPrejoinSourceFixture(t *testing.T, replacement bool) (clusterSSHPreparat
 	a := clusterSSHPreparationAuthority{Cohort: cohort, Source: members, Lease: lease, Baseline: baseline,
 		K3sVersion: "v1.36.3+k3s1", PayloadSHA256: strings.Repeat("a", 64)}
 	s := clusterSSHPrejoinSource{Binding: engineidentity.Binding{ClusterID: members.ClusterID, SourceID: m.NodeID, SourceUID: m.NodeUID}, Process: process}
+	a.IdentitySource = &s.Binding
 	if !s.valid(a) {
 		t.Fatal("invalid fixture")
 	}

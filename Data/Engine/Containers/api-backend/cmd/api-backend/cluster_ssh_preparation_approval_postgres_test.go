@@ -24,8 +24,9 @@ func newSSHPreparationApprovalFixture(t *testing.T, replacement bool) (sshPrepar
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": plan, "confirmation": "PREPARE ENGINE NODES"})
-	confirmation, err := newClusterSSHPreparationConfirmation([]byte(raw), "admin", now, snapshot.work.Authorization)
+	source := snapshot.work.Proof.Source
+	raw := marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": plan, "confirmation": "PREPARE ENGINE NODES", "source_id": source.Members[len(source.Members)-1].NodeID})
+	confirmation, err := newClusterSSHPreparationConfirmation([]byte(raw), "admin", now, snapshot.work.Authorization, source)
 	if err != nil {
 		t.Fatal(err)
 	}

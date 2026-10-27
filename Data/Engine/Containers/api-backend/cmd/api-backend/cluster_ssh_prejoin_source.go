@@ -29,7 +29,7 @@ func (s clusterSSHPrejoinSource) validIdentity() bool {
 }
 
 func (s clusterSSHPrejoinSource) valid(a clusterSSHPreparationAuthority) bool {
-	if !s.validIdentity() || !validClusterSSHPreparationLease(a.Lease) || a.Recovery != nil || a.Baseline.Validate() != nil ||
+	if !s.validIdentity() || a.IdentitySource == nil || *a.IdentitySource != s.Binding || !validClusterSSHPreparationLease(a.Lease) || a.Recovery != nil || a.Baseline.Validate() != nil ||
 		validateClusterSSHInspectionCohort(a.Cohort, a.Source) != nil || s.Binding.ClusterID != a.Source.ClusterID ||
 		a.Lease.ControllerHolder != a.Cohort.ControllerHolder || a.Lease.OperationID != a.Cohort.OperationID || a.Lease.OperationAttempt != a.Cohort.Attempt ||
 		!validClusterSSHPreparationDigest(a.PayloadSHA256) || s.Binding.SourceID == a.Lease.TargetID {

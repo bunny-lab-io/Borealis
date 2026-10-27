@@ -121,7 +121,7 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 func (c *clusterController) approveClusterSSHPreparation(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot,
 	confirmation clusterSSHPreparationConfirmation, getJSON func(context.Context, string, any) error, gates clusterSSHPreparationGates) error {
 	plan, err := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
-	if c == nil || err != nil || getJSON == nil || !confirmation.valid(snapshot.work.Authorization) {
+	if c == nil || err != nil || getJSON == nil || !confirmation.valid(snapshot.work.Authorization, snapshot.work.Proof.Source) {
 		return errClusterConflict
 	}
 	source := func(ctx context.Context) error {

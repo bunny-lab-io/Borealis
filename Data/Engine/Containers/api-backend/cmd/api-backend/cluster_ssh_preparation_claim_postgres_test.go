@@ -39,7 +39,7 @@ func newSSHPreparationClaimFixture(t *testing.T, replacement bool) (sshPreparati
 	if json.Unmarshal([]byte(raw), &payload) != nil {
 		t.Fatal("decode payload")
 	}
-	payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization)
+	payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization, proof.Source)
 	plan, _ := clusterSSHPreparationPlanDigest(authorization)
 	var receipts [6]string
 	for i := range receipts {
@@ -166,7 +166,13 @@ func TestClusterSSHPreparationClaimPostgresRejectsDrift(t *testing.T) {
 				report := f.op.Payload["ssh_qualification"].(clusterSSHQualificationReport)
 				report.ObservedAt -= clusterSSHInspectionLifetimeSeconds
 				authorization.QualificationSHA256, _ = clusterSSHPreparationDigest(report)
-				f.op.Payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization)
+				var inspected clusterSSHParentProof
+				wire := marshalClusterJSON(f.op.Payload)
+				inspected, _, err := parseClusterSSHPreparationInspection([]byte(wire), f.lease, f.baseline)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.op.Payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization, inspected.Source)
 				plan, _ := clusterSSHPreparationPlanDigest(authorization)
 				readiness := f.op.Payload["ssh_preparation_readiness"].(clusterSSHPreparationReadinessReceipt)
 				readiness.PlanSHA256 = plan

@@ -35,7 +35,7 @@ func (s *sshPreparationAPITestStore) requestClusterSSHPreparation(ctx context.Co
 	if s.err != nil {
 		return clusterSSHPreparationConfirmation{}, s.err
 	}
-	return newClusterSSHPreparationConfirmation(raw, actor, time.Now().Unix(), s.snapshot.work.Authorization)
+	return newClusterSSHPreparationConfirmation(raw, actor, time.Now().Unix(), s.snapshot.work.Authorization, s.snapshot.work.Proof.Source)
 }
 
 func sshPreparationAPIService(t *testing.T) (*clusterSSHPreparationAPI, *sshPreparationAPITestStore, string, string) {
@@ -49,7 +49,7 @@ func sshPreparationAPIService(t *testing.T) (*clusterSSHPreparationAPI, *sshPrep
 		Proof: proof, Baseline: baseline, Authorization: authorization, Payload: `{"private":"do-not-disclose"}`},
 		credentials: []sealedClusterSSHCredentials{{ciphertext: "do-not-disclose-credential", generation: "private-generation"}}}}
 	plan, _ := clusterSSHPreparationPlanDigest(authorization)
-	raw := marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": plan, "confirmation": "PREPARE ENGINE NODES"})
+	raw := marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": plan, "confirmation": "PREPARE ENGINE NODES", "source_id": source.Members[0].NodeID})
 	return &clusterSSHPreparationAPI{auth: auth, store: backend, slots: make(chan struct{}, 1)}, backend, token, raw
 }
 
@@ -65,7 +65,7 @@ func sshPreparationAPIRequest(t *testing.T, s *clusterSSHPreparationAPI, token, 
 }
 
 func TestClusterSSHPreparationAPIAdminAndValidation(t *testing.T) {
-	for _, mode := range []string{"success", "unauthenticated", "non admin", "bad id", "query", "unknown", "alias", "duplicate", "timestamp", "actor", "bad UUID", "bad digest", "wrong phrase", "oversize", "invalid UTF-8", "backend error", "busy"} {
+	for _, mode := range []string{"success", "unauthenticated", "non admin", "bad id", "query", "unknown", "alias", "duplicate", "timestamp", "actor", "bad UUID", "bad digest", "missing source", "bad source", "zero source", "source UID injection", "wrong phrase", "oversize", "invalid UTF-8", "backend error", "busy"} {
 		t.Run(mode, func(t *testing.T) {
 			s, backend, token, raw := sshPreparationAPIService(t)
 			path := "/api/server/cluster/onboarding/operations/" + backend.snapshot.work.Authorization.OperationID + "/prepare"
@@ -99,6 +99,20 @@ func TestClusterSSHPreparationAPIAdminAndValidation(t *testing.T) {
 				raw = marshalClusterJSON(body)
 			case "wrong phrase":
 				raw = strings.Replace(raw, "PREPARE ENGINE NODES", "INSPECT ENGINE NODES", 1)
+			case "missing source", "bad source", "zero source", "source UID injection":
+				var body map[string]any
+				_ = json.Unmarshal([]byte(raw), &body)
+				switch mode {
+				case "missing source":
+					delete(body, "source_id")
+				case "bad source":
+					body["source_id"] = "invalid"
+				case "zero source":
+					body["source_id"] = "00000000-0000-0000-0000-000000000000"
+				case "source UID injection":
+					body["source_uid"] = newClusterUUID()
+				}
+				raw = marshalClusterJSON(body)
 			case "oversize":
 				raw += strings.Repeat(" ", 4097)
 			case "invalid UTF-8":
@@ -131,7 +145,7 @@ func TestClusterSSHPreparationAPIPlanProjection(t *testing.T) {
 			body, want := "", 200
 			switch mode {
 			case "confirmed", "stale confirmation":
-				c, err := newClusterSSHPreparationConfirmation([]byte(raw), "operator", time.Now().Unix(), backend.snapshot.work.Authorization)
+				c, err := newClusterSSHPreparationConfirmation([]byte(raw), "operator", time.Now().Unix(), backend.snapshot.work.Authorization, backend.snapshot.work.Proof.Source)
 				if err != nil {
 					t.Fatal(err)
 				}

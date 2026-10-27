@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -34,12 +35,13 @@ type clusterSSHPreparationAuthorizedTarget struct {
 }
 
 type clusterSSHPreparationWork struct {
-	Claims        []clusterSSHNetworkTargetClaim
-	Baseline      clusterbootstrap.Expected
-	Payload       string
-	Proof         clusterSSHParentProof
-	Source        clusterSSHQueueSource
-	Authorization clusterSSHPreparationAuthorization
+	Claims         []clusterSSHNetworkTargetClaim
+	Baseline       clusterbootstrap.Expected
+	Payload        string
+	Proof          clusterSSHParentProof
+	Source         clusterSSHQueueSource
+	Authorization  clusterSSHPreparationAuthorization
+	IdentitySource engineidentity.Binding
 }
 
 func (clusterSSHPreparationWork) String() string   { return "SSH preparation work [redacted]" }
@@ -92,7 +94,7 @@ func parseClusterSSHPreparationAuthorization(payload string, proof clusterSSHPar
 			return fail()
 		}
 	}
-	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization)
+	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization, proof.Source)
 	if err != nil || confirmation.ConfirmedAt < qualification.ObservedAt || parseClusterSSHPreparationReadiness(readinessRaw, authorization) != nil {
 		return fail()
 	}
@@ -161,10 +163,11 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 	if clusterBootstrapObject([]byte(work.Payload), map[string]any{"ssh_preparation_confirmation": &confirmationRaw}) != nil {
 		return fail()
 	}
-	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, work.Authorization)
+	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, work.Authorization, work.Proof.Source)
 	if err != nil {
 		return fail()
 	}
+	work.IdentitySource = confirmation.IdentitySource
 	targets := slices.Clone(work.Proof.Cohort.Targets)
 	slices.SortFunc(targets, func(a, b clusterSSHInspectedTarget) int {
 		return strings.Compare(a.Binding.TargetID, b.Binding.TargetID)

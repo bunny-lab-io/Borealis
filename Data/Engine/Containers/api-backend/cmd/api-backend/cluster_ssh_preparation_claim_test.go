@@ -34,7 +34,7 @@ func TestClusterSSHPreparationAuthorizationBindsExactReservation(t *testing.T) {
 		report.Checks[i].State = "passed"
 	}
 	authorization := sshPreparationAuthorizationFixture(t, proof, queue, &report)
-	confirmation := sshPreparationConfirmationFixture(t, &authorization)
+	confirmation := sshPreparationConfirmationFixture(t, &authorization, source)
 	plan, _ := clusterSSHPreparationPlanDigest(authorization)
 	var receipts [6]string
 	for i := range receipts {

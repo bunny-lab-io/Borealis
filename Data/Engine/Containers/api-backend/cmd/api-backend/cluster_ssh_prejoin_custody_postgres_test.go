@@ -15,7 +15,8 @@ import (
 func TestClusterSSHPrejoinCustodyPostgresAuthorityAndPoolRelease(t *testing.T) {
 	for _, mode := range []string{"expansion", "replacement", "controller drift", "credential revoked", "source Pod replaced", "final authority drift"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
+			f, work := newSSHPreparationWorkerFixture(t, mode == "replacement")
+			f.lease, f.sealed = work.Claims[0].Lease, work.Claims[0].Sealed
 			f.c.store.db.SetMaxOpenConns(1)
 			a, err := f.read(f.ctx)
 			if err != nil {

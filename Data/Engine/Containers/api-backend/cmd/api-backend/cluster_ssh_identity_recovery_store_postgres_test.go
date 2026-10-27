@@ -80,6 +80,32 @@ func clusterSSHIdentityRecoveryReservationObserver(t *testing.T, reservation clu
 }
 
 func TestClusterSSHIdentityRecoveryReservationPostgres(t *testing.T) {
+	t.Run("replacement retains explicitly confirmed survivor", func(t *testing.T) {
+		f, completions := newSSHPreparationCompletionFixture(t, true)
+		if err := f.c.store.completeClusterSSHPreparation(f.ctx, completions); err != nil {
+			t.Fatal(err)
+		}
+		reservation, err := f.c.loadClusterSSHIdentityRecoveryReservation(f.ctx, f.op)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reservation.IdentitySource.SourceID != reservation.Proof.Source.Members[1].NodeID {
+			t.Fatal("fixture did not explicitly select second survivor")
+		}
+		observe := clusterSSHIdentityRecoveryReservationObserver(t, reservation, nil)
+		recovery, err := discoverClusterSSHIdentityRecoveryRequest(f.ctx, observe, reservation)
+		if err != nil || recovery.SourceID != reservation.IdentitySource.SourceID || recovery.SourceNodeUID != reservation.IdentitySource.SourceUID {
+			t.Fatal("discovery changed selected source", err)
+		}
+		changed := recovery
+		changed.SourceID, changed.SourceNodeUID = reservation.Proof.Source.Members[0].NodeID, reservation.Proof.Source.Members[0].NodeUID
+		if f.c.commitClusterSSHIdentityRecoveryReservation(f.ctx, reservation, changed) == nil {
+			t.Fatal("commit switched to another original source")
+		}
+		if err := f.c.commitClusterSSHIdentityRecoveryReservation(f.ctx, reservation, recovery); err != nil {
+			t.Fatal("selected source rejected", err)
+		}
+	})
 	t.Run("original controller reserves one drained target", func(t *testing.T) {
 		f, reservation := newSSHIdentityRecoveryReservationFixture(t)
 		observe := clusterSSHIdentityRecoveryReservationObserver(t, reservation, nil)

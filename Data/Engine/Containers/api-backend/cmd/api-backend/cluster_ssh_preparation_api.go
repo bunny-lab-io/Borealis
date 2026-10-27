@@ -65,12 +65,12 @@ func (s *clusterSSHPreparationAPI) plan(w http.ResponseWriter, r *http.Request) 
 	}
 	var confirmation any
 	if len(raw) != 0 {
-		stored, err := parseClusterSSHPreparationRequest(raw, snapshot.work.Authorization)
+		stored, err := parseClusterSSHPreparationRequest(raw, snapshot.work.Authorization, snapshot.work.Proof.Source)
 		if err != nil || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHInspectionLifetimeSeconds {
 			writeClusterSSHOnboardingError(w, errClusterConflict)
 			return
 		}
-		confirmation = map[string]any{"request_id": stored.RequestID, "confirmed_at": stored.ConfirmedAt}
+		confirmation = map[string]any{"request_id": stored.RequestID, "confirmed_at": stored.ConfirmedAt, "source_id": stored.IdentitySource.SourceID}
 	}
 	targets := make([]map[string]any, 0, len(snapshot.work.Proof.Cohort.Targets))
 	for _, target := range snapshot.work.Proof.Cohort.Targets {
@@ -78,9 +78,13 @@ func (s *clusterSSHPreparationAPI) plan(w http.ResponseWriter, r *http.Request) 
 			"port": target.Binding.Port, "hostname": target.Report.Hostname, "host_key_fingerprint": target.Binding.Fingerprint})
 	}
 	// Explicit projection: never serialize snapshot, authorization or credentials.
+	sources := make([]map[string]any, 0, len(snapshot.work.Proof.Source.Members))
+	for _, member := range snapshot.work.Proof.Source.Members {
+		sources = append(sources, map[string]any{"source_id": member.NodeID, "hostname": member.Name})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"operation_id": snapshot.work.Authorization.OperationID,
 		"attempt": snapshot.work.Authorization.Attempt, "plan_sha256": plan, "baseline_release": snapshot.work.Baseline.Release,
-		"source_sha": snapshot.work.Baseline.SourceSHA, "targets": targets, "confirmation": confirmation,
+		"source_sha": snapshot.work.Baseline.SourceSHA, "targets": targets, "identity_sources": sources, "confirmation": confirmation,
 		"preparation_authorized": false, "state": "awaiting_readiness"})
 }
 
@@ -102,7 +106,7 @@ func (s *clusterSSHPreparationAPI) request(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer clear(raw)
-	if _, _, err := parseClusterSSHPreparationRequestBody(raw); err != nil {
+	if _, _, _, err := parseClusterSSHPreparationRequestBody(raw); err != nil {
 		writePublicValidationErrors(w, []publicValidationError{{Field: "body", Message: "exact preparation confirmation fields required"}})
 		return
 	}
@@ -125,6 +129,6 @@ func (s *clusterSSHPreparationAPI) request(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"operation_id": confirmation.OperationID, "request_id": confirmation.RequestID,
-		"plan_sha256": confirmation.PlanSHA256, "confirmed_at": confirmation.ConfirmedAt,
+		"plan_sha256": confirmation.PlanSHA256, "confirmed_at": confirmation.ConfirmedAt, "source_id": confirmation.IdentitySource.SourceID,
 		"state": "awaiting_readiness", "preparation_authorized": false})
 }

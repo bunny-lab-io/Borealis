@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -222,13 +223,33 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	if clusterBootstrapObject([]byte(source.ConfigJSON), map[string]any{"k3s_version": &configured}) != nil || configured != version {
 		return fail()
 	}
+	var identitySource *engineidentity.Binding
+	if validClusterSSHPreparationLease(lease) {
+		var authorizationRaw, confirmationRaw json.RawMessage
+		if clusterBootstrapObject([]byte(payload), map[string]any{"ssh_preparation_authorization": &authorizationRaw, "ssh_preparation_confirmation": &confirmationRaw}) != nil {
+			return fail()
+		}
+		// Legacy observation fixtures may omit mutation authorization. They never
+		// acquire a selected source and cannot pass private pre-join custody.
+		if len(authorizationRaw) != 0 || len(confirmationRaw) != 0 {
+			authorization, _, err := parseClusterSSHPreparationAuthorization(payload, proof, queue)
+			if err != nil {
+				return fail()
+			}
+			confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization, proof.Source)
+			if err != nil {
+				return fail()
+			}
+			identitySource = &confirmation.IdentitySource
+		}
+	}
 	proof.Cohort.ObservedAt = now
 	if validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil || ctx.Err() != nil {
 		return fail()
 	}
 	payloadDigest := sha256.Sum256([]byte(payload))
 	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Queue: queue, Lease: lease, Baseline: baseline,
-		K3sVersion: version, PayloadSHA256: hex.EncodeToString(payloadDigest[:]), Recovery: recovery, payload: payload}, nil
+		K3sVersion: version, PayloadSHA256: hex.EncodeToString(payloadDigest[:]), Recovery: recovery, IdentitySource: identitySource, payload: payload}, nil
 }
 
 func parseClusterSSHPreparationInspection(payload []byte, lease clusterSSHTargetLease, baseline clusterbootstrap.Expected) (clusterSSHParentProof, string, error) {

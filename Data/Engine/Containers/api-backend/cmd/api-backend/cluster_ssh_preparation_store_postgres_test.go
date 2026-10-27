@@ -104,7 +104,7 @@ func TestClusterSSHPreparationCompletionPostgres(t *testing.T) {
 		})
 	}
 
-	for _, mode := range []string{"controller", "credential", "source config", "payload digest", "missing sibling", "expired lease", "blocked qualification", "mixed confirmation", "unapproved confirmation", "unreserved generation", "missing authorization"} {
+	for _, mode := range []string{"controller", "credential", "source config", "missing source", "changed sibling source", "payload digest", "missing sibling", "expired lease", "blocked qualification", "mixed confirmation", "unapproved confirmation", "unreserved generation", "missing authorization"} {
 		t.Run("reject "+mode, func(t *testing.T) {
 			f, completions := newSSHPreparationCompletionFixture(t, false)
 			switch mode {
@@ -114,6 +114,12 @@ func TestClusterSSHPreparationCompletionPostgres(t *testing.T) {
 				f.exec(t, `UPDATE engine.cluster_onboarding_credentials SET ciphertext=ciphertext||'changed' WHERE target_id=$1`, completions[1].Authority.Lease.TargetID)
 			case "source config":
 				f.exec(t, `UPDATE engine.cluster_state SET config_json='{}' WHERE id=1`)
+			case "missing source":
+				completions[0].Authority.IdentitySource = nil
+			case "changed sibling source":
+				selected := *completions[1].Authority.IdentitySource
+				selected.SourceUID = newClusterUUID()
+				completions[1].Authority.IdentitySource = &selected
 			case "payload digest":
 				completions[0].Authority.PayloadSHA256 = strings.Repeat("f", 64)
 			case "missing sibling":

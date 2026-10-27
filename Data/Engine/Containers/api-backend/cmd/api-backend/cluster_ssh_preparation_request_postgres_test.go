@@ -14,7 +14,52 @@ func newSSHPreparationRequestFixture(t *testing.T) (sshPreparationAuthorityFixtu
 	delete(f.op.Payload, "ssh_preparation_request")
 	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
 	plan, _ := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
-	return f, []byte(marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": plan, "confirmation": "PREPARE ENGINE NODES"}))
+	return f, []byte(marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": plan, "confirmation": "PREPARE ENGINE NODES", "source_id": snapshot.work.Proof.Source.Members[0].NodeID}))
+}
+
+func TestClusterSSHPreparationSelectedSourcePostgres(t *testing.T) {
+	f, snapshot, selected, proof := newSSHPreparationApprovalFixture(t, true)
+	body := map[string]any{"request_id": selected.RequestID, "plan_sha256": selected.PlanSHA256, "confirmation": "PREPARE ENGINE NODES", "source_id": selected.IdentitySource.SourceID}
+	before := f.events(t)
+	got, err := f.c.store.requestClusterSSHPreparation(f.ctx, f.op.ID, selected.Actor, []byte(marshalClusterJSON(body)))
+	if err != nil || got != selected || f.events(t) != before {
+		t.Fatal("selected source replay changed intent", err)
+	}
+	body["source_id"] = snapshot.work.Proof.Source.Members[0].NodeID
+	if body["source_id"] == selected.IdentitySource.SourceID {
+		t.Fatal("fixture lacks alternate survivor")
+	}
+	if _, err := f.c.store.requestClusterSSHPreparation(f.ctx, f.op.ID, selected.Actor, []byte(marshalClusterJSON(body))); err == nil {
+		t.Fatal("same request changed source")
+	}
+	if f.events(t) != before {
+		t.Fatal("rejected source emitted success event")
+	}
+	if err := f.c.commitClusterSSHPreparationApproval(f.ctx, snapshot, selected, proof); err != nil {
+		t.Fatal(err)
+	}
+	f.op.State, f.op.CurrentStep = "running", clusterSSHPreparationOperationStep
+	work, err := f.c.claimClusterSSHPreparation(f.ctx, f.op, newClusterUUID())
+	if err != nil || work.IdentitySource != selected.IdentitySource {
+		t.Fatal("claim changed source", err)
+	}
+	f.lease, f.sealed = work.Claims[0].Lease, work.Claims[0].Sealed
+	authority, err := f.read(f.ctx)
+	if err != nil || authority.IdentitySource == nil || *authority.IdentitySource != selected.IdentitySource {
+		t.Fatal("authority lost selected source", err)
+	}
+	_, process, _ := existingIdentitySourceFixture(t)
+	member := snapshot.work.Proof.Source.Members[1]
+	process.NodeName = member.Name
+	source := clusterSSHPrejoinSource{Binding: selected.IdentitySource, Process: process}
+	if !source.valid(authority) {
+		t.Fatal("selected source cannot prove custody")
+	}
+	member = snapshot.work.Proof.Source.Members[0]
+	source.Binding.SourceID, source.Binding.SourceUID, source.Process.NodeName = member.NodeID, member.NodeUID, member.Name
+	if source.valid(authority) {
+		t.Fatal("custody permitted unselected original survivor")
+	}
 }
 
 func TestClusterSSHPreparationRequestPostgresIntentAndReplay(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -14,12 +15,13 @@ import (
 )
 
 type clusterSSHIdentityRecoveryReservation struct {
-	Operation clusterControllerOperation
-	Baseline  clusterbootstrap.Expected
-	Proof     clusterSSHParentProof
-	Receipt   clusterSSHPreparationReceipt
-	Target    clusterSSHInspectedTarget
-	Payload   string
+	Operation      clusterControllerOperation
+	Baseline       clusterbootstrap.Expected
+	Proof          clusterSSHParentProof
+	Receipt        clusterSSHPreparationReceipt
+	Target         clusterSSHInspectedTarget
+	Payload        string
+	IdentitySource engineidentity.Binding
 }
 
 func completedClusterSSHQualification(report *clusterSSHQualificationReport) bool {
@@ -82,6 +84,10 @@ func (c *clusterController) loadClusterSSHIdentityRecoveryReservation(ctx contex
 	if err != nil {
 		return fail()
 	}
+	selected, err := clusterSSHPreparationRecordedSource(raw, proof, receipt.ConfirmationSHA256)
+	if err != nil {
+		return fail()
+	}
 	var qualificationRaw json.RawMessage
 	if clusterBootstrapObject([]byte(raw), map[string]any{"ssh_qualification": &qualificationRaw}) != nil || len(qualificationRaw) == 0 {
 		return fail()
@@ -92,7 +98,7 @@ func (c *clusterController) loadClusterSSHIdentityRecoveryReservation(ctx contex
 	}
 	for _, target := range proof.Cohort.Targets {
 		if target.Binding.TargetID == targetID {
-			return clusterSSHIdentityRecoveryReservation{Operation: operation, Baseline: baseline, Proof: proof, Receipt: receipt, Target: target, Payload: raw}, nil
+			return clusterSSHIdentityRecoveryReservation{Operation: operation, Baseline: baseline, Proof: proof, Receipt: receipt, Target: target, Payload: raw, IdentitySource: selected}, nil
 		}
 	}
 	return fail()
@@ -131,6 +137,10 @@ func discoverClusterSSHIdentityRecoveryRequest(ctx context.Context, getJSON func
 	}
 	if getJSON == nil || reservation.Operation.ID == "" || reservation.Target.Binding.TargetID == "" ||
 		validateClusterSSHInspectionCohort(reservation.Proof.Cohort, reservation.Proof.Source) != nil || len(reservation.Proof.Source.Members) == 0 || ctx.Err() != nil {
+		return fail()
+	}
+	selected, err := clusterSSHPreparationRecordedSource(reservation.Payload, reservation.Proof, reservation.Receipt.ConfirmationSHA256)
+	if err != nil || selected != reservation.IdentitySource {
 		return fail()
 	}
 	readNamespace := func() (string, error) {
@@ -191,8 +201,7 @@ func discoverClusterSSHIdentityRecoveryRequest(ctx context.Context, getJSON func
 	if err != nil || before != after || targetUID == "" || ctx.Err() != nil {
 		return fail()
 	}
-	source := reservation.Proof.Source.Members[0]
-	recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: source.NodeID, SourceNodeUID: source.NodeUID, TargetNodeUID: targetUID}
+	recovery := clusterbootstrap.IdentityRecoveryRequest{SourceID: selected.SourceID, SourceNodeUID: selected.SourceUID, TargetNodeUID: targetUID}
 	binding := clusterbootstrap.SessionBinding{ClusterID: reservation.Proof.Source.ClusterID, OperationID: reservation.Operation.ID,
 		TargetID: reservation.Target.Binding.TargetID, HolderID: "00000000-0000-4000-8000-000000000001", Generation: 1,
 		OperationAttempt: reservation.Operation.Attempt, Address: reservation.Target.Binding.Address, Port: reservation.Target.Binding.Port,
@@ -216,6 +225,10 @@ func (c *clusterController) commitClusterSSHIdentityRecoveryReservation(ctx cont
 	}
 	receipt, err := parseClusterSSHPreparationReceipt(reservation.Payload, reservation.Proof)
 	if err != nil || !reflect.DeepEqual(receipt, reservation.Receipt) {
+		return errClusterConflict
+	}
+	selected, err := clusterSSHPreparationRecordedSource(reservation.Payload, reservation.Proof, receipt.ConfirmationSHA256)
+	if err != nil || selected != reservation.IdentitySource || recovery.SourceID != selected.SourceID || recovery.SourceNodeUID != selected.SourceUID {
 		return errClusterConflict
 	}
 	var payload map[string]json.RawMessage

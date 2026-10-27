@@ -124,6 +124,10 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 	if err != nil {
 		return errClusterConflict
 	}
+	selected, err := clusterSSHPreparationRecordedSource(first.payload, inspection, authorization.ConfirmationSHA256)
+	if err != nil || first.IdentitySource == nil || *first.IdentitySource != selected {
+		return errClusterConflict
+	}
 	byTarget := make(map[string]clusterSSHPreparationCompletion, len(completions))
 	confirmation := authorization.ConfirmationSHA256
 	stableCohort := first.Cohort
@@ -138,6 +142,7 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 		stable := authority.Cohort
 		stable.ObservedAt = 0
 		if !completion.Result.valid(authority.Lease) || completion.Result.ConfirmationSHA256 != confirmation || byTarget[authority.Lease.TargetID].Result.Version != 0 ||
+			authority.IdentitySource == nil || *authority.IdentitySource != selected ||
 			authority.Recovery != nil || authority.payload != first.payload || authority.PayloadSHA256 != first.PayloadSHA256 ||
 			authority.Baseline != first.Baseline || authority.K3sVersion != first.K3sVersion || authority.Queue != first.Queue ||
 			validateClusterSSHInspectionCohort(authority.Cohort, authority.Source) != nil || !reflect.DeepEqual(stable, stableCohort) || !reflect.DeepEqual(authority.Source, first.Source) ||

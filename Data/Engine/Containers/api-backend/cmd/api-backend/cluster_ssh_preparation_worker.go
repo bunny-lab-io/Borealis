@@ -2,9 +2,11 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"time"
@@ -14,7 +16,7 @@ import (
 // journals and joined cleanup. Returning hashes alone is not an implementation
 // of that contract. No production adapter or polling caller is installed.
 type clusterSSHPreparationDispatch func(context.Context, clusterSSHNetworkTargetClaim,
-	clusterbootstrap.Expected, string, func(context.Context) error) (clusterSSHPreparationResult, error)
+	clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) (clusterSSHPreparationResult, error)
 
 type clusterSSHPreparationWorker struct {
 	store    *postgresOperatorStore
@@ -48,6 +50,14 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 	if err != nil || !reflect.DeepEqual(authorization, work.Authorization) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
+	var confirmationRaw json.RawMessage
+	if clusterBootstrapObject([]byte(work.Payload), map[string]any{"ssh_preparation_confirmation": &confirmationRaw}) != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization, proof.Source)
+	if err != nil || confirmation.IdentitySource != work.IdentitySource {
+		return clusterbootstrap.ErrPreparationConfig
+	}
 	digest := sha256.Sum256([]byte(work.Payload))
 	payloadHash := hex.EncodeToString(digest[:])
 	readers := make([]clusterSSHPreparationAuthorityRead, len(claims))
@@ -66,7 +76,7 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			value, err := read(ctx)
 			stable, inspected := value.Cohort, proof.Cohort
 			stable.ObservedAt, inspected.ObservedAt = 0, 0
-			if err != nil || value.Lease != claim.Lease || value.Baseline != work.Baseline || value.Recovery != nil ||
+			if err != nil || value.IdentitySource == nil || *value.IdentitySource != work.IdentitySource || value.Lease != claim.Lease || value.Baseline != work.Baseline || value.Recovery != nil ||
 				value.payload != work.Payload || value.PayloadSHA256 != payloadHash || value.K3sVersion != version ||
 				value.Queue != work.Source || !reflect.DeepEqual(value.Source, proof.Source) || !reflect.DeepEqual(stable, inspected) {
 				return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrSessionAuthority
@@ -101,7 +111,7 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			if check(ctx) != nil {
 				return clusterbootstrap.ErrSessionAuthority
 			}
-			result, err := w.dispatch(ctx, claim, work.Baseline, authorization.ConfirmationSHA256, check)
+			result, err := w.dispatch(ctx, claim, work.Baseline, authorization.ConfirmationSHA256, work.IdentitySource, check)
 			if err != nil || ctx.Err() != nil || !result.valid(claim.Lease) ||
 				result.ConfirmationSHA256 != authorization.ConfirmationSHA256 || check(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig

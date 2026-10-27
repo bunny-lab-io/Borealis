@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -24,15 +25,16 @@ var clusterSSHSourceJobPathRE = regexp.MustCompile(`^/apis/batch/v1/namespaces/b
 // returning its DB connection. No callback may retain a transaction or select
 // source identity from this API replica's process environment.
 type clusterSSHPreparationAuthority struct {
-	Cohort        clusterSSHInspectionCohort
-	Source        clusterSSHSourceCohort
-	Queue         clusterSSHQueueSource
-	Lease         clusterSSHTargetLease
-	Baseline      clusterbootstrap.Expected
-	K3sVersion    string
-	PayloadSHA256 string
-	Recovery      *clusterSSHIdentityRecoveryAuthorityBinding
-	payload       string
+	Cohort         clusterSSHInspectionCohort
+	Source         clusterSSHSourceCohort
+	Queue          clusterSSHQueueSource
+	Lease          clusterSSHTargetLease
+	Baseline       clusterbootstrap.Expected
+	K3sVersion     string
+	PayloadSHA256  string
+	Recovery       *clusterSSHIdentityRecoveryAuthorityBinding
+	IdentitySource *engineidentity.Binding
+	payload        string
 }
 
 type clusterSSHPreparationAuthorityRead func(context.Context) (clusterSSHPreparationAuthority, error)

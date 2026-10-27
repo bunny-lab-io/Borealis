@@ -165,7 +165,7 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	confirmation clusterSSHPreparationConfirmation, proof clusterSSHPreparationApprovalProof) error {
 	w := snapshot.work
 	plan, err := clusterSSHPreparationPlanDigest(w.Authorization)
-	if c == nil || c.store == nil || c.store.db == nil || ctx.Err() != nil || err != nil || !confirmation.valid(w.Authorization) ||
+	if c == nil || c.store == nil || c.store.db == nil || ctx.Err() != nil || err != nil || !confirmation.valid(w.Authorization, w.Proof.Source) ||
 		w.Authorization.ControllerHolder != c.holder || !proof.valid(plan) || len(snapshot.credentials) != len(w.Proof.Cohort.Targets) ||
 		len(w.Authorization.Targets) != len(snapshot.credentials) || proof.recheck(ctx) != nil || !proof.valid(plan) {
 		return errClusterConflict
@@ -174,7 +174,7 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	if json.Unmarshal([]byte(w.Payload), &payload) != nil || payload["ssh_preparation_authorization"] != nil || payload["ssh_preparation_confirmation"] != nil {
 		return errClusterConflict
 	}
-	requested, err := parseClusterSSHPreparationRequest(payload["ssh_preparation_request"], w.Authorization)
+	requested, err := parseClusterSSHPreparationRequest(payload["ssh_preparation_request"], w.Authorization, w.Proof.Source)
 	if err != nil || requested != confirmation {
 		return errClusterConflict
 	}

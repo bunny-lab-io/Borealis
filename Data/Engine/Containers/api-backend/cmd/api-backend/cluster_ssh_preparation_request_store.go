@@ -88,7 +88,7 @@ func (s *postgresOperatorStore) requestClusterSSHPreparation(ctx context.Context
 		return fail()
 	}
 	w := snapshot.work
-	confirmation, err := newClusterSSHPreparationConfirmation(raw, actor, now, w.Authorization)
+	confirmation, err := newClusterSSHPreparationConfirmation(raw, actor, now, w.Authorization, w.Proof.Source)
 	if err != nil {
 		return fail()
 	}
@@ -102,9 +102,9 @@ func (s *postgresOperatorStore) requestClusterSSHPreparation(ctx context.Context
 	}
 	replay := len(payload["ssh_preparation_request"]) != 0
 	if replay {
-		stored, err := parseClusterSSHPreparationRequest(payload["ssh_preparation_request"], w.Authorization)
+		stored, err := parseClusterSSHPreparationRequest(payload["ssh_preparation_request"], w.Authorization, w.Proof.Source)
 		if err != nil || stored.RequestID != confirmation.RequestID || stored.Actor != confirmation.Actor ||
-			stored.PlanSHA256 != confirmation.PlanSHA256 || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHInspectionLifetimeSeconds {
+			stored.PlanSHA256 != confirmation.PlanSHA256 || stored.IdentitySource != confirmation.IdentitySource || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHInspectionLifetimeSeconds {
 			return fail()
 		}
 		confirmation = stored
