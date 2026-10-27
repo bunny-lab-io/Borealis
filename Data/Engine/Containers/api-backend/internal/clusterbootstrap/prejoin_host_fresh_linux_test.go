@@ -81,6 +81,9 @@ func TestPrejoinHostLegacyIntentCannotAttestFreshHost(t *testing.T) {
 	if _, err := p.completePrejoinHost(ctx, j, install, material, PrejoinHostRecoveryActions{ProveConfigured: actions.CheckFresh, Complete: actions.Prepare, Prove: actions.Prove}, parent); err == nil || calls != 0 {
 		t.Fatal("legacy host intent entered continuation", err, calls)
 	}
+	if _, err := p.completePrejoinFirewall(ctx, j, install, material, PrejoinFirewallRecoveryActions{ProvePartial: actions.CheckFresh, Complete: actions.Prepare, Prove: actions.Prove}, parent); err == nil || calls != 0 {
+		t.Fatal("legacy host intent entered firewall continuation", err, calls)
+	}
 	if r := readMutationFixture(t, path).Steps["prepare_host"]; r.InputSHA256 != legacy || r.ResultSHA256 != legacy || r.State != "applied" {
 		t.Fatal("legacy evidence rewritten")
 	}

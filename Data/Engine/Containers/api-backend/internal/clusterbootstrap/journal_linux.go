@@ -118,6 +118,9 @@ func (s mutationState) valid() bool {
 					return false
 				}
 				partial, hostContinued = prejoinHostConfiguredDigest(r.InputSHA256), true
+				if r.ResultSHA256 == prejoinHostFirewallDigest(r.InputSHA256) {
+					partial = r.ResultSHA256
+				}
 			}
 			if s.Version < 3 || partial == "" || r.ResultSHA256 != partial ||
 				!exists || current.InputSHA256 != r.InputSHA256 || current.Binding.Generation <= r.Binding.Generation || current.Binding.OperationAttempt < r.Binding.OperationAttempt || current.State == "not_applied" {

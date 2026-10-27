@@ -81,7 +81,7 @@ func readBootstrapHostFirewall(parent context.Context, chain string) ([]byte, er
 	return output.buffer.Bytes(), nil
 }
 
-// The generated script flushes its named chain. Fresh preparation must prove
+// The generated script replaces its named chain. Fresh preparation must prove
 // no preexisting chain/reference before invoking it; command failure is unknown,
 // never absence. Read the complete bounded filter table twice without autoload.
 func proveBootstrapFreshFirewall(ctx context.Context, check func(context.Context) error, read func(context.Context, string) ([]byte, error)) error {
@@ -151,12 +151,7 @@ func validateBootstrapHostFirewall(raw []byte, chain string, expected clusterboo
 		}
 		// The installer inserts each jump at position one. Require that exact
 		// prefix, not merely -C membership: an earlier ACCEPT would bypass it.
-		for i, port := range []string{"51821", "51820", "8472", "5001", "10250", "2379:2381", "6443"} {
-			protocol := "tcp"
-			if i < 3 {
-				protocol = "udp"
-			}
-			want := "-A INPUT -p " + protocol + " -m " + protocol + " --dport " + port + " -j " + bootstrapHostFirewallChain
+		for i, want := range bootstrapHostFirewallInputRules() {
 			if lines[i+1] != want {
 				return errBootstrapSource
 			}
@@ -171,6 +166,31 @@ func validateBootstrapHostFirewall(raw []byte, chain string, expected clusterboo
 	if chain != bootstrapHostFirewallChain {
 		return errBootstrapSource
 	}
+	want := bootstrapHostFirewallChainRules(expected)
+	if len(lines) != len(want) {
+		return errBootstrapSource
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			return errBootstrapSource
+		}
+	}
+	return nil
+}
+
+func bootstrapHostFirewallInputRules() []string {
+	rules := make([]string, 0, 7)
+	for i, port := range []string{"51821", "51820", "8472", "5001", "10250", "2379:2381", "6443"} {
+		protocol := "tcp"
+		if i < 3 {
+			protocol = "udp"
+		}
+		rules = append(rules, "-A INPUT -p "+protocol+" -m "+protocol+" --dport "+port+" -j "+bootstrapHostFirewallChain)
+	}
+	return rules
+}
+
+func bootstrapHostFirewallChainRules(expected clusterbootstrap.PreparationExpected) []string {
 	prefix := "-A " + bootstrapHostFirewallChain
 	want := []string{
 		"-N " + bootstrapHostFirewallChain,
@@ -187,13 +207,5 @@ func validateBootstrapHostFirewall(raw []byte, chain string, expected clusterboo
 		want = append(want, prefix+" -s "+peer+"/32 -j ACCEPT")
 	}
 	want = append(want, prefix+" -j DROP")
-	if len(lines) != len(want) {
-		return errBootstrapSource
-	}
-	for i := range want {
-		if lines[i] != want[i] {
-			return errBootstrapSource
-		}
-	}
-	return nil
+	return want
 }

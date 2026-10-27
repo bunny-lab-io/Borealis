@@ -27,6 +27,7 @@ type clusterSSHPrejoinClient interface {
 	ReconcilePrejoinIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	PreparePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	CompletePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
+	CompletePrejoinFirewall(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	ReconcilePrejoinHost(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	Close() error
 }
@@ -294,6 +295,21 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 			// configured-host proof. Delivery ambiguity still needs complete proof.
 			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				return c.CompletePrejoinHost(checkCtx, inputs, e, source, material, sudo, check)
+			}); boundaryErr != nil {
+				return fail
+			}
+			err, boundaryErr := run(steps[index][1])
+			if boundaryErr != nil {
+				return fail
+			}
+			if err == nil {
+				return nil
+			}
+			// This class requires complete non-firewall state and a stopped,
+			// canonical unit with exactly owned interrupted rules. The journal
+			// still requires a newer claim before any continuation effect.
+			if _, boundaryErr := run(func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+				return c.CompletePrejoinFirewall(checkCtx, inputs, e, source, material, sudo, check)
 			}); boundaryErr != nil {
 				return fail
 			}

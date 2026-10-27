@@ -2632,24 +2632,29 @@ CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
 PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS:-}"
 
-iptables -N "${CHAIN}" 2>/dev/null || true
-iptables -F "${CHAIN}"
-iptables -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A "${CHAIN}" -i lo -j ACCEPT
-iptables -A "${CHAIN}" -s 127.0.0.0/8 -j ACCEPT
-for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
-  iptables -A "${CHAIN}" -i cni+ -s "${cidr}" -j ACCEPT
-  iptables -A "${CHAIN}" -i flannel+ -s "${cidr}" -j ACCEPT
-done
-if [ -n "${PEER_CIDRS}" ]; then
-  old_ifs="${IFS}"
-  IFS=','
-  for cidr in ${PEER_CIDRS}; do
-    iptables -A "${CHAIN}" -s "${cidr}" -j ACCEPT
+# Restore changes only this chain in one commit. Existing jumps never observe
+# an empty allowlist during a retry; unrelated chains/rules remain untouched.
+case "${PORT}" in ''|*[!0-9]*) exit 1 ;; esac
+case "${CLUSTER_CIDR},${SERVICE_CIDR},${PEER_CIDRS}" in *[!0-9.,/]*) exit 1 ;; esac
+{
+  printf '*filter\n:%s - [0:0]\n' "${CHAIN}"
+  printf '%s\n' "-A ${CHAIN} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+  printf '%s\n' "-A ${CHAIN} -i lo -j ACCEPT"
+  printf '%s\n' "-A ${CHAIN} -s 127.0.0.0/8 -j ACCEPT"
+  for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
+    printf '%s\n' "-A ${CHAIN} -i cni+ -s ${cidr} -j ACCEPT"
+    printf '%s\n' "-A ${CHAIN} -i flannel+ -s ${cidr} -j ACCEPT"
   done
-  IFS="${old_ifs}"
-fi
-iptables -A "${CHAIN}" -j DROP
+  if [ -n "${PEER_CIDRS}" ]; then
+    old_ifs="${IFS}"
+    IFS=','
+    for cidr in ${PEER_CIDRS}; do
+      printf '%s\n' "-A ${CHAIN} -s ${cidr} -j ACCEPT"
+    done
+    IFS="${old_ifs}"
+  fi
+  printf '%s\n' "-A ${CHAIN} -j DROP" COMMIT
+} | iptables-restore --noflush --wait 5
 
 if ! iptables -C INPUT -p tcp --dport "${PORT}" -j "${CHAIN}" 2>/dev/null; then
   iptables -I INPUT 1 -p tcp --dport "${PORT}" -j "${CHAIN}"

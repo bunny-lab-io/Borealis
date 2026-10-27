@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `b7b7bf8a27311e7dac5791b0eac9c81b948b340d`.
+- Published base `43b98a9f3793c01be964c18d4e6ad1e2aa2eae8c`.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,8 +52,7 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Finish bounded recovery for interrupted firewall installation and earlier
-   package/repository phases.
+1. Finish bounded recovery for earlier package/repository phases.
    No blind package/service replay.
 2. Cover earlier host interruption classes through independently classified
    effects; unknown native state remains fenced, never guessed absent.
@@ -81,10 +80,12 @@ provisioning, original-controller authority and all safety gates in #530.
   CachyOS workstation lacks them. Changed pinned transport tests pass. Required
   Ubuntu CI remains necessary; do not skip assertions or substitute old results.
 - Strict docs needs Python3.12 per #538; Python3.14/Docker-access constraint remains.
-- Published preflight head b7b7bf8a27311e7dac5791b0eac9c81b948b340d has
-  Container Policy pass40460624134 and PR Validation40460624165 in progress.
-  Public API confirmed delayed run creation after immediate lookup was empty.
-  These do not validate unpushed continuation changes; no pending polling.
+- Published configured-host head43b98a9f3793c01be964c18d4e6ad1e2aa2eae8c:
+  Container Policy40462375531 passed. PR Validation40462375542 passed policy,
+  strict docs, PostgreSQL, WebUI, containers, Agent/Linux/Windows, Python,
+  migration and architecture lanes; Engine Go still running at single check.
+  This validates only that published code, not unpushed firewall changes.
+  No repeated pending polling or artifact downloads.
 - Go1.25.12: `/home/nicole/.local/share/borealis-dev-tools/go1.25.12/bin/go`.
   Use GOMAXPROCS=2/-p1 and add user-local borealis-dev-tools/bin for policy tools.
 - No runtime cleanup obligation, credential use, deployed-checkout edits or live
@@ -92,10 +93,39 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Classify interrupted generated firewall effects under fresh
-producer authority, preserving foreign rules and refusing uncertain ownership.
-Complete earlier package/repository interruption handling and immutable delivery;
-production polling stays disabled until required integration is complete.
+Implement fresh-claim continuation for a retained v2-fresh host intent only when
+current full fresh-host checks prove configured package inventory, absent Docker
+runtime/repository and absent generated host files. Retain old producer/history;
+never label partial base-package effects absent or repair unknown dpkg state.
+Reuse fixed native preparation after this explicit bounded proof. Then handle
+exact repository partial effects and complete immutable artifact delivery.
+Production polling stays disabled until required integration completes.
+
+## Interrupted-firewall continuation checkpoint
+
+- Concrete M3 safety prerequisite: old renderer flushed a referenced chain before
+  refilling it. Canonical renderers now use one bounded iptables-restore --noflush
+  commit with the same allowlist, rejecting stream metacharacters before writes.
+- Disposable user/network namespace on bunny-box passed actual nft kernel checks:
+  exact canonical rules, repeat idempotence, killed uncommitted restore, malformed
+  transaction preserving prior rules, all eight INPUT construction prefixes,
+  foreign-rule preservation and input-injection rejection. No host/Engine firewall
+  changed; namespace exited and leaves no live runtime obligation.
+- New fixed complete_prejoin_firewall path is being integrated. It requires all
+  non-firewall effects complete, canonical stopped unit, exact owned chain/input
+  construction prefix, source/key custody, both fences and newer generation.
+  Distinct domain-separated continuation proof retains every producer; existing
+  configured-host history stays valid. Separate complete-host proof is required.
+- Evidence: ignored `Unit_Test_Results/m3-firewall-continuation-20261027/`.
+  Focused race suite3 repetitions passed bootstrap98.620s/native1.315s/
+  API2.482s/remote2.493s. Module vet/build, repository policy184tests/219routes
+  and K3s policy passed. Full bootstrap/native race suite passed146/150top-level tests,
+  zero failures/skips (433.024s/12.984s). All validation processes finished.
+- Actual Ubuntu1.8.10/systemd and end-to-end qualification remain outstanding;
+  local kernel used iptables1.8.13 nf_tables. Legacy fixture failed before any
+  rule creation because ip_tables is unavailable and namespace cannot load host
+  modules; no host module/control relaxation attempted. Fixture lock was private.
+  No Engine action or credential use.
 
 ## Configured-host continuation checkpoint
 

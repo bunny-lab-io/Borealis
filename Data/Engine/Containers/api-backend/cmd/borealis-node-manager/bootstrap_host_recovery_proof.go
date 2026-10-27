@@ -50,27 +50,8 @@ func validateBootstrapRecoverableUnit(unit string, raw []byte) error {
 	if unit != "iscsid.service" && unit != "borealis-k3s-api-firewall.service" {
 		return errBootstrapSource
 	}
-	if len(raw) == 0 || len(raw) > bootstrapHostFirewallLimit || raw[len(raw)-1] != '\n' {
-		return errBootstrapSource
-	}
-	want, values := map[string]bool{}, map[string]string{}
-	for _, key := range strings.Split(bootstrapHostUnitProperties, ",") {
-		want[key] = true
-	}
-	for _, ch := range raw {
-		if ch != '\n' && (ch < ' ' || ch > '~') {
-			return errBootstrapSource
-		}
-	}
-	for _, row := range strings.Split(string(raw[:len(raw)-1]), "\n") {
-		key, value, ok := strings.Cut(row, "=")
-		if !ok || !want[key] {
-			return errBootstrapSource
-		}
-		delete(want, key)
-		values[key] = value
-	}
-	if len(want) != 0 {
+	values, err := bootstrapHostUnitValues(raw)
+	if err != nil {
 		return errBootstrapSource
 	}
 	if unit == "iscsid.service" {
@@ -110,6 +91,11 @@ func validateBootstrapRecoverableUnit(unit string, raw []byte) error {
 // that Docker contains no workloads.
 func proveBootstrapConfiguredHostWith(ctx context.Context, check func(context.Context) error,
 	read func(context.Context, string) ([]byte, error), repository, files, kernel, firewall func(context.Context) error) error {
+	return proveBootstrapHostRecoveryWith(ctx, check, read, repository, files, kernel, firewall, false)
+}
+
+func proveBootstrapHostRecoveryWith(ctx context.Context, check func(context.Context) error,
+	read func(context.Context, string) ([]byte, error), repository, files, kernel, firewall func(context.Context) error, firewallOnly bool) error {
 	if check == nil || read == nil || repository == nil || files == nil || kernel == nil || firewall == nil {
 		return errBootstrapSource
 	}
@@ -140,9 +126,19 @@ func proveBootstrapConfiguredHostWith(ctx context.Context, check func(context.Co
 			case "inventory":
 				err = validateBootstrapConfiguredPackages(raw)
 			case "docker.service", "iscsid.service", "borealis-k3s-api-firewall.service":
-				err = validateBootstrapRecoverableUnit(probe, raw)
+				if !firewallOnly {
+					err = validateBootstrapRecoverableUnit(probe, raw)
+				} else if probe == "borealis-k3s-api-firewall.service" {
+					err = validateBootstrapInterruptedFirewallUnit(raw)
+				} else {
+					err = validateBootstrapHostDependency(probe, raw)
+				}
 			case "multipathd.socket", "multipathd.service":
-				_, err = bootstrapMultipathNeedsStop(probe, raw)
+				if firewallOnly {
+					err = validateBootstrapHostDependency(probe, raw)
+				} else {
+					_, err = bootstrapMultipathNeedsStop(probe, raw)
+				}
 			default:
 				err = validateBootstrapHostDependency(probe, raw)
 			}
@@ -153,4 +149,31 @@ func proveBootstrapConfiguredHostWith(ctx context.Context, check func(context.Co
 		}
 	}
 	return boundary()
+}
+
+func bootstrapHostUnitValues(raw []byte) (map[string]string, error) {
+	if len(raw) == 0 || len(raw) > bootstrapHostFirewallLimit || raw[len(raw)-1] != '\n' {
+		return nil, errBootstrapSource
+	}
+	want, values := map[string]bool{}, map[string]string{}
+	for _, key := range strings.Split(bootstrapHostUnitProperties, ",") {
+		want[key] = true
+	}
+	for _, ch := range raw {
+		if ch != '\n' && (ch < ' ' || ch > '~') {
+			return nil, errBootstrapSource
+		}
+	}
+	for _, row := range strings.Split(string(raw[:len(raw)-1]), "\n") {
+		key, value, ok := strings.Cut(row, "=")
+		if !ok || !want[key] {
+			return nil, errBootstrapSource
+		}
+		delete(want, key)
+		values[key] = value
+	}
+	if len(want) != 0 {
+		return nil, errBootstrapSource
+	}
+	return values, nil
 }

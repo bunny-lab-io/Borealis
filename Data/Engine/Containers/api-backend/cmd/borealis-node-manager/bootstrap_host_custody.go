@@ -11,7 +11,7 @@ import (
 )
 
 func bootstrapHostAction(action string) bool {
-	return action == "prepare_prejoin_host" || action == "complete_prejoin_host" || action == "reconcile_prejoin_host"
+	return action == "prepare_prejoin_host" || action == "complete_prejoin_host" || action == "complete_prejoin_firewall" || action == "reconcile_prejoin_host"
 }
 
 // Separate host-phase boundary. Earlier source/identity action allowlists stay
@@ -38,7 +38,7 @@ func verifyBootstrapHostPaths(root *os.Root, expected clusterbootstrap.Preparati
 	if err != nil || absent {
 		return errBootstrapSource
 	}
-	return proveBootstrapHostFilePrefix(root, expected, action == "reconcile_prejoin_host")
+	return proveBootstrapHostFilePrefix(root, expected, action == "reconcile_prejoin_host" || action == "complete_prejoin_firewall")
 }
 
 // The file writer calls custody only before creating scratch and after writing,

@@ -83,10 +83,10 @@ func (p *PreparationInputs) prejoinHostRequest(ctx context.Context, j *MutationJ
 }
 
 func (p *PreparationInputs) preparePrejoinHost(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool) (string, error) {
-	return p.prejoinHostTransaction(ctx, j, install, material, actions, parent, reconcile, nil)
+	return p.prejoinHostTransaction(ctx, j, install, material, actions, parent, reconcile, nil, false)
 }
 
-func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool, configured func(context.Context) error) (string, error) {
+func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string, reconcile bool, configured func(context.Context) error, firewallOnly bool) (string, error) {
 	if j == nil || actions.Prove == nil || !reconcile && (actions.Prepare == nil || configured == nil && actions.CheckFresh == nil) {
 		return "", ErrMutationJournal
 	}
@@ -154,7 +154,11 @@ func (p *PreparationInputs) prejoinHostTransaction(ctx context.Context, j *Mutat
 				return prove(ctx)
 			}
 			if configured != nil {
-				result, err = j.continuePrejoinHostLocked(ctx, input, func(ctx context.Context) error {
+				continueHost := j.continuePrejoinHostLocked
+				if firewallOnly {
+					continueHost = j.continuePrejoinFirewallLocked
+				}
+				result, err = continueHost(ctx, input, func(ctx context.Context) error {
 					if proveSource(ctx) != nil || configured(ctx) != nil || proveSource(ctx) != nil {
 						return ErrMutationUnknown
 					}

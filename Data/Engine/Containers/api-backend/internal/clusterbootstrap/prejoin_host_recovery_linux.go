@@ -34,12 +34,19 @@ func (p *PreparationInputs) completePrejoinHost(ctx context.Context, j *Mutation
 	if actions.ProveConfigured == nil || actions.Complete == nil || actions.Prove == nil {
 		return "", ErrMutationJournal
 	}
-	return p.prejoinHostTransaction(ctx, j, install, material, PrejoinHostActions{Prepare: actions.Complete, Prove: actions.Prove}, parent, false, actions.ProveConfigured)
+	return p.prejoinHostTransaction(ctx, j, install, material, PrejoinHostActions{Prepare: actions.Complete, Prove: actions.Prove}, parent, false, actions.ProveConfigured, false)
 }
 
 // Called only inside the source/key-verified transaction holding BOTH fences.
 // Retain every old producer before a newer executor can finish bounded effects.
 func (j *MutationJournal) continuePrejoinHostLocked(ctx context.Context, input string, configured func(context.Context) error, complete func(context.Context, *os.File) (string, error)) (string, error) {
+	return j.continuePrejoinHostClassLocked(ctx, input, prejoinHostConfiguredDigest(input), configured, complete)
+}
+
+func (j *MutationJournal) continuePrejoinHostClassLocked(ctx context.Context, input, partial string, configured func(context.Context) error, complete func(context.Context, *os.File) (string, error)) (string, error) {
+	if partial != prejoinHostConfiguredDigest(input) && partial != prejoinHostFirewallDigest(input) {
+		return "", ErrMutationJournal
+	}
 	const step = "prepare_host"
 	if j.authority(ctx) != nil {
 		return "", ErrSessionAuthority
@@ -67,7 +74,7 @@ func (j *MutationJournal) continuePrejoinHostLocked(ctx context.Context, input s
 			return "", ErrMutationUnknown
 		}
 	}
-	previous.State, previous.ResultSHA256 = "continued", prejoinHostConfiguredDigest(input)
+	previous.State, previous.ResultSHA256 = "continued", partial
 	j.state.History = append(j.state.History, mutationPastAttempt{Step: step, Record: previous})
 	// Older helpers must reject this new continuation contract. Account history
 	// remains retained and validated; ordinary version2/3 journals are unchanged.
