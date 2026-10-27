@@ -98,6 +98,10 @@ func main() {
 		if sourceNetworkClient(os.Args[2:]) != nil {
 			fatalf("source network observation unavailable")
 		}
+	case "source-join-client":
+		if sourceJoinClient(os.Args[2:]) != nil {
+			fatalf("source join material unavailable")
+		}
 	case "source-vip-client":
 		if sourceObservationClient(os.Args[2:], true) != nil {
 			fatalf("source VIP observation unavailable")
@@ -405,6 +409,7 @@ func serve() {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node_name": m.nodeName})
 	})
 	mux.HandleFunc("POST /v1/action", m.authorized(m.handleAction))
+	mux.HandleFunc("POST "+clusterbootstrap.K3sJoinSourceSocketPath, m.authorized(m.handleSourceJoinMaterial))
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

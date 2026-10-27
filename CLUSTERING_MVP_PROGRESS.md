@@ -17,7 +17,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `fd447882a1acc5e17d590ce63e0a3d8f4e61a9e1`.
+- Published base `4f9839473b84f02e7a59211348095f0df2b00f7b`; subsequent publication SHA stays in #530 active handoff.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -52,9 +52,10 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Complete M2 runtime installation/import: complete artifact transfer, publication
-   and six-stage dispatch are published at6f567ab. Finish fixed inert K3s installation,
-   then original-controller admission and actual import under existing scopes.
+1. Complete M2 runtime admission/import: seven-stage artifact/inert-service
+   installation is published. Private join material and concrete source acquisition
+   are implemented; wire worker broker into current preparation scope, then fixed
+   target join configuration, journaled admission and actual import.
 2. Finish M3 activation/existing-node interruption qualification. Preserve all
    original identity material and keep consumers fenced until complete proof.
 3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
@@ -92,15 +93,38 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Exact next executable action
 
-Publish validated private join-input primitives, then implement concrete source
-acquisition through original controller. Reuse bounded non-root immutable source
-Jobs and fixed authenticated node-manager socket. Send private frame only through
-internal authenticated encryption; Job termination receipt contains public digest
-of delivered ciphertext, never token/CA payload. Controller must independently
-validate actual Job/Pod identity, success and digest before exposing pending frame
-to current worker claim. HTTP callback authentication alone is not native evidence.
-Then add fixed target join configuration and journaled membership/import.
-Production polling remains disabled; no live runtime action taken.
+Publish validated concrete source acquisition, then add worker-facing encrypted
+broker using existing SQL/Aegis preparation authority and source delivery registry.
+Register fixed callback beside broker on original controller; extend only this
+request's bounded deadline to cover immutable source Job, preserving short existing
+broker limits. Worker must recheck current claim/source before and after acquisition
+and own/clear material through preparation scope. Then integrate fixed target join
+configuration and journaled membership/import. Production polling stays disabled.
+No live runtime action taken.
+
+## Private source acquisition checkpoint
+
+- Canonical public source request binds current claim, confirmed original source,
+  source network and bounded expiry. Native private Unix endpoint brackets fixed
+  root-file custody with actual source observations; no generic action exports it.
+- Fixed non-root source Job client reads bounded complete frame and encrypts
+  callback under separate existing-operator-secret domain. Only ciphertext digest,
+  request digest and actual Job/Pod IDs appear in termination message. Existing
+  socket/token mounts and SecretKeyRef suffice; no root mount, RBAC or credential
+  rotation. Private bytes never enter argv, logs or Kubernetes status.
+- Original-controller acquisition verifies full actual immutable Job/Pod, source
+  placement, current authority and matching ciphertext receipt. Callback alone is
+  insufficient. Two pending reads maximum, no Job POST replay, no overwritten
+  delivery, single-use material consumption, private-buffer cleanup on every exit.
+- Focused protocol/native/API race suite passed three repetitions in
+  1.056s/1.453s/3.474s. Full native race166 top-level tests passed14.094s, zero
+  failures/skips. Full-module vet, CGO-disabled node-manager build and docs-reference
+  checks passed. Repository policy184tests/219routes passed. Publication recorded in #530.
+  Evidence: `Unit_Test_Results/m2-k3s-source-acquisition-20261027/`.
+- Base4f983 Container Policy40489019847 passed; PR Validation40489020019 pending
+  at one check. No manual reruns, repeated pending polls or artifact downloads.
+- Worker broker/preparation scope remains unwired. No live acquisition, runtime
+  qualification or readiness claim; all M1-M8 remain open.
 
 ## Interrupted-firewall continuation checkpoint
 
