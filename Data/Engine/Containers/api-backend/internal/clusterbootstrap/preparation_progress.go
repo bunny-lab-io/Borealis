@@ -5,14 +5,15 @@ package clusterbootstrap
 // that step's separate reconciliation, which verifies its entire prerequisite
 // chain against current source/configuration/identity and actual host state.
 // Empty permits only the existing clean-destination source publication path.
-// Failed inspection is never empty; uncertain or absent effects grant no replay.
+// source_absent requires renewed absence proof before source publication and is
+// returned only for a fresh generation. Failed inspection is never empty.
 type PreparationProgress struct {
 	Step string `json:"step"`
 }
 
 func (p PreparationProgress) Validate() error {
 	switch p.Step {
-	case "empty", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host":
+	case "empty", "source_absent", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host":
 		return nil
 	default:
 		return ErrSessionProtocol

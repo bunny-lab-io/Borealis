@@ -15,6 +15,7 @@ import (
 
 type sshPrejoinDispatchTestClient struct {
 	inspect func(context.Context) (clusterbootstrap.PreparationProgress, error)
+	absent  func(context.Context) error
 	run     func(context.Context, string, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, []byte, func(context.Context) error) error
 	close   func() error
 }
@@ -32,6 +33,15 @@ func (c *sshPrejoinDispatchTestClient) InspectPreparationProgress(ctx context.Co
 func (c *sshPrejoinDispatchTestClient) Close() error { return c.close() }
 func (c *sshPrejoinDispatchTestClient) DeliverPreparation(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, sudo []byte, check func(context.Context) error) error {
 	return c.run(ctx, "source", p, e, engineidentity.Binding{}, nil, sudo, check)
+}
+func (c *sshPrejoinDispatchTestClient) ReconcilePreparationAbsent(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ []byte, check func(context.Context) error) error {
+	if err := check(ctx); err != nil {
+		return err
+	}
+	if c.absent != nil {
+		return c.absent(ctx)
+	}
+	return nil
 }
 func (c *sshPrejoinDispatchTestClient) ReconcilePreparation(ctx context.Context, p *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, sudo []byte, check func(context.Context) error) error {
 	return c.run(ctx, "source proof", p, e, engineidentity.Binding{}, nil, sudo, check)
@@ -155,6 +165,9 @@ func TestClusterSSHPrejoinDispatchOrderingAndUncertainty(t *testing.T) {
 				wantOpened := 11
 				if mode == "proof failed" {
 					wantOpened = stage*2 + 3
+					if stage == 0 {
+						wantOpened++
+					}
 				} else if !success {
 					wantOpened = stage*2 + 2
 				}
@@ -342,6 +355,7 @@ func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
 					session := opened
 					opened++
 					return &sshPrejoinDispatchTestClient{
+						absent: func(context.Context) error { calls = append(calls, "source absent proof"); return nil },
 						inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
 							calls = append(calls, "inspect")
 							if session != 0 {
@@ -390,10 +404,74 @@ func TestClusterSSHPrejoinDispatchResume(t *testing.T) {
 						want = append(want, sequence[start])
 					}
 				}
+				if mode == "proof error" && index <= 1 {
+					want = append(want, "source absent proof")
+				}
 				if (err == nil) != (mode == "valid") || !reflect.DeepEqual(calls, want) || closed != opened || opened != len(want) {
 					t.Fatalf("unsafe resume: err=%v calls=%v want=%v connections=%d/%d", err, calls, want, opened, closed)
 				}
 			})
 		}
+	}
+}
+
+func TestClusterSSHPrejoinDispatchProvenAbsence(t *testing.T) {
+	a, source, _ := sshPrejoinSourceFixture(t, false)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := sshIdentitySourceMaterial(t, t.TempDir())
+	for _, mode := range []string{"valid", "absence changed", "cleanup failed", "authority lost"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := []string{}
+			opened, closed := 0, 0
+			lost := false
+			current := func(context.Context) error {
+				if lost {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				return nil
+			}
+			connect := func(context.Context) (clusterSSHPrejoinClient, error) {
+				session := opened
+				opened++
+				return &sshPrejoinDispatchTestClient{
+					inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
+						calls = append(calls, "inspect")
+						return clusterbootstrap.PreparationProgress{Step: "source_absent"}, nil
+					},
+					absent: func(context.Context) error {
+						calls = append(calls, "absence proof")
+						if mode == "absence changed" {
+							return errors.New("destination occupied")
+						}
+						if mode == "authority lost" {
+							lost = true
+						}
+						return nil
+					},
+					run: func(ctx context.Context, action string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, check func(context.Context) error) error {
+						calls = append(calls, action)
+						return check(ctx)
+					},
+					close: func() error {
+						closed++
+						if mode == "cleanup failed" && session == 1 {
+							return errors.New("uncertain cleanup")
+						}
+						return nil
+					},
+				}, nil
+			}
+			err := dispatchClusterSSHPrejoinIdentity(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, expected, source.Binding, keys, nil, current)
+			want := []string{"inspect", "absence proof"}
+			if mode == "valid" {
+				want = append(want, "source", "source proof", "account", "account proof", "directory", "directory proof", "keys", "keys proof", "host", "host proof")
+			}
+			if (err == nil) != (mode == "valid") || !reflect.DeepEqual(calls, want) || opened != closed || opened != len(want) {
+				t.Fatal("unsafe source retry", calls, opened, closed, err)
+			}
+		})
 	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func TestPreparationProgressSession(t *testing.T) {
-	for _, step := range []string{"empty", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "", "join_cluster"} {
+	for _, step := range []string{"empty", "source_absent", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "", "join_cluster"} {
 		t.Run(step, func(t *testing.T) {
 			expected, _ := preparationFixture()
 			request, err := NewPreparationSessionRequest(expected, strings.Repeat("b", 64), strings.Repeat("a", 64), "inspect_preparation_progress")

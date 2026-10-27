@@ -34,6 +34,13 @@ func (client *Client) ReconcilePreparation(ctx context.Context, inputs *clusterb
 	return client.preparation(ctx, inputs, expected, "reconcile_source", sudoPassword, check)
 }
 
+// ReconcilePreparationAbsent independently proves no atomic source publication.
+// It never retries the write or removes interrupted private scratch.
+func (client *Client) ReconcilePreparationAbsent(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	sudoPassword []byte, check func(context.Context) error) error {
+	return client.preparation(ctx, inputs, expected, "reconcile_source_absent", sudoPassword, check)
+}
+
 func (client *Client) PrepareRuntimeIdentity(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected, sudoPassword []byte, check func(context.Context) error) error {
 	return client.preparation(ctx, inputs, expected, "prepare_runtime_identity", sudoPassword, check)
 }

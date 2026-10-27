@@ -16,6 +16,7 @@ import (
 type clusterSSHPrejoinClient interface {
 	InspectPreparationProgress(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) (clusterbootstrap.PreparationProgress, error)
 	DeliverPreparation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
+	ReconcilePreparationAbsent(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	ReconcilePreparation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	PrepareRuntimeIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
 	ReconcileRuntimeIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, []byte, func(context.Context) error) error
@@ -258,6 +259,29 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 	}); err != nil || boundaryErr != nil || progress.Validate() != nil {
 		return fail
 	}
+	absent := func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
+		return c.ReconcilePreparationAbsent(checkCtx, inputs, e, sudo, check)
+	}
+	if progress.Step == "source_absent" {
+		// The receiver admits this cursor only for a strictly newer claim.
+		// Repeat actual absence proof before clean no-replace publication.
+		if err, boundaryErr := run(absent); err != nil || boundaryErr != nil {
+			return fail
+		}
+	}
+	proveStep := func(index int) error {
+		err, boundaryErr := run(steps[index][1])
+		if err == nil && boundaryErr == nil {
+			return nil
+		}
+		if boundaryErr == nil && index == 0 {
+			// Failed completion is not absence. A separate fixed proof may
+			// record absence for a future fresh claim; this dispatch still
+			// stops and never retries its uncertain source write.
+			_, _ = run(absent)
+		}
+		return fail
+	}
 	retained := -1
 	switch progress.Step {
 	case "stage_source":
@@ -272,15 +296,16 @@ func dispatchClusterSSHPrejoinIdentity(parent context.Context, connect func(cont
 		retained = 4
 	}
 	if retained >= 0 {
-		if err, boundaryErr := run(steps[retained][1]); err != nil || boundaryErr != nil {
+		if proveStep(retained) != nil {
 			return fail
 		}
 	}
-	for _, step := range steps[retained+1:] {
+	for index := retained + 1; index < len(steps); index++ {
+		step := steps[index]
 		if _, boundaryErr := run(step[0]); boundaryErr != nil {
 			return fail
 		}
-		if err, boundaryErr := run(step[1]); err != nil || boundaryErr != nil {
+		if proveStep(index) != nil {
 			return fail
 		}
 	}

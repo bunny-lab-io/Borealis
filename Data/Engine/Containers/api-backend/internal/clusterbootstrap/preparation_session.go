@@ -58,7 +58,7 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 		return expected, ErrSessionProtocol
 	}
 	switch r.Action {
-	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity", "inspect_preparation_progress":
+	case "stage_source", "reconcile_source", "reconcile_source_absent", "prepare_runtime_identity", "reconcile_runtime_identity", "inspect_preparation_progress":
 		if r.IdentitySource != nil {
 			return expected, ErrSessionProtocol
 		}

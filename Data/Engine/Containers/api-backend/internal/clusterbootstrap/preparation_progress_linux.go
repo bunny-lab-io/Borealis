@@ -42,13 +42,20 @@ func (j *MutationJournal) preparationProgressLocked(ctx context.Context, sourceI
 			i > 0 && (previous.State != "applied" || record.Binding.Generation < previous.Binding.Generation || record.Binding.OperationAttempt < previous.Binding.OperationAttempt) {
 			return invalid, ErrMutationJournal
 		}
-		if record.State != "applied" && record.State != "intent" {
+		if record.State == "not_applied" {
+			if i != 0 || len(j.state.Steps) != 1 || j.state.Owner.Generation <= record.Binding.Generation || record.ResultSHA256 != sourcePublicationAbsenceDigest(sourceInput) {
+				return invalid, ErrMutationUnknown
+			}
+		} else if record.State != "applied" && record.State != "intent" {
 			return invalid, ErrMutationUnknown
 		}
 		if i == 0 && (record.InputSHA256 != sourceInput || record.State == "applied" && record.ResultSHA256 != sourceInput) {
 			return invalid, ErrMutationJournal
 		}
 		progress.Step, previous = step, record
+		if record.State == "not_applied" {
+			progress.Step = "source_absent"
+		}
 	}
 	for _, prior := range j.state.History {
 		current, exists := j.state.Steps[prior.Step]

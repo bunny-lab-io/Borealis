@@ -103,6 +103,8 @@ func bootstrapSourceSessionContained(args []string) {
 				_, err = inputs.PublishSource(ctx, journal)
 			case "reconcile_source":
 				_, err = inputs.ReconcileSource(ctx, journal)
+			case "reconcile_source_absent":
+				_, err = inputs.ReconcileSourceAbsent(ctx, journal)
 			case "prepare_runtime_identity":
 				_, err = inputs.PrepareRuntimeIdentity(ctx, journal, clusterbootstrap.RuntimeIdentityActions{
 					Prepare: func(ctx context.Context, lock *os.File) error {
@@ -226,7 +228,7 @@ func bootstrapSourceSafeDirectory(path string) error {
 
 func verifyBootstrapSourcePaths(root *os.Root, action string, destination bool) error {
 	switch action {
-	case "stage_source", "reconcile_source", "prepare_runtime_identity", "reconcile_runtime_identity",
+	case "stage_source", "reconcile_source", "reconcile_source_absent", "prepare_runtime_identity", "reconcile_runtime_identity",
 		"prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity":
 	default:
 		return errBootstrapSource
@@ -239,7 +241,7 @@ func verifyBootstrapSourcePaths(root *os.Root, action string, destination bool) 
 	}
 	if destination {
 		absent, err := bootstrapSourcePath(root, "opt/Borealis")
-		if err != nil || absent != (action == "stage_source") {
+		if err != nil || absent != (action == "stage_source" || action == "reconcile_source_absent") {
 			return errBootstrapSource
 		}
 	}

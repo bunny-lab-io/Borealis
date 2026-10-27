@@ -40,7 +40,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "reconcile_prejoin_host", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "reconcile_prejoin_host", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			var server *fakeSSH
 			var consumed atomic.Bool
@@ -102,7 +102,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 						if mode == "reconcile" {
 							wantAction = "reconcile_source"
 						}
-						if strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
+						if mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
 							wantAction = mode
 						}
 						if request.Action != wantAction {
@@ -153,7 +153,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 			if mode == "reconcile" {
 				action = "reconcile_source"
 			}
-			if strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
+			if mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin") {
 				action = mode
 			}
 			if mode == "wrong host pin" {
@@ -186,7 +186,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					t.Fatal("progress escaped remote failure or was lost", progress, err)
 				}
 			}
-			if (err == nil) != (mode == "inspect progress" || mode == "deliver" || mode == "reconcile" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
+			if (err == nil) != (mode == "inspect progress" || mode == "deliver" || mode == "reconcile" || mode == "reconcile_source_absent" || strings.HasSuffix(mode, "runtime_identity") || strings.Contains(mode, "prejoin")) {
 				t.Fatalf("unexpected result: %v", err)
 			}
 			if err != nil && err != ErrBootstrapVerification {
