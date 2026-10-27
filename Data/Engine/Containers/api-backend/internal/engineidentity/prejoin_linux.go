@@ -3,8 +3,10 @@ package engineidentity
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // InstallPrejoinFencedJournaledRetained is only for a qualified, never-serving
@@ -61,6 +63,51 @@ func (install Installation) ProvePrejoinFencedCommitted(material *Material) erro
 		return err
 	}
 	return proof.close()
+}
+
+// WithPrejoinFencedCommitted retains exclusive identity exclusion throughout
+// one synchronous host-preparation operation. It grants no host mutation
+// authority: caller still owns durable intent, supervised execution and actual
+// prepared-state proof. Pass lock through ExtraFiles to every child and join
+// them before returning. Callback must not close or unlock the borrowed handle.
+// Child inheritance keeps exclusion if parent dies.
+// Neither normal completion nor error releases the startup marker.
+func (install Installation) WithPrejoinFencedCommitted(material *Material, work func(*os.File) error) (result error) {
+	if work == nil {
+		return errors.New("pre-join fenced work required")
+	}
+	proof, err := install.proveFencedCommittedMode(material, true, true)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Also runs on panic: restore only this exact marker if unexpectedly
+		// removed while original directory remains pinned. Never overwrite a
+		// foreign marker or write through a replaced directory.
+		if err := proof.fence.check(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			result = errors.Join(result, restoreRecoveryMarker(proof.fence.root, proof.marker, install.UID, install.GID))
+		}
+		result = errors.Join(result, proof.close())
+	}()
+	syscall.ForkLock.RLock()
+	descriptor, err := syscall.Dup(int(proof.fence.directory.Fd()))
+	if err == nil {
+		syscall.CloseOnExec(descriptor)
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return errors.New("pre-join inherited exclusion unavailable")
+	}
+	lock := os.NewFile(uintptr(descriptor), "prejoin-identity-lock")
+	defer func() { result = errors.Join(result, lock.Close()) }()
+	workErr := work(lock)
+	proofErr := install.recheckCommittedFence(material, proof, true)
+	if workErr != nil || proofErr != nil {
+		return errors.New("pre-join fenced operation incomplete; retain journal and keep consumers stopped")
+	}
+	return nil
 }
 
 // ReleasePrejoinFencedCommitted removes only the exact committed restart marker.

@@ -117,9 +117,16 @@ func (p *PreparationInputs) prejoinDirectoryRequest(j *MutationJournal, install 
 }
 
 func (p *PreparationInputs) prejoinDirectoryRequestMode(j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent string, installed bool) (string, prejoinDirectoryProof, error) {
-	invalid := prejoinDirectoryProof{}
 	source, err := p.sourcePublicationInputForPrejoin(j, true, installed)
-	if err != nil || install.Check == nil || install.Quiesced == nil || install.Binding.ClusterID != j.state.Owner.ClusterID ||
+	if err != nil {
+		return "", prejoinDirectoryProof{}, err
+	}
+	return prejoinDirectoryRequestFromSource(j, install, material, parent, source)
+}
+
+func prejoinDirectoryRequestFromSource(j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, parent, source string) (string, prejoinDirectoryProof, error) {
+	invalid := prejoinDirectoryProof{}
+	if j == nil || !digestPattern.MatchString(source) || install.Check == nil || install.Quiesced == nil || install.Binding.ClusterID != j.state.Owner.ClusterID ||
 		install.Target.ProvisioningID != j.state.Owner.TargetID || install.Target.SSHFingerprint != j.state.Owner.HostKeyFingerprint ||
 		install.Root != filepath.Join(parent, "Borealis", prejoinSecretsRelative) || install.Journal != filepath.Join(j.root.Name(), "identity-attempt") {
 		return "", invalid, ErrMutationJournal
@@ -128,7 +135,7 @@ func (p *PreparationInputs) prejoinDirectoryRequestMode(j *MutationJournal, inst
 	if record.State != "applied" || record.InputSHA256 != source || record.ResultSHA256 != source {
 		return "", invalid, ErrMutationJournal
 	}
-	accountInput, err := p.runtimeIdentityInputForPrejoin(j, install.UID, install.GID, installed)
+	accountInput, err := runtimeIdentityInputFromSource(j, source, install.UID, install.GID)
 	account := j.state.Steps["prepare_runtime_identity"]
 	if err != nil || account.State != "applied" || account.InputSHA256 != accountInput || account.ResultSHA256 != accountInput {
 		return "", invalid, ErrMutationJournal

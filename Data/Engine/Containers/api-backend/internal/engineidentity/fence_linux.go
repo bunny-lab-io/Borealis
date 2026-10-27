@@ -232,6 +232,16 @@ func (install Installation) proveFencedCommittedMode(material *Material, markerR
 	if proof.markerPresent && (metadata.UID != install.UID || metadata.GID != install.GID || !bytes.Equal(observed, proof.marker)) {
 		return nil, errors.New("identity recovery marker does not prove requested attempt")
 	}
+	if err := install.recheckCommittedFence(material, proof, prejoin); err != nil {
+		return nil, err
+	}
+	return proof, nil
+}
+
+// Reuse the same held directory, never release/reacquire exclusion between
+// effects. Exact journal, keys, marker and caller custody are re-read each time.
+func (install Installation) recheckCommittedFence(material *Material, proof *committedFenceProof, prejoin bool) error {
+	fence := proof.fence
 	checkFence := func() error {
 		if err := fence.check(); err != nil {
 			return err
@@ -252,70 +262,79 @@ func (install Installation) proveFencedCommittedMode(material *Material, markerR
 		return nil
 	}
 	if err := checkFence(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := install.Check(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := install.Quiesced(); err != nil {
-		return nil, err
+		return err
+	}
+	journalPath, err := filepath.Abs(install.Journal)
+	if err != nil {
+		return errors.New("identity recovery journal unavailable")
 	}
 	backup, err := openIdentityRoot(journalPath)
 	if err != nil {
-		return nil, errors.New("identity recovery journal unavailable")
+		return errors.New("identity recovery journal unavailable")
 	}
 	defer backup.Close()
 	journalInfo, err := backup.Stat(".")
 	if err != nil || !journalInfo.IsDir() || journalInfo.Mode().Perm() != 0o700 {
-		return nil, errors.New("identity recovery journal ownership invalid")
+		return errors.New("identity recovery journal ownership invalid")
 	}
 	journalOwner, ok := journalInfo.Sys().(*syscall.Stat_t)
 	if !ok || int(journalOwner.Uid) != os.Geteuid() {
-		return nil, errors.New("identity recovery journal ownership invalid")
+		return errors.New("identity recovery journal ownership invalid")
 	}
 	raw, metadata, err := readIdentityFile(backup, "journal.json")
 	if err != nil || !metadata.Present || metadata.UID != os.Geteuid() || metadata.GID != os.Getegid() {
-		return nil, errors.New("identity recovery journal record invalid")
+		return errors.New("identity recovery journal record invalid")
 	}
 	var journal installationJournal
 	if json.Unmarshal(raw, &journal) != nil || journal.Version != 2 || journal.Binding != install.Binding ||
 		journal.Target != install.Target || journal.Incoming != material.Digest() || journal.State != "committed" || len(journal.Files) != len(identityPaths) {
-		return nil, errors.New("identity recovery journal does not prove committed request")
+		return errors.New("identity recovery journal does not prove committed request")
 	}
 	canonical, err := json.Marshal(journal)
 	if err != nil || !bytes.Equal(canonical, raw) {
-		return nil, errors.New("identity recovery journal encoding invalid")
+		return errors.New("identity recovery journal encoding invalid")
 	}
 	for _, name := range identityPaths {
 		if previous, ok := journal.Files[name]; !ok || prejoin && previous != (fileRecord{}) {
-			return nil, errors.New("identity recovery journal inventory incomplete")
+			return errors.New("identity recovery journal inventory incomplete")
 		}
 	}
 	files := make(map[string][]byte, len(identityPaths))
+	defer func() {
+		for _, raw := range files {
+			clear(raw)
+		}
+	}()
 	for _, name := range identityPaths {
 		raw, metadata, err := readIdentityFile(fence.root, name)
 		if err != nil || !metadata.Present || metadata.UID != install.UID || metadata.GID != install.GID {
-			return nil, errors.New("committed identity files changed")
+			return errors.New("committed identity files changed")
 		}
 		files[name] = raw
 	}
 	current, err := ParseFiles(files)
 	if err != nil || !material.Equal(current) {
-		return nil, errors.New("committed identity files changed")
+		return errors.New("committed identity files changed")
 	}
 	if err := checkFence(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := install.Quiesced(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := install.Check(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := checkFence(); err != nil {
-		return nil, err
+		return err
 	}
-	return proof, nil
+	return nil
 }
 
 // ProveFencedCommitted reads an exact retained recovery attempt without

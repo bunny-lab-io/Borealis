@@ -49,17 +49,26 @@ func (p *PreparationInputs) sourcePublicationInputWithIdentityRoot(j *MutationJo
 }
 
 func (p *PreparationInputs) sourcePublicationInputForPrejoin(j *MutationJournal, identityRoot, installed bool) (string, error) {
+	if j == nil {
+		return "", ErrMutationJournal
+	}
+	for step := range j.state.Steps {
+		if step != "stage_source" && !(identityRoot && (step == "prepare_identity_root" || step == "prepare_runtime_identity" || installed && step == "install_identity")) {
+			return "", ErrMutationJournal
+		}
+	}
+	return p.sourcePublicationBinding(j)
+}
+
+// Caller separately enforces its exact phase allowlist. Sharing the immutable
+// binding does not let later host state satisfy an earlier source-only proof.
+func (p *PreparationInputs) sourcePublicationBinding(j *MutationJournal) (string, error) {
 	if p == nil || p.bundle == nil || p.configuration == nil || j == nil {
 		return "", ErrPreparationConfig
 	}
 	e := p.configuration.wire.Expected
 	if e.Target != j.state.Owner || e.Source != j.state.Source {
 		return "", ErrSessionAuthority
-	}
-	for step := range j.state.Steps {
-		if step != "stage_source" && !(identityRoot && (step == "prepare_identity_root" || step == "prepare_runtime_identity" || installed && step == "install_identity")) {
-			return "", ErrMutationJournal
-		}
 	}
 	wire := p.configuration.wire
 	wire.Expected.Target = stableMutationBinding(wire.Expected.Target)

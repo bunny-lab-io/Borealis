@@ -38,7 +38,14 @@ func (p *PreparationInputs) runtimeIdentityInput(j *MutationJournal, uid, gid in
 
 func (p *PreparationInputs) runtimeIdentityInputForPrejoin(j *MutationJournal, uid, gid int, installed bool) (string, error) {
 	source, err := p.sourcePublicationInputForPrejoin(j, true, installed)
-	if err != nil || uid < 0 || gid < 0 {
+	if err != nil {
+		return "", err
+	}
+	return runtimeIdentityInputFromSource(j, source, uid, gid)
+}
+
+func runtimeIdentityInputFromSource(j *MutationJournal, source string, uid, gid int) (string, error) {
+	if j == nil || !digestPattern.MatchString(source) || uid < 0 || gid < 0 {
 		return "", ErrMutationJournal
 	}
 	record := j.state.Steps["stage_source"]
