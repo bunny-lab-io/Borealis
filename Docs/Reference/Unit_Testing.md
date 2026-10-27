@@ -89,7 +89,8 @@ Runners keep dependencies, compiled output, caches, virtual environments, and re
 - Engine API: Go 1.25.12.
 - Admission-policy tests: Go 1.26.8 and Python 3. Set `BOREALIS_ADMISSION_GO_BIN` to its executable when using multiple Go versions; Engine runtime toolchain stays unchanged.
 - WebUI: Node.js 22 and npm.
-- Site-worker Python and docs: Python 3 with `venv`.
+- Site-worker Python: Python 3 with `venv`.
+- Documentation: Python 3.12 with `venv`, matching pull-request CI.
 - Repository policy: ShellCheck, PowerShell, Node.js, `actionlint`, and dependencies in `Tests/requirements-policy.txt`.
 - Container and PostgreSQL lanes: Docker with local image-build permission.
 
@@ -98,6 +99,9 @@ Missing tools fail clearly. No required lane silently skips.
 Development-only CLI tools may live under `$HOME/.local/share/borealis-dev-tools/bin`; add that directory to `PATH` when using verified user-local installations. Docker Compose CLI plugin discovery uses `$HOME/.docker/cli-plugins`. Installing these validation tools does not require starting Docker, Engine, K3s or cluster workloads on the development workstation.
 
 Netplan fixtures require Ubuntu's `netplan.io`, `python3-netplan` and `python3-yaml`, matching CI. On other distributions, run the unchanged Go lane inside a disposable Ubuntu 24.04 development container with read-only source and separate writable results/cache. Use bounded tmpfs for test scratch when the container backing filesystem reports zero inode capacity; archive capacity guards intentionally reject that incomplete evidence. Disable package service startup inside the fixture. This is non-deployment validation, not an Engine container.
+
+!!! bug "Intermittent documentation-tool failures"
+    Workstation Python 3.14 has produced both a Zensical `TypeError` and an interpreter segmentation fault. Root cause remains under investigation in [#538](https://github.com/bunny-lab-io/Borealis/issues/538). Use Python 3.12 as `python3` on `PATH` before running `./Tests/run-docs.sh`; preserve failure logs instead of treating a successful retry as a fix. A disposable Ubuntu 24.04 validation container can run the unchanged command against a private source copy with separate results and service startup disabled. It must not run Engine or cluster workloads.
 
 ## PostgreSQL Validation
 
@@ -118,6 +122,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_legacy_admission_recovery Tests.Unit_Tests.test_engine_cluster_recovery`. These repository tests use temporary files and mock host service/cluster observations; they never operate on deployed PostgreSQL or K3s. Runtime recovery still requires the immutable-release check and original controller admission gates.
 
 ??? example "Detailed Codex Breakdown"
+
+    - Native pre-join host files: `go -C Data/Engine/Containers/api-backend test -race ./cmd/borealis-node-manager -run '^TestBootstrapHostFiles' -count=1`. Pure Bash renderer fixtures check exact installer parity without running startup or generated firewall commands. Temporary-root fixtures cover safe parent creation, durable atomic no-replace publication, actual two-pass file proof, escaped/malformed network bindings, environment/alias isolation, wrong bytes/modes, hardlinks/symlinks, unsafe/replaced ancestors, extra K3s files/directories, authority loss, cancellation, preflight rejection, late collision and retained partial effects. No real host paths, package manager, service manager, firewall, K3s or Engine runtime change; complete prepared-host proof and live acceptance remain separate.
 
     - Held pre-join host preparation: run `go -C Data/Engine/Containers/api-backend test -race ./internal/engineidentity ./internal/clusterbootstrap -run 'TestPrejoinFencedScope|TestPrejoinHost' -count=1`. Real temporary identity/archive/journal fixtures reject invalid prerequisite receipts, source/key/environment drift, lost authority/quiescence, cancellation and premature progression. Host-effect fixtures verify durable intent before effects, both inherited locks, separate proof-only reconciliation, lost acknowledgements and unknown partial state. A real subprocess keeps the identity flock after both parent descriptors close; killing and joining it releases only the kernel lock, not the marker. Panic/missing-marker cleanup restores the exact fence without overwriting foreign markers or replaced directories. Host adapter effects are private temporary files, not real packages, services or configuration; these tests do not prove native host preparation or live readiness.
 
