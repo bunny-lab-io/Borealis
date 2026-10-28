@@ -1039,6 +1039,12 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	nextState, step, message := "", "", ""
 	retryResumeStep := ""
 	if action == "retry" {
+		if kind == "node_maintenance" && currentStep == clusterAutomaticRecoveryStep {
+			return nil, fmt.Errorf("%w: automatic recovery observation requires its own authority reconciliation", errClusterConflict)
+		}
+		if err := rejectClusterAutomaticRecoveryRetry(kind, payloadJSON); err != nil {
+			return nil, fmt.Errorf("%w: %v", errClusterConflict, err)
+		}
 		if kind == "ssh_onboarding" || kind == clusterExistingIdentityKind {
 			return nil, fmt.Errorf("%w: SSH retry requires explicit credential resubmission and target reconciliation", errClusterConflict)
 		}
