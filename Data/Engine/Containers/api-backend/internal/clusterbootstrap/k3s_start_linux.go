@@ -3,8 +3,6 @@ package clusterbootstrap
 import (
 	"borealis/api-backend/internal/engineidentity"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 )
@@ -77,15 +75,5 @@ func (o K3sStartedObservation) result(expected PreparationExpected, input string
 	if err != nil || !checked.Voting || checked.LocalID != o.Membership.LocalID {
 		return "", ErrMutationUnknown
 	}
-	raw, err = json.Marshal(struct {
-		Domain, Input string
-		Node          K3sJoinedNode
-		MemberID      uint64
-		MemberName    string
-	}{"prepared-k3s-started-v1", input, o.Node, checked.LocalID, localName})
-	if err != nil {
-		return "", ErrMutationUnknown
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
+	return startedPreparationReceipt(input, o.Node, checked.LocalID, localName), nil
 }

@@ -115,8 +115,10 @@ func TestPrejoinIdentityActivationJournal(t *testing.T) {
 				}
 				return value, nil
 			}
+			var receipt PrejoinPreparationReceipt
 			run := func(reconcile bool) (string, error) {
-				return p.prejoinArtifactPhaseTransactionWithActivation(ctx, j, identity.install, identity.material, artifacts, artifacts.postgresReference, check, parent, system, reconcile, nil, nil, nil, phase, true)
+				receipt = PrejoinPreparationReceipt{}
+				return p.prejoinArtifactPhaseTransactionWithReceipt(ctx, j, identity.install, identity.material, artifacts, artifacts.postgresReference, check, parent, system, reconcile, nil, nil, nil, phase, true, &receipt)
 			}
 			result, err := run(false)
 			success := mode == "complete" || mode == "intent lost acknowledgement"
@@ -126,6 +128,13 @@ func TestPrejoinIdentityActivationJournal(t *testing.T) {
 			innerAfter, _ := os.ReadFile(filepath.Join(identity.install.Journal, "journal.json"))
 			if !bytes.Equal(innerBefore, innerAfter) {
 				t.Fatal("activation rewrote original empty-NodeUID journal")
+			}
+			if success {
+				if receipt.Validate(p.configuration.wire.Expected, identity.install.Binding) != nil || receipt.Node != started.Node || receipt.MemberID != started.Membership.LocalID || receipt.Steps[10].ResultSHA256 != result {
+					t.Fatal("native completion receipt lost exact observed identity")
+				}
+			} else if receipt != (PrejoinPreparationReceipt{}) {
+				t.Fatal("failed native proof leaked completion")
 			}
 			if !success {
 				if mode == "same history executor" && (calls != 0 || j.state.Steps["activate_identity"].State != "") {
@@ -166,6 +175,9 @@ func TestPrejoinIdentityActivationJournal(t *testing.T) {
 			reopen()
 			if value, err := run(true); err != nil || value != result {
 				t.Fatal("lost acknowledgement proof failed", value, err)
+			}
+			if receipt.Validate(p.configuration.wire.Expected, identity.install.Binding) != nil {
+				t.Fatal("reconciliation omitted complete receipt")
 			}
 			if _, err := p.prejoinArtifactPhaseTransactionWithStart(ctx, j, identity.install, identity.material, artifacts, artifacts.postgresReference, check, parent, system, true, nil, nil, nil, phase); err == nil {
 				t.Fatal("earlier image phase accepted activated prefix")

@@ -32,3 +32,18 @@ func (p *PreparationInputs) ReconcilePrejoinIdentityActivation(ctx context.Conte
 	return p.prejoinArtifactPhaseTransactionWithActivation(ctx, j, install, identity, artifacts, postgresReference, proveHost, "/opt", "/", true, nil, nil, nil,
 		&prejoinImageVerificationPhase{material, actions, K3sPins()}, true)
 }
+
+// ReconcilePrejoinPreparation returns evidence only after exact activation
+// reconciliation and identity-lock cleanup. It never retries marker removal.
+func (p *PreparationInputs) ReconcilePrejoinPreparation(ctx context.Context, j *MutationJournal, install engineidentity.Installation, identity *engineidentity.Material,
+	artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, material *K3sJoinMaterial, actions PreparedImageVerificationActions) (PrejoinPreparationReceipt, error) {
+	var receipt PrejoinPreparationReceipt
+	if os.Geteuid() != 0 || install.UID != PreparationRuntimeID || install.GID != PreparationRuntimeID {
+		return receipt, ErrMutationJournal
+	}
+	_, err := p.prejoinArtifactPhaseTransactionWithReceipt(ctx, j, install, identity, artifacts, postgresReference, proveHost, "/opt", "/", true, nil, nil, nil, &prejoinImageVerificationPhase{material, actions, K3sPins()}, true, &receipt)
+	if err != nil {
+		return PrejoinPreparationReceipt{}, err
+	}
+	return receipt, nil
+}

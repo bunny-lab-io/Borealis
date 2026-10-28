@@ -45,3 +45,14 @@ func (client *Client) ReconcilePrejoinK3sConfiguration(ctx context.Context, inpu
 	source engineidentity.Binding, identity *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgres string, join *clusterbootstrap.K3sJoinMaterial, sudo []byte, check func(context.Context) error) error {
 	return client.preparationWithK3sJoinResult(ctx, inputs, expected, "reconcile_prejoin_k3s_configuration", &source, identity, artifacts, postgres, join, sudo, check, nil)
 }
+
+// Completion remains private and is returned only after remote exit and current
+// authority. Controller must independently verify the reported Node identity.
+func (client *Client) ReconcilePrejoinPreparation(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	source engineidentity.Binding, identity *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgres string, join *clusterbootstrap.K3sJoinMaterial, sudo []byte, check func(context.Context) error) (clusterbootstrap.PrejoinPreparationReceipt, error) {
+	var receipt clusterbootstrap.PrejoinPreparationReceipt
+	if err := client.preparationWithCompletion(ctx, inputs, expected, "reconcile_prejoin_identity_activation", &source, identity, artifacts, postgres, join, sudo, check, nil, &receipt); err != nil {
+		return clusterbootstrap.PrejoinPreparationReceipt{}, err
+	}
+	return receipt, nil
+}

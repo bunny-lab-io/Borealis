@@ -171,6 +171,12 @@ func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs
 func (client *Client) preparationWithK3sJoinResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
 	join *clusterbootstrap.K3sJoinMaterial, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
+	return client.preparationWithCompletion(ctx, inputs, expected, action, source, material, artifacts, postgresReference, join, sudoPassword, check, progress, nil)
+}
+
+func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
+	join *clusterbootstrap.K3sJoinMaterial, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
 	configuration := action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration" || action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start" || action == "verify_prepared_images" || action == "reconcile_prepared_images" || action == "activate_prejoin_identity" || action == "reconcile_prejoin_identity_activation"
 	if configuration != (join != nil) {
 		return ErrBootstrapVerification
@@ -204,7 +210,7 @@ func (client *Client) preparationWithK3sJoinResult(ctx context.Context, inputs *
 	if err != nil || bundleSource != expected.Source {
 		return ErrBootstrapVerification
 	}
-	return client.transferPreparationArtifactResult(ctx, bundle.ManagerPath(), digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
+	return client.transferPreparationCompletion(ctx, bundle.ManagerPath(), digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
 			if join != nil {
 				return inputs.WritePrejoinK3sJoinPreparation(ctx, expected, *source, material, artifacts, postgresReference, join, output, serialized)
@@ -216,7 +222,7 @@ func (client *Client) preparationWithK3sJoinResult(ctx context.Context, inputs *
 				return inputs.WritePrejoinPreparation(ctx, expected, *source, material, output, serialized)
 			}
 			return inputs.WritePreparation(ctx, expected, output, serialized)
-		}, progress)
+		}, progress, completion)
 }
 
 // Package-private executable seam supports pinned loopback SSH fixtures. Public
@@ -238,6 +244,14 @@ func (client *Client) transferPreparationWithResult(parent context.Context, mana
 
 func (client *Client) transferPreparationArtifactResult(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, postgresReference string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress) error {
+	return client.transferPreparationCompletion(parent, managerPath, digest, size, expected, action, source, postgresReference, sudoPassword, check, produce, progress, nil)
+}
+
+func (client *Client) transferPreparationCompletion(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
+	action string, source *engineidentity.Binding, postgresReference string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
+	if completion != nil && action != "reconcile_prejoin_identity_activation" {
+		return ErrBootstrapVerification
+	}
 	if (action == "inspect_preparation_progress") != (progress != nil) {
 		return ErrBootstrapVerification
 	}
@@ -324,8 +338,11 @@ func (client *Client) transferPreparationArtifactResult(parent context.Context, 
 	// Closing the session releases a blocked stdout reader on cancellation.
 	input := preparationSSHOutput{Reader: stdout, close: func() error { return session.Close() }}
 	output := preparationSSHInput{Writer: stdin, close: func() error { return client.Close() }}
+	var receipt clusterbootstrap.PrejoinPreparationReceipt
 	var cursor clusterbootstrap.PreparationProgress
-	if progress != nil {
+	if completion != nil {
+		receipt, err = clusterbootstrap.ExchangePrejoinPreparationSession(ctx, input, output, request, produce, check)
+	} else if progress != nil {
 		cursor, err = clusterbootstrap.ExchangePreparationProgressSession(ctx, input, output, request, produce, check)
 	} else {
 		err = clusterbootstrap.ExchangePreparationSession(ctx, input, output, request, produce, check)
@@ -339,6 +356,9 @@ func (client *Client) transferPreparationArtifactResult(parent context.Context, 
 	}
 	if progress != nil {
 		*progress = cursor
+	}
+	if completion != nil {
+		*completion = receipt
 	}
 	return nil
 }

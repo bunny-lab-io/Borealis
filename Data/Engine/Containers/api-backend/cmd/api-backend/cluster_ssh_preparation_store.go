@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -19,19 +20,20 @@ var clusterSSHPreparationResultDigestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // Completion contains only fixed journal result digests. It is not produced by
 // qualification and grants no restart, next-target or membership authority.
 type clusterSSHPreparationResult struct {
-	Version            int    `json:"version"`
-	Attempt            int64  `json:"attempt"`
-	TargetID           string `json:"target_id"`
-	Generation         int64  `json:"generation"`
-	ConfirmationSHA256 string `json:"confirmation_sha256"`
-	StageSourceSHA256  string `json:"stage_source_sha256"`
-	PrepareHostSHA256  string `json:"prepare_host_sha256"`
-	StageImagesSHA256  string `json:"stage_images_sha256"`
-	JoinClusterSHA256  string `json:"join_cluster_sha256"`
+	Version            int                      `json:"version"`
+	Attempt            int64                    `json:"attempt"`
+	TargetID           string                   `json:"target_id"`
+	Generation         int64                    `json:"generation"`
+	ConfirmationSHA256 string                   `json:"confirmation_sha256"`
+	StageSourceSHA256  string                   `json:"stage_source_sha256"`
+	PrepareHostSHA256  string                   `json:"prepare_host_sha256"`
+	StageImagesSHA256  string                   `json:"stage_images_sha256"`
+	JoinClusterSHA256  string                   `json:"join_cluster_sha256"`
+	Prejoin            *clusterSSHPrejoinResult `json:"prejoin,omitempty"`
 }
 
 func (r clusterSSHPreparationResult) valid(lease clusterSSHTargetLease) bool {
-	if r.Version != 1 || r.Attempt != lease.OperationAttempt || r.TargetID != lease.TargetID ||
+	if (r.Version != 1 && r.Version != 2) || r.Attempt != lease.OperationAttempt || r.TargetID != lease.TargetID ||
 		r.Generation != lease.Generation || !validClusterSSHPreparationLease(lease) {
 		return false
 	}
@@ -39,16 +41,36 @@ func (r clusterSSHPreparationResult) valid(lease clusterSSHTargetLease) bool {
 }
 
 func (r clusterSSHPreparationResult) validProof(operationID, targetID string, attempt, inspectedGeneration int64) bool {
-	if !clusterUUIDRE.MatchString(operationID) || !clusterUUIDRE.MatchString(targetID) || r.Version != 1 || r.Attempt != attempt ||
+	if !clusterUUIDRE.MatchString(operationID) || !clusterUUIDRE.MatchString(targetID) || (r.Version != 1 && r.Version != 2) || r.Attempt != attempt ||
 		r.TargetID != targetID || r.Generation <= inspectedGeneration {
 		return false
 	}
-	for _, digest := range []string{r.ConfirmationSHA256, r.StageSourceSHA256, r.PrepareHostSHA256, r.StageImagesSHA256, r.JoinClusterSHA256} {
+	digests := []string{r.ConfirmationSHA256, r.StageSourceSHA256, r.PrepareHostSHA256, r.StageImagesSHA256}
+	if r.Version == 1 {
+		if r.Prejoin != nil {
+			return false
+		}
+		digests = append(digests, r.JoinClusterSHA256)
+	} else {
+		p := r.Prejoin
+		if r.JoinClusterSHA256 != "" || p == nil || p.Receipt.Validate(p.Expected, p.Receipt.Source) != nil || p.Expected.Target.OperationID != operationID || p.Expected.Target.TargetID != targetID || p.Expected.Target.OperationAttempt != attempt || p.Expected.Target.Generation != r.Generation ||
+			r.StageSourceSHA256 != p.Receipt.Steps[0].ResultSHA256 || r.PrepareHostSHA256 != p.Receipt.Steps[4].ResultSHA256 || r.StageImagesSHA256 != p.Receipt.Steps[5].ResultSHA256 {
+			return false
+		}
+		digests = append(digests, p.ControllerSHA256)
+	}
+	for _, digest := range digests {
 		if !clusterSSHPreparationResultDigestRE.MatchString(digest) || digest == strings.Repeat("0", 64) {
 			return false
 		}
 	}
 	return true
+}
+
+type clusterSSHPrejoinResult struct {
+	Expected         clusterbootstrap.PreparationExpected       `json:"expected"`
+	Receipt          clusterbootstrap.PrejoinPreparationReceipt `json:"receipt"`
+	ControllerSHA256 string                                     `json:"controller_sha256"`
 }
 
 type clusterSSHPreparationCompletion struct {
@@ -65,12 +87,24 @@ type clusterSSHPreparationReceipt struct {
 }
 
 func parseClusterSSHPreparationReceipt(raw string, proof clusterSSHParentProof) (clusterSSHPreparationReceipt, error) {
+	return parseClusterSSHPreparationReceiptVersion(raw, proof, 1)
+}
+
+func parseClusterSSHPreparationReceiptVersion(raw string, proof clusterSSHParentProof, version int) (clusterSSHPreparationReceipt, error) {
+	if version != 1 && version != 2 {
+		return clusterSSHPreparationReceipt{}, errClusterConflict
+	}
+
 	fail := func() (clusterSSHPreparationReceipt, error) {
 		return clusterSSHPreparationReceipt{}, errClusterConflict
 	}
+	maxReceipt := 8 << 10
+	if version == 2 {
+		maxReceipt = 24 << 10
+	}
 	var receiptRaw json.RawMessage
 	if len(raw) == 0 || len(raw) > 256<<10 || clusterBootstrapObject([]byte(raw), map[string]any{"ssh_preparation": &receiptRaw}) != nil ||
-		len(receiptRaw) == 0 || len(receiptRaw) > 8<<10 {
+		len(receiptRaw) == 0 || len(receiptRaw) > maxReceipt {
 		return fail()
 	}
 	object, err := decodeClusterSSHObject(receiptRaw, map[string]bool{
@@ -84,14 +118,14 @@ func parseClusterSSHPreparationReceipt(raw string, proof clusterSSHParentProof) 
 		return fail()
 	}
 	canonical, err := json.Marshal(receipt)
-	if err != nil || !sameClusterSSHStoredJSON(receiptRaw, canonical, 0) || receipt.Version != 1 || receipt.Attempt != proof.Cohort.Attempt ||
+	if err != nil || !sameClusterSSHStoredJSON(receiptRaw, canonical, 0) || receipt.Version != version || receipt.Attempt != proof.Cohort.Attempt ||
 		!clusterSSHPreparationResultDigestRE.MatchString(receipt.ConfirmationSHA256) || receipt.ConfirmationSHA256 == strings.Repeat("0", 64) ||
 		len(receipt.Targets) != len(proof.Cohort.Targets) {
 		return fail()
 	}
 	for index, target := range proof.Cohort.Targets {
 		result := receipt.Targets[index]
-		if !result.validProof(proof.Cohort.OperationID, target.Binding.TargetID, proof.Cohort.Attempt, target.Generation) ||
+		if result.Version != version || !result.validProof(proof.Cohort.OperationID, target.Binding.TargetID, proof.Cohort.Attempt, target.Generation) ||
 			result.ConfirmationSHA256 != receipt.ConfirmationSHA256 {
 			return fail()
 		}
@@ -104,6 +138,16 @@ func parseClusterSSHPreparationReceipt(raw string, proof clusterSSHParentProof) 
 // and joined scope succeeds. This function deliberately has no runtime caller
 // until that proof-producing dispatcher exists.
 func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Context, completions []clusterSSHPreparationCompletion) error {
+	return s.completeClusterSSHPreparationVersion(ctx, completions, 1)
+}
+
+// Shared atomic settlement retains all controller/cohort/credential fences.
+// Version2 is called only by the independent pre-join verification adapter.
+func (s *postgresOperatorStore) completeClusterSSHPreparationVersion(ctx context.Context, completions []clusterSSHPreparationCompletion, version int) error {
+	if version != 1 && version != 2 {
+		return errClusterConflict
+	}
+
 	if s == nil || s.db == nil || ctx.Err() != nil || len(completions) < 1 || len(completions) > 2 {
 		return errClusterConflict
 	}
@@ -141,7 +185,7 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 		authority := completion.Authority
 		stable := authority.Cohort
 		stable.ObservedAt = 0
-		if !completion.Result.valid(authority.Lease) || completion.Result.ConfirmationSHA256 != confirmation || byTarget[authority.Lease.TargetID].Result.Version != 0 ||
+		if completion.Result.Version != version || !completion.Result.valid(authority.Lease) || completion.Result.ConfirmationSHA256 != confirmation || byTarget[authority.Lease.TargetID].Result.Version != 0 ||
 			authority.IdentitySource == nil || *authority.IdentitySource != selected ||
 			authority.Recovery != nil || authority.payload != first.payload || authority.PayloadSHA256 != first.PayloadSHA256 ||
 			authority.Baseline != first.Baseline || authority.K3sVersion != first.K3sVersion || authority.Queue != first.Queue ||
@@ -153,9 +197,19 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 			!strings.HasPrefix(completion.Sealed.ciphertext, aegisEnvelopePrefix) || len(completion.Sealed.ciphertext) > 256<<10 {
 			return errClusterConflict
 		}
+		if version == 2 {
+			p := completion.Result.Prejoin
+			observed := authority
+			observed.Cohort.ObservedAt = 0
+			digest, digestErr := clusterSSHPreparationDigest(observed)
+			expected, expectedErr := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, authority.Lease, authority.Baseline, authority.K3sVersion, p.Expected.PodCIDR, p.Expected.ServiceCIDR)
+			if digestErr != nil || expectedErr != nil || p.ControllerSHA256 != digest || p.Receipt.Source != selected || !reflect.DeepEqual(p.Expected, expected) {
+				return errClusterConflict
+			}
+		}
 		byTarget[authority.Lease.TargetID] = completion
 	}
-	receipt := clusterSSHPreparationReceipt{Version: 1, Attempt: first.Lease.OperationAttempt, ConfirmationSHA256: confirmation}
+	receipt := clusterSSHPreparationReceipt{Version: version, Attempt: first.Lease.OperationAttempt, ConfirmationSHA256: confirmation}
 	for i, target := range first.Cohort.Targets {
 		completion, ok := byTarget[target.Binding.TargetID]
 		credentialDigest, err := clusterSSHPreparationDigest([]string{completion.Sealed.generation, completion.Sealed.ciphertext})
@@ -173,7 +227,7 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 		return errClusterConflict
 	}
 	rawReceipt, err := json.Marshal(receipt)
-	if err != nil || len(rawReceipt) > 8<<10 {
+	if err != nil || len(rawReceipt) > 24<<10 {
 		return errClusterConflict
 	}
 	payload["ssh_preparation"] = rawReceipt
@@ -265,8 +319,12 @@ func (s *postgresOperatorStore) completeClusterSSHPreparation(ctx context.Contex
 	if changed, _ := result.RowsAffected(); changed != 1 {
 		return errClusterConflict
 	}
+	message := "Paired SSH preparation journals proved; identity recovery remains fenced."
+	if version == 2 {
+		message = "Pre-join shared identity activated and target Nodes independently verified; admission remains disabled."
+	}
 	if insertClusterEvent(ctx, tx, first.Lease.OperationID, "", first.Source.ClusterID, "ssh_preparation_complete",
-		clusterSSHPreparationCompleteStep, "Paired SSH preparation journals proved; identity recovery remains fenced.",
+		clusterSSHPreparationCompleteStep, message,
 		map[string]any{"attempt": first.Lease.OperationAttempt, "confirmation_sha256": confirmation, "target_count": len(targets)}, now) != nil || tx.Commit() != nil {
 		return errClusterUnavailable
 	}

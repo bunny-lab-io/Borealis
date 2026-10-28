@@ -61,6 +61,8 @@
     "TestClusterSSHPreparationClaimPostgresRechecksAfterWait",
     "TestClusterSSHPreparationClaimPostgresRejectsDrift",
     "TestClusterSSHPreparationCompletionPostgres",
+    "TestClusterSSHPrejoinCompletionPostgres",
+    "TestClusterSSHPrejoinWorkerPostgres",
     "TestClusterSSHPreparationWorkerPostgres",
     "TestClusterSSHPreparationWorkerPostgresRenewsCohort",
     "TestClusterSSHPreparationPublicationPostgresProposalFence",

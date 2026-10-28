@@ -45,6 +45,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		return nil
 	}
 	var progress clusterbootstrap.PreparationProgress
+	var completion *clusterbootstrap.PrejoinPreparationReceipt
 	receive := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) error {
 		expected, err := request.Expected()
 		if err != nil || request.Session.Nonce != nonce {
@@ -92,7 +93,15 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				case "activate_prejoin_identity", "reconcile_prejoin_identity_activation":
 					operation := inputs.ActivatePrejoinIdentity
 					if request.Action == "reconcile_prejoin_identity_activation" {
-						operation = inputs.ReconcilePrejoinIdentityActivation
+						var receipt clusterbootstrap.PrejoinPreparationReceipt
+						receipt, err = inputs.ReconcilePrejoinPreparation(ctx, journal, install, material, assets, request.PostgresReference,
+							func(ctx context.Context) error {
+								return proveBootstrapPreparedK3sStartHost(ctx, expected, install.Binding, join, authority)
+							}, join, bootstrapNativePreparedImageActions(expected, install.Binding, join, guard, executor, authority))
+						if err == nil {
+							completion = &receipt
+						}
+						break
 					}
 					_, err = operation(ctx, journal, install, material, assets, request.PostgresReference,
 						func(ctx context.Context) error {
@@ -220,17 +229,24 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				return consume(ctx, inputs, nil, nil, nil)
 			})
 	}
-	serve := clusterbootstrap.ServePreparationSessionWithProgress
+	var sessionErr error
 	if artifacts {
-		serve = clusterbootstrap.ServeArtifactPreparationSession
+		sessionErr = clusterbootstrap.ServeArtifactPreparationSessionWithResult(ctx, os.Stdin, os.Stdout, nonce, verify,
+			func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
+				err := receive(ctx, request, input)
+				return clusterbootstrap.PreparationSessionResult{Progress: progress, Completion: completion}, err
+			}, guard.ObserveDeadline)
+	} else {
+		sessionErr = clusterbootstrap.ServePreparationSessionWithProgress(ctx, os.Stdin, os.Stdout, nonce, verify,
+			func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationProgress, error) {
+				err := receive(ctx, request, input)
+				return progress, err
+			}, guard.ObserveDeadline)
 	}
-	if serve(ctx, os.Stdin, os.Stdout, nonce, verify,
-		func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationProgress, error) {
-			err := receive(ctx, request, input)
-			return progress, err
-		}, guard.ObserveDeadline) != nil {
+	if sessionErr != nil {
 		fatalf("source preparation failed; inspect journal before any write retry")
 	}
+
 }
 
 // Source/identity phases keep their narrow paths; host actions select an exact

@@ -121,15 +121,16 @@ func (r PreparationSessionRequest) Digest() (string, error) {
 }
 
 // Data is private base64 payload. Never log frames or return them through API
-// progress. Completion contains only session/request identity, not config hash.
+// progress. Native completion evidence remains on this private channel only.
 type PreparationSessionFrame struct {
-	Protocol      int    `json:"protocol"`
-	State         string `json:"state"`
-	Nonce         string `json:"nonce"`
-	RequestSHA256 string `json:"request_sha256,omitempty"`
-	Sequence      int64  `json:"sequence,omitempty"`
-	Data          string `json:"data,omitempty"`
-	JournalStep   string `json:"journal_step,omitempty"`
+	Protocol         int    `json:"protocol"`
+	State            string `json:"state"`
+	Nonce            string `json:"nonce"`
+	RequestSHA256    string `json:"request_sha256,omitempty"`
+	Sequence         int64  `json:"sequence,omitempty"`
+	Data             string `json:"data,omitempty"`
+	JournalStep      string `json:"journal_step,omitempty"`
+	CompletionBase64 string `json:"completion_base64,omitempty"`
 }
 
 func (PreparationSessionFrame) String() string   { return "preparation frame [private data withheld]" }
@@ -138,6 +139,21 @@ func (PreparationSessionFrame) GoString() string { return "preparation frame [pr
 type PreparationSessionReceiver func(context.Context, PreparationSessionRequest, io.Reader) error
 
 type PreparationSessionProgressReceiver func(context.Context, PreparationSessionRequest, io.Reader) (PreparationProgress, error)
+
+// PreparationSessionResult separates the unproved inspection cursor from native
+// completion evidence. Only activation reconciliation may return a receipt.
+type PreparationSessionResult struct {
+	Progress   PreparationProgress
+	Completion *PrejoinPreparationReceipt
+}
+type PreparationSessionResultReceiver func(context.Context, PreparationSessionRequest, io.Reader) (PreparationSessionResult, error)
+
+func ServeArtifactPreparationSessionWithResult(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionResultReceiver, observe func(time.Time) error) error {
+	ctx, cancel := context.WithTimeout(parent, ArtifactPreparationLifetime)
+	defer cancel()
+	return servePreparationSessionResult(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, preparationProfile(true))
+}
 
 // ServePreparationSessionWithProgress adds only a bounded journal cursor to the
 // inspection action. Other actions must return the zero cursor. The cursor is
@@ -185,6 +201,17 @@ func ServeArtifactPreparationSession(parent context.Context, input io.ReadCloser
 
 func servePreparationSessionProfile(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
 	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error, timing sessionTiming, profile preparationTransportProfile) error {
+	if receive == nil {
+		return ErrSessionProtocol
+	}
+	return servePreparationSessionResult(parent, input, output, nonce, verify, func(ctx context.Context, r PreparationSessionRequest, in io.Reader) (PreparationSessionResult, error) {
+		progress, err := receive(ctx, r, in)
+		return PreparationSessionResult{Progress: progress}, err
+	}, observe, timing, profile)
+}
+
+func servePreparationSessionResult(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionResultReceiver, observe func(time.Time) error, timing sessionTiming, profile preparationTransportProfile) error {
 	if input == nil || output == nil || verify == nil || receive == nil || observe == nil || !digestPattern.MatchString(nonce) {
 		return ErrSessionProtocol
 	}
@@ -229,8 +256,8 @@ func servePreparationSessionProfile(parent context.Context, input io.ReadCloser,
 	chunks := make(chan []byte)
 	chunkReader := &preparationChunkReader{ctx: ctx, chunks: chunks}
 	type receiverResult struct {
-		progress PreparationProgress
-		err      error
+		value PreparationSessionResult
+		err   error
 	}
 	finished := make(chan receiverResult, 1)
 	working := false
@@ -283,7 +310,7 @@ func servePreparationSessionProfile(parent context.Context, input io.ReadCloser,
 			}
 			sequence++
 		case frame := <-frames:
-			if frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.JournalStep != "" || !time.Now().Before(deadline) {
+			if frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.JournalStep != "" || frame.CompletionBase64 != "" || !time.Now().Before(deadline) {
 				return ErrSessionProtocol
 			}
 			if frame.State == "heartbeat" {
@@ -347,13 +374,27 @@ func servePreparationSessionProfile(parent context.Context, input io.ReadCloser,
 				return ErrSessionProtocol
 			}
 			if request.Action == "inspect_preparation_progress" {
-				if result.progress.Validate() != nil {
+				if result.value.Progress.Validate() != nil {
 					return ErrSessionProtocol
 				}
-			} else if result.progress != (PreparationProgress{}) {
+			} else if result.value.Progress != (PreparationProgress{}) {
 				return ErrSessionProtocol
 			}
-			return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "verified", Nonce: nonce, RequestSHA256: digest, Sequence: sequence, JournalStep: result.progress.Step})
+			completionBase64 := ""
+			expected, expectedErr := request.Expected()
+			if request.Action == "reconcile_prejoin_identity_activation" {
+				if expectedErr != nil || request.IdentitySource == nil || result.value.Completion == nil || result.value.Completion.Validate(expected, *request.IdentitySource) != nil {
+					return ErrSessionProtocol
+				}
+				var encodeErr error
+				completionBase64, encodeErr = encodePreparationReceipt(*result.value.Completion)
+				if encodeErr != nil {
+					return ErrSessionProtocol
+				}
+			} else if result.value.Completion != nil {
+				return ErrSessionProtocol
+			}
+			return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "verified", Nonce: nonce, RequestSHA256: digest, Sequence: sequence, JournalStep: result.value.Progress.Step, CompletionBase64: completionBase64})
 		case <-ticker.C:
 			if !pendingChallenge && issue() != nil {
 				return ErrSessionProtocol

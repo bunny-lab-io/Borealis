@@ -38,6 +38,13 @@ func (c *sshStartupTestClient) ReconcilePrejoinIdentityActivation(ctx context.Co
 	return c.activate(ctx, true, source, identity, join, check)
 }
 
+func (c *sshStartupTestClient) ReconcilePrejoinPreparation(ctx context.Context, _ *clusterbootstrap.PreparationInputs, e clusterbootstrap.PreparationExpected, source engineidentity.Binding, identity *engineidentity.Material, _ *clusterbootstrap.PreparationArtifacts, _ string, join *clusterbootstrap.K3sJoinMaterial, _ []byte, check func(context.Context) error) (clusterbootstrap.PrejoinPreparationReceipt, error) {
+	if err := c.activate(ctx, true, source, identity, join, check); err != nil {
+		return clusterbootstrap.PrejoinPreparationReceipt{}, err
+	}
+	return sshPrejoinReceiptFixture(e, source), nil
+}
+
 func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 	_, request, frame := sshJoinSourceFixture(t)
 	defer clear(frame)
@@ -178,10 +185,18 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 				defer join.Close()
 				return consume(ctx, join, check)
 			}
-			err := dispatchClusterSSHPrejoinStartup(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{}, clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), expected, source, keys, []byte("fixture"), check, acquire, mode != "old prefix" && mode != "old activation prefix")
+			var receipt clusterbootstrap.PrejoinPreparationReceipt
+			output := &receipt
+			if mode == "old prefix" || mode == "old activation prefix" {
+				output = nil
+			}
+			err := dispatchClusterSSHPrejoinCompletion(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{}, clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), expected, source, keys, []byte("fixture"), check, acquire, mode != "old prefix" && mode != "old activation prefix", output)
 			success := mode == "complete" || mode == "lost acknowledgement" || mode == "resume startup" || mode == "resume images" || mode == "resume activation" || mode == "activation lost acknowledgement"
 			if (err == nil) != success || opened != closed {
 				t.Fatal("wrong startup result/cleanup", err, opened, closed)
+			}
+			if success && receipt.Validate(expected, source) != nil || !success && receipt != (clusterbootstrap.PrejoinPreparationReceipt{}) {
+				t.Fatal("completion escaped failed dispatch or successful receipt missing")
 			}
 			want := []string{"configuration proof", "start", "startup proof", "images", "image proof", "activation", "activation proof"}
 			switch mode {

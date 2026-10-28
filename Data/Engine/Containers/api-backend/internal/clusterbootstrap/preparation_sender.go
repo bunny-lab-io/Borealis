@@ -35,6 +35,23 @@ func ExchangePreparationProgressSession(parent context.Context, input io.ReadClo
 
 func exchangePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
 	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress) error {
+	return exchangePreparationSessionResult(parent, input, output, request, produce, refresh, progress, nil)
+}
+
+func ExchangePrejoinPreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, request PreparationSessionRequest,
+	produce func(context.Context, io.Writer) error, refresh func(context.Context) error) (PrejoinPreparationReceipt, error) {
+	var result PrejoinPreparationReceipt
+	if request.Action != "reconcile_prejoin_identity_activation" {
+		return result, ErrSessionProtocol
+	}
+	if err := exchangePreparationSessionResult(parent, input, output, request, produce, refresh, nil, &result); err != nil {
+		return PrejoinPreparationReceipt{}, err
+	}
+	return result, nil
+}
+
+func exchangePreparationSessionResult(parent context.Context, input io.ReadCloser, output io.WriteCloser,
+	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress, completion *PrejoinPreparationReceipt) error {
 	if request.IdentitySource != nil {
 		source := *request.IdentitySource
 		request.IdentitySource = &source
@@ -208,7 +225,7 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 				}
 			}
 		case frame, ok := <-frames:
-			if !ok || frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.Data != "" || frame.State != "verified" && frame.JournalStep != "" {
+			if !ok || frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.Data != "" || frame.State != "verified" && (frame.JournalStep != "" || frame.CompletionBase64 != "") {
 				return ErrSessionProtocol
 			}
 			if frame.State == "challenge" {
@@ -245,6 +262,19 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 					return ErrSessionProtocol
 				}
 			case "verified":
+				var receipt PrejoinPreparationReceipt
+				if request.Action == "reconcile_prejoin_identity_activation" {
+					expected, e := request.Expected()
+					if e != nil || request.IdentitySource == nil {
+						return ErrSessionProtocol
+					}
+					receipt, e = decodePreparationReceipt(frame.CompletionBase64, expected, *request.IdentitySource)
+					if e != nil {
+						return ErrSessionProtocol
+					}
+				} else if frame.CompletionBase64 != "" || completion != nil {
+					return ErrSessionProtocol
+				}
 				cursor := PreparationProgress{Step: frame.JournalStep}
 				if progress != nil {
 					if cursor.Validate() != nil {
@@ -265,6 +295,9 @@ func exchangePreparationSession(parent context.Context, input io.ReadCloser, out
 				completed = true
 				if progress != nil {
 					*progress = cursor
+				}
+				if completion != nil {
+					*completion = receipt
 				}
 				return nil
 			default:

@@ -29,3 +29,24 @@ func withClusterSSHPreparedK3sStartupDispatch(ctx context.Context, store *postgr
 	}
 	return withClusterSSHPrejoinStartupDispatch(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected, checks.Authority, checks.K3sJoin, true)
 }
+
+// Separate capability keeps legacy error-only clients from manufacturing a
+// completion result from a successful cursor/session acknowledgement.
+type clusterSSHPrejoinReceiptClient interface {
+	ReconcilePrejoinPreparation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, *clusterbootstrap.K3sJoinMaterial, []byte, func(context.Context) error) (clusterbootstrap.PrejoinPreparationReceipt, error)
+}
+
+var _ clusterSSHPrejoinReceiptClient = (*clusterremote.Client)(nil)
+
+func withClusterSSHPreparedK3sCompletionDispatch(ctx context.Context, store *postgresOperatorStore, aegis *goAegisService,
+	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, inputs *clusterbootstrap.PreparationInputs,
+	artifacts *clusterbootstrap.PreparationArtifacts, postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) (clusterbootstrap.PrejoinPreparationReceipt, error) {
+	var receipt clusterbootstrap.PrejoinPreparationReceipt
+	if checks.K3sJoin == nil || checks.Authority == nil || artifacts == nil {
+		return receipt, clusterbootstrap.ErrSessionAuthority
+	}
+	if err := withClusterSSHPrejoinCompletionDispatch(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected, checks.Authority, checks.K3sJoin, true, &receipt); err != nil {
+		return clusterbootstrap.PrejoinPreparationReceipt{}, err
+	}
+	return receipt, nil
+}

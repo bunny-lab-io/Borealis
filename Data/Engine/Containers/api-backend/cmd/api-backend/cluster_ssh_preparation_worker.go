@@ -18,11 +18,19 @@ import (
 type clusterSSHPreparationDispatch func(context.Context, clusterSSHNetworkTargetClaim,
 	clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) (clusterSSHPreparationResult, error)
 
+type clusterSSHPrejoinDispatchResult struct {
+	Expected clusterbootstrap.PreparationExpected
+	Receipt  clusterbootstrap.PrejoinPreparationReceipt
+}
+type clusterSSHPrejoinPreparationDispatch func(context.Context, clusterSSHNetworkTargetClaim, clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) (clusterSSHPrejoinDispatchResult, error)
+
 type clusterSSHPreparationWorker struct {
 	store    *postgresOperatorStore
 	aegis    *goAegisService
 	dispatch clusterSSHPreparationDispatch
 	interval time.Duration
+	prejoin  clusterSSHPrejoinPreparationDispatch
+	getJSON  func(context.Context, string, any) error
 }
 
 func newClusterSSHPreparationWorker(store *postgresOperatorStore, aegis *goAegisService, dispatch clusterSSHPreparationDispatch) *clusterSSHPreparationWorker {
@@ -32,11 +40,20 @@ func newClusterSSHPreparationWorker(store *postgresOperatorStore, aegis *goAegis
 	return &clusterSSHPreparationWorker{store: store, aegis: aegis, dispatch: dispatch, interval: 5 * time.Second}
 }
 
+// Callable-only pre-join variant reuses claim renewal, owned source selection,
+// descendant joining and atomic settlement. No poller or admission is installed.
+func newClusterSSHPrejoinPreparationWorker(store *postgresOperatorStore, aegis *goAegisService, dispatch clusterSSHPrejoinPreparationDispatch, getJSON func(context.Context, string, any) error) *clusterSSHPreparationWorker {
+	if store == nil || store.db == nil || aegis == nil || dispatch == nil || getJSON == nil {
+		return nil
+	}
+	return &clusterSSHPreparationWorker{store: store, aegis: aegis, prejoin: dispatch, getJSON: getJSON, interval: 5 * time.Second}
+}
+
 // Prepare neither claims nor reclaims targets. Any uncertain dispatch outcome
 // retains all original claims until expiry; expiry cannot authorize replay.
 // Only successful whole-cohort dispatch and joined scope cleanup can settle.
 func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clusterSSHPreparationWork) error {
-	if w == nil || w.store == nil || w.store.db == nil || w.aegis == nil || w.dispatch == nil ||
+	if w == nil || w.store == nil || w.store.db == nil || w.aegis == nil || (w.dispatch == nil) == (w.prejoin == nil) || w.prejoin != nil && w.getJSON == nil ||
 		parent.Err() != nil || len(work.Claims) < 1 || len(work.Claims) > 2 || work.Baseline.Validate() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -96,6 +113,7 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 		return ctx.Err()
 	}
 	results := make([]clusterSSHPreparationResult, len(claims))
+	prepared := make([]clusterSSHPrejoinCompletion, len(claims))
 	err = runClusterSSHPreparationScope(parent, w.interval, checkAll, func(scope context.Context) error {
 		ctx, cancel := context.WithCancel(scope)
 		defer cancel()
@@ -111,8 +129,17 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			if check(ctx) != nil {
 				return clusterbootstrap.ErrSessionAuthority
 			}
+			if w.prejoin != nil {
+				value, err := w.prejoin(ctx, claim, work.Baseline, authorization.ConfirmationSHA256, work.IdentitySource, check)
+				if err != nil || ctx.Err() != nil || value.Expected.Source != work.Baseline || value.Receipt.Validate(value.Expected, work.IdentitySource) != nil || check(ctx) != nil {
+					return clusterbootstrap.ErrPreparationConfig
+				}
+				value.Expected.PeerAddresses = slices.Clone(value.Expected.PeerAddresses)
+				prepared[i] = clusterSSHPrejoinCompletion{Claim: claim, Expected: value.Expected, Receipt: value.Receipt, PayloadSHA256: payloadHash}
+				continue
+			}
 			result, err := w.dispatch(ctx, claim, work.Baseline, authorization.ConfirmationSHA256, work.IdentitySource, check)
-			if err != nil || ctx.Err() != nil || !result.valid(claim.Lease) ||
+			if err != nil || ctx.Err() != nil || result.Version != 1 || !result.valid(claim.Lease) ||
 				result.ConfirmationSHA256 != authorization.ConfirmationSHA256 || check(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
@@ -122,6 +149,12 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 	})
 	if err != nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
+	}
+	if w.prejoin != nil {
+		if w.store.completeClusterSSHPrejoinPreparation(parent, w.aegis, prepared, w.getJSON) != nil || parent.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
 	}
 	// Heartbeat and all dispatch descendants have joined before final authority
 	// collection and atomic settlement. Cancellation cannot become success.

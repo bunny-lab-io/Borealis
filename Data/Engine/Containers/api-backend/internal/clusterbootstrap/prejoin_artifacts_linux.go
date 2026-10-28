@@ -51,6 +51,10 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 }
 
 func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase, images *prejoinImageVerificationPhase, activate bool) (string, error) {
+	return p.prejoinArtifactPhaseTransactionWithReceipt(ctx, j, install, material, artifacts, postgresReference, proveHost, parent, systemPath, reconcile, runtime, join, start, images, activate, nil)
+}
+
+func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithReceipt(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase, images *prejoinImageVerificationPhase, activate bool, receipt *PrejoinPreparationReceipt) (string, error) {
 	if p == nil || j == nil || artifacts == nil || proveHost == nil || !ValidPostgresImageReference(postgresReference) {
 		return "", ErrMutationJournal
 	}
@@ -195,6 +199,8 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx co
 		sum := sha256.Sum256([]byte("prepared-image-verification-v1\x00" + startInput + "\x00" + startResult + "\x00" + digest))
 		input = hex.EncodeToString(sum[:])
 	}
+	var observed K3sStartedObservation
+	var completedReceipt PrejoinPreparationReceipt
 	imageInput, imageResult := input, ""
 	if activate {
 		prior := j.state.Steps["verify_images"]
@@ -299,6 +305,7 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx co
 					if err != nil || result != imageResult {
 						return "", ErrMutationUnknown
 					}
+					observed = observation.After
 					return input, nil
 				}
 				return result, err
@@ -340,6 +347,28 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx co
 			final, err := prove(ctx, j.lock)
 			if err != nil || final != result {
 				return ErrMutationUnknown
+			}
+			if receipt != nil {
+				completedReceipt = PrejoinPreparationReceipt{Version: 1, ExpectedSHA256: preparationReceiptDigest(p.configuration.wire.Expected), Source: install.Binding, Node: observed.Node, MemberID: observed.Membership.LocalID}
+				completedReceipt.ImageTargetsSHA256, err = containerdImportTargetDigest(imageTargets)
+				if err != nil {
+					return ErrMutationUnknown
+				}
+				for _, member := range observed.Membership.Members {
+					if member.ID == completedReceipt.MemberID {
+						completedReceipt.MemberName = member.Name
+					}
+				}
+				for i, name := range []string{"stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s", "start_k3s", "verify_images", "activate_identity"} {
+					record := j.state.Steps[name]
+					if record.State != "applied" {
+						return ErrMutationUnknown
+					}
+					completedReceipt.Steps[i] = PreparationStepReceipt{name, record.InputSHA256, record.ResultSHA256}
+				}
+				if completedReceipt.Validate(p.configuration.wire.Expected, install.Binding) != nil {
+					return ErrMutationUnknown
+				}
 			}
 			return nil
 		}
@@ -388,6 +417,9 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx co
 	}
 	if err != nil {
 		return "", ErrMutationUnknown
+	}
+	if receipt != nil {
+		*receipt = completedReceipt
 	}
 	return result, nil
 }
