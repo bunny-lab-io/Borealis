@@ -27,7 +27,7 @@ func artifactSessionRequestFixture(t *testing.T) PreparationSessionRequest {
 func TestArtifactPreparationRequestAndLimits(t *testing.T) {
 	r := artifactSessionRequestFixture(t)
 	original, _ := r.Digest()
-	for _, action := range []string{"install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start"} {
+	for _, action := range []string{"install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start", "verify_prepared_images", "reconcile_prepared_images"} {
 		changed := r
 		changed.Action = action
 		digest, err := changed.Digest()
@@ -137,7 +137,11 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 				_, err := io.Copy(out, bytes.NewReader(payload))
 				return err
 			}, func(context.Context) error {
-				if mode == "authority loss" && produced.Load() {
+				// Revoke at first post-verification boundary. Waiting until the
+				// producer fills its pipe can let receiver finish before sender's
+				// final authority check, making server outcome scheduler-dependent.
+				if mode == "authority loss" && verified.Load() {
+					_ = client.Close()
 					return ErrSessionAuthority
 				}
 				return nil

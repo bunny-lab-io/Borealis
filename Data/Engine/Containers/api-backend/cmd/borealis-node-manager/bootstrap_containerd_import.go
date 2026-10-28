@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/engineidentity"
 	"bytes"
 	"context"
 	"io"
@@ -10,12 +11,33 @@ import (
 	"time"
 )
 
-// Read-only component, not a dispatcher or admission receipt. A future journal
-// caller must retain both fences and bind this observation to its startup proof.
-func observeBootstrapContainerdImport(ctx context.Context, artifacts *clusterbootstrap.PreparationArtifacts,
+func bootstrapNativePreparedImageActions(expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
+	join *clusterbootstrap.K3sJoinMaterial, guard *clusterbootstrap.ExecutorGuard,
+	executor clusterbootstrap.ExecutorIdentity, check func(context.Context) error) clusterbootstrap.PreparedImageVerificationActions {
+	started := bootstrapNativeK3sStartActions(expected, source, join, guard, executor, check)
+	return clusterbootstrap.PreparedImageVerificationActions{Observe: func(ctx context.Context, hostLock, identityLock *os.File, targets []clusterbootstrap.ContainerdImageTarget) (clusterbootstrap.PreparedImageObservation, error) {
+		before, err := started.Prove(ctx)
+		if err != nil {
+			return clusterbootstrap.PreparedImageObservation{}, errBootstrapSource
+		}
+		images, err := observeBootstrapContainerdImport(ctx, targets, hostLock, identityLock, guard, executor, check)
+		if err != nil {
+			return clusterbootstrap.PreparedImageObservation{}, errBootstrapSource
+		}
+		after, err := started.Prove(ctx)
+		if err != nil {
+			return clusterbootstrap.PreparedImageObservation{}, errBootstrapSource
+		}
+		return clusterbootstrap.PreparedImageObservation{Before: before, Images: images, After: after}, nil
+	}}
+}
+
+// Read-only native component. Journal caller retains both fences and binds
+// returned rows to exact before/after startup proof; this grants no admission.
+func observeBootstrapContainerdImport(ctx context.Context, targets []clusterbootstrap.ContainerdImageTarget,
 	hostLock, identityLock *os.File, guard *clusterbootstrap.ExecutorGuard, identity clusterbootstrap.ExecutorIdentity,
 	check func(context.Context) error) ([]clusterbootstrap.ContainerdImageTarget, error) {
-	if os.Geteuid() != 0 || os.Getegid() != 0 || guard == nil || check == nil || artifacts == nil {
+	if os.Geteuid() != 0 || os.Getegid() != 0 || guard == nil || check == nil || len(targets) == 0 {
 		return nil, errBootstrapSource
 	}
 	authority := func(ctx context.Context) error {
@@ -24,12 +46,8 @@ func observeBootstrapContainerdImport(ctx context.Context, artifacts *clusterboo
 		}
 		return nil
 	}
-	targets, err := artifacts.ImportTargets(ctx, authority)
-	if err != nil {
-		return nil, errBootstrapSource
-	}
 	var observed []clusterbootstrap.ContainerdImageTarget
-	err = withBootstrapStartedK3sExecutable(ctx, "/proc", readBootstrapStartedK3s, checkSourceKubeletExecutable, authority,
+	err := withBootstrapStartedK3sExecutable(ctx, "/proc", readBootstrapStartedK3s, checkSourceKubeletExecutable, authority,
 		func(serverCheck func(context.Context) error, executable *os.File, pid uint64) error {
 			return withBootstrapContainerdEndpoint(ctx, "/", "/proc", pid, executable, serverCheck, connectSourceCSIPeer,
 				func(socket *os.File, endpointCheck func(context.Context) error) error {

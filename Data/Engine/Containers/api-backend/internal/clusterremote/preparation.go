@@ -159,7 +159,7 @@ func (client *Client) ReconcilePrejoinK3s(ctx context.Context, inputs *clusterbo
 }
 
 func artifactPreparationAction(action string) bool {
-	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s" || action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration" || action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start"
+	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s" || action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration" || action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start" || action == "verify_prepared_images" || action == "reconcile_prepared_images"
 }
 
 func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
@@ -171,7 +171,7 @@ func (client *Client) preparationWithArtifactsResult(ctx context.Context, inputs
 func (client *Client) preparationWithK3sJoinResult(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
 	join *clusterbootstrap.K3sJoinMaterial, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress) error {
-	configuration := action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration" || action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start"
+	configuration := action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration" || action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start" || action == "verify_prepared_images" || action == "reconcile_prepared_images"
 	if configuration != (join != nil) {
 		return ErrBootstrapVerification
 	}

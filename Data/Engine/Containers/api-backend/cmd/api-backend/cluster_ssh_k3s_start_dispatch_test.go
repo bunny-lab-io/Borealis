@@ -13,7 +13,8 @@ import (
 
 type sshStartupTestClient struct {
 	*sshConfigurationTestClient
-	start func(context.Context, bool, *clusterbootstrap.K3sJoinMaterial, func(context.Context) error) error
+	start  func(context.Context, bool, *clusterbootstrap.K3sJoinMaterial, func(context.Context) error) error
+	images func(context.Context, bool, *clusterbootstrap.K3sJoinMaterial, func(context.Context) error) error
 }
 
 func (c *sshStartupTestClient) StartPreparedK3s(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ *clusterbootstrap.PreparationArtifacts, _ string, join *clusterbootstrap.K3sJoinMaterial, _ []byte, check func(context.Context) error) error {
@@ -22,23 +23,33 @@ func (c *sshStartupTestClient) StartPreparedK3s(ctx context.Context, _ *clusterb
 func (c *sshStartupTestClient) ReconcilePreparedK3sStart(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ *clusterbootstrap.PreparationArtifacts, _ string, join *clusterbootstrap.K3sJoinMaterial, _ []byte, check func(context.Context) error) error {
 	return c.start(ctx, true, join, check)
 }
+func (c *sshStartupTestClient) VerifyPreparedImages(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ *clusterbootstrap.PreparationArtifacts, _ string, join *clusterbootstrap.K3sJoinMaterial, _ []byte, check func(context.Context) error) error {
+	return c.images(ctx, false, join, check)
+}
+func (c *sshStartupTestClient) ReconcilePreparedImages(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ *clusterbootstrap.PreparationArtifacts, _ string, join *clusterbootstrap.K3sJoinMaterial, _ []byte, check func(context.Context) error) error {
+	return c.images(ctx, true, join, check)
+}
 
 func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 	_, request, frame := sshJoinSourceFixture(t)
 	defer clear(frame)
 	expected, source := request.Expected, request.Source
 	keys := sshIdentitySourceMaterial(t, t.TempDir())
-	for _, mode := range []string{"complete", "lost acknowledgement", "resume startup", "unknown proof", "authority loss", "cleanup loss", "missing capability", "old prefix", "acquisition failure"} {
+	for _, mode := range []string{"complete", "lost acknowledgement", "resume startup", "resume images", "unknown proof", "unknown image proof", "authority loss", "cleanup loss", "missing capability", "old prefix", "acquisition failure"} {
 		t.Run(mode, func(t *testing.T) {
 			cursor := "configure_k3s"
 			if mode == "resume startup" || mode == "old prefix" {
 				cursor = "start_k3s"
 			}
+			if mode == "resume images" {
+				cursor = "verify_images"
+			}
 			var calls []string
 			var borrowed []*clusterbootstrap.K3sJoinMaterial
 			opened, closed, acquired := 0, 0, 0
 			lost := false
-			started := cursor == "start_k3s"
+			started := cursor == "start_k3s" || cursor == "verify_images"
+			verified := cursor == "verify_images"
 			check := func(context.Context) error {
 				if lost {
 					return clusterbootstrap.ErrSessionAuthority
@@ -74,7 +85,7 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 				if mode == "missing capability" {
 					return configuration, nil
 				}
-				return &sshStartupTestClient{configuration, func(ctx context.Context, proof bool, join *clusterbootstrap.K3sJoinMaterial, current func(context.Context) error) error {
+				start := func(ctx context.Context, proof bool, join *clusterbootstrap.K3sJoinMaterial, current func(context.Context) error) error {
 					last = "start"
 					if proof {
 						last = "startup proof"
@@ -95,7 +106,24 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 						return clusterbootstrap.ErrMutationUnknown
 					}
 					return nil
-				}}, nil
+				}
+				images := func(ctx context.Context, proof bool, join *clusterbootstrap.K3sJoinMaterial, current func(context.Context) error) error {
+					last = "images"
+					if proof {
+						last = "image proof"
+					} else {
+						verified = true
+					}
+					calls = append(calls, last)
+					if join.Verify(ctx, expected, source, current) != nil || proof && !verified {
+						return clusterbootstrap.ErrMutationUnknown
+					}
+					if proof && mode == "unknown image proof" {
+						return clusterbootstrap.ErrMutationUnknown
+					}
+					return nil
+				}
+				return &sshStartupTestClient{configuration, start, images}, nil
 			}
 			acquire := func(ctx context.Context, binding engineidentity.Binding, consume clusterSSHJoinMaterialConsumer) error {
 				acquired++
@@ -114,18 +142,24 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 				return consume(ctx, join, check)
 			}
 			err := dispatchClusterSSHPrejoinStartup(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{}, clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), expected, source, keys, []byte("fixture"), check, acquire, mode != "old prefix")
-			success := mode == "complete" || mode == "lost acknowledgement" || mode == "resume startup"
+			success := mode == "complete" || mode == "lost acknowledgement" || mode == "resume startup" || mode == "resume images"
 			if (err == nil) != success || opened != closed {
 				t.Fatal("wrong startup result/cleanup", err, opened, closed)
 			}
-			want := []string{"configuration proof", "start", "startup proof"}
+			want := []string{"configuration proof", "start", "startup proof", "images", "image proof"}
 			switch mode {
 			case "resume startup":
-				want = []string{"startup proof"}
+				want = []string{"startup proof", "images", "image proof"}
+			case "resume images":
+				want = []string{"image proof"}
 			case "old prefix":
 				want = nil
 			case "authority loss", "cleanup loss":
 				want = want[:2]
+			case "unknown proof":
+				want = want[:3]
+			case "unknown image proof":
+				want = want[:5]
 			case "acquisition failure":
 				want = []string{"configuration proof", "startup proof"}
 			case "missing capability":
@@ -134,7 +168,7 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 			if !reflect.DeepEqual(calls, want) {
 				t.Fatal("startup write replay or missing independent proof", calls, want)
 			}
-			if mode == "complete" && acquired != 3 || mode == "resume startup" && acquired != 1 {
+			if mode == "complete" && acquired != 5 || mode == "resume startup" && acquired != 3 || mode == "resume images" && acquired != 1 {
 				t.Fatal("private material reused across sessions")
 			}
 			for _, join := range borrowed {
@@ -144,7 +178,7 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 			}
 		})
 	}
-	if clusterSSHStartupDispatchBudget(true, true, true) != 250*time.Minute || clusterSSHStartupDispatchBudget(true, true, false) != 190*time.Minute || clusterSSHStartupDispatchBudget(true, false, false) != 130*time.Minute || clusterSSHStartupDispatchBudget(false, false, false) != 10*time.Minute {
+	if clusterSSHStartupDispatchBudget(true, true, true) != 310*time.Minute || clusterSSHStartupDispatchBudget(true, true, false) != 190*time.Minute || clusterSSHStartupDispatchBudget(true, false, false) != 130*time.Minute || clusterSSHStartupDispatchBudget(false, false, false) != 10*time.Minute {
 		t.Fatal("startup/legacy budgets diverged")
 	}
 }

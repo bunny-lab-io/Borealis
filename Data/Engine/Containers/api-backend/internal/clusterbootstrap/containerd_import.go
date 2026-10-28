@@ -2,6 +2,9 @@ package clusterbootstrap
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,6 +19,26 @@ type ContainerdImageTarget struct {
 }
 
 var containerdImageReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$`)
+
+func containerdImportTargetDigest(targets []ContainerdImageTarget) (string, error) {
+	if len(targets) < 1 || len(targets) > 64 {
+		return "", ErrImageArchive
+	}
+	for i, target := range targets {
+		if !containerdImageReference.MatchString(target.Reference) || !validImageDigest(target.Digest) || i > 0 && targets[i-1].Reference >= target.Reference {
+			return "", ErrImageArchive
+		}
+	}
+	raw, err := json.Marshal(struct {
+		Domain  string
+		Targets []ContainerdImageTarget
+	}{"containerd-import-targets-v1", targets})
+	if err != nil {
+		return "", ErrImageArchive
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
 
 // ParseContainerdImportCheck consumes pinned ctr images check output for the
 // fixed k8s.io namespace and overlayfs snapshotter. Unlike exit status, each

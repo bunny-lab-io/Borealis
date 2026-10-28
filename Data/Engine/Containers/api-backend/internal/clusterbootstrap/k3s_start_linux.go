@@ -33,7 +33,7 @@ func (p *PreparationInputs) StartPreparedK3s(ctx context.Context, j *MutationJou
 	if os.Geteuid() != 0 || install.UID != PreparationRuntimeID || install.GID != PreparationRuntimeID {
 		return "", ErrMutationJournal
 	}
-	return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, identity, artifacts, postgresReference, proveHost, "/opt", "/", false, nil, nil, &prejoinK3sStartPhase{material, actions})
+	return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, identity, artifacts, postgresReference, proveHost, "/opt", "/", false, nil, nil, &prejoinK3sStartPhase{material, actions}, nil)
 }
 
 func (p *PreparationInputs) ReconcilePreparedK3sStart(ctx context.Context, j *MutationJournal, install engineidentity.Installation, identity *engineidentity.Material,
@@ -41,7 +41,7 @@ func (p *PreparationInputs) ReconcilePreparedK3sStart(ctx context.Context, j *Mu
 	if os.Geteuid() != 0 || install.UID != PreparationRuntimeID || install.GID != PreparationRuntimeID {
 		return "", ErrMutationJournal
 	}
-	return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, identity, artifacts, postgresReference, proveHost, "/opt", "/", true, nil, nil, &prejoinK3sStartPhase{material, actions})
+	return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, identity, artifacts, postgresReference, proveHost, "/opt", "/", true, nil, nil, &prejoinK3sStartPhase{material, actions}, nil)
 }
 
 // Receipt binds this target's actual Node/member identities. Other approved

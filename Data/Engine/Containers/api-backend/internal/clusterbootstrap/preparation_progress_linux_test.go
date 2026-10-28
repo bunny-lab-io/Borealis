@@ -19,7 +19,7 @@ func progressJournalFixture(t *testing.T, count int, intent bool) *MutationJourn
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { j.Close() })
-	for i, step := range []string{"stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s", "start_k3s"} {
+	for i, step := range []string{"stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s", "start_k3s", "verify_images"} {
 		if i >= count {
 			break
 		}
@@ -36,7 +36,7 @@ func progressJournalFixture(t *testing.T, count int, intent bool) *MutationJourn
 }
 
 func TestPreparationProgressRetainedPrefixes(t *testing.T) {
-	steps := []string{"empty", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s", "start_k3s"}
+	steps := []string{"empty", "stage_source", "prepare_runtime_identity", "prepare_identity_root", "install_identity", "prepare_host", "stage_images", "install_k3s", "configure_k3s", "start_k3s", "verify_images"}
 	for count, step := range steps {
 		for _, intent := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/intent=%t", step, intent), func(t *testing.T) {

@@ -282,7 +282,7 @@ func TestClusterSSHPrejoinBulkIdentityDeadline(t *testing.T) {
 			want = 190 * time.Minute
 		}
 		if flags[2] {
-			want = 250 * time.Minute
+			want = 310 * time.Minute
 		}
 		if maximum != want {
 			t.Fatal("wrong bounded dispatch budget")

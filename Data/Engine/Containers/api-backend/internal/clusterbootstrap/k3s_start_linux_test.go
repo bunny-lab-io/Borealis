@@ -141,7 +141,7 @@ func TestPreparedK3sStartJournal(t *testing.T) {
 				return proof, nil
 			}
 			run := func(reconcile bool) (string, error) {
-				return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, identity, artifacts, artifacts.postgresReference, check, parent, system, reconcile, nil, nil, phase)
+				return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, identity, artifacts, artifacts.postgresReference, check, parent, system, reconcile, nil, nil, phase, nil)
 			}
 			result, err := run(false)
 			if (err == nil) != (mode == "complete") {

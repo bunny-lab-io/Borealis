@@ -165,8 +165,8 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 }
 
 // Separate explicit joining scope permits approved drained registrations while
-// retaining original source/configuration/storage proof. It grants no start;
-// the native journal must independently prove its complete configuration prefix.
+// retaining original source/configuration/storage proof. Startup and image
+// verification remain native journal phases with independently proven prefixes.
 func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, joining bool,
 	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
@@ -181,7 +181,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
 	maximum := 210 * time.Minute
 	if joining {
-		maximum = 270 * time.Minute
+		maximum = 330 * time.Minute
 	}
 	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, leaseCheck, func(ctx context.Context) (result error) {
 		snapshotRead := client.snapshotReadFor(authority, lease, baseline, sealed, joining)

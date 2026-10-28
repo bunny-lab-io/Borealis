@@ -99,6 +99,9 @@ func TestBootstrapStartingK3sPathCustody(t *testing.T) {
 				if (verifyBootstrapArtifactPaths(root, expected, "reconcile_prepared_k3s_start", true) == nil) != valid {
 					t.Fatal("wrong startup custody")
 				}
+				if (verifyBootstrapArtifactPaths(root, expected, "verify_prepared_images", true) == nil) != valid {
+					t.Fatal("wrong image-verification custody")
+				}
 				if mode != "incomplete" && (verifyBootstrapProgressPaths(root, expected) == nil) != valid {
 					t.Fatal("wrong startup cursor")
 				}

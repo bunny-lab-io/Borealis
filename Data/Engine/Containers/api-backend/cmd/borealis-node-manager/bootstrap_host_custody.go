@@ -132,7 +132,7 @@ func verifyBootstrapProgressPaths(root *os.Root, expected clusterbootstrap.Prepa
 		if verifyBootstrapArtifactPaths(root, expected, "reconcile_prejoin_k3s_configuration", false) == nil {
 			return nil
 		}
-		return verifyBootstrapArtifactPaths(root, expected, "reconcile_prepared_k3s_start", false)
+		return verifyBootstrapArtifactPaths(root, expected, "reconcile_prepared_images", false)
 	}
 	for _, path := range []string{"etc/borealis", "var/lib/rancher/k3s", "usr/local/bin/k3s", "var/lib/kubelet", "etc/kubernetes"} {
 		if !bootstrapDockerPathAbsent(root, path) {

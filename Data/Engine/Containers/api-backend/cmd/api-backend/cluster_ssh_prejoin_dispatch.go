@@ -298,7 +298,7 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 		})
 	}
 	if joinRead != nil {
-		configuration := func(reconcile, starting bool) action {
+		configuration := func(reconcile, starting, verifying bool) action {
 			return func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				target, ok := c.(clusterSSHK3sConfigurationClient)
 				if !ok {
@@ -328,6 +328,16 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 							operation = starter.ReconcilePreparedK3sStart
 						}
 					}
+					if verifying {
+						verifier, ok := c.(clusterSSHK3sStartupClient)
+						if !ok {
+							return fail
+						}
+						operation = verifier.VerifyPreparedImages
+						if reconcile {
+							operation = verifier.ReconcilePreparedImages
+						}
+					}
 					if operation(ctx, inputs, e, source, material, artifacts, postgresReference, join, sudo, bound) != nil || bound(ctx) != nil {
 						return fail
 					}
@@ -335,9 +345,10 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 				})
 			}
 		}
-		steps = append(steps, [2]action{configuration(false, false), configuration(true, false)})
+		steps = append(steps, [2]action{configuration(false, false, false), configuration(true, false, false)})
 		if startup {
-			steps = append(steps, [2]action{configuration(false, true), configuration(true, true)})
+			steps = append(steps, [2]action{configuration(false, true, false), configuration(true, true, false)})
+			steps = append(steps, [2]action{configuration(false, false, true), configuration(true, false, true)})
 		}
 	}
 	// Return action uncertainty separately from failed authority/cleanup. Only
@@ -510,6 +521,11 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 			return fail
 		}
 		retained = 8
+	case "verify_images":
+		if !startup {
+			return fail
+		}
+		retained = 9
 	}
 	if retained >= 0 {
 		if proveStep(retained) != nil {
@@ -548,7 +564,7 @@ func clusterSSHPrejoinDispatchBudget(artifacts, configuration bool) time.Duratio
 func clusterSSHStartupDispatchBudget(artifacts, configuration, startup bool) time.Duration {
 	maximum := clusterSSHPrejoinDispatchBudget(artifacts, configuration)
 	if startup && artifacts && configuration {
-		maximum += 2 * clusterbootstrap.ArtifactPreparationLifetime
+		maximum += 4 * clusterbootstrap.ArtifactPreparationLifetime
 	}
 	return maximum
 }

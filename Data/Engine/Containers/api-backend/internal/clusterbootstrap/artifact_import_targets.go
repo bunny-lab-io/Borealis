@@ -24,6 +24,12 @@ func (a *PreparationArtifacts) importTargets(ctx context.Context, check func(con
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.importTargetsLocked(ctx, check, pins)
+}
+
+// Caller holds aggregate ownership while composing journal input and native
+// proof. Component locks still prevent a concurrent close or borrowed mutation.
+func (a *PreparationArtifacts) importTargetsLocked(ctx context.Context, check func(context.Context) error, pins K3sInputPins) ([]ContainerdImageTarget, error) {
 	if a.verifyBindings(ctx, check) != nil {
 		return nil, ErrImageArchive
 	}

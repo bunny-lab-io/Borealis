@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // PublishPrejoinArtifacts stages the complete immutable cohort without running
@@ -42,10 +43,10 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransaction(ctx context.Context,
 }
 
 func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithJoin(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase) (string, error) {
-	return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, material, artifacts, postgresReference, proveHost, parent, systemPath, reconcile, runtime, join, nil)
+	return p.prejoinArtifactPhaseTransactionWithStart(ctx, j, install, material, artifacts, postgresReference, proveHost, parent, systemPath, reconcile, runtime, join, nil, nil)
 }
 
-func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase) (string, error) {
+func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase, images *prejoinImageVerificationPhase) (string, error) {
 	if p == nil || j == nil || artifacts == nil || proveHost == nil || !ValidPostgresImageReference(postgresReference) {
 		return "", ErrMutationJournal
 	}
@@ -68,6 +69,13 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		}
 		step, maximum = "start_k3s", 9
 		join = &prejoinK3sJoinPhase{material: start.material}
+	}
+	if images != nil {
+		if runtime != nil || join != nil || start != nil || images.material == nil || images.actions.Observe == nil {
+			return "", ErrMutationJournal
+		}
+		step, maximum = "verify_images", 10
+		join = &prejoinK3sJoinPhase{material: images.material}
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -122,13 +130,34 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		digest := sha256.Sum256([]byte("prejoin-k3s-configuration-v1\x00" + input + "\x00" + joinDigest + "\x00" + config))
 		input = hex.EncodeToString(digest[:])
 	}
-	if start != nil {
+	startInput := ""
+	if start != nil || images != nil {
 		prior := j.state.Steps["configure_k3s"]
 		if prior.State != "applied" || prior.InputSHA256 != input || prior.ResultSHA256 != input {
 			return "", ErrMutationJournal
 		}
 		digest := sha256.Sum256([]byte("prepared-k3s-start-v1\x00" + input))
 		input = hex.EncodeToString(digest[:])
+		startInput = input
+	}
+	var imageTargets []ContainerdImageTarget
+	startResult := ""
+	if images != nil {
+		prior := j.state.Steps["start_k3s"]
+		if prior.State != "applied" || prior.InputSHA256 != startInput || !digestPattern.MatchString(prior.ResultSHA256) {
+			return "", ErrMutationJournal
+		}
+		startResult = prior.ResultSHA256
+		imageTargets, err = artifacts.importTargetsLocked(ctx, j.authority, images.pins)
+		if err != nil {
+			return "", ErrMutationJournal
+		}
+		digest, err := containerdImportTargetDigest(imageTargets)
+		if err != nil {
+			return "", ErrMutationJournal
+		}
+		sum := sha256.Sum256([]byte("prepared-image-verification-v1\x00" + startInput + "\x00" + startResult + "\x00" + digest))
+		input = hex.EncodeToString(sum[:])
 	}
 	archive, err := os.Open(p.bundle.ArchivePath())
 	if err != nil {
@@ -168,7 +197,7 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 	}
 	boundary := func(ctx context.Context) error { return prejoinDirectoryBoundary(ctx, j, install) }
 	proveArtifacts := targets.prove
-	if start != nil {
+	if start != nil || images != nil {
 		proveArtifacts = targets.proveRunning
 	}
 	result := ""
@@ -178,7 +207,11 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		if proveSource(ctx) != nil || proveHost(ctx) != nil {
 			return ErrMutationUnknown
 		}
-		if start != nil {
+		if images != nil {
+			if proveArtifacts(ctx, plan, artifactInput, boundary) != nil || images.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil {
+				return ErrMutationUnknown
+			}
+		} else if start != nil {
 			if proveArtifacts(ctx, plan, artifactInput, boundary) != nil || start.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil || start.actions.Configured(ctx) != nil ||
 				!reconcile && (targets.prove(ctx, plan, artifactInput, boundary) != nil || start.actions.CheckFresh(ctx) != nil) {
 				return ErrMutationUnknown
@@ -194,7 +227,7 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		} else if !reconcile && (targets.fresh(ctx, plan, artifactInput, boundary) != nil || proveHost(ctx) != nil) {
 			return ErrMutationUnknown
 		}
-		prove := func(ctx context.Context) (string, error) {
+		prove := func(ctx context.Context, hostLock *os.File) (string, error) {
 			if proveSource(ctx) != nil || proveHost(ctx) != nil || proveArtifacts(ctx, plan, artifactInput, boundary) != nil ||
 				proveHost(ctx) != nil || proveArtifacts(ctx, plan, artifactInput, boundary) != nil ||
 				p.Verify(ctx, p.configuration.wire.Expected, j.authority) != nil || proveSource(ctx) != nil {
@@ -202,6 +235,16 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 			}
 			if runtime != nil && (runtime.Prove(ctx) != nil || proveSource(ctx) != nil || runtime.Prove(ctx) != nil) {
 				return "", ErrMutationUnknown
+			}
+			if images != nil {
+				if hostLock == nil || images.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil {
+					return "", ErrMutationUnknown
+				}
+				observation, err := images.actions.Observe(ctx, hostLock, identityLock, slices.Clone(imageTargets))
+				if err != nil || proveSource(ctx) != nil || images.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil {
+					return "", ErrMutationUnknown
+				}
+				return observation.result(p.configuration.wire.Expected, startInput, startResult, input, imageTargets)
 			}
 			if start != nil {
 				if start.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil || start.actions.Configured(ctx) != nil {
@@ -220,11 +263,14 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		}
 		var err error
 		if reconcile {
-			result, err = j.reconcileLocked(ctx, step, input, prove, "applied")
+			result, err = j.reconcileLocked(ctx, step, input, func(ctx context.Context) (string, error) { return prove(ctx, j.lock) }, "applied")
 		} else {
 			result, err = j.applyLocked(ctx, step, input, func(ctx context.Context, hostLock *os.File) (string, error) {
 				if proveSource(ctx) != nil || proveHost(ctx) != nil {
 					return "", ErrMutationUnknown
+				}
+				if images != nil {
+					return prove(ctx, hostLock)
 				}
 				if start != nil {
 					if targets.prove(ctx, plan, artifactInput, boundary) != nil || start.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil || start.actions.Configured(ctx) != nil || start.actions.CheckFresh(ctx) != nil || start.actions.Start(ctx, hostLock, identityLock) != nil {
@@ -241,13 +287,13 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 				} else if targets.publishWithSource(ctx, plan, artifactInput, boundary, proveSource) != nil {
 					return "", ErrMutationUnknown
 				}
-				return prove(ctx)
+				return prove(ctx, hostLock)
 			})
 		}
 		if err != nil {
 			return err
 		}
-		final, err := prove(ctx)
+		final, err := prove(ctx, j.lock)
 		if err != nil || final != result {
 			return ErrMutationUnknown
 		}
