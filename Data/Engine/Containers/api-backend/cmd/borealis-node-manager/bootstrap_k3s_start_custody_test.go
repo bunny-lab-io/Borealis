@@ -102,6 +102,13 @@ func TestBootstrapStartingK3sPathCustody(t *testing.T) {
 				if (verifyBootstrapArtifactPaths(root, expected, "verify_prepared_images", true) == nil) != valid {
 					t.Fatal("wrong image-verification custody")
 				}
+				for _, action := range []string{"activate_prejoin_identity", "reconcile_prejoin_identity_activation"} {
+					for _, initial := range []bool{true, false} {
+						if (verifyBootstrapArtifactPaths(root, expected, action, initial) == nil) != valid {
+							t.Fatal("wrong identity-activation custody", action, initial)
+						}
+					}
+				}
 				if mode != "incomplete" && (verifyBootstrapProgressPaths(root, expected) == nil) != valid {
 					t.Fatal("wrong startup cursor")
 				}

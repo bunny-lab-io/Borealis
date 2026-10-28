@@ -47,6 +47,10 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithJoin(ctx context.
 }
 
 func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase, images *prejoinImageVerificationPhase) (string, error) {
+	return p.prejoinArtifactPhaseTransactionWithActivation(ctx, j, install, material, artifacts, postgresReference, proveHost, parent, systemPath, reconcile, runtime, join, start, images, false)
+}
+
+func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase, images *prejoinImageVerificationPhase, activate bool) (string, error) {
 	if p == nil || j == nil || artifacts == nil || proveHost == nil || !ValidPostgresImageReference(postgresReference) {
 		return "", ErrMutationJournal
 	}
@@ -77,6 +81,12 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		step, maximum = "verify_images", 10
 		join = &prejoinK3sJoinPhase{material: images.material}
 	}
+	if activate {
+		if images == nil {
+			return "", ErrMutationJournal
+		}
+		step, maximum = "activate_identity", 11
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	artifacts.mu.Lock()
@@ -86,6 +96,32 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 	if err != nil || host.State != "applied" || host.InputSHA256 != hostInput || host.ResultSHA256 != hostInput ||
 		artifacts.expected != p.configuration.wire.Expected.Source || artifacts.k3sVersion != p.configuration.wire.Expected.K3sVersion || artifacts.postgresReference != postgresReference {
 		return "", ErrMutationJournal
+	}
+	if activate {
+		expectedCount := 10
+		if reconcile {
+			expectedCount = 11
+		}
+		if len(j.state.Steps) != expectedCount {
+			return "", ErrMutationJournal
+		}
+		for name, record := range j.state.Steps {
+			if record.Executor == j.executor || name != step && record.State != "applied" || name == step && record.State != "intent" && record.State != "applied" {
+				return "", ErrMutationUnknown
+			}
+		}
+		for _, prior := range j.state.History {
+			if prior.Record.Executor == j.executor {
+				return "", ErrMutationUnknown
+			}
+		}
+		quiesced := install.Quiesced
+		install.Quiesced = func() error {
+			if j.priorExecutorsQuiescent(ctx) != nil || quiesced() != nil || j.priorExecutorsQuiescent(ctx) != nil {
+				return ErrMutationUnknown
+			}
+			return nil
+		}
 	}
 	if !reconcile {
 		if _, exists := j.state.Steps[step]; exists {
@@ -159,6 +195,19 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		sum := sha256.Sum256([]byte("prepared-image-verification-v1\x00" + startInput + "\x00" + startResult + "\x00" + digest))
 		input = hex.EncodeToString(sum[:])
 	}
+	imageInput, imageResult := input, ""
+	if activate {
+		prior := j.state.Steps["verify_images"]
+		if prior.State != "applied" || prior.InputSHA256 != imageInput || !digestPattern.MatchString(prior.ResultSHA256) {
+			return "", ErrMutationJournal
+		}
+		imageResult = prior.ResultSHA256
+		sum := sha256.Sum256([]byte("prejoin-identity-activation-v1\x00" + imageInput + "\x00" + imageResult))
+		input = hex.EncodeToString(sum[:])
+		if reconcile && j.state.Steps[step].InputSHA256 != input {
+			return "", ErrMutationJournal
+		}
+	}
 	archive, err := os.Open(p.bundle.ArchivePath())
 	if err != nil {
 		return "", ErrPreparationConfig
@@ -201,7 +250,8 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 		proveArtifacts = targets.proveRunning
 	}
 	result := ""
-	err = install.WithPrejoinFencedCommitted(material, func(identityLock *os.File) error {
+	work := func(identityLock *os.File, markerPresent bool, release func() error) error {
+		identity.markerReleased = activate && !markerPresent
 		// Both fences stay held. Artifact publication starts no child; the
 		// fixed runtime adapter must borrow both descriptors for daemon-reload.
 		if proveSource(ctx) != nil || proveHost(ctx) != nil {
@@ -244,7 +294,14 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 				if err != nil || proveSource(ctx) != nil || images.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil {
 					return "", ErrMutationUnknown
 				}
-				return observation.result(p.configuration.wire.Expected, startInput, startResult, input, imageTargets)
+				result, err := observation.result(p.configuration.wire.Expected, startInput, startResult, imageInput, imageTargets)
+				if activate {
+					if err != nil || result != imageResult {
+						return "", ErrMutationUnknown
+					}
+					return input, nil
+				}
+				return result, err
 			}
 			if start != nil {
 				if start.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil || start.actions.Configured(ctx) != nil {
@@ -260,6 +317,31 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 				return "", ErrMutationUnknown
 			}
 			return input, nil
+		}
+		if activate {
+			activateIdentity := func(ctx context.Context, hostLock *os.File) (string, error) {
+				if _, err := prove(ctx, hostLock); err != nil {
+					return "", err
+				}
+				if release == nil || release() != nil {
+					return "", ErrMutationUnknown
+				}
+				identity.markerReleased = true
+				return prove(ctx, hostLock)
+			}
+			if reconcile {
+				result, err = j.reconcileLocked(ctx, step, input, func(ctx context.Context) (string, error) { return activateIdentity(ctx, j.lock) }, "applied")
+			} else {
+				result, err = j.applyLocked(ctx, step, input, activateIdentity)
+			}
+			if err != nil {
+				return err
+			}
+			final, err := prove(ctx, j.lock)
+			if err != nil || final != result {
+				return ErrMutationUnknown
+			}
+			return nil
 		}
 		var err error
 		if reconcile {
@@ -298,7 +380,12 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithStart(ctx context
 			return ErrMutationUnknown
 		}
 		return nil
-	})
+	}
+	if activate {
+		err = install.WithPrejoinActivationFencedCommitted(material, reconcile, work)
+	} else {
+		err = install.WithPrejoinFencedCommitted(material, func(lock *os.File) error { return work(lock, true, nil) })
+	}
 	if err != nil {
 		return "", ErrMutationUnknown
 	}

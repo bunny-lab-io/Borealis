@@ -25,6 +25,8 @@ type prejoinDirectoryProof struct {
 	uid, gid int
 	marker   []byte
 	files    map[string][]byte
+	// Set only by activation while exclusive identity custody is held.
+	markerReleased bool
 }
 
 // InstallPreparedPrejoinIdentity consumes the exact applied directory receipt
@@ -308,7 +310,11 @@ func verifyPrejoinDirectoryExtras(ctx context.Context, root *os.Root, actual map
 		delete(actual, name)
 	}
 	name := prejoinSecretsRelative + "/" + engineidentity.RecoveryMarkerName
-	if verifyPrejoinPrivateFile(ctx, root, actual, proof, name, proof.marker) != nil {
+	if proof.markerReleased {
+		if _, present := actual[name]; present {
+			return ErrPreparationConfig
+		}
+	} else if verifyPrejoinPrivateFile(ctx, root, actual, proof, name, proof.marker) != nil {
 		return ErrPreparationConfig
 	}
 	for relative, raw := range proof.files {

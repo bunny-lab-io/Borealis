@@ -179,10 +179,9 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
 	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
-	maximum := 210 * time.Minute
-	if joining {
-		maximum = 330 * time.Minute
-	}
+	// Retain the existing twenty-minute source-acquisition allowance around
+	// the exact bounded session budget, including identity activation.
+	maximum := clusterSSHStartupDispatchBudget(true, true, joining) + 20*time.Minute
 	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, leaseCheck, func(ctx context.Context) (result error) {
 		snapshotRead := client.snapshotReadFor(authority, lease, baseline, sealed, joining)
 		initial, err := snapshotRead(ctx)

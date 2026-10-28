@@ -85,7 +85,11 @@ func (p *PreparationInputs) prejoinHostPrefixRequest(ctx context.Context, j *Mut
 				return install, "", invalid, ErrMutationJournal
 			}
 		case "verify_images":
-			if maximum != 10 {
+			if maximum < 10 {
+				return install, "", invalid, ErrMutationJournal
+			}
+		case "activate_identity":
+			if maximum != 11 {
 				return install, "", invalid, ErrMutationJournal
 			}
 		default:

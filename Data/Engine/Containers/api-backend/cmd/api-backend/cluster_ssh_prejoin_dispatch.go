@@ -298,7 +298,7 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 		})
 	}
 	if joinRead != nil {
-		configuration := func(reconcile, starting, verifying bool) action {
+		configuration := func(reconcile, starting, verifying, activating bool) action {
 			return func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 				target, ok := c.(clusterSSHK3sConfigurationClient)
 				if !ok {
@@ -338,6 +338,16 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 							operation = verifier.ReconcilePreparedImages
 						}
 					}
+					if activating {
+						activator, ok := c.(clusterSSHK3sStartupClient)
+						if !ok {
+							return fail
+						}
+						operation = activator.ActivatePrejoinIdentity
+						if reconcile {
+							operation = activator.ReconcilePrejoinIdentityActivation
+						}
+					}
 					if operation(ctx, inputs, e, source, material, artifacts, postgresReference, join, sudo, bound) != nil || bound(ctx) != nil {
 						return fail
 					}
@@ -345,10 +355,11 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 				})
 			}
 		}
-		steps = append(steps, [2]action{configuration(false, false, false), configuration(true, false, false)})
+		steps = append(steps, [2]action{configuration(false, false, false, false), configuration(true, false, false, false)})
 		if startup {
-			steps = append(steps, [2]action{configuration(false, true, false), configuration(true, true, false)})
-			steps = append(steps, [2]action{configuration(false, false, true), configuration(true, false, true)})
+			steps = append(steps, [2]action{configuration(false, true, false, false), configuration(true, true, false, false)})
+			steps = append(steps, [2]action{configuration(false, false, true, false), configuration(true, false, true, false)})
+			steps = append(steps, [2]action{configuration(false, false, false, true), configuration(true, false, false, true)})
 		}
 	}
 	// Return action uncertainty separately from failed authority/cleanup. Only
@@ -526,6 +537,11 @@ func dispatchClusterSSHPrejoinStartup(parent context.Context, connect func(conte
 			return fail
 		}
 		retained = 9
+	case "activate_identity":
+		if !startup {
+			return fail
+		}
+		retained = 10
 	}
 	if retained >= 0 {
 		if proveStep(retained) != nil {
@@ -564,7 +580,9 @@ func clusterSSHPrejoinDispatchBudget(artifacts, configuration bool) time.Duratio
 func clusterSSHStartupDispatchBudget(artifacts, configuration, startup bool) time.Duration {
 	maximum := clusterSSHPrejoinDispatchBudget(artifacts, configuration)
 	if startup && artifacts && configuration {
-		maximum += 4 * clusterbootstrap.ArtifactPreparationLifetime
+		// Startup, image verification and identity activation each use two
+		// separately bounded delivery/proof sessions.
+		maximum += 6 * clusterbootstrap.ArtifactPreparationLifetime
 	}
 	return maximum
 }

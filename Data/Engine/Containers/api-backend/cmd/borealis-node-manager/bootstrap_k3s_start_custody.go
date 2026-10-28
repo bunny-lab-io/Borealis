@@ -7,11 +7,15 @@ import (
 )
 
 func bootstrapK3sStartupAction(action string) bool {
-	return action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start" || bootstrapImageVerificationAction(action)
+	return action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start" || bootstrapImageVerificationAction(action) || bootstrapIdentityActivationAction(action)
 }
 
 func bootstrapImageVerificationAction(action string) bool {
 	return action == "verify_prepared_images" || action == "reconcile_prepared_images"
+}
+
+func bootstrapIdentityActivationAction(action string) bool {
+	return action == "activate_prejoin_identity" || action == "reconcile_prejoin_identity_activation"
 }
 
 // Phase custody only, never a completed-effect receipt. The start invocation

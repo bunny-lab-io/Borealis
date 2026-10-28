@@ -27,7 +27,7 @@ func artifactSessionRequestFixture(t *testing.T) PreparationSessionRequest {
 func TestArtifactPreparationRequestAndLimits(t *testing.T) {
 	r := artifactSessionRequestFixture(t)
 	original, _ := r.Digest()
-	for _, action := range []string{"install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start", "verify_prepared_images", "reconcile_prepared_images"} {
+	for _, action := range []string{"install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start", "verify_prepared_images", "reconcile_prepared_images", "activate_prejoin_identity", "reconcile_prejoin_identity_activation"} {
 		changed := r
 		changed.Action = action
 		digest, err := changed.Digest()

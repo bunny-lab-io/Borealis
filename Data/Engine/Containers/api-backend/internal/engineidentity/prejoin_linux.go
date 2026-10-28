@@ -119,3 +119,80 @@ func (install Installation) WithPrejoinFencedCommitted(material *Material, work 
 func (install Installation) ReleasePrejoinFencedCommitted(material *Material) (string, error) {
 	return install.releaseFencedCommittedMode(material, true)
 }
+
+// WithPrejoinActivationFencedCommitted extends the existing committed release
+// proof through the caller's durable activation journal and final observation.
+// allowAbsent is only for proof-only reconciliation of a recorded activation
+// whose marker is already absent, by a distinct executor after independently
+// proving the producer stopped. The callback must establish all
+// live prerequisites before calling release and must join its children while
+// inheriting the borrowed lock. It may remove only this exact marker once.
+// Failure or panic restores the marker before exclusion ends, provided the
+// original directory is still pinned. No identity file or inner journal changes.
+func (install Installation) WithPrejoinActivationFencedCommitted(material *Material, allowAbsent bool, work func(*os.File, bool, func() error) error) (result error) {
+	if work == nil {
+		return errors.New("pre-join activation operation journal required")
+	}
+	proof, err := install.proveFencedCommittedMode(material, !allowAbsent, true)
+	if err != nil {
+		return err
+	}
+	if allowAbsent && proof.markerPresent {
+		return errors.Join(errors.New("pre-join activation marker remains; no removal replay"), proof.close())
+	}
+	completed := false
+	defer func() {
+		if !completed || result != nil {
+			if err := proof.fence.check(); err != nil {
+				result = errors.Join(result, err)
+			} else {
+				result = errors.Join(result, restoreRecoveryMarker(proof.fence.root, proof.marker, install.UID, install.GID))
+			}
+		}
+		result = errors.Join(result, proof.close())
+	}()
+	syscall.ForkLock.RLock()
+	descriptor, err := syscall.Dup(int(proof.fence.directory.Fd()))
+	if err == nil {
+		syscall.CloseOnExec(descriptor)
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return errors.New("pre-join activation exclusion unavailable")
+	}
+	lock := os.NewFile(uintptr(descriptor), "prejoin-activation-lock")
+	defer func() { result = errors.Join(result, lock.Close()) }()
+	released, releaseFailed := false, false
+	release := func() error {
+		if released || releaseFailed {
+			releaseFailed = true
+			return errors.New("pre-join activation release repeated")
+		}
+		releaseFailed = true
+		if err := install.recheckCommittedFence(material, proof, true); err != nil {
+			return err
+		}
+		if proof.markerPresent {
+			if err := proof.fence.root.Remove(recoveryMarker); err != nil {
+				return err
+			}
+			proof.markerPresent = false
+			if err := syncDirectory(proof.fence.root, "."); err != nil {
+				return err
+			}
+		}
+		if err := install.recheckCommittedFence(material, proof, true); err != nil {
+			return err
+		}
+		released, releaseFailed = true, false
+		return nil
+	}
+	if err := work(lock, proof.markerPresent, release); err != nil {
+		return err
+	}
+	if !released || releaseFailed || install.recheckCommittedFence(material, proof, true) != nil {
+		return errors.New("pre-join activation incomplete; keep consumers stopped")
+	}
+	completed = true
+	return nil
+}

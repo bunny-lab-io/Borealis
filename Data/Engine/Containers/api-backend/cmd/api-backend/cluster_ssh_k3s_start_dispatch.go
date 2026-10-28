@@ -12,13 +12,15 @@ type clusterSSHK3sStartupClient interface {
 	ReconcilePreparedK3sStart(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, *clusterbootstrap.K3sJoinMaterial, []byte, func(context.Context) error) error
 	VerifyPreparedImages(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, *clusterbootstrap.K3sJoinMaterial, []byte, func(context.Context) error) error
 	ReconcilePreparedImages(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, *clusterbootstrap.K3sJoinMaterial, []byte, func(context.Context) error) error
+	ActivatePrejoinIdentity(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, *clusterbootstrap.K3sJoinMaterial, []byte, func(context.Context) error) error
+	ReconcilePrejoinIdentityActivation(context.Context, *clusterbootstrap.PreparationInputs, clusterbootstrap.PreparationExpected, engineidentity.Binding, *engineidentity.Material, *clusterbootstrap.PreparationArtifacts, string, *clusterbootstrap.K3sJoinMaterial, []byte, func(context.Context) error) error
 }
 
 var _ clusterSSHK3sStartupClient = (*clusterremote.Client)(nil)
 
 // Caller must acquire inputs with the explicit joining source scope. This
-// delivers startup plus read-only image verification; cohort admission and
-// identity release remain separate. Production polling is not enabled here.
+// delivers startup, read-only image verification and journaled shared-identity
+// activation. Cohort admission remains separate; production polling is disabled.
 func withClusterSSHPreparedK3sStartupDispatch(ctx context.Context, store *postgresOperatorStore, aegis *goAegisService,
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {

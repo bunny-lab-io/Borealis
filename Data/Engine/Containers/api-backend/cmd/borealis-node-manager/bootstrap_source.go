@@ -89,6 +89,15 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 					return errors.Join(installErr, journal.Close())
 				}
 				switch request.Action {
+				case "activate_prejoin_identity", "reconcile_prejoin_identity_activation":
+					operation := inputs.ActivatePrejoinIdentity
+					if request.Action == "reconcile_prejoin_identity_activation" {
+						operation = inputs.ReconcilePrejoinIdentityActivation
+					}
+					_, err = operation(ctx, journal, install, material, assets, request.PostgresReference,
+						func(ctx context.Context) error {
+							return proveBootstrapPreparedK3sStartHost(ctx, expected, install.Binding, join, authority)
+						}, join, bootstrapNativePreparedImageActions(expected, install.Binding, join, guard, executor, authority))
 				case "verify_prepared_images", "reconcile_prepared_images":
 					operation := inputs.VerifyPreparedImages
 					if request.Action == "reconcile_prepared_images" {
