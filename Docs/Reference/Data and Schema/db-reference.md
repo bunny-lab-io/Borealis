@@ -112,7 +112,7 @@ sudo k3s kubectl -n borealis exec -i postgres-db-0 -- sh -lc \
   - `Small Business`
   - `MSP / Production`
   - `Enterprise`
-- The roadmap-only `Enterprise Clustered` profile in `Docs/Engine/deploying-the-engine.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+- Supported profile topology and cluster inheritance are defined in [Engine Deployment](../../Engine/deploying-the-engine.md#cluster-onboarding-profile-checks). Cluster preparation retains the source rank/reference memory and rejects explicit profile tuning that deployment would replace.
 - Site-worker scheduled work-item slots are profile-managed and exposed as read-only in Server Info.
 
 ### Profile selection thresholds

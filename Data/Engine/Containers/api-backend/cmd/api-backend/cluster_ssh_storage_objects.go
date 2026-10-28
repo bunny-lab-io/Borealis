@@ -85,7 +85,7 @@ func clusterSSHStorageObject(raw []byte) (map[string]any, [32]byte, error) {
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
-	value, err := clusterSSHStorageJSONValue(d, 0)
+	value, err := clusterSSHPrivateJSONValue(d, 0)
 	object, ok := value.(map[string]any)
 	if err != nil || !ok || object == nil {
 		return fail()
@@ -100,9 +100,10 @@ func clusterSSHStorageObject(raw []byte) (map[string]any, [32]byte, error) {
 	return object, sha256.Sum256(canonical), nil
 }
 
-// This decoder is private to full Kubernetes object receipts. It does not
-// change stored-authority JSON comparison or public request field contracts.
-func clusterSSHStorageJSONValue(d *json.Decoder, depth int) (any, error) {
+// Shared private JSON value decoder for Kubernetes receipts and stored-authority
+// comparison. Callers own size/UTF-8 bounds and trailing-input validation; public
+// request field contracts remain separate.
+func clusterSSHPrivateJSONValue(d *json.Decoder, depth int) (any, error) {
 	if depth > 32 {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
@@ -126,7 +127,7 @@ func clusterSSHStorageJSONValue(d *json.Decoder, depth int) (any, error) {
 			if _, exists := object[name]; exists {
 				return nil, clusterbootstrap.ErrPreparationConfig
 			}
-			value, err := clusterSSHStorageJSONValue(d, depth+1)
+			value, err := clusterSSHPrivateJSONValue(d, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -139,7 +140,7 @@ func clusterSSHStorageJSONValue(d *json.Decoder, depth int) (any, error) {
 	case '[':
 		values := []any{}
 		for d.More() {
-			value, err := clusterSSHStorageJSONValue(d, depth+1)
+			value, err := clusterSSHPrivateJSONValue(d, depth+1)
 			if err != nil {
 				return nil, err
 			}

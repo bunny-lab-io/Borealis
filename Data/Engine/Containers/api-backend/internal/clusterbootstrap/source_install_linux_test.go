@@ -2,6 +2,7 @@ package clusterbootstrap
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,8 +16,16 @@ import (
 
 func sourcePublicationFixture(t *testing.T) (*PreparationInputs, *MutationJournal, string, string) {
 	t.Helper()
+	// Deep journal cases repeatedly recheck the entire real source/binary.
+	// Stored gzip blocks preserve archive, hash and byte-custody checks without
+	// repeatedly exercising instrumented Huffman decoding at every phase.
+	return sourcePublicationFixtureWithCompression(t, gzip.NoCompression)
+}
+
+func sourcePublicationFixtureWithCompression(t *testing.T, level int) (*PreparationInputs, *MutationJournal, string, string) {
+	t.Helper()
 	source, manifest, members := archiveFixture(t)
-	bundle, err := stageFixture(t, context.Background(), source, manifest, pack(t, members), t.TempDir())
+	bundle, err := stageFixture(t, context.Background(), source, manifest, packWithCompressionLevel(t, members, level), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +70,9 @@ func reopenSourcePublication(t *testing.T, p *PreparationInputs, j *MutationJour
 }
 
 func TestSourcePublicationAtomicAndReconciled(t *testing.T) {
-	p, j, journalPath, destination := sourcePublicationFixture(t)
+	// Keep compressed-source publication and independent reconciliation covered
+	// in addition to the unchanged receiver corruption/archive tests.
+	p, j, journalPath, destination := sourcePublicationFixtureWithCompression(t, gzip.DefaultCompression)
 	ctx := context.Background()
 	result, err := p.publishSource(ctx, j, destination)
 	if err != nil || !digestPattern.MatchString(result) {

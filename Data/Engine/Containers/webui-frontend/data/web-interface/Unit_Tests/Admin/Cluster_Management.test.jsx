@@ -261,6 +261,41 @@ describe("Cluster Management", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("not freshly measured");
   });
 
+  it("anchors soak countdown to server clock, ticks once per second and stops after clock failure", async () => {
+    const serverMS = Date.parse("2026-10-28T12:00:00Z");
+    let browserMS = serverMS + 6 * 60 * 60 * 1000;
+    let monotonic = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => browserMS);
+    vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    let poll, tick;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      if (delay === 1000) { tick = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.operations = [{ id: "op-soak", kind: "node_maintenance", state: "running", current_step: "minimum_ready_soak", attempt: 1, updated_at: serverMS / 1000 }];
+    state.events = [{ id: 1, operation_id: "op-soak", event_type: "operation_soak_started", created_at: serverMS / 1000,
+      details: { operation_id: "op-soak", attempt: 1, step: "minimum_ready_soak", run_id: "11111111-1111-4111-8111-111111111111", holder: "controller", phase: "ready",
+        started_at_ms: serverMS, deadline_at_ms: serverMS + 30_000, observed_at_ms: serverMS, valid_until_ms: serverMS + 15_000 } }];
+    let clockFailure = false;
+    vi.stubGlobal("fetch", vi.fn(async (path) => {
+      if (path === "/api/server/time" && clockFailure) throw new Error("clock unavailable");
+      return { ok: true, json: async () => path === "/api/server/cluster" ? { enabled: true, operations: state.operations, nodes: [] }
+        : path === "/api/server/time" ? { utc: new Date(serverMS).toISOString(), epoch: serverMS / 1000 } : { events: [], releases: [] } };
+    }));
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText(/Soak timing unavailable/)).toBeInTheDocument();
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Configured soak wait: 30s remaining")).toBeInTheDocument();
+    act(() => { browserMS += 1000; monotonic += 1000; tick(); });
+    expect(await screen.findByText("Configured soak wait: 29s remaining")).toBeInTheDocument();
+    clockFailure = true;
+    await act(async () => { poll(); });
+    expect(await screen.findByText(/Soak timing unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/\ds remaining/)).not.toBeInTheDocument();
+  });
+
   it.each(["failed", "hanging"])("ages retained version records during %s polling", async (failure) => {
     let now = 1_787_770_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -948,7 +983,7 @@ describe("Cluster Management", () => {
     expect(within(screen.getByRole("list", { name: "Operation timeline" })).queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
     recover = true;
     await act(async () => { poll(); });
-    expect(await screen.findByText("Current: In progress · Observe sustained workload health")).toBeInTheDocument();
+    expect(await screen.findByText("Current: In progress · Workload soak wait")).toBeInTheDocument();
     expect(screen.queryByText(/Updates delayed/)).not.toBeInTheDocument();
     expect(screen.getAllByText("Verify workload health — passed")).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=40", expect.anything());

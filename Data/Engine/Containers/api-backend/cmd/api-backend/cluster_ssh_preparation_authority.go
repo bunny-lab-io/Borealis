@@ -299,46 +299,24 @@ func sameClusterSSHStoredJSON(raw, canonical []byte, depth int) bool {
 	if len(raw) == 0 || len(canonical) == 0 {
 		return false
 	}
-	if canonical[0] == '{' {
-		var expected map[string]json.RawMessage
-		if json.Unmarshal(canonical, &expected) != nil {
-			return false
-		}
-		allowed := make(map[string]bool, len(expected))
-		for key := range expected {
-			allowed[key] = true
-		}
-		actual, err := decodeClusterSSHObject(raw, allowed)
-		if err != nil || len(actual) != len(expected) {
-			return false
-		}
-		for key, value := range expected {
-			if !sameClusterSSHStoredJSON(actual[key], value, depth+1) {
-				return false
-			}
-		}
-		return true
+	// Identical scalars need syntax validation, while containers still require
+	// the recursive duplicate-key and depth checks below.
+	if canonical[0] != '{' && canonical[0] != '[' && bytes.Equal(raw, canonical) {
+		return json.Valid(canonical)
 	}
-	if canonical[0] == '[' {
-		var actual, expected []json.RawMessage
-		if raw[0] != '[' || json.Unmarshal(raw, &actual) != nil || json.Unmarshal(canonical, &expected) != nil || len(actual) != len(expected) {
-			return false
-		}
-		for i := range expected {
-			if !sameClusterSSHStoredJSON(actual[i], expected[i], depth+1) {
-				return false
-			}
-		}
-		return true
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	actual, err := clusterSSHPrivateJSONValue(d, depth)
+	if err != nil {
+		return false
 	}
-	decode := func(value []byte) (any, bool) {
-		d := json.NewDecoder(bytes.NewReader(value))
-		d.UseNumber()
-		var out any
-		err := d.Decode(&out)
-		return out, err == nil && d.Decode(&struct{}{}) == io.EOF
+	if _, err := d.Token(); err != io.EOF {
+		return false
 	}
-	actual, ok := decode(raw)
-	expected, expectedOK := decode(canonical)
-	return ok && expectedOK && reflect.DeepEqual(actual, expected)
+	// The typed serializer defines the exact field set. Keep number spelling
+	// and encoding/json string replacement semantics when comparing values.
+	d = json.NewDecoder(bytes.NewReader(canonical))
+	d.UseNumber()
+	var expected any
+	return d.Decode(&expected) == nil && d.Decode(&struct{}{}) == io.EOF && reflect.DeepEqual(actual, expected)
 }

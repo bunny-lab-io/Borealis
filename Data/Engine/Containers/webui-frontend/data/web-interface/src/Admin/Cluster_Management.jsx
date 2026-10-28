@@ -43,7 +43,7 @@ import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-communi
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import ClusterSSHInspection from "./Cluster_SSH_Inspection.jsx";
 import ClusterSSHOnboarding, { validSSHInspectionID } from "./Cluster_SSH_Onboarding.jsx";
-import ClusterOperationTimeline, { buildClusterOperationTimeline } from "./ClusterOperationTimeline.jsx";
+import ClusterOperationTimeline, { buildClusterOperationTimeline, clusterSoakClock } from "./ClusterOperationTimeline.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -921,6 +921,9 @@ export default function ClusterManagement() {
   const snapshotCompletedGeneration = useRef(0);
   const releaseCompletedGeneration = useRef(0);
   const eventsCompletedGeneration = useRef(0);
+  const clockCompletedGeneration = useRef(0);
+  const lastSoakClock = useRef(null);
+  const [soakClock, setSoakClock] = useState(null);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
@@ -1063,15 +1066,30 @@ export default function ClusterManagement() {
         setEventError(requestError?.message || "Cluster event details could not be loaded.");
       }
     })();
-    await Promise.all([snapshotRequest, releaseRequest, eventRequest]);
+    const clockRequest = (async () => {
+      const sentAt = performance.now();
+      try {
+        const response = await fetch("/api/server/time", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error("Server clock unavailable.");
+        if (!acceptCompletion(clockCompletedGeneration)) return;
+        const clock = clusterSoakClock(payload, sentAt, performance.now(), lastSoakClock.current);
+        if (clock) lastSoakClock.current = clock;
+        setSoakClock(clock);
+      } catch {
+        if (acceptCompletion(clockCompletedGeneration)) setSoakClock(null);
+      }
+    })();
+    await Promise.all([snapshotRequest, releaseRequest, eventRequest, clockRequest]);
   }, [notify]);
 
   useEffect(() => {
+    const clockTimer = window.setInterval(() => setVersionClock(Date.now()), 1000);
     const timer = window.setInterval(() => {
       setVersionClock(Date.now());
       void refresh({ quiet: true });
     }, 5000);
-    return () => window.clearInterval(timer);
+    return () => { window.clearInterval(timer); window.clearInterval(clockTimer); };
   }, [refresh]);
 
   const mutate = useCallback(async (path, body) => {
@@ -1206,20 +1224,23 @@ export default function ClusterManagement() {
         const nodeLabel = clusterOperationNodeLabel(operation, nodes, admissions, linkedEvents);
         const details = buildClusterOperationDetails(operation, linkedEvents, nodeLabel);
         const timestamp = Number(operation?.created_at || operation?.started_at || operation?.updated_at || operation?.finished_at || 0);
+        const timelineStale = Boolean(eventError) || snapshotUnavailable || snapshotReceivedAt <= 0 || eventsReceivedAt <= 0
+          || versionClock < snapshotReceivedAt || versionClock < eventsReceivedAt
+          || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS || versionClock - eventsReceivedAt > CLUSTER_SNAPSHOT_STALE_MS;
         return {
           ...operation,
           operationLabel: friendlyClusterOperationName(operation),
           nodeLabel,
           detailSummary: details.summary,
           detailsText: details.copyText,
-          timeline: buildClusterOperationTimeline(operation, linkedEvents, nodes, admissions),
-          timelineStale: Boolean(eventError) || snapshotUnavailable || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS || versionClock - eventsReceivedAt > CLUSTER_SNAPSHOT_STALE_MS,
+          timeline: buildClusterOperationTimeline(operation, linkedEvents, nodes, admissions, { clock: soakClock, now: performance.now(), fresh: !timelineStale }),
+          timelineStale,
           timestamp,
           timestampLabel: formatClusterTimestamp(timestamp),
         };
       });
     },
-    [admissions, events, nodes, operations, eventError, eventsReceivedAt, snapshotUnavailable, snapshotReceivedAt, versionClock]
+    [admissions, events, nodes, operations, eventError, eventsReceivedAt, snapshotUnavailable, snapshotReceivedAt, versionClock, soakClock]
   );
 
   const closeNodeActionMenu = useCallback(() => {

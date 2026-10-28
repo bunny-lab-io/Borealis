@@ -109,18 +109,43 @@ func withClusterSSHPrejoinCompletionDispatch(parent context.Context, store *post
 	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error,
 	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error, startup bool, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
+	var proved clusterbootstrap.PrejoinPreparationReceipt
+	var output *clusterbootstrap.PrejoinPreparationReceipt
+	if startup {
+		output = &proved
+	}
+	err := withClusterSSHPrejoinNativeScope(parent, store, aegis, source, claim, baseline, inputs, artifacts, postgresReference, expected, preparation, joinRead, startup,
+		func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
+			return target.run(ctx, false, -1, nil, nil, output)
+		})
+	if err == nil && completion != nil {
+		*completion = proved
+	}
+	return err
+}
+
+// Every action closes its native session before returning. The surrounding
+// source-identity scope remains live across a cohort barrier and its mutation.
+type clusterSSHPrejoinNativeTarget struct {
+	current func(context.Context) error
+	// Full source snapshots may launch bounded Jobs. The cohort invokes this
+	// only between native sessions, never from a short transport challenge.
+	inputs func(context.Context) error
+	run    func(context.Context, bool, int, func(context.Context) error, func(context.Context) error, *clusterbootstrap.PrejoinPreparationReceipt) error
+}
+
+func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,
+	source clusterSSHPrejoinSource, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, preparation func(context.Context) error,
+	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error, startup bool,
+	consume func(context.Context, clusterSSHPrejoinNativeTarget) error) error {
 	if store == nil || store.db == nil || aegis == nil || inputs == nil || preparation == nil || !validClusterSSHPreparationLease(claim.Lease) ||
-		expected.Validate() != nil || expected.Source != baseline || parent.Err() != nil || startup && (joinRead == nil || artifacts == nil) {
+		expected.Validate() != nil || expected.Source != baseline || parent.Err() != nil || startup && (joinRead == nil || artifacts == nil) || consume == nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
 	expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed)
-	var proved clusterbootstrap.PrejoinPreparationReceipt
-	var receiptOutput *clusterbootstrap.PrejoinPreparationReceipt
-	if startup {
-		receiptOutput = &proved
-	}
-	err := withClusterSSHProcessIdentityPhase(parent, store, aegis, source, claim, baseline, clusterSSHStartupDispatchBudget(artifacts != nil, joinRead != nil, startup), startup,
+	return withClusterSSHProcessIdentityPhase(parent, store, aegis, source, claim, baseline, clusterSSHStartupDispatchBudget(artifacts != nil, joinRead != nil, startup), startup,
 		func(ctx context.Context, material *engineidentity.Material, sourceRefresh func(context.Context) error) error {
 			readKey := func(ctx context.Context) (clusterremote.HostKey, error) {
 				if sourceRefresh(ctx) != nil || preparation(ctx) != nil || ctx.Err() != nil {
@@ -165,15 +190,33 @@ func withClusterSSHPrejoinCompletionDispatch(parent context.Context, store *post
 				}
 				return client, err
 			}
-			return dispatchClusterSSHPrejoinCompletion(ctx, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, check, joinRead, startup, receiptOutput)
+			runCtx, cancelRuns := context.WithCancel(ctx)
+			lifetime := &clusterSSHNetworkReaderLifetime{ctx: runCtx, cancel: cancelRuns}
+			defer lifetime.close()
+			target := clusterSSHPrejoinNativeTarget{current: check}
+			target.run = func(caller context.Context, prepareOnly bool, proofStep int, beforeStart, cohortCurrent func(context.Context) error, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
+				return lifetime.run(caller, func(bound context.Context) error {
+					current := check
+					if cohortCurrent != nil {
+						current = func(ctx context.Context) error {
+							if check(ctx) != nil || cohortCurrent(ctx) != nil || check(ctx) != nil {
+								return clusterbootstrap.ErrSessionAuthority
+							}
+							return nil
+						}
+					}
+					if current(bound) != nil {
+						return clusterbootstrap.ErrSessionAuthority
+					}
+					return dispatchClusterSSHPrejoinPhase(bound, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, current, joinRead, startup, completion, prepareOnly, proofStep, beforeStart)
+				})
+			}
+			consumeErr := consume(runCtx, target)
+			if lifetime.close() != nil || consumeErr != nil || ctx.Err() != nil {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			return nil
 		})
-	if err != nil {
-		return err
-	}
-	if completion != nil {
-		*completion = proved
-	}
-	return nil
 }
 
 // This is the source/account/identity/host prefix, not complete image delivery. It creates
@@ -216,8 +259,19 @@ func dispatchClusterSSHPrejoinCompletion(parent context.Context, connect func(co
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
 	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error,
 	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error, startup bool, completion *clusterbootstrap.PrejoinPreparationReceipt) (result error) {
+	return dispatchClusterSSHPrejoinPhase(parent, connect, inputs, artifacts, postgresReference, expected, source, material, sudoPassword, current, joinRead, startup, completion, false, -1, nil)
+}
+
+func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context.Context) (clusterSSHPrejoinClient, error),
+	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
+	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error,
+	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error, startup bool, completion *clusterbootstrap.PrejoinPreparationReceipt,
+	prepareOnly bool, proofStep int, beforeStart func(context.Context) error) (result error) {
 	fail := clusterbootstrap.ErrSessionAuthority
 	var receipt clusterbootstrap.PrejoinPreparationReceipt
+	if (prepareOnly || proofStep >= 0 || beforeStart != nil) && !startup || proofStep != -1 && proofStep != 7 && proofStep != 10 || prepareOnly && proofStep >= 0 {
+		return fail
+	}
 	if completion != nil && !startup {
 		return fail
 	}
@@ -440,6 +494,14 @@ func dispatchClusterSSHPrejoinCompletion(parent context.Context, connect func(co
 		}
 		return err, nil
 	}
+	// A barrier proof selects its exact native phase directly. No cursor,
+	// continuation, source-absence inference or write can authorize this path.
+	if proofStep >= 0 {
+		if err, boundaryErr := run(steps[proofStep][1]); err != nil || boundaryErr != nil || check(checkCtx) != nil {
+			return fail
+		}
+		return nil
+	}
 	// Inspection is a cursor, not completion proof. A failed query never becomes
 	// an empty journal. Reconcile exactly its retained stage in a new executor
 	// before any later write; actual source/account/key/host proof remains there.
@@ -586,11 +648,29 @@ func dispatchClusterSSHPrejoinCompletion(parent context.Context, connect func(co
 		retained = 10
 	}
 	if retained >= 0 {
+		if beforeStart != nil && retained > 7 {
+			// The cohort proved this target configured, not already started.
+			// A changed cursor cannot authorize image/activation continuation.
+			return fail
+		}
+		if prepareOnly && retained > 7 && retained != 10 {
+			return fail // Partial startup needs its separate recovery contract.
+		}
 		if proveStep(retained) != nil {
 			return fail
 		}
 	}
-	for index := retained + 1; index < len(steps); index++ {
+	end := len(steps)
+	if prepareOnly {
+		end = 8
+	}
+	for index := retained + 1; index < end; index++ {
+		if index == 8 && beforeStart != nil {
+			// No connection, native executor or target lock is active here.
+			if beforeStart(checkCtx) != nil || check(checkCtx) != nil {
+				return fail
+			}
+		}
 		step := steps[index]
 		if _, boundaryErr := run(step[0]); boundaryErr != nil {
 			return fail

@@ -14,7 +14,8 @@ import (
 
 // A native dispatcher must own fresh domain/source proofs, fixed remote
 // journals and joined cleanup. Returning hashes alone is not an implementation
-// of that contract. No production adapter or polling caller is installed.
+// of that contract. The native pre-join adapter is callable only; no polling
+// caller is installed.
 type clusterSSHPreparationDispatch func(context.Context, clusterSSHNetworkTargetClaim,
 	clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) (clusterSSHPreparationResult, error)
 
@@ -23,6 +24,7 @@ type clusterSSHPrejoinDispatchResult struct {
 	Receipt  clusterbootstrap.PrejoinPreparationReceipt
 }
 type clusterSSHPrejoinPreparationDispatch func(context.Context, clusterSSHNetworkTargetClaim, clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) (clusterSSHPrejoinDispatchResult, error)
+type clusterSSHPrejoinCohortDispatch func(context.Context, []clusterSSHNetworkTargetClaim, clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) ([]clusterSSHPrejoinDispatchResult, error)
 
 type clusterSSHPreparationWorker struct {
 	store    *postgresOperatorStore
@@ -30,6 +32,7 @@ type clusterSSHPreparationWorker struct {
 	dispatch clusterSSHPreparationDispatch
 	interval time.Duration
 	prejoin  clusterSSHPrejoinPreparationDispatch
+	cohort   clusterSSHPrejoinCohortDispatch
 	getJSON  func(context.Context, string, any) error
 }
 
@@ -49,11 +52,20 @@ func newClusterSSHPrejoinPreparationWorker(store *postgresOperatorStore, aegis *
 	return &clusterSSHPreparationWorker{store: store, aegis: aegis, prejoin: dispatch, getJSON: getJSON, interval: 5 * time.Second}
 }
 
+func newClusterSSHPrejoinCohortPreparationWorker(store *postgresOperatorStore, aegis *goAegisService, dispatch clusterSSHPrejoinCohortDispatch, getJSON func(context.Context, string, any) error) *clusterSSHPreparationWorker {
+	if store == nil || store.db == nil || aegis == nil || dispatch == nil || getJSON == nil {
+		return nil
+	}
+	return &clusterSSHPreparationWorker{store: store, aegis: aegis, cohort: dispatch, getJSON: getJSON, interval: 5 * time.Second}
+}
+
 // Prepare neither claims nor reclaims targets. Any uncertain dispatch outcome
 // retains all original claims until expiry; expiry cannot authorize replay.
 // Only successful whole-cohort dispatch and joined scope cleanup can settle.
 func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clusterSSHPreparationWork) error {
-	if w == nil || w.store == nil || w.store.db == nil || w.aegis == nil || (w.dispatch == nil) == (w.prejoin == nil) || w.prejoin != nil && w.getJSON == nil ||
+	if w == nil || w.store == nil || w.store.db == nil || w.aegis == nil ||
+		(w.dispatch == nil && w.prejoin == nil && w.cohort == nil) || w.dispatch != nil && (w.prejoin != nil || w.cohort != nil) || w.prejoin != nil && w.cohort != nil ||
+		(w.prejoin != nil || w.cohort != nil) && w.getJSON == nil ||
 		parent.Err() != nil || len(work.Claims) < 1 || len(work.Claims) > 2 || work.Baseline.Validate() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -114,7 +126,13 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 	}
 	results := make([]clusterSSHPreparationResult, len(claims))
 	prepared := make([]clusterSSHPrejoinCompletion, len(claims))
-	err = runClusterSSHPreparationScope(parent, w.interval, checkAll, func(scope context.Context) error {
+	maximum := clusterSSHPreparationWorkerBudget(w.prejoin != nil || w.cohort != nil, len(claims))
+	if w.cohort != nil {
+		// One preparation pass and one independently retained-scope start pass
+		// per target. Each inner source/native phase keeps its original ceiling.
+		maximum *= 2
+	}
+	err = runClusterSSHPreparationScopeFor(parent, w.interval, maximum, checkAll, func(scope context.Context) error {
 		ctx, cancel := context.WithCancel(scope)
 		defer cancel()
 		boundary := clusterSSHPreparationBoundary(ctx, checkAll, func(context.Context) error { return nil })
@@ -122,6 +140,20 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			if boundary(caller) != nil {
 				cancel() // Ignored boundary failure still poisons this dispatch scope.
 				return clusterbootstrap.ErrSessionAuthority
+			}
+			return nil
+		}
+		if w.cohort != nil {
+			values, err := w.cohort(ctx, slices.Clone(claims), work.Baseline, authorization.ConfirmationSHA256, work.IdentitySource, check)
+			if err != nil || len(values) != len(claims) || check(ctx) != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			for i, value := range values {
+				if value.Expected.Source != work.Baseline || value.Receipt.Validate(value.Expected, work.IdentitySource) != nil {
+					return clusterbootstrap.ErrPreparationConfig
+				}
+				value.Expected.PeerAddresses = slices.Clone(value.Expected.PeerAddresses)
+				prepared[i] = clusterSSHPrejoinCompletion{Claim: claims[i], Expected: value.Expected, Receipt: value.Receipt, PayloadSHA256: payloadHash}
 			}
 			return nil
 		}
@@ -150,7 +182,7 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 	if err != nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	if w.prejoin != nil {
+	if w.prejoin != nil || w.cohort != nil {
 		if w.store.completeClusterSSHPrejoinPreparation(parent, w.aegis, prepared, w.getJSON) != nil || parent.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -172,4 +204,15 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	return nil
+}
+
+func clusterSSHPreparationWorkerBudget(prejoin bool, targets int) time.Duration {
+	if targets < 1 || targets > 2 {
+		return 0
+	}
+	if prejoin {
+		// Claims are dispatched serially while the whole exact cohort renews.
+		return time.Duration(targets) * clusterSSHPreparationSourceBudget(true)
+	}
+	return 10 * time.Minute
 }

@@ -279,6 +279,7 @@ type kubernetesClusterStepRunner struct {
 	clusterInitAuthorizationGrace time.Duration
 	postgresReplicationProbe      func(context.Context, string, int64) (bool, error)
 	persistRemovalFence           func(context.Context, clusterControllerOperation, clusterRemovalFence) error
+	recordOperationSoak           clusterOperationSoakRecorder
 }
 
 func clusterControllerMode() bool {
@@ -314,6 +315,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	}
 	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns, leaseTransport: &postgresLeaseTransport{dsn: normalizePostgresDriverURL(cfg)}}
 	runner.persistRemovalFence = controller.persistRemovalFence
+	runner.recordOperationSoak = controller.recordOperationSoak
 	healthServer := controller.healthServer()
 	healthServer.BaseContext = func(net.Listener) context.Context { return ctx }
 	healthExited := make(chan error, 1)
@@ -1656,8 +1658,14 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		status := completedClusterRecoveryStatus(operation, clusterStatus, activeSize, desiredSize, true, parseClusterJSON(configJSON))
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,updated_at=$2 WHERE id=1`, status, now)
 	case "node_remove":
-		for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, cleanText(rawID))
+		// Finalize the same validated cohort used by planning and the native
+		// absence gate, including legacy payloads without the pinned ID field.
+		targets, targetErr := clusterRemovalNodes(operation, nodes)
+		if targetErr != nil {
+			return targetErr
+		}
+		for _, node := range targets {
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, node.ID)
 			if err != nil {
 				break
 			}
@@ -1808,6 +1816,7 @@ func truncateClusterError(value string, maximum int) string {
 }
 
 func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation clusterControllerOperation, step clusterControllerStep, nodes []clusterControllerNode) error {
+	ctx = r.soakContext(ctx, operation, step)
 	if operation.Kind == "hmr_start" {
 		return errClusterHMREntryDisabled
 	}
@@ -2106,12 +2115,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			if err := r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":start", NodeID: node.ID}, node, "InspectCandidateHealth"); err != nil {
 				return err
 			}
-			timer := time.NewTimer(r.soak)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
+			if err := r.waitOperationSoak(ctx, "candidate"); err != nil {
+				return err
 			}
 			return r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
 		}
@@ -2192,12 +2197,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			if err := r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":start", NodeID: node.ID}, node, "InspectCandidateHealth"); err != nil {
 				return err
 			}
-			timer := time.NewTimer(r.soak)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
+			if err := r.waitOperationSoak(ctx, "candidate"); err != nil {
+				return err
 			}
 			return r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
 		case "promote_candidate":
@@ -2353,12 +2354,8 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 				return err
 			}
 			if action.soakAfter {
-				timer := time.NewTimer(r.soak)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return ctx.Err()
-				case <-timer.C:
+				if err := r.waitOperationSoak(ctx, action.stepName); err != nil {
+					return err
 				}
 				if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName + ":soak", NodeID: node.ID}, node, action.verb); err != nil {
 					return err
@@ -2374,12 +2371,8 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		if err := r.nodeActionJob(ctx, redeploy, healthStep, node, "InspectHealth"); err != nil {
 			return err
 		}
-		timer := time.NewTimer(r.soak)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := r.waitOperationSoak(ctx, healthStep.Name); err != nil {
+			return err
 		}
 		if err := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: healthStep.Name + ":soak", NodeID: node.ID}, node, "InspectHealth"); err != nil {
 			return err
@@ -2394,13 +2387,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 		activationErr := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health", NodeID: node.ID}, node, "InspectHealth")
 		if activationErr == nil {
-			timer = time.NewTimer(r.soak)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				activationErr = ctx.Err()
-			case <-timer.C:
-			}
+			activationErr = r.waitOperationSoak(ctx, "admit:"+node.ID+":role_health")
 		}
 		if activationErr == nil {
 			activationErr = r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health:soak", NodeID: node.ID}, node, "InspectHealth")
@@ -4439,12 +4426,8 @@ func (r *kubernetesClusterStepRunner) verifyMemberRemoved(ctx context.Context, o
 	if err := r.retireMemberWorkloads(ctx, targetName); err != nil {
 		return err
 	}
-	timer := time.NewTimer(r.soak)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
+	if err := r.waitOperationSoak(ctx, "member_removal"); err != nil {
+		return err
 	}
 	healthy, err := r.memberRemovalStateHealthy(ctx, operation, targetName, nodes)
 	if err != nil {
@@ -4514,12 +4497,8 @@ func (r *kubernetesClusterStepRunner) minimumReadySoak(ctx context.Context, node
 	if err := r.verifyReadyEndpointsForNode(ctx, nodeName); err != nil {
 		return err
 	}
-	timer := time.NewTimer(r.soak)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
+	if err := r.waitOperationSoak(ctx, "ready:"+nodeName); err != nil {
+		return err
 	}
 	return r.verifyReadyEndpointsForNode(ctx, nodeName)
 }

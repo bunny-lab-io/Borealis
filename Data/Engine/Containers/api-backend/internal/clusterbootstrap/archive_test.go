@@ -109,8 +109,16 @@ type member struct {
 
 func pack(t *testing.T, members []member) []byte {
 	t.Helper()
+	return packWithCompressionLevel(t, members, gzip.DefaultCompression)
+}
+
+func packWithCompressionLevel(t *testing.T, members []member, level int) []byte {
+	t.Helper()
 	var out bytes.Buffer
-	z := gzip.NewWriter(&out)
+	z, err := gzip.NewWriterLevel(&out, level)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tarOut := tar.NewWriter(z)
 	for _, m := range members {
 		h := m.header

@@ -1010,7 +1010,7 @@
   {
     "pattern": "GET /live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 392,
+    "line": 394,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1019,7 +1019,7 @@
   {
     "pattern": "GET /ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 395,
+    "line": 397,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1028,7 +1028,7 @@
   {
     "pattern": "GET /startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 389,
+    "line": 391,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller_test.go",
@@ -1901,7 +1901,7 @@
   {
     "pattern": "POST /internal/cluster/existing-identity-custody",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 383,
+    "line": 385,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-existing-member-phase-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_custody_broker_test.go",
@@ -1910,7 +1910,7 @@
   {
     "pattern": "POST /internal/cluster/existing-identity-plan",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 381,
+    "line": 383,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-controller-reservation",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_existing_identity_broker_test.go",
@@ -1919,7 +1919,7 @@
   {
     "pattern": "POST /internal/cluster/k3s-join-result",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 379,
+    "line": 381,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-pending-native-job-receipt",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_join_source_test.go",
@@ -1928,7 +1928,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-k3s-join",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 378,
+    "line": 380,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-confirmed-source-preparation-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_join_broker_test.go",
@@ -1937,7 +1937,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-prejoin-custody",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 385,
+    "line": 387,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-preparation-phase-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_prejoin_custody_broker_test.go",
@@ -1946,7 +1946,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-preparation-source",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 376,
+    "line": 378,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_source_broker_test.go",
@@ -1955,7 +1955,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-vip-check",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 388,
+    "line": 390,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",
@@ -1964,7 +1964,7 @@
   {
     "pattern": "POST /internal/cluster/ssh-vip-scope",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
-    "line": 387,
+    "line": 389,
     "class": "internal-cluster",
     "authentication": "operator-derived-aead-and-target-lease",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_vip_broker_test.go",

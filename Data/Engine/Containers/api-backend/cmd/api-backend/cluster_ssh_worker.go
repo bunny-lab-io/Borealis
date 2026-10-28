@@ -183,7 +183,7 @@ func (w *clusterSSHInspectionWorker) inspect(parent context.Context, lease clust
 	if check(ctx) != nil {
 		return errClusterSSHInspectionWorker
 	}
-	guard := startClusterControllerLeaseGuardWithGrace(ctx, w.renewInterval, time.Millisecond, func(ctx context.Context) (bool, error) { return check(ctx) == nil, nil })
+	guard := startJoinedClusterLeaseGuard(ctx, w.renewInterval, time.Millisecond, func(ctx context.Context) (bool, error) { return check(ctx) == nil, nil })
 	defer guard.Close()
 	ctx = guard.Context()
 	key, err := w.store.loadClusterSSHTargetKey(ctx, lease)

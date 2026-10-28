@@ -164,6 +164,12 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 	return withClusterSSHPreparationSourceFor(parent, scratchParent, store, aegis, lease, baseline, sealed, false, consume)
 }
 
+// Derive the outer allowance from the existing native session budget and source
+// acquisition allowance. No lease, credential or individual phase is extended.
+func clusterSSHPreparationSourceBudget(joining bool) time.Duration {
+	return clusterSSHStartupDispatchBudget(true, true, joining) + 20*time.Minute
+}
+
 // Separate explicit joining scope permits approved drained registrations while
 // retaining original source/configuration/storage proof. Startup and image
 // verification remain native journal phases with independently proven prefixes.
@@ -181,7 +187,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
 	// Retain the existing twenty-minute source-acquisition allowance around
 	// the exact bounded session budget, including identity activation.
-	maximum := clusterSSHStartupDispatchBudget(true, true, joining) + 20*time.Minute
+	maximum := clusterSSHPreparationSourceBudget(joining)
 	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, leaseCheck, func(ctx context.Context) (result error) {
 		snapshotRead := client.snapshotReadFor(authority, lease, baseline, sealed, joining)
 		initial, err := snapshotRead(ctx)

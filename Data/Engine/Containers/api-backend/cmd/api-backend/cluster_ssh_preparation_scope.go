@@ -39,7 +39,7 @@ func runClusterSSHPreparationScopeFor(parent context.Context, interval, maximum 
 	if check(ctx) != nil || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
-	guard := startClusterControllerLeaseGuardWithGrace(ctx, interval, time.Millisecond, func(heartbeat context.Context) (bool, error) {
+	guard := startJoinedClusterLeaseGuard(ctx, interval, time.Millisecond, func(heartbeat context.Context) (bool, error) {
 		if heartbeat.Err() != nil {
 			return false, nil
 		}
