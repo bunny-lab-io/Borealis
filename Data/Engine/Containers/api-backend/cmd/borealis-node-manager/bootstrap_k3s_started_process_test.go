@@ -108,7 +108,13 @@ func TestBootstrapStartedK3sProcessCustody(t *testing.T) {
 				return err
 			}
 			var escaped func(context.Context) error
-			err = withBootstrapStartedK3sProcess(ctx, proc, read, hash, check, func(refresh func(context.Context) error) error {
+			var borrowed *os.File
+			err = withBootstrapStartedK3sExecutable(ctx, proc, read, hash, check, func(refresh func(context.Context) error, executable *os.File, pid uint64) error {
+				borrowed = executable
+				_, seekErr := executable.Seek(0, 0)
+				if pid != 42 || seekErr != nil || hashSourceKubeletExecutable(ctx, executable, pin) != nil {
+					t.Fatal("authenticated executable unavailable")
+				}
 				escaped = refresh
 				switch mode {
 				case "service restart":
@@ -156,6 +162,11 @@ func TestBootstrapStartedK3sProcessCustody(t *testing.T) {
 			}
 			if escaped != nil && escaped(context.Background()) == nil {
 				t.Fatal("escaped capability remained active")
+			}
+			if borrowed != nil {
+				if _, err := borrowed.Stat(); err == nil {
+					t.Fatal("borrowed executable escaped scope")
+				}
 			}
 		})
 	}

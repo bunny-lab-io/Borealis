@@ -109,7 +109,18 @@ func runBootstrapHostCommand(ctx context.Context, step bootstrapHostCommand, hos
 func runBootstrapHostCommandWith(ctx context.Context, step bootstrapHostCommand, hostLock, identityLock *os.File,
 	check, idle func(context.Context) error, run func(context.Context, bootstrapHostCommandSpec, *os.File, *os.File) error, abort func()) error {
 	spec, err := bootstrapHostCommandPlan(step)
-	if err != nil || hostLock == nil || identityLock == nil || check == nil || idle == nil || run == nil || abort == nil {
+	if err != nil {
+		return errBootstrapSource
+	}
+	return runBootstrapCommandSpecWith(ctx, spec, hostLock, identityLock, check, idle, run, abort)
+}
+
+// Share the fenced child/cleanup lifetime with the separately scoped read-only
+// containerd command. Its executable/socket descriptors never enter the general
+// host command vocabulary.
+func runBootstrapCommandSpecWith(ctx context.Context, spec bootstrapHostCommandSpec, hostLock, identityLock *os.File,
+	check, idle func(context.Context) error, run func(context.Context, bootstrapHostCommandSpec, *os.File, *os.File) error, abort func()) error {
+	if spec.timeout <= 0 || hostLock == nil || identityLock == nil || check == nil || idle == nil || run == nil || abort == nil {
 		return errBootstrapSource
 	}
 	host, hostErr := hostLock.Stat()

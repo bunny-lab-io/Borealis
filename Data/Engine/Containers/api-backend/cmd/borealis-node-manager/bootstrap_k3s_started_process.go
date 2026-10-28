@@ -60,6 +60,16 @@ func readBootstrapStartedK3s(ctx context.Context) ([]byte, error) {
 // not yet been admitted to storage. No process arguments or environment are read.
 func withBootstrapStartedK3sProcess(ctx context.Context, proc string, read func(context.Context) ([]byte, error),
 	executableCheck func(context.Context, *os.File) error, check func(context.Context) error, consume func(func(context.Context) error) error) error {
+	if consume == nil {
+		return errBootstrapSource
+	}
+	return withBootstrapStartedK3sExecutable(ctx, proc, read, executableCheck, check, func(refresh func(context.Context) error, _ *os.File, _ uint64) error { return consume(refresh) })
+}
+
+// The held authenticated embedded executable may be borrowed synchronously for
+// its fixed read-only ctr reexec entrypoint. Never invoke the extracting launcher.
+func withBootstrapStartedK3sExecutable(ctx context.Context, proc string, read func(context.Context) ([]byte, error),
+	executableCheck func(context.Context, *os.File) error, check func(context.Context) error, consume func(func(context.Context) error, *os.File, uint64) error) error {
 	if read == nil || executableCheck == nil || check == nil || consume == nil || ctx.Err() != nil || check(ctx) != nil {
 		return errBootstrapSource
 	}
@@ -140,7 +150,7 @@ func withBootstrapStartedK3sProcess(ctx context.Context, proc string, read func(
 		}
 		return nil
 	}
-	if refresh(ctx) != nil || consume(refresh) != nil || refresh(ctx) != nil {
+	if refresh(ctx) != nil || consume(refresh, executable, service.pid) != nil || refresh(ctx) != nil {
 		return errBootstrapSource
 	}
 	return nil

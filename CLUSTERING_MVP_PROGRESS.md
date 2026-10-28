@@ -6,9 +6,10 @@ Canonical procedures remain in [Managing Engine Clusters](Docs/Engine/managing-e
 
 ## Objective and readiness
 
-Continue until clustering MVP is implemented, integrated, verified and ready for
-direct operator testing. Continuous execution supersedes ten-slice/one-slice
-stopping limits. Readiness requires executable primary workflows and intended-host
+Project objective: clustering MVP implemented, integrated, verified and ready for
+direct operator testing. Operator restored slice-based execution on2026-10-28:
+complete one coherent slice, validate, publish and hand off; do not continue into
+the next separately reviewable slice. Readiness requires executable primary workflows and intended-host
 setup, passing critical functional/integration/smoke tests, resolved blocking
 defects, and documented configuration/test data/operator steps. Component tests
 alone do not establish readiness. Preserve one/three-Engine topology, calculated
@@ -17,7 +18,7 @@ provisioning, original-controller authority and all safety gates in #530.
 ## Published state and evidence
 
 - Branch `issue/cluster-central-ssh-onboarding`, draft [PR#522](https://github.com/bunny-lab-io/Borealis/pull/522).
-- Published base `96d809660339d13e0f4214d7bfbdd51161874544`; subsequent publication SHA stays in #530 active handoff.
+- Published base `18f7260627d77d81b6bac211f804771b1495ebfd`; subsequent publication SHA stays in #530 active handoff.
 - Fixed host custody/transport, source/account/directory/keys/host prefix and
   journal-based resume are integrated. Resume independently reconciles retained
   stage before later writes. Source absence recovery requires explicit proof,
@@ -30,6 +31,30 @@ provisioning, original-controller authority and all safety gates in #530.
   `d6710ce524c8431aa9c62c3724ef5900f3c06e79`; evidence applies only to unchanged code.
 - All M1-M8 acceptance items remain open. No readiness percentage or live acceptance
   claim. Production preparation polling remains disabled pending delivery/recovery.
+
+## Image-import component checkpoint (2026-10-28)
+
+- Base `18f7260627d77d81b6bac211f804771b1495ebfd`; exact publication SHA in
+  #530 active handoff. Same branch/PR. Operator restored one-slice cadence.
+- Authenticated41-image target plan, bounded complete/unpacked ctr parser and
+  fixed read-only native observer implemented. Held embedded executable uses ctr
+  reexec; outer launcher never runs. Socket ancestry, kernel peer pidfd, root
+  child/namespace/executable identities and both inherited exclusions remain held.
+- Shared command cleanup retains pre/post supervised-idle checks, cancellation
+  cleanup and abort on unknown descendants. No new dependency/public route/schema.
+- Journal receipt and native/private SSH/controller integration remain next slice.
+  Production polling disabled; all M1-M8 open. No live Engine action, credentials,
+  deployment, merge/release or runtime cleanup obligation. Actual Ubuntu import,
+  activation and end-to-end operator workflows remain unverified.
+- Focused race3 passed native8.003s/bootstrap1.701s; full native180 top-level
+  tests passed15.959s, zero failures/skips. Affected vet, CGO-disabled node-manager
+  build, repository policy184tests84.930s/221routes and docs/gofmt/diff passed.
+  Initial borrowed-executable test attempted hashing at EOF; fixture now rewinds
+  and validates the same held bytes. No assertions suppressed. Unchanged full
+  bootstrap journal evidence remains at prior startup checkpoint; no broad rerun.
+- Evidence `Unit_Test_Results/m2-image-import-20261028/`; all validation processes
+  finished. New-head required CI must run once for publication; no manual reruns,
+  repeated pending polls or unchanged artifact downloads.
 
 ## Account continuation checkpoint
 
@@ -52,10 +77,11 @@ provisioning, original-controller authority and all safety gates in #530.
 
 ## Ordered remaining work
 
-1. Complete M2 runtime admission/import: eight-stage artifact/inert-service/join
-   configuration is published. Independent native/controller Node proof and
-   separate registration-phase source observer are implemented; integrate
-   phase-bound startup custody, journaled admission and actual import.
+1. Integrate read-only image verification as the tenth journal stage after published
+   ninth-stage startup. Bind authenticated41-image complete/unpacked observation to
+   retained Node/member proof under both exclusions; add fixed native/private
+   session, pinned SSH/controller dispatch and proof-only resume. Current component
+   observation does not grant activation or readiness.
 2. Finish M3 activation/existing-node interruption qualification. Preserve all
    original identity material and keep consumers fenced until complete proof.
 3. Qualify bounded host recovery on Ubuntu. Unknown/unconfigured dpkg state stays
