@@ -36,6 +36,8 @@ const state = vi.hoisted(() => ({
   nodes: null,
   admissions: null,
   snapshotReceivedAt: null,
+  activeOperationID: "",
+  pageChrome: null,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -48,6 +50,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
         enabled: state.enabled,
         status: state.clusterStatus,
         active_size: state.activeSize,
+        active_operation_id: state.activeOperationID,
         desired_size: state.desiredSize,
         baseline_release: "2026.08.1",
         release_channel: state.releaseChannel,
@@ -91,6 +94,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
       releases: { releases: state.releases },
       releaseError: state.releaseError,
       events: state.events,
+      eventsReceivedAt: Date.now(),
       eventError: "",
       initialError: "",
     }),
@@ -102,7 +106,7 @@ vi.mock("@/app/hooks/useAppNotifications.js", () => ({
 }));
 
 vi.mock("@/app/hooks/useRoutePageChrome.js", () => ({
-  useRoutePageChrome: vi.fn(),
+  useRoutePageChrome: (value) => { state.pageChrome = value; },
 }));
 
 function renderClusterManagement(initialEntry = "/cluster-management") {
@@ -136,8 +140,66 @@ describe("Cluster Management", () => {
     state.nodes = null;
     state.admissions = null;
     state.snapshotReceivedAt = null;
+    state.activeOperationID = "";
+    state.pageChrome = null;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each(["pair", "replacement"])("opens complete %s inspection from current cluster topology", async (mode) => {
+    state.activeSize = mode === "pair" ? 1 : 2;
+    state.clusterStatus = mode === "pair" ? "Healthy" : "Degraded Quorum";
+    state.hmrState = "inactive"; state.admissions = [];
+    state.nodes = Array.from({ length: state.activeSize }, (_, i) => ({ id: `source-${i}`, membership_state: "Active", application_state: "active" }));
+    renderClusterManagement();
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.disabled).toBe(false);
+    act(() => action.onClick());
+    expect(await screen.findByText(`Inspect Engine host 1 of ${mode === "pair" ? 2 : 1}`)).toBeInTheDocument();
+  });
+
+  it.each(["stale", "future timestamp", "isolation", "active operation", "drain", "admission", "database", "three members"])("blocks new inspection with %s", (mode) => {
+    state.activeSize = 1; state.desiredSize = 1; state.hmrState = "inactive"; state.admissions = [];
+    state.nodes = [{ id: "source", membership_state: "Active", application_state: "active" }];
+    if (mode === "stale") state.snapshotReceivedAt = Date.now() - 16000;
+    if (mode === "future timestamp") state.snapshotReceivedAt = Date.now() + 16000;
+    if (mode === "isolation") state.hmrState = "active";
+    if (mode === "active operation") state.activeOperationID = "11111111-1111-4111-8111-111111111111";
+    if (mode === "drain") state.nodes[0].application_state = "drained";
+    if (mode === "admission") state.admissions = [{ state: "Recovery Required" }];
+    if (mode === "database") state.database.fully_ready = false;
+    if (mode === "three members") { state.activeSize = 3; state.desiredSize = 3; }
+    renderClusterManagement();
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.disabled).toBe(true);
+    act(() => action.onClick());
+    expect(screen.queryByText(/Inspect Engine host 1 of/)).toBeNull();
+  });
+
+  it("resumes public inspection UUID from URL without credential submission", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const fetch = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: "ssh_onboarding_not_found" }) });
+    vi.stubGlobal("fetch", fetch);
+    renderClusterManagement(`/cluster-management?tab=overview&inspection=${id}`);
+    await screen.findByText(/Submission is not recorded yet/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe(`/api/server/cluster/onboarding/operations/${id}`);
+    expect(fetch.mock.calls[0][1].method).toBeUndefined();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
+  });
+
+  it("opens active inspection from header while keeping admission and generic cancellation separate", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    state.activeOperationID = id;
+    state.operations = [{ id, kind: "ssh_onboarding", state: "waiting", current_step: "qualify_ssh_targets" }];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    renderClusterManagement("/cluster-management?tab=events");
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.label).toBe("View Host Inspection");
+    expect(friendlyClusterOperationName(state.operations[0])).toBe("SSH Host Inspection");
+    act(() => action.onClick());
+    expect(await screen.findByText("Engine host inspection")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
   });
 
   it("keeps recorded release identity separate from report freshness and runtime verification", () => {
@@ -197,6 +259,41 @@ describe("Cluster Management", () => {
     fireEvent.mouseOver(within(firstRow).getByText("2026.09.1"));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(`Recorded commit SHA: ${"a".repeat(40)}`);
     expect(screen.getByRole("tooltip")).toHaveTextContent("not freshly measured");
+  });
+
+  it("anchors soak countdown to server clock, ticks once per second and stops after clock failure", async () => {
+    const serverMS = Date.parse("2026-10-28T12:00:00Z");
+    let browserMS = serverMS + 6 * 60 * 60 * 1000;
+    let monotonic = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => browserMS);
+    vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    let poll, tick;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      if (delay === 1000) { tick = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.operations = [{ id: "op-soak", kind: "node_maintenance", state: "running", current_step: "minimum_ready_soak", attempt: 1, updated_at: serverMS / 1000 }];
+    state.events = [{ id: 1, operation_id: "op-soak", event_type: "operation_soak_started", created_at: serverMS / 1000,
+      details: { operation_id: "op-soak", attempt: 1, step: "minimum_ready_soak", run_id: "11111111-1111-4111-8111-111111111111", holder: "controller", phase: "ready",
+        started_at_ms: serverMS, deadline_at_ms: serverMS + 30_000, observed_at_ms: serverMS, valid_until_ms: serverMS + 15_000 } }];
+    let clockFailure = false;
+    vi.stubGlobal("fetch", vi.fn(async (path) => {
+      if (path === "/api/server/time" && clockFailure) throw new Error("clock unavailable");
+      return { ok: true, json: async () => path === "/api/server/cluster" ? { enabled: true, operations: state.operations, nodes: [] }
+        : path === "/api/server/time" ? { utc: new Date(serverMS).toISOString(), epoch: serverMS / 1000 } : { events: [], releases: [] } };
+    }));
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText(/Soak timing unavailable/)).toBeInTheDocument();
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Configured soak wait: 30s remaining")).toBeInTheDocument();
+    act(() => { browserMS += 1000; monotonic += 1000; tick(); });
+    expect(await screen.findByText("Configured soak wait: 29s remaining")).toBeInTheDocument();
+    clockFailure = true;
+    await act(async () => { poll(); });
+    expect(await screen.findByText(/Soak timing unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/\ds remaining/)).not.toBeInTheDocument();
   });
 
   it.each(["failed", "hanging"])("ages retained version records during %s polling", async (failure) => {
@@ -855,6 +952,51 @@ describe("Cluster Management", () => {
     expect(copied).toContain("wait_node_conformance");
     expect(copied).toContain("[redacted]");
     expect(copied).not.toContain("temporary-secret");
+  });
+
+  it.each(["failed", "hanging"])("retains timeline on %s event polling and recovers without duplicate milestones", async (failure) => {
+    let now = 1_787_770_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.operations = [{ id: "timeline-op", kind: "node_maintenance", state: "running", current_step: "inspect_health", updated_at: now / 1000 }];
+    state.events = [{ id: 40, operation_id: "timeline-op", event_type: "operation_started", created_at: now / 1000 - 1 }];
+    let recover = false;
+    let passed = { id: 41, operation_id: "timeline-op", event_type: "operation_step_passed", message: "Cluster operation step passed.", details: { step: "inspect_health", next_step: "minimum_ready_soak" }, created_at: now / 1000 + 20 };
+    const fetchMock = vi.fn((path) => {
+      if (String(path).includes("/events")) {
+        if (!recover) return failure === "failed" ? Promise.reject(new Error("history offline")) : new Promise(() => {});
+        return Promise.resolve({ ok: true, json: async () => ({ events: [state.events[0], passed, passed] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => path === "/api/server/cluster" ? { nodes: [], operations: state.operations } : { releases: [] } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("Current: In progress · Verify workload health")).toBeInTheDocument();
+    await act(async () => { now += 20_000; poll(); });
+    expect(await screen.findByText(/Updates delayed/)).toBeInTheDocument();
+    expect(screen.getByText("Operation started")).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Operation timeline" })).queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
+    recover = true;
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Current: In progress · Workload soak wait")).toBeInTheDocument();
+    expect(screen.queryByText(/Updates delayed/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Verify workload health — passed")).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=40", expect.anything());
+    // Same generic event message; renderer still updates the nested timeline.
+    passed = { ...passed, id: 42, details: { step: "minimum_ready_soak", next_step: "restore_roles" } };
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Current: In progress · Restore cluster roles")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=41", expect.anything());
+    view.unmount();
+    // Browser refresh rebuilds progress from durable loader history.
+    state.events = [state.events[0], passed];
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("Current: In progress · Restore cluster roles")).toBeInTheDocument();
   });
 
   it("requires paired safe removal and explicit external fencing for emergency removal", async () => {

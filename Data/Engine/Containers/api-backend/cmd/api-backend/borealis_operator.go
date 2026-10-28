@@ -1295,7 +1295,19 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 					"name":            "prepare-site-worker-logs",
 					"image":           imageRef,
 					"imagePullPolicy": "IfNotPresent",
-					"command":         []string{"sh", "-c"},
+					// Sequential init inherits the selected worker envelope. Leaving
+					// it unbounded prevents a finite whole-Pod memory budget.
+					"resources": map[string]any{
+						"requests": map[string]string{
+							"cpu":    profile.RequestCPU,
+							"memory": profile.RequestMemory,
+						},
+						"limits": map[string]string{
+							"cpu":    profile.LimitCPU,
+							"memory": profile.LimitMemory,
+						},
+					},
+					"command": []string{"sh", "-c"},
 					"args": []string{
 						fmt.Sprintf("mkdir -p %s && chown %d:%d %s && chmod 0775 %s", shellQuote(logRoot), runtimeUID, runtimeGID, shellQuote(logRoot), shellQuote(logRoot)),
 					},

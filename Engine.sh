@@ -2632,24 +2632,29 @@ CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
 PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS:-}"
 
-iptables -N "${CHAIN}" 2>/dev/null || true
-iptables -F "${CHAIN}"
-iptables -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A "${CHAIN}" -i lo -j ACCEPT
-iptables -A "${CHAIN}" -s 127.0.0.0/8 -j ACCEPT
-for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
-  iptables -A "${CHAIN}" -i cni+ -s "${cidr}" -j ACCEPT
-  iptables -A "${CHAIN}" -i flannel+ -s "${cidr}" -j ACCEPT
-done
-if [ -n "${PEER_CIDRS}" ]; then
-  old_ifs="${IFS}"
-  IFS=','
-  for cidr in ${PEER_CIDRS}; do
-    iptables -A "${CHAIN}" -s "${cidr}" -j ACCEPT
+# Restore changes only this chain in one commit. Existing jumps never observe
+# an empty allowlist during a retry; unrelated chains/rules remain untouched.
+case "${PORT}" in ''|*[!0-9]*) exit 1 ;; esac
+case "${CLUSTER_CIDR},${SERVICE_CIDR},${PEER_CIDRS}" in *[!0-9.,/]*) exit 1 ;; esac
+{
+  printf '*filter\n:%s - [0:0]\n' "${CHAIN}"
+  printf '%s\n' "-A ${CHAIN} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+  printf '%s\n' "-A ${CHAIN} -i lo -j ACCEPT"
+  printf '%s\n' "-A ${CHAIN} -s 127.0.0.0/8 -j ACCEPT"
+  for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
+    printf '%s\n' "-A ${CHAIN} -i cni+ -s ${cidr} -j ACCEPT"
+    printf '%s\n' "-A ${CHAIN} -i flannel+ -s ${cidr} -j ACCEPT"
   done
-  IFS="${old_ifs}"
-fi
-iptables -A "${CHAIN}" -j DROP
+  if [ -n "${PEER_CIDRS}" ]; then
+    old_ifs="${IFS}"
+    IFS=','
+    for cidr in ${PEER_CIDRS}; do
+      printf '%s\n' "-A ${CHAIN} -s ${cidr} -j ACCEPT"
+    done
+    IFS="${old_ifs}"
+  fi
+  printf '%s\n' "-A ${CHAIN} -j DROP" COMMIT
+} | iptables-restore --noflush --wait 5
 
 if ! iptables -C INPUT -p tcp --dport "${PORT}" -j "${CHAIN}" 2>/dev/null; then
   iptables -I INPUT 1 -p tcp --dport "${PORT}" -j "${CHAIN}"
@@ -4435,6 +4440,14 @@ $(k3s_timezone_env_entries)
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: BOREALIS_ENGINE_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BOREALIS_ENGINE_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             - name: BOREALIS_ENGINE_MANAGEMENT_IP
               valueFrom:
                 fieldRef:
@@ -8789,6 +8802,21 @@ profile_name_for_rank() {
 load_profile_tuning() {
   local vcpu="$1"
   local mem_mib="$2"
+  local inherited_rank="${3-}"
+  local inherited_memory_mib="${4-}"
+  local tuning_memory_mib="${mem_mib}"
+  # These arguments come from the controller-supplied private configuration,
+  # never a joining host's independent profile choice.
+  PROFILE_CLUSTER_SIZING_RANK=""
+  PROFILE_CLUSTER_SIZING_MEMORY_MIB=""
+  if [[ -n "${inherited_rank}" || -n "${inherited_memory_mib}" ]]; then
+    [[ "${inherited_rank}" =~ ^[0-3]$ && "${inherited_memory_mib}" =~ ^[1-9][0-9]{0,8}$ ]] \
+      || die "Cluster sizing contract is missing or invalid."
+    [[ "${vcpu}" =~ ^[1-9][0-9]{0,8}$ && "${mem_mib}" =~ ^[1-9][0-9]{0,8}$ ]] \
+      || die "Cluster sizing requires valid observed CPU and memory capacity."
+    (( $(profile_rank_for_memory "${inherited_memory_mib}") >= inherited_rank )) \
+      || die "Cluster sizing memory does not support its recorded profile."
+  fi
   local cpu_rank
   local memory_rank
   local profile_rank
@@ -8797,6 +8825,15 @@ load_profile_tuning() {
   profile_rank="${cpu_rank}"
   if (( memory_rank < profile_rank )); then
     profile_rank="${memory_rank}"
+  fi
+
+  if [[ -n "${inherited_rank}" ]]; then
+    (( cpu_rank >= inherited_rank && memory_rank >= inherited_rank )) \
+      || die "Joining host capacity is below the cluster sizing profile."
+    profile_rank="${inherited_rank}"
+    tuning_memory_mib="${inherited_memory_mib}"
+    PROFILE_CLUSTER_SIZING_RANK="${inherited_rank}"
+    PROFILE_CLUSTER_SIZING_MEMORY_MIB="${inherited_memory_mib}"
   fi
 
   PROFILE_RANK="${profile_rank}"
@@ -8815,8 +8852,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=24
       PROFILE_SITE_WORKER_CONCURRENCY=16
       PROFILE_POSTGRES_MAX_CONNECTIONS=180
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 12288 24576)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 32768 65536)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 12288 24576)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 32768 65536)"
       PROFILE_POSTGRES_WORK_MEM="16MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="1GB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=16
@@ -8834,8 +8871,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=20
       PROFILE_SITE_WORKER_CONCURRENCY=12
       PROFILE_POSTGRES_MAX_CONNECTIONS=150
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 8192 16384)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 20480 32768)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 8192 16384)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 20480 32768)"
       PROFILE_POSTGRES_WORK_MEM="8MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=12
@@ -8853,8 +8890,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=16
       PROFILE_SITE_WORKER_CONCURRENCY=8
       PROFILE_POSTGRES_MAX_CONNECTIONS=120
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 4096 8192)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 8192 16384)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 4096 8192)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 8192 16384)"
       PROFILE_POSTGRES_WORK_MEM="8MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
@@ -8872,8 +8909,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=10
       PROFILE_SITE_WORKER_CONCURRENCY=5
       PROFILE_POSTGRES_MAX_CONNECTIONS=80
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 1024 4096)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 4096 12288)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 1024 4096)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 4096 12288)"
       PROFILE_POSTGRES_WORK_MEM="4MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="256MB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
@@ -9004,6 +9041,10 @@ load_profile_tuning() {
       ;;
   esac
 
+  if [[ -n "${inherited_rank}" ]] && (( shared_mib + postgres_extra_mib > mem_mib )); then
+    die "Joining host cannot fit the inherited PostgreSQL memory cap."
+  fi
+
   PROFILE_POSTGRES_DB_MEMORY_LIMIT="$(format_docker_memory_mib "$((shared_mib + postgres_extra_mib))")"
   PROFILE_POSTGRES_SHARED_BUFFERS="$(format_pg_memory_mib "${shared_mib}")"
   PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE="$(format_pg_memory_mib "${cache_mib}")"
@@ -9013,6 +9054,23 @@ load_profile_tuning() {
   PROFILE_POSTGRES_CHECKPOINT_TIMEOUT="15min"
   PROFILE_POSTGRES_CHECKPOINT_COMPLETION_TARGET="0.9"
   PROFILE_POSTGRES_RANDOM_PAGE_COST="1.1"
+}
+
+# Use a retained contract after hydration/redeploy. Legacy clustered sources
+# establish the same contract from their existing profile fields once; fresh
+# standalone deployment retains automatic sizing. Do not read ambient override
+# variables for this authority-bound configuration.
+load_deployment_profile_tuning() {
+  local inherited_rank inherited_memory_mib
+  inherited_rank="$(read_env_value BOREALIS_CLUSTER_SIZING_RANK)"
+  inherited_memory_mib="$(read_env_value BOREALIS_CLUSTER_SIZING_MEMORY_MIB)"
+  if [[ -z "${inherited_rank}" && -z "${inherited_memory_mib}" ]] && cluster_mode_enabled; then
+    inherited_rank="$(read_env_value BOREALIS_DEPLOYMENT_PROFILE_RANK)"
+    inherited_memory_mib="$(read_env_value BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB)"
+    [[ -n "${inherited_rank}" && -n "${inherited_memory_mib}" ]] \
+      || die "Cluster preparation requires the source sizing configuration."
+  fi
+  load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)" "${inherited_rank}" "${inherited_memory_mib}"
 }
 
 write_compose_env() {
@@ -9105,7 +9163,7 @@ write_compose_env() {
   postgres_runtime_gid="$(resolve_postgres_runtime_gid)"
   validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_UID" "${postgres_runtime_uid}"
   validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_GID" "${postgres_runtime_gid}"
-  load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
+  load_deployment_profile_tuning
   webui_memory_limit="${PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT}"
   webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_CPU_LIMIT}"
   if [[ "${mode}" == "dev" ]]; then
@@ -9208,6 +9266,8 @@ BOREALIS_DEPLOYMENT_MEMORY_RANK=${PROFILE_MEMORY_RANK}
 BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
+BOREALIS_CLUSTER_SIZING_RANK=${PROFILE_CLUSTER_SIZING_RANK}
+BOREALIS_CLUSTER_SIZING_MEMORY_MIB=${PROFILE_CLUSTER_SIZING_MEMORY_MIB}
 
 BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE_API_BACKEND_MEMORY_LIMIT}}
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}

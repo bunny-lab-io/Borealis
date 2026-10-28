@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData } from "react-router-dom";
+import { useLoaderData, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -41,6 +41,9 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import ClusterSSHInspection from "./Cluster_SSH_Inspection.jsx";
+import ClusterSSHOnboarding, { validSSHInspectionID } from "./Cluster_SSH_Onboarding.jsx";
+import ClusterOperationTimeline, { buildClusterOperationTimeline, clusterSoakClock } from "./ClusterOperationTimeline.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -346,6 +349,7 @@ export async function loadClusterManagementPageData(request) {
     let releaseError = "";
     let events = [];
     let eventError = "";
+    let eventsReceivedAt = 0;
     await Promise.all([
       (async () => {
         try {
@@ -358,13 +362,14 @@ export async function loadClusterManagementPageData(request) {
       (async () => {
         try {
           events = await loadClusterEventHistory((path) => progress.fetchJson(path));
+          eventsReceivedAt = Date.now();
         } catch (error) {
           // Cluster controls remain usable if audit history is temporarily unavailable.
           eventError = getRouteErrorMessage(error, "Cluster event details could not be loaded.");
         }
       })(),
     ]);
-    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventError, initialError: "" };
+    return { cluster, snapshotReceivedAt, releases, releaseError, events, eventsReceivedAt, eventError, initialError: "" };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return { cluster: null, releases: { releases: [] }, events: [], initialError: getRouteErrorMessage(error, "Cluster state could not be loaded.") };
@@ -602,6 +607,7 @@ export function friendlyClusterOperationName(operation) {
     cluster_enable: "Cluster Mode Enabled",
     membership_scale: "Cluster Nodes Added",
     membership_admit: "Cluster Node Added",
+    ssh_onboarding: "SSH Host Inspection",
     postgres_switchover: "PostgreSQL Primary Switched",
     postgres_emergency_failover: "PostgreSQL Emergency Failover",
     hmr_start: "Cluster-Wide Node Isolation Enabled",
@@ -832,11 +838,7 @@ function OperationDetailsCell({ data }) {
   };
   return (
     <Box sx={{ display: "flex", alignItems: "center", width: "100%", minWidth: 0, gap: 1 }}>
-      <Tooltip title={data?.detailSummary || ""} placement="top-start" arrow>
-        <Typography component="span" sx={{ flex: 1, minWidth: 0, color: "#cbd5e1", fontSize: "inherit", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {data?.detailSummary || "No details recorded."}
-        </Typography>
-      </Tooltip>
+      <ClusterOperationTimeline timeline={data.timeline} stale={data.timelineStale} formatTimestamp={formatClusterTimestamp} />
       <Tooltip title={copied ? "Copied" : "Copy full event details"} arrow>
         <IconButton
           size="small"
@@ -919,10 +921,14 @@ export default function ClusterManagement() {
   const snapshotCompletedGeneration = useRef(0);
   const releaseCompletedGeneration = useRef(0);
   const eventsCompletedGeneration = useRef(0);
+  const clockCompletedGeneration = useRef(0);
+  const lastSoakClock = useRef(null);
+  const [soakClock, setSoakClock] = useState(null);
   const [releases, setReleases] = useState(loaderData?.releases?.releases || []);
   const [releaseError, setReleaseError] = useState(loaderData?.releaseError || "");
   const [events, setEvents] = useState(Array.isArray(loaderData?.events) ? loaderData.events : []);
   const [eventError, setEventError] = useState(loaderData?.eventError || "");
+  const [eventsReceivedAt, setEventsReceivedAt] = useState(() => Number(loaderData?.eventsReceivedAt) || 0);
   const eventCursorRef = useRef((Array.isArray(loaderData?.events) ? loaderData.events : []).reduce(
     (maximum, event) => Math.max(maximum, Number(event?.id || 0)),
     0
@@ -934,6 +940,13 @@ export default function ClusterManagement() {
   const [error, setError] = useState(loaderData?.initialError || "");
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(null);
+  const [sshInspectionOpen, setSSHInspectionOpen] = useState(false);
+  const [sshCohort, setSSHCohort] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sshOperationID = searchParams.get("inspection") || "";
+  const showSSHOperation = useCallback((id) => {
+    setSearchParams((current) => { const next = new URLSearchParams(current); next.set("inspection", id); return next; }, { replace: true });
+  }, [setSearchParams]);
   const [nodeActionMenu, setNodeActionMenu] = useState({ open: false, top: 0, left: 0, node: null });
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
@@ -977,6 +990,13 @@ export default function ClusterManagement() {
   const replacementRecovery = activeSize === 2 && desiredMembershipSize === 3 && cluster?.status === "Degraded Quorum";
   const canPrepareMembership = (activeSize === 1 || replacementRecovery) && applicationCapacityReady;
   const canExpandToThree = activeSize === 1;
+  const activeSSHOperation = operations.find((operation) => operation.id === cluster?.active_operation_id && operation.kind === "ssh_onboarding");
+  const snapshotFresh = !snapshotUnavailable && snapshotReceivedAt > 0 && versionClock >= snapshotReceivedAt && versionClock - snapshotReceivedAt <= CLUSTER_SNAPSHOT_STALE_MS;
+  const canInspectCohort = snapshotFresh && cluster?.enabled === true && !cluster?.active_operation_id && !busy
+    && isolationInactive && databaseRecoveryReady && applicationCapacityReady
+    && ((activeSize === 1 && [1, 3].includes(desiredMembershipSize) && cluster?.status === "Healthy") || replacementRecovery)
+    && nodes.filter((node) => node.membership_state === "Active").length === activeSize
+    && !admissions.some((admission) => ["Pending Quorum", "Approved", "Recovery Required"].includes(admission.state));
   const expansionSizes = useMemo(() => Number(cluster?.active_size || 1) === 1 ? [3] : [], [cluster?.active_size]);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
@@ -1039,21 +1059,37 @@ export default function ClusterManagement() {
             eventCursorRef.current
           );
         }
+        setEventsReceivedAt(Date.now());
         setEventError("");
       } catch (requestError) {
         if (!acceptCompletion(eventsCompletedGeneration)) return;
         setEventError(requestError?.message || "Cluster event details could not be loaded.");
       }
     })();
-    await Promise.all([snapshotRequest, releaseRequest, eventRequest]);
+    const clockRequest = (async () => {
+      const sentAt = performance.now();
+      try {
+        const response = await fetch("/api/server/time", { credentials: "include", cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error("Server clock unavailable.");
+        if (!acceptCompletion(clockCompletedGeneration)) return;
+        const clock = clusterSoakClock(payload, sentAt, performance.now(), lastSoakClock.current);
+        if (clock) lastSoakClock.current = clock;
+        setSoakClock(clock);
+      } catch {
+        if (acceptCompletion(clockCompletedGeneration)) setSoakClock(null);
+      }
+    })();
+    await Promise.all([snapshotRequest, releaseRequest, eventRequest, clockRequest]);
   }, [notify]);
 
   useEffect(() => {
+    const clockTimer = window.setInterval(() => setVersionClock(Date.now()), 1000);
     const timer = window.setInterval(() => {
       setVersionClock(Date.now());
       void refresh({ quiet: true });
     }, 5000);
-    return () => window.clearInterval(timer);
+    return () => { window.clearInterval(timer); window.clearInterval(clockTimer); };
   }, [refresh]);
 
   const mutate = useCallback(async (path, body) => {
@@ -1188,18 +1224,23 @@ export default function ClusterManagement() {
         const nodeLabel = clusterOperationNodeLabel(operation, nodes, admissions, linkedEvents);
         const details = buildClusterOperationDetails(operation, linkedEvents, nodeLabel);
         const timestamp = Number(operation?.created_at || operation?.started_at || operation?.updated_at || operation?.finished_at || 0);
+        const timelineStale = Boolean(eventError) || snapshotUnavailable || snapshotReceivedAt <= 0 || eventsReceivedAt <= 0
+          || versionClock < snapshotReceivedAt || versionClock < eventsReceivedAt
+          || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS || versionClock - eventsReceivedAt > CLUSTER_SNAPSHOT_STALE_MS;
         return {
           ...operation,
           operationLabel: friendlyClusterOperationName(operation),
           nodeLabel,
           detailSummary: details.summary,
           detailsText: details.copyText,
+          timeline: buildClusterOperationTimeline(operation, linkedEvents, nodes, admissions, { clock: soakClock, now: performance.now(), fresh: !timelineStale }),
+          timelineStale,
           timestamp,
           timestampLabel: formatClusterTimestamp(timestamp),
         };
       });
     },
-    [admissions, events, nodes, operations]
+    [admissions, events, nodes, operations, eventError, eventsReceivedAt, snapshotUnavailable, snapshotReceivedAt, versionClock, soakClock]
   );
 
   const closeNodeActionMenu = useCallback(() => {
@@ -1362,11 +1403,13 @@ export default function ClusterManagement() {
         const operation = params?.data || {};
         const state = String(operation?.state || "unknown").toLowerCase();
         const label = clusterOperationStatusLabel(operation);
-        const cancellable = operation.kind !== "membership_admit" && ["queued", "waiting"].includes(state);
+        const sshInspection = operation.kind === "ssh_onboarding" && validSSHInspectionID(operation.id);
+        const cancellable = !["ssh_onboarding", "membership_admit"].includes(operation.kind) && ["queued", "waiting"].includes(state);
         const retryable = operation.kind === "membership_admit" && !operation.superseded_by && ["failed", "cancelled"].includes(state);
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />
+            {sshInspection ? <Button size="small" onClick={(event) => { event.stopPropagation(); showSSHOperation(operation.id); }}>View inspection</Button> : null}
             {retryable ? (
               <Button size="small" disabled={busy} onClick={(event) => {
                 event.stopPropagation();
@@ -1414,6 +1457,10 @@ export default function ClusterManagement() {
       flex: 1,
       sortable: false,
       filter: true,
+      autoHeight: true,
+      wrapText: true,
+      // Nested timeline changes must refresh even when the latest message stays unchanged.
+      equals: () => false,
       cellRenderer: OperationDetailsCell,
     },
     {
@@ -1426,9 +1473,15 @@ export default function ClusterManagement() {
       comparator: (left, right) => Number(left || 0) - Number(right || 0),
       sort: "desc",
     },
-  ], [busy, mutate]);
+  ], [busy, mutate, showSSHOperation]);
 
-  const pageActions = useMemo(() => [{ id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() }], [refresh]);
+  const pageActions = useMemo(() => [
+    { id: "cluster-refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: () => void refresh() },
+    { id: "cluster-inspect-host", label: "Connect Joining Host", icon: <NodesIcon />, tone: "secondary", onClick: () => setSSHInspectionOpen(true) },
+    activeSSHOperation && validSSHInspectionID(activeSSHOperation.id)
+      ? { id: "cluster-inspect-cohort", label: "View Host Inspection", icon: <NodesIcon />, tone: "secondary", onClick: () => showSSHOperation(activeSSHOperation.id) }
+      : { id: "cluster-inspect-cohort", label: "Inspect Engine Hosts", icon: <NodesIcon />, tone: "secondary", disabled: !canInspectCohort, onClick: () => { if (canInspectCohort) setSSHCohort({ targetCount: replacementRecovery ? 1 : 2 }); } },
+  ], [activeSSHOperation, canInspectCohort, refresh, replacementRecovery, showSSHOperation]);
   useRoutePageChrome({
     title: "Cluster Management",
     subtitle: "Quorum, role ownership, isolation recovery, node maintenance, and rolling Engine release operations.",
@@ -1448,6 +1501,14 @@ export default function ClusterManagement() {
   const owner = (value) => operatorNodeLabel(value, nodes);
   return (
     <PageBodyFrame>
+      {sshInspectionOpen ? <ClusterSSHInspection onClose={() => setSSHInspectionOpen(false)} /> : null}
+      {sshCohort || sshOperationID ? <ClusterSSHOnboarding targetCount={sshCohort?.targetCount || 2} initialOperationID={sshOperationID}
+        onOperation={showSSHOperation} onChanged={() => void refresh({ quiet: true })}
+        onClose={() => {
+          setSSHCohort(null);
+          setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("inspection"); return next; }, { replace: true });
+          void refresh({ quiet: true });
+        }} /> : null}
       <Stack spacing={2.25} sx={{ p: { xs: 1.5, md: 2.5 }, flexGrow: 1, minHeight: 0 }}>
         {error ? <Alert severity="error" onClose={() => setError("")}>{error}</Alert> : null}
         {cluster?.status === "Degraded Quorum" ? <Alert severity="error">Cluster degraded. Failed node stays drained; retry or explicit recovery required.</Alert> : null}
@@ -1502,7 +1563,7 @@ export default function ClusterManagement() {
 
         {tab === "operations" ? (
           <Stack spacing={1.25} sx={{ minHeight: 320, height: "100%", flexGrow: 1 }}>
-            {eventError ? <Alert severity="warning">{eventError} Operation summaries remain available, but copied details may omit lifecycle events.</Alert> : null}
+            {eventError ? <Alert severity="warning">{eventError} Recorded progress remains available. Timelines and copied details may omit recent lifecycle events.</Alert> : null}
             <ClusterGrid
               rowData={operationRows}
               columnDefs={operationColumnDefs}

@@ -9,11 +9,12 @@
       ]
     },
     "core": {
-      "description": "Site-worker database bootstrap, edge settings, and secret configuration behavior.",
+      "description": "Site-worker database bootstrap, edge settings, secret configuration, and identity startup fence behavior.",
       "tests": [
         "Data/Engine/Unit_Tests/test_database_schema.py",
         "Data/Engine/Unit_Tests/test_edge_runtime.py",
-        "Data/Engine/Unit_Tests/test_engine_secret_config.py"
+        "Data/Engine/Unit_Tests/test_engine_secret_config.py",
+        "Data/Engine/Unit_Tests/test_identity_consumer.py"
       ]
     },
     "files": {

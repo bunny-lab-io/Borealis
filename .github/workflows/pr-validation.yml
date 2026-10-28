@@ -77,7 +77,7 @@ jobs:
       - name: Install policy tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          sudo apt-get install --yes shellcheck zstd
           python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
           GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -136,13 +136,18 @@ jobs:
     needs: changes
     if: needs.changes.outputs.engine_go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Allow setup, the bounded race suite, and runtime builds.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+      - name: Install isolated Netplan fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes netplan.io python3-netplan python3-yaml
       - run: ./Tests/run-engine-go.sh
         env:
           CGO_ENABLED: "1"
@@ -214,6 +219,9 @@ jobs:
           cache: pip
           cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
       - run: ./Tests/run-database-postgres.sh
+        env:
+          CGO_ENABLED: "1"
+          GOFLAGS: -race
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -228,7 +236,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.runtime_policy == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -242,6 +250,11 @@ jobs:
           cache-dependency-path: Tests/requirements-policy.txt
       - run: python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
       - run: ./Tests/run-k3s-policy.sh
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: Tests/tools/admissionpolicy/go.sum
+      - run: ./Tests/run-admission-policy.sh
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
@@ -263,7 +276,13 @@ jobs:
         with:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
-      - run: ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+      - name: Build selected images
+        run: |
+          if [[ "$BOREALIS_CI_FORCE_ALL" == "true" ]]; then
+            ./Tests/run-containers.sh --all
+          else
+            ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+          fi
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

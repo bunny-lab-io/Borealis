@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -132,6 +131,8 @@ type clusterControllerStepRunner interface {
 }
 
 type clusterController struct {
+	leaseTransport             leaseExecutor
+	leaseConfirmedAt           atomic.Pointer[time.Time]
 	store                      *postgresOperatorStore
 	runner                     clusterControllerStepRunner
 	holder                     string
@@ -160,6 +161,10 @@ func startClusterControllerLeaseGuard(parent context.Context, interval time.Dura
 }
 
 func startClusterControllerLeaseGuardWithGrace(parent context.Context, interval, renewalGrace time.Duration, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
+	return startOwnershipLeaseGuard(parent, interval, renewalGrace, time.Now(), errClusterControllerLeaseLost, renew)
+}
+
+func startOwnershipLeaseGuard(parent context.Context, interval, renewalGrace time.Duration, confirmedAt time.Time, lost error, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
 	if interval <= 0 {
 		interval = clusterControllerLeaseRenewInterval
 	}
@@ -167,39 +172,71 @@ func startClusterControllerLeaseGuardWithGrace(parent context.Context, interval,
 		renewalGrace = clusterControllerLeaseRenewalGrace
 	}
 	guardCtx, cancel := context.WithCancelCause(parent)
-	heartbeatCtx, heartbeatCancel := context.WithCancel(parent)
+	heartbeatCtx, heartbeatCancel := context.WithCancel(guardCtx)
 	guard := &clusterControllerLeaseGuard{
-		ctx:             guardCtx,
-		cancel:          cancel,
-		heartbeatCancel: heartbeatCancel,
-		done:            make(chan struct{}),
+		ctx: guardCtx, cancel: cancel, heartbeatCancel: heartbeatCancel, done: make(chan struct{}),
 	}
+	type renewal struct {
+		started time.Time
+		owned   bool
+		err     error
+	}
+	results := make(chan renewal)
+	// Only this goroutine calls the transport. The watchdog below never waits
+	// for renewal to return, including during shutdown or an unresponsive driver.
 	go func() {
-		defer close(guard.done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		lastRenewed := time.Now()
 		for {
 			select {
 			case <-heartbeatCtx.Done():
 				return
 			case <-ticker.C:
-				owned, err := renew(heartbeatCtx)
 				if heartbeatCtx.Err() != nil {
 					return
 				}
-				if err != nil {
-					if time.Since(lastRenewed) >= renewalGrace {
-						guard.fail(fmt.Errorf("%w: renewal failed throughout grace period: %v", errClusterControllerLeaseLost, err))
-						return
-					}
-					continue
-				}
-				if !owned {
-					guard.fail(errClusterControllerLeaseLost)
+				started := time.Now()
+				owned, err := renew(heartbeatCtx)
+				select {
+				case results <- renewal{started: started, owned: owned, err: err}:
+				case <-heartbeatCtx.Done():
 					return
 				}
-				lastRenewed = time.Now()
+			}
+		}
+	}()
+	go func() {
+		defer close(guard.done)
+		defer heartbeatCancel()
+		deadline := confirmedAt.Add(renewalGrace)
+		timer := time.NewTimer(time.Until(deadline))
+		defer timer.Stop()
+		for {
+			select {
+			case <-guardCtx.Done():
+				return
+			case <-timer.C:
+				guard.fail(fmt.Errorf("%w: renewal deadline exceeded", lost))
+				return
+			case result := <-results:
+				// A delayed result must not revive ownership after the watchdog's
+				// deadline, even when the result and timer become ready together.
+				if !time.Now().Before(deadline) || (result.err == nil && !result.owned) {
+					guard.fail(lost)
+					return
+				}
+				if result.err != nil {
+					continue
+				}
+				// Lease expiry is based on query start, not response arrival.
+				deadline = result.started.Add(renewalGrace)
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(time.Until(deadline))
 			}
 		}
 	}()
@@ -226,13 +263,14 @@ func (g *clusterControllerLeaseGuard) Err() error {
 }
 
 func (g *clusterControllerLeaseGuard) Close() {
+	g.cancel(context.Canceled)
 	g.heartbeatCancel()
 	<-g.done
-	g.cancel(context.Canceled)
 }
 
 type kubernetesClusterStepRunner struct {
 	kube                          *kubernetesAPIClient
+	controllerHolder              string
 	db                            *sql.DB
 	namespace                     string
 	actionImage                   string
@@ -241,6 +279,7 @@ type kubernetesClusterStepRunner struct {
 	clusterInitAuthorizationGrace time.Duration
 	postgresReplicationProbe      func(context.Context, string, int64) (bool, error)
 	persistRemovalFence           func(context.Context, clusterControllerOperation, clusterRemovalFence) error
+	recordOperationSoak           clusterOperationSoakRecorder
 }
 
 func clusterControllerMode() bool {
@@ -251,7 +290,7 @@ func clusterControllerMode() bool {
 }
 
 func runClusterController(ctx context.Context, cfg gatewayConfig) error {
-	operatorStore, closeStore, err := openOperatorStore(cfg)
+	operatorStore, closeStore, err := openControlOperatorStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -267,15 +306,18 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	hostname, _ := os.Hostname()
 	holder := firstText(strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_CONTROLLER_ID")), strings.TrimSpace(hostname)+"-"+newClusterUUID())
 	runner := &kubernetesClusterStepRunner{
-		kube:        kube,
-		db:          store.db,
-		namespace:   borealisOperatorNamespace(),
-		actionImage: strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
-		soak:        envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
+		controllerHolder: holder,
+		kube:             kube,
+		db:               store.db,
+		namespace:        borealisOperatorNamespace(),
+		actionImage:      strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
+		soak:             envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
-	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
+	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns, leaseTransport: &postgresLeaseTransport{dsn: normalizePostgresDriverURL(cfg)}}
 	runner.persistRemovalFence = controller.persistRemovalFence
+	runner.recordOperationSoak = controller.recordOperationSoak
 	healthServer := controller.healthServer()
+	healthServer.BaseContext = func(net.Listener) context.Context { return ctx }
 	healthExited := make(chan error, 1)
 	go func() {
 		err := healthServer.ListenAndServe()
@@ -301,7 +343,17 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	log.Printf("borealis-cluster-controller started holder=%s", holder)
+	nextSSHCleanup := time.Time{}
 	for {
+		if !time.Now().Before(nextSSHCleanup) {
+			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 5*time.Second)
+			cleanupErr := store.cleanupClusterSSHCredentials(cleanupCtx)
+			cleanupCancel()
+			if cleanupErr != nil {
+				log.Printf("cluster SSH credential cleanup unavailable")
+			}
+			nextSSHCleanup = time.Now().Add(30 * time.Second)
+		}
 		if err := controller.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("cluster controller reconcile failed: %v", err)
 		}
@@ -321,6 +373,21 @@ func clusterControllerEligible() bool {
 
 func (c *clusterController) healthServer() *http.Server {
 	mux := http.NewServeMux()
+	runner, _ := c.runner.(*kubernetesClusterStepRunner)
+	sourceBroker := newClusterSSHSourceBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHSourceBrokerPath, sourceBroker.handle)
+	joinBroker := newClusterSSHJoinBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHJoinBrokerPath, joinBroker.handle)
+	mux.HandleFunc("POST /internal/cluster/k3s-join-result", joinBroker.deliveries.handle)
+	identityBroker := newClusterExistingIdentityBroker(c, runner, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterExistingIdentityBrokerPath, identityBroker.handle)
+	custodyBroker := newClusterExistingIdentityCustodyBroker(c, runner, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterExistingIdentityCustodyPath, custodyBroker.handle)
+	prejoinCustodyBroker := newClusterSSHPrejoinCustodyBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHPrejoinCustodyPath, prejoinCustodyBroker.handle)
+	vipBroker := newClusterSSHVIPBroker(c.store, runner, c.holder, strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")))
+	mux.HandleFunc("POST "+clusterSSHVIPStartPath, vipBroker.start)
+	mux.HandleFunc("POST "+clusterSSHVIPCheckPath, vipBroker.check)
 	mux.HandleFunc("GET /startup", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
@@ -336,7 +403,8 @@ func (c *clusterController) healthServer() *http.Server {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	return &http.Server{Addr: net.JoinHostPort("0.0.0.0", envDefault("BOREALIS_CLUSTER_CONTROLLER_PORT", "8090")), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	return &http.Server{Addr: net.JoinHostPort("0.0.0.0", envDefault("BOREALIS_CLUSTER_CONTROLLER_PORT", "8090")), Handler: mux,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
 }
 
 func (c *clusterController) runOnce(ctx context.Context) error {
@@ -344,7 +412,15 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if err != nil || !owned {
 		return err
 	}
-	leaseGuard := startClusterControllerLeaseGuard(ctx, c.leaseRenewInterval, c.acquireLease)
+	confirmedAt := time.Now()
+	if confirmed := c.leaseConfirmedAt.Load(); confirmed != nil {
+		confirmedAt = *confirmed
+	}
+	leaseGuard := startOwnershipLeaseGuard(ctx, c.leaseRenewInterval, clusterControllerLeaseRenewalGrace, confirmedAt, errClusterControllerLeaseLost, c.acquireLease)
+	// Standbys may still hold idle operation-store sockets to the former
+	// primary. Discard those before beginning work under newly acquired lease.
+	c.store.db.SetMaxIdleConns(0)
+	c.store.db.SetMaxIdleConns(c.maxIdleConnections)
 	defer leaseGuard.Close()
 	runCtx := leaseGuard.Context()
 	if err := c.reconcileAdmissions(runCtx); err != nil {
@@ -366,6 +442,11 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		if recovered, recoveryErr := c.reconcileLostHMRNode(runCtx, runner); recoveryErr != nil || recovered {
 			return recoveryErr
 		}
+		if runner.kube != nil {
+			if handled, err := c.reconcileClusterExistingIdentityMutation(runCtx, runner.kube.getJSON); handled || err != nil {
+				return err
+			}
+		}
 	}
 	operation, ok, err := c.claimOperation(runCtx)
 	if err != nil || !ok {
@@ -384,6 +465,16 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if operation.Kind == "ssh_onboarding" {
+		var observe func(context.Context, string, any) error
+		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok && runner.kube != nil {
+			observe = runner.kube.getJSON
+		}
+		if textInSet(operation.CurrentStep, "preflight", clusterSSHInspectionOperationStep) {
+			return c.runSSHInspectionParent(runCtx, operation, observe)
+		}
+		return c.runSSHIdentityRecoveryParent(runCtx, operation, observe)
 	}
 	nodes, err := c.activeNodes(runCtx)
 	if err != nil {
@@ -976,6 +1067,8 @@ func clusterControllerStepTimeout(step string) time.Duration {
 func clusterOperationSteps(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerStep, error) {
 	base := []clusterControllerStep{{Name: "preflight"}}
 	switch operation.Kind {
+	case "ssh_onboarding":
+		return append(base, clusterControllerStep{Name: clusterSSHInspectionOperationStep}, clusterControllerStep{Name: clusterSSHQualificationStep}), nil
 	case "engine_update":
 		ordered, err := clusterUpdateNodes(operation, nodes)
 		if err != nil {
@@ -1175,8 +1268,9 @@ func clusterUpdateNodes(operation clusterControllerOperation, nodes []clusterCon
 }
 
 func clusterRemovalNodes(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerNode, error) {
-	ids := anySlice(operation.Payload["removal_node_ids"])
-	if len(ids) == 0 {
+	rawIDs, pinned := operation.Payload["removal_node_ids"]
+	ids := anySlice(rawIDs)
+	if !pinned {
 		for _, id := range clusterRemovalNodeIDs(operation.TargetNodeID, operation.Payload) {
 			ids = append(ids, id)
 		}
@@ -1203,14 +1297,9 @@ func clusterRemovalNodes(operation clusterControllerOperation, nodes []clusterCo
 		}
 		selected = append(selected, node)
 	}
-	sort.SliceStable(selected, func(i, j int) bool {
-		left := clusterNodeLeadershipWeight(selected[i])
-		right := clusterNodeLeadershipWeight(selected[j])
-		if left == right {
-			return selected[i].Name < selected[j].Name
-		}
-		return left < right
-	})
+	// Role ownership changes during removal. Re-sorting would move the current
+	// checkpoint across its sibling and could skip or replay that sibling's steps.
+	// Both the pinned cohort and legacy target fields already have stable order.
 	return selected, nil
 }
 
@@ -1257,14 +1346,14 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 	}
 	acquireCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	started := time.Now()
 	now := c.now().UTC().Unix()
 	expires := now + int64(clusterControllerLeaseTTL/time.Second)
-	conn, err := c.store.db.Conn(acquireCtx)
-	if err != nil {
-		return false, err
+	executor := c.leaseTransport
+	if executor == nil {
+		executor = c.store.db
 	}
-	defer conn.Close()
-	result, err := conn.ExecContext(acquireCtx, `
+	result, err := executor.ExecContext(acquireCtx, `
 		INSERT INTO engine.cluster_application_leases(name, holder, expires_at, updated_at)
 		VALUES($1,$2,$3,$4)
 		ON CONFLICT(name) DO UPDATE
@@ -1273,20 +1362,12 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 		   OR engine.cluster_application_leases.expires_at < EXCLUDED.updated_at
 	`, clusterControllerLeaseName, c.holder, expires, now)
 	if err != nil {
-		if acquireCtx.Err() != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-			// A primary transition can leave several old Service connections
-			// idle in this controller-only pool. Retiring only the connection
-			// selected above would spend one acquisition timeout per stale
-			// socket before a standby can acquire the controller lease.
-			c.store.db.SetMaxIdleConns(0)
-			if c.maxIdleConnections > 0 {
-				c.store.db.SetMaxIdleConns(c.maxIdleConnections)
-			}
-		}
 		return false, err
 	}
 	rows, err := result.RowsAffected()
+	if rows == 1 && err == nil {
+		c.leaseConfirmedAt.Store(&started)
+	}
 	return rows == 1, err
 }
 
@@ -1334,6 +1415,8 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		  FROM engine.cluster_operations o
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
+		   AND o.kind<>'ssh_identity_recovery'
+		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting')
 		 FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1575,8 +1658,14 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		status := completedClusterRecoveryStatus(operation, clusterStatus, activeSize, desiredSize, true, parseClusterJSON(configJSON))
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,updated_at=$2 WHERE id=1`, status, now)
 	case "node_remove":
-		for _, rawID := range anySlice(operation.Payload["removal_node_ids"]) {
-			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, cleanText(rawID))
+		// Finalize the same validated cohort used by planning and the native
+		// absence gate, including legacy payloads without the pinned ID field.
+		targets, targetErr := clusterRemovalNodes(operation, nodes)
+		if targetErr != nil {
+			return targetErr
+		}
+		for _, node := range targets {
+			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, node.ID)
 			if err != nil {
 				break
 			}
@@ -1727,6 +1816,7 @@ func truncateClusterError(value string, maximum int) string {
 }
 
 func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation clusterControllerOperation, step clusterControllerStep, nodes []clusterControllerNode) error {
+	ctx = r.soakContext(ctx, operation, step)
 	if operation.Kind == "hmr_start" {
 		return errClusterHMREntryDisabled
 	}
@@ -1835,6 +1925,11 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return r.scaleCNPG(ctx, int(coerceInt64(operation.Payload["target_size"])))
 	}
 	if step.Name == "scale_shared_artifact_membership" {
+		if plannedClusterRemoval(operation) {
+			if err := r.requireRemovalCohortAbsent(ctx, operation, nodes); err != nil {
+				return err
+			}
+		}
 		survivors, err := clusterRemovalSurvivorNodes(operation, nodes)
 		if err != nil {
 			return err
@@ -1860,6 +1955,11 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return r.nodeActionJob(ctx, phaseOperation, step, node, "RunSchemaPhase")
 	}
 	if step.Name == "verify_cluster" || step.Name == "verify_quorum" || step.Name == "verify_postgres" {
+		if step.Name == "verify_quorum" && plannedClusterRemoval(operation) {
+			if err := r.requireRemovalCohortAbsent(ctx, operation, nodes); err != nil {
+				return err
+			}
+		}
 		return r.verifyReadyEndpoints(ctx)
 	}
 	if step.Name == "apply_cluster_foundation" {
@@ -2015,12 +2115,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			if err := r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":start", NodeID: node.ID}, node, "InspectCandidateHealth"); err != nil {
 				return err
 			}
-			timer := time.NewTimer(r.soak)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
+			if err := r.waitOperationSoak(ctx, "candidate"); err != nil {
+				return err
 			}
 			return r.nodeActionJob(ctx, restore, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
 		}
@@ -2101,12 +2197,8 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 			if err := r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":start", NodeID: node.ID}, node, "InspectCandidateHealth"); err != nil {
 				return err
 			}
-			timer := time.NewTimer(r.soak)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
+			if err := r.waitOperationSoak(ctx, "candidate"); err != nil {
+				return err
 			}
 			return r.nodeActionJob(ctx, operation, clusterControllerStep{Name: step.Name + ":finish", NodeID: node.ID}, node, "InspectCandidateHealth")
 		case "promote_candidate":
@@ -2262,12 +2354,8 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 				return err
 			}
 			if action.soakAfter {
-				timer := time.NewTimer(r.soak)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return ctx.Err()
-				case <-timer.C:
+				if err := r.waitOperationSoak(ctx, action.stepName); err != nil {
+					return err
 				}
 				if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName + ":soak", NodeID: node.ID}, node, action.verb); err != nil {
 					return err
@@ -2283,12 +2371,8 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		if err := r.nodeActionJob(ctx, redeploy, healthStep, node, "InspectHealth"); err != nil {
 			return err
 		}
-		timer := time.NewTimer(r.soak)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := r.waitOperationSoak(ctx, healthStep.Name); err != nil {
+			return err
 		}
 		if err := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: healthStep.Name + ":soak", NodeID: node.ID}, node, "InspectHealth"); err != nil {
 			return err
@@ -2303,13 +2387,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 		activationErr := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health", NodeID: node.ID}, node, "InspectHealth")
 		if activationErr == nil {
-			timer = time.NewTimer(r.soak)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				activationErr = ctx.Err()
-			case <-timer.C:
-			}
+			activationErr = r.waitOperationSoak(ctx, "admit:"+node.ID+":role_health")
 		}
 		if activationErr == nil {
 			activationErr = r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health:soak", NodeID: node.ID}, node, "InspectHealth")
@@ -2765,7 +2843,7 @@ func (r *kubernetesClusterStepRunner) runtimeRoleOwners(ctx context.Context, db 
 			return nil, queryErr
 		}
 		if queryErr == nil {
-			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, holder)
+			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, schedulerLeadershipPod(holder))
 			if err != nil {
 				return nil, err
 			}
@@ -4348,12 +4426,8 @@ func (r *kubernetesClusterStepRunner) verifyMemberRemoved(ctx context.Context, o
 	if err := r.retireMemberWorkloads(ctx, targetName); err != nil {
 		return err
 	}
-	timer := time.NewTimer(r.soak)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
+	if err := r.waitOperationSoak(ctx, "member_removal"); err != nil {
+		return err
 	}
 	healthy, err := r.memberRemovalStateHealthy(ctx, operation, targetName, nodes)
 	if err != nil {
@@ -4423,12 +4497,8 @@ func (r *kubernetesClusterStepRunner) minimumReadySoak(ctx context.Context, node
 	if err := r.verifyReadyEndpointsForNode(ctx, nodeName); err != nil {
 		return err
 	}
-	timer := time.NewTimer(r.soak)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
+	if err := r.waitOperationSoak(ctx, "ready:"+nodeName); err != nil {
+		return err
 	}
 	return r.verifyReadyEndpointsForNode(ctx, nodeName)
 }

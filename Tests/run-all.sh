@@ -23,6 +23,7 @@ run_lane engine-go "${REPO_ROOT}/Tests/run-engine-go.sh"
 run_lane engine-python "${REPO_ROOT}/Tests/run-engine-python.sh"
 run_lane webui "${REPO_ROOT}/Tests/run-webui.sh"
 run_lane k3s-policy "${REPO_ROOT}/Tests/run-k3s-policy.sh"
+run_lane admission-policy "${REPO_ROOT}/Tests/run-admission-policy.sh"
 run_lane migration "${REPO_ROOT}/Tests/run-migration-helpers.sh"
 run_lane database "${REPO_ROOT}/Tests/run-database-postgres.sh"
 run_lane containers "${REPO_ROOT}/Tests/run-containers.sh" --all

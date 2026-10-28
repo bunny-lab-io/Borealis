@@ -44,6 +44,16 @@ If the configured repository is unavailable or excludes `wireguard-tools`, the W
 
 Linux WireGuard health requires a recent peer handshake; an active interface alone is not Healthy. Agent tries Engine FQDN endpoint first. When that interface produces no handshake, Agent tries private Engine host endpoint supplied by authenticated tunnel session. This supports Engine-hosted devices that cannot reach UDP forwarding through their own public address. Agent restores primary configuration and reports recovery error if neither path handshakes.
 
+## Troubleshoot Agent Token Rejections
+
+A site-worker `invalid_token` entry means that one socket presented an access token the current Engine identity could not verify. It does not prove every enrolled Agent is failing. Compare the GUID embedded in that entry's Agent ID with **Devices**, then check the device's latest heartbeat and **System Heartbeat** role.
+
+- A current device whose heartbeat advances and whose Engine Socket.IO control channel is connected is authenticated. Investigate any remaining script failure separately because Agent JWT trust and script-signing trust use different keys.
+- A rejected GUID absent from **Devices** is an orphaned or retired Agent installation, not a connected managed device. Stop or uninstall that old installation, or intentionally deploy it again with a new enrollment code. Do not rotate Engine identity or reset current devices to silence its retries.
+- A current device with a stale heartbeat needs its local `Logs/Agent/agent.log` checked for token-refresh response, clock, Engine URL, and certificate errors. Preserve `agent.json`; use the normal redeploy/enrollment path instead of editing token fields by hand.
+
+After shared-identity repair, an enrolled Agent with a valid refresh token should receive an access token signed by the retained Engine identity on its next refresh. Confirm both a new refresh and a connected socket before treating recovery as complete.
+
 ## Agent CLI Flags
 
 Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Agent` command-line arguments, including install and re-deploy inputs, metadata field get/set, update checks, service repair/removal, watchdog checks, validation, and internal helper modes.
@@ -82,6 +92,13 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
 - Windows installed runtime is `C:\Borealis\Agent.exe` plus `C:\Borealis\agent.json`, managed by the native `BorealisAgent` Windows service. Fresh bootstrap from an operator-downloaded `Agent.exe` stages the runtime copy. Re-deploy with install inputs stops Borealis-managed services, scheduled tasks, and processes, preserves existing `agent.json` identity/trust state, replaces `Agent.exe`, and restarts the Agent service. Providing a new enrollment code clears cached Agent auth tokens and remote-ops route state so cross-Engine or cross-site re-enrollment cannot keep using stale socket routing. If the old binary is still locked, bootstrap leaves a verified `.redeploy` binary and starts a deferred replacement loop that stops the old process, moves the new binary into place, and restarts the service.
     - Linux installed runtime is a single compiled `Agent` binary managed by systemd. Fresh execution from an operator-downloaded binary with both `--server-url` and `--site-enrollment-code` self-stages into `/opt/Borealis/Agent/Agent`, writes or updates `agent.json`, and installs the service plus updater and watchdog timers. Re-deploy with install inputs stops Borealis-managed systemd units and the WireGuard interface, preserves existing `agent.json` identity/trust state, replaces the runtime binary, and restarts the Agent service.
     - Go Agent updates use current Engine artifact and local `--update-check` path.
+
+    ### Token-rejection debug flow
+
+    - Site-worker `invalid_token` is emitted before database device lookup when JWT signature decoding fails. Treat the presented Agent ID as untrusted diagnostic text; normalize its GUID and compare it with `engine.devices` and `engine.refresh_tokens` before assigning current-device impact.
+    - A current device needs fresh `devices.last_seen`, an active unrevoked refresh-token row with advancing `last_used_at`, and `system:system_heartbeat` details showing `socket_state=connected`. These independent observations distinguish a working managed Agent from repeated connections by an old installation no longer represented in Engine state.
+    - Shared Engine identity repair preserves refresh-token rows. Current Go Agents proactively refresh within one minute of access-token expiry and persist the replacement token atomically. An Agent absent from both tables cannot recover through token refresh; use explicit enrollment or remove that retired runtime.
+    - Script-signing trust remains separate. Successful JWT refresh and socket registration do not prove the Agent's persisted `trust.server_signing_key_spki_b64` accepts current Engine script signatures. Verify one benign signed operation before completing shared-identity qualification.
 
     ### Service modes and context
     - Service mode is used for elevated tasks (Windows service runtime, support scheduled tasks, VPN, system scripts).

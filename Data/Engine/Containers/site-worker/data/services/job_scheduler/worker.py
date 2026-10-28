@@ -39,7 +39,8 @@ from typing import Any, Dict, Mapping, Optional
 import requests
 
 from Data.Engine import database
-from Data.Engine.config import initialise_engine_logger, load_runtime_config
+from Data.Engine.config import ENGINE_SECRET_PATH, initialise_engine_logger, load_runtime_config
+from Data.Engine.identity_consumer import acquire_identity_consumer
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.ansible import EngineAnsibleRunner
 
@@ -56,6 +57,10 @@ from .security import INTERNAL_TOKEN_HEADER, internal_token
 from .worker_socket import SiteWorkerSocketRuntime
 
 LANE_AGENT_SOCKETS = "agent_sockets"
+
+# No close at main() return: background key users may still be alive. Kernel
+# process teardown releases the shared directory lock, including on SIGKILL.
+_identity_consumer_fd: Optional[int] = None
 
 _TRANSIENT_HEARTBEAT_DB_ERRORS = (
     "deadlock detected",
@@ -345,6 +350,9 @@ def _lanes_with_agent_sockets(lanes: list[str], connected_device_count: int, onl
 
 
 def main() -> None:
+    global _identity_consumer_fd
+    secret_path = os.path.expanduser(os.environ.get("BOREALIS_ENGINE_SECRET_PATH") or str(ENGINE_SECRET_PATH))
+    _identity_consumer_fd = acquire_identity_consumer(os.path.dirname(os.path.abspath(secret_path)))
     settings = load_runtime_config()
     logger = initialise_engine_logger(settings, name="borealis.site_worker")
     secret = str(settings.secret_key or "")

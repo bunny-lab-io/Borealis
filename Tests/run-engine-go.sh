@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=Tests/lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
-TIMEOUT_SECONDS="${BOREALIS_ENGINE_GO_TIMEOUT_SECONDS:-900}"
+TIMEOUT_SECONDS="${BOREALIS_ENGINE_GO_TIMEOUT_SECONDS:-1800}"
 RESULT_DIR="$(result_dir_for engine-go)"
 MODULE_RELATIVE="Data/Engine/Containers/api-backend"
 MODULE_ROOT="${REPO_ROOT}/${MODULE_RELATIVE}"
@@ -26,14 +26,18 @@ run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" ve
   >"${RESULT_DIR}/engine-go-vet.log" 2>&1
 
 printf '==> Engine Go tests\n'
-TEST_FLAGS=(-count=1)
+# The complete API race suite exceeds Go's implicit 10-minute package limit.
+# Keep package timeout inside the command budget so failures retain Go stacks.
+# JSON streams across parallel packages; verbose text alone can stay buffered
+# until a package exits, losing unfinished-test evidence on command timeout.
+TEST_FLAGS=(-json -count=1 -timeout=20m)
 case "${BOREALIS_ENGINE_GO_RACE:-0}" in
   0) ;;
   1) TEST_FLAGS+=(-race) ;;
   *) printf 'ENGINE GO FAIL: BOREALIS_ENGINE_GO_RACE must be 0 or 1.\n' >&2; exit 2 ;;
 esac
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" test "${TEST_FLAGS[@]}" ./... \
-  >"${RESULT_DIR}/engine-go-test.log" 2>&1
+  >"${RESULT_DIR}/engine-go-results.jsonl" 2>"${RESULT_DIR}/engine-go-stderr.log"
 
 printf '==> Engine Go runtime binary builds\n'
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \

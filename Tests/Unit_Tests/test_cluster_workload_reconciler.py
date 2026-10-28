@@ -33,6 +33,18 @@ def patched_generic_deployment(container_name: str, image: str, revision: str) -
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_api_identity_custody_uses_actual_pod_and_node(self) -> None:
+        fields = {"BOREALIS_ENGINE_NODE_NAME": "spec.nodeName", "BOREALIS_ENGINE_POD_NAME": "metadata.name", "BOREALIS_ENGINE_POD_UID": "metadata.uid"}
+        for candidate in (False, True):
+            source = {"metadata": {}, "spec": {"template": {"metadata": {}, "spec": {"containers": [{"name": "api-backend", "startupProbe": {"periodSeconds": 2, "failureThreshold": 30}, "livenessProbe": {"initialDelaySeconds": 0}, "env": [{"name": name, "value": "copied-source"} for name in fields for _ in range(2)]}]}}}}
+            with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(MODULE, "cluster_virtual_ip", return_value="192.168.3.248"), mock.patch.object(MODULE, "kubectl", return_value="") as kubectl:
+                MODULE.reconcile_one("api-backend", "api-backend", "engine-2", "a" * 40, {"api-backend": "borealis/api-backend@sha256:" + "b" * 64}, candidate)
+            manifest = json.loads(next(call.kwargs["stdin"] for call in kubectl.call_args_list if "apply" in call.args))
+            env = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            for name, field in fields.items():
+                self.assertEqual([entry for entry in env if entry["name"] == name], [{"name": name, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": field}}}])
+            self.assertEqual(next(entry["value"] for entry in env if entry["name"] == "BOREALIS_API_BACKGROUND_LOOPS"), "0" if candidate else "1")
+
     def test_aegis_trust_bootstrap_preserves_existing_policy(self) -> None:
         with mock.patch.object(MODULE, "kubectl", return_value='{"data":{"ca-bundle.crt":"old+new"}}') as kubectl:
             MODULE.ensure_aegis_trust_bundle()
