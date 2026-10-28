@@ -474,7 +474,11 @@ The Database view reports configured and Ready CloudNativePG instances separatel
 
 Cluster Events preserves failed records for audit and translates internal operation kinds into operator-facing names such as `Maintenance Mode Enabled`, `Cluster-Wide Node Isolation Disabled`, and `Node Pair Removed`.
 
-Each row identifies affected node hostnames, summarizes the latest lifecycle message or failure, and provides a copy control for full troubleshooting text containing operation metadata, raw step names, error context, redacted payload, and linked lifecycle events.
+Each row identifies affected node hostnames and shows a timeline in **Details**. Passed steps, failed steps, retry requests, and completion retain their recorded timestamps. The current step animates while the operation is running. Queued, waiting, cancelled, and superseded operations remain still.
+
+Use **Show earlier events** to expand an operation's history. The most recent three events and current status remain visible by default. The copy control includes the complete loaded history, operation metadata, raw step names, error context, and redacted payload, including events hidden by the collapsed timeline.
+
+Refresh the browser to reload recorded progress. If updates fail or stall, the timeline retains its last records, displays **Updates delayed**, and pauses animation until both operation state and event history refresh. Health-soak steps show their recorded state; countdowns are unavailable until the Engine supplies authoritative timing.
 
 Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
 
@@ -780,9 +784,36 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 * Kubernetes VolumeSnapshot data sources are namespace-scoped.  Keep the validation cluster in the same namespace with unique Services and PVCs, verify restored data without changing production, and remove only the validation resources after recording evidence.
 * The Aegis key remains memory-only.  An all-cold restart requires operator unlock.
 
+### Scheduler Recovery
+
+Scheduler ownership expires independently of script, Ansible, patch-install, and Agent-maintenance execution limits. After a scheduler loss, healthy ownership can recover queued work without waiting for a long-running job's execution timeout.
+
+If a run reports `execution outcome unknown`, inspect its retained activity, workflow, or Agent operation result before retrying manually. Borealis does not automatically resend work whose dispatch may already have reached its destination. The queue records the uncertainty while the remote execution keeps its existing result and timeout path.
+
+Before upgrading from a release without this ownership protocol, let active work finish and drain the previous scheduler. A recovered legacy running claim has no dispatch evidence and remains unknown instead of being replayed.
+
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### MVP qualification evidence contract
+
+    [Q01 issue #480](https://github.com/bunny-lab-io/Borealis/issues/480) and [PR #482](https://github.com/bunny-lab-io/Borealis/pull/482) own final runtime qualification. [Tracker #530](https://github.com/bunny-lab-io/Borealis/issues/530) owns current implementation status, approvals and missing evidence. Prepare this matrix before requesting runtime authorization; do not turn portable fixture results or an existing three-node lab into a completed runtime row.
+
+    Bind every run to one integrated immutable Engine release, full source SHA, release-manifest digest, exact K3s version, reviewed profile/tuning and explicit target host identities. Record applicable approval, advance disruption notice, starting topology, operation/attempt, controller holder, observation interval, expected result, actual result and retained evidence location. Changed candidate or relevant configuration invalidates dependent evidence. Missing, stale, failed and unexecuted observations remain blockers.
+
+    | Sequence | Required evidence | Dependency and retained recovery state |
+    | --- | --- | --- |
+    | Candidate | Required CI and complete mandatory PostgreSQL inventory for the exact candidate; release and loaded-binary identity | Integrate applicable M1-M7 changes and obtain required review/merge/release approvals before final Q01 execution. |
+    | Supported capacity | Pre-admission expansion and replacement measurements for the reviewed profile; aggregate worker limits, infrastructure, reserves, overlap, bytes and inodes | Hardware selection bands and declared application subtotals cannot supply missing capacity evidence. Preserve measured inventories and calculated provisioning. |
+    | Fresh source | Fresh immutable Engine deployment, exact-version probe conformance and Healthy 1/1 | Use only authorized remote lab nodes; development workstation is never a runtime target. |
+    | Paired preparation | UI inspection and explicit confirmation of two clean targets; complete artifacts, eleven native journal receipts and independently observed whole-cohort identities | Original controller, credential generations, source custody and journals remain bound. Native completion cannot replace approval or admission proof. |
+    | Paired admission | Original-controller transition, Healthy 3/3, CNPG quorum, expected placement, storage replicas and continuous required health soak | Both targets must satisfy their applicable phase gates. Retain exact Node/voter identities, shared-identity evidence and all recovery journals. |
+    | Public and Agent paths | FQDN authentication/session continuity, Aegis propagation, signed Agent work, ingress VIP and WireGuard movement during continuous traffic | Record actual endpoint, Agent and operation identities; an unrelated healthy endpoint does not prove the tested path. Preserve at least one unlocked Aegis holder where required. |
+    | Interrupted lifecycle | Worker/controller restart, credential expiry, safe cancellation, uncertain writes, partial pair, externally fenced replacement and paired shrink | Prove no blind replay, sibling admission or skipped removal. Retain reservations/fences until exact recovery or absence evidence permits their release. |
+    | Recovery | H03 partition/leader-loss fencing and recovery before heal; H04 five-minute recovery budget and five uninterrupted healthy minutes before controlled return | H03 integration and revised live gate remain separate. Never clear operator maintenance, remove an unfenced unreachable member or repeat uncertain non-idempotent work. |
+    | Update and restore | Rolling Engine/K3s update success and failure, CNPG failover/quorum, snapshot restore and continuous API/UI/Agent traffic | Retain pre-change snapshot, immutable update order, failed-node drain and restoration procedure. Qualify exact supported stable K3s release. |
+    | Visibility and closure | Durable event/status recovery after refresh, accurate failures and server-derived soak timing; all required matrix outcomes and accepted deferrals | Record owner and explicit acceptance for each deferral. Final merge/release remains an operator decision; engineering percentages provide no readiness proof. |
 
     ### Completing interrupted account creation
 
@@ -816,10 +847,32 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
     ### H03 qualification after clustered HMR disablement
 
     Operator-approved sequencing under #493 retains exact-release #492 restoration before U01 deployment. H03 then qualifies production controller/scheduler partition recovery on its exact immutable candidate, including recovery before heal, stale-owner/generation rejection, target fencing, no duplicate non-idempotent dispatch and healthy3/3 restoration. This explicitly replaces the original HMR-entry setup in #466; it does not infer H03 recovery from pre-U01 restoration or portable tests. Keep PR499 unmerged until its revised live gate passes; Q01 still qualifies the final complete release.
+    ### Ownership transport and task recovery
+
+    - `postgres_lease_transport.go` gives each lease request its own lib/pq connection and directly closable sockets, including cancellation traffic. Controller and scheduler acquisition/renewal have five-second deadlines. A separate watchdog cancels ownership after fifteen seconds without confirmation even if renewal never returns; successful confirmation starts its budget at query start. Leadership TTL remains twenty seconds.
+    - `postgres_control_connector.go` applies direct socket cancellation to controller operations and a separate scheduler ownership pool. Scheduler fleet snapshots, ordinary scheduling reads/writes, and health/bootstrap use the ordinary store; they do not inherit the five-second ownership transaction limit. Transaction and row-stream watchers live until commit/rollback or close. Both lease and control connectors enforce PostgreSQL 17 `transaction_timeout=5000` per connection: the server releases locks even when the partition also drops TCP disconnects. See [PostgreSQL transaction timeout](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-TRANSACTION-TIMEOUT). Ordinary API/auth pools retain their connection policy.
+    - Scheduler holder is Pod name plus a fresh UUID per leadership acquisition. `scheduler_ownership.go` locks live leadership before the work row and requires holder plus `attempt_count` generation for claims, heartbeats, dispatch admission, status writes, and completion. Context cancellation propagates into task network calls. Work TTL is sixty seconds with ten-second heartbeat and forty-five-second independent expiry; script and patch execution limits are separate.
+    - `scheduler_execution_ownership.go` stores `ownership_version`, per-component execution records, and `recovery_state` in existing `job_scheduler_work_items.payload_json`. Stable identity is `work:<id>:<component-key>`. Prepared activity creation and ledger persistence share one short transaction; all remote calls happen after the connection returns to the pool.
+    - Dispatch admission commits `dispatching` under current ownership before sending. Acknowledgement or a matching terminal activity result (including Failed) settles dispatch without changing the actual run/activity status or diagnostics; exactly one workflow run with the matching execution identity establishes accepted execution when Running or terminal (Success, Skipped, Warning, Failed or Timed Out). An unacknowledged Pending run retains uncertainty because the API saves it before executor launch and a crash can leave it without an executor. Explicitly acknowledged dispatch remains accepted even while its workflow is Pending. Missing, unrelated or duplicate workflow identities retain uncertainty; count all matching rows before checking status so a duplicate Pending row cannot hide ambiguity. A later claim skips acknowledged components and can send components still proved unsent. Synchronous patch results persist terminal run/activity status and returned output in the same transaction as dispatch acknowledgement. Agent maintenance similarly commits response-derived Running, coalesced Skipped or explicit Failed status and diagnostic output with its acknowledgement, so takeover cannot mislabel a coalesced or rejected request as timed out. An actual Agent status=error response is definitive rejection for maintenance and patch dispatch; a worker error label without an Agent response or a missing/transport-lost reply remains uncertain. A terminal Agent callback that commits before acceptance is acknowledged keeps its existing result instead of returning to Running. A failed result write rolls back acknowledgement, so takeover cannot skip a result that was never saved. A send admitted before ownership loss may finish remotely; no remote exactly-once guarantee is implied.
+    - An unacknowledged send becomes queue failure with `recovery_state=outcome_unknown`, retained identity, and explicit error. Run/activity status and execution deadlines remain intact for actual results. Legacy running claims lack this evidence and also fail closed. Never clear the ledger to manufacture retry eligibility.
+    - Recovery reclaims the previous leadership incarnation's work immediately after healthy takeover, or an expired sixty-second work claim. The five-minute recovery target assumes available PostgreSQL, healthy replacement scheduler, and downstream capacity; portable tests do not qualify live failover timing.
+    - Required PostgreSQL tests cover established-socket blackhole/cancellation/healing, cancellation of idle transactions holding locks while TCP disconnects are also dropped, stale ownership writes, owner death, partial-component replay, workflow identity, and uncertainty without false execution failure. Retain #466 live partition acceptance and #493 exact-release qualification separately.
 
     ### Clustered HMR entry boundary
 
     Public API, store creation/retry, controller dispatch and step runner reject `hmr_start`. Legacy queued/interrupted entry fails before Kubernetes intent and becomes `restore_failed` with its target retained. Failed HMR exit may queue through the generic quorum failure status; existing controller membership, health and fencing checks still apply. CLI dev commands require confirmed standalone membership; lookup failure never means standalone. WebUI retains recovery controls only. Canonical procedures, test/UI checks and exact-release #492 restoration gate live in [WebUI HMR Development](webui-hmr-development.md).
+
+    ### Cluster operation timeline
+
+    - `src/Admin/ClusterOperationTimeline.jsx` builds the timeline from existing operation snapshots and linked events; `Cluster_Management.jsx` owns fetching, cursor pagination, copy diagnostics, and AG Grid integration. Paths are relative to `Data/Engine/Containers/webui-frontend/data/web-interface/`.
+    - Events are isolated by operation ID, deduplicated by event ID, and ordered by numeric event ID. Only `operation_step_passed` proves a passed step. Its `details.step` labels the milestone and `details.next_step` identifies subsequent recorded work. Node/admission IDs resolve through the current inventory; missing identities remain visible as IDs.
+    - Retry events retain earlier failures and use `details.attempt` and `details.resume_step`. The store emits cancellation as `operation_cancel`; historical `operation_cancelled` is also recognized. Unknown event types remain visible with their recorded message and timestamp.
+    - Snapshot and event fetches complete independently. Newer transitions can advance the displayed current state before the snapshot catches up. A newer snapshot or retry attempt takes precedence over old events; terminal snapshots win equal-second timestamps. No future step plan, percentage, step-start time, or soak deadline is fabricated. Current timestamps mean last recorded status, not elapsed step duration.
+    - Snapshot and event receipt times age independently at the five-second poll interval. A failed fetch or receipt older than 15 seconds pauses the current indicator and labels retained progress as delayed. Existing per-stream completion generations reject superseded responses. Successful reconnect resumes from the retained event cursor; loader hydration rebuilds history after browser refresh.
+    - Details uses AG Grid auto-height and refreshes when nested timeline data changes even if the summary string stays unchanged. Other grids retain fixed rows. Histories show the latest three events by default; expansion keeps all loaded events in a scrollable area. Reduced-motion preference disables animation; labels and icons communicate status without relying on color.
+    - Portable coverage: `Unit_Tests/Admin/ClusterOperationTimeline.test.jsx` and `Unit_Tests/Admin/Cluster_Management.test.jsx`; run `Tests/run-webui.sh` from repository root. No API, schema, input field, or third-party dependency changes are required.
+    - Browser verification after an approved deployment: open `/cluster-management?tab=operations`, inspect running and failed/retried operations, expand history, copy diagnostics, and refresh. Block only the events request and verify delayed status with retained milestones; restore access and verify new steps without duplicate rows. Check narrow columns, keyboard expansion/copy, and reduced-motion preference.
+    - U03/#467 follow-on remains authoritative soak timing and integration with H04 maintenance and S01 onboarding event contracts. This implementation covers existing operation records.
 
     ### Engine release identity
 
@@ -1525,13 +1578,13 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - WebUI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Cluster_Management.jsx`
 - Enable dialog uses shared glass overlay, input, and pill-action tokens from `Data/Engine/Containers/webui-frontend/data/web-interface/src/DialogStyles.jsx`.  It contains one `cluster_vip` field and no typed confirmation.
 - WebUI tab keys are `overview`, `nodes`, `database`, `operations`, and `maintenance` through `?tab=` URL state.  `operations` appears as Cluster Events, and Engine release controls live under Maintenance.
-- Nodes and Cluster Events use Quartz AG Grid with 44px rows and headers, 20-row default pagination, and `20`, `50`, and `100` selectors.
+- Nodes and Cluster Events use Quartz AG Grid with 44px headers, 20-row default pagination, and `20`, `50`, and `100` selectors. Nodes retain 44px rows; Cluster Events rows grow to fit their Details timeline.
 - Nodes derives Database text from `leaders.postgres_primary` with `roles.postgres_primary` fallback plus aggregate CloudNativePG readiness.
 - Primary displays linked `Active`.
 - Non-primary active members display `Replica Healthy` only when configured instances equal active membership, every configured instance is Ready, and `fully_ready` is not false.  Otherwise replicas display `Not Ready`.
 - Inactive historical rows display `Not Active`.
 - Aggregate readiness cannot identify one failed replica, so degraded state marks every passive replica `Not Ready`.
-- Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution and copied diagnostics.
+- Cluster Events incrementally consumes cursor-paginated `/api/server/cluster/events` records and joins them to operation rows for hostname resolution, lifecycle timelines, and copied diagnostics.
 - Node row actions use shared `Grid_Row_Context_Menu_Button.jsx` and `Row_Context_Menu.jsx` components.
 - Release compatibility: `Data/Engine/release-manifest.json`
 - Initial cluster baseline: `Engine.sh` prefers an exact dotted-numeric tag.  A clean untagged checkout emits `dev-<FIRST_12_COMMIT_CHARACTERS>`; API, controller, CRD, and node manager require the identity to match the full SHA.  A dirty checkout emits no baseline.
@@ -1633,8 +1686,9 @@ sudo k3s kubectl -n borealis create configmap borealis-aegis-trust \
 - Long database bootstrap, node redeploy, or Kubernetes reconciliation never makes liveness depend on controller-loop progress or external dependencies.
 - The cluster controller renews its 20-second PostgreSQL ownership lease every five seconds through an independent heartbeat while operation steps run.
 - Each acquisition has a five-second deadline.
-- Timeout evicts the selected driver connection plus every remaining idle connection in the controller-only pool.
-- This bounds reusable stale sockets after the driver returns but cannot interrupt an active `lib/pq` socket read blackholed during CloudNativePG primary failover.
+- Lease requests use dedicated PostgreSQL connections. Cancellation directly closes each request's active socket and any `lib/pq` cancellation socket, including blackholed authentication or query reads; ordinary application pools keep their existing transport.
+- Lease expiry has its own watchdog goroutine. A blocked renewal cannot delay step cancellation or guard shutdown; late renewal responses cannot revive expired ownership. Successful renewal extends the deadline from request start, not response arrival.
+- Before beginning operation work after acquisition, the controller discards idle operation-store connections to the former primary.
 - Live HMR partition recovery remains tracked in [issue #466](https://github.com/bunny-lab-io/Borealis/issues/466).
 - Explicit ownership loss cancels step context immediately.
 - Transient database errors during primary-Service handoff are retried for at most 15 seconds.  Persistent failure cancels before lease expiry.

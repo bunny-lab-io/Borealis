@@ -33,12 +33,13 @@ func (c *PreparationConfiguration) Sizing() (PreparationSizing, error) {
 	if err != nil || !value.valid() {
 		return PreparationSizing{}, ErrPreparationConfig
 	}
-	// Engine.sh renders this field from the inherited profile, even when an
-	// explicit value was supplied. Accepting a different source value would
-	// silently change tuning on the joining host. Absence retains the existing
-	// optional-setting contract: derive from the same inherited profile.
-	if slots, supplied := c.wire.Runtime["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"]; supplied && slots != sizingScheduledSlots[value.rank] {
-		return PreparationSizing{}, ErrPreparationConfig
+	// Engine.sh renders these settings from the inherited profile even when
+	// supplied explicitly. Reject tuning that would change on the joining host.
+	// Absent optional settings continue deriving from the inherited profile.
+	for key, expected := range value.profileTuning() {
+		if supplied, present := c.wire.Runtime[key]; present && supplied != expected {
+			return PreparationSizing{}, ErrPreparationConfig
+		}
 	}
 	return value, nil
 }
@@ -101,11 +102,15 @@ func (s PreparationSizing) Fits(cpu uint32, memoryKiB uint64) error {
 // inherited reference drives shared_buffers, not the target's own RAM. Call
 // only after valid() bounds both rank and arithmetic inputs.
 func (s PreparationSizing) postgresProfileMiB() uint64 {
+	extra := [...]uint64{512, 2048, 4096, 8192}
+	return s.postgresSharedMiB() + extra[s.rank]
+}
+
+func (s PreparationSizing) postgresSharedMiB() uint64 {
 	minimum := [...]uint64{1024, 4096, 8192, 12288}
 	maximum := [...]uint64{4096, 8192, 16384, 24576}
-	extra := [...]uint64{512, 2048, 4096, 8192}
 	shared := s.referenceMiB * 25 / 100
-	return min(max(shared, minimum[s.rank]), maximum[s.rank]) + extra[s.rank]
+	return min(max(shared, minimum[s.rank]), maximum[s.rank])
 }
 
 var preparationEffectiveMemory = regexp.MustCompile(`^([1-9][0-9]{0,8})(Ki|Mi|Gi|Ti|k|K|m|M|g|G|T)$`)

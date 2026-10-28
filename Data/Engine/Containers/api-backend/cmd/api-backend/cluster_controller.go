@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -132,6 +131,8 @@ type clusterControllerStepRunner interface {
 }
 
 type clusterController struct {
+	leaseTransport             leaseExecutor
+	leaseConfirmedAt           atomic.Pointer[time.Time]
 	store                      *postgresOperatorStore
 	runner                     clusterControllerStepRunner
 	holder                     string
@@ -160,6 +161,10 @@ func startClusterControllerLeaseGuard(parent context.Context, interval time.Dura
 }
 
 func startClusterControllerLeaseGuardWithGrace(parent context.Context, interval, renewalGrace time.Duration, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
+	return startOwnershipLeaseGuard(parent, interval, renewalGrace, time.Now(), errClusterControllerLeaseLost, renew)
+}
+
+func startOwnershipLeaseGuard(parent context.Context, interval, renewalGrace time.Duration, confirmedAt time.Time, lost error, renew func(context.Context) (bool, error)) *clusterControllerLeaseGuard {
 	if interval <= 0 {
 		interval = clusterControllerLeaseRenewInterval
 	}
@@ -167,39 +172,71 @@ func startClusterControllerLeaseGuardWithGrace(parent context.Context, interval,
 		renewalGrace = clusterControllerLeaseRenewalGrace
 	}
 	guardCtx, cancel := context.WithCancelCause(parent)
-	heartbeatCtx, heartbeatCancel := context.WithCancel(parent)
+	heartbeatCtx, heartbeatCancel := context.WithCancel(guardCtx)
 	guard := &clusterControllerLeaseGuard{
-		ctx:             guardCtx,
-		cancel:          cancel,
-		heartbeatCancel: heartbeatCancel,
-		done:            make(chan struct{}),
+		ctx: guardCtx, cancel: cancel, heartbeatCancel: heartbeatCancel, done: make(chan struct{}),
 	}
+	type renewal struct {
+		started time.Time
+		owned   bool
+		err     error
+	}
+	results := make(chan renewal)
+	// Only this goroutine calls the transport. The watchdog below never waits
+	// for renewal to return, including during shutdown or an unresponsive driver.
 	go func() {
-		defer close(guard.done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		lastRenewed := time.Now()
 		for {
 			select {
 			case <-heartbeatCtx.Done():
 				return
 			case <-ticker.C:
-				owned, err := renew(heartbeatCtx)
 				if heartbeatCtx.Err() != nil {
 					return
 				}
-				if err != nil {
-					if time.Since(lastRenewed) >= renewalGrace {
-						guard.fail(fmt.Errorf("%w: renewal failed throughout grace period: %v", errClusterControllerLeaseLost, err))
-						return
-					}
-					continue
-				}
-				if !owned {
-					guard.fail(errClusterControllerLeaseLost)
+				started := time.Now()
+				owned, err := renew(heartbeatCtx)
+				select {
+				case results <- renewal{started: started, owned: owned, err: err}:
+				case <-heartbeatCtx.Done():
 					return
 				}
-				lastRenewed = time.Now()
+			}
+		}
+	}()
+	go func() {
+		defer close(guard.done)
+		defer heartbeatCancel()
+		deadline := confirmedAt.Add(renewalGrace)
+		timer := time.NewTimer(time.Until(deadline))
+		defer timer.Stop()
+		for {
+			select {
+			case <-guardCtx.Done():
+				return
+			case <-timer.C:
+				guard.fail(fmt.Errorf("%w: renewal deadline exceeded", lost))
+				return
+			case result := <-results:
+				// A delayed result must not revive ownership after the watchdog's
+				// deadline, even when the result and timer become ready together.
+				if !time.Now().Before(deadline) || (result.err == nil && !result.owned) {
+					guard.fail(lost)
+					return
+				}
+				if result.err != nil {
+					continue
+				}
+				// Lease expiry is based on query start, not response arrival.
+				deadline = result.started.Add(renewalGrace)
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(time.Until(deadline))
 			}
 		}
 	}()
@@ -226,9 +263,9 @@ func (g *clusterControllerLeaseGuard) Err() error {
 }
 
 func (g *clusterControllerLeaseGuard) Close() {
+	g.cancel(context.Canceled)
 	g.heartbeatCancel()
 	<-g.done
-	g.cancel(context.Canceled)
 }
 
 type kubernetesClusterStepRunner struct {
@@ -252,7 +289,7 @@ func clusterControllerMode() bool {
 }
 
 func runClusterController(ctx context.Context, cfg gatewayConfig) error {
-	operatorStore, closeStore, err := openOperatorStore(cfg)
+	operatorStore, closeStore, err := openControlOperatorStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -275,7 +312,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		actionImage:      strings.TrimSpace(os.Getenv("BOREALIS_CLUSTER_ACTION_IMAGE")),
 		soak:             envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
-	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns}
+	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns, leaseTransport: &postgresLeaseTransport{dsn: normalizePostgresDriverURL(cfg)}}
 	runner.persistRemovalFence = controller.persistRemovalFence
 	healthServer := controller.healthServer()
 	healthServer.BaseContext = func(net.Listener) context.Context { return ctx }
@@ -373,7 +410,15 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	if err != nil || !owned {
 		return err
 	}
-	leaseGuard := startClusterControllerLeaseGuard(ctx, c.leaseRenewInterval, c.acquireLease)
+	confirmedAt := time.Now()
+	if confirmed := c.leaseConfirmedAt.Load(); confirmed != nil {
+		confirmedAt = *confirmed
+	}
+	leaseGuard := startOwnershipLeaseGuard(ctx, c.leaseRenewInterval, clusterControllerLeaseRenewalGrace, confirmedAt, errClusterControllerLeaseLost, c.acquireLease)
+	// Standbys may still hold idle operation-store sockets to the former
+	// primary. Discard those before beginning work under newly acquired lease.
+	c.store.db.SetMaxIdleConns(0)
+	c.store.db.SetMaxIdleConns(c.maxIdleConnections)
 	defer leaseGuard.Close()
 	runCtx := leaseGuard.Context()
 	if err := c.reconcileAdmissions(runCtx); err != nil {
@@ -1221,8 +1266,9 @@ func clusterUpdateNodes(operation clusterControllerOperation, nodes []clusterCon
 }
 
 func clusterRemovalNodes(operation clusterControllerOperation, nodes []clusterControllerNode) ([]clusterControllerNode, error) {
-	ids := anySlice(operation.Payload["removal_node_ids"])
-	if len(ids) == 0 {
+	rawIDs, pinned := operation.Payload["removal_node_ids"]
+	ids := anySlice(rawIDs)
+	if !pinned {
 		for _, id := range clusterRemovalNodeIDs(operation.TargetNodeID, operation.Payload) {
 			ids = append(ids, id)
 		}
@@ -1249,14 +1295,9 @@ func clusterRemovalNodes(operation clusterControllerOperation, nodes []clusterCo
 		}
 		selected = append(selected, node)
 	}
-	sort.SliceStable(selected, func(i, j int) bool {
-		left := clusterNodeLeadershipWeight(selected[i])
-		right := clusterNodeLeadershipWeight(selected[j])
-		if left == right {
-			return selected[i].Name < selected[j].Name
-		}
-		return left < right
-	})
+	// Role ownership changes during removal. Re-sorting would move the current
+	// checkpoint across its sibling and could skip or replay that sibling's steps.
+	// Both the pinned cohort and legacy target fields already have stable order.
 	return selected, nil
 }
 
@@ -1303,14 +1344,14 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 	}
 	acquireCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	started := time.Now()
 	now := c.now().UTC().Unix()
 	expires := now + int64(clusterControllerLeaseTTL/time.Second)
-	conn, err := c.store.db.Conn(acquireCtx)
-	if err != nil {
-		return false, err
+	executor := c.leaseTransport
+	if executor == nil {
+		executor = c.store.db
 	}
-	defer conn.Close()
-	result, err := conn.ExecContext(acquireCtx, `
+	result, err := executor.ExecContext(acquireCtx, `
 		INSERT INTO engine.cluster_application_leases(name, holder, expires_at, updated_at)
 		VALUES($1,$2,$3,$4)
 		ON CONFLICT(name) DO UPDATE
@@ -1319,20 +1360,12 @@ func (c *clusterController) acquireLease(ctx context.Context) (bool, error) {
 		   OR engine.cluster_application_leases.expires_at < EXCLUDED.updated_at
 	`, clusterControllerLeaseName, c.holder, expires, now)
 	if err != nil {
-		if acquireCtx.Err() != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-			// A primary transition can leave several old Service connections
-			// idle in this controller-only pool. Retiring only the connection
-			// selected above would spend one acquisition timeout per stale
-			// socket before a standby can acquire the controller lease.
-			c.store.db.SetMaxIdleConns(0)
-			if c.maxIdleConnections > 0 {
-				c.store.db.SetMaxIdleConns(c.maxIdleConnections)
-			}
-		}
 		return false, err
 	}
 	rows, err := result.RowsAffected()
+	if rows == 1 && err == nil {
+		c.leaseConfirmedAt.Store(&started)
+	}
 	return rows == 1, err
 }
 
@@ -1883,6 +1916,11 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return r.scaleCNPG(ctx, int(coerceInt64(operation.Payload["target_size"])))
 	}
 	if step.Name == "scale_shared_artifact_membership" {
+		if plannedClusterRemoval(operation) {
+			if err := r.requireRemovalCohortAbsent(ctx, operation, nodes); err != nil {
+				return err
+			}
+		}
 		survivors, err := clusterRemovalSurvivorNodes(operation, nodes)
 		if err != nil {
 			return err
@@ -1908,6 +1946,11 @@ func (r *kubernetesClusterStepRunner) Run(ctx context.Context, operation cluster
 		return r.nodeActionJob(ctx, phaseOperation, step, node, "RunSchemaPhase")
 	}
 	if step.Name == "verify_cluster" || step.Name == "verify_quorum" || step.Name == "verify_postgres" {
+		if step.Name == "verify_quorum" && plannedClusterRemoval(operation) {
+			if err := r.requireRemovalCohortAbsent(ctx, operation, nodes); err != nil {
+				return err
+			}
+		}
 		return r.verifyReadyEndpoints(ctx)
 	}
 	if step.Name == "apply_cluster_foundation" {
@@ -2813,7 +2856,7 @@ func (r *kubernetesClusterStepRunner) runtimeRoleOwners(ctx context.Context, db 
 			return nil, queryErr
 		}
 		if queryErr == nil {
-			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, holder)
+			schedulerOwner, err = r.kubernetesPodNode(ctx, r.namespace, schedulerLeadershipPod(holder))
 			if err != nil {
 				return nil, err
 			}

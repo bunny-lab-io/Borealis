@@ -30,10 +30,13 @@ func sshSmallBusinessSettings() map[string]string {
 }
 
 func TestClusterSSHTargetProfileSizing(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "missing cap", "override", "other profile", "template mismatch", "postgres mismatch", "missing infrastructure", "source identity", "settings drift before", "settings drift after", "template drift before", "template drift after", "receipt drift", "unrelated setting drift", "nil source"} {
+	for _, mode := range []string{"expansion", "replacement", "postgres override", "pool override", "postgres drift before", "postgres drift after", "missing cap", "override", "other profile", "template mismatch", "postgres mismatch", "missing infrastructure", "source identity", "settings drift before", "settings drift after", "template drift before", "template drift after", "receipt drift", "unrelated setting drift", "nil source"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			snapshot := clusterSSHPreparationSnapshot{Settings: sshSmallBusinessSettings(), Storage: sshStorageSnapshotFixture(t, f.a), DesiredWorkerSites: []int64{}}
+			snapshot.Settings["BOREALIS_POSTGRES_SHARED_BUFFERS"] = "4GB"
+			snapshot.Settings["BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE"] = "10GB"
+			snapshot.Settings["BOREALIS_DB_POOL_SIZE"] = "12"
 			snapshot.Storage.Requirements.Applications = clusterSSHSmallBusinessApplications()
 			snapshot.Storage.Requirements.PostgresResources = clusterSSHSmallBusinessPostgres()
 			if cpu, memory, valid := clusterSSHDesiredWorkerWorkloadBudget(snapshot); !valid {
@@ -45,6 +48,10 @@ func TestClusterSSHTargetProfileSizing(t *testing.T) {
 				e, err := buildClusterSSHPreparationExpected(f.a.Cohort, f.a.Source, f.a.Lease, f.a.Baseline, f.a.K3sVersion, f.sources[0].PodCIDR, f.sources[0].ServiceCIDR)
 				snapshot.Expected = e
 				switch mode {
+				case "postgres override":
+					snapshot.Settings["BOREALIS_POSTGRES_SHARED_BUFFERS"] = "8GB"
+				case "pool override":
+					snapshot.Settings["BOREALIS_DB_POOL_SIZE"] = "24"
 				case "missing cap":
 					delete(snapshot.Settings, "BOREALIS_API_BACKEND_MEMORY_LIMIT")
 				case "override":
@@ -63,6 +70,9 @@ func TestClusterSSHTargetProfileSizing(t *testing.T) {
 				if (mode == "settings drift before" && reads == 2) || (mode == "settings drift after" && consumed) {
 					snapshot.Settings["BOREALIS_API_BACKEND_CPU_LIMIT"] = "3.00"
 				}
+				if (mode == "postgres drift before" && reads == 2) || (mode == "postgres drift after" && consumed) {
+					snapshot.Settings["BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE"] = "12GB"
+				}
 				if (mode == "template drift before" && reads == 2) || (mode == "template drift after" && consumed) {
 					snapshot.Storage.Requirements.Applications[0].MemoryLimitBytes++
 				}
@@ -70,7 +80,7 @@ func TestClusterSSHTargetProfileSizing(t *testing.T) {
 					snapshot.Storage.Observation = strings.Repeat("e", 64)
 				}
 				if mode == "unrelated setting drift" && reads == 2 {
-					snapshot.Settings["BOREALIS_DB_POOL_SIZE"] = "13"
+					snapshot.Settings["BOREALIS_DB_CONNECT_TIMEOUT"] = "13"
 				}
 				return snapshot, err
 			}

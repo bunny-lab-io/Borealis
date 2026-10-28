@@ -14,7 +14,7 @@ import (
 
 func preparationSizingFixture(t *testing.T, rank int, reference, cap string) PreparationSizing {
 	t.Helper()
-	e, runtime := preparationFixture()
+	e, runtime := preparationSizingRuntimeFixture()
 	runtime["BOREALIS_CLUSTER_SIZING_RANK"] = strconv.Itoa(rank)
 	runtime["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = reference
 	runtime["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = cap
@@ -41,7 +41,7 @@ for service in API_BACKEND JOB_SCHEDULER WEBUI_FRONTEND TRAEFIK_EDGE POSTGRES_DB
 done
 printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\nBOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=%s\n' "$PROFILE_RANK" "$PROFILE_CLUSTER_SIZING_MEMORY_MIB" "$PROFILE_SITE_WORKER_CONCURRENCY"
 `)
-	e, settings := preparationFixture()
+	e, settings := preparationSizingRuntimeFixture()
 	keys := []string{}
 	for _, line := range strings.Split(output, "\n") {
 		key, value, ok := strings.Cut(line, "=")
@@ -139,7 +139,7 @@ func TestPreparationSizingRequiresOwnedExplicitConfiguration(t *testing.T) {
 			t.Fatal("unselected configuration accepted")
 		}
 	}
-	e, runtime := preparationFixture()
+	e, runtime := preparationSizingRuntimeFixture()
 	delete(runtime, "BOREALIS_POSTGRES_DB_MEMORY_LIMIT")
 	c, err := NewPreparationConfiguration(e, runtime)
 	if err != nil {
@@ -197,7 +197,7 @@ load_profile_tuning 64 262144 "$1" "$2"
 printf '%s\n' "$PROFILE_SITE_WORKER_CONCURRENCY"
 `, rankText, reference)
 			for _, supplied := range []string{"", want, "0", "1", "5", "8", "12", "16", "999999999"} {
-				e, runtime := preparationFixture()
+				e, runtime := preparationSizingRuntimeFixture()
 				runtime["BOREALIS_CLUSTER_SIZING_RANK"] = rankText
 				runtime["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = reference
 				runtime["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"] = "32g"

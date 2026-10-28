@@ -346,6 +346,15 @@ func validPreparationTuning(kind, value string) bool {
 	case "quantity":
 		return preparationQuantity.MatchString(value)
 	case "duration":
+		// PostgreSQL uses "min"; Engine.sh emits checkpoint_timeout=15min.
+		// Retain existing duration forms while accepting bounded canonical
+		// integer minutes from the actual profile renderer.
+		if minutes, present := strings.CutSuffix(value, "min"); present {
+			if !preparationInteger.MatchString(minutes) {
+				return false
+			}
+			value = minutes + "m"
+		}
 		d, err := time.ParseDuration(value)
 		return err == nil && d > 0 && d <= 24*time.Hour
 	case "compression":

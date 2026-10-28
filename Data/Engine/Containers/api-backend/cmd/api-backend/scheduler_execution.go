@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -51,24 +50,12 @@ type scheduledComponentDocument struct {
 }
 
 func (m *goSchedulerManager) processScheduledRunWork(ctx context.Context) error {
-	leaseSeconds := int64(envInt("BOREALIS_SCHEDULED_RUN_MANAGER_LEASE_SECONDS", 900, 60, 86400))
 	for i := 0; i < envInt("BOREALIS_SCHEDULED_RUN_MANAGER_BATCH", 4, 1, 32); i++ {
-		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindScheduledRun}, "job-scheduler", leaseSeconds)
+		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindScheduledRun})
 		if err != nil || item == nil {
 			return err
 		}
-		claimed := *item
-		go func() {
-			status := workStatusSucceeded
-			errorText := ""
-			if err := m.runScheduledRunWorkItem(context.Background(), claimed); err != nil {
-				status = workStatusFailed
-				errorText = err.Error()
-			}
-			if err := m.completeWorkItem(context.Background(), claimed.ID, status, errorText); err != nil {
-				log.Printf("failed to complete scheduled run work item id=%d: %v", claimed.ID, err)
-			}
-		}()
+		m.startClaimedWork(ctx, *item, m.runScheduledRunWorkItem)
 	}
 	return nil
 }
@@ -124,12 +111,12 @@ func (m *goSchedulerManager) runScheduledRunWorkItem(ctx context.Context, item s
 	}
 	dispatched := 0
 	var dispatchErrors []string
-	for _, raw := range scriptComponents {
+	for index, raw := range scriptComponents {
 		component := schedulerAnyMap(raw)
 		if len(component) == 0 {
 			continue
 		}
-		if err := m.dispatchScheduledScript(ctx, scheduledScriptDispatch{
+		if err := m.dispatchScheduledScript(withSchedulerExecution(ctx, fmt.Sprintf("script:%d", index)), scheduledScriptDispatch{
 			JobID:       jobID,
 			RunID:       runID,
 			ScheduledTS: coerceInt64(payload["scheduled_ts"]),
@@ -142,12 +129,12 @@ func (m *goSchedulerManager) runScheduledRunWorkItem(ctx context.Context, item s
 		}
 		dispatched++
 	}
-	for _, raw := range selectedAnsible {
+	for index, raw := range selectedAnsible {
 		component := schedulerAnyMap(raw)
 		if len(component) == 0 {
 			continue
 		}
-		if err := m.dispatchScheduledAnsible(ctx, scheduledAnsibleDispatch{
+		if err := m.dispatchScheduledAnsible(withSchedulerExecution(ctx, fmt.Sprintf("ansible:%d", index)), scheduledAnsibleDispatch{
 			JobID:             jobID,
 			RunID:             runID,
 			ScheduledTS:       coerceInt64(payload["scheduled_ts"]),
@@ -181,6 +168,9 @@ type scheduledScriptDispatch struct {
 }
 
 func (m *goSchedulerManager) dispatchScheduledScript(ctx context.Context, req scheduledScriptDispatch) error {
+	if acknowledged, err := m.resumeSchedulerExecution(ctx); err != nil || acknowledged {
+		return err
+	}
 	resolved, err := m.resolveScheduledComponentDocument(ctx, req.Component, "script")
 	if err != nil {
 		return err
@@ -259,6 +249,9 @@ func (m *goSchedulerManager) dispatchScheduledScript(ctx context.Context, req sc
 	if resolved.GUID != "" {
 		payload["context"].(map[string]any)["assembly_guid"] = resolved.GUID
 	}
+	if err := m.beginSchedulerDispatch(ctx, fmt.Sprint(activityID)); err != nil {
+		return err
+	}
 	result, state, err := m.emitSiteWorkerHostServiceEvent(ctx, snapshot.Route, map[string]any{
 		"hostname":            req.Hostname,
 		"service_mode":        runMode,
@@ -276,7 +269,7 @@ func (m *goSchedulerManager) dispatchScheduledScript(ctx context.Context, req sc
 		_ = m.failScheduledRun(ctx, req.RunID, failure)
 		return errors.New(failure)
 	}
-	return nil
+	return m.acknowledgeSchedulerDispatch(ctx, fmt.Sprint(activityID))
 }
 
 type scheduledAnsibleDispatch struct {
@@ -291,6 +284,9 @@ type scheduledAnsibleDispatch struct {
 }
 
 func (m *goSchedulerManager) dispatchScheduledAnsible(ctx context.Context, req scheduledAnsibleDispatch) error {
+	if acknowledged, err := m.resumeSchedulerExecution(ctx); err != nil || acknowledged {
+		return err
+	}
 	transport := normalizeScheduledAnsibleTransport(req.RunMode)
 	if !stringInSet(transport, "local", "ssh", "winrm") {
 		return m.failScheduledRun(ctx, req.RunID, "Unsupported Ansible execution context "+req.RunMode+".")
@@ -355,6 +351,9 @@ func (m *goSchedulerManager) dispatchScheduledAnsible(ctx context.Context, req s
 		"scheduled_job_run_row_id": req.RunID,
 		"connection":               transport,
 	}
+	if err := m.beginSchedulerDispatch(ctx, fmt.Sprint(activityID)); err != nil {
+		return err
+	}
 	response, errPayload := m.postSiteWorkerJSON(ctx, route, "/automation/ansible/run", map[string]any{"queue_run": queueRun}, 10*time.Second)
 	if errPayload != nil {
 		message := firstText(cleanText(errPayload["message"]), cleanText(errPayload["error"]), "Ansible playbook dispatch failed.")
@@ -368,7 +367,7 @@ func (m *goSchedulerManager) dispatchScheduledAnsible(ctx context.Context, req s
 		_ = m.failScheduledRun(ctx, req.RunID, message)
 		return errors.New(message)
 	}
-	return nil
+	return m.acknowledgeSchedulerDispatch(ctx, cleanText(response["run_id"]))
 }
 
 func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, req scheduledAnsibleDispatch, transport string, targets []scheduledExecutionTarget) ([]any, []any, error) {
@@ -586,20 +585,34 @@ type scheduledActivityInsert struct {
 }
 
 func (m *goSchedulerManager) insertScheduledActivity(ctx context.Context, req scheduledActivityInsert) (int64, error) {
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return 0, errors.Join(errOperatorStoreDown, err)
+	item, ok := ctx.Value(schedulerWorkContextKey{}).(schedulerWorkItem)
+	if !ok {
+		return 0, errSchedulerOwnershipLost
 	}
-	defer conn.Close()
-	metadataJSON, err := json.Marshal(req.Metadata)
+	metadata := req.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["scheduler_work_id"] = item.ID
+	metadata["scheduler_holder"] = item.LeaseOwner
+	metadata["scheduler_generation"] = item.AttemptCount
+	metadata["scheduler_execution_id"] = fmt.Sprintf("work:%d:%s", item.ID, schedulerExecutionKey(ctx))
+	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return 0, err
 	}
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
 		return 0, err
 	}
-	defer rollbackQuietly(tx)
+	defer cleanup()
+	execution, err := loadSchedulerExecution(ctx, tx, item)
+	if err != nil {
+		return 0, err
+	}
+	if execution.ActivityID > 0 {
+		return execution.ActivityID, tx.Commit()
+	}
 	now := time.Now().Unix()
 	var startedAt any
 	if strings.EqualFold(req.Status, "running") {
@@ -621,6 +634,10 @@ func (m *goSchedulerManager) insertScheduledActivity(ctx context.Context, req sc
 			run_id, activity_id, component_kind, script_type, component_path, component_name, created_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7)
 	`, req.RunID, activityID, cleanText(req.ComponentKind), cleanText(req.ScriptType), cleanText(req.ScriptPath), cleanText(req.ScriptName), now); err != nil {
+		return 0, err
+	}
+	execution.ActivityID = activityID
+	if err := storeSchedulerExecution(ctx, tx, item, execution); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -752,31 +769,20 @@ func (m *goSchedulerManager) scheduledRunHostname(ctx context.Context, runID int
 
 func (m *goSchedulerManager) markScheduledRunRunning(ctx context.Context, runID int64) error {
 	now := time.Now().Unix()
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	_, err = conn.ExecContext(ctx, `
+	return m.writeOwnedWork(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1, started_ts=COALESCE(started_ts, $2), finished_ts=NULL, error='', updated_at=$3
-		 WHERE id=$4
+		 WHERE id=$4 AND LOWER(status) NOT IN ('success','warning','failed','expired','timed out','skipped')
 	`, scheduledStatusRunning, now, now, runID)
-	return err
 }
 
 func (m *goSchedulerManager) markScheduledConnectionProbe(ctx context.Context, runID int64, targetRowIDs []int64, connection string) error {
 	now := time.Now().Unix()
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, _, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
 		return err
 	}
-	defer rollbackQuietly(tx)
+	defer cleanup()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1, updated_at=$2
@@ -803,37 +809,60 @@ func (m *goSchedulerManager) markScheduledConnectionProbe(ctx context.Context, r
 }
 
 func (m *goSchedulerManager) failScheduledRun(ctx context.Context, runID int64, message string) error {
-	now := time.Now().Unix()
-	conn, err := m.store.db.Conn(ctx)
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
+		return err
 	}
-	defer conn.Close()
-	_, err = conn.ExecContext(ctx, `
+	defer cleanup()
+	uncertain, err := schedulerWorkOutcomeUnknown(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	if uncertain {
+		if err := noteScheduledOutcomeUnknown(ctx, tx, runID, item.ID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1, finished_ts=$2, updated_at=$3, error=$4
 		 WHERE id=$5
-	`, scheduledStatusFailed, now, now, truncateString(message, 512), runID)
-	return err
+	`, scheduledStatusFailed, now, now, truncateString(message, 512), runID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) markScheduledRunSkipped(ctx context.Context, runID int64, message string) error {
 	now := time.Now().Unix()
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	_, err = conn.ExecContext(ctx, `
+	return m.writeOwnedWork(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1, finished_ts=$2, updated_at=$3, skip_reason=$4, error=$5
 		 WHERE id=$6
 	`, scheduledStatusSkipped, now, now, scheduledSkipNoTargets, truncateString(message, 512), runID)
-	return err
 }
 
 func (m *goSchedulerManager) markScheduledActivityFailed(ctx context.Context, activityID int64, failureText string) error {
-	return m.store.markQuickRunActivityFailed(ctx, activityID, failureText)
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	record, err := loadSchedulerExecution(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE engine.activity_history SET status='Failed',stderr=$1,updated_at=$2,finished_at=$2 WHERE id=$3`
+	if record.State == "dispatching" {
+		query = `UPDATE engine.activity_history SET stderr=$1,updated_at=$2 WHERE id=$3`
+		failureText = fmt.Sprintf("%s: %s", errSchedulerOutcomeUnknown, record.ID)
+	}
+	if _, err := tx.ExecContext(ctx, query, failureText, time.Now().Unix(), activityID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) loadScheduledExecutionTargets(ctx context.Context, runID int64, targetRowIDs []int64) ([]scheduledExecutionTarget, error) {
@@ -897,12 +926,7 @@ func (m *goSchedulerManager) updateScheduledRunTargets(ctx context.Context, runI
 }
 
 func (m *goSchedulerManager) updateScheduledTargetRow(ctx context.Context, targetID int64, status string, reason string, connection string, peerIP string, inventory string) error {
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	_, err = conn.ExecContext(ctx, `
+	return m.writeOwnedWork(ctx, `
 		UPDATE engine.scheduled_job_run_targets
 		   SET inventory_hostname=COALESCE(NULLIF($1, ''), inventory_hostname),
 		       wireguard_peer_ip=$2,
@@ -911,7 +935,6 @@ func (m *goSchedulerManager) updateScheduledTargetRow(ctx context.Context, targe
 		       resolution_reason=$5
 		 WHERE id=$6
 	`, inventory, peerIP, connection, status, reason, targetID)
-	return err
 }
 
 func (m *goSchedulerManager) emitSiteWorkerHostServiceEvent(ctx context.Context, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, string, error) {

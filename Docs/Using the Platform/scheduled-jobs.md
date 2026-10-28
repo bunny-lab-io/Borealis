@@ -41,6 +41,8 @@ Scheduled wall-clock times use the Engine host timezone. If the Engine host is c
 
 The job list opens on the `Normal` filter so operator-created automation and onboarding jobs stay separate from internal maintenance and patch-install noise. Use `Maintenance` to audit internal Agent or Engine maintenance jobs, and use `Patch Management` to review Windows patch-install jobs created from Patch Management. `Immediate`, `Scheduled`, `Recurring`, and `Completed` narrow normal jobs only.
 
+If a run reports `execution outcome unknown`, inspect the existing activity, workflow, or Agent result before using rerun. A lost dispatch response does not prove the remote job stopped. See [Scheduler Recovery](../Engine/managing-engine-clusters.md#scheduler-recovery) for failover and upgrade handling.
+
 ## Onboarding Jobs
 
 Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. They use discovery scope, exclusions, stored credentials, platform selection, remote ports, and concurrency limits. Successful install still requires Device Approval.
@@ -79,6 +81,7 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
 
     - API: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs*.go`
     - Scheduler queue and tick manager: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`
+    - Scheduler ownership and execution ledger: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_ownership.go` and `scheduler_execution_ownership.go`.
     - Scheduled script/Ansible dispatch: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Site worker runtime: `Data/Engine/Containers/site-worker/data/services/job_scheduler/worker.py`
     - UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/`
