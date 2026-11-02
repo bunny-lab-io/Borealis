@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -16,6 +18,7 @@ import (
 )
 
 func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T) {
+	t.Run("handler cancellation scope", testClusterSSHSourceBrokerPostgresHandlerLifecycle)
 	for _, mode := range []string{"instance memory bounds changed during Job", "instance CPU percentage changed during Job", "instance policy changed during Job", "instance owner changed during Job", "instance CPU input changed during Job", "plugin main bounds changed during Job", "plugin registrar bounds changed during Job", "plugin liveness bounds changed during Job", "plugin placement changed during Job", "snapshotter bounds changed during Job", "snapshotter replicas changed during Job", "snapshotter placement changed during Job", "resizer bounds changed during Job", "resizer replicas changed during Job", "resizer placement changed during Job", "provisioner bounds changed during Job", "provisioner replicas changed during Job", "provisioner placement changed during Job", "attacher bounds changed during Job", "attacher replicas changed during Job", "attacher placement changed during Job", "driver main bounds changed during Job", "driver wait bounds changed during Job", "driver replicas changed during Job", "driver placement changed during Job", "UI resource bounds changed during Job", "UI replicas changed during Job", "UI placement changed during Job", "manager resource bounds changed during Job", "prepull resource bounds changed during Job", "manager placement changed during Job", "kube-vip resource bounds changed during Job", "kube-vip placement changed during Job", "cainjector resource bounds changed during Job", "cainjector replicas changed during Job", "webhook resource bounds changed during Job", "webhook replicas changed during Job", "cert-manager resource bounds changed during Job", "cert-manager replicas changed during Job", "snapshot resource bounds changed during Job", "snapshot replicas changed during Job", "upgrade resource bounds changed during Job", "upgrade replicas changed during Job", "CNPG resource bounds changed during Job", "CNPG replicas changed during Job", "worker census changed during Job", "worker policy changed during Job", "worker resources changed during Job", "worker identity changed during Job", "worker set changed during Job", "postgres resources changed during Job", "application resources changed during Job", "cert-manager runtime changed during Job", "cert-manager owner changed during Job", "snapshot runtime changed during Job", "snapshot owner changed during Job", "CNPG runtime changed during Job", "CNPG owner changed during Job", "upgrade runtime changed during Job", "upgrade owner changed during Job", "native CSI peer changed during Job", "native CSI socket changed during Job", "native CSI ancestry changed during Job", "native executable digest changed during Job", "native kubelet root mismatch", "native kubelet process changed during Job", "expansion", "replacement", "qualification", "absent CNPG config", "controller changed", "worker expired", "credential removed", "Aegis locked", "Secret UID changed", "Secret revision changed", "excluded Secret data changed", "storage revision changed", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn replica images changed during Job", "Longhorn volume images changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn driver runtime changed during Job", "Longhorn driver init changed during Job", "Longhorn driver owner changed during Job", "Longhorn provisioner runtime changed during Job", "Longhorn provisioner owner changed during Job", "Longhorn resizer runtime changed during Job", "Longhorn resizer owner changed during Job", "Longhorn snapshotter runtime changed during Job", "Longhorn snapshotter owner changed during Job", "Longhorn csi-attacher startup changed during Job", "Longhorn csi-provisioner startup changed during Job", "Longhorn csi-resizer startup changed during Job", "Longhorn csi-snapshotter startup changed during Job", "Longhorn csi-attacher socket changed during Job", "Longhorn csi-provisioner socket changed during Job", "Longhorn csi-resizer socket changed during Job", "Longhorn csi-snapshotter socket changed during Job", "Longhorn attacher runtime changed during Job", "Longhorn attacher owner changed during Job", "Longhorn UI runtime changed during Job", "Longhorn UI owner changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, mode == "replacement")
@@ -35,6 +38,11 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			}
 			storage := newSSHStorageFixtureForAuthority(t, current)
 			sshSiteWorkerPopulate(t, storage)
+			// Schema/seed setup has its own 15-second context. Two fresh reads
+			// each retain the production 45-second bound within this test scope.
+			exerciseCtx, stopExercise := context.WithTimeout(context.Background(), 2*45*time.Second)
+			defer stopExercise()
+			f.ctx = exerciseCtx
 			if mode == "kube-vip interface mismatch" {
 				sshKubeVIPEnv(storage, "vip_interface")["value"] = "ens19"
 			}
@@ -146,7 +154,13 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 					case "worker census changed during Job":
 						key := "census-" + newClusterUUID()
 						f.exec(t, `INSERT INTO engine.job_scheduler_work_items(dedupe_key,kind,site_id,lane,payload_json,status,available_at,created_at,updated_at) VALUES($1,'test',1000000000,'test','{}','queued',0,0,0)`, key)
-						t.Cleanup(func() { f.exec(t, `DELETE FROM engine.job_scheduler_work_items WHERE dedupe_key=$1`, key) })
+						t.Cleanup(func() {
+							cleanupCtx, stopCleanup := context.WithTimeout(context.Background(), 10*time.Second)
+							defer stopCleanup()
+							cleanupFixture := f
+							cleanupFixture.ctx = cleanupCtx
+							cleanupFixture.exec(t, `DELETE FROM engine.job_scheduler_work_items WHERE dedupe_key=$1`, key)
+						})
 					case "worker policy changed during Job":
 						clusterSSHStorageMap(storage.objects[clusterSSHWorkerSecretPath], "data")["BOREALIS_SITE_WORKER_RESOURCE_PROFILE"] = "bGFyZ2U="
 					case "worker resources changed during Job":
@@ -410,10 +424,37 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 				jobPollInterval: time.Millisecond, kube: &kubernetesAPIClient{baseURL: kubernetes.URL, token: "private-fixture", httpClient: kubernetes.Client()}}
 			controller := &clusterController{store: f.c.store, runner: runner, holder: f.c.holder}
 			t.Setenv("BOREALIS_OPERATOR_SECRET", sshBrokerTestSecret)
-			server := httptest.NewServer(controller.healthServer().Handler)
-			defer server.Close()
-			client := sshBrokerClient(t, server.URL)
-			client.httpClient.Timeout = 10 * time.Second
+			var activeHandlers atomic.Int64
+			handler := controller.healthServer().Handler
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				activeHandlers.Add(1)
+				defer activeHandlers.Add(-1)
+				handler.ServeHTTP(w, r)
+			}))
+			defer func() {
+				server.Close()
+				t.Logf("broker handler joined: active=%d in_use=%d jobs=%d", activeHandlers.Load(), f.c.store.db.Stats().InUse, jobs.Load())
+			}()
+			client, err := newClusterSSHSourceBrokerClientFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.peers = func(context.Context) ([]string, error) { return []string{server.URL}, nil }
+			transport := client.httpClient.Transport
+			client.httpClient.Transport = bootstrapRoundTripper(func(r *http.Request) (*http.Response, error) {
+				started := time.Now()
+				response, err := transport.RoundTrip(r)
+				var timeout net.Error
+				status := 0
+				if response != nil {
+					status = response.StatusCode
+				}
+				if err != nil {
+					t.Error("broker fixture HTTP transport failed before domain observation completed")
+				}
+				t.Logf("broker transport: elapsed=%s status=%d error=%t timeout=%t context_deadline=%t context_cancelled=%t jobs=%d handlers=%d in_use=%d", time.Since(started), status, err != nil, errors.As(err, &timeout) && timeout.Timeout(), errors.Is(r.Context().Err(), context.DeadlineExceeded), errors.Is(r.Context().Err(), context.Canceled), jobs.Load(), activeHandlers.Load(), f.c.store.db.Stats().InUse)
+				return response, err
+			})
 			read := client.preparationRead(f.read, f.lease, f.baseline, f.sealed)
 			expected, settings, err := read(f.ctx)
 			good := mode == "absent CNPG config" || mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
@@ -433,6 +474,17 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			} else if err != clusterbootstrap.ErrPreparationConfig || settings != nil {
 				t.Fatal("stale authority returned private settings")
 			}
+			// A client timeout can return while cancellation is still unwinding
+			// the controller handler. Complete that scope before inspecting its
+			// pool or events; transport failure never proves injected domain drift.
+			server.Close()
+			kubernetes.Close()
+			stopExercise()
+			// Final assertions do not borrow an expired setup or exercise scope.
+			assertCtx, stopAssertions := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stopAssertions()
+			assertionFixture := f
+			assertionFixture.ctx = assertCtx
 			if jobs.Load() == 0 {
 				t.Fatal("actual controller source transport was not exercised")
 			}
@@ -445,7 +497,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			if textInSet(mode, "instance memory bounds changed during Job", "instance CPU percentage changed during Job", "instance policy changed during Job", "instance owner changed during Job", "instance CPU input changed during Job", "cainjector resource bounds changed during Job", "cainjector replicas changed during Job", "webhook resource bounds changed during Job", "webhook replicas changed during Job", "cert-manager resource bounds changed during Job", "cert-manager replicas changed during Job", "snapshot resource bounds changed during Job", "snapshot replicas changed during Job", "upgrade resource bounds changed during Job", "upgrade replicas changed during Job", "CNPG resource bounds changed during Job", "CNPG replicas changed during Job", "storage placement changed during Job", "bootstrap image changed during Job", "cert-manager solver changed during Job", "Longhorn CSI changed during Job", "CNPG configuration changed during Job", "Longhorn replica images changed during Job", "Longhorn volume images changed during Job", "Longhorn manager runtime changed during Job", "Longhorn share runtime changed during Job", "Longhorn manager Pod replaced during Job", "kube-vip runtime changed during Job", "kube-vip Pod replaced during Job", "kube-vip image changed during Job", "kube-vip interface mismatch", "snapshot image changed during Job", "upgrade kubectl changed during Job", "Longhorn driver runtime changed during Job", "Longhorn driver init changed during Job", "Longhorn driver owner changed during Job", "Longhorn provisioner runtime changed during Job", "Longhorn provisioner owner changed during Job", "Longhorn resizer runtime changed during Job", "Longhorn resizer owner changed during Job", "Longhorn snapshotter runtime changed during Job", "Longhorn snapshotter owner changed during Job", "Longhorn csi-attacher startup changed during Job", "Longhorn csi-provisioner startup changed during Job", "Longhorn csi-resizer startup changed during Job", "Longhorn csi-snapshotter startup changed during Job", "Longhorn csi-attacher socket changed during Job", "Longhorn csi-provisioner socket changed during Job", "Longhorn csi-resizer socket changed during Job", "Longhorn csi-snapshotter socket changed during Job", "Longhorn attacher runtime changed during Job", "Longhorn attacher owner changed during Job", "Longhorn UI runtime changed during Job", "Longhorn UI owner changed during Job", "Longhorn UI changed during Job", "Longhorn manager setting changed during Job") && secretReads.Load() != 2 {
 				t.Fatal("storage drift did not bracket complete source acquisition")
 			}
-			if f.c.store.db.Stats().InUse != 0 || f.events(t) != before {
+			if f.c.store.db.Stats().InUse != 0 || assertionFixture.events(t) != before {
 				t.Fatal("broker retained DB connection or published event")
 			}
 		})

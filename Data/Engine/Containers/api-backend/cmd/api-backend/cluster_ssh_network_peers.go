@@ -15,16 +15,20 @@ import (
 // settings and historical inspection reports. Equal namespace/index values on
 // different hosts are expected and are never treated as global identities.
 func validateClusterSSHSourceNetworks(authority clusterSSHPreparationAuthority, networks []clusterbootstrap.SourceNetwork) error {
-	if validateClusterSSHInspectionCohort(authority.Cohort, authority.Source) != nil || len(networks) != len(authority.Source.Members) {
+	return validateClusterSSHPlannedSourceNetworks(authority.Cohort, authority.Source, authority.K3sVersion, networks)
+}
+
+func validateClusterSSHPlannedSourceNetworks(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, version string, networks []clusterbootstrap.SourceNetwork) error {
+	if validateClusterSSHInspectionCohort(cohort, source) != nil || len(networks) != len(source.Members) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	macs := map[string]bool{}
 	for i, network := range networks {
-		member := authority.Source.Members[i]
+		member := source.Members[i]
 		prefix, err := netip.ParsePrefix(network.ManagementLink.Address)
 		if network.Validate() != nil || network.NodeUID != member.NodeUID || network.Hostname != member.Name ||
 			network.MachineID != member.MachineID || network.BootID != member.BootID || !network.ManagementLink.MatchesAddress(member.Address) ||
-			network.K3sVersion != authority.K3sVersion || err != nil || prefix.Masked().String() != authority.Cohort.Targets[0].Report.ConnectedPrefix ||
+			network.K3sVersion != version || err != nil || prefix.Masked().String() != cohort.Targets[0].Report.ConnectedPrefix ||
 			macs[network.ManagementLink.MAC] {
 			return clusterbootstrap.ErrPreparationConfig
 		}

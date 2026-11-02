@@ -89,93 +89,106 @@ func (r *kubernetesClusterStepRunner) newSSHSourceObservationRead(authority clus
 			wire, err := json.Marshal(after)
 			return err == nil && bytes.Equal(wire, frozen)
 		}
-		nonce := newClusterUUID()
-		name := "borealis-source-" + strings.ReplaceAll(nonce, "-", "")
-		manifest := clusterSSHSourceJobManifest(name, nonce, r.actionImage, member.Name, before.Lease.OperationID)
-		if inspectVIP {
-			c := anySlice(nestedMap(nestedMap(nestedMap(manifest, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
-			c["command"] = []string{"/usr/local/bin/borealis-node-manager", "source-vip-client"}
-			c["args"] = []string{nonce, address}
+		return r.readSSHSourceObservation(ctx, member, before.Lease.OperationID, before.K3sVersion, address, inspectVIP, check)
+	}
+}
+
+// Fixed fresh Job transport shared by separately checked claimed and waiting
+// proposal callers. Each caller supplies its exact phase check; this helper
+// never manufactures a target holder/generation or adopts an earlier Job.
+func (r *kubernetesClusterStepRunner) readSSHSourceObservation(ctx context.Context, member clusterSSHSourceMember, operationID, version, address string, inspectVIP bool, check func() bool) (clusterbootstrap.SourceVIPNetwork, error) {
+	fail := func() (clusterbootstrap.SourceVIPNetwork, error) {
+		return clusterbootstrap.SourceVIPNetwork{}, clusterbootstrap.ErrPreparationConfig
+	}
+	if r == nil || r.kube == nil || r.namespace != "borealis" || r.controllerHolder == "" || !clusterUUIDRE.MatchString(operationID) || !borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) || check == nil || ctx.Err() != nil {
+		return fail()
+	}
+	nonce := newClusterUUID()
+	name := "borealis-source-" + strings.ReplaceAll(nonce, "-", "")
+	manifest := clusterSSHSourceJobManifest(name, nonce, r.actionImage, member.Name, operationID)
+	if inspectVIP {
+		c := anySlice(nestedMap(nestedMap(nestedMap(manifest, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
+		c["command"] = []string{"/usr/local/bin/borealis-node-manager", "source-vip-client"}
+		c["args"] = []string{nonce, address}
+	}
+	var job map[string]any
+	// One POST only. Conflict or an uncertain POST receipt fails this read;
+	// neither a name lookup nor old successful Job can substitute for it.
+	if !check() || r.kube.doClusterSSHSourceJSON(ctx, http.MethodPost, "/apis/batch/v1/namespaces/borealis/jobs", manifest, &job) != nil {
+		return fail()
+	}
+	uid, _ := nestedMap(job, "metadata")["uid"].(string)
+	if !clusterbootstrap.ValidSourceReceiptIdentity(nonce, uid, uid) || !validClusterSSHSourceJob(job, manifest, uid) {
+		return fail()
+	}
+	path := "/apis/batch/v1/namespaces/borealis/jobs/" + name
+	podsPath := "/api/v1/namespaces/borealis/pods?labelSelector=" + url.QueryEscape("batch.kubernetes.io/controller-uid="+uid)
+	interval := r.jobPollInterval
+	if interval <= 0 || interval > time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	nextCheck := time.Now().Add(5 * time.Second)
+	observedPodUID := ""
+	for {
+		if !time.Now().Before(nextCheck) {
+			if !check() {
+				return fail()
+			}
+			nextCheck = time.Now().Add(5 * time.Second)
 		}
-		var job map[string]any
-		// One POST only. Conflict or an uncertain POST receipt fails this read;
-		// neither a name lookup nor old successful Job can substitute for it.
-		if !check() || r.kube.doClusterSSHSourceJSON(ctx, http.MethodPost, "/apis/batch/v1/namespaces/borealis/jobs", manifest, &job) != nil {
+		// JSON decoding into a reused map retains omitted keys. Each read
+		// must stand alone, including metadata and completion state.
+		job = nil
+		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, path, nil, &job) != nil || !validClusterSSHSourceJob(job, manifest, uid) {
 			return fail()
 		}
-		uid, _ := nestedMap(job, "metadata")["uid"].(string)
-		if !clusterbootstrap.ValidSourceReceiptIdentity(nonce, uid, uid) || !validClusterSSHSourceJob(job, manifest, uid) {
+		status := nestedMap(job, "status")
+		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
 			return fail()
 		}
-		path := "/apis/batch/v1/namespaces/borealis/jobs/" + name
-		podsPath := "/api/v1/namespaces/borealis/pods?labelSelector=" + url.QueryEscape("batch.kubernetes.io/controller-uid="+uid)
-		interval := r.jobPollInterval
-		if interval <= 0 || interval > time.Second {
-			interval = time.Second
+		var pods struct {
+			Metadata struct{ Continue string }
+			Items    []map[string]any
 		}
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		nextCheck := time.Now().Add(5 * time.Second)
-		observedPodUID := ""
-		for {
-			if !time.Now().Before(nextCheck) {
-				if !check() {
-					return fail()
+		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil || pods.Metadata.Continue != "" || len(pods.Items) > 1 {
+			return fail()
+		}
+		if len(pods.Items) == 1 {
+			podUID, _ := nestedMap(pods.Items[0], "metadata")["uid"].(string)
+			if observedPodUID != "" && podUID != observedPodUID {
+				return fail()
+			}
+			observedPodUID = podUID
+			message, complete, err := clusterSSHSourcePodMessage(pods.Items[0], manifest, nonce, uid)
+			if err != nil {
+				return fail()
+			}
+			var value clusterbootstrap.SourceVIPNetwork
+			if message != "" {
+				if inspectVIP {
+					value, err = clusterbootstrap.ParseSourceVIPReceipt([]byte(message), nonce, uid, podUID, address)
+				} else {
+					value.Network, err = clusterbootstrap.ParseSourceNetworkReceipt([]byte(message), nonce, uid, podUID)
 				}
-				nextCheck = time.Now().Add(5 * time.Second)
-			}
-			// JSON decoding into a reused map retains omitted keys. Each read
-			// must stand alone, including metadata and completion state.
-			job = nil
-			if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, path, nil, &job) != nil || !validClusterSSHSourceJob(job, manifest, uid) {
-				return fail()
-			}
-			status := nestedMap(job, "status")
-			if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
-				return fail()
-			}
-			var pods struct {
-				Metadata struct{ Continue string }
-				Items    []map[string]any
-			}
-			if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil || pods.Metadata.Continue != "" || len(pods.Items) > 1 {
-				return fail()
-			}
-			if len(pods.Items) == 1 {
-				podUID, _ := nestedMap(pods.Items[0], "metadata")["uid"].(string)
-				if observedPodUID != "" && podUID != observedPodUID {
-					return fail()
-				}
-				observedPodUID = podUID
-				message, complete, err := clusterSSHSourcePodMessage(pods.Items[0], manifest, nonce, uid)
 				if err != nil {
 					return fail()
 				}
-				var value clusterbootstrap.SourceVIPNetwork
-				if message != "" {
-					if inspectVIP {
-						value, err = clusterbootstrap.ParseSourceVIPReceipt([]byte(message), nonce, uid, podUID, address)
-					} else {
-						value.Network, err = clusterbootstrap.ParseSourceNetworkReceipt([]byte(message), nonce, uid, podUID)
-					}
-					if err != nil {
-						return fail()
-					}
-				}
-				network := value.Network
-				if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
-					if network.NodeUID != member.NodeUID || network.Hostname != member.Name || network.MachineID != member.MachineID ||
-						network.BootID != member.BootID || !network.ManagementLink.MatchesAddress(member.Address) || network.K3sVersion != before.K3sVersion || !check() {
-						return fail()
-					}
-					return value, nil
-				}
 			}
-			select {
-			case <-ctx.Done():
-				return fail()
-			case <-ticker.C:
+			network := value.Network
+			if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
+				if network.NodeUID != member.NodeUID || network.Hostname != member.Name || network.MachineID != member.MachineID ||
+					network.BootID != member.BootID || !network.ManagementLink.MatchesAddress(member.Address) || network.K3sVersion != version || !check() {
+					return fail()
+				}
+				return value, nil
 			}
+		}
+		select {
+		case <-ctx.Done():
+			return fail()
+		case <-ticker.C:
 		}
 	}
 }

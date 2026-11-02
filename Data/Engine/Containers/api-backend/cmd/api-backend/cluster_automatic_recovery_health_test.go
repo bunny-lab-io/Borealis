@@ -201,12 +201,12 @@ func TestClusterAutomaticRecoveryNativeBindingAndDecoder(t *testing.T) {
 	}
 	raw, _ := json.Marshal(node)
 	for _, wire := range []string{string(raw) + `{}`, `null`, `[]`, `{"metadata":{"uid":"first","uid":"last"}}`, `{"metadata":{"uid":"first","UID":"last"}}`} {
-		var object clusterAutomaticRecoveryNativeObject
+		var object clusterNativeObservationObject
 		if object.UnmarshalJSON([]byte(wire)) == nil {
 			t.Fatal("ambiguous native object accepted")
 		}
 	}
-	var object clusterAutomaticRecoveryNativeObject
+	var object clusterNativeObservationObject
 	if object.UnmarshalJSON(raw) != nil || !reflect.DeepEqual(map[string]any(object), node) {
 		t.Fatal("native decoder changed valid fields")
 	}

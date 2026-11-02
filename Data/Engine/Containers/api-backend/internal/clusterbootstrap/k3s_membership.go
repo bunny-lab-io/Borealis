@@ -2,6 +2,7 @@ package clusterbootstrap
 
 import (
 	"encoding/json"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
@@ -35,6 +36,39 @@ func ParseK3sMembership(raw []byte, expected PreparationExpected, localName stri
 	if expected.Validate() != nil || expected.K3sVersion != K3sPins().Version || !ValidK3sMemberName(localName, expected.Target.Hostname) {
 		return fail()
 	}
+	return parseK3sMembership(raw, expected.Target.Address, expected.PeerAddresses, localName)
+}
+
+// Identity-only reader for an existing original source. This accepts no worker
+// claim and preserves the startup parser's incomplete/learner observations.
+func ParseK3sMembershipIdentity(raw []byte, identity K3sJoinedNodeIdentity, peers []string, localName string) (K3sMembership, error) {
+	fail := func() (K3sMembership, error) { return K3sMembership{}, ErrPreparationConfig }
+	if !sessionHostname.MatchString(identity.Hostname) || identity.K3sVersion != K3sPins().Version ||
+		!ValidK3sMemberName(localName, identity.Hostname) || len(peers) != 3 || !slices.IsSorted(peers) {
+		return fail()
+	}
+	seen, local := map[string]bool{}, false
+	for _, address := range peers {
+		ip, err := netip.ParseAddr(address)
+		if err != nil || !ip.Is4() || !ip.IsPrivate() || ip.String() != address || seen[address] {
+			return fail()
+		}
+		seen[address], local = true, local || address == identity.Address
+	}
+	if !local {
+		return fail()
+	}
+	return parseK3sMembership(raw, identity.Address, peers, localName)
+}
+
+// Complete native JSON must be validated before a membership observer projects
+// Node/namespace fields. Reuse the existing bounded duplicate/alias walker.
+func ParseK3sObservationObject(raw []byte) (map[string]json.RawMessage, error) {
+	return sourceJSONObject(raw, 128<<10)
+}
+
+func parseK3sMembership(raw []byte, localAddress string, peers []string, localName string) (K3sMembership, error) {
+	fail := func() (K3sMembership, error) { return K3sMembership{}, ErrPreparationConfig }
 	object, err := sourceJSONObject(raw, 64<<10)
 	if err != nil || len(object) != 1 {
 		return fail()
@@ -71,7 +105,7 @@ func ParseK3sMembership(raw []byte, expected PreparationExpected, localName stri
 			return fail()
 		}
 		address := ""
-		for _, allowed := range expected.PeerAddresses {
+		for _, allowed := range peers {
 			if member.PeerURLs[0] == "https://"+allowed+":2380" {
 				address = allowed
 				break
@@ -95,7 +129,7 @@ func ParseK3sMembership(raw []byte, expected PreparationExpected, localName stri
 			}
 		}
 		ids[member.ID], addresses[address], names[member.Name] = true, true, true
-		if address == expected.Target.Address {
+		if address == localAddress {
 			if member.Name != localName || len(member.ClientURLs) != 1 {
 				return fail()
 			}

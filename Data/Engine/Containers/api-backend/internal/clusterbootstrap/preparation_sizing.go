@@ -22,13 +22,19 @@ func (c *PreparationConfiguration) Sizing() (PreparationSizing, error) {
 	if c == nil || len(c.raw) == 0 {
 		return PreparationSizing{}, ErrPreparationConfig
 	}
-	rank := c.wire.Runtime["BOREALIS_CLUSTER_SIZING_RANK"]
-	reference := c.wire.Runtime["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"]
+	return preparationSizingFromRuntime(c.wire.Runtime)
+}
+
+// Selection validates inherited settings only; callers still need separate
+// observed hardware and workload evidence before making any capacity decision.
+func preparationSizingFromRuntime(runtime map[string]string) (PreparationSizing, error) {
+	rank := runtime["BOREALIS_CLUSTER_SIZING_RANK"]
+	reference := runtime["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"]
 	memory, err := strconv.ParseUint(reference, 10, 64)
 	if len(rank) != 1 || rank[0] < '0' || rank[0] > '3' || !preparationInteger.MatchString(reference) || err != nil || memory < 1 {
 		return PreparationSizing{}, ErrPreparationConfig
 	}
-	cap, err := preparationMemoryBytes(c.wire.Runtime["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"])
+	cap, err := preparationMemoryBytes(runtime["BOREALIS_POSTGRES_DB_MEMORY_LIMIT"])
 	value := PreparationSizing{rank: int(rank[0] - '0'), referenceMiB: memory, postgresBytes: cap}
 	if err != nil || !value.valid() {
 		return PreparationSizing{}, ErrPreparationConfig
@@ -37,7 +43,7 @@ func (c *PreparationConfiguration) Sizing() (PreparationSizing, error) {
 	// supplied explicitly. Reject tuning that would change on the joining host.
 	// Absent optional settings continue deriving from the inherited profile.
 	for key, expected := range value.profileTuning() {
-		if supplied, present := c.wire.Runtime[key]; present && supplied != expected {
+		if supplied, present := runtime[key]; present && supplied != expected {
 			return PreparationSizing{}, ErrPreparationConfig
 		}
 	}

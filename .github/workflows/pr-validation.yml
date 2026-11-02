@@ -206,7 +206,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

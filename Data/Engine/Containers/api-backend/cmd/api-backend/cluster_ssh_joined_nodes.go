@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const clusterSSHJoinedNodeObservationTimeout = 15 * time.Second
+
 // Read-only controller evidence. Missing/NotReady targets remain incomplete;
 // observation never authorizes startup, changes source membership or settles a
 // target. Final admission must match each UID to independent native target proof.
@@ -23,7 +25,7 @@ func readClusterSSHJoinedTargets(parent context.Context, authority clusterSSHPre
 	if authority == nil || getJSON == nil || parent.Err() != nil {
 		return fail()
 	}
-	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	ctx, cancel := context.WithTimeout(parent, clusterSSHJoinedNodeObservationTimeout)
 	defer cancel()
 	before, err := authority(ctx)
 	if err != nil || !validClusterSSHPreparationLease(before.Lease) || before.Recovery != nil || before.IdentitySource == nil || before.Baseline.Validate() != nil ||
@@ -71,86 +73,7 @@ func readClusterSSHJoinedTargets(parent context.Context, authority clusterSSHPre
 		return fail()
 	}
 	observe := func() (map[string]clusterbootstrap.K3sJoinedNode, error) {
-		targets := map[string]clusterbootstrap.K3sJoinedNode{}
-		observed, err := observeClusterSSHSourceCohort(ctx, func(ctx context.Context, path string, out any) error {
-			if path != "/api/v1/nodes" {
-				return getJSON(ctx, path, out)
-			}
-			var list struct {
-				APIVersion string `json:"apiVersion"`
-				Kind       string `json:"kind"`
-				Metadata   struct {
-					Continue string `json:"continue"`
-				} `json:"metadata"`
-				Items *[]json.RawMessage `json:"items"`
-			}
-			if getJSON(ctx, path, &list) != nil || list.APIVersion != "v1" || list.Kind != "NodeList" || list.Metadata.Continue != "" || list.Items == nil || len(*list.Items) < len(frozen.Source.Members) || len(*list.Items) > len(frozen.Source.Members)+len(frozen.Cohort.Targets) {
-				return clusterbootstrap.ErrSessionAuthority
-			}
-			originals := make([]json.RawMessage, 0, len(frozen.Source.Members))
-			names, uids := map[string]bool{}, map[string]bool{}
-			for _, raw := range *list.Items {
-				var node struct {
-					APIVersion string `json:"apiVersion"`
-					Kind       string `json:"kind"`
-					Metadata   struct {
-						Name   string            `json:"name"`
-						UID    string            `json:"uid"`
-						Labels map[string]string `json:"labels"`
-					} `json:"metadata"`
-				}
-				if len(raw) > 128<<10 || json.Unmarshal(raw, &node) != nil || node.APIVersion != "v1" || node.Kind != "Node" || names[node.Metadata.Name] || uids[node.Metadata.UID] {
-					return clusterbootstrap.ErrSessionAuthority
-				}
-				names[node.Metadata.Name], uids[node.Metadata.UID] = true, true
-				original := false
-				for _, member := range frozen.Source.Members {
-					if member.Name == node.Metadata.Name {
-						original = true
-						break
-					}
-				}
-				if original {
-					if node.Metadata.Labels["borealis.io/engine-node"] != "true" || node.Metadata.Labels["borealis.io/application-state"] != "active" {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					originals = append(originals, raw)
-					continue
-				}
-				found := false
-				for _, target := range frozen.Cohort.Targets {
-					if target.Report.Hostname != node.Metadata.Name {
-						continue
-					}
-					identity := clusterbootstrap.K3sJoinedNodeIdentity{Hostname: target.Report.Hostname, MachineID: target.Report.MachineID, BootID: target.Report.BootID, Address: target.Binding.Address, K3sVersion: frozen.K3sVersion}
-					observed, err := clusterbootstrap.ParseK3sJoinedNodeIdentity(raw, identity)
-					if err != nil {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					targets[target.Binding.TargetID], found = observed, true
-				}
-				if !found {
-					return clusterbootstrap.ErrSessionAuthority
-				}
-			}
-			wire, err := json.Marshal(map[string]any{"items": originals})
-			if err != nil {
-				return clusterbootstrap.ErrSessionAuthority
-			}
-			return json.Unmarshal(wire, out)
-		}, frozen.Source)
-		if err != nil || !reflect.DeepEqual(observed, frozen.Source) {
-			return nil, clusterbootstrap.ErrSessionAuthority
-		}
-		var namespace struct {
-			Metadata struct {
-				UID string `json:"uid"`
-			} `json:"metadata"`
-		}
-		if getJSON(ctx, "/api/v1/namespaces/kube-system", &namespace) != nil || namespace.Metadata.UID != frozen.Source.KubeSystemUID || ctx.Err() != nil {
-			return nil, clusterbootstrap.ErrSessionAuthority
-		}
-		return targets, nil
+		return observeClusterSSHJoinedNodes(ctx, getJSON, frozen.Cohort, frozen.Source, frozen.K3sVersion)
 	}
 	first, err := observe()
 	if err != nil {
@@ -177,4 +100,90 @@ func readClusterSSHJoinedTargets(parent context.Context, authority clusterSSHPre
 		return fail()
 	}
 	return clusterSSHJoinedTargets{digest, second}, nil
+}
+
+// Native observation only; caller must independently fence its own phase.
+// Sharing this projection never manufactures a preparation worker lease.
+func observeClusterSSHJoinedNodes(ctx context.Context, getJSON func(context.Context, string, any) error,
+	cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, k3sVersion string) (map[string]clusterbootstrap.K3sJoinedNode, error) {
+	targets := map[string]clusterbootstrap.K3sJoinedNode{}
+	observed, err := observeClusterSSHSourceCohort(ctx, func(ctx context.Context, path string, out any) error {
+		if path != "/api/v1/nodes" {
+			return getJSON(ctx, path, out)
+		}
+		var list struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Metadata   struct {
+				Continue string `json:"continue"`
+			} `json:"metadata"`
+			Items *[]json.RawMessage `json:"items"`
+		}
+		if getJSON(ctx, path, &list) != nil || list.APIVersion != "v1" || list.Kind != "NodeList" || list.Metadata.Continue != "" || list.Items == nil || len(*list.Items) < len(source.Members) || len(*list.Items) > len(source.Members)+len(cohort.Targets) {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		originals := make([]json.RawMessage, 0, len(source.Members))
+		names, uids := map[string]bool{}, map[string]bool{}
+		for _, raw := range *list.Items {
+			var node struct {
+				APIVersion string `json:"apiVersion"`
+				Kind       string `json:"kind"`
+				Metadata   struct {
+					Name   string            `json:"name"`
+					UID    string            `json:"uid"`
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
+			}
+			if len(raw) > 128<<10 || json.Unmarshal(raw, &node) != nil || node.APIVersion != "v1" || node.Kind != "Node" || names[node.Metadata.Name] || uids[node.Metadata.UID] {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			names[node.Metadata.Name], uids[node.Metadata.UID] = true, true
+			original := false
+			for _, member := range source.Members {
+				if member.Name == node.Metadata.Name {
+					original = true
+					break
+				}
+			}
+			if original {
+				if node.Metadata.Labels["borealis.io/engine-node"] != "true" || node.Metadata.Labels["borealis.io/application-state"] != "active" {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				originals = append(originals, raw)
+				continue
+			}
+			found := false
+			for _, target := range cohort.Targets {
+				if target.Report.Hostname != node.Metadata.Name {
+					continue
+				}
+				identity := clusterbootstrap.K3sJoinedNodeIdentity{Hostname: target.Report.Hostname, MachineID: target.Report.MachineID, BootID: target.Report.BootID, Address: target.Binding.Address, K3sVersion: k3sVersion}
+				observed, err := clusterbootstrap.ParseK3sJoinedNodeIdentity(raw, identity)
+				if err != nil {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				targets[target.Binding.TargetID], found = observed, true
+			}
+			if !found {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+		}
+		wire, err := json.Marshal(map[string]any{"items": originals})
+		if err != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		return json.Unmarshal(wire, out)
+	}, source)
+	if err != nil || !reflect.DeepEqual(observed, source) {
+		return nil, clusterbootstrap.ErrSessionAuthority
+	}
+	var namespace struct {
+		Metadata struct {
+			UID string `json:"uid"`
+		} `json:"metadata"`
+	}
+	if getJSON(ctx, "/api/v1/namespaces/kube-system", &namespace) != nil || namespace.Metadata.UID != source.KubeSystemUID || ctx.Err() != nil {
+		return nil, clusterbootstrap.ErrSessionAuthority
+	}
+	return targets, nil
 }

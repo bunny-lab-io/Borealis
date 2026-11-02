@@ -84,6 +84,69 @@ func withBootstrapJoinedK3sClientAt(parent context.Context, root *os.Root, expec
 	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
+	return withBootstrapK3sObservationFiles(ctx, root, expected.Target.Hostname, membership, func(ctx context.Context) error { return join.Verify(ctx, expected, source, check) }, func(files []bootstrapHostFile, refresh func(context.Context) error, memberName string) error {
+		// Authenticate the agent's CA against freshly acquired original-source token
+		// before using its TLS identity. Token is never sent in the HTTP request.
+		storage := make([]byte, clusterbootstrap.MaxK3sJoinTokenBytes)
+		defer clear(storage)
+		token := bytes.NewBuffer(storage[:0])
+		if join.WriteToken(ctx, expected, source, check, token) != nil {
+			return fail()
+		}
+		bound, err := clusterbootstrap.NewK3sJoinMaterial(expected, source, token.Bytes(), files[0].data)
+		if err != nil {
+			return fail()
+		}
+		bound.Close()
+		pair, err := tls.X509KeyPair(files[1].data, files[2].data)
+		if err != nil || len(pair.Certificate) == 0 {
+			return fail()
+		}
+		leaf, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil || leaf.Subject.CommonName != "system:node:"+expected.Target.Hostname || len(leaf.Subject.Organization) != 1 || leaf.Subject.Organization[0] != "system:nodes" {
+			return fail()
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(files[0].data) {
+			return fail()
+		}
+		config := &tls.Config{RootCAs: roots, Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
+		defer func() {
+			pair.PrivateKey = nil
+			config.Certificates = nil
+			config.RootCAs = nil
+		}()
+		client := clientFor(config)
+		if client == nil {
+			return fail()
+		}
+		defer client.CloseIdleConnections()
+		get := func(ctx context.Context, path string) ([]byte, error) {
+			if path != "/version" && path != "/api/v1/nodes/"+expected.Target.Hostname && (!membership || path != "/db/info") || refresh(ctx) != nil {
+				return nil, errBootstrapSource
+			}
+			raw, err := sourceNetworkHTTPGet(ctx, client, "https://127.0.0.1:6443", path)
+			if err != nil || refresh(ctx) != nil {
+				clear(raw)
+				return nil, errBootstrapSource
+			}
+			return raw, nil
+		}
+		if consume(ctx, refresh, get, memberName) != nil {
+			return fail()
+		}
+		return nil
+	})
+}
+
+// Fixed private-file custody shared by original-source membership observation.
+// No path is caller-selectable; bytes and refresh callback stay synchronous.
+func withBootstrapK3sObservationFiles(ctx context.Context, root *os.Root, hostname string, membership bool,
+	check func(context.Context) error, consume func([]bootstrapHostFile, func(context.Context) error, string) error) error {
+	fail := func() error { return errBootstrapSource }
+	if root == nil || check == nil || consume == nil || !sourceNetworkHostname.MatchString(hostname) {
+		return fail()
+	}
 	files := []bootstrapHostFile{{path: "var/lib/rancher/k3s/agent/server-ca.crt", mode: 0600}, {path: "var/lib/rancher/k3s/agent/client-kubelet.crt", mode: 0600}, {path: "var/lib/rancher/k3s/agent/client-kubelet.key", mode: 0600}}
 	if membership {
 		files = append(files, bootstrapHostFile{path: "var/lib/rancher/k3s/server/db/etcd/name", mode: 0600})
@@ -125,12 +188,12 @@ func withBootstrapJoinedK3sClientAt(parent context.Context, root *os.Root, expec
 	memberName := ""
 	if membership {
 		memberName = string(files[3].data)
-		if !clusterbootstrap.ValidK3sMemberName(memberName, expected.Target.Hostname) {
+		if !clusterbootstrap.ValidK3sMemberName(memberName, hostname) {
 			return fail()
 		}
 	}
 	refresh := func(ctx context.Context) error {
-		if join.Verify(ctx, expected, source, check) != nil {
+		if check(ctx) != nil {
 			return errBootstrapSource
 		}
 		current, err := bootstrapHostFileAncestors(root, files)
@@ -148,59 +211,12 @@ func withBootstrapJoinedK3sClientAt(parent context.Context, root *os.Root, expec
 				return errBootstrapSource
 			}
 		}
-		return join.Verify(ctx, expected, source, check)
+		return check(ctx)
 	}
 	if refresh(ctx) != nil {
 		return fail()
 	}
-	// Authenticate the agent's CA against freshly acquired original-source token
-	// before using its TLS identity. Token is never sent in the HTTP request.
-	storage := make([]byte, clusterbootstrap.MaxK3sJoinTokenBytes)
-	defer clear(storage)
-	token := bytes.NewBuffer(storage[:0])
-	if join.WriteToken(ctx, expected, source, check, token) != nil {
-		return fail()
-	}
-	bound, err := clusterbootstrap.NewK3sJoinMaterial(expected, source, token.Bytes(), files[0].data)
-	if err != nil {
-		return fail()
-	}
-	bound.Close()
-	pair, err := tls.X509KeyPair(files[1].data, files[2].data)
-	if err != nil || len(pair.Certificate) == 0 {
-		return fail()
-	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil || leaf.Subject.CommonName != "system:node:"+expected.Target.Hostname || len(leaf.Subject.Organization) != 1 || leaf.Subject.Organization[0] != "system:nodes" {
-		return fail()
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(files[0].data) {
-		return fail()
-	}
-	config := &tls.Config{RootCAs: roots, Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
-	defer func() {
-		pair.PrivateKey = nil
-		config.Certificates = nil
-		config.RootCAs = nil
-	}()
-	client := clientFor(config)
-	if client == nil {
-		return fail()
-	}
-	defer client.CloseIdleConnections()
-	get := func(ctx context.Context, path string) ([]byte, error) {
-		if path != "/version" && path != "/api/v1/nodes/"+expected.Target.Hostname && (!membership || path != "/db/info") || refresh(ctx) != nil {
-			return nil, errBootstrapSource
-		}
-		raw, err := sourceNetworkHTTPGet(ctx, client, "https://127.0.0.1:6443", path)
-		if err != nil || refresh(ctx) != nil {
-			clear(raw)
-			return nil, errBootstrapSource
-		}
-		return raw, nil
-	}
-	if consume(ctx, refresh, get, memberName) != nil || refresh(ctx) != nil {
+	if consume(files, refresh, memberName) != nil || refresh(ctx) != nil {
 		return fail()
 	}
 	return nil

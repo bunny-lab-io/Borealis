@@ -72,64 +72,6 @@ func (c *kubernetesAPIClient) getClusterAutomaticRecoveryJSON(ctx context.Contex
 	return c.clusterSSHPrivateJSON(ctx, http.MethodGet, path, nil, out)
 }
 
-// Decode before projection: encoding/json's typed structs otherwise hide
-// duplicate UID/status fields. Reuse bounded Kubernetes object validation,
-// then reject case aliases at every depth; policy uses exact map keys only.
-type clusterAutomaticRecoveryNativeObject map[string]any
-
-func (o *clusterAutomaticRecoveryNativeObject) UnmarshalJSON(raw []byte) error {
-	object, _, err := clusterSSHStorageObject(raw)
-	metadata, status := clusterSSHStorageMap(object, "metadata"), clusterSSHStorageMap(object, "status")
-	if err != nil || !clusterAutomaticRecoveryExactKeys(object) ||
-		!clusterAutomaticRecoveryFieldNames(object, "apiVersion", "kind", "metadata", "status") ||
-		!clusterAutomaticRecoveryFieldNames(metadata, "name", "uid", "resourceVersion", "namespace", "deletionTimestamp") ||
-		!clusterAutomaticRecoveryFieldNames(status, "conditions") {
-		return errClusterConflict
-	}
-	for _, item := range anySlice(status["conditions"]) {
-		condition, _ := item.(map[string]any)
-		if !clusterAutomaticRecoveryFieldNames(condition, "type", "status") {
-			return errClusterConflict
-		}
-	}
-	*o = object
-	return nil
-}
-
-// Optional fields need exact spelling even when their canonical key is absent:
-// an aliased deletion marker must not look like a non-deleting object.
-func clusterAutomaticRecoveryFieldNames(object map[string]any, names ...string) bool {
-	for key := range object {
-		for _, name := range names {
-			if key != name && strings.EqualFold(key, name) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func clusterAutomaticRecoveryExactKeys(value any) bool {
-	switch object := value.(type) {
-	case map[string]any:
-		seen := map[string]bool{}
-		for key, child := range object {
-			folded := strings.ToLower(key)
-			if seen[folded] || !clusterAutomaticRecoveryExactKeys(child) {
-				return false
-			}
-			seen[folded] = true
-		}
-	case []any:
-		for _, child := range object {
-			if !clusterAutomaticRecoveryExactKeys(child) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func readClusterAutomaticRecoveryNodeHealth(ctx context.Context, getJSON func(context.Context, string, any) error, binding clusterAutomaticRecoveryNodeBinding) (clusterAutomaticRecoveryHealth, error) {
 	fail := func() (clusterAutomaticRecoveryHealth, error) {
 		return clusterAutomaticRecoveryHealth{}, errClusterConflict
@@ -138,7 +80,7 @@ func readClusterAutomaticRecoveryNodeHealth(ctx context.Context, getJSON func(co
 		return fail()
 	}
 	read := func(path, kind, name, uid string) (map[string]any, error) {
-		var object clusterAutomaticRecoveryNativeObject
+		var object clusterNativeObservationObject
 		if getJSON(ctx, path, &object) != nil || ctx.Err() != nil {
 			return nil, errClusterConflict
 		}

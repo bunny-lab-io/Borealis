@@ -68,6 +68,17 @@ func parseClusterSSHPreparationAuthorization(payload string, proof clusterSSHPar
 	}) != nil || len(raw) == 0 || len(raw) > 8<<10 || len(completed) != 0 || len(recovery) != 0 {
 		return fail()
 	}
+	return parseClusterSSHPreparationAuthorizationContent(raw, qualificationRaw, confirmationRaw, readinessRaw, proof, source)
+}
+
+// Content validation is shared with read-only prepared-v2 observation. Callers
+// retain their separate phase gates: preparation claims reject any completion;
+// a prepared observer must first validate the complete version2 receipt.
+func parseClusterSSHPreparationAuthorizationContent(raw, qualificationRaw, confirmationRaw, readinessRaw json.RawMessage,
+	proof clusterSSHParentProof, source clusterSSHQueueSource) (clusterSSHPreparationAuthorization, *clusterSSHQualificationReport, error) {
+	fail := func() (clusterSSHPreparationAuthorization, *clusterSSHQualificationReport, error) {
+		return clusterSSHPreparationAuthorization{}, nil, errClusterConflict
+	}
 	var authorization clusterSSHPreparationAuthorization
 	if json.Unmarshal(raw, &authorization) != nil {
 		return fail()

@@ -48,20 +48,29 @@ func (e PreparationExpected) Validate() error {
 		!nonzeroPreparationUUID(e.KubeSystemUID) || len(e.K3sVersion) > 32 || !preparationK3s.MatchString(e.K3sVersion) || len(e.PeerAddresses) != 3 {
 		return ErrPreparationConfig
 	}
-	management, ok := preparationPrefix(e.ManagementCIDR)
-	pods, podsOK := preparationPrefix(e.PodCIDR)
-	services, servicesOK := preparationPrefix(e.ServiceCIDR)
+	return validatePreparationNetwork(e.ManagementCIDR, e.PodCIDR, e.ServiceCIDR, e.ControlPlaneVIP, e.EdgeVIP, e.Target.Address, e.PeerAddresses)
+}
+
+// Network validation is shared by the planned configuration projection and the
+// later claimed private wire. It grants no worker or target authority.
+func validatePreparationNetwork(managementCIDR, podCIDR, serviceCIDR, controlPlaneVIP, edgeVIP, targetAddress string, peers []string) error {
+	if len(peers) != 3 {
+		return ErrPreparationConfig
+	}
+	management, ok := preparationPrefix(managementCIDR)
+	pods, podsOK := preparationPrefix(podCIDR)
+	services, servicesOK := preparationPrefix(serviceCIDR)
 	if !ok || !podsOK || !servicesOK || management.Overlaps(pods) || management.Overlaps(services) || pods.Overlaps(services) {
 		return ErrPreparationConfig
 	}
 	seen, own := map[string]bool{}, false
-	for _, address := range e.PeerAddresses {
-		if !preparationHost(management, address) || seen[address] || address == e.ControlPlaneVIP || address == e.EdgeVIP {
+	for _, address := range peers {
+		if !preparationHost(management, address) || seen[address] || address == controlPlaneVIP || address == edgeVIP {
 			return ErrPreparationConfig
 		}
-		seen[address], own = true, own || address == e.Target.Address
+		seen[address], own = true, own || address == targetAddress
 	}
-	if !own || !preparationHost(management, e.ControlPlaneVIP) || !preparationHost(management, e.EdgeVIP) || !sort.StringsAreSorted(e.PeerAddresses) {
+	if !own || !preparationHost(management, controlPlaneVIP) || !preparationHost(management, edgeVIP) || !sort.StringsAreSorted(peers) {
 		return ErrPreparationConfig
 	}
 	return nil
