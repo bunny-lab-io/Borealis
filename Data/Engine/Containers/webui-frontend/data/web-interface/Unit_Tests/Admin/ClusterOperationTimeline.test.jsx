@@ -178,6 +178,94 @@ describe("cluster operation timeline", () => {
       .toMatchObject({ label: "In progress · Prepare SSH targets", timestamp: 104 });
   });
 
+  describe("interrupted preparation recovery", () => {
+    const step = "recover_ssh_preparation";
+    const pending = "Recovery required · Preparation verification pending";
+    const recovery = (id, type, patch = {}) => ({
+      ...event(id, type, { attempt: 1, step, target_count: 2, recovery_id: "11111111-1111-4111-8111-111111111111" }),
+      state: "running", ...patch,
+    });
+    const reserved = "ssh_preparation_recovery_reserved";
+    const claimed = "ssh_preparation_recovery_claimed";
+
+    it.each([1, 2])("shows retained %s-target recovery as paused verification, never execution or completion", (count) => {
+      const events = [recovery(1, reserved), recovery(2, claimed)].map((value) => ({ ...value, details: { ...value.details, target_count: count } }));
+      const timeline = build(events, { kind: "ssh_onboarding", current_step: "prepare_ssh_targets" });
+      expect(timeline.entries.map(({ label, tone }) => ({ label, tone }))).toEqual([
+        { label: "Interrupted preparation retained for recovery", tone: "recorded" },
+        { label: "Preparation recovery verification pending", tone: "recorded" },
+      ]);
+      expect(build([events[0]], { kind: "ssh_onboarding" }).current)
+        .toMatchObject({ label: pending, active: false, tone: "recorded", soakLabel: "", timestamp: 101 });
+      expect(timeline.current).toMatchObject({ label: pending, active: false, tone: "recorded", soakLabel: "", timestamp: 102 });
+      render(<ClusterOperationTimeline timeline={timeline} formatTimestamp={String} />);
+      expect(screen.getByText(`Current: ${pending}`)).toBeInTheDocument();
+      expect(screen.queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("CheckCircleOutlineRoundedIcon")).not.toBeInTheDocument();
+      expect(screen.queryByText(/started|completed|admitted|stopped producer|\ds remaining/i)).not.toBeInTheDocument();
+    });
+
+    it("pauses snapshot-only recovery and ignores unrelated soak timing even after refresh", () => {
+      const snapshot = { ...operation, kind: "ssh_onboarding", current_step: step, updated_at: 110 };
+      const details = { operation_id: operation.id, attempt: 1, step, run_id: "11111111-1111-4111-8111-111111111111",
+        holder: "controller-1", phase: "ready", started_at_ms: 100_000, deadline_at_ms: 130_000, observed_at_ms: 100_000, valid_until_ms: 115_000 };
+      for (const events of [[], [recovery(1, reserved)], [event(2, "operation_soak_started", details)]]) {
+        const timeline = buildClusterOperationTimeline(snapshot, events, [], [], {
+          fresh: true, clock: { serverMS: 100_000, receivedAt: 100, uncertaintyMS: 0 }, now: 100,
+        });
+        expect(timeline.current).toMatchObject({ label: pending, active: false, tone: "recorded", soakLabel: "", timestamp: 110 });
+      }
+    });
+
+    it("preserves newer attempts, snapshots, terminal states and operation isolation", () => {
+      const old = recovery(3, claimed);
+      expect(build([event(2, "operation_retry", { attempt: 2, resume_step: "inspect_ssh_targets" }), old], { kind: "ssh_onboarding" }).current)
+        .toMatchObject({ label: "Queued · Inspect SSH targets", timestamp: 102 });
+      expect(build([old], { kind: "ssh_onboarding", attempt: 2, current_step: "prepare_ssh_targets" }).current)
+        .toMatchObject({ label: "In progress · Prepare SSH targets", active: true, timestamp: 100 });
+      expect(build([old], { kind: "ssh_onboarding", updated_at: 104, current_step: "inspect_ssh_targets" }).current)
+        .toMatchObject({ label: "In progress · Inspect SSH targets", active: true, timestamp: 104 });
+      expect(build([old], { kind: "ssh_onboarding", state: "failed", current_step: step, updated_at: 103, error: "Stopped safely" }).current)
+        .toMatchObject({ label: "Failed · Preparation recovery verification pending", active: false, tone: "failed", message: "Stopped safely" });
+      expect(build([old], { kind: "ssh_onboarding", current_step: step, superseded_by: "op-2" }).current)
+        .toMatchObject({ label: "Superseded", active: false });
+      expect(build([{ ...old, operation_id: "op-2" }], { kind: "ssh_onboarding" }).entries).toEqual([]);
+      expect(build([old], { kind: "node_maintenance" }).current.timestamp).toBe(100);
+    });
+
+    it.each([reserved, claimed])("keeps malformed or target-only %s as history without moving parent", (type) => {
+      const valid = recovery(1, type);
+      const invalidDetails = [
+        { attempt: undefined }, { attempt: 0 }, { attempt: "1" }, { attempt: 1.5 },
+        { step: "complete" }, { target_count: 0 }, { target_count: 3 }, { target_count: "2" },
+        { recovery_id: "invalid" }, { recovery_id: undefined }, { recovery_id: [valid.details.recovery_id] }, { target_id: "target-1" },
+      ];
+      const invalid = invalidDetails.map((patch) => ({ ...valid, details: { ...valid.details, ...patch } }));
+      invalid.push({ ...valid, state: "succeeded" }, { ...valid, state: undefined },
+        ...["target-1", 0, false].map((node_id) => ({ ...valid, node_id })));
+      for (const value of invalid) {
+        const timeline = build([value], { kind: "ssh_onboarding", current_step: "prepare_ssh_targets" });
+        expect(timeline.entries).toHaveLength(1);
+        expect(timeline.entries[0].tone).toBe("recorded");
+        expect(timeline.current).toMatchObject({ label: "In progress · Prepare SSH targets", active: true, timestamp: 100 });
+      }
+      for (const node_id of [null, undefined, ""]) {
+        expect(build([{ ...valid, node_id }], { kind: "ssh_onboarding", current_step: "prepare_ssh_targets" }).current)
+          .toMatchObject({ label: pending, active: false });
+      }
+    });
+
+    it("keeps delayed recovery display paused and exposes no invented timing", () => {
+      const timeline = build([recovery(1, reserved)], { kind: "ssh_onboarding" });
+      const view = render(<ClusterOperationTimeline timeline={timeline} stale formatTimestamp={String} />);
+      expect(screen.getByRole("status")).toHaveTextContent("Updates delayed");
+      expect(screen.getByText(`Current: ${pending}`)).toBeInTheDocument();
+      view.rerender(<ClusterOperationTimeline timeline={timeline} stale={false} formatTimestamp={String} />);
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
+    });
+  });
+
   it.each([0, -1, 1.5, null, true, "2", "invalid"])("retains malformed attempt %s as history only", (attempt) => {
     const timeline = build([event(1, "ssh_preparation_complete", { attempt })], { kind: "ssh_onboarding" });
     expect(timeline.entries).toHaveLength(1);

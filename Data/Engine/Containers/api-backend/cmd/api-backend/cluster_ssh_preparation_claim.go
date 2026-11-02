@@ -60,12 +60,13 @@ func parseClusterSSHPreparationAuthorization(payload string, proof clusterSSHPar
 	fail := func() (clusterSSHPreparationAuthorization, *clusterSSHQualificationReport, error) {
 		return clusterSSHPreparationAuthorization{}, nil, errClusterConflict
 	}
-	var raw, qualificationRaw, completed, recovery, confirmationRaw, readinessRaw json.RawMessage
+	var raw, qualificationRaw, completed, recovery, preparationRecovery, confirmationRaw, readinessRaw json.RawMessage
 	if len(payload) == 0 || len(payload) > 256<<10 || clusterBootstrapObject([]byte(payload), map[string]any{
 		"ssh_preparation_authorization": &raw, "ssh_qualification": &qualificationRaw,
 		"ssh_preparation_confirmation": &confirmationRaw, "ssh_preparation_readiness": &readinessRaw,
 		"ssh_preparation": &completed, "ssh_identity_recovery": &recovery,
-	}) != nil || len(raw) == 0 || len(raw) > 8<<10 || len(completed) != 0 || len(recovery) != 0 {
+		"ssh_preparation_recovery": &preparationRecovery,
+	}) != nil || len(raw) == 0 || len(raw) > 8<<10 || len(completed) != 0 || len(recovery) != 0 || len(preparationRecovery) != 0 {
 		return fail()
 	}
 	return parseClusterSSHPreparationAuthorizationContent(raw, qualificationRaw, confirmationRaw, readinessRaw, proof, source)

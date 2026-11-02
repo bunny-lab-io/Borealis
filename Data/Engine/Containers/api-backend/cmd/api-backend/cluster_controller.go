@@ -1417,6 +1417,7 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		 WHERE o.state IN ('queued','running','waiting')
 		   AND o.kind<>'ssh_identity_recovery'
 		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting')
+		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
 		 FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -103,6 +103,12 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
  AND octet_length(payload_json)<=262144`, lease.OperationID, lease.OperationAttempt, lease.OperationStep).Scan(&payload) != nil {
 		return fail()
 	}
+	if validClusterSSHPreparationLease(lease) {
+		var recovery json.RawMessage
+		if clusterBootstrapObject([]byte(payload), map[string]any{"ssh_preparation_recovery": &recovery}) != nil || len(recovery) != 0 {
+			return fail()
+		}
+	}
 	proof, version, err := parseClusterSSHPreparationInspection([]byte(payload), lease, baseline)
 	if err != nil {
 		return fail()

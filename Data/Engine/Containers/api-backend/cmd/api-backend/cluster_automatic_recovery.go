@@ -167,6 +167,19 @@ type clusterAutomaticRecoveryCoordinator struct {
 	session    string
 }
 
+// Correlation for private observer continuity, never runtime authority. The
+// coordinator installs this while holding mu; adapters never read session
+// directly. A failed store operation rotates it before the next observation.
+type clusterAutomaticRecoveryObserverSessionKey struct{}
+
+func clusterAutomaticRecoveryObserverSession(ctx context.Context) string {
+	session, _ := ctx.Value(clusterAutomaticRecoveryObserverSessionKey{}).(string)
+	if !vipScopeUUID(session) {
+		return ""
+	}
+	return session
+}
+
 func newClusterAutomaticRecoveryCoordinator(c *clusterController) *clusterAutomaticRecoveryCoordinator {
 	return &clusterAutomaticRecoveryCoordinator{controller: c, session: newClusterUUID()}
 }
@@ -185,6 +198,7 @@ func (c *clusterAutomaticRecoveryCoordinator) Reserve(parent context.Context, no
 	}
 	ctx, cancel := context.WithTimeout(parent, clusterControllerLeaseAcquireTimeout)
 	defer cancel()
+	ctx = context.WithValue(ctx, clusterAutomaticRecoveryObserverSessionKey{}, c.session)
 	record, err = c.reserve(ctx, nodeID, observe)
 	completed = true
 	return record, err
@@ -204,6 +218,7 @@ func (c *clusterAutomaticRecoveryCoordinator) Observe(parent context.Context, op
 	}
 	ctx, cancel := context.WithTimeout(parent, clusterControllerLeaseAcquireTimeout)
 	defer cancel()
+	ctx = context.WithValue(ctx, clusterAutomaticRecoveryObserverSessionKey{}, c.session)
 	record, err = c.observe(ctx, operationID, observe)
 	completed = true
 	return record, err

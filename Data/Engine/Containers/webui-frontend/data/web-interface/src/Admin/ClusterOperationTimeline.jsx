@@ -5,6 +5,18 @@ import { CheckCircleOutlineRounded, ErrorOutlineRounded, PendingOutlined, SyncRo
 const humanize = (value) => String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const SOAK_FRESH_MS = 15_000; // Existing cluster snapshot/ownership freshness window.
 const SOAK_EVENTS = new Set(["operation_soak_started", "operation_soak_observed", "operation_soak_elapsed", "operation_soak_interrupted"]);
+const PREPARATION_RECOVERY_STEP = "recover_ssh_preparation";
+const PREPARATION_RECOVERY_LABEL = "Recovery required · Preparation verification pending";
+const PREPARATION_RECOVERY_EVENTS = new Set(["ssh_preparation_recovery_reserved", "ssh_preparation_recovery_claimed"]);
+
+function preparationRecoveryParentEvent(event) {
+  const detail = event.details || {};
+  return event.state === "running" && [null, undefined, ""].includes(event.node_id) && detail.target_id === undefined
+    && Number.isSafeInteger(detail.attempt) && detail.attempt > 0
+    && detail.step === PREPARATION_RECOVERY_STEP && [1, 2].includes(detail.target_count)
+    && typeof detail.recovery_id === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(detail.recovery_id);
+}
 
 // Existing authenticated /api/server/time supplies UTC. Request duration bounds
 // uncertainty; monotonic elapsed time avoids dependence on the browser wall clock.
@@ -59,6 +71,7 @@ const STEP_LABELS = {
   inspect_ssh_targets: "Inspect SSH targets",
   qualify_ssh_targets: "Qualify SSH targets",
   prepare_ssh_targets: "Prepare SSH targets",
+  recover_ssh_preparation: "Preparation recovery verification pending",
   recover_ssh_identity: "Recover target identity",
   identity_recovery_reserved: "Confirm member identity recovery",
   identity_recovery_confirmed: "Verify member before identity recovery",
@@ -83,6 +96,10 @@ const SSH_EVENTS = {
     ...phase("Preparation complete · Admission not authorized", "running", "prepare_ssh_targets",
       { label: "Prepared · Admission not authorized", active: false }), tone: "complete",
   },
+  ssh_preparation_recovery_reserved: phase("Interrupted preparation retained for recovery", "running", PREPARATION_RECOVERY_STEP,
+    { label: PREPARATION_RECOVERY_LABEL, active: false }),
+  ssh_preparation_recovery_claimed: phase("Preparation recovery verification pending", "running", PREPARATION_RECOVERY_STEP,
+    { label: PREPARATION_RECOVERY_LABEL, active: false }),
   ssh_identity_recovery_reserved: phase("Target identity recovery reserved", "running", "recover_ssh_identity"),
   ssh_identity_recovery_required: {
     ...phase("Target identity recovery outcome uncertain", "running", "recover_ssh_identity",
@@ -196,7 +213,9 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
           if (known && (event.event_type !== "completed" || event.state === "succeeded")) {
             label = known.label;
             tone = known.tone || "recorded";
-            if (known.next) next = { ...known.next, message: event.message };
+            if (known.next && (!PREPARATION_RECOVERY_EVENTS.has(event.event_type) || preparationRecoveryParentEvent(event))) {
+              next = { ...known.next, message: event.message };
+            }
             if (next && event.event_type === "ssh_inspection_failed") next.step = detail.step || next.step;
           }
         }
@@ -222,7 +241,10 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
     ? transition
     : { state: operation.state, step: operation.current_step, timestamp: snapshotTime, error: operation.error };
   const state = operation.superseded_by ? "superseded" : String(current.state || "unknown").toLowerCase();
-  const active = state === "running" && current.step !== "complete" && current.active !== false;
+  // This retained phase has no native consumer. A snapshot alone must not
+  // animate execution while its event request is missing or still catching up.
+  const preparationRecovery = operation.kind === "ssh_onboarding" && state === "running" && current.step === PREPARATION_RECOVERY_STEP;
+  const active = state === "running" && current.step !== "complete" && current.active !== false && !preparationRecovery;
   const status = { running: "In progress", queued: "Queued", waiting: "Waiting", succeeded: "Completed", failed: "Failed", cancelled: "Cancelled", superseded: "Superseded" }[state] || humanize(state);
   const step = current.step && current.step !== "complete" ? stepLabel(current.step, identities) : "";
   // Current snapshot and event transition must agree before timing can animate.
@@ -236,6 +258,7 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
     entries: entries.filter((_, index) => ordered[index].event_type !== "operation_soak_observed"),
     current: {
       id: "current", label: state !== "superseded" && current.label ? current.label
+        : preparationRecovery ? PREPARATION_RECOVERY_LABEL
         : `${status}${step && ["running", "queued", "waiting", "failed"].includes(state) ? ` · ${step}` : ""}`,
       tone: state !== "superseded" && current.tone ? current.tone
         : active ? "active" : state === "failed" ? "failed" : state === "succeeded" ? "complete" : "recorded",
