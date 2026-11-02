@@ -61,9 +61,11 @@ The four sizing profiles remain Homelab, Small Business, MSP / Production and En
 
 Scheduled task slots must match the inherited profile: **5, 8, 12 or 16**, respectively. Explicit database pool, overflow and PostgreSQL profile settings must also match the values deployment derives from that profile and its inherited reference memory. Use the renderer's canonical spellings, including PostgreSQL `15min` checkpoint timeout. Conflicting values block the inherited hardware check because deployment would replace them. Reconcile source configuration through an approved maintenance procedure, then inspect the targets again. Omitted optional settings continue to derive from the inherited profile. Existing service-limit checks and explicitly preserved timeout and Ansible concurrency overrides remain in force; this compatibility check does not bound the total number of workers.
 
-The current SSH preview's application-budget check accepts only **Small Business with 16 GiB source reference memory, eight scheduled slots and explicit default application CPU/memory caps**. Source configuration and observed workloads must agree. Missing limits, changed caps, other reference memory or other profiles block this check, even when targets have more RAM. Review source deployment settings and reconcile unsupported tuning through approved maintenance before inspecting again. This narrow qualification does not remove other profiles from the deployment plan above.
+The SSH preview's application-budget check covers **all four profiles with their inherited source reference memory, default scheduled slots and explicit default application CPU/memory caps**. Source configuration and observed workloads must agree. PostgreSQL keeps its calculated source-profile cap; larger joining hosts do not change it. Missing limits, unsupported overrides or changed workloads block this check. Review source deployment settings and reconcile unsupported tuning through approved maintenance before inspecting again.
 
 Validated onboarding hardware minimums, workload recommendations, complete allowed tuning and full release/profile capacity budgets remain pending for every profile. Meeting a selection band or passing the application check does not authorize preparation or admission. See [Managing Engine Clusters](managing-engine-clusters.md) for current readiness gates.
+
+Agent redeployment keeps old workers running until all replacement workers are ready. The SSH preview includes this overlap for observed and currently demanded workers. It does not cap future worker creation or establish complete host capacity.
 
 ## Profile-Managed Container Limits
 `Engine.sh` writes least-privilege runtime settings during every deploy. Normal Engine services and K3s pods run as the `borealis-engine` system user/group where supported, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, profile-scaled CPU/memory caps, and fixed read-only host timezone data. PostgreSQL runs in K3s as the official non-root PostgreSQL UID on a Longhorn-backed PVC so imported database state keeps compatible ownership. Limits are caps, not reservations. K3s `remote-desktop-guacd` stays ClusterIP-only and does not mount the Docker socket.
@@ -86,7 +88,7 @@ Scheduled task slots control claimed work items. Ansible controller concurrency 
     | Site-worker CPU cap | `1.00` |
     | Site-worker PID cap | `128` |
 
-    The SSH preview's qualified application configuration uses these caps with **16 GiB source reference memory**. They apply per Engine in either topology. Other reference memory changes calculated PostgreSQL tuning and needs separate qualification.
+    These application caps illustrate **16 GiB source reference memory**. They apply per Engine in either topology. Other inherited reference memory changes the calculated PostgreSQL cap; the SSH preview checks that calculated value against source configuration and observed workloads.
 
     | Application | Memory cap | CPU cap (cores) |
     | --- | ---: | ---: |
@@ -116,7 +118,7 @@ Scheduled task slots control claimed work items. Ansible controller concurrency 
 
 PostgreSQL memory caps derive from the selected PostgreSQL profile so `shared_buffers`, cache sizing, and container caps move together. WebUI gets separate production and dev-mode defaults so Vite dev mode has more headroom than static production serving.
 
-Existing deployments accept explicit service-limit overrides before redeploy, for example below. An override does not establish a supported cluster-onboarding budget; the current Small Business application check requires its default application CPU/memory caps. Site-worker limits and total worker capacity need separate qualification.
+Existing deployments accept explicit service-limit overrides before redeploy, for example below. An override does not establish a supported cluster-onboarding budget; the application check requires the selected profile's default application CPU/memory caps. Site-worker limits and total worker capacity need separate qualification.
 ```sh
 BOREALIS_SITE_WORKER_MEMORY_LIMIT=768m \
 BOREALIS_API_BACKEND_MEMORY_LIMIT=2g \

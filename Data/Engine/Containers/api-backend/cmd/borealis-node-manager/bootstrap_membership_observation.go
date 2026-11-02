@@ -2,7 +2,6 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
-	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -10,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"net/netip"
 	"os"
 	"reflect"
 	"slices"
@@ -18,36 +16,15 @@ import (
 	"time"
 )
 
-// Historical completion inputs remain evidence, never live worker claims.
-// Caller must derive these from the original controller's prepared-v2 snapshot.
-type bootstrapMembershipPreparedTarget struct {
-	Expected clusterbootstrap.PreparationExpected
-	Receipt  clusterbootstrap.PrejoinPreparationReceipt
-}
+// Keep native observer names local; protocol owns portable binding/validation.
+type bootstrapMembershipPreparedTarget = clusterbootstrap.MembershipPreparedTarget
+type bootstrapMembershipNodeExpectation = clusterbootstrap.MembershipNodeExpectation
+type bootstrapMembershipObservationRequest clusterbootstrap.MembershipObservationRequest
+type bootstrapMembershipObservation = clusterbootstrap.MembershipObservation
 
-// These identities and member annotations are controller-provided expectations.
-// Only the selected local source's Node is independently read by this adapter.
-type bootstrapMembershipNodeExpectation struct {
-	Node       clusterbootstrap.K3sJoinedNode
-	MemberName string
+func (r bootstrapMembershipObservationRequest) valid() bool {
+	return clusterbootstrap.MembershipObservationRequest(r).Valid()
 }
-type bootstrapMembershipObservationRequest struct {
-	Source        engineidentity.Binding
-	Network       clusterbootstrap.SourceNetwork
-	KubeSystemUID string
-	Nodes         []bootstrapMembershipNodeExpectation
-	Prepared      []bootstrapMembershipPreparedTarget
-}
-
-// One original source's current complete view. This is not independent agreement
-// between endpoints, quorum availability, partition proof or admission authority.
-type bootstrapMembershipObservation struct {
-	Source        engineidentity.Binding
-	LocalNode     clusterbootstrap.K3sJoinedNode
-	Membership    clusterbootstrap.K3sMembership
-	RequestSHA256 string
-}
-
 func (bootstrapMembershipObservationRequest) String() string {
 	return "membership observation request [internal]"
 }
@@ -55,72 +32,10 @@ func (bootstrapMembershipObservationRequest) GoString() string {
 	return "membership observation request [internal]"
 }
 
-func (r bootstrapMembershipObservationRequest) valid() bool {
-	uuid := func(value string) bool {
-		return clusterUUIDPattern.MatchString(value) && value != "00000000-0000-0000-0000-000000000000"
-	}
-	if !uuid(r.Source.ClusterID) || !uuid(r.Source.SourceID) || !uuid(r.Source.SourceUID) || !uuid(r.KubeSystemUID) ||
-		r.Network.Validate() != nil || r.Source.SourceUID != r.Network.NodeUID || r.Network.K3sVersion != clusterbootstrap.K3sPins().Version || len(r.Nodes) != 3 || len(r.Prepared) < 1 || len(r.Prepared) > 2 {
-		return false
-	}
-	names, uids, addresses, machines, boots := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	peers := []string{}
-	local := false
-	for _, expected := range r.Nodes {
-		node := expected.Node
-		if !clusterbootstrap.ValidK3sMemberName(expected.MemberName, node.Hostname) {
-			return false
-		}
-		ip, err := netip.ParseAddr(node.Address)
-		if err != nil || !ip.Is4() || !ip.IsPrivate() || ip.String() != node.Address || !nodePattern.MatchString(node.Hostname) || !uuid(node.NodeUID) || !uuid(node.BootID) || len(node.MachineID) != 32 || node.MachineID == strings.Repeat("0", 32) || !node.Ready || node.K3sVersion != r.Network.K3sVersion || names[node.Hostname] || uids[node.NodeUID] || addresses[node.Address] || machines[node.MachineID] || boots[node.BootID] {
-			return false
-		}
-		for _, c := range node.MachineID {
-			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-				return false
-			}
-		}
-		names[node.Hostname], uids[node.NodeUID], addresses[node.Address], machines[node.MachineID], boots[node.BootID] = true, true, true, true, true
-		peers = append(peers, node.Address)
-		if node.NodeUID == r.Source.SourceUID {
-			local = node.Hostname == r.Network.Hostname && node.MachineID == r.Network.MachineID && node.BootID == r.Network.BootID && r.Network.ManagementLink.MatchesAddress(node.Address)
-		}
-	}
-	if !local {
-		return false
-	}
-	slices.Sort(peers)
-	prepared, targets, ids := map[string]bool{}, map[string]bool{}, map[uint64]bool{}
-	for i, p := range r.Prepared {
-		e := p.Expected
-		if e.Validate() != nil || p.Receipt.Validate(e, r.Source) != nil || e.Target.ClusterID != r.Source.ClusterID || e.KubeSystemUID != r.KubeSystemUID || e.K3sVersion != r.Network.K3sVersion || e.PodCIDR != r.Network.PodCIDR || e.ServiceCIDR != r.Network.ServiceCIDR || !slices.Equal(e.PeerAddresses, peers) || p.Receipt.Node.NodeUID == r.Source.SourceUID || prepared[p.Receipt.Node.NodeUID] || targets[e.Target.TargetID] || ids[p.Receipt.MemberID] {
-			return false
-		}
-		found := false
-		for _, node := range r.Nodes {
-			found = found || node.Node == p.Receipt.Node && node.MemberName == p.Receipt.MemberName
-		}
-		if !found {
-			return false
-		}
-		if i > 0 {
-			first := r.Prepared[0].Expected
-			if e.Target.OperationID != first.Target.OperationID || e.Target.OperationAttempt != first.Target.OperationAttempt || e.Source != first.Source || e.CohortSHA256 != first.CohortSHA256 || e.ManagementCIDR != first.ManagementCIDR || e.ControlPlaneVIP != first.ControlPlaneVIP || e.EdgeVIP != first.EdgeVIP {
-				return false
-			}
-		}
-		prepared[p.Receipt.Node.NodeUID], targets[e.Target.TargetID], ids[p.Receipt.MemberID] = true, true, true
-	}
-	return true
-}
-
-// Callable only. No registered action, result transport, service start or SQL
-// authority exists here; the future caller must bracket this with its own exact
-// prepared parent/controller/payload checks. Local reads independently bind the
-// selected installed source's current host and runtime identity.
-// Namespace/remote-Node identity is provided expectation only. The future
-// controller must independently bracket this with fresh whole-Node/namespace
-// reads using its existing authority; kubelet credentials cannot provide those.
+// Native read behind the fixed InspectSourceMembership action. SQL authority
+// remains controller-owned; local reads independently bind selected source host
+// and runtime identity. Remote Node/namespace fields stay provided expectations,
+// bracketed by the prepared-phase controller adapter using existing authority.
 func (m *manager) observeBootstrapMembership(parent context.Context, request bootstrapMembershipObservationRequest, authority func(context.Context) error) (bootstrapMembershipObservation, error) {
 	if m == nil || os.Geteuid() != 0 || os.Getegid() != 0 || m.nodeName != request.Network.Hostname || authority == nil {
 		return bootstrapMembershipObservation{}, errBootstrapSource
@@ -294,7 +209,7 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		if err != nil || !reflect.DeepEqual(before, after) || version() != nil || !prove() {
 			return errBootstrapSource
 		}
-		result = bootstrapMembershipObservation{request.Source, second, after, requestSHA256}
+		result = bootstrapMembershipObservation{Source: request.Source, LocalNode: second, Membership: after, RequestSHA256: requestSHA256}
 		return nil
 	})
 	if err != nil || ctx.Err() != nil {

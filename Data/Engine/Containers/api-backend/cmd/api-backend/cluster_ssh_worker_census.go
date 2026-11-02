@@ -178,12 +178,21 @@ func clusterSSHWorkerCensusValid(sites []int64) bool {
 
 // Existing observed demand stays charged, including extra/stale Pods. For each
 // required site add only the gap up to one worker using the selected recreation
-// profile; max by resource avoids both undercounting and double charging.
+// profile. Engine.sh's Agent rotation clones every worker's init/main envelope
+// and keeps the complete candidate cohort until all candidates are ready. Add
+// that cohort once, separately from applications/infrastructure. Missing-site
+// reserves also cover their later rotation; this bounds current demand only,
+// never future worker growth. Native source observation still rejects an
+// in-progress rotation's candidate names/duplicate worker identities.
 func clusterSSHDesiredWorkerWorkloadBudget(snapshot clusterSSHPreparationSnapshot) (cpu, memory uint64, ok bool) {
 	r := snapshot.Storage.Requirements
 	cpu, memory, ok = clusterSSHNodeWorkloadBudget(r)
 	profile, valid := r.WorkerPolicy.resources()
 	if !ok || !valid || !clusterSSHWorkerCensusValid(snapshot.DesiredWorkerSites) {
+		return 0, 0, false
+	}
+	rotationCPU, rotationMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)
+	if !valid {
 		return 0, 0, false
 	}
 	for _, site := range snapshot.DesiredWorkerSites {
@@ -196,17 +205,35 @@ func clusterSSHDesiredWorkerWorkloadBudget(snapshot clusterSSHPreparationSnapsho
 			}
 		}
 		if observedCPU < profile.CPURequestMilli {
-			cpu, ok = clusterSSHCapacitySum(cpu, profile.CPURequestMilli-observedCPU)
+			gap := profile.CPURequestMilli - observedCPU
+			cpu, ok = clusterSSHCapacitySum(cpu, gap)
+			if !ok {
+				return 0, 0, false
+			}
+			rotationCPU, ok = clusterSSHCapacitySum(rotationCPU, gap)
 			if !ok {
 				return 0, 0, false
 			}
 		}
 		if observedMemory < profile.MemoryLimitBytes {
-			memory, ok = clusterSSHCapacitySum(memory, profile.MemoryLimitBytes-observedMemory)
+			gap := profile.MemoryLimitBytes - observedMemory
+			memory, ok = clusterSSHCapacitySum(memory, gap)
+			if !ok {
+				return 0, 0, false
+			}
+			rotationMemory, ok = clusterSSHCapacitySum(rotationMemory, gap)
 			if !ok {
 				return 0, 0, false
 			}
 		}
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, rotationCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, rotationMemory)
+	if !ok {
+		return 0, 0, false
 	}
 	return cpu, memory, true
 }

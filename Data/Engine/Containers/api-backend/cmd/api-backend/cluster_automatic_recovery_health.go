@@ -29,12 +29,18 @@ func (b clusterAutomaticRecoveryNodeBinding) valid() bool {
 // production caller. Existing SQL authority reads bracket native GETs without
 // retaining a pool connection; the coordinator separately fences persistence.
 func (c *clusterAutomaticRecoveryCoordinator) nodeHealthObserver(binding clusterAutomaticRecoveryNodeBinding) clusterAutomaticRecoveryObserve {
+	return c.nativeHealthObserver(binding, func(ctx context.Context, kube *kubernetesAPIClient) (clusterAutomaticRecoveryHealth, error) {
+		return readClusterAutomaticRecoveryNodeHealth(ctx, kube.getClusterAutomaticRecoveryJSON, binding)
+	})
+}
+
+func (c *clusterAutomaticRecoveryCoordinator) nativeHealthObserver(binding clusterAutomaticRecoveryNodeBinding, read func(context.Context, *kubernetesAPIClient) (clusterAutomaticRecoveryHealth, error)) clusterAutomaticRecoveryObserve {
 	return func(parent context.Context, node clusterControllerNode) (clusterAutomaticRecoveryHealth, error) {
 		fail := func() (clusterAutomaticRecoveryHealth, error) {
 			return clusterAutomaticRecoveryHealth{}, errClusterConflict
 		}
 		if c == nil || c.controller == nil || c.controller.store == nil || c.controller.store.db == nil ||
-			!binding.valid() || binding.Controller != c.controller.holder || node.ID != binding.NodeID || node.Name != binding.NodeName {
+			read == nil || !binding.valid() || binding.Controller != c.controller.holder || node.ID != binding.NodeID || node.Name != binding.NodeName {
 			return fail()
 		}
 		runner, ok := c.controller.runner.(*kubernetesClusterStepRunner)
@@ -47,7 +53,7 @@ func (c *clusterAutomaticRecoveryCoordinator) nodeHealthObserver(binding cluster
 		if err != nil || before.ClusterID != binding.ClusterID || !reflect.DeepEqual(clusterNodeByID(before.Nodes, binding.NodeID), node) {
 			return fail()
 		}
-		health, err := readClusterAutomaticRecoveryNodeHealth(ctx, runner.kube.getClusterAutomaticRecoveryJSON, binding)
+		health, err := read(ctx, runner.kube)
 		if err != nil {
 			return fail()
 		}

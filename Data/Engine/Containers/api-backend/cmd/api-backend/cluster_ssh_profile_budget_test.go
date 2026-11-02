@@ -141,51 +141,11 @@ func TestClusterSSHSmallBusinessApplicationBudget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("profile manifest rendering: %v: %s", err, out)
 			}
-			decode := exec.CommandContext(ctx, "python3", "-c", `import json,pathlib,subprocess,sys,yaml
-root,directory=map(pathlib.Path,sys.argv[1:])
-profile=json.loads((directory/'profile.json').read_text())
-assert profile=={'rank':1,'reference_memory_mib':16384,'scheduled_slots':8},profile
-apps={}
-postgres=[]
-paths=sorted(directory.glob('*.yaml'))+[root/'Data/Engine/K3s/cluster/controller.yaml']
-for path in paths:
-    if path.name=='webui-dev.yaml':
-        continue
-    for obj in yaml.safe_load_all(path.read_text()):
-        if not obj:
-            continue
-        if obj.get('kind')=='Deployment':
-            name=obj['metadata']['name']
-            assert name not in apps,name
-            apps[name]=obj
-        if obj.get('kind')=='StatefulSet':
-            assert obj['metadata']['name']=='postgres-db'
-            postgres.append(obj)
-assert len(postgres)==1
-cnpg=[]
-for instances in (1,3):
-    result=subprocess.run([sys.executable,str(root/'Data/Engine/K3s/cluster/render-postgres.py'),str(root/'Data/Engine/K3s/cluster/postgres.yaml'),str(instances)],input=json.dumps(postgres[0]),text=True,capture_output=True,check=True,timeout=5)
-    clusters=[obj for obj in yaml.safe_load_all(result.stdout) if obj and obj.get('kind')=='Cluster']
-    assert len(clusters)==1 and clusters[0]['spec']['instances']==instances
-    cnpg.append(clusters[0]['spec']['resources'])
-print(json.dumps({'applications':apps,'postgres':postgres[0]['spec']['template']['spec']['containers'][0]['resources'],'cnpg':cnpg}))
-`, root, directory)
-			decode.Env = render.Env
-			out, err = decode.Output()
-			if err != nil {
-				if failure, ok := err.(*exec.ExitError); ok {
-					t.Fatalf("decode production manifests: %v: %s", err, failure.Stderr)
-				}
-				t.Fatal(err)
+			profile, err := os.ReadFile(filepath.Join(directory, "profile.json"))
+			if err != nil || string(profile) != "{\"rank\":1,\"reference_memory_mib\":16384,\"scheduled_slots\":8}\n" {
+				t.Fatal("inherited Small Business selection changed", err)
 			}
-			var rendered struct {
-				Applications map[string]map[string]any `json:"applications"`
-				Postgres     map[string]any            `json:"postgres"`
-				CNPG         []map[string]any          `json:"cnpg"`
-			}
-			if err := json.Unmarshal(out, &rendered); err != nil {
-				t.Fatal(err)
-			}
+			rendered := sshDecodeRenderedApplicationBudget(t, ctx, root, directory, render.Env)
 			if len(rendered.Applications) != len(want) || len(rendered.CNPG) != 2 {
 				t.Fatal("production workload inventory changed")
 			}
@@ -216,4 +176,56 @@ print(json.dumps({'applications':apps,'postgres':postgres[0]['spec']['template']
 			}
 		})
 	}
+}
+
+// Shared decoding keeps both the original Small Business expectations and the
+// all-profile contract on actual production Deployment and CNPG renderers.
+type sshRenderedApplicationBudget struct {
+	Applications map[string]map[string]any `json:"applications"`
+	Postgres     map[string]any            `json:"postgres"`
+	CNPG         []map[string]any          `json:"cnpg"`
+}
+
+func sshDecodeRenderedApplicationBudget(t *testing.T, ctx context.Context, root, directory string, environment []string) sshRenderedApplicationBudget {
+	t.Helper()
+	decode := exec.CommandContext(ctx, "python3", "-c", `import json,pathlib,subprocess,sys,yaml
+root,directory=map(pathlib.Path,sys.argv[1:])
+apps={}
+postgres=[]
+paths=sorted(directory.glob('*.yaml'))+[root/'Data/Engine/K3s/cluster/controller.yaml']
+for path in paths:
+    if path.name=='webui-dev.yaml':
+        continue
+    for obj in yaml.safe_load_all(path.read_text()):
+        if not obj:
+            continue
+        if obj.get('kind')=='Deployment':
+            name=obj['metadata']['name']
+            assert name not in apps,name
+            apps[name]=obj
+        if obj.get('kind')=='StatefulSet':
+            assert obj['metadata']['name']=='postgres-db'
+            postgres.append(obj)
+assert len(postgres)==1
+cnpg=[]
+for instances in (1,3):
+    result=subprocess.run([sys.executable,str(root/'Data/Engine/K3s/cluster/render-postgres.py'),str(root/'Data/Engine/K3s/cluster/postgres.yaml'),str(instances)],input=json.dumps(postgres[0]),text=True,capture_output=True,check=True,timeout=5)
+    clusters=[obj for obj in yaml.safe_load_all(result.stdout) if obj and obj.get('kind')=='Cluster']
+    assert len(clusters)==1 and clusters[0]['spec']['instances']==instances
+    cnpg.append(clusters[0]['spec']['resources'])
+print(json.dumps({'applications':apps,'postgres':postgres[0]['spec']['template']['spec']['containers'][0]['resources'],'cnpg':cnpg}))
+`, root, directory)
+	decode.Env = environment
+	out, err := decode.Output()
+	if err != nil {
+		if failure, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("decode production manifests: %v: %s", err, failure.Stderr)
+		}
+		t.Fatal(err)
+	}
+	var rendered sshRenderedApplicationBudget
+	if err := json.Unmarshal(out, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	return rendered
 }

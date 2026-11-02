@@ -162,6 +162,18 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			}
 			cpu, memory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 			valid := slices.Contains([]string{"empty", "missing worker", "observed smaller", "observed larger", "two sites", "duplicate workers"}, mode)
+			// Engine.sh holds one complete candidate cohort alongside the
+			// observed/reconstructed workers; applications stay single-charged.
+			rotation := map[string][2]uint64{
+				"empty":             {25, 256 << 20},
+				"missing worker":    {75, 768 << 20},
+				"observed smaller":  {50, 512 << 20},
+				"observed larger":   {50, 1 << 30},
+				"two sites":         {100, 1 << 30},
+				"duplicate workers": {50, 512 << 20},
+			}[mode]
+			wantCPU += rotation[0]
+			wantMemory += rotation[1]
 			if ok != valid || (ok && (cpu != wantCPU || memory != wantMemory)) {
 				t.Fatal("incorrect desired worker budget", cpu, memory, ok, wantCPU, wantMemory)
 			}

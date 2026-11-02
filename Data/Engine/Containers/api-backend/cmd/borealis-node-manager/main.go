@@ -94,6 +94,10 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "source-membership-client":
+		if sourceMembershipClient(os.Args[2:]) != nil {
+			fatalf("source membership observation unavailable")
+		}
 	case "source-network-client":
 		if sourceNetworkClient(os.Args[2:]) != nil {
 			fatalf("source network observation unavailable")
@@ -526,6 +530,12 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if strings.TrimSpace(request.Verb) == "InspectSourceMembership" {
+		if _, err := clusterbootstrap.ParseMembershipActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
@@ -538,7 +548,7 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
-	case "InspectSourceNetwork", "InspectVIPNetwork", "InspectIdentityConsumers":
+	case "InspectSourceNetwork", "InspectVIPNetwork", "InspectIdentityConsumers", "InspectSourceMembership":
 		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
@@ -586,6 +596,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.inspectHealth(ctx)
 	case "InspectIdentityConsumers":
 		return m.inspectIdentityConsumers(ctx, request.Params)
+	case "InspectSourceMembership":
+		return m.inspectSourceMembership(ctx, request.Params)
 	case "InspectSourceNetwork":
 		if len(request.Params) != 0 {
 			return nil, clusterbootstrap.ErrPreparationConfig

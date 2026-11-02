@@ -9,7 +9,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${1:-${BOREALIS_K3S_RENDER_OUTPUT_DIR:-${REPO_ROOT}/Unit_Test_Results/k3s-render}}"
 RENDER_PROFILE="${2:-fixture}"
 case "${RENDER_PROFILE}" in
-  fixture|small-business) ;;
+  fixture|homelab|small-business|msp|enterprise) ;;
   *) printf 'Unsupported manifest fixture profile: %s\n' "${RENDER_PROFILE}" >&2; exit 2 ;;
 esac
 FIXTURE_ROOT="$(mktemp -d)"
@@ -31,18 +31,35 @@ RUNTIME_ENV="${DEPLOY_DIR}/runtime.env"
 WEBUI_RUNTIME_SOURCE_DIR="${RUNTIME_ROOT}/Services/webui-frontend/data/web-interface"
 mkdir -p "${DEPLOY_DIR}" "${OUTPUT_DIR}"
 
-if [[ "${RENDER_PROFILE}" == small-business ]]; then
-  # Qualification fixture: inherited rank 1 / 16 GiB reference, no overrides.
-  # Optional CPU/RAM arguments exercise stronger joining hosts, not new tuning.
-  load_profile_tuning "${3:-8}" "${4:-16384}" 1 16384
+if [[ "${RENDER_PROFILE}" != fixture ]]; then
+  # Pure renderer fixtures, not qualified host minimums. Keep Small Business's
+  # original default and optional joining CPU/RAM arguments unchanged.
+  case "${RENDER_PROFILE}" in
+    homelab) FIXTURE_RANK=0; FIXTURE_CPU=4; FIXTURE_MEMORY=8192 ;;
+    small-business) FIXTURE_RANK=1; FIXTURE_CPU=8; FIXTURE_MEMORY=16384 ;;
+    msp) FIXTURE_RANK=2; FIXTURE_CPU=16; FIXTURE_MEMORY=32768 ;;
+    enterprise) FIXTURE_RANK=3; FIXTURE_CPU=24; FIXTURE_MEMORY=65536 ;;
+  esac
+  load_profile_tuning "${3:-${FIXTURE_CPU}}" "${4:-${FIXTURE_MEMORY}}" "${FIXTURE_RANK}" "${5:-${FIXTURE_MEMORY}}"
   printf '{"rank":%s,"reference_memory_mib":%s,"scheduled_slots":%s}\n' \
     "${PROFILE_RANK}" "${PROFILE_CLUSTER_SIZING_MEMORY_MIB}" "${PROFILE_SITE_WORKER_CONCURRENCY}" \
     >"${OUTPUT_DIR}/profile.json"
+  # Retain actual effective profile settings for the independent Go contract.
+  {
+    for service in API_BACKEND JOB_SCHEDULER WEBUI_FRONTEND TRAEFIK_EDGE POSTGRES_DB REMOTE_DESKTOP_GUACD WIREGUARD_TUNNEL; do
+      for resource in CPU MEMORY; do
+        variable="PROFILE_${service}_${resource}_LIMIT"
+        printf 'BOREALIS_%s_%s_LIMIT=%s\n' "${service}" "${resource}" "${!variable}"
+      done
+    done
+    printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\nBOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=%s\n' \
+      "${PROFILE_RANK}" "${PROFILE_CLUSTER_SIZING_MEMORY_MIB}" "${PROFILE_SITE_WORKER_CONCURRENCY}"
+  } >"${OUTPUT_DIR}/application-limits.env"
 fi
 
 fixture_limit() {
   local kind="$1" fallback="$2" variable="$3"
-  if [[ "${RENDER_PROFILE}" == small-business ]]; then
+  if [[ "${RENDER_PROFILE}" != fixture ]]; then
     "format_k3s_${kind}_quantity" "${!variable}"
   else
     printf '%s\n' "${fallback}"

@@ -26,6 +26,30 @@ func clusterSSHSmallBusinessPostgres() clusterSSHApplicationResource {
 	return clusterSSHApplicationResource{"postgres", 100, 2000, 256 << 20, 6144 << 20}
 }
 
+// Requests and the two fixed controller envelopes come from the production
+// manifests. Profile-managed limits must also match the effective private
+// settings; this projection never substitutes for observed source resources.
+func clusterSSHProfileApplications(configuration *clusterbootstrap.PreparationConfiguration) ([]clusterSSHApplicationResource, clusterSSHApplicationResource, error) {
+	limits, err := configuration.ProfileApplicationLimits()
+	if err != nil {
+		return nil, clusterSSHApplicationResource{}, clusterbootstrap.ErrPreparationConfig
+	}
+	applications := clusterSSHSmallBusinessApplications()
+	postgres := clusterSSHSmallBusinessPostgres()
+	for _, limit := range limits {
+		if limit.Name == "postgres" {
+			postgres.CPULimitMilli, postgres.MemoryLimitBytes = limit.CPULimitMilli, limit.MemoryLimitBytes
+			continue
+		}
+		for i := range applications {
+			if applications[i].Name == limit.Name {
+				applications[i].CPULimitMilli, applications[i].MemoryLimitBytes = limit.CPULimitMilli, limit.MemoryLimitBytes
+			}
+		}
+	}
+	return applications, postgres, nil
+}
+
 // Add profile compatibility to every source read inside the existing native
 // sizing scope. Keep all observed demand, receipts, source/release identity,
 // controller authority and before/after rechecks; replace no mandatory check.
@@ -40,9 +64,11 @@ func withClusterSSHTargetProfileSizing(ctx context.Context, readers clusterSSHNe
 			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		configuration, err := clusterbootstrap.NewPreparationConfiguration(value.Expected, value.Settings)
-		if err != nil || configuration.SmallBusinessApplicationLimits() != nil ||
-			!slices.Equal(value.Storage.Requirements.Applications, clusterSSHSmallBusinessApplications()) ||
-			value.Storage.Requirements.PostgresResources != clusterSSHSmallBusinessPostgres() {
+		if err != nil {
+			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+		}
+		applications, postgres, err := clusterSSHProfileApplications(configuration)
+		if err != nil || !slices.Equal(value.Storage.Requirements.Applications, applications) || value.Storage.Requirements.PostgresResources != postgres {
 			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		return value, nil

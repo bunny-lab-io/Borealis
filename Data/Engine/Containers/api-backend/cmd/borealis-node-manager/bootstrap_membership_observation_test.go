@@ -68,9 +68,9 @@ func membershipObservationFixture(t *testing.T, pair bool) bootstrapMembershipOb
 		if e.Validate() != nil || receipt.Validate(e, r.Source) != nil {
 			t.Fatal("invalid immutable receipt fixture")
 		}
-		r.Nodes = append(r.Nodes, bootstrapMembershipNodeExpectation{receipt.Node, receipt.MemberName})
+		r.Nodes = append(r.Nodes, bootstrapMembershipNodeExpectation{Node: receipt.Node, MemberName: receipt.MemberName})
 		if pair || e.Target.Address == join.Expected.Target.Address {
-			r.Prepared = append(r.Prepared, bootstrapMembershipPreparedTarget{e, receipt})
+			r.Prepared = append(r.Prepared, bootstrapMembershipPreparedTarget{Expected: e, Receipt: receipt})
 		}
 	}
 	if !r.valid() {

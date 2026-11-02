@@ -227,6 +227,9 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 			workers := []clusterSSHSiteWorkerResource{sshSiteWorkerResourceValue(f.a.Source.Members[0].Name)}
 			values[0].CPURequestMilli -= workers[0].Resources.CPURequestMilli
 			values[0].MemoryLimitBytes -= workers[0].Resources.MemoryLimitBytes
+			// Preserve exact fit with the producer's whole candidate cohort.
+			values[0].CPURequestMilli -= workers[0].Resources.CPURequestMilli
+			values[0].MemoryLimitBytes -= workers[0].Resources.MemoryLimitBytes
 			if _, _, valid := clusterSSHApplicationBudget(values); !valid {
 				t.Fatal("invalid baseline application bounds")
 			}
