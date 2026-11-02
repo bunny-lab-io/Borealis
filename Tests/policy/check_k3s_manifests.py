@@ -182,13 +182,16 @@ def validate_cluster_controller_contract() -> None:
         if item.get("kind") == "ClusterRole"
         and (item.get("metadata") or {}).get("name") == "borealis-cluster-controller"
     ]
-    if len(roles) != 1:
+    if len(roles) != 1 or roles[0].get("metadata") != {"name": "borealis-cluster-controller"}:
         fail("cluster controller manifest must contain one dedicated ClusterRole")
+    cluster_roles = [item for item in objects if item.get("kind") == "ClusterRole"]
+    if len(cluster_roles) != 2 or any("aggregationRule" in role for role in cluster_roles):
+        fail("controller must retain only two explicit ClusterRoles without aggregated permissions")
     rules = (roles[0].get("rules") or [])
     namespace_rules = [rule for rule in rules if "namespaces" in (rule.get("resources") or [])]
-    if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}]:
-        fail("cluster controller namespace read must stay limited to kube-system identity")
-    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "daemonsets", "replicasets", "instancemanagers", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings", "*"} or (any(api_group == "longhorn.io" for api_group in rule.get("apiGroups", []) if isinstance(api_group, str)) and "nodes" in rule.get("resources", [])) for rule in rules):
+    if namespace_rules != [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system", "borealis"], "verbs": ["get"]}]:
+        fail("cluster controller namespace reads must stay limited to kube-system and borealis identity")
+    if any(set(rule.get("resources") or []) & {"secrets", "configmaps", "pods/log", "services", "daemonsets", "replicasets", "instancemanagers", "mutatingadmissionpolicies", "mutatingadmissionpolicybindings", "*"} or (any(api_group == "longhorn.io" for api_group in rule.get("apiGroups", []) if isinstance(api_group, str)) and "nodes" in rule.get("resources", [])) for rule in rules):
         fail("cluster controller must not gain broad private configuration, owner or admission policy access")
     source_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-source-settings"]
     expected_source_rule = {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["borealis-api-backend-runtime-env", "borealis-job-scheduler-runtime-env"], "verbs": ["get"]}
@@ -200,6 +203,10 @@ def validate_cluster_controller_contract() -> None:
     binding = source_bindings[0]
     if binding.get("metadata") != {"name": "borealis-cluster-source-settings", "namespace": "borealis"} or binding.get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-source-settings"} or binding.get("subjects") != [{"kind": "ServiceAccount", "name": "borealis-cluster-controller", "namespace": "borealis"}]:
         fail("cluster source settings must bind only existing controller ServiceAccount")
+    cluster_bindings = [item for item in objects if item.get("kind") == "ClusterRoleBinding"]
+    controller_bindings = [item for item in cluster_bindings if (item.get("metadata") or {}).get("name") == "borealis-cluster-controller"]
+    if len(cluster_bindings) != 2 or len(controller_bindings) != 1 or controller_bindings[0].get("metadata") != {"name": "borealis-cluster-controller"} or controller_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "borealis-cluster-controller"} or controller_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("controller must retain only its two fixed ClusterRoleBindings to the existing ServiceAccount")
     storage_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-storage-policy"]
     storage_settings = [
         "current-longhorn-version", "default-data-path", "create-default-disk-labeled-nodes",
@@ -258,7 +265,17 @@ def validate_cluster_controller_contract() -> None:
     cert_manager_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-cert-manager-source"]
     if len(cert_manager_bindings) != 1 or cert_manager_bindings[0].get("metadata") != {"name": "borealis-cluster-cert-manager-source", "namespace": "cert-manager"} or cert_manager_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-cert-manager-source"} or cert_manager_bindings[0].get("subjects") != binding.get("subjects"):
         fail("cert-manager source RoleBinding must bind only controller ServiceAccount")
-    if sum(item.get("kind") == "Role" for item in objects) != 7 or sum(item.get("kind") == "RoleBinding" for item in objects) != 7:
+    application_roles = [item for item in objects if item.get("kind") == "Role" and (item.get("metadata") or {}).get("name") == "borealis-cluster-application-health"]
+    application_rules = [
+        {"apiGroups": [""], "resources": ["services"], "resourceNames": ["api-backend"], "verbs": ["get"]},
+        {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
+    ]
+    if len(application_roles) != 1 or application_roles[0].get("metadata") != {"name": "borealis-cluster-application-health", "namespace": "borealis"} or application_roles[0].get("rules") != application_rules:
+        fail("application health Role must allow only named api-backend Service GET and borealis ReplicaSet GET")
+    application_bindings = [item for item in objects if item.get("kind") == "RoleBinding" and (item.get("metadata") or {}).get("name") == "borealis-cluster-application-health"]
+    if len(application_bindings) != 1 or application_bindings[0].get("metadata") != {"name": "borealis-cluster-application-health", "namespace": "borealis"} or application_bindings[0].get("roleRef") != {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "borealis-cluster-application-health"} or application_bindings[0].get("subjects") != binding.get("subjects"):
+        fail("application health RoleBinding must bind only controller ServiceAccount")
+    if sum(item.get("kind") == "Role" for item in objects) != 8 or sum(item.get("kind") == "RoleBinding" for item in objects) != 8:
         fail("controller must not gain additional namespaced permissions")
     storage_class_rules = [rule for rule in rules if "storageclasses" in (rule.get("resources") or [])]
     if storage_class_rules != [{"apiGroups": ["storage.k8s.io"], "resources": ["storageclasses"], "verbs": ["get"]}]:

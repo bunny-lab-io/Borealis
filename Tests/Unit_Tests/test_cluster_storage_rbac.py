@@ -28,6 +28,155 @@ class ClusterStorageRBACTests(unittest.TestCase):
     def test_committed_controller_passes(self):
         self.validate(self.objects)
 
+    def test_controller_cluster_objects_reject_unrelated_grants(self):
+        extra_role = {
+            "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+            "metadata": {"name": "unrelated-application-read"},
+            "rules": [{"apiGroups": [""], "resources": ["services"], "verbs": ["get"]}],
+        }
+        extra_binding = {
+            "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding",
+            "metadata": {"name": "unrelated-application-read"},
+            "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "unrelated-application-read"},
+            "subjects": [{"kind": "ServiceAccount", "name": "borealis-cluster-controller", "namespace": "borealis"}],
+        }
+        for additions in ([extra_role], [extra_binding], [extra_role, extra_binding]):
+            with self.subTest(kinds=[item["kind"] for item in additions]):
+                objects = copy.deepcopy(self.objects + additions)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_controller_cluster_binding_rejects_scope_drift(self):
+        mutations = {
+            "wrong name": lambda item: item["metadata"].update(name="other"),
+            "namespaced metadata": lambda item: item["metadata"].update(namespace="borealis"),
+            "other role": lambda item: item["roleRef"].update(name="cluster-admin"),
+            "other role kind": lambda item: item["roleRef"].update(kind="Role"),
+            "other role API group": lambda item: item["roleRef"].update(apiGroup="other"),
+            "other subject": lambda item: item["subjects"][0].update(name="other"),
+            "other subject namespace": lambda item: item["subjects"][0].update(namespace="default"),
+            "group subject": lambda item: item.update(subjects=[{"kind": "Group", "name": "system:authenticated"}]),
+            "extra subject": lambda item: item["subjects"].append({"kind": "ServiceAccount", "name": "other", "namespace": "borealis"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                binding = next(item for item in objects if item.get("kind") == "ClusterRoleBinding" and item["metadata"]["name"] == "borealis-cluster-controller")
+                mutate(binding)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+        for mode in ("missing", "duplicate"):
+            with self.subTest(mode=mode):
+                objects = copy.deepcopy(self.objects)
+                binding = next(item for item in objects if item.get("kind") == "ClusterRoleBinding" and item["metadata"]["name"] == "borealis-cluster-controller")
+                if mode == "missing":
+                    objects.remove(binding)
+                else:
+                    objects.append(copy.deepcopy(binding))
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_controller_cluster_roles_reject_aggregated_permissions(self):
+        for role_name in ("borealis-cluster-controller", "borealis-cluster-instance-manager-policy"):
+            with self.subTest(role=role_name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "ClusterRole" and item["metadata"]["name"] == role_name)
+                role["aggregationRule"] = {"clusterRoleSelectors": [{}]}
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_application_namespace_reads_reject_permission_drift(self):
+        mutations = {
+            "missing kube-system": lambda rule: rule["resourceNames"].remove("kube-system"),
+            "missing borealis": lambda rule: rule["resourceNames"].remove("borealis"),
+            "extra namespace": lambda rule: rule["resourceNames"].append("default"),
+            "unrestricted names": lambda rule: rule.pop("resourceNames"),
+            "Secret": lambda rule: rule["resources"].append("secrets"),
+        }
+        for verb in ("list", "watch", "create", "update", "patch", "delete", "deletecollection", "*"):
+            mutations[verb] = lambda rule, v=verb: rule["verbs"].append(v)
+        for field in ("apiGroups", "resources", "resourceNames"):
+            mutations[field] = lambda rule, f=field: rule.update({f: ["*"]})
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "ClusterRole" and item["metadata"]["name"] == "borealis-cluster-controller")
+                rule = next(rule for rule in role["rules"] if rule.get("resources") == ["namespaces"])
+                mutate(rule)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_application_health_role_rejects_permission_drift(self):
+        mutations = {
+            "wrong namespace": lambda role: role["metadata"].update(namespace="default"),
+            "cluster role": lambda role: role.update(kind="ClusterRole"),
+            "extra Service": lambda role: role["rules"][0]["resourceNames"].append("other"),
+            "all Services": lambda role: role["rules"][0].pop("resourceNames"),
+            "fixed owner cannot cover revisions": lambda role: role["rules"][1].update(resourceNames=["api-backend"]),
+            "wildcard owner": lambda role: role["rules"][1].update(resourceNames=["api-backend-*"]),
+            "owner subresource": lambda role: role["rules"][1].update(resources=["replicasets/status"]),
+            "extra Secret rule": lambda role: role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}),
+        }
+        for index in (0, 1):
+            mutations[f"missing rule {index}"] = lambda role, i=index: role["rules"].pop(i)
+            mutations[f"duplicate rule {index}"] = lambda role, i=index: role["rules"].append(copy.deepcopy(role["rules"][i]))
+            mutations[f"extra Secret resource {index}"] = lambda role, i=index: role["rules"][i]["resources"].append("secrets")
+            for verb in ("list", "watch", "create", "update", "patch", "delete", "deletecollection", "*"):
+                mutations[f"rule {index} verb {verb}"] = lambda role, i=index, v=verb: role["rules"][i]["verbs"].append(v)
+            for field in ("apiGroups", "resources", "resourceNames"):
+                mutations[f"rule {index} wildcard {field}"] = lambda role, i=index, f=field: role["rules"][i].update({f: ["*"]})
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "Role" and item["metadata"]["name"] == "borealis-cluster-application-health")
+                mutate(role)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_application_health_binding_rejects_scope_drift(self):
+        mutations = {
+            "wrong namespace": lambda binding: binding["metadata"].update(namespace="default"),
+            "cluster binding": lambda binding: binding.update(kind="ClusterRoleBinding"),
+            "cluster role": lambda binding: binding["roleRef"].update(kind="ClusterRole"),
+            "wrong role": lambda binding: binding["roleRef"].update(name="other"),
+            "wrong role API group": lambda binding: binding["roleRef"].update(apiGroup="other"),
+            "wrong subject": lambda binding: binding["subjects"][0].update(name="other"),
+            "wrong subject namespace": lambda binding: binding["subjects"][0].update(namespace="default"),
+            "extra subject": lambda binding: binding["subjects"].append({"kind": "Group", "name": "system:authenticated"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                objects = copy.deepcopy(self.objects)
+                binding = next(item for item in objects if item.get("kind") == "RoleBinding" and item["metadata"]["name"] == "borealis-cluster-application-health")
+                mutate(binding)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
+    def test_application_health_objects_must_exist_once(self):
+        for kind in ("Role", "RoleBinding"):
+            for mode in ("missing", "duplicate"):
+                with self.subTest(kind=kind, mode=mode):
+                    objects = copy.deepcopy(self.objects)
+                    item = next(item for item in objects if item.get("kind") == kind and item["metadata"]["name"] == "borealis-cluster-application-health")
+                    if mode == "missing":
+                        objects.remove(item)
+                    else:
+                        objects.append(copy.deepcopy(item))
+                    with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                        self.validate(objects)
+
+    def test_application_health_reads_cannot_move_to_cluster_role(self):
+        for rule in (
+            {"apiGroups": [""], "resources": ["services"], "resourceNames": ["api-backend"], "verbs": ["get"]},
+            {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
+        ):
+            with self.subTest(rule=rule):
+                objects = copy.deepcopy(self.objects)
+                role = next(item for item in objects if item.get("kind") == "ClusterRole" and item["metadata"]["name"] == "borealis-cluster-controller")
+                role["rules"].append(rule)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.validate(objects)
+
     def test_source_settings_role_rejects_permission_drift(self):
         mutations = {
             "missing scheduler": lambda role: role["rules"][0]["resourceNames"].remove("borealis-job-scheduler-runtime-env"),
