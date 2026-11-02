@@ -22,6 +22,23 @@ func (c *clusterController) withClusterSSHPreparationRecoveryProof(parent contex
 
 func (c *clusterController) withClusterSSHPreparationRecoveryProofEvery(parent context.Context, aegis *goAegisService,
 	issued clusterSSHPreparationRecoveryClaim, interval time.Duration, consume clusterSSHPreparationRecoveryProofConsumer) (result error) {
+	return c.withClusterSSHPreparationRecoveryCustodyEvery(parent, aegis, issued, interval, consume)
+}
+
+// Separate entry permits only source journal resolution under the issued Q+2
+// claim. It supplies no source-delivery or later preparation capability. The
+// consumer must independently prove original source bytes or source absence.
+type clusterSSHPreparationRecoverySourceReconciliationConsumer func(context.Context, clusterSSHPreparationRecoveryAuthority, func(context.Context) error) error
+
+func (c *clusterController) withClusterSSHPreparationRecoverySourceReconciliation(parent context.Context, aegis *goAegisService,
+	issued clusterSSHPreparationRecoveryClaim, consume clusterSSHPreparationRecoverySourceReconciliationConsumer) error {
+	return c.withClusterSSHPreparationRecoveryCustodyEvery(parent, aegis, issued, time.Second, clusterSSHPreparationRecoveryProofConsumer(consume))
+}
+
+// Shared lease custody does not select native actions. Each caller retains its
+// separate transport interface and meaning of the returned private evidence.
+func (c *clusterController) withClusterSSHPreparationRecoveryCustodyEvery(parent context.Context, aegis *goAegisService,
+	issued clusterSSHPreparationRecoveryClaim, interval time.Duration, consume clusterSSHPreparationRecoveryProofConsumer) (result error) {
 	// Consume before any fallible check. Even failed/canceled entry cannot replay
 	// the same issued handle. Copies share the latch but never mutable expectations.
 	if issued.custody == nil || !issued.custody.started.CompareAndSwap(false, true) {

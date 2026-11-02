@@ -78,7 +78,9 @@ func recoveryProgressCommand(t *testing.T, root, binary string, args ...string) 
 	defer cancel()
 	c := exec.CommandContext(ctx, binary, args...)
 	c.Dir = root
-	c.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64", "GOTOOLCHAIN=local", "GOWORK=off")
+	// This synthetic static helper is inspected as Bundle content, never run.
+	// Parent test race flags must not conflict with its CGO-disabled build.
+	c.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "CGO_ENABLED=0", "GOFLAGS=", "GOOS=linux", "GOARCH=amd64", "GOTOOLCHAIN=local", "GOWORK=off")
 	out, err := c.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fixture recoveryProgressCommand failed: %v %s", err, out)

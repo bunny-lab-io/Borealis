@@ -7,6 +7,7 @@ import (
 	"context"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 type clusterSSHPreparationRecoveryProgressClient interface {
@@ -84,18 +85,90 @@ func (c *clusterController) observeClusterSSHPreparationRecoveryProgressWith(par
 	return result, nil
 }
 
+// Private borrowed inputs live only inside consume. The caller selects its
+// separately typed transport; this helper grants no native action capability.
+type clusterSSHPreparationRecoveryTargetInputs struct {
+	inputs              *clusterbootstrap.PreparationInputs
+	expected            clusterbootstrap.PreparationExpected
+	target              clusterremote.Target
+	key                 clusterremote.HostKey
+	credential          *clusterremote.Credential
+	sudo                []byte
+	current, inputCheck func(context.Context) error
+}
+
 func inspectClusterSSHPreparationRecoveryTarget(ctx context.Context, authority clusterSSHPreparationRecoveryAuthority, index int,
 	sealed sealedClusterSSHCredentials, aegis clusterSSHWorkerAegis, scratchParent string, source clusterSSHPreparationRecoverySourceRead,
-	check func(context.Context) error, dependencies clusterSSHPreparationRecoveryProgressDependencies) (progress clusterbootstrap.PreparationProgress, result error) {
-	fail := func() (clusterbootstrap.PreparationProgress, error) {
-		return clusterbootstrap.PreparationProgress{}, clusterbootstrap.ErrPreparationConfig
+	check func(context.Context) error, dependencies clusterSSHPreparationRecoveryProgressDependencies) (clusterbootstrap.PreparationProgress, error) {
+	var progress clusterbootstrap.PreparationProgress
+	err := withClusterSSHPreparationRecoveryTargetInputs(ctx, authority, index, sealed, aegis, scratchParent, source, check,
+		dependencies.download, dependencies.closeInputs, func(target clusterSSHPreparationRecoveryTargetInputs) error {
+			if dependencies.connect == nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			client, connectErr := dependencies.connect(ctx, target.target, target.key, target.credential)
+			if client == nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			actionErr, boundaryErr := runClusterSSHPreparationRecoverySession(ctx, target, client.Close, func() error {
+				if connectErr != nil {
+					return connectErr
+				}
+				var err error
+				progress, err = client.InspectPreparationProgress(ctx, target.inputs, target.expected, target.sudo, target.current)
+				return err
+			})
+			if actionErr != nil || boundaryErr != nil || progress.Validate() != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			return nil
+		})
+	if err != nil {
+		return clusterbootstrap.PreparationProgress{}, err
 	}
-	if aegis == nil || source == nil || check == nil || dependencies.download == nil || dependencies.connect == nil || index < 0 || index >= len(authority.Cohort.Targets) {
+	return progress, nil
+}
+
+// Return action and boundary failures separately. Only an independently joined
+// action failure may be followed by another proof; failed cleanup/authority
+// never becomes absence or a reason to repeat an uncertain effect.
+func runClusterSSHPreparationRecoverySession(ctx context.Context, target clusterSSHPreparationRecoveryTargetInputs,
+	closeClient func() error, action func() error) (actionErr, boundaryErr error) {
+	if closeClient == nil || action == nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	var once sync.Once
+	closed := make(chan struct{})
+	var closeErr error
+	closeOwned := func() { once.Do(func() { closeErr = closeClient(); close(closed) }) }
+	stop := context.AfterFunc(ctx, closeOwned)
+	defer func() {
+		stop()
+		closeOwned()
+		<-closed
+		if closeErr != nil || target.current(ctx) != nil || target.inputCheck(ctx) != nil || ctx.Err() != nil {
+			boundaryErr = clusterbootstrap.ErrPreparationConfig
+		}
+	}()
+	if target.current(ctx) != nil || target.inputCheck(ctx) != nil || ctx.Err() != nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	return action(), nil
+}
+
+func withClusterSSHPreparationRecoveryTargetInputs(ctx context.Context, authority clusterSSHPreparationRecoveryAuthority, index int,
+	sealed sealedClusterSSHCredentials, aegis clusterSSHWorkerAegis, scratchParent string, source clusterSSHPreparationRecoverySourceRead,
+	check func(context.Context) error, download func(context.Context, clusterbootstrap.Expected, string) (*clusterbootstrap.Bundle, error),
+	closeInputs func(*clusterbootstrap.PreparationInputs) error, consume func(clusterSSHPreparationRecoveryTargetInputs) error) (result error) {
+	fail := func() error { return clusterbootstrap.ErrPreparationConfig }
+	if aegis == nil || source == nil || check == nil || download == nil || consume == nil || index < 0 || index >= len(authority.Cohort.Targets) {
 		return fail()
 	}
 	item := authority.Cohort.Targets[index]
+	var failed atomic.Bool
 	current := func(ctx context.Context) error {
-		if ctx.Err() != nil || check(ctx) != nil || aegis.verifyClusterSSHGeneration(ctx, sealed.generation) != nil || ctx.Err() != nil {
+		if failed.Load() || ctx.Err() != nil || check(ctx) != nil || aegis.verifyClusterSSHGeneration(ctx, sealed.generation) != nil || ctx.Err() != nil {
+			failed.Store(true)
 			return clusterbootstrap.ErrSessionAuthority
 		}
 		return nil
@@ -122,15 +195,14 @@ func inspectClusterSSHPreparationRecoveryTarget(ctx context.Context, authority c
 	if err != nil {
 		return fail()
 	}
-	inputs, err := prepareClusterSSHTargetInputsWith(ctx, expected, runtime, scratchParent, read, dependencies.download)
+	inputs, err := prepareClusterSSHTargetInputsWith(ctx, expected, runtime, scratchParent, read, download)
 	if inputs != nil {
 		defer func() {
-			closeInputs := dependencies.closeInputs
 			if closeInputs == nil {
 				closeInputs = (*clusterbootstrap.PreparationInputs).Close
 			}
 			if closeInputs(inputs) != nil {
-				progress, result = fail()
+				result = fail()
 			}
 		}()
 	}
@@ -155,28 +227,13 @@ func inspectClusterSSHPreparationRecoveryTarget(ctx context.Context, authority c
 	defer clear(sudo)
 	key := item.Key
 	key.PublicKey = bytes.Clone(key.PublicKey)
-	client, err := dependencies.connect(ctx, clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}, key, credential)
-	if client != nil {
-		var closeOnce sync.Once
-		closed := make(chan struct{})
-		var closeErr error
-		closeClient := func() { closeOnce.Do(func() { closeErr = client.Close(); close(closed) }) }
-		stop := context.AfterFunc(ctx, closeClient)
-		defer func() {
-			stop()
-			closeClient()
-			<-closed
-			if closeErr != nil {
-				progress, result = fail()
-			}
-		}()
-	}
-	if err != nil || client == nil || current(ctx) != nil || inputCheck(ctx) != nil {
+	if current(ctx) != nil {
 		return fail()
 	}
-	progress, err = client.InspectPreparationProgress(ctx, inputs, expected, sudo, current)
-	if err != nil || progress.Validate() != nil || inputCheck(ctx) != nil || current(ctx) != nil {
+	if consume(clusterSSHPreparationRecoveryTargetInputs{inputs, expected,
+		clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}, key, credential, sudo, current, inputCheck}) != nil ||
+		current(ctx) != nil {
 		return fail()
 	}
-	return progress, nil
+	return nil
 }
