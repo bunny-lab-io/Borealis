@@ -1575,6 +1575,14 @@ func (c *clusterController) failOperation(ctx context.Context, operation cluster
 }
 
 func (c *clusterController) completeOperation(ctx context.Context, operation clusterControllerOperation, nodes []clusterControllerNode) error {
+	var removal clusterRemovalCompletion
+	if operation.Kind == "node_remove" {
+		var err error
+		removal, err = prepareClusterRemovalCompletion(operation, nodes)
+		if err != nil {
+			return err
+		}
+	}
 	conn, err := c.store.db.Conn(ctx)
 	if err != nil {
 		return err
@@ -1658,13 +1666,12 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 		status := completedClusterRecoveryStatus(operation, clusterStatus, activeSize, desiredSize, true, parseClusterJSON(configJSON))
 		_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_state SET status=$1,updated_at=$2 WHERE id=1`, status, now)
 	case "node_remove":
-		// Finalize the same validated cohort used by planning and the native
-		// absence gate, including legacy payloads without the pinned ID field.
-		targets, targetErr := clusterRemovalNodes(operation, nodes)
-		if targetErr != nil {
-			return targetErr
+		// Native absence/quorum observations authorize only this original
+		// operation and active census, not a replacement or resumed attempt.
+		if err := c.requireRemovalCompletion(ctx, tx, operation, removal, activeSize); err != nil {
+			return err
 		}
-		for _, node := range targets {
+		for _, node := range removal.targets {
 			_, err = tx.ExecContext(ctx, `UPDATE engine.cluster_nodes SET membership_state='Removed',application_state='drained',drain_reason=$1,roles_json='{}',updated_at=$2 WHERE id=$3`, firstText(cleanText(operation.Payload["reason"]), "removed"), now, node.ID)
 			if err != nil {
 				break
@@ -1741,6 +1748,11 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 	}
 	if err := insertClusterEvent(ctx, tx, operation.ID, "", "", "operation_succeeded", "succeeded", "Cluster operation completed.", map[string]any{"kind": operation.Kind}, now); err != nil {
 		return err
+	}
+	if operation.Kind == "node_remove" {
+		if err := c.requireLeaseOwnership(ctx, tx); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

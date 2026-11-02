@@ -423,7 +423,7 @@ func saveUnlocked(path string, cfg *AgentConfig, writer string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceConfigFile(tmpPath, path); err != nil {
 		return err
 	}
 	return RestrictFile(path)
