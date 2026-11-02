@@ -13,9 +13,13 @@ import (
 // Only API-assigned identity, scheduling and status are synthetic.
 func sshSiteWorkerPodFixture(t *testing.T, node string, site int64) map[string]any {
 	t.Helper()
+	return sshSiteWorkerPodFixtureWithIdentity(t, node, site, fmt.Sprintf("Site %d", site), fmt.Sprintf("worker-%d", site))
+}
+
+func sshSiteWorkerPodFixtureWithIdentity(t *testing.T, node string, site int64, siteName, worker string) map[string]any {
+	t.Helper()
 	profile, _ := borealisOperatorSiteWorkerResourceProfile("small")
 	o := borealisOperator{namespace: "borealis"}
-	siteName, worker := fmt.Sprintf("Site %d", site), fmt.Sprintf("worker-%d", site)
 	name := siteWorkerNameForSite(site, siteName, worker)
 	pod := o.siteWorkerPodManifest(name, name, "10.43.10.7", site, siteName, siteWorkerSiteSlug(site, siteName), worker, "borealis-engine/site-worker:sha-cccccccccccc", "small", profile, 56001, 61001)
 	meta, spec := pod["metadata"].(map[string]any), pod["spec"].(map[string]any)
@@ -49,6 +53,49 @@ func sshSiteWorkerPopulate(t *testing.T, f *sshStorageFixture) {
 
 func sshSiteWorkerPod(f *sshStorageFixture, member int) map[string]any {
 	return f.objects[clusterSSHSiteWorkerPodsPath(f.a.Source.Members[member].Name)]["items"].([]any)[0].(map[string]any)
+}
+
+func TestClusterSSHSiteWorkerSiteUniqueness(t *testing.T) {
+	for _, separateNodes := range []bool{false, true} {
+		for _, duplicateSite := range []bool{false, true} {
+			t.Run(fmt.Sprintf("separate_nodes=%t/duplicate_site=%t", separateNodes, duplicateSite), func(t *testing.T) {
+				f := newSSHStorageFixture(t, separateNodes)
+				firstNode, secondNode := f.a.Source.Members[0].Name, f.a.Source.Members[0].Name
+				if separateNodes {
+					secondNode = f.a.Source.Members[1].Name
+				}
+				secondSite := int64(2)
+				if duplicateSite {
+					secondSite = 1
+				}
+				// A renamed site can leave two individually canonical Pod names.
+				// Keep name, UID and worker GUID distinct to isolate SiteID reuse.
+				first := sshSiteWorkerPodFixtureWithIdentity(t, firstNode, 1, "Original site", "worker-first")
+				second := sshSiteWorkerPodFixtureWithIdentity(t, secondNode, secondSite, "Renamed site", "worker-second")
+				firstPath, secondPath := clusterSSHSiteWorkerPodsPath(firstNode), clusterSSHSiteWorkerPodsPath(secondNode)
+				f.objects[firstPath]["items"] = []any{first}
+				if separateNodes {
+					f.objects[secondPath]["items"] = []any{second}
+				} else {
+					f.objects[firstPath]["items"] = []any{first, second}
+				}
+				got, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
+				if duplicateSite {
+					if err == nil {
+						t.Fatal("accepted distinct workers for the same site")
+					}
+					return
+				}
+				if err != nil || len(got.Requirements.SiteWorkers) != 2 {
+					t.Fatal("rejected distinct-site workers", err)
+				}
+				cpu, memory, ok := clusterSSHSiteWorkerBudget(got.Requirements.SiteWorkers)
+				if !ok || cpu != 50 || memory != 512<<20 {
+					t.Fatal("changed distinct-site worker sum", cpu, memory, ok)
+				}
+			})
+		}
+	}
 }
 
 func TestClusterSSHSiteWorkerResources(t *testing.T) {
@@ -182,7 +229,7 @@ func TestClusterSSHSiteWorkerBudgetAndSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"missing", "order", "UID", "worker", "name", "site", "node", "resource name", "resource request", "CPU overflow", "memory overflow"} {
+	for _, mode := range []string{"missing", "order", "UID", "worker", "name", "site", "duplicate site", "node", "resource name", "resource request", "CPU overflow", "memory overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			v := slices.Clone(observed.Requirements.SiteWorkers)
 			switch mode {
@@ -198,6 +245,8 @@ func TestClusterSSHSiteWorkerBudgetAndSource(t *testing.T) {
 				v[0].Name = "other"
 			case "site":
 				v[0].SiteID = -1
+			case "duplicate site":
+				v[1].SiteID = v[0].SiteID
 			case "node":
 				v[0].Node = "failed-member"
 			case "resource name":

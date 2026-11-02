@@ -134,8 +134,6 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 				worker := snapshot.Storage.Requirements.SiteWorkers[0]
 				worker.Name, worker.Worker, worker.UID = "site-worker-site-2", "worker-2", newClusterUUID()
 				snapshot.Storage.Requirements.SiteWorkers = append(snapshot.Storage.Requirements.SiteWorkers, worker)
-				wantCPU += 25
-				wantMemory += 256 << 20
 			case "missing census":
 				snapshot.DesiredWorkerSites = nil
 			case "duplicate sites":
@@ -161,16 +159,15 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 				snapshot.DesiredWorkerSites = []int64{2}
 			}
 			cpu, memory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
-			valid := slices.Contains([]string{"empty", "missing worker", "observed smaller", "observed larger", "two sites", "duplicate workers"}, mode)
+			valid := slices.Contains([]string{"empty", "missing worker", "observed smaller", "observed larger", "two sites"}, mode)
 			// Engine.sh holds one complete candidate cohort alongside the
 			// observed/reconstructed workers; applications stay single-charged.
 			rotation := map[string][2]uint64{
-				"empty":             {25, 256 << 20},
-				"missing worker":    {75, 768 << 20},
-				"observed smaller":  {50, 512 << 20},
-				"observed larger":   {50, 1 << 30},
-				"two sites":         {100, 1 << 30},
-				"duplicate workers": {50, 512 << 20},
+				"empty":            {25, 256 << 20},
+				"missing worker":   {75, 768 << 20},
+				"observed smaller": {50, 512 << 20},
+				"observed larger":  {50, 1 << 30},
+				"two sites":        {100, 1 << 30},
 			}[mode]
 			wantCPU += rotation[0]
 			wantMemory += rotation[1]

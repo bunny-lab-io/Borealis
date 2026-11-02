@@ -176,6 +176,12 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 				values[i].CPURequestMilli = 1750
 				values[i].MemoryLimitBytes = 7 << 29
 			}
+			// Preserve the exact 32-GiB fit after the separately specified
+			// 7.5-GB OS/K3s/headroom policy charge. Spread the reduction so
+			// each synthetic workload still has a valid request/cap envelope.
+			for i := 2; i < 6; i++ {
+				values[i].MemoryLimitBytes -= 7_500_000_000 / 4
+			}
 			operator := sshCNPGResourceValue(t)
 			upgrade := sshSystemUpgradeResourceValue(t)
 			ui := sshLonghornUIResourceValue(t)

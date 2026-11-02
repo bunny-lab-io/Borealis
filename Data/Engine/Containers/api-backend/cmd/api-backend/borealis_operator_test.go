@@ -786,16 +786,22 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			if len(deleted) > 0 {
+				writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"items": []any{
 					map[string]any{
 						"metadata": map[string]any{
 							"name":      "site-worker-worker-safe",
+							"uid":       "owned-object-uid",
 							"namespace": "borealis",
 							"labels": map[string]any{
 								"app.kubernetes.io/component":  "site-worker",
 								"app.kubernetes.io/managed-by": "borealis-operator",
 								"borealis.io/worker-guid":      "worker-safe",
+								"borealis.io/site-id":          "7",
 							},
 						},
 					},
@@ -807,6 +813,7 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 								"app.kubernetes.io/component":  "site-worker",
 								"app.kubernetes.io/managed-by": "manual",
 								"borealis.io/worker-guid":      "worker-safe",
+								"borealis.io/site-id":          "7",
 							},
 						},
 					},
@@ -818,11 +825,13 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 					map[string]any{
 						"metadata": map[string]any{
 							"name":      "site-worker-worker-safe",
+							"uid":       "owned-object-uid",
 							"namespace": "borealis",
 							"labels": map[string]any{
 								"app.kubernetes.io/component":  "site-worker",
 								"app.kubernetes.io/managed-by": "borealis-operator",
 								"borealis.io/worker-guid":      "worker-safe",
+								"borealis.io/site-id":          "7",
 							},
 						},
 					},
@@ -834,6 +843,7 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 								"app.kubernetes.io/component":  "site-worker",
 								"app.kubernetes.io/managed-by": "manual",
 								"borealis.io/worker-guid":      "worker-safe",
+								"borealis.io/site-id":          "7",
 							},
 						},
 					},
@@ -876,11 +886,16 @@ func TestBorealisOperatorPostRestoreRefreshRetiresWorkersAndRestartsRuntime(t *t
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			if deleted["/api/v1/namespaces/borealis/pods/site-worker-bunny-lab"] {
+				writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"items": []any{
 					map[string]any{
 						"metadata": map[string]any{
 							"name":      "site-worker-bunny-lab",
+							"uid":       "refresh-object-uid",
 							"namespace": "borealis",
 							"labels": map[string]any{
 								"app.kubernetes.io/component":  "site-worker",
@@ -899,6 +914,7 @@ func TestBorealisOperatorPostRestoreRefreshRetiresWorkersAndRestartsRuntime(t *t
 					map[string]any{
 						"metadata": map[string]any{
 							"name":      "site-worker-bunny-lab",
+							"uid":       "refresh-object-uid",
 							"namespace": "borealis",
 							"labels": map[string]any{
 								"app.kubernetes.io/component":  "site-worker",

@@ -115,6 +115,7 @@
     "TestSchedulerPostgresSnapshotOutlivesOwnershipTransactionBudget",
     "TestSchedulerPostgresUnknownOutcomePreservesExecution",
     "TestSchedulerPostgresWorkflowDispatchRetainsIdentity",
+    "TestSchedulerWorkerPolicyPostgresPreservesUncertainOwnership",
     "TestVPNSessionStorePostgresReplicaConvergence"
   ]
 }

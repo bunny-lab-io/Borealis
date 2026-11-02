@@ -39,20 +39,23 @@ func clusterSSHSiteWorkerPodsPathValid(path string) bool {
 // observed active-source set to each target, without assuming even spreading or
 // creating one worker replica per node. Missing-worker reconstruction and the
 // complete desired worker census remain separate readiness evidence.
+// This source inventory permits one resident worker per site; Agent-transition
+// candidates remain excluded and cannot become another baseline worker.
 func clusterSSHSiteWorkerBudget(values []clusterSSHSiteWorkerResource) (cpu, memory uint64, ok bool) {
 	if values == nil || len(values) > clusterSSHSiteWorkerLimit {
 		return 0, 0, false
 	}
 	uids, workers := map[string]bool{}, map[string]bool{}
+	sites := map[int64]bool{}
 	previous := ""
 	for _, v := range values {
 		if !borealisOperatorKubernetesNameAllowed(v.Name) || !strings.HasPrefix(v.Name, siteWorkerNamePrefix) || v.Name <= previous ||
 			!vipScopeUUID(v.UID) || uids[v.UID] || !clusterSSHStorageName(v.Node) ||
-			!borealisOperatorKubernetesNameAllowed(v.Worker) || workers[v.Worker] || v.SiteID <= 0 || uint64(v.SiteID) > clusterSSHCapacityLimit ||
+			!borealisOperatorKubernetesNameAllowed(v.Worker) || workers[v.Worker] || v.SiteID <= 0 || uint64(v.SiteID) > clusterSSHCapacityLimit || sites[v.SiteID] ||
 			v.Resources.Name != "site-worker" || !clusterSSHWorkloadResourceValid(v.Resources) {
 			return 0, 0, false
 		}
-		previous, uids[v.UID], workers[v.Worker] = v.Name, true, true
+		previous, uids[v.UID], workers[v.Worker], sites[v.SiteID] = v.Name, true, true, true
 		cpu, ok = clusterSSHCapacitySum(cpu, v.Resources.CPURequestMilli)
 		if !ok {
 			return 0, 0, false

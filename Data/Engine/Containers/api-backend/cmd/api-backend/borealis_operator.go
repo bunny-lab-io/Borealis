@@ -577,29 +577,8 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	if remoteDesktopPort <= 0 {
 		return nil, http.StatusBadRequest, errors.New("remote_desktop_port is required")
 	}
-	existing, err := o.siteWorkerPodsByGUID(ctx, workerGUID)
-	if err != nil {
-		return nil, http.StatusBadGateway, err
-	}
-	if len(existing) > 0 {
-		return nil, http.StatusConflict, fmt.Errorf("site-worker %s already has %d K3s pod(s)", workerGUID, len(existing))
-	}
-	staleServices, err := o.siteWorkerServicesByGUID(ctx, workerGUID)
-	if err != nil {
-		return nil, http.StatusBadGateway, err
-	}
-	for _, service := range staleServices {
-		metadata := nestedMap(service, "metadata")
-		name := cleanText(metadata["name"])
-		if name == "" {
-			continue
-		}
-		if err := o.kubeDelete(ctx, "core", "services", name, map[string]any{
-			"apiVersion": "v1",
-			"kind":       "DeleteOptions",
-		}); err != nil {
-			return nil, http.StatusBadGateway, err
-		}
+	if err := o.siteWorkerLaunchPreflight(ctx, req.SiteID, workerGUID); err != nil {
+		return nil, http.StatusConflict, err
 	}
 	siteName := cleanText(req.SiteName)
 	siteSlug := siteWorkerSiteSlug(req.SiteID, siteName)
@@ -621,10 +600,8 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	pod := o.siteWorkerPodManifest(podName, serviceName, serviceHost, req.SiteID, siteName, siteSlug, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
 	created, err := o.kubeCreate(ctx, "core", "pods", pod)
 	if err != nil {
-		_ = o.kubeDelete(context.Background(), "core", "services", serviceName, map[string]any{
-			"apiVersion": "v1",
-			"kind":       "DeleteOptions",
-		})
+		// A failed response does not prove Kubernetes rejected creation. Keep
+		// the Service and its routing identity until explicit retirement.
 		return nil, http.StatusBadGateway, err
 	}
 	podSummary := summarizeBorealisSiteWorkerPod(created)
@@ -657,11 +634,7 @@ func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOpe
 	if !borealisOperatorKubernetesNameAllowed(workerGUID) {
 		return nil, http.StatusBadRequest, errors.New("worker_guid must be a Kubernetes DNS label segment")
 	}
-	pods, err := o.siteWorkerPodsByGUID(ctx, workerGUID)
-	if err != nil {
-		return nil, http.StatusBadGateway, err
-	}
-	services, err := o.siteWorkerServicesByGUID(ctx, workerGUID)
+	pods, services, err := o.siteWorkerRetirementInventory(ctx, workerGUID)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
 	}
@@ -679,10 +652,16 @@ func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOpe
 			"apiVersion":         "v1",
 			"kind":               "DeleteOptions",
 			"gracePeriodSeconds": 15,
+			"preconditions":      map[string]any{"uid": metadata["uid"]},
 		}); err != nil {
 			return nil, http.StatusBadGateway, err
 		}
 		retired = append(retired, name)
+	}
+	// DELETE acceptance is not absence. Keep the Service while the old Pod
+	// terminates, a replacement appears, or the fresh inventory is uncertain.
+	if err := o.siteWorkerRetirementAbsent(ctx, workerGUID, pods, services); err != nil {
+		return nil, http.StatusConflict, err
 	}
 	retiredServices := make([]string, 0, len(services))
 	for _, service := range services {
@@ -692,8 +671,9 @@ func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOpe
 			continue
 		}
 		if err := o.kubeDelete(ctx, "core", "services", name, map[string]any{
-			"apiVersion": "v1",
-			"kind":       "DeleteOptions",
+			"apiVersion":    "v1",
+			"kind":          "DeleteOptions",
+			"preconditions": map[string]any{"uid": metadata["uid"]},
 		}); err != nil {
 			return nil, http.StatusBadGateway, err
 		}
@@ -769,11 +749,11 @@ func (o *borealisOperator) runPostRestoreRefresh(delay time.Duration, workloads 
 }
 
 func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]any, error) {
-	pods, err := o.kubeListItems(ctx, "core", "pods")
+	pods, err := o.siteWorkerObjects(ctx, "pods")
 	if err != nil {
 		return nil, err
 	}
-	services, err := o.kubeListItems(ctx, "core", "services")
+	services, err := o.siteWorkerObjects(ctx, "services")
 	if err != nil {
 		return nil, err
 	}
@@ -1527,6 +1507,7 @@ func summarizeKubernetesWorkload(kind string, item map[string]any) map[string]an
 
 func summarizeKubernetesPod(item map[string]any) map[string]any {
 	metadata := nestedMap(item, "metadata")
+	spec := nestedMap(item, "spec")
 	status := nestedMap(item, "status")
 	labels := mapStringAny(metadata["labels"])
 	return map[string]any{
@@ -1534,7 +1515,7 @@ func summarizeKubernetesPod(item map[string]any) map[string]any {
 		"namespace":     cleanText(metadata["namespace"]),
 		"labels":        labels,
 		"phase":         cleanText(status["phase"]),
-		"node_name":     cleanText(status["nodeName"]),
+		"node_name":     cleanText(spec["nodeName"]),
 		"pod_ip":        cleanText(status["podIP"]),
 		"started_at":    cleanText(status["startTime"]),
 		"ready":         kubernetesPodReady(status),
@@ -1559,6 +1540,8 @@ func summarizeBorealisSiteWorkerPod(pod map[string]any) map[string]any {
 	}
 	phase := cleanText(status["phase"])
 	summary["site_id"] = siteID
+	summary["uid"] = cleanText(metadata["uid"])
+	summary["deletion_timestamp"] = cleanText(metadata["deletionTimestamp"])
 	summary["worker_guid"] = workerGUID
 	summary["container_name"] = firstText(cleanText(metadata["name"]), "site-worker-"+workerGUID)
 	summary["configured_image"] = firstText(cleanText(annotations["borealis.io/image-ref"]), kubernetesPodContainerImage(spec, "site-worker"))
@@ -2038,6 +2021,11 @@ func (c *kubernetesAPIClient) doJSON(ctx context.Context, method string, path st
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
+	if strict, ok := out.(*operatorSiteWorkerJSONObject); ok {
+		payload, err := decodeOperatorSiteWorkerObject(resp.Body)
+		*strict = payload
+		return err
+	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
 }
 
@@ -2077,6 +2065,20 @@ func (c *borealisOperatorClient) command(ctx context.Context, verb string, param
 	}
 	defer resp.Body.Close()
 	var payload map[string]any
+	if verb == "ListSiteWorkers" || verb == "LaunchSiteWorker" || verb == "RetireSiteWorker" {
+		payload, err = decodeOperatorSiteWorkerObject(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("borealis-operator %s returned HTTP %d", verb, resp.StatusCode)
+		}
+		result, ok := payload["result"].(map[string]any)
+		if payload["ok"] != true || payload["verb"] != verb || !ok || result == nil {
+			return nil, errors.New("invalid site-worker command receipt")
+		}
+		return payload, nil
+	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&payload)
 	if resp.StatusCode >= 400 {
 		return payload, fmt.Errorf("borealis-operator %s returned HTTP %d", verb, resp.StatusCode)
@@ -2110,13 +2112,17 @@ func (c *borealisOperatorClient) listSiteWorkers(ctx context.Context) ([]map[str
 		return nil, err
 	}
 	result := schedulerAnyMap(payload["result"])
-	items, _ := result["workers"].([]any)
+	items, ok := result["workers"].([]any)
+	if !ok {
+		return nil, errors.New("site-worker inventory must contain workers array")
+	}
 	workers := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		worker, ok := item.(map[string]any)
-		if ok {
-			workers = append(workers, worker)
+		if !ok || worker == nil {
+			return nil, errors.New("site-worker inventory contains invalid worker")
 		}
+		workers = append(workers, worker)
 	}
 	return workers, nil
 }
@@ -2174,6 +2180,30 @@ func borealisOperatorResultValue(response map[string]any, key string) any {
 	return result[key]
 }
 
+// Custody fields belong to the internal lifecycle protocol. Preserve the
+// existing public status shape without removing them from internal snapshots.
+func borealisOperatorPublicSiteWorkers(value any) []map[string]any {
+	workers, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	public := make([]map[string]any, 0, len(workers))
+	for _, raw := range workers {
+		worker, ok := raw.(map[string]any)
+		if !ok {
+			return nil
+		}
+		copy := make(map[string]any, len(worker))
+		for key, item := range worker {
+			if key != "uid" && key != "deletion_timestamp" {
+				copy[key] = item
+			}
+		}
+		public = append(public, copy)
+	}
+	return public
+}
+
 func borealisOperatorStatusHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -2216,7 +2246,7 @@ func borealisOperatorStatusHandler(auth *authService) http.HandlerFunc {
 			payload["workloads_error"] = workloadErr.Error()
 		}
 		if workerErr == nil {
-			payload["site_workers"] = borealisOperatorResultValue(siteWorkers, "workers")
+			payload["site_workers"] = borealisOperatorPublicSiteWorkers(borealisOperatorResultValue(siteWorkers, "workers"))
 		} else {
 			payload["site_workers_error"] = workerErr.Error()
 		}

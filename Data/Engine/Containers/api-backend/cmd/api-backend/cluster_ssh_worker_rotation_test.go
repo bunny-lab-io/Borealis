@@ -158,7 +158,6 @@ func TestClusterSSHWorkerRotationDemandAndOverflow(t *testing.T) {
 				} else {
 					r.SiteWorkers[1].SiteID = 1
 					snapshot.DesiredWorkerSites = []int64{1}
-					wantCPU, wantMemory = 324, 2560<<20 // Charge both observed Pods and both clones.
 				}
 			case "CPU overflow", "memory overflow":
 				worker := sshSiteWorkerResourceValue("engine-source")
@@ -173,9 +172,9 @@ func TestClusterSSHWorkerRotationDemandAndOverflow(t *testing.T) {
 				}
 			}
 			cpu, memory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
-			if strings.HasSuffix(mode, "overflow") {
+			if strings.HasSuffix(mode, "overflow") || mode == "surplus same site" {
 				if ok || cpu != 0 || memory != 0 {
-					t.Fatal("candidate overflow returned usable budget")
+					t.Fatal("invalid worker cohort returned usable budget")
 				}
 			} else if !ok || cpu != baseCPU+wantCPU || memory != baseMemory+wantMemory {
 				t.Fatal("wrong complete worker rotation demand", cpu, memory, wantCPU, wantMemory)
@@ -185,7 +184,7 @@ func TestClusterSSHWorkerRotationDemandAndOverflow(t *testing.T) {
 }
 
 func TestClusterSSHWorkerRotationTargetFit(t *testing.T) {
-	for _, mode := range []string{"exact", "one millicpu", "one byte", "candidate CPU", "candidate memory"} {
+	for _, mode := range []string{"exact", "one millicpu", "one byte", "candidate CPU", "candidate memory", "host reserve omitted"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, false, "peer")
 			_, _, snapshot := sshBrokerFixture(t)
@@ -201,7 +200,7 @@ func TestClusterSSHWorkerRotationTargetFit(t *testing.T) {
 			}
 			app := &snapshot.Storage.Requirements.Applications[0]
 			app.CPURequestMilli += 16000 - cpu
-			app.MemoryLimitBytes += (32 << 30) - memory
+			app.MemoryLimitBytes += (32 << 30) - 7_500_000_000 - memory
 			switch mode {
 			case "one millicpu":
 				app.CPURequestMilli++
@@ -211,6 +210,8 @@ func TestClusterSSHWorkerRotationTargetFit(t *testing.T) {
 				app.CPURequestMilli += 25
 			case "candidate memory":
 				app.MemoryLimitBytes += 256 << 20
+			case "host reserve omitted":
+				app.MemoryLimitBytes += 7_500_000_000
 			}
 			app.CPULimitMilli = app.CPURequestMilli
 			steadyCPU, steadyMemory, ok := clusterSSHNodeWorkloadBudget(snapshot.Storage.Requirements)

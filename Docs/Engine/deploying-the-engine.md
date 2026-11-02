@@ -29,31 +29,39 @@ Borealis writes profile tuning into `Engine/Deploy/compose.env` and applies data
 
 Homelab and Small Business can use one non-clustered Engine or three clustered Engines. MSP / Production and Enterprise are clustered deployment profiles: plan three Engines. Install the first Engine before adding its two peers through the cluster workflow. Profile selection alone does not create a cluster; existing single-Engine installations retain their tuning until an approved topology change.
 
-The CPU and RAM bands below describe current automatic profile selection **per Engine**. They are not validated minimum or recommended hardware for SSH cluster onboarding. Homelab's open lower band does not establish a safe minimum. Endpoint and operator counts describe the whole environment, not each node, and remain planning estimates. Do not multiply those estimates by node count. Storage figures are per-Engine planning ranges; actual data, replicas, installation, scratch, free-space and inode requirements still need measurement.
+The CPU and RAM bands below describe current automatic profile selection **per Engine**. They are not validated minimum or recommended hardware for SSH cluster onboarding. Homelab's open lower band does not establish a safe minimum. Endpoint figures are planning estimates: Homelab about 30-40 devices, Small Business about 100-200 devices, and MSP/Enterprise hundreds of devices per managed site. They are not enforced device limits or measured capacity. Operator counts describe the whole environment; do not multiply them by node count. Storage figures are per-Engine planning ranges; actual data, replicas, installation, scratch, free-space and inode requirements still need measurement.
 
 === "Homelab"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Non-clustered (1 Engine) or clustered (3 Engines) | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
+    | Non-clustered (1 Engine) or clustered (3 Engines) | Personal labs, testing, feature development, very small sites | About 30-40 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
 
 === "Small Business"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Non-clustered (1 Engine) or clustered (3 Engines) | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
+    | Non-clustered (1 Engine) or clustered (3 Engines) | Smaller production environments | About 100-200 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
 
 === "MSP / Production (Clustered)"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Clustered (3 Engines) | SMB and managed-service production environments | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
+    | Clustered (3 Engines) | SMB and managed-service production environments | Hundreds per managed site | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
 
 === "Enterprise (Clustered)"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Clustered (3 Engines) | Larger production environments | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 16 | 500 GiB-1 TiB |
+    | Clustered (3 Engines) | Larger production environments | Hundreds per managed site | 10-20 | 24+ | 64 GiB+ | 16 | 500 GiB-1 TiB |
 
 !!! info "Scheduled task slots"
 
     Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
+
+### Resident workers and active work
+
+Keep one resident worker per site. An idle worker keeps its site sessions available; it must not be removed merely to free an active-work slot. Temporary old/replacement overlap is reserved for recovery or rebuild while Agents transition. Passive workers still need memory, connections and other resources.
+
+The active-work policy targets **4, 8, 12 and 16 concurrently busy site workers per Engine** for Homelab, Small Business, MSP / Production and Enterprise respectively. These counts double the original 2/4/6/8 proposal and are separate from scheduled task slots within each worker. Additional sites wait for an active-work slot; finishing actual work returns the slot without tearing down the resident worker. Cross-path enforcement is still being implemented; these numbers are not current runtime guarantees.
+
+Before counting worker capacity, reserve **7.5 GB per Engine** for the host: Ubuntu Server's 1.5-GB ISO minimum, K3s server's 2-GB minimum, and the operator-selected 4-GB allowance. GB here means decimal bytes. Borealis application and infrastructure envelopes, every resident worker, and replacement overlap are charged separately. The SSH workload-fit check now subtracts this reserve from measured host RAM. Published installation minima plus this policy allowance are not measured runtime demand or proof of readiness. [Ubuntu Server requirements](https://ubuntu.com/server/docs/reference/installation/system-requirements/) and [K3s requirements](https://docs.k3s.io/installation/requirements) provide the baseline figures.
 
 ### Cluster onboarding profile checks
 
@@ -70,9 +78,11 @@ Agent redeployment keeps old workers running until all replacement workers are r
 ## Profile-Managed Container Limits
 `Engine.sh` writes least-privilege runtime settings during every deploy. Normal Engine services and K3s pods run as the `borealis-engine` system user/group where supported, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, profile-scaled CPU/memory caps, and fixed read-only host timezone data. PostgreSQL runs in K3s as the official non-root PostgreSQL UID on a Longhorn-backed PVC so imported database state keeps compatible ownership. Limits are caps, not reservations. K3s `remote-desktop-guacd` stays ClusterIP-only and does not mount the Docker socket.
 
-Site-worker memory is per active worker. If 500 workers are active at once, aggregate memory pressure is roughly `500 x site-worker cap` plus Engine service overhead. Tune active worker concurrency and per-worker caps together before scaling large environments.
+Site-worker memory is per resident Pod, including idle workers and temporary replacements. Do not count idle workers as zero memory or subtract their caps merely because an active-work slot was released. Current K3s worker envelopes come from the scheduler/operator resource profile described below; declared deployment-profile values alone do not establish actual worker limits.
 
 Scheduled task slots control claimed work items. Ansible controller concurrency has separate `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` limit and defaults to `2` per site worker so individual playbooks cannot consume worker memory for every claimed slot at once.
+
+The profile values below are declared deployment defaults. Current K3s site workers use a separate operator profile: `small`, `standard` or `large`; the scheduler defaults to `standard`. Their memory caps are 256, 512 and 1024 MiB respectively. In particular, the Small Business 384-MiB declaration is not the current K3s worker cap. Use observed Pod limits for sizing until profile ownership is unified.
 
 === "Homelab"
     | Setting | Default |

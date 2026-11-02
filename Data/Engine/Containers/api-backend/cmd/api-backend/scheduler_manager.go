@@ -188,8 +188,11 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 }
 
 func (m *goSchedulerManager) runLeader(ctx context.Context) error {
+	workersObserved := false
 	if err := m.reconcileSiteWorkers(ctx); err != nil {
 		log.Printf("site-worker leadership reconcile failed: %v", err)
+	} else {
+		workersObserved = true
 	}
 	nextTick := int64(0)
 	nextReconcile := int64(0)
@@ -215,29 +218,17 @@ func (m *goSchedulerManager) runLeader(ctx context.Context) error {
 			}
 			nextTick = now + maxInt64(60-(now%60), 5)
 		}
-		if now >= nextReconcile {
-			if err := m.reconcileSiteWorkers(ctx); err != nil {
-				log.Printf("site-worker reconcile failed: %v", err)
-			}
+		refreshWorkers := now >= nextReconcile
+		if refreshWorkers {
 			nextReconcile = now + reconcileInterval
 		}
 		if err := m.expireStaleLeases(ctx); err != nil {
 			log.Printf("stale lease expiration failed: %v", err)
 		}
-		if err := m.markLostWorkers(ctx); err != nil {
-			log.Printf("worker lost-state update failed: %v", err)
-		}
-		if err := m.pruneWorkerHistory(ctx, historySeconds); err != nil {
-			log.Printf("worker history prune failed: %v", err)
-		}
-		siteIDs, err := m.siteIDsNeedingWorkers(ctx)
-		if err != nil {
-			log.Printf("site worker demand lookup failed: %v", err)
-		}
-		for _, siteID := range siteIDs {
-			if err := m.spawnSiteWorker(ctx, siteID); err != nil {
-				log.Printf("failed to reconcile worker for site_id=%d: %v", siteID, err)
-			}
+		var workerErr error
+		workersObserved, workerErr = m.reconcileSiteWorkerLifecycle(ctx, refreshWorkers, workersObserved, historySeconds)
+		if workerErr != nil {
+			log.Printf("site-worker lifecycle unavailable: %v", workerErr)
 		}
 		if err := m.processServiceAction(ctx); err != nil {
 			log.Printf("failed to process service action queue: %v", err)
@@ -1743,7 +1734,8 @@ func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int6
 		RemoteDesktopPort: remoteDesktopPort,
 	})
 	if err != nil {
-		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+		// CREATE may have succeeded before its response was lost. Preserve this
+		// original Starting identity until fresh inventory and cleanup reconcile it.
 		return fmt.Errorf("failed to launch K3s %s: %w", containerName, err)
 	}
 	result := schedulerAnyMap(response["result"])
@@ -1804,13 +1796,14 @@ func (m *goSchedulerManager) reconcileSiteWorkers(ctx context.Context) error {
 func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error {
 	client, err := m.operatorClient()
 	if err != nil {
-		log.Printf("site-worker K3s reconcile skipped: %v", err)
-		return nil
+		return err
 	}
 	snapshots, err := client.listSiteWorkers(ctx)
 	if err != nil {
-		log.Printf("site-worker K3s reconcile skipped: %v", err)
-		return nil
+		return err
+	}
+	if err := validateSchedulerWorkerInventory(snapshots); err != nil {
+		return err
 	}
 	desiredImage := schedulerDesiredSiteWorkerImage()
 	sort.SliceStable(snapshots, func(i, j int) bool {
@@ -1847,64 +1840,64 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		containerName := firstText(cleanText(snapshot["container_name"]), cleanText(snapshot["name"]), "site-worker-"+workerGUID)
 		expectedWorkerGUID := schedulerK3sSiteWorkerGUID(siteID)
 		if expectedWorkerGUID != "" && workerGUID != expectedWorkerGUID {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "stable_site_worker_guid_migration"); err != nil {
-				log.Printf("failed to retire K3s site-worker with legacy guid pod=%s worker_guid=%s expected_worker_guid=%s: %v", containerName, workerGUID, expectedWorkerGUID, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "stable_site_worker_guid_migration"); err != nil {
+				return fmt.Errorf("retire legacy site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired K3s site-worker with legacy guid pod=%s worker_guid=%s expected_worker_guid=%s", containerName, workerGUID, expectedWorkerGUID)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		if schedulerK3sSiteWorkerTerminal(snapshot) {
 			phase := cleanText(snapshot["kubernetes_phase"])
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "terminal_phase"); err != nil {
-				log.Printf("failed to retire terminal K3s site-worker pod=%s worker_guid=%s phase=%s: %v", containerName, workerGUID, phase, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "terminal_phase"); err != nil {
+				return fmt.Errorf("retire terminal site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired terminal K3s site-worker pod=%s worker_guid=%s phase=%s", containerName, workerGUID, phase)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		if !schedulerSiteWorkerImageMatches(snapshot, desiredImage) {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "stale_image"); err != nil {
-				log.Printf("failed to retire stale K3s site-worker pod=%s worker_guid=%s: %v", containerName, workerGUID, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "stale_image"); err != nil {
+				return fmt.Errorf("retire stale site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired stale K3s site-worker pod=%s worker_guid=%s image=%s desired=%s", containerName, workerGUID, cleanText(snapshot["configured_image"]), desiredImage)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		serviceHost, clusterIPMigrationReason := schedulerK3sSiteWorkerServiceHost(snapshot)
 		if clusterIPMigrationReason == "cluster_ip_route_migration" {
-			networkMode := strings.ToLower(cleanText(snapshot["network_mode"]))
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "cluster_ip_route_migration"); err != nil {
-				log.Printf("failed to retire host-loopback K3s site-worker pod=%s worker_guid=%s network_mode=%s: %v", containerName, workerGUID, networkMode, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "cluster_ip_route_migration"); err != nil {
+				return fmt.Errorf("retire host-loopback site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired host-loopback K3s site-worker pod=%s worker_guid=%s for ClusterIP route migration", containerName, workerGUID)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		if clusterIPMigrationReason == "cluster_ip_service_missing" {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "cluster_ip_service_missing"); err != nil {
-				log.Printf("failed to retire K3s site-worker missing ClusterIP service pod=%s worker_guid=%s: %v", containerName, workerGUID, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "cluster_ip_service_missing"); err != nil {
+				return fmt.Errorf("retire site-worker missing service %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired K3s site-worker missing ClusterIP service pod=%s worker_guid=%s", containerName, workerGUID)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-			continue
-		}
-		if existing := liveSites[siteID]; existing != "" {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "duplicate_site"); err != nil {
-				log.Printf("failed to retire duplicate K3s site-worker pod=%s worker_guid=%s site_id=%d: %v", containerName, workerGUID, siteID, err)
-			} else {
-				log.Printf("retired duplicate K3s site-worker pod=%s worker_guid=%s site_id=%d kept_worker_guid=%s", containerName, workerGUID, siteID, existing)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
 			continue
 		}
-		liveSites[siteID] = workerGUID
 		live = append(live, workerGUID)
+		liveSites[siteID] = workerGUID
 		remoteOpsPort := coerceInt64(snapshot["remote_ops_port"])
 		if remoteOpsPort <= 0 {
 			remoteOpsPort = schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
@@ -1928,6 +1921,9 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		if err := m.updateWorkerDockerState(ctx, workerGUID, cleanText(snapshot["kubernetes_phase"]), coerceInt64Ptr(snapshot["exit_code"])); err != nil {
 			return err
 		}
+	}
+	if err := m.retireMissingSchedulerWorkers(ctx, client, live, liveSites); err != nil {
+		return err
 	}
 	if err := m.markMissingWorkersLost(ctx, live); err != nil {
 		return err

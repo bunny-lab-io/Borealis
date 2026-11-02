@@ -129,6 +129,13 @@ func observeClusterSSHApplicationResources(read func(string) (map[string]any, er
 	return values, nil
 }
 
+// Operator policy (2026-11-02): Ubuntu Server ISO minimum 1.5 GB + K3s
+// server minimum 2 GB + 4 GB headroom. GB is decimal bytes, not GiB.
+// This policy allowance is separate from every observed workload envelope;
+// it is neither measured consumption nor Kubernetes allocatable memory.
+// Source references and qualification limits live in managing-engine-clusters.md.
+const clusterSSHHostMemoryReserveBytes uint64 = 1_500_000_000 + 2_000_000_000 + 4_000_000_000
+
 // Reuse the original sizing scope for full source binding, claim lifetime and
 // repeated native target readings. Freeze this subtotal and its source receipt
 // too; a caller cannot bypass drift by returning otherwise unchanged settings.
@@ -194,7 +201,9 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		}
 		for _, target := range targets {
 			// Fits already validated hardware bounds before this callback.
-			if cpu > uint64(target.Host.CPUCount)*1000 || memory > target.Host.MemoryKiB*1024 {
+			totalMemory := target.Host.MemoryKiB * 1024
+			if cpu > uint64(target.Host.CPUCount)*1000 || totalMemory < clusterSSHHostMemoryReserveBytes ||
+				memory > totalMemory-clusterSSHHostMemoryReserveBytes {
 				return clusterbootstrap.ErrPreparationConfig
 			}
 		}
