@@ -11,8 +11,8 @@ import (
 	"unicode/utf8"
 )
 
-// These guards preserve uncertain worker custody. They do not make a list then
-// create atomic: existing Pod/Service names still depend on mutable site names.
+// These guards preserve legacy and uncertain worker custody. New launches also
+// use an immutable per-site Service CREATE reservation for atomic exclusion.
 type operatorSiteWorkerJSONObject map[string]any
 
 func decodeOperatorSiteWorkerObject(reader io.Reader) (map[string]any, error) {

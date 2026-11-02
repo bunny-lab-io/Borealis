@@ -9,6 +9,7 @@ import threading
 import uuid
 
 import pytest
+from werkzeug.wsgi import ClosingIterator
 
 from Data.Engine.db import dbapi
 from Data.Engine.services.job_scheduler.queue import WORKER_ROUTE_SELECT_COLUMNS, ensure_job_scheduler_tables, heartbeat_worker, prune_worker_history, register_worker, stop_worker, upsert_worker_route
@@ -342,6 +343,107 @@ def run_postgres_admission_checks():
                 workers[i].complete(_receipt(ticket), agent_guid=AGENT_GUID)
         done("same_worker_partial_terminal_retains_slot")
 
+        def custody(owner, ticket):
+            with factory() as conn:
+                count = conn.execute("SELECT claimed_count FROM job_scheduler_workers WHERE worker_guid=?",(owner.worker_guid,)).fetchone()[0]
+                operations = json.loads(conn.execute("SELECT metadata_json FROM job_scheduler_worker_routes WHERE worker_guid=?",(owner.worker_guid,)).fetchone()[0])["worker_admission"]["operations"]
+                binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?",(ticket.job_id,)).fetchone()[0])["worker_operation"]
+            return count, operations, binding
+
+        owner = workers[0]
+        stage = owner.admit(kind="file_stage",hostname="LAB-ONE")
+        count, operations, binding = custody(owner,stage)
+        assert count == 1 and set(operations) == {stage.token}
+        assert binding["kind"] == "file_stage" and binding["agent_guid"] == "" and "grant_nonce" not in binding
+        stage_stream = ClosingIterator(iter([b"multipart fixture"]),lambda: owner.complete_local(stage))
+        transfer = owner.admit(kind="file_transfer_upload",hostname="LAB-ONE",agent_guid=AGENT_GUID)
+        assert owner.preflight(_preflight(transfer),agent_guid=AGENT_GUID)["status"] == "execute"
+        peers = [_admit(peer) for peer in workers[1:4]]
+        assert custody(owner,transfer)[0] == 2
+        with pytest.raises(AdmissionError,match="capacity_exhausted"):
+            _admit(workers[4])
+        assert list(stage_stream) == [b"multipart fixture"]
+        assert custody(owner,transfer)[0] == 2
+        stage_stream.close()
+        assert "receipt_sha256" in custody(owner,stage)[2]
+        count, operations, original = custody(owner,transfer)
+        assert count == 1 and set(operations) == {transfer.token}
+        assert original["kind"] == "file_transfer_upload" and original["agent_guid"] == AGENT_GUID and "grant_nonce" in original
+        assert "receipt_sha256" not in original
+        with pytest.raises(AdmissionError,match="capacity_exhausted"):
+            _admit(workers[4])
+
+        # The real completion path must close its read connection before calling
+        # the stream owner, then open a separate transaction only after approval.
+        connections, guard_calls = [], []
+        class TrackedReadConnection:
+            def __init__(self):
+                self.conn, self.closed = factory(), False
+                connections.append(self)
+            def __getattr__(self,name): return getattr(self.conn,name)
+            def close(self):
+                self.conn.close()
+                self.closed = True
+        closed = threading.Event()
+        transfer_stream = ClosingIterator(iter([b"upload fixture"]),closed.set)
+        def terminal_guard(expected):
+            assert connections and all(conn.closed for conn in connections)
+            assert expected == original
+            guard_calls.append(dict(expected))
+            if not closed.is_set():
+                raise AdmissionError("worker_file_transfer_streams_active")
+        owner.db_factory = TrackedReadConnection
+        try:
+            with pytest.raises(AdmissionError,match="custody_missing"):
+                owner.complete(_receipt(transfer),agent_guid=AGENT_GUID)
+            with pytest.raises(AdmissionError,match="streams_active"):
+                owner.complete(_receipt(transfer),agent_guid=AGENT_GUID,_terminal_guard=terminal_guard)
+            assert custody(owner,transfer) == (count,operations,original)
+            with pytest.raises(AdmissionError,match="capacity_exhausted"):
+                _admit(workers[4])
+            assert list(transfer_stream) == [b"upload fixture"]
+            assert not closed.is_set()
+            transfer_stream.close()
+            assert custody(owner,transfer) == (count,operations,original)
+            ack = owner.complete(_receipt(transfer),agent_guid=AGENT_GUID,_terminal_guard=terminal_guard)
+            assert ack == {"job_id":transfer.job_id,"worker_operation":transfer.wire(),"status":"committed"}
+            committed_count, committed_operations, committed = custody(owner,transfer)
+            assert committed_count == 0 and committed_operations == {}
+            assert committed == {**original,"receipt_sha256":committed["receipt_sha256"]}
+            assert len(guard_calls) == 2 and all(conn.closed for conn in connections)
+            # Durable exact replay needs no vanished process-local stream guard.
+            assert owner.complete(_receipt(transfer),agent_guid=AGENT_GUID) == ack
+            assert custody(owner,transfer)[0:2] == (0,{})
+        finally:
+            owner.db_factory = factory
+        contender = _admit(workers[4])
+        for peer,ticket in zip(workers[1:4],peers):
+            peer.complete(_receipt(ticket),agent_guid=AGENT_GUID)
+        workers[4].complete(_receipt(contender),agent_guid=AGENT_GUID)
+        done("file_stage_upload_guarded_terminal_preserves_worker_cap")
+
+        content = owner.admit(kind="file_content",hostname="LAB-ONE")
+        count, operations, original = custody(owner,content)
+        assert count == 1 and set(operations) == {content.token}
+        assert original["kind"] == "file_content" and original["agent_guid"] == "" and "grant_nonce" not in original
+        assert owner.preflight(_preflight(content),agent_guid=AGENT_GUID)["status"] == "deny"
+        with pytest.raises(AdmissionError,match="unbound"):
+            owner.complete(_receipt(content),agent_guid=AGENT_GUID)
+        content_acks = []
+        content_stream = ClosingIterator(iter([b"operator artifact"]),lambda: content_acks.append(owner.complete_local(content)))
+        assert list(content_stream) == [b"operator artifact"]
+        assert custody(owner,content) == (count,operations,original)
+        content_stream.close()
+        assert content_acks == [{"job_id":content.job_id,"worker_operation":content.wire(),"status":"committed"}]
+        count, operations, committed = custody(owner,content)
+        assert count == 0 and operations == {}
+        assert committed["agent_guid"] == "" and "grant_nonce" not in committed and "receipt_sha256" in committed
+        assert owner.complete_local(content) == content_acks[0]
+        with pytest.raises(AdmissionError,match="conflict"):
+            owner.complete_local(content,status="Failed")
+        assert custody(owner,content) == (count,operations,committed)
+        done("file_content_local_close_receipt_replay_preserves_count")
+
         owner = fixture(1)
         ticket = owner.admit(kind="quick_job_run",hostname="LAB-ONE",agent_guid=AGENT_GUID)
         requests = [_preflight(ticket),_preflight(ticket)]
@@ -572,7 +674,7 @@ def run_postgres_admission_checks():
             conn.execute(f"DELETE FROM job_scheduler_workers WHERE worker_guid IN ({placeholders})",tuple(owned_workers)).close()
             assert conn.execute(f"SELECT COUNT(*) FROM job_scheduler_worker_routes WHERE worker_guid IN ({placeholders})",tuple(owned_workers)).fetchone()[0] == 0
             assert conn.execute(f"SELECT COUNT(*) FROM job_scheduler_workers WHERE worker_guid IN ({placeholders})",tuple(owned_workers)).fetchone()[0] == 0
-    assert len(passed) == 13 and len(set(passed)) == 13
+    assert len(passed) == 15 and len(set(passed)) == 15
     print(json.dumps({"suite":"worker_admission_postgres","passed":len(passed),"failed":0,"skipped":0,"cases":passed}),flush=True)
 
 

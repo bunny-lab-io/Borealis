@@ -99,6 +99,20 @@ func workerOperationInteger(value any) (int64, bool) {
 	return int64(number), !math.IsNaN(number) && !math.IsInf(number, 0) && number > 0 && number <= 1<<53-1 && math.Trunc(number) == number
 }
 
+func (c *workerOperationConnection) addRegistrationCapabilities(payload map[string]any) {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || c.journal == nil {
+		return
+	}
+	if _, err := c.journal.Pending(); err != nil {
+		return
+	}
+	payload["worker_operation_version"] = 1
+	payload["worker_operation_file_transfer_version"] = 1
+}
+
 func workerOperationBinding(payload any) (map[string]any, string, int64, bool, error) {
 	body, ok := payload.(map[string]any)
 	if !ok {
@@ -239,7 +253,7 @@ func (c *workerOperationConnection) async(event string, handler func(context.Con
 		complete := func(err error) { c.complete(key, owned, "Completed", "", "", err) }
 		response, err := handler(ctx, owned, complete)
 		body, _ := response.(map[string]any)
-		// These three callback handlers return explicit rejection only before work.
+		// Callback handlers return explicit rejection only before work.
 		// Unexpected errors/ACKs do not prove termination.
 		_, hasStatus := body["status"]
 		if err == nil && body["ok"] == false && !hasStatus {

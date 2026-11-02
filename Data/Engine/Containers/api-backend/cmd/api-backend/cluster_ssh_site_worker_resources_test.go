@@ -18,10 +18,14 @@ func sshSiteWorkerPodFixture(t *testing.T, node string, site int64) map[string]a
 
 func sshSiteWorkerPodFixtureWithIdentity(t *testing.T, node string, site int64, siteName, worker string) map[string]any {
 	t.Helper()
+	return sshSiteWorkerPodFixtureWithNames(t, node, site, siteName, worker, siteWorkerPodNameForSite(site), siteWorkerServiceNameForSite(site, siteName, worker))
+}
+
+func sshSiteWorkerPodFixtureWithNames(t *testing.T, node string, site int64, siteName, worker, podName, serviceName string) map[string]any {
+	t.Helper()
 	profile, _ := borealisOperatorSiteWorkerResourceProfile("small")
 	o := borealisOperator{namespace: "borealis"}
-	name := siteWorkerNameForSite(site, siteName, worker)
-	pod := o.siteWorkerPodManifest(name, name, "10.43.10.7", site, siteName, siteWorkerSiteSlug(site, siteName), worker, "borealis-engine/site-worker:sha-cccccccccccc", "small", profile, 56001, 61001)
+	pod := o.siteWorkerPodManifest(podName, serviceName, "10.43.10.7", site, siteName, siteWorkerSiteSlug(site, siteName), worker, "borealis-engine/site-worker:sha-cccccccccccc", "small", profile, 56001, 61001)
 	meta, spec := pod["metadata"].(map[string]any), pod["spec"].(map[string]any)
 	meta["uid"], meta["resourceVersion"] = newClusterUUID(), "1"
 	spec["nodeName"], spec["schedulerName"] = node, "default-scheduler"
@@ -55,6 +59,36 @@ func sshSiteWorkerPod(f *sshStorageFixture, member int) map[string]any {
 	return f.objects[clusterSSHSiteWorkerPodsPath(f.a.Source.Members[member].Name)]["items"].([]any)[0].(map[string]any)
 }
 
+func TestClusterSSHSiteWorkerServiceProducerNames(t *testing.T) {
+	for _, test := range []struct {
+		name, pod, service string
+		valid              bool
+	}{
+		{"legacy", "site-worker-original-site", "site-worker-original-site", true},
+		{"current", "site-worker-site-7", "site-worker-site-7", true},
+		{"mixed_legacy_current", "site-worker-original-site", "site-worker-site-7", false},
+		{"mixed_current_legacy", "site-worker-site-7", "site-worker-original-site", false},
+		{"other_site", "site-worker-site-7", "site-worker-site-8", false},
+		{"other_legacy_name", "site-worker-site-7", "site-worker-other-site", false},
+		{"arbitrary_name", "other-pod", "other-service", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newSSHStorageFixture(t, false)
+			node := f.a.Source.Members[0].Name
+			pod := sshSiteWorkerPodFixtureWithNames(t, node, 7, "Original Site", schedulerK3sSiteWorkerGUID(7), test.pod, test.service)
+			f.objects[clusterSSHSiteWorkerPodsPath(node)]["items"] = []any{pod}
+			got, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
+			if test.valid {
+				if err != nil || len(got.Requirements.SiteWorkers) != 1 || got.Requirements.SiteWorkers[0].Name != test.pod {
+					t.Fatal("exact retained/current producer rejected", err)
+				}
+			} else if err == nil {
+				t.Fatal("foreign Service accepted as producer evidence")
+			}
+		})
+	}
+}
+
 func TestClusterSSHSiteWorkerSiteUniqueness(t *testing.T) {
 	for _, separateNodes := range []bool{false, true} {
 		for _, duplicateSite := range []bool{false, true} {
@@ -70,8 +104,8 @@ func TestClusterSSHSiteWorkerSiteUniqueness(t *testing.T) {
 				}
 				// A renamed site can leave two individually canonical Pod names.
 				// Keep name, UID and worker GUID distinct to isolate SiteID reuse.
-				first := sshSiteWorkerPodFixtureWithIdentity(t, firstNode, 1, "Original site", "worker-first")
-				second := sshSiteWorkerPodFixtureWithIdentity(t, secondNode, secondSite, "Renamed site", "worker-second")
+				first := sshSiteWorkerPodFixtureWithNames(t, firstNode, 1, "Original site", "worker-first", "site-worker-original-site", "site-worker-original-site")
+				second := sshSiteWorkerPodFixtureWithNames(t, secondNode, secondSite, "Renamed site", "worker-second", "site-worker-renamed-site", "site-worker-renamed-site")
 				firstPath, secondPath := clusterSSHSiteWorkerPodsPath(firstNode), clusterSSHSiteWorkerPodsPath(secondNode)
 				f.objects[firstPath]["items"] = []any{first}
 				if separateNodes {

@@ -377,7 +377,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	socket.On("quick_job_run", operations.scripts(role.HandleQuickJob, a.hostname))
 	if a.files != nil {
-		socket.On("file_management_request", operations.synchronous("file_management_request", a.files.HandleRequest, workerOperationSynchronousFile))
+		socket.On("file_management_request", operations.async("file_management_request", a.files.HandleRequestWithCompletion))
 	}
 	if a.processes != nil {
 		socket.On("process_management_request", operations.synchronous("process_management_request", a.processes.HandleRequest, workerOperationSynchronousProcess))
@@ -443,9 +443,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 			payload["helper_contexts"] = []string{"currentuser"}
 			payload["capabilities"].(map[string]any)["helper_contexts"] = []string{"currentuser"}
 		}
-		if operations.journal != nil {
-			payload["worker_operation_version"] = 1
-		}
+		operations.addRegistrationCapabilities(payload)
 		ack, err := socket.EmitWithAck(ctx, "connect_agent", payload, socketRegistrationAckTimeout)
 		if err != nil {
 			return err

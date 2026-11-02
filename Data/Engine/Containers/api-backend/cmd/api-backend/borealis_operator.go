@@ -582,7 +582,7 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	}
 	siteName := cleanText(req.SiteName)
 	siteSlug := siteWorkerSiteSlug(req.SiteID, siteName)
-	podName := siteWorkerNameForSite(req.SiteID, siteName, workerGUID)
+	podName := siteWorkerPodNameForSite(req.SiteID)
 	if !borealisOperatorKubernetesObjectNameAllowed(podName) {
 		return nil, http.StatusBadRequest, errors.New("generated site-worker pod name must be a Kubernetes DNS label segment")
 	}
@@ -591,6 +591,8 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 		return nil, http.StatusBadRequest, errors.New("generated site-worker service name must be a Kubernetes DNS label segment")
 	}
 	service := o.siteWorkerServiceManifest(serviceName, req.SiteID, siteName, siteSlug, workerGUID, remoteOpsPort, remoteDesktopPort)
+	// Only the creator of this immutable per-site reservation may create a Pod.
+	// Conflict or an ambiguous response retains the existing Service untouched.
 	createdService, err := o.kubeCreate(ctx, "core", "services", service)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
@@ -1132,10 +1134,6 @@ func (o *borealisOperator) siteWorkerServicesByGUID(ctx context.Context, workerG
 		result = append(result, service)
 	}
 	return result, nil
-}
-
-func siteWorkerServiceNameForSite(siteID int64, siteName string, workerGUID string) string {
-	return siteWorkerNameForSite(siteID, siteName, workerGUID)
 }
 
 func siteWorkerServiceDNSName(serviceName string, namespace string) string {

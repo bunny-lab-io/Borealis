@@ -13,6 +13,8 @@ import types
 from pathlib import Path
 
 import pytest
+from werkzeug.test import EnvironBuilder
+from werkzeug.exceptions import ClientDisconnected
 
 from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
@@ -23,7 +25,7 @@ from Data.Engine.services.job_scheduler import worker_socket
 from Data.Engine.services.job_scheduler.worker_socket import SiteWorkerSocketRuntime
 from Data.Engine.services.remote_ops.sessions import issue_remote_op_session
 from Data.Engine.Unit_Tests.test_worker_admission import _initialize, seed_worker
-from Data.Engine.services.job_scheduler.worker_admission import AdmissionTicket
+from Data.Engine.services.job_scheduler.worker_admission import AdmissionError, AdmissionTicket
 
 
 AGENT_GUID = "11111111-2222-3333-4444-555555555555"
@@ -155,9 +157,9 @@ def _runtime(tmp_path: Path, *, site_id: int = 7, device_status: str = "active")
     return runtime, token
 
 
-def _registered_agent(runtime, token, *, version=1):
+def _registered_agent(runtime, token, *, version=1, file_version=None):
     client = runtime.socketio.test_client(runtime.app, headers={"Authorization":f"Bearer {token}"})
-    assert client.emit("connect_agent", {"agent_id":AGENT_ID,"hostname":AGENT_HOSTNAME,"service_mode":"system","worker_operation_version":version}, callback=True)["status"] == "ok"
+    assert client.emit("connect_agent", {"agent_id":AGENT_ID,"hostname":AGENT_HOSTNAME,"service_mode":"system","worker_operation_version":version,"worker_operation_file_transfer_version":file_version}, callback=True)["status"] == "ok"
     client.get_received()
     return client
 
@@ -165,6 +167,485 @@ def _registered_agent(runtime, token, *, version=1):
 def _claim_count(runtime):
     with runtime.db_conn_factory() as conn:
         return conn.execute("SELECT claimed_count FROM job_scheduler_workers WHERE worker_guid=?", (runtime.worker_guid,)).fetchone()[0]
+
+
+def _upload_headers(hostname=AGENT_HOSTNAME, device_guid=AGENT_GUID, agent_id=AGENT_ID):
+    return {INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret"),"X-Borealis-Upload-Hostname-B64":base64.urlsafe_b64encode(hostname.encode("utf-8")).decode("ascii").rstrip("="),"X-Borealis-Upload-Device-Guid":device_guid.upper(),"X-Borealis-Upload-Agent-Id-B64":base64.urlsafe_b64encode(agent_id.encode("utf-8")).decode("ascii").rstrip("=")}
+
+
+def _start_file_transfer(runtime, direction="upload", **overrides):
+    values = {"hostname":AGENT_HOSTNAME,"device_guid":AGENT_GUID,"agent_id":AGENT_ID,"operator_id":"unit","transfer_base_url":"https://engine.example/worker"}
+    values.update(overrides)
+    headers = {INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}
+    if direction == "upload":
+        headers = _upload_headers(values["hostname"],values["device_guid"],values["agent_id"])
+        values.update(target_path=r"C:\Temp",files=(io.BytesIO(b"payload"),"payload.txt"))
+        response = runtime.app.test_client().post("/remote-files/transfers/upload",headers=headers,data=values,content_type="multipart/form-data")
+    else:
+        values.update(items=[{"path":r"C:\Temp\payload.txt"}])
+        response = runtime.app.test_client().post("/remote-files/transfers/download",headers=headers,json=values)
+    response.get_data()
+    response.close()
+    return response
+
+
+def _file_packet(agent):
+    return next(item["args"][0] for item in agent.get_received() if item["name"] == "file_management_request")
+
+
+def _grant_file(agent, packet):
+    request = {"job_id":packet["job_id"],"status":"Running","context":packet["context"],"worker_operation_preflight":{"version":1,"nonce":"d"*32}}
+    assert agent.emit("quick_job_progress",request,callback=True)["status"] == "execute"
+
+
+def _file_receipt(packet, status="Completed"):
+    return {"job_id":packet["job_id"],"status":status,"stdout":"","stderr":"","context":packet["context"]}
+
+
+@pytest.mark.parametrize("version", (None, True, 1.0, "1", 0, 2))
+@pytest.mark.parametrize("direction", ("upload", "download"))
+def test_file_transfer_requires_exact_optional_capability_before_staging(tmp_path, monkeypatch, version, direction):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=version)
+    def forbidden(**_kwargs):
+        raise AssertionError("staged transfer before capability proof")
+    monkeypatch.setattr(runtime._file_transfer_store,"create_"+direction+"_session",forbidden)
+    response = _start_file_transfer(runtime,direction)
+    assert response.status_code == 503
+    assert response.get_json() == {"error":"worker_file_transfer_capability_required"}
+    assert _claim_count(runtime) == 0
+    assert agent.get_received() == []
+    agent.disconnect()
+
+
+def test_file_transfer_terminal_waits_for_last_lazy_stream_and_seals_new_requests(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    response = _start_file_transfer(runtime)
+    assert response.status_code == 202
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    record = runtime._file_transfer_store.get_session(packet["transfer_id"])
+    path = f"/api/agent/files/transfers/{packet['transfer_id']}/upload-item/{record['upload_items'][0]['item_id']}"
+    headers = {"Authorization":f"Bearer {token}"}
+    first = runtime.app.test_client().get(path,headers=headers,buffered=False)
+    second = runtime.app.test_client().get(path,headers=headers,buffered=False)
+    assert first.status_code == second.status_code == 200
+    assert _claim_count(runtime) == 1
+    receipt = _file_receipt(packet)
+    assert agent.emit("quick_job_result",receipt,callback=True) == {"error":"worker_receipt_uncommitted"}
+    blocked = runtime.app.test_client().get(path,headers=headers)
+    assert blocked.status_code == 503
+    assert blocked.get_json() == {"error":"worker_file_transfer_sealed"}
+    first.close()
+    assert agent.emit("quick_job_result",receipt,callback=True) == {"error":"worker_receipt_uncommitted"}
+    assert _claim_count(runtime) == 1
+    second.close()
+    agent.disconnect()
+
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert agent.emit("quick_job_result",receipt,callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    runtime._file_custody.clear()
+    runtime._file_custody_ids.clear()
+    assert agent.emit("quick_job_result",receipt,callback=True)["status"] == "committed"
+    agent.disconnect()
+
+
+def test_file_transfer_raw_wsgi_iterable_close_owns_direct_passthrough_lifetime(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert _start_file_transfer(runtime).status_code == 202
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    record = runtime._file_transfer_store.get_session(packet["transfer_id"])
+    path = f"/api/agent/files/transfers/{packet['transfer_id']}/upload-item/{record['upload_items'][0]['item_id']}"
+    builder = EnvironBuilder(path=path,headers={"Authorization":f"Bearer {token}"})
+    statuses = []
+    iterable = runtime.app.wsgi_app(builder.get_environ(),lambda status,headers,exc_info=None: statuses.append(status))
+    assert statuses == ["200 OK"]
+    assert b"".join(iterable) == b"payload"
+    assert _claim_count(runtime) == 1
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True) == {"error":"worker_receipt_uncommitted"}
+    state = runtime._file_custody[packet["context"]["worker_operation"]["token"]]
+    assert state["active"] == 1
+    iterable.close()
+    iterable.close()
+    builder.close()
+    assert state["active"] == 0
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    agent.disconnect()
+
+
+def test_file_transfer_creation_request_retains_charge_until_raw_wsgi_close(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    builder = EnvironBuilder(path="/remote-files/transfers/upload",method="POST",headers=_upload_headers(),data={"hostname":AGENT_HOSTNAME,"device_guid":AGENT_GUID,"agent_id":AGENT_ID,"target_path":r"C:\Temp","files":(io.BytesIO(b"payload"),"payload.txt")},content_type="multipart/form-data")
+    statuses = []
+    iterable = runtime.app.wsgi_app(builder.get_environ(),lambda status,headers,exc_info=None: statuses.append(status))
+    assert statuses == ["202 ACCEPTED"]
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    assert json.loads(b"".join(iterable))["transfer_id"] == packet["transfer_id"]
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True) == {"error":"worker_receipt_uncommitted"}
+    assert _claim_count(runtime) == 2
+    iterable.close()
+    iterable.close()
+    builder.close()
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    agent.disconnect()
+
+
+@pytest.mark.parametrize("lost", ("missing", "replaced"))
+def test_file_transfer_missing_original_custody_never_becomes_zero(tmp_path, monkeypatch, lost):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert _start_file_transfer(runtime).status_code == 202
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    record = runtime._file_transfer_store.get_session(packet["transfer_id"])
+    if lost == "missing":
+        runtime._file_custody.clear()
+    else:
+        runtime._file_transfer_store._sessions[packet["transfer_id"]] = dict(record)
+    path = f"/api/agent/files/transfers/{packet['transfer_id']}/upload-item/{record['upload_items'][0]['item_id']}"
+    response = runtime.app.test_client().get(path,headers={"Authorization":f"Bearer {token}"})
+    assert response.status_code == 503
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True) == {"error":"worker_receipt_uncommitted"}
+    assert _claim_count(runtime) == 1
+    agent.disconnect()
+
+
+def test_file_transfer_browser_content_has_independent_local_charge(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert _start_file_transfer(runtime,"download").status_code == 202
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    transfer_id = packet["transfer_id"]
+    response = runtime.app.test_client().post(f"/api/agent/files/transfers/{transfer_id}/content",headers={"Authorization":f"Bearer {token}"},data={"artifact":(io.BytesIO(b"download artifact"),"artifact.zip")},content_type="multipart/form-data")
+    assert response.status_code == 200
+    response.close()
+    browser_path = f"/remote-files/transfers/{transfer_id}/content"
+    browser_headers = {INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}
+    premature = runtime.app.test_client().get(browser_path,headers=browser_headers)
+    assert premature.status_code == 503
+    assert premature.get_json() == {"error":"worker_file_transfer_terminal_pending"}
+    assert _claim_count(runtime) == 1
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    browser_builder = EnvironBuilder(path=browser_path,headers=browser_headers)
+    browser_status = []
+    browser = runtime.app.wsgi_app(browser_builder.get_environ(),lambda status,headers,exc_info=None: browser_status.append(status))
+    assert browser_status == ["200 OK"]
+    assert _claim_count(runtime) == 1
+    concurrent = runtime.app.test_client().get(browser_path,headers=browser_headers)
+    assert concurrent.status_code == 503
+    assert concurrent.get_json() == {"error":"worker_file_content_active"}
+    assert _claim_count(runtime) == 1
+    assert b"".join(browser) == b"download artifact"
+    assert _claim_count(runtime) == 1
+    browser.close()
+    browser.close()
+    browser_builder.close()
+    assert _claim_count(runtime) == 0
+    assert runtime._file_transfer_store.get_session(transfer_id) is None
+    agent.disconnect()
+
+
+@pytest.mark.parametrize("direction", ("upload", "download"))
+@pytest.mark.parametrize("lost", (None, "missing", "replaced", "token_alias", "transfer_alias"))
+def test_file_transfer_public_completion_waits_for_original_committed_custody(tmp_path, monkeypatch, direction, lost):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert _start_file_transfer(runtime,direction).status_code == 202
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    transfer_id = packet["transfer_id"]
+    agent_path = f"/api/agent/files/transfers/{transfer_id}"
+    public_path = f"/remote-files/transfers/{transfer_id}"
+    agent_headers = {"Authorization":f"Bearer {token}"}
+    public_headers = {INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}
+    client = runtime.app.test_client()
+    if direction == "download":
+        progress = client.post(agent_path+"/content",headers=agent_headers,data={"artifact":(io.BytesIO(b"download artifact"),"artifact.zip")},content_type="multipart/form-data")
+    else:
+        progress = client.post(agent_path+"/progress",headers=agent_headers,json={"status":"completed","bytes_complete":7,"bytes_total":7})
+    assert progress.status_code == 200 and progress.get_json()["status"] == "completed"
+    progress.close()
+    stored = runtime._file_transfer_store.get_session(transfer_id)
+    snapshot = worker_socket._transfer_status_snapshot(stored)
+    assert snapshot["download_ready"] is (direction == "download")
+    assert client.get(public_path+"/status",headers=public_headers).get_json() == {**snapshot,"status":"running","download_ready":False}
+    assert runtime._file_transfer_store.get_session(transfer_id) == stored
+    assert client.get(agent_path+"/status",headers=agent_headers).get_json() == snapshot
+    cancel = client.post(public_path+"/cancel",headers=public_headers)
+    stored = runtime._file_transfer_store.get_session(transfer_id)
+    snapshot = worker_socket._transfer_status_snapshot(stored)
+    assert stored["cancel_requested"] is True and stored["status"] == "completed"
+    assert cancel.get_json() == {**snapshot,"status":"running","download_ready":False}
+    assert _claim_count(runtime) == 1
+
+    assert agent.emit("quick_job_result",_file_receipt(packet),callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    operation_token = packet["context"]["worker_operation"]["token"]
+    state = runtime._file_custody[operation_token]
+    if lost == "missing":
+        runtime._file_custody.clear()
+    elif lost == "replaced":
+        runtime._file_transfer_store._sessions[transfer_id] = dict(state["record"])
+    elif lost == "token_alias":
+        runtime._file_custody["f"*32] = runtime._file_custody.pop(operation_token)
+        runtime._file_custody_ids[transfer_id] = "f"*32
+    elif lost == "transfer_alias":
+        state["transfer_id"] = "different-transfer"
+    expected = {**snapshot,"status":"running","download_ready":False} if lost else snapshot
+    stored = runtime._file_transfer_store.get_session(transfer_id)
+    assert client.get(public_path+"/status",headers=public_headers).get_json() == expected
+    assert runtime._file_transfer_store.get_session(transfer_id) == stored
+    cancel = client.post(public_path+"/cancel",headers=public_headers)
+    snapshot = worker_socket._transfer_status_snapshot(runtime._file_transfer_store.get_session(transfer_id))
+    assert cancel.get_json() == ({**snapshot,"status":"running","download_ready":False} if lost else snapshot)
+    assert snapshot["status"] == "completed" and snapshot["download_ready"] is (direction == "download")
+    assert client.get(agent_path+"/status",headers=agent_headers).get_json() == snapshot
+    if not lost and direction == "download":
+        content = client.get(public_path+"/content",headers=public_headers,buffered=False)
+        assert content.status_code == 200 and content.get_data() == b"download artifact"
+        assert _claim_count(runtime) == 1
+        content.close()
+        assert _claim_count(runtime) == 0
+    agent.disconnect()
+
+
+@pytest.mark.parametrize("status", ("failed", "canceled"))
+def test_file_transfer_public_error_status_keeps_existing_semantics_and_charge(tmp_path, monkeypatch, status):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert _start_file_transfer(runtime).status_code == 202
+    packet = _file_packet(agent)
+    transfer_id = packet["transfer_id"]
+    client = runtime.app.test_client()
+    progress = client.post(f"/api/agent/files/transfers/{transfer_id}/progress",headers={"Authorization":f"Bearer {token}"},json={"status":status,"error":"fixture stop"})
+    assert progress.status_code == 200
+    public_path = f"/remote-files/transfers/{transfer_id}"
+    headers = {INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}
+    for response in (client.get(public_path+"/status",headers=headers), client.post(public_path+"/cancel",headers=headers)):
+        snapshot = response.get_json()
+        assert snapshot["status"] == status and snapshot["error"] == "fixture stop"
+        assert snapshot["download_ready"] is False
+    assert _claim_count(runtime) == 1
+    agent.disconnect()
+
+
+@pytest.mark.parametrize("direction", ("upload", "download"))
+def test_file_transfer_staging_runs_after_admission_and_failure_keeps_unknown_charge(tmp_path, monkeypatch, direction):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    def fail(**_kwargs):
+        assert _claim_count(runtime) == (2 if direction == "upload" else 1)
+        raise ValueError("synthetic staging failure")
+    monkeypatch.setattr(runtime._file_transfer_store,"create_"+direction+"_session",fail)
+    response = _start_file_transfer(runtime,direction)
+    assert response.status_code == (400 if direction == "upload" else 500)
+    assert _claim_count(runtime) == 1
+    assert agent.get_received() == []
+    assert len(runtime._file_custody) == 1
+    assert next(iter(runtime._file_custody.values()))["active"] == 0
+    agent.disconnect()
+
+
+def test_file_transfer_manifest_mismatch_rejects_before_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    def forbidden(**_kwargs):
+        raise AssertionError("invalid manifest reached staging")
+    monkeypatch.setattr(runtime._file_transfer_store,"create_upload_session",forbidden)
+    response = _start_file_transfer(runtime,manifest=json.dumps([{"name":"one.txt","relative_path":"one.txt","size_bytes":7},{"name":"two.txt","relative_path":"two.txt","size_bytes":9}]))
+    assert response.status_code == 400
+    assert response.get_json() == {"error":"upload_manifest_mismatch"}
+    assert _claim_count(runtime) == 0
+    assert runtime._file_custody == {}
+    assert agent.get_received() == []
+    agent.disconnect()
+
+
+@pytest.mark.parametrize("case", ("missing", "padding", "alias_bits", "oversize", "invalid_utf8", "control", "guid", "legacy_agent"))
+def test_upload_private_identity_and_capability_reject_before_body_read(tmp_path, monkeypatch, case):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=None if case=="legacy_agent" else 1)
+    headers = _upload_headers()
+    if case == "missing":
+        headers.pop("X-Borealis-Upload-Hostname-B64")
+    elif case == "padding":
+        headers["X-Borealis-Upload-Hostname-B64"] += "="
+    elif case == "alias_bits":
+        headers["X-Borealis-Upload-Hostname-B64"] = "YR"
+    elif case == "oversize":
+        headers["X-Borealis-Upload-Hostname-B64"] = "a"*341
+    elif case == "invalid_utf8":
+        headers["X-Borealis-Upload-Hostname-B64"] = "_w"
+    elif case == "control":
+        headers["X-Borealis-Upload-Hostname-B64"] = base64.urlsafe_b64encode(b"host\x00name").decode().rstrip("=")
+    elif case == "guid":
+        headers["X-Borealis-Upload-Device-Guid"] = "malformed"
+    builder = EnvironBuilder(path="/remote-files/transfers/upload",method="POST",headers=headers,content_type="multipart/form-data; boundary=fixture",content_length=100)
+    class UnreadBody:
+        def read(self,*_args): raise AssertionError("body read before identity/capability proof")
+        def readinto(self,*_args): raise AssertionError("body read before identity/capability proof")
+    environ = builder.get_environ()
+    environ["wsgi.input"] = UnreadBody()
+    statuses = []
+    iterable = runtime.app.wsgi_app(environ,lambda status,headers,exc_info=None: statuses.append(status))
+    assert statuses == ["503 SERVICE UNAVAILABLE"]
+    assert "error" in json.loads(b"".join(iterable))
+    iterable.close()
+    builder.close()
+    assert _claim_count(runtime) == 0
+    assert runtime._file_custody == {}
+    agent.disconnect()
+
+
+def test_upload_stage_charge_precedes_multipart_read_and_failed_parse_releases_on_close(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    builder = EnvironBuilder(path="/remote-files/transfers/upload",method="POST",headers=_upload_headers(),content_type="multipart/form-data; boundary=fixture",content_length=100)
+    reads = []
+    class CanceledBody:
+        def read(self,*_args):
+            reads.append(True)
+            assert _claim_count(runtime) == 1
+            raise ClientDisconnected()
+        def readinto(self,*_args): return self.read()
+    environ = builder.get_environ()
+    environ["wsgi.input"] = CanceledBody()
+    statuses = []
+    iterable = runtime.app.wsgi_app(environ,lambda status,headers,exc_info=None: statuses.append(status))
+    assert statuses == ["400 BAD REQUEST"] and reads
+    assert _claim_count(runtime) == 1
+    assert runtime._file_custody == {}
+    assert agent.get_received() == []
+    b"".join(iterable)
+    assert _claim_count(runtime) == 1
+    iterable.close()
+    iterable.close()
+    builder.close()
+    assert _claim_count(runtime) == 0
+    with runtime.db_conn_factory() as conn:
+        status,metadata = conn.execute("SELECT status,metadata_json FROM activity_history").fetchone()
+        binding = json.loads(metadata)["worker_operation"]
+        assert status == "Failed" and binding["kind"] == "file_stage"
+        assert binding["agent_guid"] == "" and "grant_nonce" not in binding
+    agent.disconnect()
+
+
+def test_upload_form_identity_must_equal_trusted_header_before_remote_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    response = runtime.app.test_client().post("/remote-files/transfers/upload",headers=_upload_headers(),data={"hostname":"other-device","device_guid":AGENT_GUID,"agent_id":AGENT_ID,"target_path":r"C:\Temp","files":(io.BytesIO(b"payload"),"payload.txt")},content_type="multipart/form-data",buffered=False)
+    assert response.status_code == 400
+    assert response.get_json() == {"error":"worker_file_upload_identity_mismatch"}
+    assert _claim_count(runtime) == 1
+    assert runtime._file_custody == {}
+    response.close()
+    assert _claim_count(runtime) == 0
+    assert agent.get_received() == []
+    agent.disconnect()
+
+
+def test_file_transfer_cancelled_content_post_keeps_custody_until_handler_and_response_close(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    assert _start_file_transfer(runtime,"download").status_code == 202
+    packet = _file_packet(agent)
+    _grant_file(agent,packet)
+    transfer_id = packet["transfer_id"]
+    entered, interrupted = threading.Event(), threading.Event()
+    responses = []
+    statuses = []
+    builder = EnvironBuilder(path=f"/api/agent/files/transfers/{transfer_id}/content",method="POST",headers={"Authorization":f"Bearer {token}"},data={"artifact":(io.BytesIO(b"partial"),"artifact.zip")},content_type="multipart/form-data")
+    def cancelled_save(*_args,**_kwargs):
+        entered.set()
+        assert interrupted.wait(3)
+        raise ConnectionResetError("synthetic canceled upload")
+    monkeypatch.setattr(runtime._file_transfer_store,"store_download_artifact",cancelled_save)
+    def post_content():
+        responses.append(runtime.app.wsgi_app(builder.get_environ(),lambda status,headers,exc_info=None: statuses.append(status)))
+    thread = threading.Thread(target=post_content)
+    thread.start()
+    try:
+        assert entered.wait(3)
+        cancel = runtime.app.test_client().post(f"/remote-files/transfers/{transfer_id}/cancel",headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")})
+        assert cancel.status_code == 200
+        receipt = _file_receipt(packet,"Failed")
+        assert agent.emit("quick_job_result",receipt,callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert _claim_count(runtime) == 1
+    finally:
+        interrupted.set()
+        thread.join(3)
+    assert not thread.is_alive()
+    assert len(responses) == 1 and statuses == ["500 INTERNAL SERVER ERROR"]
+    assert b"Internal Server Error" in b"".join(responses[0])
+    assert agent.emit("quick_job_result",receipt,callback=True) == {"error":"worker_receipt_uncommitted"}
+    responses[0].close()
+    responses[0].close()
+    builder.close()
+    assert agent.emit("quick_job_result",receipt,callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    agent.disconnect()
+
+
+def test_file_transfer_uncertain_emit_retains_original_ticket(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    emit = runtime.socketio.emit
+    def uncertain(event,*args,**kwargs):
+        result = emit(event,*args,**kwargs)
+        if event == "file_management_request":
+            raise RuntimeError("reply lost after accepted dispatch")
+        return result
+    monkeypatch.setattr(runtime.socketio,"emit",uncertain)
+    response = _start_file_transfer(runtime)
+    assert response.status_code == 503
+    assert response.get_json() == {"error":"worker_dispatch_uncertain"}
+    packet = _file_packet(agent)
+    assert _claim_count(runtime) == 1
+    _grant_file(agent,packet)
+    cancel = runtime.app.test_client().post(f"/remote-files/transfers/{packet['transfer_id']}/cancel",headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")})
+    assert cancel.status_code == 200
+    assert _claim_count(runtime) == 1
+    assert agent.emit("quick_job_result",_file_receipt(packet,"Failed"),callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    agent.disconnect()
 
 
 @pytest.mark.parametrize("protocol", ("vnc", "rdp"))
@@ -184,8 +665,8 @@ def test_worker_desktop_session_blocks_before_proxy_probe_or_registration(tmp_pa
 
 @pytest.mark.parametrize("event,payload,error", (
     ("quick_job_run",{"run_mode":"currentuser"},"worker_currentuser_terminal_unavailable"),
-    ("file_management_request",{"action":"upload_start"},"worker_file_transfer_terminal_unavailable"),
-    ("file_management_request",{"action":"download_start"},"worker_file_transfer_terminal_unavailable"),
+    ("file_management_request",{"action":"upload_start"},"worker_file_transfer_managed_request_required"),
+    ("file_management_request",{"action":"download_start"},"worker_file_transfer_managed_request_required"),
     ("patch_install_request",{},"worker_operation_unsupported"),
     ("patch_policy_apply",{},"worker_operation_unsupported"),
     ("agent_update_request",{},"worker_operation_unsupported"),
@@ -542,6 +1023,102 @@ def test_site_worker_internal_ansible_route_hides_runner_exception(tmp_path: Pat
     assert "secret-playbook" not in response.get_data(as_text=True)
 
 
+@pytest.mark.parametrize("message,expected", (
+    ("worker_capacity_exhausted", "worker_capacity_exhausted"),
+    ("worker_capacity_exhausted\nprivate_password=fixture-secret /private/stack.py", "worker_operation_unavailable"),
+))
+@pytest.mark.parametrize("endpoint", ("event", "call", "ansible", "upload", "download", "desktop"))
+def test_worker_http_errors_return_only_literal_codes(tmp_path, monkeypatch, endpoint, message, expected):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, _token = _runtime(tmp_path)
+    def fail(*_args,**_kwargs):
+        raise AdmissionError(message) from ValueError("private chained diagnostic")
+    headers = {INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}
+    client = runtime.app.test_client()
+    if endpoint in {"event", "call"}:
+        method = "emit_host_service_event" if endpoint == "event" else "call_host_service_event"
+        monkeypatch.setattr(runtime,method,fail)
+        response = client.post("/remote-ops/host-service/"+endpoint,headers=headers,json={"hostname":AGENT_HOSTNAME,"event_name":"service_control_action","payload":{}})
+    elif endpoint == "ansible":
+        runtime.set_ansible_runner(types.SimpleNamespace(queue_run=lambda **_kwargs: pytest.fail("runner reached after admission failure")))
+        monkeypatch.setattr(runtime.admission,"admit",fail)
+        response = client.post("/automation/ansible/run",headers=headers,json={"hostname":AGENT_HOSTNAME})
+    elif endpoint in {"upload", "download"}:
+        monkeypatch.setattr(runtime,"_begin_upload_stage" if endpoint == "upload" else "_admit_file_transfer",fail)
+        response = _start_file_transfer(runtime,endpoint)
+    else:
+        monkeypatch.setattr(runtime,"_require_desktop_terminal_adapter",fail)
+        response = client.post("/remote-desktop/vnc/session",headers=headers,json={"operation_token":_issue_remote_desktop_token(runtime),"agent_id":AGENT_ID})
+    assert response.status_code == 503
+    assert response.get_json() == {"error":expected}
+    assert "private" not in response.get_data(as_text=True) and "fixture-secret" not in response.get_data(as_text=True)
+    assert _claim_count(runtime) == 0
+
+
+@pytest.mark.parametrize("error,expected", (
+    (ValueError("upload_files_required"), "upload_files_required"),
+    (ValueError("upload_manifest_mismatch"), "upload_manifest_mismatch"),
+    (RuntimeError("worker_shell_operation_unbound"), "worker_shell_operation_unbound"),
+    (AdmissionError("worker_file_transfer_custody_missing"), "worker_file_transfer_custody_missing"),
+    (AdmissionError("worker_file_transfer_terminal_pending"), "worker_file_transfer_terminal_pending"),
+    (AdmissionError("worker_dispatch_uncertain"), "worker_dispatch_uncertain"),
+    (AdmissionError("worker_capacity_exhausted", "private diagnostic"), "worker_operation_unavailable"),
+    (AdmissionError(), "worker_operation_unavailable"),
+    (ValueError("private_password=fixture-secret /private/stack.py"), "worker_operation_unavailable"),
+    (RuntimeError("private_password=fixture-secret /private/stack.py"), "worker_operation_unavailable"),
+))
+def test_worker_error_code_preserves_known_codes_without_diagnostics(error, expected):
+    assert worker_socket._worker_error_code(error) == expected
+
+
+def test_worker_error_code_never_formats_exception():
+    class DiagnosticError(AdmissionError):
+        def __str__(self):
+            raise AssertionError("exception formatting must not reach response projection")
+    assert worker_socket._worker_error_code(DiagnosticError("worker_capacity_exhausted")) == "worker_capacity_exhausted"
+    assert worker_socket._worker_error_code(DiagnosticError("private diagnostic")) == "worker_operation_unavailable"
+
+
+@pytest.mark.parametrize("message,expected", (
+    ("upload_files_required", "upload_files_required"),
+    ("upload_manifest_mismatch", "upload_manifest_mismatch"),
+    ("private_password=fixture-secret /private/stack.py", "worker_operation_unavailable"),
+))
+def test_worker_upload_validation_error_hides_unexpected_diagnostics(tmp_path, monkeypatch, message, expected):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime,token,file_version=1)
+    def fail(**_kwargs):
+        raise ValueError(message)
+    monkeypatch.setattr(runtime._file_transfer_store,"create_upload_session",fail)
+    response = _start_file_transfer(runtime)
+    assert response.status_code == 400 and response.get_json() == {"error":expected}
+    # Error shaping cannot fabricate remote completion for an admitted request.
+    assert _claim_count(runtime) == 1
+    agent.disconnect()
+
+
+@pytest.mark.parametrize("message,expected", (
+    ("worker_shell_operation_unbound", "worker_shell_operation_unbound"),
+    ("private_password=fixture-secret /private/stack.py", "worker_operation_unavailable"),
+))
+def test_worker_shell_send_error_hides_runtime_diagnostics(tmp_path, monkeypatch, message, expected):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT",str(tmp_path/"tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE","threading")
+    runtime, _token = _runtime(tmp_path)
+    client = runtime.socketio.test_client(runtime.app)
+    def fail(_payload):
+        raise RuntimeError(message)
+    session = types.SimpleNamespace(is_active=lambda: True,send=fail)
+    sid = runtime.socketio.server.manager.sid_from_eio_sid(client.eio_sid,"/")
+    runtime._shell_sessions[sid] = session
+    assert client.emit("vpn_shell_send",{"data":"fixture"},callback=True) == {"error":expected}
+    runtime._shell_sessions.clear()
+    client.disconnect()
+
+
 def test_site_worker_socket_counts_unique_registered_devices(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     runtime, _token = _runtime(tmp_path)
@@ -704,7 +1281,7 @@ def test_site_worker_file_upload_rejects_missing_terminal_adapter_before_effects
     )
 
     assert response.status_code == 503
-    assert response.get_json() == {"error":"worker_file_transfer_terminal_unavailable"}
+    assert response.get_json() == {"error":"worker_file_upload_identity_required"}
     assert emitted == []
     assert not list(runtime._file_transfer_store._root_dir.iterdir())
 
@@ -712,14 +1289,10 @@ def test_site_worker_file_upload_rejects_missing_terminal_adapter_before_effects
 def test_site_worker_agent_upload_item_endpoint_serves_worker_local_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     runtime, token = _runtime(tmp_path)
-    snapshot = runtime._file_transfer_store.create_upload_session(
-        hostname=AGENT_HOSTNAME,
-        device_guid=AGENT_GUID,
-        agent_id=AGENT_ID,
-        operator_id="unit",
-        target_path=r"C:\Temp",
-        files=[type("_Storage", (), {"filename": "payload.txt", "save": lambda _self, dest: Path(dest).write_bytes(b"payload")})()],
-    )
+    agent = _registered_agent(runtime,token,file_version=1)
+    started = _start_file_transfer(runtime)
+    assert started.status_code == 202
+    snapshot = started.get_json()
     session = runtime._file_transfer_store.get_session(snapshot["transfer_id"])
     assert session is not None
     item_id = session["upload_items"][0]["item_id"]
@@ -731,6 +1304,8 @@ def test_site_worker_agent_upload_item_endpoint_serves_worker_local_file(tmp_pat
 
     assert response.status_code == 200
     assert response.data == b"payload"
+    response.close()
+    agent.disconnect()
 
 
 def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch) -> None:

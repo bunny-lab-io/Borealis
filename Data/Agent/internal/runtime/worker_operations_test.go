@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +18,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	filemanagement "github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
 
@@ -30,6 +34,7 @@ type workerOperationTestServer struct {
 	preflightError      error
 	changeProof         func(map[string]any)
 	changeTerminalProof func(map[string]any)
+	terminalEmitted     chan struct{}
 }
 
 func (s *workerOperationTestServer) Emit(string, any) error { return nil }
@@ -67,6 +72,9 @@ func (s *workerOperationTestServer) EmitWithAck(ctx context.Context, event strin
 		return nil, fmt.Errorf("unexpected event %s", event)
 	}
 	s.receipts = append(s.receipts, string(raw))
+	if s.terminalEmitted != nil {
+		defer func() { s.terminalEmitted <- struct{}{} }()
+	}
 	if prior, ok := s.committed[token]; ok && prior != string(raw) {
 		return nil, errors.New("conflicting terminal")
 	}
@@ -492,5 +500,204 @@ func TestWorkerOperationShellCallbackCapturesOriginalConnection(t *testing.T) {
 	callback(errors.New("late duplicate"))
 	if len(c.outbox.pending) != 0 {
 		t.Fatal("late callback overwrote committed receipt")
+	}
+}
+
+func workerOperationFileManager(t *testing.T, baseURL string) *filemanagement.Manager {
+	t.Helper()
+	// Keep the role's temporary artifacts inside this disposable fixture.
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("TMP", t.TempDir())
+	cfg := agentconfig.Default()
+	cfg.ServerURL = baseURL
+	cfg.Agent.GUID = "11111111-1111-4111-8111-111111111111"
+	cfg.Tokens.AccessToken = "synthetic-access"
+	cfg.Tokens.RefreshToken = "synthetic-refresh"
+	cfg.Tokens.AccessExpiresAt = time.Now().Add(time.Hour).Unix()
+	client, err := auth.NewClient(filepath.Join(t.TempDir(), "agent.json"), &cfg, "system", auth.WithHostname("host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filemanagement.New(client, "host")
+}
+
+func TestWorkerOperationFileTransfersRetainGrantUntilActualExitAndReplayReceipt(t *testing.T) {
+	for _, action := range []string{"upload_start", "download_start"} {
+		t.Run(action, func(t *testing.T) {
+			c, s, path := workerOperationTestFixture(t)
+			s.dropTerminal = true
+			s.terminalEmitted = make(chan struct{}, 4)
+			started, release := make(chan struct{}), make(chan struct{})
+			var effects atomic.Int32
+			target := t.TempDir()
+			source := filepath.Join(target, "source.txt")
+			if err := os.WriteFile(source, []byte("download data"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/upload-item/") || strings.HasSuffix(r.URL.Path, "/content") {
+					if workerOperationTestRecord(t, path)["state"] != "granted" {
+						t.Error("file effect before durable grant")
+					}
+					effects.Add(1)
+					if r.Body != nil {
+						_, _ = io.Copy(io.Discard, r.Body)
+						_ = r.Body.Close()
+					}
+					close(started)
+					<-release
+					if action == "upload_start" {
+						_, _ = io.WriteString(w, "uploaded data")
+						return
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "running"})
+			}))
+			defer server.Close()
+			manager := workerOperationFileManager(t, server.URL)
+			payload := workerOperationTestPayload()
+			payload["action"] = action
+			payload["transfer_id"] = "transfer-1"
+			payload["target_path"] = target
+			if action == "upload_start" {
+				payload["items"] = []map[string]any{{"item_id": "item-1", "relative_path": "uploaded.txt", "size_bytes": 13}}
+			} else {
+				payload["items"] = []map[string]any{{"path": source, "name": "source.txt"}}
+			}
+			wrapped := c.async("file_management_request", manager.HandleRequestWithCompletion)
+			response, err := wrapped(context.Background(), payload)
+			if err != nil || response.(map[string]any)["status"] != "accepted" {
+				t.Fatal(response, err)
+			}
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("transfer did not start")
+			}
+			response, err = wrapped(context.Background(), payload)
+			if err != nil || response.(map[string]any)["status"] != "pending" {
+				t.Fatal("duplicate transfer not fenced", response, err)
+			}
+			select {
+			case <-s.terminalEmitted:
+				t.Fatal("accepted or duplicate ACK became terminal")
+			default:
+			}
+			if workerOperationTestRecord(t, path)["state"] != "granted" {
+				t.Fatal("in-flight grant lost")
+			}
+			c.close()
+			replacement := workerOperationTestConnection(t, path, s, c.outbox)
+			close(release)
+			select {
+			case <-s.terminalEmitted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("transfer terminal missing")
+			}
+			workerOperationTestPending(t, replacement, 1)
+			if manager.Health().Details["active_transfers"] != "0" {
+				t.Fatal("callback preceded transfer exit")
+			}
+			s.mu.Lock()
+			first := s.receipts[0]
+			s.dropTerminal = false
+			s.mu.Unlock()
+			replacement.replay(context.Background())
+			workerOperationTestPending(t, replacement, 0)
+			s.mu.Lock()
+			if len(s.receipts) != 2 || s.receipts[1] != first || !strings.Contains(first, `"status":"Completed"`) {
+				t.Error("reconnect changed transfer receipt", s.receipts)
+			}
+			s.mu.Unlock()
+			_, _ = replacement.async("file_management_request", manager.HandleRequestWithCompletion)(context.Background(), payload)
+			if effects.Load() != 1 {
+				t.Fatal("uncertain/committed transfer replayed", effects.Load())
+			}
+			if action == "upload_start" {
+				raw, err := os.ReadFile(filepath.Join(target, "uploaded.txt"))
+				if err != nil || string(raw) != "uploaded data" {
+					t.Fatal(string(raw), err)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerOperationFileCallbackCoversSyncRejectionAndCancellation(t *testing.T) {
+	for _, mode := range []string{"sync", "rejection", "cancellation"} {
+		t.Run(mode, func(t *testing.T) {
+			c, s, _ := workerOperationTestFixture(t)
+			s.terminalEmitted = make(chan struct{}, 4)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"cancel_requested": true})
+			}))
+			defer server.Close()
+			manager := workerOperationFileManager(t, server.URL)
+			payload := workerOperationTestPayload()
+			payload["target_path"] = t.TempDir()
+			if mode != "sync" {
+				payload["action"] = "upload_start"
+			}
+			if mode == "cancellation" {
+				payload["transfer_id"] = "transfer-1"
+				payload["items"] = []map[string]any{{"item_id": "item-1", "relative_path": "no-write.txt", "size_bytes": 1}}
+			}
+			response, err := c.async("file_management_request", manager.HandleRequestWithCompletion)(context.Background(), payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (mode != "rejection") != (response.(map[string]any)["ok"] == true) {
+				t.Fatal("response envelope changed", response)
+			}
+			select {
+			case <-s.terminalEmitted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("terminal result missing")
+			}
+			c.outbox.delivery.Lock()
+			c.outbox.delivery.Unlock()
+			s.mu.Lock()
+			want := "Failed"
+			if mode == "sync" {
+				want = "Completed"
+			}
+			if len(s.receipts) != 1 || !strings.Contains(s.receipts[0], `"status":"`+want+`"`) {
+				t.Error("wrong terminal result", s.receipts)
+			}
+			s.mu.Unlock()
+			if _, err := os.Stat(filepath.Join(payload["target_path"].(string), "no-write.txt")); !os.IsNotExist(err) {
+				t.Fatal("canceled request wrote target")
+			}
+		})
+	}
+}
+
+func TestWorkerOperationFileCapabilityRequiresUsableJournal(t *testing.T) {
+	for _, mode := range []string{"ready", "unavailable", "closed", "corrupt", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			c, _, path := workerOperationTestFixture(t)
+			switch mode {
+			case "unavailable":
+				c.journal = nil
+			case "closed":
+				c.close()
+			case "corrupt":
+				if err := os.WriteFile(filepath.Join(filepath.Dir(path), "worker-operations.json"), []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "missing":
+				if err := os.Remove(filepath.Join(filepath.Dir(path), "worker-operations.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			payload := map[string]any{}
+			c.addRegistrationCapabilities(payload)
+			for _, name := range []string{"worker_operation_version", "worker_operation_file_transfer_version"} {
+				value, exists := payload[name]
+				if mode == "ready" && value != 1 || mode != "ready" && exists {
+					t.Fatalf("%s capability in %s journal: %v", name, mode, payload)
+				}
+			}
+		})
 	}
 }

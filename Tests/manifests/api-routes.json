@@ -119,7 +119,7 @@
   {
     "pattern": "/api/device/files/",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_files.go",
-    "line": 21,
+    "line": 22,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/remote_files_test.go",
@@ -362,7 +362,7 @@
   {
     "pattern": "/api/server/k3s/operator",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 2174,
+    "line": 2172,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",

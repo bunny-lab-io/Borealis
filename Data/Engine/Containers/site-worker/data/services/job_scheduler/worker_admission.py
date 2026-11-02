@@ -297,7 +297,7 @@ class WorkerAdmission:
             pass
         return ack
 
-    def complete(self, receipt: Mapping[str, Any], *, agent_guid: str, _local: bool = False) -> dict:
+    def complete(self, receipt: Mapping[str, Any], *, agent_guid: str, _local: bool = False, _terminal_guard: Callable | None = None) -> dict:
         if not isinstance(receipt, dict) or not _integer(receipt.get("job_id")) or receipt.get("status") not in _TERMINAL or not isinstance(receipt.get("context"), dict):
             raise AdmissionError("worker_receipt_invalid")
         operation = wire_operation(receipt["context"].get("worker_operation"))
@@ -320,7 +320,7 @@ class WorkerAdmission:
         if expected["job_id"] != receipt["job_id"] or expected["token"] != operation["token"] or expected["agent_guid"] != agent_guid:
             raise AdmissionError("worker_receipt_unbound")
         if _local:
-            if agent_guid or expected["kind"] != "ansible" or "grant_nonce" in expected:
+            if agent_guid or expected["kind"] not in {"ansible", "file_content", "file_stage"} or "grant_nonce" in expected:
                 raise AdmissionError("worker_receipt_unbound")
         elif not agent_guid or "grant_nonce" not in expected:
             raise AdmissionError("worker_receipt_ungranted")
@@ -334,6 +334,10 @@ class WorkerAdmission:
             if expected["receipt_sha256"] != digest:
                 raise AdmissionError("worker_receipt_conflict")
             return ack
+        if _terminal_guard is not None:
+            _terminal_guard(expected)
+        elif expected["kind"] in {"file_transfer_upload", "file_transfer_download"}:
+            raise AdmissionError("worker_file_transfer_custody_missing")
         conn = self.db_factory()
         try:
             self._begin(conn, expected["node_name"])

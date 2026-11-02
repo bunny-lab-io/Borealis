@@ -5,9 +5,11 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import copy
+import base64
 import json
 import logging
 import os
+import re
 import socket
 import tempfile
 import threading
@@ -18,8 +20,9 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 import jwt
 import requests
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_socketio import SocketIO
+from werkzeug.wsgi import ClosingIterator
 
 from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
 from Data.Engine.auth.guid_utils import normalize_guid
@@ -77,6 +80,53 @@ from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
 _EVENTLET_PREPATCH_ENV = "BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED"
+
+
+def _worker_error_code(error: Exception) -> str:
+    # Return our literal, never exception text, args, or chained diagnostics.
+    # Unknown failures retain the same response shape without exposing internals.
+    for code in (
+        "upload_files_required",
+        "upload_manifest_mismatch",
+        "worker_activity_missing",
+        "worker_admission_invalid",
+        "worker_admission_storage_bound",
+        "worker_admission_unaccounted",
+        "worker_capacity_exhausted",
+        "worker_currentuser_terminal_unavailable",
+        "worker_desktop_terminal_unavailable",
+        "worker_dispatch_uncertain",
+        "worker_file_content_active",
+        "worker_file_transfer_capability_required",
+        "worker_file_transfer_custody_missing",
+        "worker_file_transfer_identity_mismatch",
+        "worker_file_transfer_managed_request_required",
+        "worker_file_transfer_sealed",
+        "worker_file_transfer_streams_active",
+        "worker_file_transfer_terminal_pending",
+        "worker_file_upload_identity_invalid",
+        "worker_file_upload_identity_required",
+        "worker_identity_missing",
+        "worker_operation_already_admitted",
+        "worker_operation_capability_required",
+        "worker_operation_invalid",
+        "worker_operation_terminal_unavailable",
+        "worker_operation_unsupported",
+        "worker_placement_changed",
+        "worker_placement_unavailable",
+        "worker_preflight_invalid",
+        "worker_profile_unavailable",
+        "worker_receipt_agent_unregistered",
+        "worker_receipt_changed",
+        "worker_receipt_conflict",
+        "worker_receipt_invalid",
+        "worker_receipt_unbound",
+        "worker_receipt_ungranted",
+        "worker_shell_operation_unbound",
+    ):
+        if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] == code:
+            return code
+    return "worker_operation_unavailable"
 
 
 def _now_ts() -> int:
@@ -328,6 +378,10 @@ class SiteWorkerSocketRuntime:
             node_name=node_name if node_name is not None else str(os.environ.get("BOREALIS_SITE_WORKER_NODE_NAME") or ""),
         )
         self._operation_versions: Dict[str, int] = {}
+        self._file_operation_versions: Dict[str, int] = {}
+        self._file_custody: Dict[str, Dict[str, Any]] = {}
+        self._file_custody_ids: Dict[str, str] = {}
+        self._file_custody_lock = threading.RLock()
         self.logger = logger
         self.service_log = service_log
         self.app = Flask(f"borealis_site_worker_{self.worker_guid}")
@@ -442,7 +496,7 @@ class SiteWorkerSocketRuntime:
             try:
                 emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
             except AdmissionError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return jsonify({"error": _worker_error_code(exc)}), 503
             queued = False
             if not emitted and allow_pending:
                 queued = self.queue_host_service_event(
@@ -487,7 +541,7 @@ class SiteWorkerSocketRuntime:
                     hostname, service_mode, event_name, payload, timeout=max(0.5, timeout),
                 )
             except AdmissionError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return jsonify({"error": _worker_error_code(exc)}), 503
             self._log(
                 "host_service_event_call hostname={0} service_mode={1} event={2} called={3} timeout={4:.1f}".format(
                     normalize_host_key(hostname) or hostname,
@@ -538,7 +592,7 @@ class SiteWorkerSocketRuntime:
                 queue_payload["worker_admission"] = (self.admission, ticket)
                 run_id = self._ansible_runner.queue_run(**queue_payload)
             except AdmissionError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return jsonify({"error": _worker_error_code(exc)}), 503
             except Exception as exc:
                 self._log(f"ansible queue failed err={exc}", level="ERROR")
                 return jsonify({"error": "ansible_queue_failed", "message": "Unable to queue Ansible run."}), 500
@@ -624,6 +678,195 @@ class SiteWorkerSocketRuntime:
             return None, ({"error": "transfer_not_found"}, 404)
         return session, None
 
+    def _require_file_agent(self, hostname: str, device_guid: str, agent_id: str):
+        registered_id = self.registry.get_agent_id_for_host_mode(hostname, "system")
+        agent = self.registry.snapshot().get(registered_id)
+        if not agent or self._file_operation_versions.get(str(agent.get("sid") or "")) != 1:
+            raise AdmissionError("worker_file_transfer_capability_required")
+        if (agent_id and agent_id != registered_id) or normalize_guid(device_guid) != normalize_guid(agent.get("guid")):
+            raise AdmissionError("worker_file_transfer_identity_mismatch")
+        return registered_id, agent
+
+    def _begin_upload_stage(self):
+        def decode(name: str, maximum: int) -> str:
+            encoded = request.headers.get(name, "")
+            if not encoded or len(encoded) > (maximum*8+5)//6 or re.fullmatch(r"[A-Za-z0-9_-]+",encoded) is None:
+                raise AdmissionError("worker_file_upload_identity_required")
+            try:
+                raw = base64.b64decode(encoded+"="*((-len(encoded))%4),altchars=b"-_",validate=True)
+                value = raw.decode("utf-8",errors="strict")
+            except (ValueError,UnicodeError) as exc:
+                raise AdmissionError("worker_file_upload_identity_invalid") from exc
+            if not raw or len(raw)>maximum or base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")!=encoded or value.strip()!=value or any(ord(char)<32 or ord(char)==127 for char in value):
+                raise AdmissionError("worker_file_upload_identity_invalid")
+            return value
+        hostname = decode("X-Borealis-Upload-Hostname-B64",255)
+        agent_id = decode("X-Borealis-Upload-Agent-Id-B64",512)
+        device_guid = request.headers.get("X-Borealis-Upload-Device-Guid", "")
+        if re.fullmatch(r"[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}",device_guid) is None:
+            raise AdmissionError("worker_file_upload_identity_invalid")
+        self._require_file_agent(hostname,device_guid,agent_id)
+        ticket = self.admission.admit(kind="file_stage",hostname=hostname)
+        closed = False
+        @after_this_request
+        def retain_stage_until_response_close(response):
+            status = "Failed" if response.status_code>=400 else "Completed"
+            def finish():
+                nonlocal closed
+                with self._file_custody_lock:
+                    if closed:
+                        return
+                    closed = True
+                try:
+                    self.admission.complete_local(ticket,status=status)
+                except Exception:
+                    self.logger.warning("upload staging ended; local terminal custody remains pending",exc_info=True)
+            response.response = ClosingIterator(response.response,[finish])
+            return response
+        return hostname,device_guid,agent_id
+
+    def _admit_file_transfer(self, hostname: str, device_guid: str, agent_id: str, direction: str):
+        registered_id, agent = self._require_file_agent(hostname,device_guid,agent_id)
+        ticket = self.admission.admit(kind="file_transfer_"+direction, hostname=hostname, agent_guid=normalize_guid(agent.get("guid")))
+        state = {"ticket":ticket,"direction":direction,"agent_id":registered_id,"agent_guid":normalize_guid(agent.get("guid")),"sid":agent["sid"],"record":None,"transfer_id":None,"active":1,"sealed":False,"committed":False}
+        with self._file_custody_lock:
+            # Committed records can leave memory after existing store cleanup.
+            # Expiry never discards unresolved SQL/local ownership.
+            for token, previous in list(self._file_custody.items()):
+                if previous["committed"] and not previous["active"] and not self._file_record_matches(previous):
+                    self._file_custody.pop(token)
+                    self._file_custody_ids.pop(previous["transfer_id"], None)
+            self._file_custody[ticket.token] = state
+        self._retain_file_response(state)
+        return state
+
+    def _file_record_matches(self, state: Mapping[str, Any]) -> bool:
+        # Compare actual server-owned record identity, not caller fields or a
+        # replacement dictionary with copied transfer metadata.
+        with self._file_transfer_store._lock:
+            return state["record"] is not None and self._file_transfer_store._sessions.get(state["transfer_id"]) is state["record"]
+
+    def _bind_file_transfer(self, state: Dict[str, Any], transfer_id: str) -> None:
+        with self._file_custody_lock, self._file_transfer_store._lock:
+            record = self._file_transfer_store._sessions.get(transfer_id)
+            if not record or record["direction"] != state["direction"] or normalize_guid(record["device_guid"]) != state["agent_guid"]:
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            state["record"], state["transfer_id"] = record, transfer_id
+            self._file_custody_ids[transfer_id] = state["ticket"].token
+
+    def _emit_file_transfer(self, state: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+        agent = self.registry.snapshot().get(state["agent_id"])
+        if not agent or agent.get("sid") != state["sid"] or self._file_operation_versions.get(state["sid"]) != 1:
+            raise AdmissionError("worker_dispatch_uncertain")
+        packet = {**payload,"job_id":state["ticket"].job_id,"context":{"worker_operation":state["ticket"].wire()}}
+        try:
+            self.socketio.emit("file_management_request", packet, to=state["sid"])
+        except Exception as exc:
+            raise AdmissionError("worker_dispatch_uncertain") from exc
+
+    def _file_transfer_terminal_guard(self, binding: Mapping[str, Any]) -> None:
+        if binding["kind"] not in {"file_transfer_upload", "file_transfer_download"}:
+            return
+        with self._file_custody_lock:
+            state = self._file_custody.get(binding["token"])
+            if not state or state["ticket"].job_id != binding["job_id"] or state["agent_guid"] != binding["agent_guid"] or binding["kind"] != "file_transfer_"+state["direction"] or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            state["sealed"] = True
+            if state["active"]:
+                raise AdmissionError("worker_file_transfer_streams_active")
+
+    def _mark_file_transfer_committed(self, receipt: Mapping[str, Any]) -> None:
+        token = receipt["context"]["worker_operation"]["token"]
+        with self._file_custody_lock:
+            state = self._file_custody.get(token)
+            if state and state["ticket"].job_id == receipt["job_id"]:
+                state["committed"] = True
+
+    def _public_file_transfer_snapshot(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+        projected = dict(snapshot)
+        transfer_id = projected.get("transfer_id")
+        with self._file_custody_lock:
+            token = self._file_custody_ids.get(transfer_id)
+            state = self._file_custody.get(token)
+            committed = (
+                state is not None
+                and state["ticket"].token == token
+                and state["transfer_id"] == transfer_id
+                and state["direction"] == projected.get("direction")
+                and state["committed"] is True
+                and self._file_record_matches(state)
+            )
+        if not committed:
+            # Browser completion triggers a one-shot artifact GET/removal. Keep
+            # polling until original terminal custody commits; progress alone
+            # does not make content available or finish an upload.
+            if projected.get("status") == "completed":
+                projected["status"] = "running"
+            projected["download_ready"] = False
+        return projected
+
+    def _begin_file_request(self, transfer_id: str) -> None:
+        with self._file_custody_lock:
+            state = self._file_custody.get(self._file_custody_ids.get(transfer_id, ""))
+            if not state or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            if state["sealed"]:
+                raise AdmissionError("worker_file_transfer_sealed")
+            state["active"] += 1
+        self._retain_file_response(state)
+
+    def _retain_file_response(self, state: Dict[str, Any]) -> None:
+        closed = False
+        def finish():
+            nonlocal closed
+            with self._file_custody_lock:
+                if not closed:
+                    closed = True
+                    state["active"] -= 1
+        @after_this_request
+        def retain_until_response_close(response):
+            # send_file uses direct_passthrough: wrap its actual iterable so
+            # WSGI closure, including abort, releases request custody.
+            response.response = ClosingIterator(response.response, [finish])
+            return response
+
+    def _begin_file_content(self, transfer_id: str, hostname: str):
+        with self._file_custody_lock:
+            state = self._file_custody.get(self._file_custody_ids.get(transfer_id, ""))
+            if not state or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            if not state["committed"]:
+                raise AdmissionError("worker_file_transfer_terminal_pending")
+            if state.get("content_active"):
+                raise AdmissionError("worker_file_content_active")
+            state["content_active"] = True
+        try:
+            ticket = self.admission.admit(kind="file_content", hostname=hostname)
+        except Exception:
+            with self._file_custody_lock:
+                state["content_active"] = False
+            raise
+        with self._file_custody_lock:
+            if self._file_custody.get(state["ticket"].token) is not state or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+        closed = False
+        def finish():
+            nonlocal closed
+            with self._file_custody_lock, self._file_transfer_store._lock:
+                if closed:
+                    return
+                closed = True
+                if not self._file_record_matches(state):
+                    self.logger.warning("file content ended with missing original transfer custody")
+                    return
+                self._file_transfer_store.delete_session(transfer_id)
+                state["content_active"] = False
+            try:
+                self.admission.complete_local(ticket)
+            except Exception:
+                self.logger.warning("file content ended; terminal custody remains pending", exc_info=True)
+        return finish
+
     def _register_file_management_routes(self) -> None:
         @self.app.route("/remote-files/transfers/upload", methods=["POST"])
         def _remote_files_upload():
@@ -631,11 +874,17 @@ class SiteWorkerSocketRuntime:
             if requirement:
                 payload, status = requirement
                 return jsonify(payload), status
+            try:
+                header_identity = self._begin_upload_stage()
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             hostname = _normalize_file_text(request.form.get("hostname"))
             device_guid = _normalize_file_text(request.form.get("device_guid"))
             agent_id = _normalize_file_text(request.form.get("agent_id"))
             if not device_guid:
                 device_guid = normalize_guid(infer_guid_from_agent_id(agent_id))
+            if (request.form.get("hostname"),request.form.get("device_guid"),request.form.get("agent_id")) != header_identity:
+                return jsonify({"error":"worker_file_upload_identity_mismatch"}), 400
             operator_id = _normalize_file_text(request.form.get("operator_id")) or "unknown"
             target_path = _normalize_file_text(request.form.get("target_path"))
             transfer_base_url = _normalize_file_text(request.form.get("transfer_base_url"))
@@ -663,10 +912,12 @@ class SiteWorkerSocketRuntime:
                     "message": "Upload transfer request is missing: {0}.".format(", ".join(missing_fields)),
                     "missing": missing_fields,
                 }), 400
+            if manifest_items and len(manifest_items) != len(files) and not manifest_only_empty_upload:
+                return jsonify({"error": "upload_manifest_mismatch"}), 400
             try:
-                self._validate_host_operation("file_management_request", {"action": "upload_start"})
+                state = self._admit_file_transfer(hostname, device_guid, agent_id, "upload")
             except AdmissionError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return jsonify({"error": _worker_error_code(exc)}), 503
             try:
                 snapshot = self._file_transfer_store.create_upload_session(
                     hostname=hostname,
@@ -679,7 +930,8 @@ class SiteWorkerSocketRuntime:
                     overwrite_keys=overwrite_keys if isinstance(overwrite_keys, list) else [],
                 )
             except ValueError as exc:
-                return jsonify({"error": _normalize_file_text(exc) or "upload_files_required"}), 400
+                return jsonify({"error": _worker_error_code(exc)}), 400
+            self._bind_file_transfer(state, snapshot["transfer_id"])
             session = self._file_transfer_store.get_session(snapshot["transfer_id"]) or {}
             items = [
                 {
@@ -692,24 +944,22 @@ class SiteWorkerSocketRuntime:
                 }
                 for row in session.get("upload_items") or []
             ]
-            emitted = self.emit_host_service_event(
-                hostname,
-                "system",
-                "file_management_request",
-                {
-                    "action": "upload_start",
-                    "hostname": hostname,
-                    "agent_id": agent_id,
-                    "requested_by": operator_id,
-                    "transfer_id": snapshot["transfer_id"],
-                    "target_path": target_path,
-                    "transfer_base_url": transfer_base_url,
-                    "items": items,
-                },
-            )
-            if not emitted:
-                self._file_transfer_store.mark_failed(snapshot["transfer_id"], "agent_unavailable")
-                return jsonify({"error": "agent_unavailable"}), 503
+            try:
+                self._emit_file_transfer(
+                    state,
+                    {
+                        "action": "upload_start",
+                        "hostname": hostname,
+                        "agent_id": agent_id,
+                        "requested_by": operator_id,
+                        "transfer_id": snapshot["transfer_id"],
+                        "target_path": target_path,
+                        "transfer_base_url": transfer_base_url,
+                        "items": items,
+                    },
+                )
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             return jsonify(snapshot), 202
 
         @self.app.route("/remote-files/transfers/download", methods=["POST"])
@@ -734,9 +984,9 @@ class SiteWorkerSocketRuntime:
             if not hostname or not device_guid or not selections:
                 return jsonify({"error": "invalid_request"}), 400
             try:
-                self._validate_host_operation("file_management_request", {"action": "download_start"})
+                state = self._admit_file_transfer(hostname, device_guid, agent_id, "download")
             except AdmissionError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return jsonify({"error": _worker_error_code(exc)}), 503
             snapshot = self._file_transfer_store.create_download_session(
                 hostname=hostname,
                 device_guid=device_guid,
@@ -745,25 +995,24 @@ class SiteWorkerSocketRuntime:
                 selections=selections,
                 archive_name=archive_name,
             )
-            emitted = self.emit_host_service_event(
-                hostname,
-                "system",
-                "file_management_request",
-                {
-                    "action": "download_start",
-                    "hostname": hostname,
-                    "agent_id": agent_id,
-                    "requested_by": operator_id,
-                    "transfer_id": snapshot["transfer_id"],
-                    "archive_name": archive_name,
-                    "archive_required": archive_required,
-                    "transfer_base_url": transfer_base_url,
-                    "items": selections,
-                },
-            )
-            if not emitted:
-                self._file_transfer_store.mark_failed(snapshot["transfer_id"], "agent_unavailable")
-                return jsonify({"error": "agent_unavailable"}), 503
+            self._bind_file_transfer(state, snapshot["transfer_id"])
+            try:
+                self._emit_file_transfer(
+                    state,
+                    {
+                        "action": "download_start",
+                        "hostname": hostname,
+                        "agent_id": agent_id,
+                        "requested_by": operator_id,
+                        "transfer_id": snapshot["transfer_id"],
+                        "archive_name": archive_name,
+                        "archive_required": archive_required,
+                        "transfer_base_url": transfer_base_url,
+                        "items": selections,
+                    },
+                )
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             return jsonify(snapshot), 202
 
         @self.app.route("/remote-files/transfers/<transfer_id>/status", methods=["GET"])
@@ -775,7 +1024,7 @@ class SiteWorkerSocketRuntime:
             session = self._file_transfer_store.get_session(transfer_id)
             if session is None:
                 return jsonify({"error": "transfer_not_found"}), 404
-            return jsonify(_transfer_status_snapshot(session)), 200
+            return jsonify(self._public_file_transfer_snapshot(_transfer_status_snapshot(session))), 200
 
         @self.app.route("/remote-files/transfers/<transfer_id>/cancel", methods=["POST"])
         def _remote_files_cancel(transfer_id: str):
@@ -786,7 +1035,7 @@ class SiteWorkerSocketRuntime:
             snapshot = self._file_transfer_store.request_cancel(transfer_id)
             if snapshot is None:
                 return jsonify({"error": "transfer_not_found"}), 404
-            return jsonify(snapshot), 200
+            return jsonify(self._public_file_transfer_snapshot(snapshot)), 200
 
         @self.app.route("/remote-files/transfers/<transfer_id>/content", methods=["GET"])
         def _remote_files_content(transfer_id: str):
@@ -804,6 +1053,10 @@ class SiteWorkerSocketRuntime:
             result_path = _normalize_file_text(session.get("result_path"))
             if not result_path or not Path(result_path).is_file():
                 return jsonify({"error": "content_not_available"}), 404
+            try:
+                finish = self._begin_file_content(transfer_id, str(session.get("hostname") or ""))
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             response = send_file(
                 result_path,
                 as_attachment=True,
@@ -811,7 +1064,7 @@ class SiteWorkerSocketRuntime:
                 mimetype=_normalize_file_text(session.get("result_mime")) or "application/octet-stream",
                 max_age=0,
             )
-            response.call_on_close(lambda: self._file_transfer_store.delete_session(transfer_id))
+            response.response = ClosingIterator(response.response, [finish])
             return response
 
         @self.app.route("/api/agent/files/transfers/<transfer_id>/upload-item/<item_id>", methods=["GET"])
@@ -821,6 +1074,10 @@ class SiteWorkerSocketRuntime:
                 payload, status = error
                 return jsonify(payload), status
             assert session is not None
+            try:
+                self._begin_file_request(transfer_id)
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             if bool(session.get("cancel_requested")) or _normalize_file_text(session.get("status")).lower() in {"canceling", "canceled"}:
                 return jsonify({"error": "transfer_canceled"}), 409
             item = self._file_transfer_store.get_upload_item(transfer_id, item_id)
@@ -882,6 +1139,10 @@ class SiteWorkerSocketRuntime:
                 payload, status = error
                 return jsonify(payload), status
             assert session is not None
+            try:
+                self._begin_file_request(transfer_id)
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             if bool(session.get("cancel_requested")) or _normalize_file_text(session.get("status")).lower() in {"canceling", "canceled"}:
                 self._file_transfer_store.mark_canceled(transfer_id, "Transfer canceled by operator.")
                 return jsonify({"error": "transfer_canceled"}), 409
@@ -1002,7 +1263,7 @@ class SiteWorkerSocketRuntime:
             try:
                 self._require_desktop_terminal_adapter()
             except AdmissionError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return jsonify({"error": _worker_error_code(exc)}), 503
             if not self._ensure_guacamole_proxy():
                 return jsonify({"error": "guacamole_proxy_unavailable"}), 503
 
@@ -1329,6 +1590,8 @@ class SiteWorkerSocketRuntime:
             )
             version = data.get("worker_operation_version") if isinstance(data, dict) else None
             self._operation_versions[request.sid] = 1 if type(version) is int and version == 1 else 0
+            file_version = data.get("worker_operation_file_transfer_version") if isinstance(data, dict) else None
+            self._file_operation_versions[request.sid] = 1 if type(file_version) is int and file_version == 1 and self._operation_versions[request.sid] == 1 else 0
             self.logger.info(
                 "Site-worker Agent socket registered worker_guid=%s site_id=%s service_mode=%s helper_contexts=%s",
                 self.worker_guid,
@@ -1349,6 +1612,7 @@ class SiteWorkerSocketRuntime:
         @self.socketio.on("disconnect")
         def _disconnect() -> None:
             self._operation_versions.pop(request.sid, None)
+            self._file_operation_versions.pop(request.sid, None)
             agent_id = self.registry.unregister(request.sid)
             shell_closed = self._close_shell_session(request.sid, reason="operator_socket_disconnect")
             if agent_id:
@@ -1500,7 +1764,7 @@ class SiteWorkerSocketRuntime:
             try:
                 ticket = self.admission.admit(kind="shell", hostname=str(agent.get("hostname") or ""), agent_guid=str(agent.get("guid") or "").upper())
             except AdmissionError as exc:
-                return {"error":str(exc)}
+                return {"error":_worker_error_code(exc)}
             self._close_shell_session(request.sid, reason="superseded_open")
             self._close_agent_shell_session(agent_id, reason="superseded_agent_session")
             session = self._open_shell_session(request.sid, agent_id, virtual_ip, port, tunnel_payload, ticket=ticket)
@@ -1521,7 +1785,7 @@ class SiteWorkerSocketRuntime:
             try:
                 session.send(str(payload))
             except RuntimeError as exc:
-                return {"error":str(exc)}
+                return {"error":_worker_error_code(exc)}
             return {"status": "ok"}
 
         @self.socketio.on("vpn_shell_close")
@@ -1834,7 +2098,8 @@ class SiteWorkerSocketRuntime:
             context = data.get("context")
             if isinstance(context, dict) and "worker_operation" in context:
                 try:
-                    ack = self.admission.complete(data, agent_guid=self._receipt_agent_guid())
+                    ack = self.admission.complete(data, agent_guid=self._receipt_agent_guid(), _terminal_guard=self._file_transfer_terminal_guard)
+                    self._mark_file_transfer_committed(data)
                 except Exception:
                     self.logger.warning("tracked worker receipt rejected", exc_info=True)
                     return {"error": "worker_receipt_uncommitted"}
@@ -2063,7 +2328,7 @@ class SiteWorkerSocketRuntime:
         if not isinstance(payload, Mapping):
             raise AdmissionError("worker_operation_invalid")
         if event == "file_management_request" and str(payload.get("action") or "").lower() in {"upload_start", "download_start"}:
-            raise AdmissionError("worker_file_transfer_terminal_unavailable")
+            raise AdmissionError("worker_file_transfer_managed_request_required")
         if event == "quick_job_run" and str(payload.get("run_mode") or "system").lower() != "system":
             raise AdmissionError("worker_currentuser_terminal_unavailable")
 

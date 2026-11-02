@@ -101,12 +101,16 @@ func observeClusterSSHSiteWorkerResources(readList func(string, string, string, 
 			meta, spec, status := clusterSSHStorageMap(pod, "metadata"), clusterSSHStorageMap(pod, "spec"), clusterSSHStorageMap(pod, "status")
 			labels, annotations := clusterSSHStorageMap(meta, "labels"), clusterSSHStorageMap(meta, "annotations")
 			worker := clusterSSHStorageText(labels, "borealis.io/worker-guid")
+			siteName := clusterSSHStorageText(annotations, "borealis.io/site-name")
 			siteText := clusterSSHStorageText(labels, "borealis.io/site-id")
 			site, siteErr := strconv.ParseInt(siteText, 10, 64)
+			// Each exact producer uses the same name for Pod and Service:
+			// retained legacy site slug, or current immutable site reservation.
+			serviceName := clusterSSHStorageText(annotations, "borealis.io/service-name")
 			if !valid || siteErr != nil || strconv.FormatInt(site, 10) != siteText ||
 				labels["app.kubernetes.io/name"] != "site-worker" || labels["app.kubernetes.io/part-of"] != "borealis" ||
 				labels["app.kubernetes.io/managed-by"] != "borealis-operator" || labels["app.kubernetes.io/component"] != "site-worker" || labels["borealis.io/workload"] != "site-worker" ||
-				id.Name != siteWorkerNameForSite(site, clusterSSHStorageText(annotations, "borealis.io/site-name"), worker) || annotations["borealis.io/service-name"] != id.Name ||
+				(id.Name != siteWorkerNameForSite(site, siteName, worker) && id.Name != siteWorkerPodNameForSite(site)) || serviceName != id.Name ||
 				!clusterSSHStorageEmptyList(meta["ownerReferences"]) || spec["nodeName"] != member.Name ||
 				!clusterSSHSiteWorkerPlacement(spec) || status["phase"] != "Running" {
 				return fail()

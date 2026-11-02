@@ -19,7 +19,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/credentials` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go:53` |
 | `/api/credentials/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/credentials.go:54` |
 | `/api/device/activity/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/activity.go:20` |
-| `/api/device/files/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_files.go:21` |
+| `/api/device/files/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_files.go:22` |
 | `/api/device/registry/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/remote_registry.go:13` |
 | `/api/device_filters` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go:106` |
 | `/api/device_filters/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/device_filters.go:110` |
@@ -46,7 +46,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `/api/scheduled_jobs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:134` |
 | `/api/scheduled_jobs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs.go:135` |
 | `/api/server/ansible-runner-settings` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_settings.go:21` |
-| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2174` |
+| `/api/server/k3s/operator` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go:2172` |
 | `/api/server/logs` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:24` |
 | `/api/server/logs/` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go:25` |
 | `/api/server/overview` | `operator-api` | `operator-session` | `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go:53` |
