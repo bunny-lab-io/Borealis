@@ -2,10 +2,12 @@ package agentruntime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,75 +15,91 @@ import (
 )
 
 func TestHandleAgentMaintenanceRequestPersistsOperationBeforeAckAndStartsUpdaterAfterAck(t *testing.T) {
-	originalStarter := startLocalUpdaterForRequest
-	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
-	started := make(chan struct{}, 1)
-	release := make(chan struct{})
-	startLocalUpdaterForRequest = func(configPath string) error {
-		started <- struct{}{}
-		<-release
-		return nil
-	}
+	for _, tc := range []struct {
+		status string
+		err    error
+	}{{status: "updater_started"}, {status: "failed", err: errors.New("fixture updater failed")}} {
+		t.Run(tc.status, func(t *testing.T) {
+			originalStarter := startLocalUpdaterForRequest
+			t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
+			started := make(chan struct{}, 1)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseUpdater := func() { releaseOnce.Do(func() { close(release) }) }
+			startLocalUpdaterForRequest = func(configPath string) error {
+				started <- struct{}{}
+				<-release
+				return tc.err
+			}
 
-	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
-	cfg := agentconfig.Default()
-	cfg.ServerURL = "https://borealis.example.com"
-	if err := agentconfig.Save(configPath, &cfg); err != nil {
-		t.Fatal(err)
-	}
+			configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
+			cfg := agentconfig.Default()
+			cfg.ServerURL = "https://borealis.example.com"
+			if err := agentconfig.Save(configPath, &cfg); err != nil {
+				t.Fatal(err)
+			}
 
-	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := agent.handleAgentMaintenanceRequest(context.Background(), map[string]any{
-		"operation_id": "op-ack-first",
-		"kind":         "update_now",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, afterAck := responseBody(t, response)
-	if body["status"] != "ok" || body["operation_id"] != "op-ack-first" {
-		t.Fatalf("unexpected response: %#v", body)
-	}
-	select {
-	case <-started:
-		t.Fatalf("local updater started before ack callback")
-	case <-time.After(50 * time.Millisecond):
-	}
+			agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := agent.handleAgentMaintenanceRequest(context.Background(), map[string]any{
+				"operation_id": "op-ack-first",
+				"kind":         "update_now",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, afterAck := responseBody(t, response)
+			if body["status"] != "ok" || body["operation_id"] != "op-ack-first" {
+				t.Fatalf("unexpected response: %#v", body)
+			}
+			select {
+			case <-started:
+				t.Fatalf("local updater started before ack callback")
+			default:
+			}
 
-	loaded, err := agentconfig.Load(configPath)
-	if err != nil {
-		t.Fatal(err)
+			loaded, err := agentconfig.Load(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Agent.Update.OperationID != "op-ack-first" || loaded.Agent.Update.Status != "requested" {
+				t.Fatalf("update operation must be durable before ack callback: %#v", loaded.Agent.Update)
+			}
+			done := runUpdateAfterAck(t, afterAck, releaseUpdater)
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatalf("local updater was not started after ack callback")
+			}
+			select {
+			case <-done:
+				t.Fatal("ack callback returned before updater completed")
+			default:
+			}
+			releaseUpdater()
+			waitUpdateAfterAck(t, done)
+			loaded, err = agentconfig.Load(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Agent.Update.Status != tc.status || loaded.Agent.Update.OperationID != "op-ack-first" {
+				t.Fatalf("ack callback returned before persisting updater result: %#v", loaded.Agent.Update)
+			}
+			if tc.err != nil && (loaded.Agent.Update.LastError != tc.err.Error() || loaded.Agent.Update.CompletedAt == 0) {
+				t.Fatalf("failed updater result missing completion or error: %#v", loaded.Agent.Update)
+			}
+		})
 	}
-	if loaded.Agent.Update.OperationID != "op-ack-first" || loaded.Agent.Update.Status != "requested" {
-		t.Fatalf("update operation must be durable before ack callback: %#v", loaded.Agent.Update)
-	}
-	go afterAck()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatalf("local updater was not started after ack callback")
-	}
-	close(release)
-	for i := 0; i < 20; i++ {
-		loaded, err = agentconfig.Load(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if loaded.Agent.Update.Status == "updater_started" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("update operation did not reach updater_started: %#v", loaded.Agent.Update)
 }
 
 func TestHandleUpdateRequestStoresSchedulerCorrelationBeforeAckCallback(t *testing.T) {
 	originalStarter := startLocalUpdaterForRequest
 	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
+	started := make(chan struct{}, 1)
 	startLocalUpdaterForRequest = func(configPath string) error {
+		started <- struct{}{}
 		return nil
 	}
 
@@ -114,26 +132,51 @@ func TestHandleUpdateRequestStoresSchedulerCorrelationBeforeAckCallback(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Agent.Update.OperationID != "op-current-target" || loaded.Agent.Update.ScheduledJobID != 123 || loaded.Agent.Update.ScheduledJobRunID != 456 {
+	if loaded.Agent.Update.OperationID != "op-current-target" || loaded.Agent.Update.Status != "requested" || loaded.Agent.Update.ScheduledJobID != 123 || loaded.Agent.Update.ScheduledJobRunID != 456 {
 		t.Fatalf("update operation correlation must be written before ack callback: %#v", loaded.Agent.Update)
 	}
-
-	go afterAck()
-	for i := 0; i < 20; i++ {
-		loaded, err = agentconfig.Load(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if loaded.Agent.Update.Status == "updater_started" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-started:
+		t.Fatal("local updater started before ack callback")
+	default:
 	}
-	if loaded.Agent.Update.OperationID != "op-current-target" {
-		t.Fatalf("operation id = %q", loaded.Agent.Update.OperationID)
+
+	done := runUpdateAfterAck(t, afterAck, func() {})
+	waitUpdateAfterAck(t, done)
+	loaded, err = agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.Update.OperationID != "op-current-target" || loaded.Agent.Update.Status != "updater_started" || loaded.Agent.Update.ScheduledJobID != 123 || loaded.Agent.Update.ScheduledJobRunID != 456 {
+		t.Fatalf("ack callback did not persist updater result with scheduler correlation: %#v", loaded.Agent.Update)
 	}
 	if loaded.Agent.Update.Kind != "update_now" {
 		t.Fatalf("update kind = %q", loaded.Agent.Update.Kind)
+	}
+}
+
+func runUpdateAfterAck(t *testing.T, afterAck, release func()) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	// Registered after TempDir and hook restoration: even a fatal assertion
+	// releases the fixture and joins the callback before either cleanup runs.
+	t.Cleanup(func() {
+		release()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		afterAck()
+	}()
+	return done
+}
+
+func waitUpdateAfterAck(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ack callback did not complete")
 	}
 }
 
