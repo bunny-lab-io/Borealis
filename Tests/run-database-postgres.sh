@@ -88,6 +88,20 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   exit 1
 fi
 
+# Exercise the production Python admission transactions against the same
+# canonical schema. This entrypoint requires PostgreSQL and cannot skip SQL.
+if ! run_timed "${TIMEOUT_SECONDS}" env \
+  BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
+  BOREALIS_PROJECT_ROOT="${REPO_ROOT}" \
+  BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0 \
+  PYTHONPATH="${REPO_ROOT}" \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "${PYTHON_BIN}" "${REPO_ROOT}/Data/Engine/Unit_Tests/test_worker_admission.py" --postgres \
+  >"${RESULT_DIR}/worker-admission-postgres.log" 2>&1; then
+  tail -n 160 "${RESULT_DIR}/worker-admission-postgres.log" >&2 || true
+  exit 1
+fi
+
 # Required race-instrumented authority/drift cases exceeded the former 15-minute
 # package limit with 27 broker cases and 16 top-level tests still unfinished.
 # Bound the full suite separately from individual operations, and retain five

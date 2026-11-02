@@ -1347,6 +1347,8 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 					"env": []map[string]any{
 						{"name": "BOREALIS_PROCESS_ROLE", "value": "site-worker"},
 						{"name": "BOREALIS_SITE_WORKER_GUID", "value": workerGUID},
+						{"name": "BOREALIS_SITE_WORKER_POD_UID", "valueFrom": map[string]any{"fieldRef": map[string]any{"apiVersion": "v1", "fieldPath": "metadata.uid"}}},
+						{"name": "BOREALIS_SITE_WORKER_NODE_NAME", "valueFrom": map[string]any{"fieldRef": map[string]any{"apiVersion": "v1", "fieldPath": "spec.nodeName"}}},
 						{"name": "BOREALIS_SITE_WORKER_SITE_ID", "value": fmt.Sprintf("%d", siteID)},
 						{"name": "BOREALIS_SITE_WORKER_CONTAINER_NAME", "value": podName},
 						{"name": "BOREALIS_SITE_WORKER_SERVICE_NAME", "value": serviceName},

@@ -144,8 +144,9 @@ func softwareRefreshHandler(auth *authService) http.HandlerFunc {
 					})
 					return
 				}
-				_ = workerStatus
-				_ = workerErr
+				if !workerHostServiceDispatchRetryable(result, workerStatus, workerErr) {
+					break
+				}
 			}
 			if time.Now().After(deadline) {
 				break

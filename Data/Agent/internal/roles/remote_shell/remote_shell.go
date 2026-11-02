@@ -33,6 +33,10 @@ type RoleHealth struct {
 	Details    map[string]any
 }
 
+// OperationBinder durably claims a session before any shell execution.
+// Completion is called only after process Wait, or closed-before-start proof.
+type OperationBinder func(context.Context, map[string]any) (func(error), error)
+
 type Manager struct {
 	hostname    string
 	serviceMode string
@@ -45,15 +49,18 @@ type Manager struct {
 	shellKind   string
 	shellBin    string
 
-	mu            sync.Mutex
-	sessionMu     sync.Mutex
-	started       bool
-	listening     bool
-	lastError     string
-	lastCheckedAt int64
-	listener      net.Listener
-	cancel        context.CancelFunc
-	session       *shellSession
+	mu                  sync.Mutex
+	sessionMu           sync.Mutex
+	started             bool
+	listening           bool
+	lastError           string
+	lastCheckedAt       int64
+	listener            net.Listener
+	cancel              context.CancelFunc
+	session             *shellSession
+	operationBinder     OperationBinder
+	operationGeneration uint64
+	requireOperation    bool
 }
 
 type shellSession struct {
@@ -72,9 +79,15 @@ type shellSession struct {
 	once    sync.Once
 	ready   sync.Once
 
-	proc   *exec.Cmd
-	stdin  io.WriteCloser
-	closed chan struct{}
+	proc             *exec.Cmd
+	stdin            io.WriteCloser
+	closed           chan struct{}
+	requireOperation bool
+	bindOperation    OperationBinder
+	bound            bool
+	complete         func(error)
+	terminalOnce     sync.Once
+	terminalErr      error
 
 	engineSessionID    string
 	lastInput          inputMeta
@@ -288,6 +301,25 @@ func (m *Manager) serve(ctx context.Context) {
 	}
 }
 
+// SetOperationBinder captures this connection's durable operation owner. Cleanup
+// cannot erase a newer Socket.IO connection's binder. A nil binder still fences
+// active sessions while passive readiness remains available.
+func (m *Manager) SetOperationBinder(binder OperationBinder) func() {
+	m.mu.Lock()
+	m.requireOperation = true
+	m.operationGeneration++
+	generation := m.operationGeneration
+	m.operationBinder = binder
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		if m.operationGeneration == generation {
+			m.operationBinder = nil
+		}
+		m.mu.Unlock()
+	}
+}
+
 func (m *Manager) handleConnection(conn net.Conn) {
 	remoteHost := remoteHost(conn.RemoteAddr())
 	if !isAllowedShellRemote(remoteHost) {
@@ -297,6 +329,10 @@ func (m *Manager) handleConnection(conn net.Conn) {
 	}
 	configureTCPSocket(conn)
 	session := newShellSession(conn, conn.RemoteAddr().String(), m.shellKind, m.shellBin, m.logf, m.onSessionClosed, m.activateSession)
+	m.mu.Lock()
+	session.requireOperation = m.requireOperation
+	session.bindOperation = m.operationBinder
+	m.mu.Unlock()
 	m.logf("Accepted remote shell connection from %s", conn.RemoteAddr().String())
 	go session.start()
 }
@@ -380,18 +416,23 @@ func (s *shellSession) start() {
 
 func (s *shellSession) ensureProcessStarted() error {
 	s.procMu.Lock()
+	if s.isClosed() || s.requireOperation && !s.bound {
+		s.procMu.Unlock()
+		return fmt.Errorf("shell operation unavailable")
+	}
 	if s.proc != nil && s.stdin != nil {
 		s.procMu.Unlock()
 		return nil
 	}
 	stdout, stderr, err := s.startProcessLocked()
+	proc := s.proc
 	s.procMu.Unlock()
 	if err != nil {
 		return err
 	}
 	go s.readOutput(stdout, "stdout")
 	go s.readOutput(stderr, "stderr")
-	go s.waitProcess()
+	go s.waitProcess(proc)
 	return nil
 }
 
@@ -431,20 +472,30 @@ func (s *shellSession) startProcessLocked() (io.Reader, io.Reader, error) {
 	return stdout, stderr, nil
 }
 
-func (s *shellSession) waitProcess() {
-	s.procMu.Lock()
-	proc := s.proc
-	s.procMu.Unlock()
+func (s *shellSession) waitProcess(proc *exec.Cmd) {
 	if proc == nil {
 		return
 	}
-	err := proc.Wait()
+	s.waitForTerminal(func() (error, bool) {
+		err := proc.Wait()
+		return err, proc.ProcessState != nil
+	})
+}
+
+func (s *shellSession) waitForTerminal(wait func() (error, bool)) {
+	err, joined := wait()
+	if !joined {
+		s.logf("Shell process exit unconfirmed; tracked operation remains unresolved: %v", err)
+		s.close()
+		return
+	}
 	if err != nil {
 		s.logf("Shell subprocess exited error=%v", err)
 	} else {
 		s.logf("Shell subprocess exited cleanly")
 	}
 	s.close()
+	s.completeTerminal(err)
 }
 
 func (s *shellSession) readOutput(reader io.Reader, label string) {
@@ -496,12 +547,16 @@ func (s *shellSession) handleLine(line []byte) {
 		return
 	}
 	s.captureSessionID(msg)
-	s.markReady()
+	if !s.requireOperation {
+		s.markReady()
+	}
 	if s.handleControlMessage(msg) {
 		return
 	}
 	msgType := strings.ToLower(strings.TrimSpace(fmt.Sprint(msg["type"])))
 	switch msgType {
+	case "worker_operation_bind":
+		s.handleOperationBind(msg)
 	case "stdin":
 		s.handleStdin(msg)
 	case "close":
@@ -550,6 +605,49 @@ func (s *shellSession) handleControlMessage(msg map[string]any) bool {
 	return true
 }
 
+func (s *shellSession) handleOperationBind(msg map[string]any) {
+	s.procMu.Lock()
+	unavailable := s.bound || s.proc != nil || s.isClosed() || s.bindOperation == nil
+	s.procMu.Unlock()
+	sessionID, validID := msg["session_id"].(string)
+	if unavailable || len(msg) != 4 || !validID || sessionID == "" || len(sessionID) > 128 || sessionID != s.sessionID() {
+		s.close()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	complete, err := s.bindOperation(ctx, msg)
+	cancel()
+	if err != nil || complete == nil {
+		s.close()
+		return
+	}
+	s.procMu.Lock()
+	s.bound, s.complete = true, complete
+	closed := s.isClosed()
+	s.procMu.Unlock()
+	if closed {
+		s.completeTerminal(nil)
+		return
+	}
+	s.markReady()
+	operationContext, _ := msg["context"].(map[string]any)
+	if err := s.sendJSON(map[string]any{
+		"type": "worker_operation_bound", "session_id": sessionID, "job_id": msg["job_id"],
+		"worker_operation": operationContext["worker_operation"], "status": "accepted",
+	}); err != nil {
+		s.close()
+	}
+}
+
+func (s *shellSession) completeTerminal(err error) {
+	s.procMu.Lock()
+	complete := s.complete
+	s.procMu.Unlock()
+	if complete != nil {
+		s.terminalOnce.Do(func() { complete(err) })
+	}
+}
+
 func (s *shellSession) handleStdin(msg map[string]any) {
 	payload := strings.TrimSpace(fmt.Sprint(msg["data"]))
 	decoded, err := base64.StdEncoding.DecodeString(payload)
@@ -558,6 +656,9 @@ func (s *shellSession) handleStdin(msg map[string]any) {
 		return
 	}
 	if err := s.ensureProcessStarted(); err != nil {
+		s.procMu.Lock()
+		s.terminalErr = err
+		s.procMu.Unlock()
 		s.logf("Shell subprocess start failed error=%v session_id=%s", err, s.sessionID())
 		s.sendStdout([]byte(fmt.Sprintf("[borealis] Failed to start remote shell: %v\n", err)))
 		s.close()
@@ -688,7 +789,7 @@ func (s *shellSession) close() {
 		stdin := s.stdin
 		proc := s.proc
 		s.stdin = nil
-		s.proc = nil
+		terminalErr := s.terminalErr
 		s.procMu.Unlock()
 		if stdin != nil {
 			_ = stdin.Close()
@@ -708,6 +809,9 @@ func (s *shellSession) close() {
 		}
 		if s.onClosed != nil {
 			s.onClosed(s)
+		}
+		if proc == nil {
+			s.completeTerminal(terminalErr)
 		}
 	})
 }

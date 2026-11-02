@@ -2,6 +2,7 @@ package patchmanagement
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -459,5 +460,63 @@ func TestPatchInstallRequestWaitTimeout(t *testing.T) {
 	payload, _ := response.(map[string]any)
 	if payload["error"] != "install_wait_failed" || payload["ok"] != false {
 		t.Fatalf("unexpected timeout response %#v", payload)
+	}
+}
+
+func TestTrackedRefreshCallbacksStayWithTheirScan(t *testing.T) {
+	m := New(nil, "test-host", "system")
+	m.supported = true
+	m.loopRunning = true
+	firstStarted, releaseFirst := make(chan struct{}), make(chan struct{})
+	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	firstReturned := make(chan error, 1)
+	callback := func(ch chan error) func(error) { return func(err error) { _ = m.Health(); ch <- err } }
+	request := map[string]any{"hostname": "test-host", "reason": "tracked"}
+	if ack, err := m.HandleRefreshRequestWithCompletion(context.Background(), request, callback(firstDone)); err != nil || ack.(map[string]any)["status"] != "accepted" {
+		t.Fatal("refresh not accepted", ack, err)
+	}
+	go func() {
+		firstReturned <- m.refreshBatch(func() error { close(firstStarted); <-releaseFirst; return nil })
+	}()
+	<-firstStarted
+	if _, err := m.HandleRefreshRequestWithCompletion(context.Background(), request, callback(secondDone)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstDone:
+		t.Fatal("acceptance became terminal")
+	default:
+	}
+	close(releaseFirst)
+	if err := <-firstReturned; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("first scan lost callback")
+	}
+	select {
+	case <-secondDone:
+		t.Fatal("concurrent request consumed earlier scan")
+	default:
+	}
+	failed := fmt.Errorf("second scan failed")
+	if err := m.refreshBatch(func() error { return failed }); err != failed {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-secondDone:
+		if err != failed {
+			t.Fatal("scan failure lost", err)
+		}
+	default:
+		t.Fatal("second scan lost callback")
+	}
+	if len(m.refreshCallbacks) != 0 {
+		t.Fatal("completed callbacks retained")
 	}
 }

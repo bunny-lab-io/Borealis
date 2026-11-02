@@ -466,6 +466,23 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 		t.Fatalf("expected one site-worker container: %#v", containers)
 	}
 	container, _ := containers[0].(map[string]any)
+	for name, path := range map[string]string{"BOREALIS_SITE_WORKER_POD_UID": "metadata.uid", "BOREALIS_SITE_WORKER_NODE_NAME": "spec.nodeName"} {
+		found := 0
+		for _, raw := range schedulerAnyList(container["env"]) {
+			env := schedulerAnyMap(raw)
+			if env["name"] != name {
+				continue
+			}
+			found++
+			field := nestedMap(nestedMap(env, "valueFrom"), "fieldRef")
+			if _, literal := env["value"]; literal || field["apiVersion"] != "v1" || field["fieldPath"] != path {
+				t.Fatalf("worker incarnation must use fixed Downward API field: %#v", env)
+			}
+		}
+		if found != 1 {
+			t.Fatalf("missing or duplicate worker identity environment %s", name)
+		}
+	}
 	readinessProbe := nestedMap(container, "readinessProbe")
 	readinessHTTP := nestedMap(readinessProbe, "httpGet")
 	if cleanText(readinessHTTP["path"]) != "/ready" || cleanText(readinessHTTP["port"]) != "remote-ops" {

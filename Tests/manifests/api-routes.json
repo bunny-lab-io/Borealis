@@ -209,7 +209,7 @@
   {
     "pattern": "/api/internal/job-scheduler/credential/",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 21,
+    "line": 22,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -218,7 +218,7 @@
   {
     "pattern": "/api/internal/job-scheduler/host-service-event",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 26,
+    "line": 27,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -227,7 +227,7 @@
   {
     "pattern": "/api/internal/job-scheduler/online-hosts",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 23,
+    "line": 24,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -236,7 +236,7 @@
   {
     "pattern": "/api/internal/job-scheduler/online-sites",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 24,
+    "line": 25,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -245,7 +245,7 @@
   {
     "pattern": "/api/internal/job-scheduler/public-base-url",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 25,
+    "line": 26,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -254,7 +254,7 @@
   {
     "pattern": "/api/internal/job-scheduler/service-account/",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 22,
+    "line": 23,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -263,7 +263,7 @@
   {
     "pattern": "/api/internal/job-scheduler/vpn-prepare",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 28,
+    "line": 29,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -272,7 +272,7 @@
   {
     "pattern": "/api/internal/job-scheduler/vpn-sessions",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 27,
+    "line": 28,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -281,7 +281,7 @@
   {
     "pattern": "/api/internal/job-scheduler/work-items",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 29,
+    "line": 30,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -290,7 +290,7 @@
   {
     "pattern": "/api/internal/job-scheduler/workflow/start",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler.go",
-    "line": 30,
+    "line": 31,
     "class": "internal-scheduler",
     "authentication": "internal-hmac",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/internal_scheduler_test.go",
@@ -362,7 +362,7 @@
   {
     "pattern": "/api/server/k3s/operator",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go",
-    "line": 2172,
+    "line": 2174,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator_test.go",

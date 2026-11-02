@@ -189,7 +189,7 @@ def _commit_worker_heartbeat(
     lanes,
     task_links,
     idle_since: Optional[int],
-    claimed_count: int,
+    claimed_count: Optional[int],
     container_name: str = "",
     max_attempts: int = 3,
     sleep_fn=time.sleep,
@@ -462,7 +462,9 @@ def main() -> None:
                     lanes=_lanes_with_agent_sockets([], agent_device_count, online_device_total),
                     task_links=_agent_socket_task_links(agent_device_count) + _agent_online_task_links(online_device_total),
                     idle_since=None if online_device_total > 0 else idle_since,
-                    claimed_count=0,
+                    # Active ownership belongs to durable admission, not
+                    # connected-device heartbeat or idle status.
+                    claimed_count=None,
                     container_name=container_name,
                 )
             finally:

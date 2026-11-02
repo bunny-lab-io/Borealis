@@ -36,6 +36,12 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Writes are atomic temp-write + rename and serialized across processes through a sibling `agent.json.lock` file. Each write increments `agent.state.revision` and stamps `agent.state.writer` plus `agent.state.last_write_at` so stale writer/debug cases are visible.
 - Successful heartbeats clean stale atomic-write temp files such as `.config-*.tmp` from the Agent install root after they are older than one hour.
 
+## Execution Journal
+
+Tracked site-worker operations keep `worker-operations.json` beside `agent.json`. Preserve this file through restarts and upgrades. It records execution intent before work starts and retains completed output until the Engine confirms its durable receipt. Reconnecting resends that receipt; it never reruns uncertain work.
+
+An unavailable, corrupt or full journal blocks tracked work. First open creates a missing journal; recreating it cannot reacquire an earlier Engine execution grant or clear Engine-side ownership and can strand completion evidence. Resolve the original operation before resubmitting commands. Passive connection and health reporting remain separate from active-work admission.
+
 ## Linux WireGuard Dependency
 
 Linux agents require the `wireguard-tools` package for `wg` and `wg-quick`. When either command is missing, the root Agent installs `wireguard-tools` through the first available supported package manager (`dnf`, `apt-get`, `yum`, `zypper`, `apk`, or `pacman`), re-detects both commands, then resumes tunnel setup. [Rocky Linux 10 provides this package in AppStream](https://download.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/Packages/w/).
@@ -160,6 +166,14 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     - VNC role trace logs (`vnc_trace ...`) are disabled by default because the always-on health loop can otherwise produce high-volume logs during normal operation. Set `BOREALIS_VNC_TRACE=1` only for short diagnostic captures.
     - The UltraVNC config writer enables capture performance flags (`TurboMode`, full-screen polling defaults, `EnableDriver`, and `EnableHook`) when the official UltraVNC helper DLLs are present beside `winvnc.exe`.
     - Software inventory suppresses UltraVNC's known EXE/MSI-wrapper ARP noise row (`UNREGISTERED - Wrapped using MSI Wrapper`) and keeps the real `UltraVNC` installed-software row.
+
+    ### Durable worker-operation custody
+
+    `internal/config/worker_operations.go` stores an Agent-ID/Server-URL-bound version1 sidecar using the existing process mutex, sibling cross-process lock, restrictive file creation, sync and atomic replacement. Linux also syncs the containing directory. Windows retains file sync and atomic replacement; native sudden-power-loss directory persistence remains unqualified. This is not a new credential store or `agent.json` schema.
+
+    Bounds are 64 unresolved operations, 4096 total records/tombstones, 72MiB journal and 1MiB terminal receipt, with at most256KiB each stdout/stderr and UTF-8-safe truncation. Committed tombstones can compact when space is needed; 4096 is not a lifetime execution limit. These are protocol bounds, not hardware capacity. Duplicate JSON, malformed fields, changed job/token/event/request digest and wrong identity fail closed. Intent and nonce persist before fresh private preflight; grant persists before effects. Existing uncertain intent never reacquires execution. Exact denial may discard only a fresh never-granted intent.
+
+    `internal/runtime/worker_operations.go` captures the original connection emitter and preserves immutable first completion. Terminal persistence precedes emission; persistence failure retains the in-memory outbox and durable grant. Only exact committed job/token acknowledgement writes the tombstone. Reconnect retries persistence and terminal delivery. Shell binding precedes stdin. Closure proven before process start can complete without launching; a started shell requires the original process to finish `Wait` with confirmed process state. An unknown wait outcome retains its charge. Supported and blocked adapters are listed in [Engine deployment](../../Engine/deploying-the-engine.md#resident-workers-and-active-work). Untracked legacy Socket.IO handlers retain their existing behavior. The raw shell transport always requires binding; legacy unbound TCP clients cannot start a shell.
 
     ### Token storage
     - Refresh/access tokens are stored in `agent.json`.

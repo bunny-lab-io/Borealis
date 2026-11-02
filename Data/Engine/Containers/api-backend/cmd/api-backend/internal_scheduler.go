@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnRuntime *vpnTunnelService, fallback http.Handler) {
@@ -583,13 +584,24 @@ func emitWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
-	resp, err := http.DefaultClient.Do(req)
+	// A redirect cannot prove that the original worker did not admit this POST.
+	// Retain the caller's transport/settings without replaying to another route.
+	client := *http.DefaultClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
 	}
 	defer resp.Body.Close()
-	var payloadMap map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payloadMap); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(raw) > 1<<20 || !utf8.Valid(raw) {
+		return nil, http.StatusBadGateway, map[string]any{"error": "invalid_worker_response", "message": "The site-worker returned an invalid response."}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	value, decodeErr := clusterSSHPrivateJSONValue(decoder, 0)
+	payloadMap, object := value.(map[string]any)
+	_, trailingErr := decoder.Token()
+	if decodeErr != nil || !object || payloadMap == nil || trailingErr != io.EOF {
 		return nil, http.StatusBadGateway, map[string]any{"error": "invalid_worker_response", "message": "The site-worker returned an invalid response."}
 	}
 	if resp.StatusCode >= 400 {
@@ -599,5 +611,5 @@ func emitWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 		}
 		return nil, status, payloadMap
 	}
-	return payloadMap, http.StatusOK, nil
+	return payloadMap, resp.StatusCode, nil
 }

@@ -382,7 +382,7 @@ func purgeDeviceRows(ctx context.Context, tx *sql.Tx, record devicePurgeRecord) 
 	if err != nil {
 		return nil, err
 	}
-	deleted["activity_history"], err = purgeDeleteByInt64List(ctx, tx, "engine.activity_history", "id", activityIDs)
+	deleted["activity_history"], err = deleteScheduledActivityHistoryRows(ctx, tx, activityIDs)
 	if err != nil {
 		return nil, err
 	}

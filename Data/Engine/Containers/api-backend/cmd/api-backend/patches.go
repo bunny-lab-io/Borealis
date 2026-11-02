@@ -166,7 +166,7 @@ func patchRefreshHandler(auth *authService) http.HandlerFunc {
 					"requested_by": firstText(cleanText(profile.Username), "unknown"),
 					"reason":       "operator_query_patch_inventory",
 				}
-				result, _, workerErr := emitWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
+				result, workerStatus, workerErr := emitWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
 					"hostname":            snapshot.Hostname,
 					"service_mode":        "system",
 					"event_name":          "patch_inventory_refresh_request",
@@ -182,6 +182,9 @@ func patchRefreshHandler(auth *authService) http.HandlerFunc {
 						"requested_at": requestedAt,
 					})
 					return
+				}
+				if !workerHostServiceDispatchRetryable(result, workerStatus, workerErr) {
+					break
 				}
 			}
 			if time.Now().After(deadline) {

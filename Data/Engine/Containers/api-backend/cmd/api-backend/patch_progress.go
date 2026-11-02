@@ -132,7 +132,10 @@ func (s *postgresOperatorStore) recordPatchInstallProgress(ctx context.Context, 
 	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM engine.activity_history WHERE id=$1 FOR UPDATE`, nullInt(activityID)).Scan(&metadataJSON); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	metadata := agentDetailsMapFromAny(parseJSON(metadataJSON))
+	metadata, err := schedulerActivityMetadata(nullString(metadataJSON))
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	metadata["patch_progress"] = progress
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `

@@ -73,6 +73,8 @@ type Agent struct {
 	socketMu      sync.RWMutex
 	socketState   string
 	socketStateAt int64
+	workerMu      sync.Mutex
+	workerOutbox  *workerOperationOutbox
 }
 
 type heartbeatResponse struct {
@@ -137,6 +139,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	registryManager := registrymanagement.New(hostname, options.ServiceMode)
 	rdpManager := rdprole.New(authClient, configPath)
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
+	remoteShellManager.SetOperationBinder(nil)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
 	vncManager := vncrole.New(authClient, hostname, options.ServiceMode, configPath)
@@ -365,32 +368,34 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	headers := a.authClient.AuthHeaders()
 	socket := transport.NewClient(socketBaseURL, headers, transport.WithTLSConfig(a.authClient.TLSConfig()), transport.WithDialContext(a.authClient.DialContext()))
 	socket.OnActivity(a.recordConnectedSocketActivity)
-	role := systemcontext.New(socket, a.authClient, a.dispatcher)
+	operations := a.workerOperationConnection(socket)
+	defer operations.close()
+	role := systemcontext.New(operations, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname
 	if a.software != nil {
 		role.SoftwareRefresh = a.software
 	}
-	socket.On("quick_job_run", role.HandleQuickJob)
+	socket.On("quick_job_run", operations.scripts(role.HandleQuickJob, a.hostname))
 	if a.files != nil {
-		socket.On("file_management_request", a.files.HandleRequest)
+		socket.On("file_management_request", operations.synchronous("file_management_request", a.files.HandleRequest, workerOperationSynchronousFile))
 	}
 	if a.processes != nil {
-		socket.On("process_management_request", a.processes.HandleRequest)
+		socket.On("process_management_request", operations.synchronous("process_management_request", a.processes.HandleRequest, workerOperationSynchronousProcess))
 	}
 	if a.registry != nil {
-		socket.On("registry_management_request", a.registry.HandleRequest)
+		socket.On("registry_management_request", operations.synchronous("registry_management_request", a.registry.HandleRequest, workerOperationSynchronousRegistry))
 	}
 	if a.services != nil {
-		socket.On("service_control_action", a.services.HandleControlAction)
+		socket.On("service_control_action", operations.async("service_control_action", a.services.HandleControlActionWithCompletion))
 	}
 	if a.patches != nil {
-		socket.On("patch_inventory_refresh_request", a.patches.HandleRefreshRequest)
-		socket.On("patch_install_request", a.patches.HandleInstallRequest)
-		socket.On("patch_policy_enforcement_request", a.patches.HandlePolicyEnforcementRequest)
-		socket.On("patch_reboot_request", a.patches.HandleRebootRequest)
+		socket.On("patch_inventory_refresh_request", operations.async("patch_inventory_refresh_request", a.patches.HandleRefreshRequestWithCompletion))
+		socket.On("patch_install_request", operations.synchronous("patch_install_request", a.patches.HandleInstallRequest, workerOperationUnsupported))
+		socket.On("patch_policy_enforcement_request", operations.synchronous("patch_policy_enforcement_request", a.patches.HandlePolicyEnforcementRequest, workerOperationUnsupported))
+		socket.On("patch_reboot_request", operations.synchronous("patch_reboot_request", a.patches.HandleRebootRequest, workerOperationUnsupported))
 	}
 	if a.software != nil {
-		socket.On("software_inventory_refresh_request", a.software.HandleRefreshRequest)
+		socket.On("software_inventory_refresh_request", operations.async("software_inventory_refresh_request", a.software.HandleRefreshRequestWithCompletion))
 	}
 	if a.wireguard != nil {
 		socket.On("vpn_tunnel_start", a.wireguard.HandleStart)
@@ -398,19 +403,20 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vpn_tunnel_activity", a.wireguard.HandleActivity)
 	}
 	if a.remoteShell != nil {
-		socket.On("remote_shell_restart", a.handleRemoteShellRestart)
+		defer a.remoteShell.SetOperationBinder(operations.bindShell)()
+		socket.On("remote_shell_restart", operations.synchronous("remote_shell_restart", a.handleRemoteShellRestart, workerOperationUnsupported))
 	}
 	if a.vnc != nil {
-		socket.On("vnc_start", a.vnc.HandleStart)
-		socket.On("vnc_stop", a.vnc.HandleStop)
-		socket.On("vnc_refresh", a.vnc.HandleRefresh)
-		socket.On("vnc_credential_request", a.vnc.HandleCredentialRequest)
+		socket.On("vnc_start", operations.synchronous("vnc_start", a.vnc.HandleStart, workerOperationUnsupported))
+		socket.On("vnc_stop", operations.synchronous("vnc_stop", a.vnc.HandleStop, workerOperationUnsupported))
+		socket.On("vnc_refresh", operations.synchronous("vnc_refresh", a.vnc.HandleRefresh, workerOperationUnsupported))
+		socket.On("vnc_credential_request", operations.synchronous("vnc_credential_request", a.vnc.HandleCredentialRequest, workerOperationUnsupported))
 	}
 	if a.rdp != nil {
-		socket.On("rdp_start", a.rdp.HandleStart)
+		socket.On("rdp_start", operations.synchronous("rdp_start", a.rdp.HandleStart, workerOperationUnsupported))
 	}
-	socket.On("agent_update_request", a.handleUpdateRequest)
-	socket.On("agent_maintenance_request", a.handleAgentMaintenanceRequest)
+	socket.On("agent_update_request", operations.synchronous("agent_update_request", a.handleUpdateRequest, workerOperationUnsupported))
+	socket.On("agent_maintenance_request", operations.synchronous("agent_maintenance_request", a.handleAgentMaintenanceRequest, workerOperationUnsupported))
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -437,6 +443,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 			payload["helper_contexts"] = []string{"currentuser"}
 			payload["capabilities"].(map[string]any)["helper_contexts"] = []string{"currentuser"}
 		}
+		if operations.journal != nil {
+			payload["worker_operation_version"] = 1
+		}
 		ack, err := socket.EmitWithAck(ctx, "connect_agent", payload, socketRegistrationAckTimeout)
 		if err != nil {
 			return err
@@ -444,6 +453,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		if err := validateSocketRegistrationAck(ack); err != nil {
 			return err
 		}
+		operations.startReplay(ctx)
 		a.recordSocketState("connected")
 		if a.wireguard != nil {
 			a.wireguard.RequestEnsure("socket_connect")

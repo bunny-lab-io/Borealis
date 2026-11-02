@@ -33,9 +33,10 @@
       ]
     },
     "scheduler": {
-      "description": "Retained scheduler queue and site-worker work-claim behavior.",
+      "description": "Scheduler queue, durable active-worker admission, and site-worker work-claim behavior.",
       "tests": [
-        "Data/Engine/Unit_Tests/test_job_scheduler_queue.py"
+        "Data/Engine/Unit_Tests/test_job_scheduler_queue.py",
+        "Data/Engine/Unit_Tests/test_worker_admission.py"
       ]
     }
   },

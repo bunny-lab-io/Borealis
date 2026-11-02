@@ -1601,34 +1601,7 @@ func (m *goSchedulerManager) markLostWorkers(ctx context.Context) error {
 }
 
 func (m *goSchedulerManager) pruneWorkerHistory(ctx context.Context, retentionSeconds int) error {
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	cutoff := time.Now().Unix() - int64(retentionSeconds)
-	_, err = conn.ExecContext(ctx, `
-		DELETE FROM engine.job_scheduler_workers
-		 WHERE status IN ($1,$2)
-		   AND COALESCE(stopped_at, updated_at, last_seen_at) < $3
-	`, schedulerWorkerStatusStopped, schedulerWorkerStatusLost, cutoff)
-	if err != nil {
-		return err
-	}
-	routeFiles, err := schedulerRouteFilesForTerminalRoutes(ctx, conn, cutoff)
-	if err != nil {
-		return err
-	}
-	_, err = conn.ExecContext(ctx, `
-		DELETE FROM engine.job_scheduler_worker_routes
-		 WHERE status IN ($1,$2)
-		   AND COALESCE(retired_at, updated_at, created_at) < $3
-	`, schedulerRouteStatusRetired, schedulerRouteStatusLost, cutoff)
-	if err != nil {
-		return err
-	}
-	schedulerRemoveRouteFiles(routeFiles)
-	return nil
+	return m.pruneWorkerAdmissionHistory(ctx, retentionSeconds)
 }
 
 func (m *goSchedulerManager) siteIDsNeedingWorkers(ctx context.Context) ([]int64, error) {
@@ -1911,6 +1884,7 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 			status = schedulerWorkerStatusRunning
 		}
 		metadata := schedulerWorkerRouteMetadataForHost(workerGUID, serviceHost, remoteOpsPort, remoteDesktopPort, "borealis-operator")
+		metadata[schedulerWorkerPlacementKey] = schedulerWorkerPlacement(snapshot)
 		upstreamPort := int64(0)
 		if serviceHost != "" {
 			upstreamPort = remoteOpsPort
@@ -1936,7 +1910,6 @@ func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, conta
 	if err != nil {
 		return errors.Join(errOperatorStoreDown, err)
 	}
-	defer conn.Close()
 	now := time.Now().Unix()
 	lanesJSON := mustJSON(lanes)
 	linksJSON := mustJSON(taskLinks)
@@ -1954,8 +1927,9 @@ func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, conta
 			task_links_json=EXCLUDED.task_links_json,
 			updated_at=EXCLUDED.updated_at
 	`, workerGUID, containerName, siteID, status, now, now, lanesJSON, linksJSON, now, now)
-	if err != nil {
-		return err
+	closeErr := conn.Close()
+	if err != nil || closeErr != nil {
+		return errors.Join(err, closeErr)
 	}
 	if siteID > 0 && upstreamPort > 0 {
 		return m.upsertWorkerRoute(ctx, workerGUID, containerName, siteID, upstreamPort, routeMetadata)
@@ -1976,6 +1950,52 @@ func (m *goSchedulerManager) upsertWorkerRoute(ctx context.Context, workerGUID, 
 		return err
 	}
 	defer rollbackQuietly(tx)
+	// Lock the existing site cohort in one order before any same-site retirement.
+	locked, err := tx.QueryContext(ctx, `SELECT worker_guid FROM engine.job_scheduler_worker_routes WHERE site_id=$1 ORDER BY worker_guid FOR UPDATE`, siteID)
+	if err != nil {
+		return err
+	}
+	for locked.Next() {
+		var ignored string
+		if err := locked.Scan(&ignored); err != nil {
+			locked.Close()
+			return err
+		}
+	}
+	lockErr := locked.Err()
+	closeErr := locked.Close()
+	if lockErr != nil || closeErr != nil {
+		return errors.Join(lockErr, closeErr)
+	}
+	inserted, err := tx.ExecContext(ctx, `INSERT INTO engine.job_scheduler_worker_routes(
+		worker_guid,site_id,container_name,route_name,route_path_prefix,route_file_path,
+		upstream_scheme,upstream_host,upstream_port,status,generation,metadata_json,created_at,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,'{}',$11,$11) ON CONFLICT(worker_guid) DO NOTHING`,
+		route.WorkerGUID, route.SiteID, route.ContainerName, route.RouteName, route.RoutePath,
+		route.RouteFilePath, route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort, route.Status, now)
+	if err != nil {
+		return err
+	}
+	created, err := inserted.RowsAffected()
+	if err != nil {
+		return err
+	}
+	var previous, oldContainer, oldHost, oldStatus string
+	var generation, oldSite, oldPort int64
+	err = tx.QueryRowContext(ctx, `SELECT metadata_json,generation,container_name,site_id,upstream_host,upstream_port,status
+		FROM engine.job_scheduler_worker_routes WHERE worker_guid=$1 FOR UPDATE`, workerGUID).
+		Scan(&previous, &generation, &oldContainer, &oldSite, &oldHost, &oldPort, &oldStatus)
+	if err != nil {
+		return err
+	}
+	if created == 1 {
+		generation = 0
+	}
+	changed := oldContainer != route.ContainerName || oldSite != route.SiteID || oldHost != route.UpstreamHost || oldPort != route.UpstreamPort || oldStatus != route.Status
+	route.Metadata, generation, err = schedulerMergeAdmissionMetadata(previous, route.Metadata, generation, changed)
+	if err != nil {
+		return err
+	}
 	retiredFiles := []string{}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT route_file_path
@@ -2014,7 +2034,7 @@ func (m *goSchedulerManager) upsertWorkerRoute(ctx context.Context, workerGUID, 
 			worker_guid, site_id, container_name, route_name, route_path_prefix,
 			route_file_path, upstream_scheme, upstream_host, upstream_port,
 			status, generation, metadata_json, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,$13)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$14,$11,$12,$13)
 		ON CONFLICT (worker_guid) DO UPDATE SET
 			site_id=EXCLUDED.site_id,
 			container_name=EXCLUDED.container_name,
@@ -2026,11 +2046,15 @@ func (m *goSchedulerManager) upsertWorkerRoute(ctx context.Context, workerGUID, 
 			upstream_port=EXCLUDED.upstream_port,
 			status=EXCLUDED.status,
 			metadata_json=EXCLUDED.metadata_json,
+			generation=EXCLUDED.generation,
 			updated_at=EXCLUDED.updated_at
-	`, route.WorkerGUID, route.SiteID, route.ContainerName, route.RouteName, route.RoutePath, route.RouteFilePath, route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort, route.Status, mustJSON(route.Metadata), now, now); err != nil {
+	`, route.WorkerGUID, route.SiteID, route.ContainerName, route.RouteName, route.RoutePath, route.RouteFilePath, route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort, route.Status, mustJSON(route.Metadata), now, now, generation); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if err := conn.Close(); err != nil {
 		return err
 	}
 	schedulerRemoveRouteFiles(retiredFiles)

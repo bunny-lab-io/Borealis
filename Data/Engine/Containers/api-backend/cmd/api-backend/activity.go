@@ -204,7 +204,19 @@ func (s *postgresOperatorStore) deleteDeviceActivity(ctx context.Context, profil
 		return nil, 0, errors.Join(errOperatorStoreDown, err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "DELETE FROM engine.activity_history WHERE hostname = $1", hostname); err != nil {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rollbackQuietly(tx)
+	ids, err := purgeSelectInt64List(ctx, tx, "engine.activity_history", "id", "hostname = ?", hostname)
+	if err != nil {
+		return nil, 0, err
+	}
+	if _, err := deleteScheduledActivityHistoryRows(ctx, tx, ids); err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, 0, err
 	}
 	return map[string]any{"status": "ok"}, http.StatusOK, nil
@@ -446,6 +458,11 @@ func parseActivityMetadata(raw string) map[string]any {
 	}
 	if parsed == nil {
 		return map[string]any{}
+	}
+	for key := range parsed {
+		if strings.EqualFold(key, schedulerWorkerOperationKey) {
+			delete(parsed, key)
+		}
 	}
 	return parsed
 }

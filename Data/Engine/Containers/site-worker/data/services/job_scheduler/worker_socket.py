@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import copy
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from flask_socketio import SocketIO
 from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
 from Data.Engine.auth.guid_utils import normalize_guid
 from Data.Engine.db import dbapi as sqlite3
+from .worker_admission import AdmissionError, WorkerAdmission, wire_operation, _object
 from Data.Engine.services.remote_files.transfers import (
     FILE_TRANSFER_SESSION_TTL_SECONDS,
     FileTransferStore,
@@ -278,6 +280,19 @@ def _authenticate_socket_agent(
     }
 
 
+_TRACKED_HOST_EVENTS = {
+    "quick_job_run", "service_control_action", "software_inventory_refresh_request",
+    "patch_inventory_refresh_request", "process_management_request", "registry_management_request",
+    "file_management_request",
+}
+_PASSIVE_HOST_EVENTS = {
+    "vpn_tunnel_start", "vpn_tunnel_stop", "vpn_tunnel_activity",
+}
+_UNSUPPORTED_TERMINAL_EVENTS = {
+    "vnc_start", "vnc_stop", "vnc_refresh", "vnc_credential_request", "rdp_start", "remote_shell_restart",
+}
+
+
 class SiteWorkerSocketRuntime:
     def __init__(
         self,
@@ -293,6 +308,8 @@ class SiteWorkerSocketRuntime:
         db_conn_factory: Callable[[], sqlite3.Connection],
         logger: logging.Logger,
         service_log: Callable[[str, str, Optional[str]], None],
+        pod_uid: Optional[str] = None,
+        node_name: Optional[str] = None,
     ) -> None:
         self.worker_guid = str(worker_guid or "")
         self.site_id = int(site_id or 0)
@@ -305,6 +322,12 @@ class SiteWorkerSocketRuntime:
             internal_api_base_url or os.environ.get("BOREALIS_INTERNAL_API_BASE_URL") or "http://127.0.0.1:5000"
         ).rstrip("/")
         self.db_conn_factory = db_conn_factory
+        self.admission = WorkerAdmission(
+            db_conn_factory, worker_guid=self.worker_guid, site_id=self.site_id,
+            pod_uid=pod_uid if pod_uid is not None else str(os.environ.get("BOREALIS_SITE_WORKER_POD_UID") or ""),
+            node_name=node_name if node_name is not None else str(os.environ.get("BOREALIS_SITE_WORKER_NODE_NAME") or ""),
+        )
+        self._operation_versions: Dict[str, int] = {}
         self.logger = logger
         self.service_log = service_log
         self.app = Flask(f"borealis_site_worker_{self.worker_guid}")
@@ -416,7 +439,10 @@ class SiteWorkerSocketRuntime:
             allow_pending = bool(data.get("allow_pending"))
             if not hostname or not event_name:
                 return jsonify({"error": "hostname_and_event_name_required"}), 400
-            emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
+            try:
+                emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
+            except AdmissionError as exc:
+                return jsonify({"error": str(exc)}), 503
             queued = False
             if not emitted and allow_pending:
                 queued = self.queue_host_service_event(
@@ -456,13 +482,12 @@ class SiteWorkerSocketRuntime:
                 timeout = 30.0
             if not hostname or not event_name:
                 return jsonify({"error": "hostname_and_event_name_required"}), 400
-            response = self.call_host_service_event(
-                hostname,
-                service_mode,
-                event_name,
-                payload,
-                timeout=max(0.5, timeout),
-            )
+            try:
+                response = self.call_host_service_event(
+                    hostname, service_mode, event_name, payload, timeout=max(0.5, timeout),
+                )
+            except AdmissionError as exc:
+                return jsonify({"error": str(exc)}), 503
             self._log(
                 "host_service_event_call hostname={0} service_mode={1} event={2} called={3} timeout={4:.1f}".format(
                     normalize_host_key(hostname) or hostname,
@@ -508,7 +533,12 @@ class SiteWorkerSocketRuntime:
             }
             queue_payload = {key: payload.get(key) for key in allowed_keys if key in payload}
             try:
+                ticket = self.admission.admit(kind="ansible", hostname=str(queue_payload.get("hostname") or ""), job_id=queue_payload.get("activity_id"))
+                queue_payload["activity_id"] = ticket.job_id
+                queue_payload["worker_admission"] = (self.admission, ticket)
                 run_id = self._ansible_runner.queue_run(**queue_payload)
+            except AdmissionError as exc:
+                return jsonify({"error": str(exc)}), 503
             except Exception as exc:
                 self._log(f"ansible queue failed err={exc}", level="ERROR")
                 return jsonify({"error": "ansible_queue_failed", "message": "Unable to queue Ansible run."}), 500
@@ -634,6 +664,10 @@ class SiteWorkerSocketRuntime:
                     "missing": missing_fields,
                 }), 400
             try:
+                self._validate_host_operation("file_management_request", {"action": "upload_start"})
+            except AdmissionError as exc:
+                return jsonify({"error": str(exc)}), 503
+            try:
                 snapshot = self._file_transfer_store.create_upload_session(
                     hostname=hostname,
                     device_guid=device_guid,
@@ -699,6 +733,10 @@ class SiteWorkerSocketRuntime:
             archive_required = bool(data.get("archive_required"))
             if not hostname or not device_guid or not selections:
                 return jsonify({"error": "invalid_request"}), 400
+            try:
+                self._validate_host_operation("file_management_request", {"action": "download_start"})
+            except AdmissionError as exc:
+                return jsonify({"error": str(exc)}), 503
             snapshot = self._file_transfer_store.create_download_session(
                 hostname=hostname,
                 device_guid=device_guid,
@@ -933,9 +971,6 @@ class SiteWorkerSocketRuntime:
             if requirement:
                 payload, status = requirement
                 return jsonify(payload), status
-            if not self._ensure_guacamole_proxy():
-                return jsonify({"error": "guacamole_proxy_unavailable"}), 503
-
             data = request.get_json(silent=True) or {}
             if not isinstance(data, Mapping):
                 data = {}
@@ -963,6 +998,13 @@ class SiteWorkerSocketRuntime:
                 return jsonify({"error": "agent_id_required"}), 400
             if agent_id != str(claims.get("agent_id") or "").strip():
                 return jsonify({"error": "device_mismatch"}), 403
+
+            try:
+                self._require_desktop_terminal_adapter()
+            except AdmissionError as exc:
+                return jsonify({"error": str(exc)}), 503
+            if not self._ensure_guacamole_proxy():
+                return jsonify({"error": "guacamole_proxy_unavailable"}), 503
 
             protocol = str(data.get("protocol") or "vnc").strip().lower()
             if protocol not in {"vnc", "rdp"}:
@@ -1285,6 +1327,8 @@ class SiteWorkerSocketRuntime:
                 helper_contexts=helper_contexts,
                 guid=str(auth_context.get("guid") or ""),
             )
+            version = data.get("worker_operation_version") if isinstance(data, dict) else None
+            self._operation_versions[request.sid] = 1 if type(version) is int and version == 1 else 0
             self.logger.info(
                 "Site-worker Agent socket registered worker_guid=%s site_id=%s service_mode=%s helper_contexts=%s",
                 self.worker_guid,
@@ -1304,6 +1348,7 @@ class SiteWorkerSocketRuntime:
 
         @self.socketio.on("disconnect")
         def _disconnect() -> None:
+            self._operation_versions.pop(request.sid, None)
             agent_id = self.registry.unregister(request.sid)
             shell_closed = self._close_shell_session(request.sid, reason="operator_socket_disconnect")
             if agent_id:
@@ -1449,9 +1494,16 @@ class SiteWorkerSocketRuntime:
                 return {"error": "tunnel_down"}
             port = self._shell_port(data)
             tunnel_payload = self._tunnel_payload(data, agent_id=agent_id, virtual_ip=virtual_ip)
+            agent = self.registry.snapshot().get(agent_id)
+            if not agent or self._operation_versions.get(str(agent.get("sid") or "")) != 1:
+                return {"error":"worker_operation_capability_required"}
+            try:
+                ticket = self.admission.admit(kind="shell", hostname=str(agent.get("hostname") or ""), agent_guid=str(agent.get("guid") or "").upper())
+            except AdmissionError as exc:
+                return {"error":str(exc)}
             self._close_shell_session(request.sid, reason="superseded_open")
             self._close_agent_shell_session(agent_id, reason="superseded_agent_session")
-            session = self._open_shell_session(request.sid, agent_id, virtual_ip, port, tunnel_payload)
+            session = self._open_shell_session(request.sid, agent_id, virtual_ip, port, tunnel_payload, ticket=ticket)
             if session is None:
                 return {"error": "shell_connect_failed"}
             return {"status": "ok", "session_id": getattr(session, "session_id", "")}
@@ -1466,13 +1518,22 @@ class SiteWorkerSocketRuntime:
             if session is None or not session.is_active():
                 self._close_shell_session(request.sid, reason="inactive_send")
                 return {"error": "shell_session_missing"}
-            session.send(str(payload))
+            try:
+                session.send(str(payload))
+            except RuntimeError as exc:
+                return {"error":str(exc)}
             return {"status": "ok"}
 
         @self.socketio.on("vpn_shell_close")
         def _vpn_shell_close(_data: Any = None) -> Dict[str, Any]:
             self._close_shell_session(request.sid, reason="close_request")
             return {"status": "ok"}
+
+    @staticmethod
+    def _require_desktop_terminal_adapter() -> None:
+        # A relay close or endpoint setup ACK does not prove all desktop work
+        # ended. New sessions remain unavailable until that custody exists.
+        raise AdmissionError("worker_desktop_terminal_unavailable")
 
     def _emit_shell_agent_start(self, agent_id: str, tunnel_payload: Mapping[str, Any], *, trigger_after: float) -> None:
         if not tunnel_payload:
@@ -1495,7 +1556,11 @@ class SiteWorkerSocketRuntime:
         virtual_ip: str,
         port: int,
         tunnel_payload: Mapping[str, Any],
+        *,
+        ticket: Any = None,
     ) -> Optional[ShellSession]:
+        if ticket is None:
+            raise AdmissionError("worker_shell_operation_unbound")
         deadline = time.monotonic() + _CONNECT_WAIT_WINDOW_SECONDS
         reemit_index = 0
         attempts = 0
@@ -1548,7 +1613,12 @@ class SiteWorkerSocketRuntime:
             )
             session.start_reader()
             if session.wait_for_ready(timeout=min(2.0, max(0.5, deadline - time.monotonic()))):
-                return session
+                if session.bind_operation(job_id=ticket.job_id, operation=ticket.wire(), timeout=min(2.0, max(0.5, deadline-time.monotonic()))):
+                    return session
+                # Bind may have reached Agent. Do not retry uncertain effects;
+                # only its durable SocketIO terminal receipt releases charge.
+                session.close_with_reason("worker_operation_bind_unconfirmed")
+                return None
             self._remove_shell_session(sid, session)
             session.close_with_reason("ready_probe_failed")
             last_error = RuntimeError("shell_ready_probe_failed")
@@ -1664,9 +1734,14 @@ class SiteWorkerSocketRuntime:
 
     def _register_task_event_handlers(self) -> None:
         @self.socketio.on("quick_job_progress")
-        def _handle_quick_job_progress(data: Any) -> None:
+        def _handle_quick_job_progress(data: Any) -> Any:
             if not isinstance(data, dict):
                 return
+            if "worker_operation_preflight" in data:
+                try:
+                    return self.admission.preflight(data, agent_guid=self._receipt_agent_guid())
+                except Exception:
+                    return {"error": "worker_preflight_unavailable"}
             try:
                 activity_id = int(data.get("job_id"))
             except (TypeError, ValueError):
@@ -1682,6 +1757,14 @@ class SiteWorkerSocketRuntime:
                 cursor = conn.cursor()
                 existing_row = get_activity_history_row(conn, activity_id)
                 existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+                reserved = existing_metadata.get("worker_operation") if isinstance(existing_metadata, dict) else None
+                if reserved is not None:
+                    operation = wire_operation((context_info or {}).get("worker_operation"))
+                    if reserved.get("token") != operation["token"] or reserved.get("agent_guid") != self._receipt_agent_guid():
+                        return {"error": "worker_receipt_unbound"}
+                    # Terminal custody cannot be overwritten by late progress.
+                    if "receipt_sha256" in reserved:
+                        return {"status": "committed"}
                 merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
                 if metadata:
                     merged_metadata.update(metadata)
@@ -1712,7 +1795,6 @@ class SiteWorkerSocketRuntime:
                     update_kwargs["started_at"] = ts_now
                 if status_is_terminal(normalized_status):
                     update_kwargs["finished_at"] = ts_now
-                update_activity_history_row(conn, activity_id, **update_kwargs)
                 run_id, scheduled_ts_ctx = self._resolve_scheduled_run_context(
                     cursor,
                     activity_id=activity_id,
@@ -1726,6 +1808,10 @@ class SiteWorkerSocketRuntime:
                     activity_id=activity_id,
                     context_info=context_info,
                 )
+                if not self._ordinary_activity_custody(conn, activity_id, context_info, tracked=True):
+                    conn.rollback()
+                    return {"error": "worker_receipt_required"}
+                update_activity_history_row(conn, activity_id, **update_kwargs)
                 conn.commit()
             except Exception:
                 self.logger.warning("site-worker quick_job_progress handler failed activity_id=%s", activity_id, exc_info=True)
@@ -1742,9 +1828,20 @@ class SiteWorkerSocketRuntime:
                         pass
 
         @self.socketio.on("quick_job_result")
-        def _handle_quick_job_result(data: Any) -> None:
+        def _handle_quick_job_result(data: Any) -> Any:
             if not isinstance(data, dict):
                 return
+            context = data.get("context")
+            if isinstance(context, dict) and "worker_operation" in context:
+                try:
+                    ack = self.admission.complete(data, agent_guid=self._receipt_agent_guid())
+                except Exception:
+                    self.logger.warning("tracked worker receipt rejected", exc_info=True)
+                    return {"error": "worker_receipt_uncommitted"}
+                # Admission commits first. Scheduled-run projection uses its
+                # own transaction so it cannot invert run->activity locking.
+                self._project_tracked_result(data)
+                return ack
             try:
                 activity_id = int(data.get("job_id"))
             except (TypeError, ValueError):
@@ -1761,6 +1858,8 @@ class SiteWorkerSocketRuntime:
                 cursor = conn.cursor()
                 existing_row = get_activity_history_row(conn, activity_id)
                 existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+                if isinstance(existing_metadata, dict) and "worker_operation" in existing_metadata:
+                    return {"error": "worker_receipt_required"}
                 merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
                 if isinstance(context_info, dict):
                     for key in ("assembly_source", "assembly_guid", "scheduled_job_id", "scheduled_job_run_id", "scheduled_ts"):
@@ -1776,7 +1875,6 @@ class SiteWorkerSocketRuntime:
                 }
                 if merged_metadata:
                     update_kwargs["metadata"] = merged_metadata
-                update_activity_history_row(conn, activity_id, **update_kwargs)
                 run_id, scheduled_ts_ctx = self._resolve_scheduled_run_context(
                     cursor,
                     activity_id=activity_id,
@@ -1790,6 +1888,10 @@ class SiteWorkerSocketRuntime:
                     activity_id=activity_id,
                     context_info=context_info,
                 )
+                if not self._ordinary_activity_custody(conn, activity_id, context_info, tracked=False):
+                    conn.rollback()
+                    return {"error": "worker_receipt_required"}
+                update_activity_history_row(conn, activity_id, **update_kwargs)
                 conn.commit()
                 self._log(f"quick_job_result_processed activity_id={activity_id} status={status}")
             except Exception:
@@ -1835,7 +1937,13 @@ class SiteWorkerSocketRuntime:
             raise
 
     def emit_host_service_event(self, hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
-        return self.registry.emit_to_host(hostname, service_mode, event_name, payload)
+        prepared = self._prepare_host_operation(hostname, service_mode, event_name, payload)
+        if prepared is None:
+            return False
+        emitted = self.registry.emit_to_host(hostname, service_mode, event_name, prepared)
+        if not emitted and event_name not in _PASSIVE_HOST_EVENTS:
+            raise AdmissionError("worker_dispatch_uncertain")
+        return emitted
 
     def queue_host_service_event(
         self,
@@ -1851,6 +1959,8 @@ class SiteWorkerSocketRuntime:
         normalized_event = str(event_name or "").strip()
         if not host_key or not mode_key or not normalized_event:
             return False
+        if normalized_event not in _TRACKED_HOST_EVENTS | _PASSIVE_HOST_EVENTS:
+            raise AdmissionError("worker_operation_unsupported")
         try:
             requested_ttl = int(ttl_seconds or self._pending_host_event_ttl_seconds)
         except Exception:
@@ -1900,7 +2010,16 @@ class SiteWorkerSocketRuntime:
             if int(entry.get("expires_at") or 0) < now:
                 expired += 1
                 continue
-            if self.emit_host_service_event(host_key, mode_key, str(entry.get("event_name") or ""), entry.get("payload")):
+            try:
+                emitted = self.emit_host_service_event(host_key, mode_key, str(entry.get("event_name") or ""), entry.get("payload"))
+            except AdmissionError as exc:
+                # Never resend an uncertain dispatch. Capacity/capability
+                # rejection happened before admission and can remain queued.
+                if str(exc) in {"worker_capacity_exhausted", "worker_operation_capability_required", "worker_placement_unavailable", "worker_placement_changed"}:
+                    remaining.append(entry)
+                self._log("pending operation blocked reason=" + str(exc), level="WARNING")
+                continue
+            if emitted:
                 delivered += 1
             else:
                 remaining.append(entry)
@@ -1928,7 +2047,85 @@ class SiteWorkerSocketRuntime:
         *,
         timeout: float = 30.0,
     ) -> Any:
-        return self.registry.call_to_host(hostname, service_mode, event_name, payload, timeout=timeout)
+        prepared = self._prepare_host_operation(hostname, service_mode, event_name, payload)
+        if prepared is None:
+            return None
+        # A response may only acknowledge accepted background work. The
+        # independently committed terminal receipt owns capacity release.
+        return self.registry.call_to_host(hostname, service_mode, event_name, prepared, timeout=timeout)
+
+    @staticmethod
+    def _validate_host_operation(event: str, payload: Any) -> None:
+        if event in _UNSUPPORTED_TERMINAL_EVENTS:
+            raise AdmissionError("worker_operation_terminal_unavailable")
+        if event not in _TRACKED_HOST_EVENTS:
+            raise AdmissionError("worker_operation_unsupported")
+        if not isinstance(payload, Mapping):
+            raise AdmissionError("worker_operation_invalid")
+        if event == "file_management_request" and str(payload.get("action") or "").lower() in {"upload_start", "download_start"}:
+            raise AdmissionError("worker_file_transfer_terminal_unavailable")
+        if event == "quick_job_run" and str(payload.get("run_mode") or "system").lower() != "system":
+            raise AdmissionError("worker_currentuser_terminal_unavailable")
+
+    def _prepare_host_operation(self, hostname: str, service_mode: str, event: str, payload: Any) -> Optional[dict]:
+        if event in _PASSIVE_HOST_EVENTS:
+            return payload
+        self._validate_host_operation(event, payload)
+        agent_id = self.registry.get_agent_id_for_host_mode(hostname, service_mode)
+        agent = self.registry.snapshot().get(agent_id)
+        if not agent:
+            return None
+        if self._operation_versions.get(str(agent.get("sid") or "")) != 1:
+            raise AdmissionError("worker_operation_capability_required")
+        prepared = copy.deepcopy(dict(payload))
+        context = prepared.get("context") or {}
+        if not isinstance(context, dict) or "worker_operation" in context:
+            raise AdmissionError("worker_operation_invalid")
+        ticket = self.admission.admit(kind=event, hostname=hostname, agent_guid=str(agent.get("guid") or "").upper(), job_id=prepared.get("job_id"))
+        prepared["job_id"] = ticket.job_id
+        prepared["context"] = {**context, "worker_operation": ticket.wire()}
+        return prepared
+
+    def _receipt_agent_guid(self) -> str:
+        for agent in self.registry.snapshot().values():
+            if agent.get("sid") == request.sid and self._operation_versions.get(request.sid) == 1:
+                return str(agent.get("guid") or "").upper()
+        raise AdmissionError("worker_receipt_agent_unregistered")
+
+    def _ordinary_activity_custody(self, conn, job_id: int, context: Optional[dict], *, tracked: bool) -> bool:
+        lock = "" if getattr(conn, "_dialect", "") == "sqlite" else " FOR UPDATE"
+        cursor = conn.execute("SELECT metadata_json FROM activity_history WHERE id=?" + lock, (job_id,))
+        try:
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        metadata = _object(row[0] or "{}") if row else {}
+        reserved = metadata.get("worker_operation")
+        if reserved is None:
+            return not (context and "worker_operation" in context)
+        if not tracked or not isinstance(reserved, dict) or "receipt_sha256" in reserved:
+            return False
+        operation = wire_operation((context or {}).get("worker_operation"))
+        return reserved.get("token") == operation["token"] and reserved.get("agent_guid") == self._receipt_agent_guid()
+
+    def _project_tracked_result(self, data: dict) -> None:
+        conn = None
+        cursor = None
+        try:
+            conn = self.db_conn_factory()
+            cursor = conn.cursor()
+            existing = get_activity_history_row(conn, data["job_id"])
+            metadata = existing.get("metadata") if isinstance(existing, dict) else {}
+            run_id, scheduled_ts = self._resolve_scheduled_run_context(cursor, activity_id=data["job_id"], context_info=metadata)
+            self._update_scheduled_run_state(cursor, run_id=run_id, scheduled_ts_ctx=scheduled_ts, status=data["status"], activity_id=data["job_id"], context_info=metadata)
+            conn.commit()
+        except Exception:
+            self.logger.warning("tracked activity committed; scheduled projection pending", exc_info=True)
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
 
     def has_host_service_socket(self, hostname: str, service_mode: str) -> bool:
         return self.registry.is_host_mode_registered(hostname, service_mode)

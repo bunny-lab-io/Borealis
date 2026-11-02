@@ -12,6 +12,8 @@ import time
 import types
 from pathlib import Path
 
+import pytest
+
 from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.RemoteDesktop import rfb_probe
@@ -20,11 +22,19 @@ from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, i
 from Data.Engine.services.job_scheduler import worker_socket
 from Data.Engine.services.job_scheduler.worker_socket import SiteWorkerSocketRuntime
 from Data.Engine.services.remote_ops.sessions import issue_remote_op_session
+from Data.Engine.Unit_Tests.test_worker_admission import _initialize, seed_worker
+from Data.Engine.services.job_scheduler.worker_admission import AdmissionTicket
 
 
 AGENT_GUID = "11111111-2222-3333-4444-555555555555"
 AGENT_HOSTNAME = "LAB-ONE"
 AGENT_ID = f"{AGENT_HOSTNAME}_{AGENT_GUID}_SYSTEM"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker_socket.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES", "0")
 
 
 def _service_log(_service: str, _message: str, scope=None, *, level: str = "INFO") -> None:
@@ -122,10 +132,13 @@ def _runtime(tmp_path: Path, *, site_id: int = 7, device_status: str = "active")
         _seed_device(conn, guid=AGENT_GUID, hostname=AGENT_HOSTNAME, site_id=site_id, fingerprint=fingerprint, status=device_status)
     finally:
         conn.close()
+    factory = _db_factory(db_path)
+    _initialize(factory)
+    owner = seed_worker(factory, site=site_id, worker="22222222-2222-4222-8222-222222222222")
     service = jwt_service.load_service()
     token = service.issue_access_token(AGENT_GUID.upper(), fingerprint, 1)
     runtime = SiteWorkerSocketRuntime(
-        worker_guid="worker-socket-test",
+        worker_guid="22222222-2222-4222-8222-222222222222",
         site_id=site_id,
         host="127.0.0.1",
         port=59001,
@@ -136,8 +149,156 @@ def _runtime(tmp_path: Path, *, site_id: int = 7, device_status: str = "active")
         db_conn_factory=_db_factory(db_path),
         logger=logging.getLogger("test.site_worker_socket"),
         service_log=_service_log,
+        pod_uid=owner.pod_uid,
+        node_name=owner.node_name,
     )
     return runtime, token
+
+
+def _registered_agent(runtime, token, *, version=1):
+    client = runtime.socketio.test_client(runtime.app, headers={"Authorization":f"Bearer {token}"})
+    assert client.emit("connect_agent", {"agent_id":AGENT_ID,"hostname":AGENT_HOSTNAME,"service_mode":"system","worker_operation_version":version}, callback=True)["status"] == "ok"
+    client.get_received()
+    return client
+
+
+def _claim_count(runtime):
+    with runtime.db_conn_factory() as conn:
+        return conn.execute("SELECT claimed_count FROM job_scheduler_workers WHERE worker_guid=?", (runtime.worker_guid,)).fetchone()[0]
+
+
+@pytest.mark.parametrize("protocol", ("vnc", "rdp"))
+def test_worker_desktop_session_blocks_before_proxy_probe_or_registration(tmp_path, monkeypatch, protocol):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, _token = _runtime(tmp_path)
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("desktop effect before terminal custody")
+    monkeypatch.setattr(runtime,"_ensure_guacamole_proxy",forbidden)
+    monkeypatch.setattr(runtime._guacamole_registry,"create",forbidden)
+    monkeypatch.setattr(worker_socket,"probe_vnc_security",forbidden)
+    response = runtime.app.test_client().post("/remote-desktop/vnc/session",headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")},json={"operation_token":_issue_remote_desktop_token(runtime),"agent_id":AGENT_ID,"protocol":protocol})
+    assert response.status_code == 503
+    assert response.get_json() == {"error":"worker_desktop_terminal_unavailable"}
+    assert _claim_count(runtime) == 0
+
+
+@pytest.mark.parametrize("event,payload,error", (
+    ("quick_job_run",{"run_mode":"currentuser"},"worker_currentuser_terminal_unavailable"),
+    ("file_management_request",{"action":"upload_start"},"worker_file_transfer_terminal_unavailable"),
+    ("file_management_request",{"action":"download_start"},"worker_file_transfer_terminal_unavailable"),
+    ("patch_install_request",{},"worker_operation_unsupported"),
+    ("patch_policy_apply",{},"worker_operation_unsupported"),
+    ("agent_update_request",{},"worker_operation_unsupported"),
+    ("agent_maintenance_request",{},"worker_operation_unsupported"),
+    *((event,{},"worker_operation_terminal_unavailable") for event in ("vnc_start","vnc_stop","vnc_refresh","vnc_credential_request","rdp_start","remote_shell_restart")),
+))
+def test_worker_active_events_without_terminal_adapter_reject_before_effects(tmp_path, monkeypatch, event, payload, error):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    try:
+        for path in ("event", "call"):
+            response = runtime.app.test_client().post("/remote-ops/host-service/"+path, headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}, json={"hostname":AGENT_HOSTNAME,"event_name":event,"payload":payload,"allow_pending":True})
+            assert response.status_code == 503
+            assert response.get_json() == {"error":error}
+        assert _claim_count(runtime) == 0
+        assert agent.get_received() == []
+        assert runtime._pending_host_events == {}
+    finally:
+        agent.disconnect()
+
+
+@pytest.mark.parametrize("event,payload", (
+    ("quick_job_run",{"run_mode":"system","context":{"assembly_guid":"fixture-assembly"}}),
+    ("service_control_action",{"service_name":"fixture","action":"restart"}),
+    ("software_inventory_refresh_request",{}),
+    ("patch_inventory_refresh_request",{}),
+    ("process_management_request",{"action":"list"}),
+    ("registry_management_request",{"action":"list"}),
+    ("file_management_request",{"action":"list"}),
+))
+def test_worker_terminal_receipt_and_preflight_use_authenticated_socket(tmp_path, monkeypatch, event, payload):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    unaffiliated = runtime.socketio.test_client(runtime.app)
+    try:
+        assert runtime.emit_host_service_event(AGENT_HOSTNAME,"system",event,payload)
+        packet = next(row["args"][0] for row in agent.get_received() if row["name"] == event)
+        if "context" in payload:
+            assert packet["context"]["assembly_guid"] == "fixture-assembly"
+        ticket = AdmissionTicket(packet["job_id"], packet["context"]["worker_operation"]["token"])
+        request = {"job_id":ticket.job_id,"status":"Running","context":{"worker_operation":ticket.wire()},"worker_operation_preflight":{"version":1,"nonce":"a"*32}}
+        assert _claim_count(runtime) == 1
+        assert unaffiliated.emit("quick_job_progress",request,callback=True) == {"error":"worker_preflight_unavailable"}
+        assert agent.emit("quick_job_progress",request,callback=True)["status"] == "execute"
+        agent.emit("quick_job_progress",{"job_id":ticket.job_id,"status":"Completed","context":{"worker_operation":ticket.wire()},"metadata":{"worker_operation":{"receipt_sha256":"f"*64}}},callback=True)
+        assert _claim_count(runtime) == 1
+        with runtime.db_conn_factory() as conn:
+            binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (ticket.job_id,)).fetchone()[0])["worker_operation"]
+            assert binding["grant_nonce"] == "a"*32
+            assert "receipt_sha256" not in binding
+        receipt = {"job_id":ticket.job_id,"status":"Completed","stdout":"done","stderr":"","context":{"worker_operation":ticket.wire()}}
+        assert unaffiliated.emit("quick_job_result",receipt,callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert _claim_count(runtime) == 1
+        ack = agent.emit("quick_job_result",receipt,callback=True)
+        assert ack == {"worker_operation":ticket.wire(),"job_id":ticket.job_id,"status":"committed"}
+        assert _claim_count(runtime) == 0
+        assert agent.emit("quick_job_result",receipt,callback=True) == ack
+    finally:
+        unaffiliated.disconnect()
+        agent.disconnect()
+
+
+def test_worker_capability_and_uncertain_emit_do_not_release_or_requeue(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    client = runtime.app.test_client()
+    args = {"headers":{INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")},"json":{"hostname":AGENT_HOSTNAME,"event_name":"service_control_action","payload":{"action":"restart"},"allow_pending":True}}
+    agent = _registered_agent(runtime, token, version=0)
+    assert client.post("/remote-ops/host-service/event",**args).get_json() == {"error":"worker_operation_capability_required"}
+    assert _claim_count(runtime) == 0
+    assert runtime.emit_host_service_event(AGENT_HOSTNAME,"system","vpn_tunnel_activity",{})
+    agent.disconnect()
+    agent = _registered_agent(runtime, token)
+    monkeypatch.setattr(runtime.registry, "emit_to_host", lambda *_args,**_kwargs: False)
+    response = client.post("/remote-ops/host-service/event",**args)
+    assert response.status_code == 503
+    assert response.get_json() == {"error":"worker_dispatch_uncertain"}
+    assert _claim_count(runtime) == 1
+    assert runtime._pending_host_events == {}
+    agent.disconnect()
+    assert _claim_count(runtime) == 1
+
+
+def test_worker_database_connections_return_before_dispatch(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    open_connections = []
+    factory = runtime.admission.db_factory
+    class TrackedConnection:
+        def __init__(self):
+            self.conn = factory()
+            open_connections.append(self)
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+        def close(self):
+            self.conn.close()
+            open_connections.remove(self)
+    runtime.admission.db_factory = TrackedConnection
+    def emit(*_args,**_kwargs):
+        assert open_connections == []
+        assert _claim_count(runtime) == 1
+        return True
+    monkeypatch.setattr(runtime.registry,"emit_to_host",emit)
+    assert runtime.emit_host_service_event(AGENT_HOSTNAME,"system","service_control_action",{"action":"restart"})
+    assert open_connections == []
+    agent.disconnect()
 
 
 def _issue_shell_token(
@@ -145,7 +306,7 @@ def _issue_shell_token(
     *,
     agent_id: str = AGENT_ID,
     site_id: int = 7,
-    worker_guid: str = "worker-socket-test",
+    worker_guid: str = "22222222-2222-4222-8222-222222222222",
 ) -> str:
     issued = issue_remote_op_session(
         runtime.jwt_service,
@@ -168,7 +329,7 @@ def _issue_remote_desktop_token(
     *,
     agent_id: str = AGENT_ID,
     site_id: int = 7,
-    worker_guid: str = "worker-socket-test",
+    worker_guid: str = "22222222-2222-4222-8222-222222222222",
 ) -> str:
     issued = issue_remote_op_session(
         runtime.jwt_service,
@@ -263,7 +424,10 @@ class _FakeShellServer:
                 except Exception:
                     continue
                 self.messages.put(msg)
-                if msg.get("type") == "ping":
+                if msg.get("type") == "worker_operation_bind":
+                    response = {"type":"worker_operation_bound", "session_id":msg["session_id"], "job_id":msg["job_id"], "worker_operation":msg["context"]["worker_operation"], "status":"accepted"}
+                    stream.write(json.dumps(response).encode("utf-8") + b"\n")
+                elif msg.get("type") == "ping":
                     response = {
                         "type": "pong",
                         "ping_id": msg.get("ping_id"),
@@ -304,6 +468,7 @@ def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path,
             "hostname": AGENT_HOSTNAME,
             "service_mode": "system",
             "capabilities": {"helper_contexts": ["currentuser"]},
+            "worker_operation_version": 1,
         },
         callback=True,
     )
@@ -311,9 +476,9 @@ def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path,
     assert ack["status"] == "ok"
     assert runtime.has_host_service_socket("lab-one", "system")
     assert runtime.has_registered_agents()
-    assert runtime.emit_host_service_event("LAB-ONE", "system", "agent_maintenance_request", {"operation_id": "op1"})
+    assert runtime.emit_host_service_event("LAB-ONE", "system", "service_control_action", {"service_name":"unit", "action":"restart"})
     received = client.get_received()
-    assert any(item["name"] == "agent_maintenance_request" for item in received)
+    assert any(item["name"] == "service_control_action" for item in received)
 
     client.disconnect()
     assert not runtime.has_host_service_socket("lab-one", "system")
@@ -367,7 +532,7 @@ def test_site_worker_internal_ansible_route_hides_runner_exception(tmp_path: Pat
     response = client.post(
         "/automation/ansible/run",
         headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
-        json={"queue_run": {"playbook_name": "Ping"}},
+        json={"queue_run": {"hostname":"borealis-engine-01", "playbook_name": "Ping"}},
     )
 
     assert response.status_code == 500
@@ -490,6 +655,7 @@ def test_site_worker_queues_pending_host_service_event_until_agent_registers(tmp
             "agent_id": AGENT_ID,
             "hostname": AGENT_HOSTNAME,
             "service_mode": "system",
+            "worker_operation_version": 1,
         },
         callback=True,
     )
@@ -505,7 +671,7 @@ def test_site_worker_queues_pending_host_service_event_until_agent_registers(tmp
     client.disconnect()
 
 
-def test_site_worker_file_upload_route_stores_transfer_and_emits_worker_url(tmp_path: Path, monkeypatch) -> None:
+def test_site_worker_file_upload_rejects_missing_terminal_adapter_before_effects(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     runtime, _token = _runtime(tmp_path)
     emitted: list[dict] = []
@@ -531,45 +697,16 @@ def test_site_worker_file_upload_route_stores_transfer_and_emits_worker_url(tmp_
             "agent_id": AGENT_ID,
             "operator_id": "unit",
             "target_path": r"C:\Temp",
-            "transfer_base_url": "https://engine.example/_borealis/site-workers/worker-socket-test",
+            "transfer_base_url": "https://engine.example/_borealis/site-workers/22222222-2222-4222-8222-222222222222",
             "files": (io.BytesIO(b"payload"), "payload.txt"),
         },
         content_type="multipart/form-data",
     )
 
-    assert response.status_code == 202
-    snapshot = response.get_json()
-    transfer_id = snapshot["transfer_id"]
-    stored_session = runtime._file_transfer_store.get_session(transfer_id)
-    assert stored_session is not None
-    assert stored_session["hostname"] == AGENT_HOSTNAME
-    assert stored_session["device_guid"] == AGENT_GUID.upper()
-    assert emitted == [
-        {
-            "hostname": AGENT_HOSTNAME,
-            "service_mode": "system",
-            "event_name": "file_management_request",
-            "payload": {
-                "action": "upload_start",
-                "hostname": AGENT_HOSTNAME,
-                "agent_id": AGENT_ID,
-                "requested_by": "unit",
-                "transfer_id": transfer_id,
-                "target_path": r"C:\Temp",
-                "transfer_base_url": "https://engine.example/_borealis/site-workers/worker-socket-test",
-                "items": [
-                    {
-                        "item_id": stored_session["upload_items"][0]["item_id"],
-                        "client_key": "payload.txt",
-                        "name": "payload.txt",
-                        "relative_path": "payload.txt",
-                        "size_bytes": len(b"payload"),
-                        "overwrite_existing": False,
-                    }
-                ],
-            },
-        }
-    ]
+    assert response.status_code == 503
+    assert response.get_json() == {"error":"worker_file_transfer_terminal_unavailable"}
+    assert emitted == []
+    assert not list(runtime._file_transfer_store._root_dir.iterdir())
 
 
 def test_site_worker_agent_upload_item_endpoint_serves_worker_local_file(tmp_path: Path, monkeypatch) -> None:
@@ -665,6 +802,8 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
     monkeypatch.setattr(
@@ -720,6 +859,8 @@ def test_site_worker_remote_desktop_registers_rdp_without_vnc_probe(tmp_path: Pa
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
     monkeypatch.setattr(
@@ -771,6 +912,8 @@ def test_site_worker_remote_desktop_honors_request_scoped_vnc_auth_probe(tmp_pat
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "0")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
     calls: list[dict[str, object]] = []
@@ -948,6 +1091,8 @@ def test_site_worker_remote_desktop_rejects_passwordless_vnc_before_guacd(tmp_pa
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
     rejection = (
@@ -997,6 +1142,8 @@ def test_site_worker_remote_desktop_rejects_vnc_lockout_before_guacd(tmp_path: P
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
     rejection = "too_many_auth_failures:Your connection has been rejected to many attempts."
@@ -1043,6 +1190,8 @@ def test_site_worker_remote_desktop_rejects_failed_vnc_auth_probe(tmp_path: Path
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
     monkeypatch.setattr(
@@ -1086,6 +1235,8 @@ def test_site_worker_remote_desktop_rejects_wrong_worker_token(tmp_path: Path, m
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, _token = _runtime(tmp_path)
+    # Exercise retained transport internals behind separately tested unavailable gate.
+    monkeypatch.setattr(runtime, "_require_desktop_terminal_adapter", lambda: None)
     operation_token = _issue_remote_desktop_token(runtime, worker_guid="other-worker")
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
 
@@ -1111,7 +1262,9 @@ def test_site_worker_remote_desktop_rejects_wrong_worker_token(tmp_path: Path, m
 def test_site_worker_shell_bridges_valid_session_to_agent_tcp(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
-    runtime, _token = _runtime(tmp_path)
+    runtime, token = _runtime(tmp_path)
+    agent_client = runtime.socketio.test_client(runtime.app, headers={"Authorization":f"Bearer {token}"})
+    assert agent_client.emit("connect_agent", {"agent_id":AGENT_ID,"hostname":AGENT_HOSTNAME,"service_mode":"system","worker_operation_version":1}, callback=True)["status"] == "ok"
     _seed_vpn_lease(runtime)
     operation_token = _issue_shell_token(runtime)
 
@@ -1133,6 +1286,9 @@ def test_site_worker_shell_bridges_valid_session_to_agent_tcp(tmp_path: Path, mo
         assert ack["status"] == "ok"
         assert ack["session_id"]
         assert server.wait_for_message("ping")["ping_id"]
+        binding = server.wait_for_message("worker_operation_bind")
+        assert _claim_count(runtime) == 1
+        assert agent_client.emit("quick_job_progress",{"job_id":binding["job_id"],"status":"Running","context":binding["context"],"worker_operation_preflight":{"version":1,"nonce":"c"*32}},callback=True)["status"] == "execute"
 
         send_ack = client.emit("vpn_shell_send", {"data": "whoami\n"}, callback=True)
         assert send_ack["status"] == "ok"
@@ -1141,7 +1297,13 @@ def test_site_worker_shell_bridges_valid_session_to_agent_tcp(tmp_path: Path, mo
 
         close_ack = client.emit("vpn_shell_close", {}, callback=True)
         assert close_ack["status"] == "ok"
+        assert _claim_count(runtime) == 1
 
     client.disconnect()
     assert runtime._shell_sessions == {}
     assert runtime._shell_sessions_by_agent == {}
+    assert _claim_count(runtime) == 1
+    receipt = {"job_id":binding["job_id"],"status":"Completed","stdout":"","stderr":"","context":binding["context"]}
+    assert agent_client.emit("quick_job_result",receipt,callback=True)["status"] == "committed"
+    assert _claim_count(runtime) == 0
+    agent_client.disconnect()

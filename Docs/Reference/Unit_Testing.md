@@ -68,7 +68,7 @@ Use inventory-backed site-worker Python domains while iterating:
 | `core` | Site-worker database bootstrap, edge settings, and secret configuration. |
 | `files` | Site-worker file-transfer behavior. |
 | `remote-access` | Site-worker Guacamole, worker socket, VNC, and VPN shell behavior. |
-| `scheduler` | Site-worker queue and work-claim behavior. |
+| `scheduler` | Site-worker queue, durable active-worker admission and work-claim behavior. |
 
 `Tests/manifests/engine-test-domains.json` owns Python domain membership. Inventory policy fails for undocumented tests, missing files, duplicate ownership, or zero-test domains.
 
@@ -107,6 +107,8 @@ Netplan fixtures require Ubuntu's `netplan.io`, `python3-netplan` and `python3-y
 
 Run `./Tests/run-database-postgres.sh` when changing cluster membership, controller recovery, operation storage, or scheduler behavior. The runner creates an isolated PostgreSQL 17 container and removes it when validation exits. It never uses the deployed Engine database.
 
+The PostgreSQL lane also executes `Data/Engine/Unit_Tests/test_worker_admission.py --postgres` after canonical schema initialization. Its named concurrency and custody cases require an isolated database URL and emit an exact, zero-skip summary in `worker-admission-postgres.log`. Normal scheduler-domain pytest covers bounded portable admission and receipt fixtures.
+
 Every required database test must run and pass. Missing tests, skipped tests or subtests, and incomplete results fail the lane. Keep the reported result directory when investigating a failure; CI retains database logs for successful and failed runs.
 
 The required Go database package has an explicit 30-minute suite limit. Each runner command has a default 35-minute limit, and CI allows 45 minutes for setup, validation and diagnostic upload. CI enables the race detector through `GOFLAGS=-race`; a normal local invocation without that setting is not race evidence. `BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS` overrides the command limit; setting it below the package limit can stop Go before timeout diagnostics finish. Individual operation deadlines and all required assertions remain unchanged.
@@ -124,6 +126,8 @@ Do not delete regression coverage silently. Update [Testing Regressions](testing
 Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest Tests.Unit_Tests.test_legacy_admission_recovery Tests.Unit_Tests.test_engine_cluster_recovery`. These repository tests use temporary files and mock host service/cluster observations; they never operate on deployed PostgreSQL or K3s. Runtime recovery still requires the immutable-release check and original controller admission gates.
 
 ??? example "Detailed Codex Breakdown"
+
+    - Active-worker custody: run scheduler/remote-access/Ansible Python domains, Agent config/runtime/role race tests, then full `Tests/run-engine-python.sh` and `Tests/run-agent.sh`. Required PostgreSQL cases exercise distinct-worker caps, partial terminal release, single-issued nonce grants, fresh reserved metadata, registration/heartbeat/terminal lock order, pruning, malformed/orphan custody, original-node replacement and missing receipt history. Go `TestHostServiceDispatch` covers lost replies, strict no-dispatch receipts and redirect refusal; focused service/software/patch tests retain public envelopes. Cross-compilation does not supply native Windows journal evidence. No fixture supplies measured runtime capacity.
 
     - Preparation intent UI: use the preparation/onboarding/Cluster Management Vitest suites in an isolated copy, then `Tests/run-webui.sh`. Cover exact pair/replacement plans, explicit identity-source choice and confirmation, stale/malformed evidence, one pre-submit reread and one POST, contradictory receipts, pending-write reopen/reload, unavailable browser storage, and late cancellation/POST responses after operation or attempt changes. Public pending intent must survive without credentials; an empty confirmation read cannot establish that an earlier ambiguous write failed. UI success records intent only, with no readiness, installation or admission claim.
 
@@ -151,6 +155,8 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
     - Automatic-recovery application evidence: run `go -C Data/Engine/Containers/api-backend test -race ./cmd/api-backend -run '^TestClusterAutomaticRecovery' -count=1`. Synthetic Kubernetes and HTTP fixtures bind original API/scheduler workload ownership, container IDs, Service/EndpointSlice identities and fixed health responses; changes, denied reads and malformed/redirected responses reject proof. Required PostgreSQL test `TestClusterAutomaticRecoveryApplicationPostgresAuthority` checks authority drift, cancellation, unknown/reset behavior and pool release. Tests do not grant missing Kubernetes permissions or prove database/storage/role/Agent-path health, automatic entry or controlled return.
 
     - Resident-worker custody: run the focused `TestBorealisOperatorSiteWorker`, `TestOperatorSiteWorker`, `TestSchedulerWorkerPolicy` and `TestClusterSSHSiteWorker` families with race detection. `TestSchedulerWorkerPolicyPostgresPreservesUncertainOwnership` requires the isolated PostgreSQL fixture and proves inventory/retirement failures preserve original worker, route and work rows, with SQL connections released before operator HTTP. Stateful Kubernetes fixtures retain uncertain creations, reject candidate/duplicate inventories and require UID-preconditioned deletion plus fresh Pod absence. A confirmed missing Pod can still need original Service cleanup before replacement. These tests do not prove atomic concurrent site admission or the future per-Engine active-work quota.
+    - Active-worker custody foundation: run `go -C Data/Engine/Containers/api-backend test -race ./cmd/api-backend -run '^Test(SchedulerWorkerAdmission|SchedulerWorkerActivityCustody|WorkerOperationActivityPostgresDeletionCustody)' -count=1` against the isolated PostgreSQL fixture. Mandatory `TestSchedulerWorkerAdmissionPostgresCustody` includes fresh locked activity-metadata preservation; `TestWorkerOperationActivityPostgresDeletionCustody` covers whole-delete rollback, terminal-only history removal, actual competing row-lock waits, device history clearing and purge with a one-connection pool. Route replacement preserves original node/Pod charges; malformed or positive unknown custody cannot be pruned. These tests do not substitute for the Python execution boundary or Agent terminal-replay tests.
+
 
     - Host allowance: `TestClusterSSHTargetApplicationSizing`, `TestClusterSSHWorkerRotationTargetFit` and `TestClusterSSHTargetProfileSizingAllProfiles` exercise the7.5-decimal-GB Ubuntu/K3s/headroom deduction through original native target scopes. Exact fit, one-byte overflow, sibling drift and complete candidate-cohort demand remain covered. The missing-reserve regression must fail against the original production code. This is policy arithmetic, not runtime qualification.
 
