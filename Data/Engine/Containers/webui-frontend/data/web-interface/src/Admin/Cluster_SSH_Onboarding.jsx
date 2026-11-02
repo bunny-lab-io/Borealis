@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
 import ClusterSSHInspection, { validateSSHInspectionTarget } from "./Cluster_SSH_Inspection.jsx";
+import ClusterSSHPreparation from "./Cluster_SSH_Preparation.jsx";
 import { createSSHInspectionSubmission } from "./clusterSSHOnboarding.js";
+import { preparationProgressBinding } from "./clusterSSHPreparation.js";
 import { DIALOG_ACTIONS_SX, DIALOG_BUTTON_SX, DIALOG_CONTENT_SX, DIALOG_DANGER_BUTTON_SX, DIALOG_PAPER_SX, DIALOG_TITLE_SX } from "../DialogStyles.jsx";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -82,11 +84,17 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
   const [error, setError] = useState("");
   const [receivedAt, setReceivedAt] = useState(0);
   const [cancelling, setCancelling] = useState(false);
+  const [mutationPending, setMutationPending] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [submissionRejected, setSubmissionRejected] = useState(false);
   const drafts = useRef([]);
   const requests = useRef(new Set());
   const mounted = useRef(true);
+  const mutation = useRef(null);
+  const cancelAction = useRef(null);
+  const currentEvidence = useRef(null);
+  currentEvidence.current = { operationID: initialOperationID && initialOperationID !== submittingID ? initialOperationID : operationID,
+    binding: preparationProgressBinding(progress, operationID) };
   const callbacks = useRef({ onClose, onOperation, onChanged });
   callbacks.current = { onClose, onOperation, onChanged };
   useEffect(() => {
@@ -114,6 +122,7 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
       requests.current.forEach((controller) => controller.abort());
       clearCredentials(drafts.current); drafts.current = [];
       setProgress(null); setReceivedAt(0); setSubmissionRejected(false);
+      cancelAction.current = null; setCancelling(false);
       setOperationID(initialOperationID);
     }
   }, [initialOperationID, submittingID, operationID]);
@@ -172,20 +181,43 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
   const cancel = async () => {
     if (!canCancel) return;
     if (Date.now() - receivedAt > 15000) { setReceivedAt(0); setError(statusUnavailable); return; }
+    const release = acquireMutation();
+    if (!release) return;
+    const action = { operationID, binding: preparationProgressBinding(progress, operationID) };
+    cancelAction.current = action;
+    const isCurrent = () => mounted.current && cancelAction.current === action && currentEvidence.current.operationID === action.operationID
+      && currentEvidence.current.binding === action.binding;
     setCancelling(true);
     try {
       const { response, payload } = await request(`/api/server/cluster/operations/${operationID}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmation: "CANCEL OPERATION" }) }, 15000);
       if (!response.ok || payload?.state !== "cancelled") throw new Error("cancellation not confirmed");
-      if (mounted.current) { setReceivedAt(0); setRefresh((n) => n + 1); callbacks.current.onChanged?.(); }
-    } catch { if (mounted.current) { setReceivedAt(0); setError("Cancellation is not confirmed. Refresh status before taking another action."); } }
-    finally { if (mounted.current) setCancelling(false); }
+      if (isCurrent()) { setReceivedAt(0); setRefresh((n) => n + 1); callbacks.current.onChanged?.(); }
+    } catch { if (isCurrent()) { setReceivedAt(0); setError("Cancellation is not confirmed. Refresh status before taking another action."); } }
+    finally {
+      release();
+      if (cancelAction.current === action) { cancelAction.current = null; if (mounted.current) setCancelling(false); }
+    }
+  };
+
+  // Shared synchronous claim prevents two clicks from racing before React's
+  // disabled state renders. Preparation and cancellation cannot overlap.
+  const acquireMutation = () => {
+    if (mutation.current) return null;
+    const claim = {};
+    mutation.current = claim; setMutationPending(true);
+    return () => {
+      if (mutation.current === claim) {
+        mutation.current = null;
+        if (mounted.current) setMutationPending(false);
+      }
+    };
   };
 
   if (!operationID && !submittingID) return <ClusterSSHInspection key={index} title={`Inspect Engine host ${index + 1} of ${targetCount}`}
     submitLabel={index + 1 < targetCount ? "Next host" : "Inspect hosts"} onApprovedTarget={selectTarget} onClose={onClose}
     onBack={index ? () => { clearCredentials(drafts.current); drafts.current = []; setIndex(0); } : undefined} />;
 
-  const canCancel = !submittingID && !cancelling && receivedAt > 0 && Date.now() - receivedAt <= 15000 && ["queued", "running", "waiting"].includes(progress?.state) && phases.has(progress?.current_step)
+  const canCancel = !submittingID && !cancelling && !mutationPending && receivedAt > 0 && Date.now() - receivedAt <= 15000 && ["queued", "running", "waiting"].includes(progress?.state) && phases.has(progress?.current_step)
     && progress.targets.every((target) => ["queued", "running", "recovery_required"].includes(target.state) && ["inspect", "inspection_complete", "qualify", "qualification_complete"].includes(target.current_step));
   return <Dialog open onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
     <DialogTitle sx={DIALOG_TITLE_SX}>Engine host inspection</DialogTitle>
@@ -213,11 +245,14 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
           </Typography>)}
         </Stack>)}
       </Stack> : null}
+      {validSSHInspectionID(operationID) ? <ClusterSSHPreparation key={`${operationID}:${progress?.attempt || 0}`} operationID={operationID} progress={progress}
+        receivedAt={receivedAt} cancelling={cancelling} acquireMutation={acquireMutation}
+        onConfirmed={() => { setReceivedAt(0); setRefresh((value) => value + 1); callbacks.current.onChanged?.(); }} /> : null}
       <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>Request: {operationID || submittingID}</Typography>
     </Stack></DialogContent>
     <DialogActions sx={DIALOG_ACTIONS_SX}>
       <Button sx={DIALOG_BUTTON_SX} onClick={onClose}>Close</Button>
-      <Button sx={DIALOG_BUTTON_SX} disabled={!validSSHInspectionID(operationID) || Boolean(submittingID) || cancelling} onClick={() => { setReceivedAt(0); setRefresh((n) => n + 1); }}>Refresh status</Button>
+      <Button sx={DIALOG_BUTTON_SX} disabled={!validSSHInspectionID(operationID) || Boolean(submittingID) || mutationPending} onClick={() => { setReceivedAt(0); setRefresh((n) => n + 1); }}>Refresh status</Button>
       <Button sx={DIALOG_DANGER_BUTTON_SX} disabled={!canCancel} onClick={() => void cancel()}>End inspection</Button>
     </DialogActions>
   </Dialog>;

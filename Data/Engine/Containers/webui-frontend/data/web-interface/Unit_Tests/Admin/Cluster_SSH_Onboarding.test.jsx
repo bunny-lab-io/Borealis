@@ -74,7 +74,7 @@ function mockDiscovery(path, init) {
 }
 
 describe("SSH cohort inspection dialog", () => {
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
 
   it("shows recorded readiness blockers and permits cancellation after read-only qualification", async () => {
     const value = progress(); value.qualification = qualification();
@@ -85,7 +85,49 @@ describe("SSH cohort inspection dialog", () => {
     expect(screen.getByText("Remaining join prerequisites: Pending")).toBeInTheDocument();
     expect(screen.getByText(/Joining remains unavailable/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End inspection" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review preparation" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /Prepare|Join hosts/ })).toBeNull();
+  });
+
+  it("preserves pending readiness and serializes explicit confirmation against cancellation", async () => {
+    const value = progress(); value.qualification = qualification();
+    value.qualification.checks.forEach((check, index) => { check.state = index === 5 ? "pending" : "passed"; });
+    value.targets.forEach((target) => { target.state = "queued"; target.current_step = "qualification_complete"; });
+    const sourceID = "33333333-3333-4333-8333-333333333333";
+    const plan = { operation_id: requestID, attempt: 1, plan_sha256: "a".repeat(64), baseline_release: "2026.9.5.1", source_sha: "b".repeat(40),
+      targets: value.targets.map((target) => ({ target_id: target.id, address: target.address, port: target.port, hostname: target.report.hostname, host_key_fingerprint: target.host_key_fingerprint })),
+      identity_sources: [{ source_id: sourceID, hostname: "engine-1" }], confirmation: null, preparation_authorized: false, state: "awaiting_readiness" };
+    let finishReview;
+    let planReads = 0;
+    const changed = vi.fn();
+    const fetch = vi.fn((path, init) => {
+      if (path.endsWith("preparation-plan")) return ++planReads === 1 ? Promise.resolve(response(plan)) : new Promise((resolve) => { finishReview = resolve; });
+      if (path.endsWith("/prepare")) {
+        const body = JSON.parse(init.body);
+        return Promise.resolve(response({ operation_id: requestID, request_id: body.request_id, plan_sha256: body.plan_sha256, source_id: body.source_id,
+          confirmed_at: Math.floor(Date.now() / 1000), preparation_authorized: false, state: "awaiting_readiness" }, 202));
+      }
+      return Promise.resolve(response(value));
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ClusterSSHOnboarding initialOperationID={requestID} onClose={vi.fn()} onChanged={changed} />);
+    await screen.findByText("Remaining join prerequisites: Pending");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Review preparation" }));
+    fireEvent.mouseDown(await screen.findByLabelText("Original identity source"));
+    fireEvent.click(await screen.findByRole("option", { name: "engine-1" }));
+    fireEvent.change(screen.getByLabelText("Type PREPARE ENGINE NODES"), { target: { value: "PREPARE ENGINE NODES" } });
+    fireEvent.click(screen.getByRole("button", { name: "Record preparation confirmation" }));
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh status" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "End inspection" }));
+    expect(fetch.mock.calls.some(([path]) => path.endsWith("/cancel"))).toBe(false);
+    await act(async () => finishReview(response(plan)));
+    await screen.findByText(/Confirmation recorded for identity source/);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Remaining join prerequisites: Pending")).toBeInTheDocument();
+    expect(screen.getByText(/Joining remains unavailable/)).toBeInTheDocument();
+    expect(fetch.mock.calls.filter(([path]) => path.endsWith("/prepare"))).toHaveLength(1);
   });
 
   it.each(["ready", "attempt", "future", "check omission", "unknown check", "partial storage", "unsafe number"])("rejects malformed qualification: %s", (mode) => {
@@ -228,6 +270,26 @@ describe("SSH cohort inspection dialog", () => {
     expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
     expect(screen.getAllByText(/attempt 1, generation 2/)).toHaveLength(2);
     expect(screen.queryByText(/private status failure/)).toBeNull();
+  });
+
+  it.each(["success", "failure"])("ignores old cancellation %s after navigation to another operation", async (outcome) => {
+    const nextID = "33333333-3333-4333-8333-333333333333";
+    let complete, reject;
+    const changed = vi.fn();
+    const fetch = vi.fn((path) => path.endsWith("/cancel") ? new Promise((resolve, failure) => { complete = resolve; reject = failure; })
+      : Promise.resolve(response({ ...progress(), operation_id: path.endsWith(nextID) ? nextID : requestID })));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<ClusterSSHOnboarding initialOperationID={requestID} onClose={vi.fn()} onChanged={changed} />);
+    await screen.findByText(/Inspection complete/);
+    fireEvent.click(screen.getByRole("button", { name: "End inspection" }));
+    view.rerender(<ClusterSSHOnboarding initialOperationID={nextID} onClose={vi.fn()} onChanged={changed} />);
+    await screen.findByText(`Request: ${nextID}`);
+    await waitFor(() => expect(fetch.mock.calls.some(([path]) => path.endsWith(nextID))).toBe(true));
+    await act(async () => outcome === "success" ? complete(response({ state: "cancelled" })) : reject(new Error("old cancel failure")));
+    expect(screen.queryByText(/Cancellation is not confirmed/)).toBeNull();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeEnabled();
+    expect(changed).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("cancels read-only inspection and reloads retained reports without resubmitting credentials", async () => {
