@@ -145,18 +145,7 @@ func newClusterSSHPreparationConfigurationRead(work clusterSSHPreparationWork, c
 		if err != nil {
 			return fail()
 		}
-		projection := clusterbootstrap.PreparationPlan{Source: owned.Baseline, PlanSHA256: plan, KubeSystemUID: owned.Proof.Source.KubeSystemUID, K3sVersion: version,
-			ManagementCIDR: owned.Proof.Cohort.Targets[0].Report.ConnectedPrefix, PodCIDR: sources[0].PodCIDR, ServiceCIDR: sources[0].ServiceCIDR,
-			ControlPlaneVIP: owned.Proof.Source.ControlPlaneVIP, EdgeVIP: owned.Proof.Source.EdgeVIP}
-		for _, member := range owned.Proof.Source.Members {
-			projection.PeerAddresses = append(projection.PeerAddresses, member.Address)
-		}
-		for _, target := range owned.Proof.Cohort.Targets {
-			projection.PeerAddresses = append(projection.PeerAddresses, target.Binding.Address)
-			projection.TargetAddresses = append(projection.TargetAddresses, target.Binding.Address)
-		}
-		sort.Strings(projection.PeerAddresses)
-		configuration, err := clusterbootstrap.PreparationPlanConfigurationDigest(projection, secret.Settings())
+		digest, err := clusterSSHPreparationConfigurationReceipt(owned.Baseline, owned.Proof, plan, version, secret, sources)
 		if err != nil {
 			return fail()
 		}
@@ -168,19 +157,45 @@ func newClusterSSHPreparationConfigurationRead(work clusterSSHPreparationWork, c
 		if err != nil || !secret.SameObservation(current) || check(ctx) != nil || ctx.Err() != nil {
 			return fail()
 		}
-		rechecked, err := clusterbootstrap.PreparationPlanConfigurationDigest(projection, current.Settings())
-		if err != nil || rechecked != configuration {
+		rechecked, err := clusterSSHPreparationConfigurationReceipt(owned.Baseline, owned.Proof, plan, version, current, sources)
+		if err != nil || rechecked != digest {
 			return fail()
 		}
-		digest, err := clusterSSHPreparationDigest(struct {
-			Version                     int
-			Plan, Configuration, Secret string
-			Sources                     []clusterbootstrap.SourceNetwork
-		}{1, plan, configuration, secret.ObservationSHA256(), sources})
 		if err != nil || ctx.Err() != nil || (retained != "" && retained != digest) || failed.Load() {
 			return fail()
 		}
 		retained = digest
 		return digest, nil
 	}
+}
+
+// Pure equality receipt shared by the waiting gate and separately fenced
+// recovery reader. Secret identity/revision/content and full runtime values are
+// retained; equal selected values cannot replace an original observation.
+func clusterSSHPreparationConfigurationReceipt(baseline clusterbootstrap.Expected, proof clusterSSHParentProof, plan, version string,
+	secret clusterbootstrap.PreparationRuntimeSecret, sources []clusterbootstrap.SourceNetwork) (string, error) {
+	if baseline.Validate() != nil || validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil ||
+		validateClusterSSHPlannedSourceNetworks(proof.Cohort, proof.Source, version, sources) != nil {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	projection := clusterbootstrap.PreparationPlan{Source: baseline, PlanSHA256: plan, KubeSystemUID: proof.Source.KubeSystemUID, K3sVersion: version,
+		ManagementCIDR: proof.Cohort.Targets[0].Report.ConnectedPrefix, PodCIDR: sources[0].PodCIDR, ServiceCIDR: sources[0].ServiceCIDR,
+		ControlPlaneVIP: proof.Source.ControlPlaneVIP, EdgeVIP: proof.Source.EdgeVIP}
+	for _, member := range proof.Source.Members {
+		projection.PeerAddresses = append(projection.PeerAddresses, member.Address)
+	}
+	for _, target := range proof.Cohort.Targets {
+		projection.PeerAddresses = append(projection.PeerAddresses, target.Binding.Address)
+		projection.TargetAddresses = append(projection.TargetAddresses, target.Binding.Address)
+	}
+	sort.Strings(projection.PeerAddresses)
+	configuration, err := clusterbootstrap.PreparationPlanConfigurationDigest(projection, secret.Settings())
+	if err != nil {
+		return "", err
+	}
+	return clusterSSHPreparationDigest(struct {
+		Version                     int
+		Plan, Configuration, Secret string
+		Sources                     []clusterbootstrap.SourceNetwork
+	}{1, plan, configuration, secret.ObservationSHA256(), sources})
 }

@@ -91,6 +91,8 @@
     "TestClusterSSHPreparationRecoveryPostgresPostWriteFence",
     "TestClusterSSHPreparationRecoveryPostgresRechecksAfterWait",
     "TestClusterSSHPreparationRecoveryPostgresRejectsDrift",
+    "TestClusterSSHPreparationRecoveryProgressPostgresCustody",
+    "TestClusterSSHPreparationRecoveryProgressPostgresJoinsCancellation",
     "TestClusterSSHPreparationRecoveryScopePostgresJoinsCancellation",
     "TestClusterSSHPreparationRecoveryScopePostgresOneUseAndCopies",
     "TestClusterSSHPreparationRenewalPostgresBindsCiphertextAtCommit",

@@ -29,6 +29,16 @@ func buildClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, sourc
 		!validClusterSSHObservationLease(lease) {
 		return fail()
 	}
+	return assembleClusterSSHPreparationExpected(cohort, source, lease, baseline, k3sVersion, podCIDR, serviceCIDR)
+}
+
+// Value assembly only. Callers must independently establish their exact phase
+// and current lease authority; this helper does not accept or create authority.
+func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string) (clusterbootstrap.PreparationExpected, error) {
+	fail := func() (clusterbootstrap.PreparationExpected, error) {
+		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
+	}
 	peers := make([]string, 0, 3)
 	for _, member := range source.Members {
 		peers = append(peers, member.Address)
