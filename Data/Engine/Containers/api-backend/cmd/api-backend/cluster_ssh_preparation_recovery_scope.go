@@ -90,6 +90,16 @@ type clusterSSHPreparationRecoveryObserve func(context.Context, map[string]int64
 // Expected state is never repaired by reading a different current SQL expiry.
 func newClusterSSHPreparationRecoveryLeaseCheck(custody *clusterSSHPreparationRecoveryCustody, assigned map[string]int64,
 	verify func(context.Context) error, observe clusterSSHPreparationRecoveryObserve) (func(context.Context) error, func() (clusterSSHPreparationRecoveryAuthority, error)) {
+	return newClusterSSHPreparationRecoveryTypedLeaseCheck(custody, assigned, verify, observe)
+}
+
+// Shared mechanics serialize exact-expiry renewal and detached snapshots;
+// separate authority types retain their own issuance and consumer boundaries.
+func newClusterSSHPreparationRecoveryTypedLeaseCheck[T interface {
+	recoveryExpiries() map[string]int64
+	recoveryStable() any
+}](custody *clusterSSHPreparationRecoveryCustody, assigned map[string]int64,
+	verify func(context.Context) error, observe func(context.Context, map[string]int64, bool) (T, map[string]int64, error)) (func(context.Context) error, func() (T, error)) {
 	gate := make(chan struct{}, 1)
 	expected := maps.Clone(assigned)
 	var frozen, latest []byte
@@ -120,16 +130,15 @@ func newClusterSSHPreparationRecoveryLeaseCheck(custody *clusterSSHPreparationRe
 			return fail()
 		}
 		before, observedExpiry, err := observe(ctx, maps.Clone(expected), false)
-		if err != nil || !maps.Equal(observedExpiry, expected) || !maps.Equal(before.ExpiresAt, expected) || ctx.Err() != nil {
+		if err != nil || !maps.Equal(observedExpiry, expected) || !maps.Equal(before.recoveryExpiries(), expected) || ctx.Err() != nil {
 			return fail()
 		}
-		before.ExpiresAt = nil
-		raw, err := json.Marshal(before)
+		raw, err := json.Marshal(before.recoveryStable())
 		if err != nil || len(raw) > 256<<10 || frozen != nil && !bytes.Equal(raw, frozen) {
 			return fail()
 		}
 		after, next, err := observe(ctx, maps.Clone(expected), true)
-		if err != nil || !maps.Equal(after.ExpiresAt, next) || len(next) != len(expected) || ctx.Err() != nil {
+		if err != nil || !maps.Equal(after.recoveryExpiries(), next) || len(next) != len(expected) || ctx.Err() != nil {
 			return fail()
 		}
 		for id := range expected {
@@ -141,20 +150,19 @@ func newClusterSSHPreparationRecoveryLeaseCheck(custody *clusterSSHPreparationRe
 		if err != nil || len(stored) > 256<<10 {
 			return fail()
 		}
-		after.ExpiresAt = nil
-		afterRaw, err := json.Marshal(after)
+		afterRaw, err := json.Marshal(after.recoveryStable())
 		if err != nil || !bytes.Equal(raw, afterRaw) || verify(ctx) != nil || custody.failed.Load() || ctx.Err() != nil {
 			return fail()
 		}
 		expected, frozen, latest = maps.Clone(next), raw, stored
 		return nil
 	}
-	snapshot := func() (clusterSSHPreparationRecoveryAuthority, error) {
+	snapshot := func() (T, error) {
 		// Snapshot is called only by synchronous scope entry, after its first
 		// check. The same gate prevents a heartbeat racing this detached copy.
 		gate <- struct{}{}
 		defer func() { <-gate }()
-		var value clusterSSHPreparationRecoveryAuthority
+		var value T
 		if custody == nil || custody.failed.Load() || len(latest) == 0 || json.Unmarshal(latest, &value) != nil {
 			return value, fail()
 		}

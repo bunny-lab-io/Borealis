@@ -75,9 +75,36 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 		owned.Baseline.Validate() == nil && validateClusterSSHInspectionCohort(owned.Cohort, owned.Source) == nil &&
 		len(owned.Leases) == len(owned.Cohort.Targets) && len(owned.Leases) == len(record.Targets) &&
 		check != nil && getJSON != nil && network != nil
-	var approved string
-	if valid {
-		approved = readiness.Checks[4].SHA256
+	if !valid {
+		return unavailableClusterSSHPreparationRecoverySourceRead
+	}
+	projection := clusterSSHPreparationRecoverySourceProjection{Baseline: owned.Baseline, Cohort: owned.Cohort, Source: owned.Source,
+		PlanSHA256: record.PlanSHA256, Version: version, Approved: readiness.Checks[4].SHA256, TargetCount: len(owned.Leases)}
+	return newClusterSSHPreparationRecoverySourceProjectionRead(projection, check, getJSON, network,
+		func(index int, version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
+			return buildClusterSSHPreparationRecoveryExpected(owned, index, version, pods, services)
+		})
+}
+
+// Immutable read inputs only, not a lease or authority conversion. Each typed
+// wrapper validates and owns its complete record before lending this projection.
+type clusterSSHPreparationRecoverySourceProjection struct {
+	Baseline                      clusterbootstrap.Expected
+	Cohort                        clusterSSHInspectionCohort
+	Source                        clusterSSHSourceCohort
+	PlanSHA256, Version, Approved string
+	TargetCount                   int
+}
+
+func unavailableClusterSSHPreparationRecoverySourceRead(context.Context) (clusterSSHPreparationRecoverySource, error) {
+	return clusterSSHPreparationRecoverySource{}, clusterbootstrap.ErrPreparationConfig
+}
+
+func newClusterSSHPreparationRecoverySourceProjectionRead(projection clusterSSHPreparationRecoverySourceProjection,
+	check func(context.Context) error, getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead,
+	build func(int, string, string, string) (clusterbootstrap.PreparationExpected, error)) clusterSSHPreparationRecoverySourceRead {
+	if check == nil || getJSON == nil || network == nil || build == nil {
+		return unavailableClusterSSHPreparationRecoverySourceRead
 	}
 	serial := make(chan struct{}, 1)
 	var failed atomic.Bool
@@ -86,7 +113,7 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 			failed.Store(true)
 			return clusterSSHPreparationRecoverySource{}, clusterbootstrap.ErrPreparationConfig
 		}
-		if !valid || failed.Load() || parent.Err() != nil {
+		if failed.Load() || parent.Err() != nil {
 			return fail()
 		}
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
@@ -110,15 +137,15 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 			return nil
 		}
 		readSource := func() error {
-			current, err := observeClusterSSHSourceCohort(ctx, get, owned.Source)
-			if err != nil || !reflect.DeepEqual(current, owned.Source) {
+			current, err := observeClusterSSHSourceCohort(ctx, get, projection.Source)
+			if err != nil || !reflect.DeepEqual(current, projection.Source) {
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			return nil
 		}
 		readNetworks := func() ([]clusterbootstrap.SourceNetwork, error) {
-			values := make([]clusterbootstrap.SourceNetwork, 0, len(owned.Source.Members))
-			for _, member := range owned.Source.Members {
+			values := make([]clusterbootstrap.SourceNetwork, 0, len(projection.Source.Members))
+			for _, member := range projection.Source.Members {
 				if check(ctx) != nil {
 					return nil, clusterbootstrap.ErrPreparationConfig
 				}
@@ -128,7 +155,7 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 				}
 				values = append(values, observed)
 			}
-			if validateClusterSSHPlannedSourceNetworks(owned.Cohort, owned.Source, version, values) != nil {
+			if validateClusterSSHPlannedSourceNetworks(projection.Cohort, projection.Source, projection.Version, values) != nil {
 				return nil, clusterbootstrap.ErrPreparationConfig
 			}
 			return values, nil
@@ -152,9 +179,9 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 		if err != nil {
 			return fail()
 		}
-		proof := clusterSSHParentProof{Version: 1, Cohort: owned.Cohort, Source: owned.Source}
-		digest, err := clusterSSHPreparationConfigurationReceipt(owned.Baseline, proof, record.PlanSHA256, version, secret, sources)
-		if err != nil || digest != approved {
+		proof := clusterSSHParentProof{Version: 1, Cohort: projection.Cohort, Source: projection.Source}
+		digest, err := clusterSSHPreparationConfigurationReceipt(projection.Baseline, proof, projection.PlanSHA256, projection.Version, secret, sources)
+		if err != nil || digest != projection.Approved {
 			return fail()
 		}
 		again, err := readNetworks()
@@ -166,8 +193,8 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 			return fail()
 		}
 		result := clusterSSHPreparationRecoverySource{Settings: secret.Settings()}
-		for i := range owned.Leases {
-			expected, err := buildClusterSSHPreparationRecoveryExpected(owned, i, version, sources[0].PodCIDR, sources[0].ServiceCIDR)
+		for i := 0; i < projection.TargetCount; i++ {
+			expected, err := build(i, projection.Version, sources[0].PodCIDR, sources[0].ServiceCIDR)
 			if err != nil {
 				return fail()
 			}

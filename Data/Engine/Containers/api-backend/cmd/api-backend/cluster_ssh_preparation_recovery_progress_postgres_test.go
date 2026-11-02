@@ -80,6 +80,17 @@ func recoveryProgressSQLPoolAvailable(ctx context.Context, f sshPreparationAutho
 	return connection.Close()
 }
 
+// Admission setup keeps its original 15-second context. Transport exercises
+// verify real source/helper bytes across multiple sessions, so each gets a
+// separate bounded context without extending any stored lease or credential.
+func recoveryTransportSQLExercise(t *testing.T, f sshPreparationAuthorityFixture) sshPreparationAuthorityFixture {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.ctx), 90*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
+	return f
+}
+
 func recoveryProgressSQLSource(t *testing.T, f sshPreparationAuthorityFixture, secret map[string]any) func(clusterSSHPreparationRecoveryAuthority, string, func(context.Context) error) clusterSSHPreparationRecoverySourceRead {
 	t.Helper()
 
@@ -122,6 +133,7 @@ func TestClusterSSHPreparationRecoveryProgressPostgresCustody(t *testing.T) {
 	for _, mode := range []string{"pair", "replacement", "second target failure", "SSH cleanup", "input cleanup", "final Secret changed", "credential changed", "controller changed", "source changed", "expired claim", "unissued claim", "initial claim"} {
 		t.Run(mode, func(t *testing.T) {
 			f, claim, secret := recoveryProgressClaimFixture(t, mode == "replacement", baseline)
+			f = recoveryTransportSQLExercise(t, f)
 			f.c.store.db.SetMaxOpenConns(1)
 			parent := t.TempDir()
 			inspected, closed, cleaned := 0, 0, 0
@@ -199,6 +211,10 @@ func TestClusterSSHPreparationRecoveryProgressPostgresCustody(t *testing.T) {
 			}
 			events := f.events(t)
 			got, err := f.c.observeClusterSSHPreparationRecoveryProgressWith(f.ctx, f.aegis, claim, parent, deps)
+			// Assertions inspect the joined outcome even if the exercise expired.
+			assertCtx, stopAssertions := context.WithTimeout(context.WithoutCancel(f.ctx), 5*time.Second)
+			defer stopAssertions()
+			f.ctx = assertCtx
 			valid := mode == "pair" || mode == "replacement"
 			if (err == nil) != valid || (!valid && len(got) != 0) {
 				t.Fatal("uncertain/partial cursor escaped", mode, got, err)

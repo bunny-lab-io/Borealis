@@ -35,6 +35,11 @@ type clusterSSHPreparationRecoveryAuthority struct {
 	ExpiresAt      map[string]int64
 }
 
+func (a clusterSSHPreparationRecoveryAuthority) recoveryExpiries() map[string]int64 {
+	return a.ExpiresAt
+}
+func (a clusterSSHPreparationRecoveryAuthority) recoveryStable() any { a.ExpiresAt = nil; return a }
+
 func (clusterSSHPreparationRecoveryAuthority) String() string {
 	return "SSH preparation recovery proof authority [redacted]"
 }

@@ -160,11 +160,33 @@ func withClusterSSHPreparationRecoveryTargetInputs(ctx context.Context, authorit
 	sealed sealedClusterSSHCredentials, aegis clusterSSHWorkerAegis, scratchParent string, source clusterSSHPreparationRecoverySourceRead,
 	check func(context.Context) error, download func(context.Context, clusterbootstrap.Expected, string) (*clusterbootstrap.Bundle, error),
 	closeInputs func(*clusterbootstrap.PreparationInputs) error, consume func(clusterSSHPreparationRecoveryTargetInputs) error) (result error) {
+	if index < 0 || index >= len(authority.Cohort.Targets) {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return withClusterSSHPreparationRecoveryProjectedInputs(ctx,
+		clusterSSHPreparationRecoveryInputProjection{authority.Cohort.Targets[index], len(authority.Leases)},
+		func(version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
+			return buildClusterSSHPreparationRecoveryExpected(authority, index, version, pods, services)
+		}, index, sealed, aegis, scratchParent, source, check, download, closeInputs, consume)
+}
+
+// Immutable transport data only. Each typed wrapper retains its own exact
+// authority builder; this projection cannot authorize another native action.
+type clusterSSHPreparationRecoveryInputProjection struct {
+	Item        clusterSSHInspectedTarget
+	TargetCount int
+}
+
+func withClusterSSHPreparationRecoveryProjectedInputs(ctx context.Context, projection clusterSSHPreparationRecoveryInputProjection,
+	build func(string, string, string) (clusterbootstrap.PreparationExpected, error), index int,
+	sealed sealedClusterSSHCredentials, aegis clusterSSHWorkerAegis, scratchParent string, source clusterSSHPreparationRecoverySourceRead,
+	check func(context.Context) error, download func(context.Context, clusterbootstrap.Expected, string) (*clusterbootstrap.Bundle, error),
+	closeInputs func(*clusterbootstrap.PreparationInputs) error, consume func(clusterSSHPreparationRecoveryTargetInputs) error) (result error) {
 	fail := func() error { return clusterbootstrap.ErrPreparationConfig }
-	if aegis == nil || source == nil || check == nil || download == nil || consume == nil || index < 0 || index >= len(authority.Cohort.Targets) {
+	if aegis == nil || source == nil || check == nil || download == nil || consume == nil || build == nil || index < 0 || index >= projection.TargetCount {
 		return fail()
 	}
-	item := authority.Cohort.Targets[index]
+	item := projection.Item
 	var failed atomic.Bool
 	current := func(ctx context.Context) error {
 		if failed.Load() || ctx.Err() != nil || check(ctx) != nil || aegis.verifyClusterSSHGeneration(ctx, sealed.generation) != nil || ctx.Err() != nil {
@@ -181,11 +203,11 @@ func withClusterSSHPreparationRecoveryTargetInputs(ctx context.Context, authorit
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrSessionAuthority
 		}
 		value, err := source(ctx)
-		if err != nil || len(value.Expected) != len(authority.Leases) || index >= len(value.Expected) || current(ctx) != nil {
+		if err != nil || len(value.Expected) != projection.TargetCount || index >= len(value.Expected) || current(ctx) != nil {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}
 		actual := value.Expected[index]
-		bound, bindErr := buildClusterSSHPreparationRecoveryExpected(authority, index, actual.K3sVersion, actual.PodCIDR, actual.ServiceCIDR)
+		bound, bindErr := build(actual.K3sVersion, actual.PodCIDR, actual.ServiceCIDR)
 		if bindErr != nil || !reflect.DeepEqual(bound, actual) {
 			return clusterbootstrap.PreparationExpected{}, nil, clusterbootstrap.ErrPreparationConfig
 		}

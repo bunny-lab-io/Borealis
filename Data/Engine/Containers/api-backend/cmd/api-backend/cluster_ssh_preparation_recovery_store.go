@@ -13,7 +13,7 @@ import (
 // Read and parse outside a transaction. Historical timestamps are retained, not
 // renewed or interpreted as fresh inspection. Recovery does not authorize any
 // native effect; a future consumer must supply fresh phase-specific proof.
-func (c *clusterController) readClusterSSHPreparationRecovery(ctx context.Context, operation clusterControllerOperation) (clusterSSHPreparationRecoverySnapshot, error) {
+func (c *clusterController) readClusterSSHPreparationRecoveryWork(ctx context.Context, operation clusterControllerOperation) (clusterSSHPreparationRecoverySnapshot, error) {
 	fail := func() (clusterSSHPreparationRecoverySnapshot, error) {
 		return clusterSSHPreparationRecoverySnapshot{}, errClusterConflict
 	}
@@ -93,6 +93,24 @@ func (c *clusterController) readClusterSSHPreparationRecovery(ctx context.Contex
 			return fail()
 		}
 		snapshot.credentials = append(snapshot.credentials, credential)
+	}
+	return snapshot, nil
+}
+
+// Initial reservation/claim retains its strict v1/Q+2 parser. Reissued proof
+// lineage uses the common original-work reader, never this initial issuer.
+func (c *clusterController) readClusterSSHPreparationRecovery(ctx context.Context, operation clusterControllerOperation) (clusterSSHPreparationRecoverySnapshot, error) {
+	fail := func() (clusterSSHPreparationRecoverySnapshot, error) {
+		return clusterSSHPreparationRecoverySnapshot{}, errClusterConflict
+	}
+	snapshot, err := c.readClusterSSHPreparationRecoveryWork(ctx, operation)
+	if err != nil {
+		return fail()
+	}
+	work := &snapshot.work
+	base, recovery, err := clusterSSHPreparationRecoveryPayload(snapshot.payload)
+	if err != nil {
+		return fail()
 	}
 	if len(recovery) != 0 {
 		snapshot.record, err = parseClusterSSHPreparationRecovery(snapshot.payload, *work)
@@ -327,16 +345,35 @@ func (c *clusterController) transitionClusterSSHPreparationRecovery(ctx context.
 // Clock predicates are repeated after every lock and write, including waits on
 // target/operation triggers. Expiry cannot be upgraded into stopped-executor proof.
 func checkClusterSSHPreparationRecoveryClock(ctx context.Context, tx *sql.Tx, snapshot clusterSSHPreparationRecoverySnapshot, payload, state, step, holder string, reports, keys map[string]string, expiries map[string]int64) error {
-	record := snapshot.record
-	var n int
-	// Triggers can change rows written by this transaction despite its locks.
-	// Repeat exact identity and custody after all writes; neither an empty census
-	// nor a same-count replacement can stand in for the approved original cohort.
-	for i, target := range snapshot.work.Proof.Cohort.Targets {
-		prior, credential := record.Targets[i], snapshot.credentials[i]
-		expectedHolder, expectedGeneration := prior.PreviousHolder, prior.PreviousGeneration
+	leases := make([]clusterSSHPreparationRecoveryRowLease, 0, len(snapshot.record.Targets))
+	for _, target := range snapshot.record.Targets {
+		lease := clusterSSHPreparationRecoveryRowLease{TargetID: target.TargetID, Holder: target.PreviousHolder, Generation: target.PreviousGeneration, ExpiresAt: expiries[target.TargetID]}
 		if holder != "" {
-			expectedHolder, expectedGeneration = holder, prior.Generation
+			lease.Holder, lease.Generation = holder, target.Generation
+		}
+		leases = append(leases, lease)
+	}
+	return checkClusterSSHPreparationRecoveryRows(ctx, tx, snapshot, payload, state, step, holder, reports, keys, leases)
+}
+
+// This row comparison is shared SQL custody only. It neither constructs an
+// initial reservation nor decides which typed proof scope may use these rows.
+type clusterSSHPreparationRecoveryRowLease struct {
+	TargetID, Holder      string
+	Generation, ExpiresAt int64
+}
+
+func checkClusterSSHPreparationRecoveryRows(ctx context.Context, tx *sql.Tx, snapshot clusterSSHPreparationRecoverySnapshot, payload, state, step, holder string, reports, keys map[string]string, leases []clusterSSHPreparationRecoveryRowLease) error {
+	record := snapshot.work.Authorization
+	if len(leases) != len(snapshot.work.Proof.Cohort.Targets) || len(snapshot.credentials) != len(leases) || len(leases) == 0 {
+		return errClusterConflict
+	}
+	var n int
+	// Repeat exact original identities and custody after all waits and writes.
+	for i, target := range snapshot.work.Proof.Cohort.Targets {
+		lease, credential := leases[i], snapshot.credentials[i]
+		if lease.TargetID != target.Binding.TargetID || lease.Holder == "" || lease.Generation < 1 || lease.ExpiresAt < 1 {
+			return errClusterConflict
 		}
 		if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets t,engine.cluster_onboarding_credentials p
  WHERE t.id=$1 AND t.operation_id=$2 AND t.cluster_id=$3 AND t.operation_attempt=$4
@@ -347,7 +384,7 @@ func checkClusterSSHPreparationRecoveryClock(ctx context.Context, tx *sql.Tx, sn
  AND p.target_id=t.id AND p.aegis_generation=$19 AND p.ciphertext=$20`, target.Binding.TargetID, record.OperationID,
 			target.Binding.ClusterID, record.Attempt, target.Binding.Address, target.Binding.Port, target.Key.Algorithm,
 			target.Key.Fingerprint, keys[target.Binding.TargetID], target.Ordinal, target.Generation, target.InspectedAt, reports[target.Binding.TargetID],
-			state, step, expectedHolder, expectedGeneration, expiries[target.Binding.TargetID], credential.generation, credential.ciphertext).Scan(&n) != nil {
+			state, step, lease.Holder, lease.Generation, lease.ExpiresAt, credential.generation, credential.ciphertext).Scan(&n) != nil {
 			return errClusterConflict
 		}
 	}
@@ -363,7 +400,7 @@ func checkClusterSSHPreparationRecoveryClock(ctx context.Context, tx *sql.Tx, sn
  AND (($6::text='' AND t.lease_expires_at<=moment.now) OR (t.lease_holder=$6 AND t.lease_expires_at>moment.now))
  AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now) IS NOT TRUE)`, clusterControllerLeaseName,
 		record.ControllerHolder, record.OperationID, state, step, holder, clusterSSHPreparationRecoveryOperationStep,
-		record.Attempt, payload, len(record.Targets)).Scan(&n) != nil {
+		record.Attempt, payload, len(leases)).Scan(&n) != nil {
 		return errClusterConflict
 	}
 	return nil

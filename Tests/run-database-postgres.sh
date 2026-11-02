@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=Tests/lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
-TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-2100}"
+TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-3000}"
 RESULT_DIR="$(result_dir_for database-postgres)"
 GO_BIN="$(resolve_go 1.25.12)"
 require_command python3
@@ -102,14 +102,14 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   exit 1
 fi
 
-# Required race-instrumented authority/drift cases exceeded the former 15-minute
-# package limit with 27 broker cases and 16 top-level tests still unfinished.
-# Bound the full suite separately from individual operations, and retain five
-# minutes inside the command budget for compilation and timeout diagnostics.
+# The 135-test race suite exhausted 30 minutes with 19 required families and
+# 19 broker cases unfinished. Completed-case timings project roughly 34 minutes
+# before additional recovery coverage. Bound the expanded suite independently
+# of operation deadlines; leave five command minutes for build/diagnostics.
 if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
-  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json -timeout=30m ./cmd/api-backend \
+  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json -timeout=45m ./cmd/api-backend \
   -run "${TEST_PATTERN}" -count=1 \
   >"${RESULT_DIR}/postgres-go-results.jsonl" 2>"${RESULT_DIR}/postgres-go-stderr.log"; then
   tail -n 160 "${RESULT_DIR}/postgres-go-results.jsonl" "${RESULT_DIR}/postgres-go-stderr.log" >&2 || true

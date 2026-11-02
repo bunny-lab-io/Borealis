@@ -197,18 +197,6 @@ func newSourceStageSQLModel(f sshPreparationAuthorityFixture, claim clusterSSHPr
 	return &sourceStageSQLModel{f: f, claim: claim, secret: secret, mode: mode, seen: map[string]bool{}, absent: map[string]bool{}, entered: make(chan struct{}), closing: make(chan struct{}), release: make(chan struct{})}
 }
 
-// The shared admission fixture's 15 seconds covers setup and its original short
-// operations. Source reconciliation performs several separately verified native
-// sessions per target. Give only this new exercise its own bounded context;
-// do not extend any SQL credential/controller/target expiry or production scope.
-func sourceStageSQLExercise(t *testing.T, f sshPreparationAuthorityFixture) sshPreparationAuthorityFixture {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.ctx), 90*time.Second)
-	t.Cleanup(cancel)
-	f.ctx = ctx
-	return f
-}
-
 func sourceStageSQLDependencies(t *testing.T, m *sourceStageSQLModel, manifest map[string]any, archive []byte) clusterSSHPreparationRecoverySourceStageDependencies {
 	t.Helper()
 	return clusterSSHPreparationRecoverySourceStageDependencies{
@@ -249,7 +237,7 @@ func TestClusterSSHPreparationRecoverySourceStagePostgresCustody(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			replacement := strings.Contains(mode, "replacement")
 			f, claim, secret := recoveryProgressClaimFixture(t, replacement, baseline)
-			f = sourceStageSQLExercise(t, f)
+			f = recoveryTransportSQLExercise(t, f)
 			f.c.store.db.SetMaxOpenConns(1)
 			model := newSourceStageSQLModel(f, claim, secret, mode)
 			deps := sourceStageSQLDependencies(t, model, manifest, archive)
@@ -367,7 +355,7 @@ func TestClusterSSHPreparationRecoverySourceStagePostgresJoinsCancellation(t *te
 	baseline, manifest, members := recoveryProgressArchiveFixture(t)
 	archive := recoveryProgressPack(t, members)
 	f, claim, secret := recoveryProgressClaimFixture(t, true, baseline)
-	f = sourceStageSQLExercise(t, f)
+	f = recoveryTransportSQLExercise(t, f)
 	f.c.store.db.SetMaxOpenConns(1)
 	model := newSourceStageSQLModel(f, claim, secret, "canceled proof")
 	deps := sourceStageSQLDependencies(t, model, manifest, archive)
