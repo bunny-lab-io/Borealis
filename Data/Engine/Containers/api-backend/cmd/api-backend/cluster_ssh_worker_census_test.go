@@ -15,6 +15,13 @@ func sshWorkerPolicyFixture(f *sshStorageFixture) {
 	clusterSSHStorageMap(s, "metadata")["labels"] = map[string]any{"app.kubernetes.io/name": "job-scheduler", "app.kubernetes.io/part-of": "borealis", "app.kubernetes.io/managed-by": "Engine.sh"}
 	s["type"], s["data"] = "Opaque", map[string]any{}
 	f.objects[clusterSSHWorkerSecretPath] = s
+	operator := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(f.objects[clusterSSHApplicationDeploymentPrefix+"borealis-operator"], "spec"), "template"), "spec")["containers"].([]any)[0].(map[string]any)
+	operator["args"] = []any{"borealis-operator"}
+	operator["env"] = []any{
+		map[string]any{"name": "BOREALIS_SITE_WORKER_CPU_LIMIT", "value": "1000m"},
+		map[string]any{"name": "BOREALIS_SITE_WORKER_MEMORY_LIMIT", "value": "512Mi"},
+		map[string]any{"name": "BOREALIS_SITE_WORKER_PIDS_LIMIT", "value": "128"},
+	}
 }
 
 func TestClusterSSHWorkerPolicy(t *testing.T) {
@@ -28,7 +35,7 @@ func TestClusterSSHWorkerPolicy(t *testing.T) {
 			c := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(f.objects[clusterSSHApplicationDeploymentPrefix+"job-scheduler"], "spec"), "template"), "spec")["containers"].([]any)[0].(map[string]any)
 			ref := c["envFrom"].([]any)[0].(map[string]any)
 			set := func(key, value string) { data[key] = base64.StdEncoding.EncodeToString([]byte(value)) }
-			want := clusterSSHWorkerPolicy{Profile: "standard", OnlineWindow: 300}
+			want := clusterSSHWorkerPolicy{Profile: "standard", OnlineWindow: 300, Limits: workerLimitsFixture()}
 			switch mode {
 			case "small", "large":
 				set("BOREALIS_SITE_WORKER_RESOURCE_PROFILE", mode)
@@ -36,7 +43,7 @@ func TestClusterSSHWorkerPolicy(t *testing.T) {
 			case "literal precedence":
 				set("BOREALIS_SITE_WORKER_RESOURCE_PROFILE", "large")
 				c["env"] = []any{map[string]any{"name": "BOREALIS_SITE_WORKER_RESOURCE_PROFILE", "value": "small"}, map[string]any{"name": "BOREALIS_AGENT_ONLINE_WINDOW_SECONDS", "value": "600"}}
-				want = clusterSSHWorkerPolicy{Profile: "small", OnlineWindow: 600}
+				want.Profile, want.OnlineWindow = "small", 600
 			case "window minimum":
 				set("BOREALIS_AGENT_ONLINE_WINDOW_SECONDS", "1")
 				want.OnlineWindow = 60
@@ -74,6 +81,93 @@ func TestClusterSSHWorkerPolicy(t *testing.T) {
 				t.Fatal("unsafe scheduler inputs", value.Requirements.WorkerPolicy, err)
 			}
 		})
+	}
+}
+
+func TestClusterSSHWorkerPolicyRequiresOriginalOperatorLimits(t *testing.T) {
+	setOperatorWorkerLimitsFixture(t, workerLimitsFixture())
+	for _, mode := range []string{"missing deployment", "foreign identity", "command override", "args override", "envFrom", "missing env", "missing CPU", "missing memory", "missing PIDs", "duplicate env", "indirect memory", "extra field", "invalid CPU", "invalid memory", "invalid PIDs", "insufficient request"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSSHStorageFixture(t, false)
+			path := clusterSSHApplicationDeploymentPrefix + "borealis-operator"
+			deployment := f.objects[path]
+			c := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(deployment, "spec"), "template"), "spec")["containers"].([]any)[0].(map[string]any)
+			env := c["env"].([]any)
+			switch mode {
+			case "missing deployment":
+				delete(f.objects, path)
+			case "foreign identity":
+				clusterSSHStorageMap(deployment, "metadata")["namespace"] = "other"
+			case "command override":
+				c["command"] = []any{"other"}
+			case "args override":
+				c["args"] = []any{"other"}
+			case "envFrom":
+				c["envFrom"] = []any{map[string]any{"secretRef": map[string]any{"name": "other"}}}
+			case "missing env":
+				delete(c, "env")
+			case "missing CPU":
+				c["env"] = env[1:]
+			case "missing memory":
+				c["env"] = []any{env[0], env[2]}
+			case "missing PIDs":
+				c["env"] = env[:2]
+			case "duplicate env":
+				c["env"] = append(env, env[0])
+			case "indirect memory":
+				env[1] = map[string]any{"name": "BOREALIS_SITE_WORKER_MEMORY_LIMIT", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.name"}}}
+			case "extra field":
+				env[1].(map[string]any)["extra"] = "ignored"
+			case "invalid CPU":
+				env[0].(map[string]any)["value"] = "1.0"
+			case "invalid memory":
+				env[1].(map[string]any)["value"] = "512m"
+			case "invalid PIDs":
+				env[2].(map[string]any)["value"] = "0"
+			case "insufficient request":
+				env[1].(map[string]any)["value"] = "96Mi"
+			}
+			if got, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get); err == nil || got.Requirements.WorkerPolicy != (clusterSSHWorkerPolicy{}) {
+				t.Fatal("local defaults masked invalid original producer", mode, err)
+			}
+		})
+	}
+}
+
+func TestClusterSSHWorkerRecreationPreservesUnprovenProducerBound(t *testing.T) {
+	for _, profile := range []string{"small", "standard", "large"} {
+		for _, higher := range []bool{false, true} {
+			t.Run(profile+"/"+map[bool]string{false: "lower", true: "higher"}[higher], func(t *testing.T) {
+				old, _ := borealisOperatorSiteWorkerResourceProfile(profile)
+				limits := borealisOperatorSiteWorkerLimits{"100m", "384Mi", "128"}
+				if profile == "small" {
+					limits.Memory = "128Mi"
+				}
+				if higher {
+					limits.CPU, limits.Memory = "3000m", "1536Mi"
+				}
+				policy := clusterSSHWorkerPolicy{Profile: profile, OnlineWindow: 300, Limits: limits}
+				declared, valid := policy.resources()
+				prospective, safe := policy.recreationResources()
+				oldCPU, _ := clusterSSHWorkloadMilliCPU(old.LimitCPU)
+				oldMemory, _ := clusterSSHWorkloadMemory(old.LimitMemory)
+				if !valid || !safe || prospective.CPULimitMilli != max(declared.CPULimitMilli, oldCPU) || prospective.MemoryLimitBytes != max(declared.MemoryLimitBytes, oldMemory) {
+					t.Fatal("legacy producer uncertainty lowered charge", declared, prospective)
+				}
+				_, _, snapshot := sshBrokerFixture(t)
+				snapshot.Storage.Requirements.WorkerPolicy = policy
+				snapshot.Storage.Requirements.SiteWorkers = []clusterSSHSiteWorkerResource{}
+				baseCPU, baseMemory, ok := clusterSSHNodeWorkloadBudget(snapshot.Storage.Requirements)
+				snapshot.DesiredWorkerSites = []int64{7}
+				cpu, memory, ok2 := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
+				if !ok || !ok2 || cpu != baseCPU+2*prospective.CPURequestMilli || memory != baseMemory+2*prospective.MemoryLimitBytes {
+					t.Fatal("missing worker/candidate charge changed", cpu, memory)
+				}
+				if profile == "standard" && !higher && (declared.MemoryLimitBytes != 384<<20 || prospective.MemoryLimitBytes != 512<<20) {
+					t.Fatal("declared384 and conservative512 collapsed")
+				}
+			})
+		}
 	}
 }
 

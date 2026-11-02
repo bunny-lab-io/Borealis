@@ -565,9 +565,9 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 		return nil, http.StatusForbidden, fmt.Errorf("image_ref %q is not allowed for site-worker", imageRef)
 	}
 	profileName := strings.ToLower(firstText(cleanText(req.ResourceProfile), "standard"))
-	profile, ok := borealisOperatorSiteWorkerResourceProfile(profileName)
+	profile, ok := operatorSiteWorkerResources(profileName, operatorSiteWorkerLimitsFromEnv())
 	if !ok {
-		return nil, http.StatusBadRequest, fmt.Errorf("unsupported resource_profile %q", profileName)
+		return nil, http.StatusBadRequest, errors.New("site-worker resource profile or effective deployment limits unavailable")
 	}
 	remoteOpsPort := req.RemoteOpsPort
 	if remoteOpsPort <= 0 {

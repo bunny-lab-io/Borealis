@@ -4,6 +4,7 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"slices"
+	"strconv"
 )
 
 // Fresh values prevent callers from mutating the qualified contract. Production
@@ -69,6 +70,12 @@ func withClusterSSHTargetProfileSizing(ctx context.Context, readers clusterSSHNe
 		}
 		applications, postgres, err := clusterSSHProfileApplications(configuration)
 		if err != nil || !slices.Equal(value.Storage.Requirements.Applications, applications) || value.Storage.Requirements.PostgresResources != postgres {
+			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+		}
+		planned, err := configuration.ProfileWorkerLimits()
+		observed, valid := value.Storage.Requirements.WorkerPolicy.resources()
+		pids, pidsErr := strconv.ParseUint(value.Storage.Requirements.WorkerPolicy.Limits.PIDs, 10, 64)
+		if err != nil || !valid || pidsErr != nil || planned.CPULimitMilli != observed.CPULimitMilli || planned.MemoryLimitBytes != observed.MemoryLimitBytes || planned.PIDs != pids {
 			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		return value, nil

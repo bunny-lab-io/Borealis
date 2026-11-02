@@ -97,3 +97,70 @@ printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\n
 		t.Fatal("unselected configuration accepted")
 	}
 }
+
+func TestPreparationSizingEffectiveWorkerLimits(t *testing.T) {
+	for rank := 0; rank < 4; rank++ {
+		t.Run(strconv.Itoa(rank), func(t *testing.T) {
+			output := preparationSizingBash(t, []string{"profile_rank_for_cpu", "profile_rank_for_memory", "profile_name_for_rank", "clamp_mib", "format_pg_memory_mib", "format_docker_memory_mib", "load_profile_tuning"}, `load_profile_tuning 64 999999999 "$1" 999999999
+printf '%s\n%s\n%s\n' "$PROFILE_SITE_WORKER_CPU_LIMIT" "$PROFILE_SITE_WORKER_MEMORY_LIMIT" "$PROFILE_SITE_WORKER_PIDS_LIMIT"
+`, strconv.Itoa(rank))
+			fields := strings.Split(output, "\n")
+			if len(fields) != 3 {
+				t.Fatal("actual worker settings missing")
+			}
+			e, settings := preparationSizingRuntimeFixture()
+			for i, key := range []string{"CPU", "MEMORY", "PIDS"} {
+				settings["BOREALIS_SITE_WORKER_"+key+"_LIMIT"] = fields[i]
+			}
+			configuration, err := NewPreparationConfiguration(e, settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := configuration.ProfileWorkerLimits()
+			want := PreparationWorkerLimits{[4]uint64{1000, 1000, 1500, 2000}[rank], [4]uint64{256, 384, 512, 512}[rank] << 20, 128}
+			if err != nil || got != want {
+				t.Fatal("actual effective worker projection drift", got, want, err)
+			}
+		})
+	}
+	for _, test := range []struct {
+		cpu, memory, pids string
+		want              PreparationWorkerLimits
+		valid             bool
+	}{
+		{"250m", "384m", "128", PreparationWorkerLimits{250, 384 << 20, 128}, true},
+		{"0.250", "384m", "128", PreparationWorkerLimits{250, 384 << 20, 128}, true},
+		{"1.125", "1536m", "192", PreparationWorkerLimits{1125, 1536 << 20, 192}, true},
+		{"1.000", "384M", "128", PreparationWorkerLimits{1000, 384 << 20, 128}, true},
+		{"0.001", "1Ki", "1", PreparationWorkerLimits{1, 1024, 1}, true},
+		{"999999.999", "8191Ti", "999999999", PreparationWorkerLimits{999999999, 8191 << 40, 999999999}, true},
+		{"", "384m", "128", PreparationWorkerLimits{}, false},
+		{"1.0", "", "128", PreparationWorkerLimits{}, false},
+		{"1.0", "384m", "", PreparationWorkerLimits{}, false},
+		{"1.0001", "384m", "128", PreparationWorkerLimits{}, false},
+		{"0.1m", "384m", "128", PreparationWorkerLimits{}, false},
+		{"250m ", "384m", "128", PreparationWorkerLimits{}, false},
+		{"0", "384m", "128", PreparationWorkerLimits{}, false},
+		{"1000000", "384m", "128", PreparationWorkerLimits{}, false},
+		{"1.0", "8192Ti", "128", PreparationWorkerLimits{}, false},
+		{"1.0", "384 m", "128", PreparationWorkerLimits{}, false},
+		{"1.0", "384m", "0", PreparationWorkerLimits{}, false},
+	} {
+		t.Run(test.cpu+"/"+test.memory+"/"+test.pids, func(t *testing.T) {
+			e, settings := preparationSizingRuntimeFixture()
+			settings["BOREALIS_SITE_WORKER_CPU_LIMIT"], settings["BOREALIS_SITE_WORKER_MEMORY_LIMIT"], settings["BOREALIS_SITE_WORKER_PIDS_LIMIT"] = test.cpu, test.memory, test.pids
+			c, err := NewPreparationConfiguration(e, settings)
+			got := PreparationWorkerLimits{}
+			if err == nil {
+				got, err = c.ProfileWorkerLimits()
+			}
+			if (err == nil) != test.valid || got != test.want {
+				t.Fatal("worker limit validation", got, err)
+			}
+		})
+	}
+	var absent *PreparationConfiguration
+	if _, err := absent.ProfileWorkerLimits(); err == nil {
+		t.Fatal("missing effective configuration accepted")
+	}
+}

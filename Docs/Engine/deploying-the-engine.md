@@ -84,25 +84,27 @@ Agent redeployment keeps old workers running until all replacement workers are r
 ## Profile-Managed Container Limits
 `Engine.sh` writes least-privilege runtime settings during every deploy. Normal Engine services and K3s pods run as the `borealis-engine` system user/group where supported, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, profile-scaled CPU/memory caps, and fixed read-only host timezone data. PostgreSQL runs in K3s as the official non-root PostgreSQL UID on a Longhorn-backed PVC so imported database state keeps compatible ownership. Limits are caps, not reservations. K3s `remote-desktop-guacd` stays ClusterIP-only and does not mount the Docker socket.
 
-Site-worker memory is per resident Pod, including idle workers and temporary replacements. Do not count idle workers as zero memory or subtract their caps merely because an active-work slot was released. Current K3s worker envelopes come from the scheduler/operator resource profile described below; declared deployment-profile values alone do not establish actual worker limits.
+Site-worker memory is per resident Pod, including idle workers and temporary replacements. Do not count idle workers as zero memory or subtract their caps merely because an active-work slot was released. New workers created by the updated operator use the effective deployment CPU and memory limits below. Existing Pods retain their observed limits until approved replacement. These caps do not reserve node memory or prove that workers fit.
 
 Scheduled task slots control claimed work items. Ansible controller concurrency has separate `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` limit and defaults to `2` per site worker so individual playbooks cannot consume worker memory for every claimed slot at once.
 
-The profile values below are declared deployment defaults. Current K3s site workers use a separate operator profile: `small`, `standard` or `large`; the scheduler defaults to `standard`. Their memory caps are 256, 512 and 1024 MiB respectively. In particular, the Small Business 384-MiB declaration is not the current K3s worker cap. Use observed Pod limits for sizing until profile ownership is unified.
+The profile values below supply CPU and memory caps to new worker main and startup containers. The separate `small`, `standard` and `large` worker choices retain their existing requests; the scheduler defaults to `standard`. Missing, malformed or below-request limits block launch. SSH preparation checks require explicit supported overrides to agree with inherited source configuration. The PID setting is retained for configuration checks; it is not enforced as a Kubernetes Pod PID cap.
+
+During a mixed-version rollout, source settings alone do not prove which limits the running operator uses. Prospective sizing therefore keeps the larger of the declared limits and the existing legacy worker envelope. For example, a Small Business declaration of 384 MiB still carries at least the legacy standard-worker 512-MiB prospective allowance. Existing workers and replacement copies retain their actual bounds. Complete producer, node-memory and placement qualification remains required.
 
 === "Homelab"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `256m` |
     | Site-worker CPU cap | `1.00` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
 === "Small Business"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `384m` |
     | Site-worker CPU cap | `1.00` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
     These application caps illustrate **16 GiB source reference memory**. They apply per Engine in either topology. Other inherited reference memory changes the calculated PostgreSQL cap; the SSH preview checks that calculated value against source configuration and observed workloads.
 
@@ -123,14 +125,14 @@ The profile values below are declared deployment defaults. Current K3s site work
     | --- | ---: |
     | Site-worker memory cap | `512m` |
     | Site-worker CPU cap | `1.50` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
 === "Enterprise (Clustered)"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `512m` |
     | Site-worker CPU cap | `2.00` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
 PostgreSQL memory caps derive from the selected PostgreSQL profile so `shared_buffers`, cache sizing, and container caps move together. WebUI gets separate production and dev-mode defaults so Vite dev mode has more headroom than static production serving.
 

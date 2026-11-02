@@ -276,6 +276,12 @@ func validatePreparationRuntime(runtime map[string]string) error {
 				kind = "integer"
 			}
 		}
+		if key == "BOREALIS_SITE_WORKER_CPU_LIMIT" {
+			if _, err := preparationWorkerMilliCPU(value); err != nil {
+				return ErrPreparationConfig
+			}
+			continue
+		}
 		if kind != "" && !validPreparationTuning(kind, value) {
 			return ErrPreparationConfig
 		}

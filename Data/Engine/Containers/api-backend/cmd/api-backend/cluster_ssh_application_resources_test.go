@@ -649,7 +649,7 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 					values = nil
 				}
 				sites := []int64{}
-				policy := clusterSSHWorkerPolicy{Profile: "standard", OnlineWindow: 300}
+				policy := clusterSSHWorkerPolicy{Profile: "standard", OnlineWindow: 300, Limits: workerLimitsFixture()}
 				if mode == "census missing" {
 					sites = nil
 				}

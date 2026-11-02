@@ -34,6 +34,36 @@ func preparationFixture() (PreparationExpected, map[string]string) {
 	return e, runtime
 }
 
+func TestPreparationConfigurationWorkerMillicoreScope(t *testing.T) {
+	for _, value := range []string{"250m", "1000m", "0.250", "1.125", "0", "0m", "0.1m", "250m ", " 0.250", "1.0001", "1000000", ""} {
+		for _, service := range []string{"SITE_WORKER", "API_BACKEND"} {
+			t.Run(service+"/"+value, func(t *testing.T) {
+				e, settings := preparationFixture()
+				settings["BOREALIS_"+service+"_CPU_LIMIT"] = value
+				c, err := NewPreparationConfiguration(e, settings)
+				want := value == "0.250" || value == "1.125"
+				if service == "SITE_WORKER" {
+					want = want || value == "250m" || value == "1000m"
+				} else {
+					want = validPreparationTuning("number", value)
+				}
+				if (err == nil) != want {
+					t.Fatal("CPU validation scope changed", err)
+				}
+				if want {
+					raw, err := c.Export()
+					if err != nil || !bytes.Contains(raw, []byte(`"BOREALIS_`+service+`_CPU_LIMIT":"`+value+`"`)) {
+						t.Fatal("effective syntax normalized", err)
+					}
+					if _, err := ImportPreparationConfiguration(raw, e); err != nil {
+						t.Fatal("effective value cannot round trip", err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestPreparationConfigurationPreservesPrivateSyntaxAndBindings(t *testing.T) {
 	e, runtime := preparationFixture()
 	c, err := NewPreparationConfiguration(e, runtime)

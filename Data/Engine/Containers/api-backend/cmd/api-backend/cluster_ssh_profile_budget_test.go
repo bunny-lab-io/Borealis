@@ -17,6 +17,9 @@ func sshSmallBusinessSettings() map[string]string {
 	settings["BOREALIS_CLUSTER_SIZING_RANK"] = "1"
 	settings["BOREALIS_CLUSTER_SIZING_MEMORY_MIB"] = "16384"
 	settings["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] = "8"
+	settings["BOREALIS_SITE_WORKER_CPU_LIMIT"] = "1.00"
+	settings["BOREALIS_SITE_WORKER_MEMORY_LIMIT"] = "384m"
+	settings["BOREALIS_SITE_WORKER_PIDS_LIMIT"] = "128"
 	for service, limits := range map[string][2]string{
 		"API_BACKEND": {"1g", "2.00"}, "JOB_SCHEDULER": {"512m", "1.50"},
 		"WEBUI_FRONTEND": {"512m", "1.00"}, "TRAEFIK_EDGE": {"512m", "1.50"},
@@ -30,10 +33,11 @@ func sshSmallBusinessSettings() map[string]string {
 }
 
 func TestClusterSSHTargetProfileSizing(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "postgres override", "pool override", "postgres drift before", "postgres drift after", "missing cap", "override", "other profile", "template mismatch", "postgres mismatch", "missing infrastructure", "source identity", "settings drift before", "settings drift after", "template drift before", "template drift after", "receipt drift", "unrelated setting drift", "nil source"} {
+	for _, mode := range []string{"expansion", "replacement", "worker override", "worker millicores", "worker missing", "worker old default", "worker CPU drift before", "worker memory drift after", "worker PIDs drift before", "worker setting drift before", "worker setting drift after", "postgres override", "pool override", "postgres drift before", "postgres drift after", "missing cap", "override", "other profile", "template mismatch", "postgres mismatch", "missing infrastructure", "source identity", "settings drift before", "settings drift after", "template drift before", "template drift after", "receipt drift", "unrelated setting drift", "nil source"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			snapshot := clusterSSHPreparationSnapshot{Settings: sshSmallBusinessSettings(), Storage: sshStorageSnapshotFixture(t, f.a), DesiredWorkerSites: []int64{}}
+			snapshot.Storage.Requirements.WorkerPolicy.Limits.Memory = "384Mi"
 			snapshot.Settings["BOREALIS_POSTGRES_SHARED_BUFFERS"] = "4GB"
 			snapshot.Settings["BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE"] = "10GB"
 			snapshot.Settings["BOREALIS_DB_POOL_SIZE"] = "12"
@@ -48,6 +52,18 @@ func TestClusterSSHTargetProfileSizing(t *testing.T) {
 				e, err := buildClusterSSHPreparationExpected(f.a.Cohort, f.a.Source, f.a.Lease, f.a.Baseline, f.a.K3sVersion, f.sources[0].PodCIDR, f.sources[0].ServiceCIDR)
 				snapshot.Expected = e
 				switch mode {
+				case "worker override":
+					snapshot.Settings["BOREALIS_SITE_WORKER_CPU_LIMIT"] = "1.125"
+					snapshot.Settings["BOREALIS_SITE_WORKER_MEMORY_LIMIT"] = "1536m"
+					snapshot.Settings["BOREALIS_SITE_WORKER_PIDS_LIMIT"] = "192"
+					snapshot.Storage.Requirements.WorkerPolicy.Limits = borealisOperatorSiteWorkerLimits{"1125m", "1536Mi", "192"}
+				case "worker millicores":
+					snapshot.Settings["BOREALIS_SITE_WORKER_CPU_LIMIT"] = "250m"
+					snapshot.Storage.Requirements.WorkerPolicy.Limits.CPU = "250m"
+				case "worker missing":
+					delete(snapshot.Settings, "BOREALIS_SITE_WORKER_MEMORY_LIMIT")
+				case "worker old default":
+					snapshot.Storage.Requirements.WorkerPolicy.Limits.Memory = "512Mi"
 				case "postgres override":
 					snapshot.Settings["BOREALIS_POSTGRES_SHARED_BUFFERS"] = "8GB"
 				case "pool override":
@@ -66,6 +82,18 @@ func TestClusterSSHTargetProfileSizing(t *testing.T) {
 					snapshot.Storage.Requirements.LonghornInstanceManagerResources = clusterSSHInstanceManagerResources{}
 				case "source identity":
 					snapshot.Expected.Source.SourceSHA = strings.Repeat("e", 40)
+				}
+				if mode == "worker CPU drift before" && reads == 2 {
+					snapshot.Storage.Requirements.WorkerPolicy.Limits.CPU = "1250m"
+				}
+				if mode == "worker memory drift after" && consumed {
+					snapshot.Storage.Requirements.WorkerPolicy.Limits.Memory = "512Mi"
+				}
+				if mode == "worker PIDs drift before" && reads == 2 {
+					snapshot.Storage.Requirements.WorkerPolicy.Limits.PIDs = "256"
+				}
+				if (mode == "worker setting drift before" && reads == 2) || (mode == "worker setting drift after" && consumed) {
+					snapshot.Settings["BOREALIS_SITE_WORKER_MEMORY_LIMIT"] = "512m"
 				}
 				if (mode == "settings drift before" && reads == 2) || (mode == "settings drift after" && consumed) {
 					snapshot.Settings["BOREALIS_API_BACKEND_CPU_LIMIT"] = "3.00"
@@ -93,7 +121,7 @@ func TestClusterSSHTargetProfileSizing(t *testing.T) {
 					return nil
 				})
 			})
-			valid := mode == "expansion" || mode == "replacement"
+			valid := mode == "expansion" || mode == "replacement" || mode == "worker override" || mode == "worker millicores"
 			if (err == nil) != valid || (valid && !consumed) {
 				t.Fatal("profile qualification result", consumed, err)
 			}

@@ -1,6 +1,58 @@
 package clusterbootstrap
 
-import "strconv"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// PreparationWorkerLimits carries effective settings, not a capacity decision.
+// PIDs is retained configuration only: Kubernetes Pod resources do not enforce it.
+type PreparationWorkerLimits struct {
+	CPULimitMilli, MemoryLimitBytes, PIDs uint64
+}
+
+var preparationWorkerCPU = regexp.MustCompile(`^(0|[1-9][0-9]{0,8})(\.[0-9]{1,3})?m?$`)
+var preparationWorkerPIDs = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+
+func preparationWorkerMilliCPU(raw string) (uint64, error) {
+	if !preparationWorkerCPU.MatchString(raw) {
+		return 0, ErrPreparationConfig
+	}
+	value, isMilli := strings.CutSuffix(raw, "m")
+	whole, fraction, fractional := strings.Cut(value, ".")
+	if isMilli && fractional {
+		return 0, ErrPreparationConfig
+	}
+	milli, _ := strconv.ParseUint(whole, 10, 64)
+	if !isMilli {
+		part, _ := strconv.ParseUint(fraction+strings.Repeat("0", 3-len(fraction)), 10, 64)
+		milli = milli*1000 + part
+	}
+	if milli == 0 || milli > 999999999 {
+		return 0, ErrPreparationConfig
+	}
+	return milli, nil
+}
+
+// ProfileWorkerLimits reads explicit inherited effective values, including
+// supported overrides. It never substitutes rank defaults or joining-host RAM.
+func (c *PreparationConfiguration) ProfileWorkerLimits() (PreparationWorkerLimits, error) {
+	if c == nil {
+		return PreparationWorkerLimits{}, ErrPreparationConfig
+	}
+	rawCPU, rawPIDs := c.wire.Runtime["BOREALIS_SITE_WORKER_CPU_LIMIT"], c.wire.Runtime["BOREALIS_SITE_WORKER_PIDS_LIMIT"]
+	milli, cpuErr := preparationWorkerMilliCPU(rawCPU)
+	if cpuErr != nil || !preparationWorkerPIDs.MatchString(rawPIDs) {
+		return PreparationWorkerLimits{}, ErrPreparationConfig
+	}
+	memory, err := preparationMemoryBytes(c.wire.Runtime["BOREALIS_SITE_WORKER_MEMORY_LIMIT"])
+	pids, _ := strconv.ParseUint(rawPIDs, 10, 64)
+	if err != nil || memory > 9007199254740991 {
+		return PreparationWorkerLimits{}, ErrPreparationConfig
+	}
+	return PreparationWorkerLimits{milli, memory, pids}, nil
+}
 
 // PreparationApplicationLimit is one renderer-declared service envelope. It
 // carries no authority, available capacity, worker bound or host reserve.

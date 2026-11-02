@@ -53,6 +53,7 @@ func TestOperatorSiteWorkerClientRejectsIncompleteInventory(t *testing.T) {
 }
 
 func TestOperatorSiteWorkerLaunchPreservesUncertainCustody(t *testing.T) {
+	setOperatorWorkerLimitsFixture(t, workerLimitsFixture())
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	for _, mode := range []string{"existing site Pod", "existing site Service", "Pod reply lost", "Service reply lost", "Pod rejected", "malformed inventory", "partial inventory"} {
 		t.Run(mode, func(t *testing.T) {

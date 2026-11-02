@@ -325,6 +325,7 @@ func TestBorealisOperatorScaleKnownWorkloadBounds(t *testing.T) {
 }
 
 func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
+	setOperatorWorkerLimitsFixture(t, workerLimitsFixture())
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	t.Setenv("BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH", "runtime-hash-test")
 	var createdPod map[string]any
@@ -543,6 +544,7 @@ func TestBorealisOperatorLaunchSiteWorkerResourceEnvelope(t *testing.T) {
 		{"unsupported", "", "", "", "", ""},
 	} {
 		t.Run(tc.profile, func(t *testing.T) {
+			setOperatorWorkerLimitsFixture(t, borealisOperatorSiteWorkerLimits{CPU: tc.limitCPU, Memory: tc.limitMemory, PIDs: "128"})
 			var pod map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.selected == "" {
@@ -605,6 +607,7 @@ func TestBorealisOperatorLaunchSiteWorkerResourceEnvelope(t *testing.T) {
 }
 
 func TestBorealisOperatorLaunchSiteWorkerKeepsFullUUIDAsWorkerIdentity(t *testing.T) {
+	setOperatorWorkerLimitsFixture(t, workerLimitsFixture())
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	var createdPod map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

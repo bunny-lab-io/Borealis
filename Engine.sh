@@ -3834,6 +3834,37 @@ generic_k3s_workload_replicas() {
   printf '1\n'
 }
 
+# This private producer has no missing-value defaults. Validate before the
+# generic formatters, which otherwise trim input, round CPU or supply defaults.
+borealis_site_worker_resource_limit() {
+  local kind="$1" key="BOREALIS_SITE_WORKER_${1}_LIMIT" raw count number factor
+  count="$(awk -F= -v key="${key}" '$1 == key { n++ } END { print n+0 }' "${COMPOSE_ENV}")" || return 1
+  [[ "${count}" == 1 ]] || { printf 'Missing or duplicate site-worker resource setting: %s\n' "${key}" >&2; return 1; }
+  raw="$(read_env_value "${key}")"
+  case "${kind}" in
+    CPU)
+      [[ "${raw}" =~ ^(0|[1-9][0-9]{0,8})(\.[0-9]{1,3})?m?$ && ! "${raw}" =~ \..*m$ ]] || return 1
+      raw="$(format_k3s_cpu_quantity "${raw}")" || return 1
+      [[ "${raw}" =~ ^[1-9][0-9]{0,8}m$ ]] || return 1
+      ;;
+    MEMORY)
+      [[ "${raw}" =~ ^([1-9][0-9]{0,8})(Ki|Mi|Gi|Ti|[kKmMgGT])$ ]] || return 1
+      number="${BASH_REMATCH[1]}"
+      case "${BASH_REMATCH[2]}" in
+        k|K|Ki) factor=1024 ;; m|M|Mi) factor=1048576 ;;
+        g|G|Gi) factor=1073741824 ;; Ti) factor=1099511627776 ;; T) factor=1000000000000 ;;
+      esac
+      (( number <= 9007199254740991 / factor )) || return 1
+      raw="$(format_k3s_memory_quantity "${raw}")" || return 1
+      ;;
+    PIDS)
+      [[ "${raw}" =~ ^[1-9][0-9]{0,8}$ ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "${raw}"
+}
+
 render_borealis_operator_manifest() {
   local image="$1"
   local secret="$2"
@@ -3845,6 +3876,10 @@ render_borealis_operator_manifest() {
   local runtime_uid
   local runtime_gid
   local replicas
+  local worker_cpu_limit worker_memory_limit worker_pids_limit
+  worker_cpu_limit="$(borealis_site_worker_resource_limit CPU)" || return 1
+  worker_memory_limit="$(borealis_site_worker_resource_limit MEMORY)" || return 1
+  worker_pids_limit="$(borealis_site_worker_resource_limit PIDS)" || return 1
   secret_b64="$(base64_inline "${secret}")"
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
@@ -4038,6 +4073,12 @@ $(k3s_timezone_env_entries)
               value: "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}"
             - name: BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH
               value: "${site_worker_runtime_secret_hash}"
+            - name: BOREALIS_SITE_WORKER_CPU_LIMIT
+              value: "${worker_cpu_limit}"
+            - name: BOREALIS_SITE_WORKER_MEMORY_LIMIT
+              value: "${worker_memory_limit}"
+            - name: BOREALIS_SITE_WORKER_PIDS_LIMIT
+              value: "${worker_pids_limit}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_UID
               value: "${runtime_uid}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_GID
@@ -4145,8 +4186,10 @@ ensure_borealis_operator_bridge() {
   workload_image_allowlist="$(borealis_operator_workload_image_allowlist)"
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   site_worker_runtime_secret_hash="$(borealis_site_worker_runtime_secret_hash)"
+  local worker_resource_limits
+  worker_resource_limits="$(borealis_site_worker_resource_limit CPU && borealis_site_worker_resource_limit MEMORY && borealis_site_worker_resource_limit PIDS)" || die "Effective site-worker resource settings unavailable."
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${ENGINE_HOST_ROOT}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${ENGINE_HOST_ROOT}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" "${worker_resource_limits}" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then

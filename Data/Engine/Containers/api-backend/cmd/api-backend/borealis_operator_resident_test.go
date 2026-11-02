@@ -12,6 +12,7 @@ import (
 )
 
 func TestBorealisOperatorConcurrentSiteLaunchReservesOneResident(t *testing.T) {
+	setOperatorWorkerLimitsFixture(t, workerLimitsFixture())
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	for _, mode := range []string{"created", "Service reply lost", "Pod reply lost", "foreign reservation conflict"} {
 		t.Run(mode, func(t *testing.T) {
@@ -154,6 +155,7 @@ func TestBorealisOperatorConcurrentSiteLaunchReservesOneResident(t *testing.T) {
 }
 
 func TestBorealisOperatorDelayedPodCreateCannotBypassReplacement(t *testing.T) {
+	setOperatorWorkerLimitsFixture(t, workerLimitsFixture())
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	first := borealisOperatorLaunchSiteWorkerRequest{SiteID: 7, SiteName: "Original Site", WorkerGUID: schedulerK3sSiteWorkerGUID(7), ImageRef: "borealis-engine/site-worker:sha-cccccccccccc", RemoteOpsPort: 56001, RemoteDesktopPort: 61001}
 	replacement := first

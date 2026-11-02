@@ -15,12 +15,13 @@ const clusterSSHWorkerSecretName = "borealis-job-scheduler-runtime-env"
 const clusterSSHWorkerSecretPath = "/api/v1/namespaces/borealis/secrets/" + clusterSSHWorkerSecretName
 
 type clusterSSHWorkerPolicy struct {
-	Profile      string `json:"profile"`
-	OnlineWindow int64  `json:"online_window_seconds"`
+	Profile      string                           `json:"profile"`
+	OnlineWindow int64                            `json:"online_window_seconds"`
+	Limits       borealisOperatorSiteWorkerLimits `json:"limits"`
 }
 
 func (p clusterSSHWorkerPolicy) resources() (clusterSSHApplicationResource, bool) {
-	profile, ok := borealisOperatorSiteWorkerResourceProfile(p.Profile)
+	profile, ok := operatorSiteWorkerResources(p.Profile, p.Limits)
 	if !ok || !slices.Contains([]string{"small", "standard", "large"}, p.Profile) || p.OnlineWindow < 60 || p.OnlineWindow > 3600 {
 		return clusterSSHApplicationResource{}, false
 	}
@@ -30,9 +31,34 @@ func (p clusterSSHWorkerPolicy) resources() (clusterSSHApplicationResource, bool
 	})
 }
 
+// A generic Deployment receipt declares the new producer's settings but does
+// not prove every running operator/node clone consumes them. Until independent
+// producer-version proof exists, prospective recreation retains the componentwise
+// larger known legacy/new envelope. Actual Pods and their rotation clones stay
+// charged from their own observed resources, without rewriting either producer.
+func (p clusterSSHWorkerPolicy) recreationResources() (clusterSSHApplicationResource, bool) {
+	declared, valid := p.resources()
+	legacy, ok := borealisOperatorSiteWorkerResourceProfile(p.Profile)
+	if !valid || !ok {
+		return clusterSSHApplicationResource{}, false
+	}
+	previous, ok := clusterSSHWorkloadResources("site-worker", map[string]any{
+		"requests": map[string]any{"cpu": legacy.RequestCPU, "memory": legacy.RequestMemory},
+		"limits":   map[string]any{"cpu": legacy.LimitCPU, "memory": legacy.LimitMemory},
+	})
+	if !ok {
+		return clusterSSHApplicationResource{}, false
+	}
+	declared.CPURequestMilli = max(declared.CPURequestMilli, previous.CPURequestMilli)
+	declared.CPULimitMilli = max(declared.CPULimitMilli, previous.CPULimitMilli)
+	declared.MemoryRequestBytes = max(declared.MemoryRequestBytes, previous.MemoryRequestBytes)
+	declared.MemoryLimitBytes = max(declared.MemoryLimitBytes, previous.MemoryLimitBytes)
+	return declared, true
+}
+
 // Resolve only the scheduler's two demand inputs from its declared environment.
 // Never use this controller's environment or infer them from a surviving worker.
-// Existing producer image/entrypoint supplies no defaults beyond scheduler code.
+// Defaults mirror scheduler code; this is not running-producer/version proof.
 func observeClusterSSHWorkerPolicy(read func(string) (map[string]any, error)) (clusterSSHWorkerPolicy, error) {
 	fail := func() (clusterSSHWorkerPolicy, error) {
 		return clusterSSHWorkerPolicy{}, clusterbootstrap.ErrPreparationConfig
@@ -115,10 +141,57 @@ func observeClusterSSHWorkerPolicy(read func(string) (map[string]any, error)) (c
 		// Match scheduler envInt's clamping without using the local environment.
 		p.OnlineWindow = max(int64(60), min(int64(3600), window))
 	}
+	p.Limits, err = observeClusterSSHWorkerLimits(read)
+	if err != nil {
+		return fail()
+	}
 	if _, ok := p.resources(); !ok {
 		return fail()
 	}
 	return p, nil
+}
+
+// Limits belong to the original operator Deployment declaration, not the
+// scheduler's local environment or a surviving legacy Pod. This is not running-
+// producer/version proof. The caller receipts the whole Deployment and repeats
+// it under existing source authority; recreationResources retains legacy bounds.
+func observeClusterSSHWorkerLimits(read func(string) (map[string]any, error)) (borealisOperatorSiteWorkerLimits, error) {
+	fail := func() (borealisOperatorSiteWorkerLimits, error) {
+		return borealisOperatorSiteWorkerLimits{}, clusterbootstrap.ErrPreparationConfig
+	}
+	deployment, err := read(clusterSSHApplicationDeploymentPrefix + "borealis-operator")
+	id, valid := clusterSSHStorageMetadata(deployment, "apps/v1", "Deployment", "borealis")
+	spec := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(deployment, "spec"), "template"), "spec")
+	containers, ok := spec["containers"].([]any)
+	if err != nil || !valid || id.Name != "borealis-operator" || !ok || len(containers) != 1 {
+		return fail()
+	}
+	c, ok := containers[0].(map[string]any)
+	env, envOK := c["env"].([]any)
+	if !ok || c["name"] != "borealis-operator" || !clusterSSHStorageEmptyList(c["command"]) ||
+		!clusterSSHStorageStrings(c["args"], "borealis-operator") || !clusterSSHStorageEmptyList(c["envFrom"]) || !envOK || len(env) > 256 {
+		return fail()
+	}
+	values := map[string]string{}
+	seen := map[string]bool{}
+	for _, raw := range env {
+		e, ok := raw.(map[string]any)
+		name := clusterSSHStorageText(e, "name")
+		if !ok || name == "" || seen[name] {
+			return fail()
+		}
+		seen[name] = true
+		if slices.Contains([]string{"BOREALIS_SITE_WORKER_CPU_LIMIT", "BOREALIS_SITE_WORKER_MEMORY_LIMIT", "BOREALIS_SITE_WORKER_PIDS_LIMIT"}, name) {
+			value, ok := e["value"].(string)
+			if !ok || len(e) != 2 || len(value) > 32 {
+				return fail()
+			}
+			values[name] = value
+		}
+	}
+	return borealisOperatorSiteWorkerLimits{
+		CPU: values["BOREALIS_SITE_WORKER_CPU_LIMIT"], Memory: values["BOREALIS_SITE_WORKER_MEMORY_LIMIT"], PIDs: values["BOREALIS_SITE_WORKER_PIDS_LIMIT"],
+	}, nil
 }
 
 type clusterSSHWorkerCensusRead func(context.Context, int64) ([]int64, error)
@@ -187,7 +260,7 @@ func clusterSSHWorkerCensusValid(sites []int64) bool {
 func clusterSSHDesiredWorkerWorkloadBudget(snapshot clusterSSHPreparationSnapshot) (cpu, memory uint64, ok bool) {
 	r := snapshot.Storage.Requirements
 	cpu, memory, ok = clusterSSHNodeWorkloadBudget(r)
-	profile, valid := r.WorkerPolicy.resources()
+	profile, valid := r.WorkerPolicy.recreationResources()
 	if !ok || !valid || !clusterSSHWorkerCensusValid(snapshot.DesiredWorkerSites) {
 		return 0, 0, false
 	}

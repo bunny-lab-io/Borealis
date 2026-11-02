@@ -180,7 +180,7 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	reply := func(status string, snapshot *clusterSSHPreparationSnapshot) {
-		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Joining: request.Joining, Version: 52, ID: request.ID, Status: status, Snapshot: snapshot})
+		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Joining: request.Joining, Version: 53, ID: request.ID, Status: status, Snapshot: snapshot})
 		if err != nil {
 			fail(http.StatusServiceUnavailable)
 			return

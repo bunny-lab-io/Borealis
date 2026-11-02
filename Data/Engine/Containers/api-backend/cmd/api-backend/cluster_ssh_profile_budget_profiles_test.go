@@ -18,7 +18,7 @@ import (
 // Real pure renderers supply both effective settings and independently observed
 // resources. Large fixture hardware only avoids target-fit rejection here; it
 // establishes no hardware recommendation, reserve or total-capacity proof.
-func sshRenderedProfileContract(t *testing.T, profile string, rank int, reference string) (map[string]string, []clusterSSHApplicationResource, clusterSSHApplicationResource) {
+func sshRenderedProfileContract(t *testing.T, profile string, rank int, reference string) (map[string]string, []clusterSSHApplicationResource, clusterSSHApplicationResource, borealisOperatorSiteWorkerLimits) {
 	t.Helper()
 	const root = "../../../../../.."
 	directory := t.TempDir()
@@ -44,7 +44,7 @@ func sshRenderedProfileContract(t *testing.T, profile string, rank int, referenc
 	}
 	settings := sshPreparationRuntimeFixture()
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	if len(lines) != 17 {
+	if len(lines) != 20 {
 		t.Fatal("effective service setting inventory changed")
 	}
 	for _, line := range lines {
@@ -78,7 +78,11 @@ func sshRenderedProfileContract(t *testing.T, profile string, rank int, referenc
 			t.Fatal("CNPG changed inherited resource envelope")
 		}
 	}
-	return settings, applications, postgres
+	limits, err := observeClusterSSHWorkerLimits(func(path string) (map[string]any, error) { return rendered.Applications[filepath.Base(path)], nil })
+	if err != nil {
+		t.Fatal("production worker limits rejected", err)
+	}
+	return settings, applications, postgres, limits
 }
 
 func TestClusterSSHProfileApplicationBudgets(t *testing.T) {
@@ -91,7 +95,7 @@ func TestClusterSSHProfileApplicationBudgets(t *testing.T) {
 		}
 		for _, reference := range references[rank] {
 			t.Run(profile+"/"+reference, func(t *testing.T) {
-				settings, observed, postgres := sshRenderedProfileContract(t, profile, rank, reference)
+				settings, observed, postgres, _ := sshRenderedProfileContract(t, profile, rank, reference)
 				cohort, source, lease, baseline := sshPreparationFixture(t)
 				expected, err := buildClusterSSHPreparationExpected(cohort, source, lease, baseline, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
 				if err != nil {
@@ -122,11 +126,12 @@ func TestClusterSSHTargetProfileSizingAllProfiles(t *testing.T) {
 		// Non-default reference values cover integer MiB calculation in each
 		// native expansion/replacement scope, not only at the pure helper.
 		reference := [4]string{"12295", "24583", "49159", "81927"}[rank]
-		settings, applications, postgres := sshRenderedProfileContract(t, profile, rank, reference)
+		settings, applications, postgres, workerLimits := sshRenderedProfileContract(t, profile, rank, reference)
 		for _, mode := range []string{"expansion", "replacement", "missing cap", "application mismatch", "postgres mismatch", "application drift after", "postgres drift after", "same-budget reference drift", "claim lost", "sibling capacity"} {
 			t.Run(profile+"/"+mode, func(t *testing.T) {
 				f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 				snapshot := clusterSSHPreparationSnapshot{Settings: maps.Clone(settings), Storage: sshStorageSnapshotFixture(t, f.a), DesiredWorkerSites: []int64{}}
+				snapshot.Storage.Requirements.WorkerPolicy.Limits = workerLimits
 				snapshot.Storage.Requirements.Applications = slices.Clone(applications)
 				snapshot.Storage.Requirements.PostgresResources = postgres
 				consumed, reads := false, 0

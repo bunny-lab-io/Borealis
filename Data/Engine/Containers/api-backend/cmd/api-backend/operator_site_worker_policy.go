@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"regexp"
 	"strconv"
 	"unicode/utf8"
 )
@@ -14,6 +16,40 @@ import (
 // These guards preserve legacy and uncertain worker custody. New launches also
 // use an immutable per-site Service CREATE reservation for atomic exclusion.
 type operatorSiteWorkerJSONObject map[string]any
+
+// Effective deployment settings, not worker-supplied launch parameters. PIDs is
+// retained for source/configuration parity; Kubernetes Pod resources cannot
+// enforce it and this projection makes no PID-capacity claim.
+type borealisOperatorSiteWorkerLimits struct {
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
+	PIDs   string `json:"pids"`
+}
+
+var operatorWorkerMilliCPU = regexp.MustCompile(`^[1-9][0-9]{0,8}m$`)
+var operatorWorkerMemory = regexp.MustCompile(`^[1-9][0-9]{0,8}(Ki|Mi|Gi|Ti|T)$`)
+var operatorWorkerPIDs = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+
+func operatorSiteWorkerLimitsFromEnv() borealisOperatorSiteWorkerLimits {
+	return borealisOperatorSiteWorkerLimits{
+		CPU: os.Getenv("BOREALIS_SITE_WORKER_CPU_LIMIT"), Memory: os.Getenv("BOREALIS_SITE_WORKER_MEMORY_LIMIT"),
+		PIDs: os.Getenv("BOREALIS_SITE_WORKER_PIDS_LIMIT"),
+	}
+}
+
+func operatorSiteWorkerResources(name string, limits borealisOperatorSiteWorkerLimits) (borealisOperatorResourceProfile, bool) {
+	profile, ok := borealisOperatorSiteWorkerResourceProfile(name)
+	cpu, cpuOK := clusterSSHWorkloadMilliCPU(limits.CPU)
+	memory, memoryOK := clusterSSHWorkloadMemory(limits.Memory)
+	requestCPU, requestCPUOK := clusterSSHWorkloadMilliCPU(profile.RequestCPU)
+	requestMemory, requestMemoryOK := clusterSSHWorkloadMemory(profile.RequestMemory)
+	if !ok || !operatorWorkerMilliCPU.MatchString(limits.CPU) || !operatorWorkerMemory.MatchString(limits.Memory) || !operatorWorkerPIDs.MatchString(limits.PIDs) ||
+		!cpuOK || !memoryOK || !requestCPUOK || !requestMemoryOK || requestCPU > cpu || requestMemory > memory {
+		return borealisOperatorResourceProfile{}, false
+	}
+	profile.LimitCPU, profile.LimitMemory = limits.CPU, limits.Memory
+	return profile, true
+}
 
 func decodeOperatorSiteWorkerObject(reader io.Reader) (map[string]any, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, (4<<20)+1))
