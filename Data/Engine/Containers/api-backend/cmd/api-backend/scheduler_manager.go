@@ -242,6 +242,9 @@ func (m *goSchedulerManager) runLeader(ctx context.Context) error {
 		if err := m.processPatchInstallWork(ctx); err != nil {
 			log.Printf("failed to process patch install work: %v", err)
 		}
+		if err := m.processPatchPolicyEnforcementWork(ctx); err != nil {
+			log.Printf("failed to process patch policy enforcement work: %v", err)
+		}
 		if err := m.processOnboardingWork(ctx); err != nil {
 			log.Printf("failed to process onboarding work: %v", err)
 		}

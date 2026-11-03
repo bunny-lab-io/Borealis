@@ -141,6 +141,7 @@ type patchPolicyResolutionCache struct {
 	executableDevices []map[string]any
 	filters           map[int64]map[string]any
 	loadedFilterIDs   map[int64]bool
+	strictInputs      bool
 }
 
 func patchPoliciesRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -1541,6 +1542,9 @@ func (c *patchPolicyResolutionCache) loadFilters(ctx context.Context, filterIDs 
 		}
 	}
 	if len(missing) > 0 {
+		if c.strictInputs {
+			return nil, errors.New("policy filter input unavailable")
+		}
 		loaded, err := c.store.loadDeviceFilters(ctx, missing, false)
 		if err != nil {
 			return nil, err
@@ -2509,18 +2513,14 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAtOnce(ctx context.Context,
 		_ = conn.Close()
 		return nil, err
 	}
-	rows, err := loadPatchPolicyRows(ctx, conn, "", nil)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
 	if err := conn.Close(); err != nil {
 		return nil, err
 	}
-	effectiveScopes, err := s.patchPolicyEffectiveScopes(ctx, profile, rows)
+	scopeProof, err := s.readPatchPolicyScopeProof(ctx, profile)
 	if err != nil {
 		return nil, err
 	}
+	rows, effectiveScopes := scopeProof.Policies, scopeProof.Scopes
 	conn, err = s.db.Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
@@ -2550,24 +2550,17 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAtOnce(ctx context.Context,
 				continue
 			}
 		}
-		conflictedKeys, err := s.patchPolicyConflictedDeviceKeys(ctx, profile, row)
-		if err != nil {
-			return nil, err
-		}
-		conn, err := s.db.Conn(ctx)
-		if err != nil {
-			return nil, errors.Join(errOperatorStoreDown, err)
-		}
-		summary, err := s.createPatchPolicyRunJobs(ctx, profile, conn, row, effectiveScopes[nullInt(row.ID)], scheduledTS, now, activeJobs, conflictedKeys)
-		closeErr := conn.Close()
-		if err != nil {
-			if closeErr != nil {
-				return nil, errors.Join(err, closeErr)
+		conflictedKeys := map[string]bool{}
+		if scope := effectiveScopes[nullInt(row.ID)]; scope != nil {
+			for _, device := range scope.Devices {
+				if device.Conflict {
+					conflictedKeys[patchPolicyDeviceIdentity(device)] = true
+				}
 			}
-			return nil, err
 		}
-		if closeErr != nil {
-			return nil, closeErr
+		summary, err := s.createPatchPolicyRunJobs(ctx, profile, scopeProof, row, effectiveScopes[nullInt(row.ID)], scheduledTS, now, activeJobs, conflictedKeys)
+		if err != nil {
+			return nil, err
 		}
 		summaries = append(summaries, summary)
 	}
@@ -2587,7 +2580,7 @@ func (s *postgresOperatorStore) patchPolicyDueAt(ctx context.Context, row patchP
 	return due, nil
 }
 
-func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, profile operatorProfile, conn *sql.Conn, row patchPolicyRow, scope *patchPolicyEffectiveScope, scheduledTS int64, now int64, activeJobs map[string]map[string]any, conflictedKeys map[string]bool) (map[string]any, error) {
+func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, profile operatorProfile, scopeProof *patchPolicyScopeProof, row patchPolicyRow, scope *patchPolicyEffectiveScope, scheduledTS int64, now int64, activeJobs map[string]map[string]any, conflictedKeys map[string]bool) (map[string]any, error) {
 	devices := []patchPolicyDevice{}
 	rulesByDevice := map[string][]patchPolicyRule{}
 	if scope != nil {
@@ -2615,17 +2608,19 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 			deviceByGUID[guid] = device
 		}
 	}
-	runID, inserted, err := ensurePatchPolicyRun(ctx, conn, nullInt(row.ID), scheduledTS, now)
+	runID, inserted, err := s.reservePatchPolicyRun(ctx, nullInt(row.ID), scheduledTS)
 	if err != nil {
 		return nil, err
 	}
 	if !inserted {
 		return map[string]any{"policy_id": nullInt(row.ID), "policy_name": nullString(row.Name), "policy_run_id": runID, "status": "already_evaluated"}, nil
 	}
-	if err := upsertPatchPolicyDeviceStates(ctx, conn, row, devices, conflictedKeys, runID, now); err != nil {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
 		return nil, err
 	}
 	patchRows, err := loadPendingPolicyPatchRows(ctx, conn, deviceByGUID)
+	err = errors.Join(err, conn.Close())
 	if err != nil {
 		return nil, err
 	}
@@ -2669,6 +2664,7 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 		groupPatch[key] = patch
 	}
 	jobIDs := []int64{}
+	jobs := []patchPolicyPreparedInstall{}
 	for key, rows := range groups {
 		targets := []any{}
 		seenTargets := map[string]bool{}
@@ -2698,10 +2694,15 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 			"policy_run_id": runID,
 			"patch":         patch,
 		}
-		jobID, err := insertPatchPolicyScheduledJob(ctx, conn, row, runID, scheduledTS, now, component, targets)
+		jobID, err := s.reservePatchPolicyID(ctx, "scheduled_jobs")
 		if err != nil {
 			return nil, err
 		}
+		componentsJSON, targetsJSON, err := scheduledJobMutationJSON([]any{component}, targets)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, patchPolicyPreparedInstall{ID: jobID, Name: strings.TrimSpace("Policy: " + nullString(row.Name) + " - " + scheduledPatchInstallDisplayName(component)), Components: componentsJSON, Targets: targetsJSON})
 		jobIDs = append(jobIDs, jobID)
 	}
 	summary := map[string]any{
@@ -2716,8 +2717,20 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 		"excluded":      excludedDevices,
 		"conflicted":    conflictedDevices,
 	}
-	if err := finishPatchPolicyRun(ctx, conn, runID, "scheduled", summary, now); err != nil {
+	drafts, err := s.preparePatchPolicyEnforcementTargets(ctx, scopeProof, row, devices, runID, scheduledTS, now)
+	if err != nil {
 		return nil, err
+	}
+	summaryJSON, err := json.Marshal(summary)
+	if err != nil {
+		return nil, err
+	}
+	committedRun, inserted, err := s.commitPatchPolicyRun(ctx, scopeProof, row, runID, scheduledTS, now, drafts, jobs, string(summaryJSON))
+	if err != nil {
+		return nil, err
+	}
+	if !inserted {
+		return map[string]any{"policy_id": nullInt(row.ID), "policy_name": nullString(row.Name), "policy_run_id": committedRun, "status": "already_evaluated"}, nil
 	}
 	return summary, nil
 }
@@ -2767,57 +2780,6 @@ func (s *postgresOperatorStore) patchPolicyConflictedDeviceKeys(ctx context.Cont
 		}
 	}
 	return conflicted, nil
-}
-
-func upsertPatchPolicyDeviceStates(ctx context.Context, conn *sql.Conn, row patchPolicyRow, devices []patchPolicyDevice, conflictedKeys map[string]bool, runID int64, now int64) error {
-	policyID := nullInt(row.ID)
-	policyType := normalizePatchPolicyType(row.PolicyType.String)
-	enforcementMode := "unmanaged"
-	if boolInt64(row.ManagedUpdateMode) {
-		enforcementMode = "managed"
-	}
-	for _, device := range devices {
-		hostname := cleanText(device.Hostname)
-		if hostname == "" {
-			continue
-		}
-		deviceKey := patchPolicyDeviceIdentity(device)
-		conflicted := device.Conflict || conflictedKeys[deviceKey]
-		mode := enforcementMode
-		if device.ExclusionMode == patchPolicyExclusionFrozen {
-			mode = patchPolicyExclusionFrozen
-		}
-		if device.ExclusionMode == patchPolicyExclusionUnmanaged {
-			mode = patchPolicyExclusionUnmanaged
-		}
-		metadata := map[string]any{
-			"policy_type":                  policyType,
-			"policy_run_id":                runID,
-			"site_id":                      device.SiteID,
-			"site_name":                    device.SiteName,
-			"conflicted":                   conflicted,
-			"hierarchy_policy_ids":         device.HierarchyPolicyIDs,
-			"exclusion_policy_id":          nullablePositiveInt64Any(device.ExclusionPolicyID),
-			"exclusion_override_policy_id": nullablePositiveInt64Any(device.ExclusionOverridePolicyID),
-		}
-		metadataJSON, _ := json.Marshal(metadata)
-		if _, err := conn.ExecContext(ctx, `
-			DELETE FROM engine.patch_policy_device_state
-			 WHERE LOWER(hostname)=LOWER($1)
-			    OR (COALESCE(device_guid, '')<>'' AND LOWER(device_guid)=LOWER($2))
-		`, hostname, normalizeCanonicalGUID(device.DeviceGUID)); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, `
-			INSERT INTO engine.patch_policy_device_state(
-				device_guid, hostname, effective_policy_id, exclusion_mode, enforcement_mode,
-				enforcement_status, drift_detected, last_evaluated_at, metadata_json
-			) VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8)
-		`, nullEmpty(normalizeCanonicalGUID(device.DeviceGUID)), hostname, nullablePositiveInt64Arg(policyID), nullEmpty(device.ExclusionMode), mode, "pending", now, string(metadataJSON)); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func syncPatchCatalogFromInventory(ctx context.Context, conn *sql.Conn, now int64) error {

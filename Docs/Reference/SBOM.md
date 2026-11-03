@@ -75,6 +75,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | job-scheduler | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | postgres-db | PostgreSQL container image (`postgres:17-bookworm`) | [PostgreSQL License plus Debian package licenses](https://www.postgresql.org/about/licence/) |
+| Engine validation only | PostgreSQL 17.11 official source build for disposable user-owned development SQL fixtures; not shipped in Engine runtime | [PostgreSQL License](https://www.postgresql.org/about/licence/); [release source and checksums](https://www.postgresql.org/ftp/source/v17.11/) |
 | remote-desktop-guacd | Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
 | remote-desktop-guacd | Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
 | remote-desktop-guacd | LibVNCServer / LibVNCClient | [GPL-2.0-or-later](https://github.com/LibVNC/libvncserver/blob/master/COPYING) |

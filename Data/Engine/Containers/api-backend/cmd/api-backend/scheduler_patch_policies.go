@@ -9,6 +9,9 @@ func (m *goSchedulerManager) processPatchPolicyTick(ctx context.Context, profile
 	if m == nil || m.store == nil {
 		return nil
 	}
+	if err := m.reconcilePatchPolicyEnforcementReceipts(ctx, now); err != nil {
+		return err
+	}
 	result, err := m.store.evaluatePatchPoliciesAt(ctx, profile, 0, nowMinute, now, false)
 	if err != nil {
 		return err

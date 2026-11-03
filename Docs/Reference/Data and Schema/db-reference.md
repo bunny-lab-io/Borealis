@@ -876,12 +876,14 @@ finally:
     - Notes:
     - Unique index on `(policy_id, scheduled_ts)` prevents duplicate policy runs per scheduler tick/occurrence.
     - Policy runs create normal `scheduled_jobs` rows with `job_kind=patch_install` so history remains in scheduled-job tables.
+    - Evaluation commits the run, exact GUID-bound state, private enforcement work and install-job rows together. A failed write cannot leave a run that suppresses unfinished intent on the next evaluation. Source preparation and JSON shaping occur outside the transaction.
 
     #### `patch_policy_device_state`
     - Status: Active transient state.
     - Purpose: Latest effective policy/enforcement state by device. Excluded from backup/restore.
     - Notes:
     - Effective state metadata records the same-role policy hierarchy, inherited exclusion source policy, and exclusion override source policy for audit/UI display.
+    - Existing `metadata_json.policy_enforcement` retains desired/active work IDs and the current projected receipt digest. This transient row is not sole custody: retained private work continues to fence an unresolved predecessor after state or policy deletion. The canonical dispatch/projection contract is in [Patch Management](../../Using%20the%20Platform/patch-management.md#exclusions-and-reboots).
 
     ### Scheduling and Automation
     #### `scheduled_jobs`
@@ -995,7 +997,8 @@ finally:
     - `job-scheduler` scheduled ticking and service-action dispatch.
     - Site-worker onboarding execution.
     - Notes:
-    - Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, `patch_install_run`, and `service_action`.
+    - Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, `patch_install_run`, private `patch_policy_enforcement`, and `service_action`.
+    - Private policy enforcement uses existing `payload_json`: original run/target/mode/request in `policy_enforcement`, original worker placement in `policy_dispatch`, existing execution/activity ownership in `executions.work`, and verified committed receipt digest in `policy_terminal`. Public/internal enqueue allowlists do not expose this new producer. Queue completion or a missing activity cannot establish terminal proof. No schema migration is required.
     - `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, and `patch_install_run` payloads include task-link metadata for the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
     - Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
     - `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
