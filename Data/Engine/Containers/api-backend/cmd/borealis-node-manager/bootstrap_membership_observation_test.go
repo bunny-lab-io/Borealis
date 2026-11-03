@@ -91,9 +91,160 @@ func membershipNativeDocuments(r bootstrapMembershipObservationRequest) (map[str
 		}
 		members = append(members, map[string]any{"ID": id, "name": expected.MemberName, "peerURLs": []string{"https://" + node.Address + ":2380"}, "clientURLs": []string{"https://" + node.Address + ":2379"}, "isLearner": false})
 	}
-	node := r.Nodes[0].Node
-	return map[string]any{"apiVersion": "v1", "kind": "Node", "metadata": map[string]any{"name": node.Hostname, "uid": node.NodeUID, "resourceVersion": "12", "labels": map[string]any{"borealis.io/engine-node": "true", "borealis.io/application-state": "active"}, "annotations": map[string]any{"etcd.k3s.cattle.io/node-name": r.Nodes[0].MemberName}}, "status": map[string]any{
+	local := r.Nodes[0]
+	for _, expected := range r.Nodes {
+		if expected.Node.NodeUID == clusterbootstrap.MembershipObservationRequest(r).ObserverUID() {
+			local = expected
+		}
+	}
+	node := local.Node
+	labels := map[string]any{"borealis.io/engine-node": "true", "borealis.io/application-state": "active"}
+	if r.Observer != nil {
+		for _, target := range r.Prepared {
+			if target.Receipt.Node.NodeUID == node.NodeUID {
+				labels["borealis.io/application-state"] = "drained"
+				for _, role := range []string{"control-plane", "edge", "scheduler", "postgres-primary"} {
+					labels["borealis.io/"+role+"-eligible"] = "false"
+				}
+			}
+		}
+	}
+	return map[string]any{"apiVersion": "v1", "kind": "Node", "metadata": map[string]any{"name": node.Hostname, "uid": node.NodeUID, "resourceVersion": "12", "labels": labels, "annotations": map[string]any{"etcd.k3s.cattle.io/node-name": local.MemberName}}, "status": map[string]any{
 		"nodeInfo": map[string]any{"machineID": node.MachineID, "bootID": node.BootID, "kubeletVersion": node.K3sVersion, "architecture": "amd64", "operatingSystem": "linux"}, "addresses": []any{map[string]any{"type": "InternalIP", "address": node.Address}}, "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}, map[string]any{"members": members}
+}
+
+func membershipObserverRequestFixture(t *testing.T, pair bool, index int) bootstrapMembershipObservationRequest {
+	t.Helper()
+	r := membershipObservationFixture(t, pair)
+	node := r.Nodes[index].Node
+	r.Observer = &clusterbootstrap.MembershipObserver{NodeUID: node.NodeUID}
+	r.OriginalSourceNodeUIDs = []string{r.Source.SourceUID}
+	if !pair {
+		r.OriginalSourceNodeUIDs = append(r.OriginalSourceNodeUIDs, r.Nodes[2].Node.NodeUID)
+	}
+	r.Network.NodeUID, r.Network.Hostname, r.Network.MachineID, r.Network.BootID = node.NodeUID, node.Hostname, node.MachineID, node.BootID
+	r.Network.ManagementLink.Address = node.Address + "/24"
+	if !r.valid() {
+		t.Fatal("invalid explicit observer request")
+	}
+	return r
+}
+
+func TestBootstrapMembershipObserverNativeTLS(t *testing.T) {
+	for _, mode := range []string{"source", "first target", "second target", "other source", "target active", "target eligible", "source drained", "wrong local UID", "membership drift", "second Node drift", "observer frozen", "original roster frozen", "network drift", "unknown condition", "cancel before", "cancel during"} {
+		t.Run(mode, func(t *testing.T) {
+			index := 1
+			if mode == "source" || mode == "source drained" {
+				index = 0
+			}
+			if mode == "second target" || mode == "other source" {
+				index = 2
+			}
+			r := membershipObserverRequestFixture(t, mode != "other source", index)
+			original, uid, wantNode := r.Source, r.Observer.NodeUID, r.Nodes[index].Node
+			wantDigest := clusterbootstrap.MembershipObservationRequest(r).SHA256()
+			network := r.Network
+			root, _, _, serverCert, roots := bootstrapJoinedTLSFixture(t, r.Prepared[0].Expected, r.Network.Hostname)
+			if root.MkdirAll("var/lib/rancher/k3s/server/db/etcd", 0700) != nil || root.WriteFile("var/lib/rancher/k3s/server/db/etcd/name", []byte(r.Network.Hostname+"-12345678"), 0600) != nil {
+				t.Fatal("observer etcd-name fixture")
+			}
+			node, members := membershipNativeDocuments(r)
+			metadata := node["metadata"].(map[string]any)
+			labels := metadata["labels"].(map[string]any)
+			switch mode {
+			case "target active":
+				labels["borealis.io/application-state"] = "active"
+			case "target eligible":
+				labels["borealis.io/scheduler-eligible"] = "true"
+			case "source drained":
+				labels["borealis.io/application-state"] = "drained"
+			case "wrong local UID":
+				metadata["uid"] = r.Source.SourceUID
+			case "unknown condition":
+				node["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "Ready", "status": "True"}, map[string]any{"type": "MemoryPressure", "status": "invalid"}}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if mode == "cancel before" {
+				cancel()
+			}
+			counts := map[string]int{}
+			var mu sync.Mutex
+			ownPath := "/api/v1/nodes/" + network.Hostname
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				counts[req.URL.Path]++
+				if req.Method != "GET" || req.Host != "127.0.0.1:6443" || req.Header.Get("Authorization") != "" || len(req.TLS.PeerCertificates) != 1 || req.TLS.PeerCertificates[0].Subject.CommonName != "system:node:"+network.Hostname {
+					t.Error("observer escaped fixed local mTLS identity")
+				}
+				if mode == "cancel during" {
+					cancel()
+				}
+				var body any
+				switch req.URL.Path {
+				case "/version":
+					body = map[string]any{"gitVersion": network.K3sVersion}
+				case "/db/info":
+					if mode == "membership drift" && counts[req.URL.Path] == 2 {
+						members["members"].([]any)[1].(map[string]any)["ID"] = uint64(42)
+					}
+					body = members
+				case ownPath:
+					if mode == "second Node drift" && counts[req.URL.Path] == 2 {
+						metadata["uid"] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+					}
+					body = node
+				default:
+					t.Error("observer requested remote Node or new path")
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(body)
+			}))
+			server.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, ClientCAs: roots, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}
+			server.StartTLS()
+			defer server.Close()
+			factory := func(config *tls.Config) *http.Client {
+				client := newBootstrapJoinedNodeClient(config)
+				client.Transport.(*http.Transport).DialContext = func(ctx context.Context, kind, address string) (net.Conn, error) {
+					if address != "127.0.0.1:6443" {
+						t.Error("observer dialed foreign address")
+					}
+					return (&net.Dialer{}).DialContext(ctx, kind, server.Listener.Addr().String())
+				}
+				return client
+			}
+			reads := 0
+			source := func(context.Context) (clusterbootstrap.SourceNetwork, error) {
+				reads++
+				if mode == "observer frozen" && reads == 1 {
+					r.Observer.NodeUID = r.Source.SourceUID
+				}
+				if mode == "original roster frozen" && reads == 1 {
+					r.OriginalSourceNodeUIDs[0] = uid
+				}
+				current := network
+				if mode == "network drift" && reads == 2 {
+					current.NodeUID = r.Source.SourceUID
+				}
+				return current, nil
+			}
+			got, err := observeBootstrapMembershipAt(ctx, root, r, func(ctx context.Context) error { return ctx.Err() }, source, factory)
+			valid := mode == "source" || mode == "first target" || mode == "second target" || mode == "other source" || mode == "observer frozen" || mode == "original roster frozen"
+			if (err == nil) != valid || !valid && !reflect.DeepEqual(got, bootstrapMembershipObservation{}) {
+				t.Fatal("observer native evidence escaped changed phase or identity", err)
+			}
+			if valid {
+				mu.Lock()
+				complete := len(counts) == 3 && counts["/version"] == 2 && counts["/db/info"] == 2 && counts[ownPath] == 2
+				mu.Unlock()
+				if !complete || reads != 2 || got.Observer == nil || got.Observer.NodeUID != uid || got.Source != original || got.LocalNode != wantNode || got.RequestSHA256 != wantDigest {
+					t.Fatal("observer lost original provenance or native read brackets")
+				}
+			}
+		})
+	}
 }
 
 // All responses pass through the actual fixed-loopback HTTPS/mTLS transport.
@@ -457,10 +608,21 @@ func (m membershipRejectTransport) RoundTrip(*http.Request) (*http.Response, err
 }
 
 func TestBootstrapMembershipObservationRejectsRequest(t *testing.T) {
-	for _, mode := range []string{"missing receipt", "bad receipt", "wrong cluster", "wrong source UID", "wrong namespace", "wrong attempt", "wrong cohort", "wrong source baseline", "duplicate target ID", "target replaced", "target member mapping", "invalid member mapping", "missing Node", "duplicate address", "bad version", "zero machine", "not Ready"} {
+	for _, mode := range []string{"missing receipt", "bad receipt", "wrong cluster", "wrong source UID", "wrong namespace", "wrong attempt", "wrong cohort", "wrong source baseline", "duplicate target ID", "target replaced", "target member mapping", "invalid member mapping", "missing Node", "duplicate address", "bad version", "zero machine", "not Ready", "observer missing partition", "observer omitted target", "observer unknown UID", "observer wrong machine"} {
 		t.Run(mode, func(t *testing.T) {
 			r := membershipObservationFixture(t, true)
+			if strings.HasPrefix(mode, "observer ") {
+				r = membershipObserverRequestFixture(t, true, 1)
+			}
 			switch mode {
+			case "observer missing partition":
+				r.OriginalSourceNodeUIDs = nil
+			case "observer omitted target":
+				r.Prepared = r.Prepared[:1]
+			case "observer unknown UID":
+				r.Observer.NodeUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+			case "observer wrong machine":
+				r.Network.MachineID = strings.Repeat("f", 32)
 			case "missing receipt":
 				r.Prepared = nil
 			case "bad receipt":

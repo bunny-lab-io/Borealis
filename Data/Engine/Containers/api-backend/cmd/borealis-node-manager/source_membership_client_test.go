@@ -15,7 +15,7 @@ import (
 )
 
 func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationRequest) clusterbootstrap.MembershipObservation {
-	result := clusterbootstrap.MembershipObservation{Source: r.Source, RequestSHA256: r.SHA256(), Membership: clusterbootstrap.K3sMembership{Voting: true}}
+	result := clusterbootstrap.MembershipObservation{Source: r.Source, Observer: r.Observer, RequestSHA256: r.SHA256(), Membership: clusterbootstrap.K3sMembership{Voting: true}}
 	for i, node := range r.Nodes {
 		id := uint64(math.MaxUint64 - uint64(i))
 		for _, target := range r.Prepared {
@@ -24,7 +24,7 @@ func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationReque
 			}
 		}
 		result.Membership.Members = append(result.Membership.Members, clusterbootstrap.K3sEtcdMember{ID: id, Name: node.MemberName, Address: node.Node.Address})
-		if node.Node.NodeUID == r.Source.SourceUID {
+		if node.Node.NodeUID == r.ObserverUID() {
 			result.LocalNode = node.Node
 			result.Membership.LocalID = id
 		}
@@ -34,9 +34,19 @@ func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationReque
 }
 
 func TestSourceMembershipClientGenericActionPrecisionAndFailures(t *testing.T) {
-	for _, mode := range []string{"success", "auth", "bad status", "redirect", "oversize", "private field", "wrong request", "wrong verb", "cancel", "bad identity"} {
+	for _, mode := range []string{"success", "observer source", "observer first target", "observer second target", "wrong observer", "auth", "bad status", "redirect", "oversize", "private field", "wrong request", "wrong verb", "cancel", "bad identity"} {
 		t.Run(mode, func(t *testing.T) {
 			request := clusterbootstrap.MembershipObservationRequest(membershipObservationFixture(t, true))
+			if strings.HasPrefix(mode, "observer ") || mode == "wrong observer" {
+				index := 0
+				if mode == "observer first target" || mode == "wrong observer" {
+					index = 1
+				}
+				if mode == "observer second target" {
+					index = 2
+				}
+				request = clusterbootstrap.MembershipObservationRequest(membershipObserverRequestFixture(t, true, index))
+			}
 			payload, err := clusterbootstrap.EncodeMembershipObservationRequest(request)
 			if err != nil {
 				t.Fatal(err)
@@ -94,6 +104,13 @@ func TestSourceMembershipClientGenericActionPrecisionAndFailures(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				if mode == "wrong observer" {
+					other := clusterbootstrap.MembershipObservationRequest(membershipObserverRequestFixture(t, true, 2))
+					encoded, err = clusterbootstrap.EncodeMembershipObservationResult(sourceMembershipResultFixture(other), other)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
 				response := map[string]any{"ok": true, "verb": "InspectSourceMembership", "result": map[string]any{"membership_observation": encoded}}
 				if mode == "private field" {
 					response["private"] = "never publish"
@@ -122,7 +139,7 @@ func TestSourceMembershipClientGenericActionPrecisionAndFailures(t *testing.T) {
 				token = strings.Repeat("x", 32)
 			}
 			receipt, err := readSourceMembershipReceipt(ctx, client, token, n, job, pod, payload)
-			if mode == "success" {
+			if mode == "success" || strings.HasPrefix(mode, "observer ") {
 				got, parseErr := clusterbootstrap.ParseMembershipObservationReceipt(receipt, request, nonce, job, pod)
 				if err != nil || parseErr != nil || !reflect.DeepEqual(got, want) {
 					t.Fatal("receipt", err, parseErr)

@@ -3,10 +3,8 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -33,7 +31,7 @@ func (bootstrapMembershipObservationRequest) GoString() string {
 }
 
 // Native read behind the fixed InspectSourceMembership action. SQL authority
-// remains controller-owned; local reads independently bind selected source host
+// remains controller-owned; local reads independently bind selected observer host
 // and runtime identity. Remote Node/namespace fields stay provided expectations,
 // bracketed by the prepared-phase controller adapter using existing authority.
 func (m *manager) observeBootstrapMembership(parent context.Context, request bootstrapMembershipObservationRequest, authority func(context.Context) error) (bootstrapMembershipObservation, error) {
@@ -82,19 +80,15 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 	}
 	request.Nodes = slices.Clone(request.Nodes)
 	request.Prepared = slices.Clone(request.Prepared)
+	request.OriginalSourceNodeUIDs = slices.Clone(request.OriginalSourceNodeUIDs)
+	if request.Observer != nil {
+		observer := *request.Observer
+		request.Observer = &observer
+	}
 	for i := range request.Prepared {
 		request.Prepared[i].Expected.PeerAddresses = slices.Clone(request.Prepared[i].Expected.PeerAddresses)
 	}
-	wire, err := json.Marshal(struct {
-		Domain  string
-		Request bootstrapMembershipObservationRequest
-	}{"original-source-membership-observation-v1", request})
-	if err != nil {
-		return fail()
-	}
-	digest := sha256.Sum256(wire)
-	clear(wire)
-	requestSHA256 := hex.EncodeToString(digest[:])
+	requestSHA256 := clusterbootstrap.MembershipObservationRequest(request).SHA256()
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	prove := func() bool {
@@ -108,7 +102,7 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		return fail()
 	}
 	var result bootstrapMembershipObservation
-	err = withBootstrapK3sObservationFiles(ctx, root, request.Network.Hostname, true, check, func(files []bootstrapHostFile, refresh func(context.Context) error, localName string) error {
+	err := withBootstrapK3sObservationFiles(ctx, root, request.Network.Hostname, true, check, func(files []bootstrapHostFile, refresh func(context.Context) error, localName string) error {
 		pair, err := tls.X509KeyPair(files[1].data, files[2].data)
 		if err != nil || len(pair.Certificate) == 0 {
 			return errBootstrapSource
@@ -155,7 +149,7 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 			}
 			local := clusterbootstrap.K3sJoinedNodeIdentity{Hostname: request.Network.Hostname, MachineID: request.Network.MachineID, BootID: request.Network.BootID, K3sVersion: request.Network.K3sVersion}
 			for _, node := range request.Nodes {
-				if node.Node.NodeUID == request.Source.SourceUID {
+				if node.Node.NodeUID == clusterbootstrap.MembershipObservationRequest(request).ObserverUID() {
 					local.Address = node.Node.Address
 				}
 			}
@@ -209,7 +203,7 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		if err != nil || !reflect.DeepEqual(before, after) || version() != nil || !prove() {
 			return errBootstrapSource
 		}
-		result = bootstrapMembershipObservation{Source: request.Source, LocalNode: second, Membership: after, RequestSHA256: requestSHA256}
+		result = bootstrapMembershipObservation{Source: request.Source, LocalNode: second, Membership: after, RequestSHA256: requestSHA256, Observer: request.Observer}
 		return nil
 	})
 	if err != nil || ctx.Err() != nil {
@@ -277,7 +271,7 @@ func observeBootstrapMembershipLocalNode(raw []byte, r bootstrapMembershipObserv
 	uid, name := bootstrapMembershipText(m, "uid"), bootstrapMembershipText(m, "name")
 	var want clusterbootstrap.K3sJoinedNode
 	for _, node := range r.Nodes {
-		if node.Node.NodeUID == uid && uid == r.Source.SourceUID && node.MemberName == localName {
+		if node.Node.NodeUID == uid && uid == clusterbootstrap.MembershipObservationRequest(r).ObserverUID() && node.MemberName == localName {
 			want = node.Node
 		}
 	}
@@ -301,14 +295,31 @@ func observeBootstrapMembershipLocalNode(raw []byte, r bootstrapMembershipObserv
 			member = value
 		}
 	}
-	if member.ID == 0 || member.Name != memberName || uid == r.Source.SourceUID && memberName != localName {
+	if member.ID == 0 || member.Name != memberName || memberName != localName {
 		return fail()
+	}
+	preparedObserver := false
+	if r.Observer != nil && !slices.Contains(r.OriginalSourceNodeUIDs, uid) {
+		for _, target := range r.Prepared {
+			if target.Receipt.Node.NodeUID == uid {
+				// A settled target retains its exact drained/ineligible phase.
+				// Original sources below still require active application state.
+				observed, err := clusterbootstrap.ParseK3sJoinedNode(raw, target.Expected)
+				if err != nil || observed != target.Receipt.Node || observed != want || member.ID != target.Receipt.MemberID {
+					return fail()
+				}
+				preparedObserver = true
+			}
+		}
+		if !preparedObserver {
+			return fail()
+		}
 	}
 	labels, ok := bootstrapMembershipObject(m["labels"])
 	if !ok || bootstrapMembershipText(labels, "borealis.io/engine-node") != "true" {
 		return fail()
 	}
-	if bootstrapMembershipText(labels, "borealis.io/application-state") != "active" {
+	if !preparedObserver && bootstrapMembershipText(labels, "borealis.io/application-state") != "active" {
 		return fail()
 	}
 	status, ok := bootstrapMembershipObject(object["status"], "nodeInfo", "addresses", "conditions")

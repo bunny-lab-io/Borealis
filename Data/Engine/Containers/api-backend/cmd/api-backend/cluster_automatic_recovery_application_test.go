@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func automaticRecoveryApplicationFixture() (clusterAutomaticRecoveryApplicationBinding, map[string]map[string]any) {
@@ -229,6 +232,76 @@ func TestClusterAutomaticRecoveryApplicationNative(t *testing.T) {
 			next, err := advanceClusterAutomaticRecovery(r, r.Controller, r.Session, 1002, health, nil)
 			if err != nil || next.HealthySince != 0 || next.RecoveryDeadline != r.RecoveryDeadline {
 				t.Fatal("partial application proof retained continuity", next, err)
+			}
+		})
+	}
+}
+
+type recoveryApplicationCleanupBody struct {
+	io.Reader
+	close func() error
+}
+
+func (b recoveryApplicationCleanupBody) Close() error { return b.close() }
+
+func TestClusterAutomaticRecoveryApplicationHTTPCleanup(t *testing.T) {
+	for _, mode := range []string{"healthy", "close failure", "cancel during close"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			var closes, calls atomic.Int32
+			body := recoveryApplicationCleanupBody{Reader: strings.NewReader(`{"ok":true,"phase":"ready"}`), close: func() error {
+				closes.Add(1)
+				if mode == "close failure" {
+					return fmt.Errorf("private cleanup diagnostic")
+				}
+				if mode == "cancel during close" {
+					close(entered)
+					<-release
+				}
+				return nil
+			}}
+			client := &http.Client{Transport: bootstrapRoundTripper(func(r *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				if r.Method != http.MethodGet || r.URL.String() != "http://10.42.0.25:5000/ready" || r.Header.Get("Authorization") != "" {
+					t.Error("probe changed target or credentials")
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: body, Header: http.Header{}}, nil
+			})}
+			result := make(chan error, 1)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				result <- recoveryApplicationHTTP(ctx, client, "10.42.0.25", 5000, "/ready")
+			}()
+			defer func() {
+				unblock.Do(func() { close(release) })
+				<-done
+			}()
+			if mode == "cancel during close" {
+				select {
+				case <-entered:
+				case <-done:
+					t.Fatal("observation returned before close")
+				case <-time.After(time.Second):
+					t.Fatal("close not reached")
+				}
+				cancel()
+				select {
+				case <-done:
+					t.Fatal("canceled observation escaped unfinished close")
+				case <-time.After(25 * time.Millisecond):
+				}
+				unblock.Do(func() { close(release) })
+			}
+			err := <-result
+			if mode == "healthy" && err != nil || mode != "healthy" && err != errClusterConflict {
+				t.Fatalf("cleanup outcome escaped health boundary: %v", err)
+			}
+			if closes.Load() != 1 || calls.Load() != 1 {
+				t.Fatal("response not closed exactly once or request replayed")
 			}
 		})
 	}

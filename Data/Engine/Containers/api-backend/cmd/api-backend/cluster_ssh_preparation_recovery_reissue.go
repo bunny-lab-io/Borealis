@@ -37,8 +37,9 @@ type clusterSSHPreparationRecoveryProofRecord struct {
 	Targets              []clusterSSHPreparationRecoveryTarget `json:"targets"`
 }
 
-// Separate type: no initial preparation, source reconciliation, delivery,
-// settlement or admission entry accepts this handle.
+// Separate type: initial preparation and original Q+2 entries reject this
+// handle. Only separately typed proof/reconciliation entries consume it;
+// source delivery, settlement and admission remain unavailable.
 type clusterSSHPreparationRecoveryReissuedProofClaim struct {
 	Lineage  clusterSSHPreparationRecoveryLineage
 	Claims   []clusterSSHPreparationRecoveryTargetClaim

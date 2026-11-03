@@ -141,3 +141,203 @@ func TestMembershipObservationProtocolRejectsMalformed(t *testing.T) {
 		}
 	}
 }
+
+func membershipObserverProtocolFixture(t *testing.T, pair bool, index int) (MembershipObservationRequest, MembershipObservation) {
+	t.Helper()
+	r, o := membershipProtocolFixture(t, true)
+	if pair {
+		e := r.Prepared[0].Expected
+		node := r.Nodes[2].Node
+		e.Target.TargetID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+		e.Target.Hostname, e.Target.Address, e.Target.MachineID, e.TargetBootID = node.Hostname, node.Address, node.MachineID, node.BootID
+		receipt := protocolMembershipReceiptFixture(e, r.Source, node.NodeUID, o.Membership.Members[2].ID)
+		r.Prepared = append(r.Prepared, MembershipPreparedTarget{e, receipt})
+	}
+	node := r.Nodes[index].Node
+	r.Observer = &MembershipObserver{NodeUID: node.NodeUID}
+	r.OriginalSourceNodeUIDs = []string{r.Source.SourceUID}
+	if !pair {
+		r.OriginalSourceNodeUIDs = append(r.OriginalSourceNodeUIDs, r.Nodes[2].Node.NodeUID)
+	}
+	r.Network.NodeUID, r.Network.Hostname, r.Network.MachineID, r.Network.BootID = node.NodeUID, node.Hostname, node.MachineID, node.BootID
+	r.Network.ManagementLink.Address = node.Address + "/24"
+	observer := *r.Observer
+	o.Observer, o.LocalNode = &observer, node
+	for _, member := range o.Membership.Members {
+		if member.Address == node.Address {
+			o.Membership.LocalID = member.ID
+		}
+	}
+	o.RequestSHA256 = r.SHA256()
+	if !r.Valid() || !o.Valid(r) {
+		t.Fatal("invalid explicit observer fixture")
+	}
+	return r, o
+}
+
+func TestMembershipObservationObserverPreservesLegacyAndProvenance(t *testing.T) {
+	legacy, oldResult := membershipProtocolFixture(t, false)
+	type legacyRequest struct {
+		Source        engineidentity.Binding
+		Network       SourceNetwork
+		KubeSystemUID string
+		Nodes         []MembershipNodeExpectation
+		Prepared      []MembershipPreparedTarget
+	}
+	type legacyResult struct {
+		Source        engineidentity.Binding
+		LocalNode     K3sJoinedNode
+		Membership    K3sMembership
+		RequestSHA256 string
+	}
+	old := legacyRequest{legacy.Source, legacy.Network, legacy.KubeSystemUID, legacy.Nodes, legacy.Prepared}
+	want, _ := json.Marshal(old)
+	got, _ := json.Marshal(legacy)
+	if !bytes.Equal(want, got) {
+		t.Fatal("legacy request bytes changed")
+	}
+	want, _ = json.Marshal(legacyResult{oldResult.Source, oldResult.LocalNode, oldResult.Membership, oldResult.RequestSHA256})
+	got, _ = json.Marshal(oldResult)
+	if !bytes.Equal(want, got) {
+		t.Fatal("legacy result bytes changed")
+	}
+	raw, _ := json.Marshal(struct {
+		Domain  string
+		Request legacyRequest
+	}{"original-source-membership-observation-v1", old})
+	sum := sha256.Sum256(raw)
+	if legacy.SHA256() != hex.EncodeToString(sum[:]) {
+		t.Fatal("legacy digest changed")
+	}
+	for _, pair := range []bool{false, true} {
+		seen := map[string]bool{}
+		for index := range 3 {
+			r, o := membershipObserverProtocolFixture(t, pair, index)
+			if seen[o.LocalNode.NodeUID] || o.Source != legacy.Source {
+				t.Fatal("observer reused UID or replaced original source")
+			}
+			seen[o.LocalNode.NodeUID] = true
+			for _, p := range r.Prepared {
+				if p.Receipt.Source != legacy.Source || p.Receipt.Validate(p.Expected, legacy.Source) != nil {
+					t.Fatal("observer replaced historical receipt provenance")
+				}
+			}
+			encoded, err := EncodeMembershipObservationRequest(r)
+			decoded, decodeErr := DecodeMembershipObservationRequest(encoded)
+			if err != nil || decodeErr != nil || !reflect.DeepEqual(r, decoded) {
+				t.Fatal("observer request round trip", err, decodeErr)
+			}
+			raw, _ := base64.RawStdEncoding.DecodeString(encoded)
+			if membershipCanonical(raw, MembershipObservationRequestLimit, &legacyRequest{}) == nil {
+				t.Fatal("old decoder accepted explicit observer")
+			}
+			result, err := EncodeMembershipObservationResult(o, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceMembership", "result": map[string]any{"membership_observation": result}})
+			nonce, job, pod := r.Source.ClusterID, r.Source.SourceID, r.Source.SourceUID
+			receipt, err := NewMembershipObservationReceipt(response, r, nonce, job, pod)
+			parsed, parseErr := ParseMembershipObservationReceipt(receipt, r, nonce, job, pod)
+			if err != nil || parseErr != nil || !reflect.DeepEqual(parsed, o) || len(receipt) > SourceNetworkReceiptLimit {
+				t.Fatal("observer receipt", err, parseErr, len(receipt))
+			}
+			for _, ids := range [][3]string{{pod, job, pod}, {nonce, pod, pod}, {nonce, job, job}} {
+				if _, err := ParseMembershipObservationReceipt(receipt, r, ids[0], ids[1], ids[2]); err == nil {
+					t.Fatal("observer receipt replay accepted")
+				}
+			}
+			other, _ := membershipObserverProtocolFixture(t, pair, (index+1)%3)
+			if _, err := ParseMembershipObservationReceipt(receipt, other, nonce, job, pod); err == nil || o.Valid(legacy) || oldResult.Valid(r) {
+				t.Fatal("observer or legacy result substituted")
+			}
+			t.Logf("pair=%v observer=%d request=%d receipt=%d", pair, index, len(encoded), len(receipt))
+		}
+	}
+}
+
+func TestMembershipObservationObserverRejectsForeignEvidence(t *testing.T) {
+	for _, mode := range []string{"unknown observer", "zero observer", "wrong network", "missing original", "duplicate UID", "short census", "missing receipt", "dropped target receipt", "missing original roster", "unknown original UID", "duplicate original UID", "zero original UID", "overlapping partition", "omitted survivor", "original outside source roster", "legacy with roster", "original source", "receipt source", "target UID", "target member ID", "learner", "duplicate member", "wrong local UID", "missing result observer", "different result observer"} {
+		t.Run(mode, func(t *testing.T) {
+			r, o := membershipObserverProtocolFixture(t, true, 1)
+			if mode == "duplicate original UID" || mode == "overlapping partition" || mode == "omitted survivor" || mode == "original outside source roster" {
+				r, o = membershipObserverProtocolFixture(t, false, 1)
+			}
+			switch mode {
+			case "unknown observer":
+				r.Observer.NodeUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+			case "zero observer":
+				r.Observer.NodeUID = "00000000-0000-0000-0000-000000000000"
+			case "wrong network":
+				r.Network.NodeUID = r.Source.SourceUID
+			case "missing original":
+				r.Nodes[0].Node.NodeUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+			case "duplicate UID":
+				r.Nodes[2].Node.NodeUID = r.Nodes[1].Node.NodeUID
+			case "short census":
+				r.Nodes = r.Nodes[:2]
+			case "missing receipt":
+				r.Prepared = nil
+			case "dropped target receipt":
+				r.Prepared = r.Prepared[:1]
+			case "missing original roster":
+				r.OriginalSourceNodeUIDs = nil
+			case "unknown original UID":
+				r.OriginalSourceNodeUIDs[0] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+			case "duplicate original UID":
+				r.OriginalSourceNodeUIDs[1] = r.OriginalSourceNodeUIDs[0]
+			case "zero original UID":
+				r.OriginalSourceNodeUIDs[0] = "00000000-0000-0000-0000-000000000000"
+			case "overlapping partition":
+				r.OriginalSourceNodeUIDs[1] = r.Prepared[0].Receipt.Node.NodeUID
+			case "omitted survivor":
+				r.OriginalSourceNodeUIDs = r.OriginalSourceNodeUIDs[:1]
+			case "original outside source roster":
+				r.OriginalSourceNodeUIDs[0] = r.Prepared[0].Receipt.Node.NodeUID
+			case "legacy with roster":
+				r, o = membershipProtocolFixture(t, false)
+				r.OriginalSourceNodeUIDs = []string{r.Source.SourceUID}
+			case "original source":
+				r.Source.SourceUID = r.Observer.NodeUID
+			case "receipt source":
+				r.Prepared[0].Receipt.Source.SourceUID = r.Observer.NodeUID
+			case "target UID":
+				r.Prepared[0].Receipt.Node.NodeUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+			case "target member ID":
+				o.Membership.Members[1].ID--
+			case "learner":
+				o.Membership.Members[1].Learner = true
+			case "duplicate member":
+				o.Membership.Members[2] = o.Membership.Members[1]
+			case "wrong local UID":
+				o.LocalNode.NodeUID = r.Source.SourceUID
+			case "missing result observer":
+				o.Observer = nil
+			case "different result observer":
+				o.Observer.NodeUID = r.Source.SourceUID
+			}
+			o.RequestSHA256 = r.SHA256()
+			if o.Valid(r) {
+				t.Fatal("foreign observer evidence accepted")
+			}
+		})
+	}
+}
+
+func TestMembershipObservationObserverRejectsAliases(t *testing.T) {
+	r, o := membershipObserverProtocolFixture(t, true, 1)
+	raw, _ := json.Marshal(r)
+	for _, bad := range [][]byte{bytes.Replace(raw, []byte(`"Observer":`), []byte(`"observer":`), 1), bytes.Replace(raw, []byte(`"Observer":{`), []byte(`"Observer":null,"Observer":{`), 1), bytes.Replace(raw, []byte(`"Observer":{"NodeUID":`), []byte(`"Observer":{"nodeuid":`), 1), bytes.Replace(raw, []byte(`"Observer":{"NodeUID":`), []byte(`"Observer":{"extra":true,"NodeUID":`), 1), bytes.Replace(raw, []byte(`"OriginalSourceNodeUIDs":`), []byte(`"originalSourceNodeUIDs":`), 1), bytes.Replace(raw, []byte(`"OriginalSourceNodeUIDs":`), []byte(`"OriginalSourceNodeUIDs":[],"OriginalSourceNodeUIDs":`), 1)} {
+		if bytes.Equal(raw, bad) {
+			t.Fatal("missing observer mutation")
+		}
+		if _, err := DecodeMembershipObservationRequest(base64.RawStdEncoding.EncodeToString(bad)); err == nil {
+			t.Fatal("malformed observer accepted")
+		}
+	}
+	raw, _ = json.Marshal(o)
+	bad := bytes.Replace(raw, []byte(`"Observer":`), []byte(`"observer":`), 1)
+	if _, err := decodeMembershipObservationResult(base64.RawStdEncoding.EncodeToString(bad), r); err == nil {
+		t.Fatal("aliased result observer accepted")
+	}
+}

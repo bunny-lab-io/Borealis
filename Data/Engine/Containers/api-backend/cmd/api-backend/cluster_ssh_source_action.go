@@ -97,15 +97,32 @@ func (r *kubernetesClusterStepRunner) newSSHSourceObservationRead(authority clus
 // proposal callers. Each caller supplies its exact phase check; this helper
 // never manufactures a target holder/generation or adopts an earlier Job.
 func (r *kubernetesClusterStepRunner) readSSHSourceObservation(ctx context.Context, member clusterSSHSourceMember, operationID, version, address string, inspectVIP bool, check func() bool) (clusterbootstrap.SourceVIPNetwork, error) {
-	fail := func() (clusterbootstrap.SourceVIPNetwork, error) {
-		return clusterbootstrap.SourceVIPNetwork{}, clusterbootstrap.ErrPreparationConfig
+	host := clusterSSHObservationHost{member.NodeUID, member.Name, member.Address, member.MachineID, member.BootID}
+	receipt, err := r.readSSHHostObservation(ctx, host, operationID, version, address, inspectVIP, check)
+	return receipt.Observation, err
+}
+
+// Immutable transport input only. Caller retains its own source or settled
+// cohort authority; a prepared host never receives a fabricated source NodeID.
+type clusterSSHObservationHost struct {
+	NodeUID, Hostname, Address, MachineID, BootID string
+}
+
+type clusterSSHHostObservationReceipt struct {
+	Observation           clusterbootstrap.SourceVIPNetwork
+	Nonce, JobUID, PodUID string
+}
+
+func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context, host clusterSSHObservationHost, operationID, version, address string, inspectVIP bool, check func() bool) (clusterSSHHostObservationReceipt, error) {
+	fail := func() (clusterSSHHostObservationReceipt, error) {
+		return clusterSSHHostObservationReceipt{}, clusterbootstrap.ErrPreparationConfig
 	}
 	if r == nil || r.kube == nil || r.namespace != "borealis" || r.controllerHolder == "" || !clusterUUIDRE.MatchString(operationID) || !borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) || check == nil || ctx.Err() != nil {
 		return fail()
 	}
 	nonce := newClusterUUID()
 	name := "borealis-source-" + strings.ReplaceAll(nonce, "-", "")
-	manifest := clusterSSHSourceJobManifest(name, nonce, r.actionImage, member.Name, operationID)
+	manifest := clusterSSHSourceJobManifest(name, nonce, r.actionImage, host.Hostname, operationID)
 	if inspectVIP {
 		c := anySlice(nestedMap(nestedMap(nestedMap(manifest, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
 		c["command"] = []string{"/usr/local/bin/borealis-node-manager", "source-vip-client"}
@@ -178,11 +195,11 @@ func (r *kubernetesClusterStepRunner) readSSHSourceObservation(ctx context.Conte
 			}
 			network := value.Network
 			if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
-				if network.NodeUID != member.NodeUID || network.Hostname != member.Name || network.MachineID != member.MachineID ||
-					network.BootID != member.BootID || !network.ManagementLink.MatchesAddress(member.Address) || network.K3sVersion != version || !check() {
+				if network.NodeUID != host.NodeUID || network.Hostname != host.Hostname || network.MachineID != host.MachineID ||
+					network.BootID != host.BootID || !network.ManagementLink.MatchesAddress(host.Address) || network.K3sVersion != version || !check() {
 					return fail()
 				}
-				return value, nil
+				return clusterSSHHostObservationReceipt{value, nonce, uid, podUID}, nil
 			}
 		}
 		select {

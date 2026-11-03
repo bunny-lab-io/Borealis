@@ -51,7 +51,7 @@ func sourceActionPod(t *testing.T, job map[string]any, network clusterbootstrap.
 }
 
 func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
-	for _, mode := range []string{"success", "source reader", "lost authority", "wrong controller", "foreign member", "mutable image", "collision", "lost POST", "job replaced", "job missing metadata", "job altered", "job image", "job failed", "duplicate conditions", "two pods", "paginated pods", "pod replaced", "wrong owner", "pod deleting", "wrong nonce", "wrong receipt pod", "private receipt", "wrong source", "wrong management link", "sidecar", "token mounted", "privileged", "logs fallback", "changed mounts", "pod retry", "pod failed", "cancel", "deadline", "VIP success", "VIP absent", "VIP wrong address", "VIP wrong command", "VIP wrong args", "VIP legacy receipt", "VIP distinct addresses", "VIP aliased authority"} {
+	for _, mode := range []string{"success", "host projection", "source reader", "lost authority", "wrong controller", "foreign member", "mutable image", "collision", "lost POST", "job replaced", "job missing metadata", "job altered", "job image", "job failed", "duplicate conditions", "two pods", "paginated pods", "pod replaced", "wrong owner", "pod deleting", "wrong nonce", "wrong receipt pod", "private receipt", "wrong source", "wrong management link", "sidecar", "token mounted", "privileged", "logs fallback", "changed mounts", "pod retry", "pod failed", "cancel", "deadline", "VIP success", "VIP absent", "VIP wrong address", "VIP wrong command", "VIP wrong args", "VIP legacy receipt", "VIP distinct addresses", "VIP aliased authority"} {
 		t.Run(mode, func(t *testing.T) {
 			cohort, source, lease, baseline := sshPreparationFixture(t)
 			current := clusterSSHPreparationAuthority{Cohort: cohort, Source: source, Lease: lease, Baseline: baseline, K3sVersion: "v1.36.3+k3s1"}
@@ -280,6 +280,14 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 			}
 			if mode == "foreign member" {
 				member.NodeUID = newClusterUUID()
+			}
+			if mode == "host projection" {
+				host := clusterSSHObservationHost{member.NodeUID, member.Name, member.Address, member.MachineID, member.BootID}
+				got, err := runner.readSSHHostObservation(ctx, host, lease.OperationID, current.K3sVersion, "", false, func() bool { authorityCalls++; return true })
+				if err != nil || got.Observation.Network != network || !clusterbootstrap.ValidSourceReceiptIdentity(got.Nonce, got.JobUID, got.PodUID) || got.PodUID != podUID || authorityCalls != 2 || posts.Load() != 1 || <-names != "borealis-source-"+strings.ReplaceAll(got.Nonce, "-", "") {
+					t.Fatal("host projection lost network receipt or changed fixed transport", err)
+				}
+				return
 			}
 			if vipMode {
 				read := runner.newSSHSourceVIPRead(authority)

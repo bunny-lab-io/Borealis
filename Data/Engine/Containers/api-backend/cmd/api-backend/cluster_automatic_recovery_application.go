@@ -97,7 +97,7 @@ func newRecoveryApplicationProbe() clusterAutomaticRecoveryApplicationProbe {
 	}
 }
 
-func recoveryApplicationHTTP(ctx context.Context, client *http.Client, address string, port int, path string) error {
+func recoveryApplicationHTTP(ctx context.Context, client *http.Client, address string, port int, path string) (probeErr error) {
 	if client == nil || !recoveryApplicationIP(address) || port < 1 || port > 65535 || !textInSet(path, "/startup", "/live", "/ready") || ctx.Err() != nil {
 		return errClusterConflict
 	}
@@ -111,7 +111,13 @@ func recoveryApplicationHTTP(ctx context.Context, client *http.Client, address s
 	if err != nil {
 		return errClusterConflict
 	}
-	defer response.Body.Close()
+	defer func() {
+		// Cleanup belongs to this observation. Neither a failed close nor
+		// cancellation while it joins can contribute healthy time.
+		if closeErr := response.Body.Close(); closeErr != nil || ctx.Err() != nil {
+			probeErr = errClusterConflict
+		}
+	}()
 	if response.StatusCode != http.StatusOK || ctx.Err() != nil {
 		return errClusterConflict
 	}

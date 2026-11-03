@@ -60,10 +60,14 @@ func (r MembershipObservationRequest) SHA256() string {
 	if !r.Valid() {
 		return ""
 	}
+	domain := "original-source-membership-observation-v1"
+	if r.Observer != nil {
+		domain = "settled-cohort-membership-observation-v1"
+	}
 	raw, err := json.Marshal(struct {
 		Domain  string
 		Request MembershipObservationRequest
-	}{"original-source-membership-observation-v1", r})
+	}{domain, r})
 	if err != nil {
 		return ""
 	}
@@ -88,6 +92,9 @@ func (o MembershipObservation) Valid(request MembershipObservationRequest) bool 
 	if !request.Valid() || o.Source != request.Source || o.RequestSHA256 != request.SHA256() || len(o.Membership.Members) != 3 || !o.Membership.Voting {
 		return false
 	}
+	if (o.Observer == nil) != (request.Observer == nil) || o.Observer != nil && *o.Observer != *request.Observer {
+		return false
+	}
 	ids, names, addresses := map[uint64]bool{}, map[string]bool{}, map[string]bool{}
 	local := false
 	for i, member := range o.Membership.Members {
@@ -99,7 +106,7 @@ func (o MembershipObservation) Valid(request MembershipObservationRequest) bool 
 		for _, expected := range request.Nodes {
 			if member.Address == expected.Node.Address && member.Name == expected.MemberName {
 				matched = true
-				if expected.Node.NodeUID == request.Source.SourceUID {
+				if expected.Node.NodeUID == request.ObserverUID() {
 					local = o.LocalNode == expected.Node && o.Membership.LocalID == member.ID
 				}
 			}
@@ -188,26 +195,47 @@ type MembershipPreparedTarget struct {
 }
 
 // These identities and member annotations are controller-provided expectations.
-// Only the selected local source's Node is independently read by this adapter.
+// Only the selected local observer's Node is independently read by this adapter.
 type MembershipNodeExpectation struct {
 	Node       K3sJoinedNode
 	MemberName string
 }
+
+// Observer selects one existing UID in the complete controller-owned cohort.
+// It is independent of Source, which remains immutable receipt provenance.
+// Full observer host/network identity comes from that exact Node and Network.
+type MembershipObserver struct {
+	NodeUID string
+}
+
 type MembershipObservationRequest struct {
 	Source        engineidentity.Binding
 	Network       SourceNetwork
 	KubeSystemUID string
 	Nodes         []MembershipNodeExpectation
 	Prepared      []MembershipPreparedTarget
+	Observer      *MembershipObserver `json:",omitempty"`
+	// Explicit observers require the retained original-source cohort. Its
+	// disjoint union with Prepared must be exactly Nodes. Only the original
+	// controller can authenticate this historical partition from its SQL proof.
+	OriginalSourceNodeUIDs []string `json:",omitempty"`
 }
 
-// One original source's current complete view. This is not independent agreement
+// One selected endpoint's current complete view. This is not independent agreement
 // between endpoints, quorum availability, partition proof or admission authority.
 type MembershipObservation struct {
 	Source        engineidentity.Binding
 	LocalNode     K3sJoinedNode
 	Membership    K3sMembership
 	RequestSHA256 string
+	Observer      *MembershipObserver `json:",omitempty"`
+}
+
+func (r MembershipObservationRequest) ObserverUID() string {
+	if r.Observer != nil {
+		return r.Observer.NodeUID
+	}
+	return r.Source.SourceUID
 }
 
 func (MembershipObservationRequest) String() string {
@@ -222,7 +250,7 @@ func (r MembershipObservationRequest) Valid() bool {
 		return sessionUUID.MatchString(value) && value != "00000000-0000-0000-0000-000000000000"
 	}
 	if !uuid(r.Source.ClusterID) || !uuid(r.Source.SourceID) || !uuid(r.Source.SourceUID) || !uuid(r.KubeSystemUID) ||
-		r.Network.Validate() != nil || r.Source.SourceUID != r.Network.NodeUID || r.Network.K3sVersion != K3sPins().Version || len(r.Nodes) != 3 || len(r.Prepared) < 1 || len(r.Prepared) > 2 {
+		r.Network.Validate() != nil || !uuid(r.ObserverUID()) || r.ObserverUID() != r.Network.NodeUID || r.Network.K3sVersion != K3sPins().Version || len(r.Nodes) != 3 || len(r.Prepared) < 1 || len(r.Prepared) > 2 {
 		return false
 	}
 	names, uids, addresses, machines, boots := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -244,18 +272,37 @@ func (r MembershipObservationRequest) Valid() bool {
 		}
 		names[node.Hostname], uids[node.NodeUID], addresses[node.Address], machines[node.MachineID], boots[node.BootID] = true, true, true, true, true
 		peers = append(peers, node.Address)
-		if node.NodeUID == r.Source.SourceUID {
+		if node.NodeUID == r.ObserverUID() {
 			local = node.Hostname == r.Network.Hostname && node.MachineID == r.Network.MachineID && node.BootID == r.Network.BootID && r.Network.ManagementLink.MatchesAddress(node.Address)
 		}
 	}
-	if !local {
+	if !local || !uids[r.Source.SourceUID] {
 		return false
+	}
+	originalSources := map[string]bool{}
+	if r.Observer == nil {
+		if r.OriginalSourceNodeUIDs != nil {
+			return false
+		}
+	} else {
+		if len(r.OriginalSourceNodeUIDs) < 1 || len(r.OriginalSourceNodeUIDs) > 2 || len(r.OriginalSourceNodeUIDs)+len(r.Prepared) != len(r.Nodes) {
+			return false
+		}
+		for _, uid := range r.OriginalSourceNodeUIDs {
+			if !uuid(uid) || !uids[uid] || originalSources[uid] {
+				return false
+			}
+			originalSources[uid] = true
+		}
+		if !originalSources[r.Source.SourceUID] {
+			return false
+		}
 	}
 	slices.Sort(peers)
 	prepared, targets, ids := map[string]bool{}, map[string]bool{}, map[uint64]bool{}
 	for i, p := range r.Prepared {
 		e := p.Expected
-		if e.Validate() != nil || p.Receipt.Validate(e, r.Source) != nil || e.Target.ClusterID != r.Source.ClusterID || e.KubeSystemUID != r.KubeSystemUID || e.K3sVersion != r.Network.K3sVersion || e.PodCIDR != r.Network.PodCIDR || e.ServiceCIDR != r.Network.ServiceCIDR || !slices.Equal(e.PeerAddresses, peers) || p.Receipt.Node.NodeUID == r.Source.SourceUID || prepared[p.Receipt.Node.NodeUID] || targets[e.Target.TargetID] || ids[p.Receipt.MemberID] {
+		if e.Validate() != nil || p.Receipt.Validate(e, r.Source) != nil || e.Target.ClusterID != r.Source.ClusterID || e.KubeSystemUID != r.KubeSystemUID || e.K3sVersion != r.Network.K3sVersion || e.PodCIDR != r.Network.PodCIDR || e.ServiceCIDR != r.Network.ServiceCIDR || !slices.Equal(e.PeerAddresses, peers) || p.Receipt.Node.NodeUID == r.Source.SourceUID || originalSources[p.Receipt.Node.NodeUID] || prepared[p.Receipt.Node.NodeUID] || targets[e.Target.TargetID] || ids[p.Receipt.MemberID] {
 			return false
 		}
 		found := false
