@@ -333,13 +333,14 @@ def _authenticate_socket_agent(
 _TRACKED_HOST_EVENTS = {
     "quick_job_run", "service_control_action", "software_inventory_refresh_request",
     "patch_inventory_refresh_request", "process_management_request", "registry_management_request",
-    "file_management_request",
+    "file_management_request", "remote_shell_restart",
+    "patch_policy_enforcement_request",
 }
 _PASSIVE_HOST_EVENTS = {
     "vpn_tunnel_start", "vpn_tunnel_stop", "vpn_tunnel_activity",
 }
 _UNSUPPORTED_TERMINAL_EVENTS = {
-    "vnc_start", "vnc_stop", "vnc_refresh", "vnc_credential_request", "rdp_start", "remote_shell_restart",
+    "vnc_start", "vnc_stop", "vnc_refresh", "vnc_credential_request", "rdp_start",
 }
 
 
@@ -2329,7 +2330,7 @@ class SiteWorkerSocketRuntime:
             raise AdmissionError("worker_operation_invalid")
         if event == "file_management_request" and str(payload.get("action") or "").lower() in {"upload_start", "download_start"}:
             raise AdmissionError("worker_file_transfer_managed_request_required")
-        if event == "quick_job_run" and str(payload.get("run_mode") or "system").lower() != "system":
+        if event == "quick_job_run" and str(payload.get("run_mode") or "system").lower() not in {"system", "currentuser"}:
             raise AdmissionError("worker_currentuser_terminal_unavailable")
 
     def _prepare_host_operation(self, hostname: str, service_mode: str, event: str, payload: Any) -> Optional[dict]:

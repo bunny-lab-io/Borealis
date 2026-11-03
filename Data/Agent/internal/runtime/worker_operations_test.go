@@ -395,7 +395,7 @@ func TestWorkerOperationPersistenceFailureRetainsTerminal(t *testing.T) {
 	}
 }
 
-func TestWorkerOperationScriptOutputAndUnsupportedCurrentUser(t *testing.T) {
+func TestWorkerOperationScriptOutputAndUnsupportedAliases(t *testing.T) {
 	for _, mode := range []string{"system", "currentuser", "current_user", "interactive", "user", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
 			c, s, _ := workerOperationTestFixture(t)
@@ -408,7 +408,7 @@ func TestWorkerOperationScriptOutputAndUnsupportedCurrentUser(t *testing.T) {
 				return nil, c.Emit("quick_job_result", map[string]any{"job_id": body["job_id"], "status": "Success", "stdout": strings.Repeat("\x00<&世", 100000), "stderr": strings.Repeat("\xff", 300000), "context": body["context"]})
 			}, "host")
 			_, _ = handler(context.Background(), p)
-			if (mode == "system") != (calls == 1) || len(s.receipts) != 1 {
+			if (mode == "system" || mode == "currentuser") != (calls == 1) || len(s.receipts) != 1 {
 				t.Fatal("script effect support mismatch")
 			}
 			raw := s.receipts[0]

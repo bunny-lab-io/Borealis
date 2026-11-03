@@ -13,6 +13,8 @@ import types
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from werkzeug.test import EnvironBuilder
 from werkzeug.exceptions import ClientDisconnected
 
@@ -20,6 +22,7 @@ from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.RemoteDesktop import rfb_probe
 from Data.Engine.services.RemoteDesktop.rfb_probe import VncAuthProbeResult
+from Data.Engine.services.activity_history import insert_activity_history_row
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 from Data.Engine.services.job_scheduler import worker_socket
 from Data.Engine.services.job_scheduler.worker_socket import SiteWorkerSocketRuntime
@@ -157,9 +160,9 @@ def _runtime(tmp_path: Path, *, site_id: int = 7, device_status: str = "active")
     return runtime, token
 
 
-def _registered_agent(runtime, token, *, version=1, file_version=None):
+def _registered_agent(runtime, token, *, version=1, file_version=None, helper_contexts=()):
     client = runtime.socketio.test_client(runtime.app, headers={"Authorization":f"Bearer {token}"})
-    assert client.emit("connect_agent", {"agent_id":AGENT_ID,"hostname":AGENT_HOSTNAME,"service_mode":"system","worker_operation_version":version,"worker_operation_file_transfer_version":file_version}, callback=True)["status"] == "ok"
+    assert client.emit("connect_agent", {"agent_id":AGENT_ID,"hostname":AGENT_HOSTNAME,"service_mode":"system","worker_operation_version":version,"worker_operation_file_transfer_version":file_version,"helper_contexts":list(helper_contexts)}, callback=True)["status"] == "ok"
     client.get_received()
     return client
 
@@ -664,14 +667,15 @@ def test_worker_desktop_session_blocks_before_proxy_probe_or_registration(tmp_pa
 
 
 @pytest.mark.parametrize("event,payload,error", (
-    ("quick_job_run",{"run_mode":"currentuser"},"worker_currentuser_terminal_unavailable"),
+    *(("quick_job_run",{"run_mode":mode},"worker_currentuser_terminal_unavailable") for mode in ("current_user", "interactive", "user", "unknown", True, ["currentuser"], {"mode":"currentuser"})),
     ("file_management_request",{"action":"upload_start"},"worker_file_transfer_managed_request_required"),
     ("file_management_request",{"action":"download_start"},"worker_file_transfer_managed_request_required"),
     ("patch_install_request",{},"worker_operation_unsupported"),
+    ("patch_reboot_request",{},"worker_operation_unsupported"),
     ("patch_policy_apply",{},"worker_operation_unsupported"),
     ("agent_update_request",{},"worker_operation_unsupported"),
     ("agent_maintenance_request",{},"worker_operation_unsupported"),
-    *((event,{},"worker_operation_terminal_unavailable") for event in ("vnc_start","vnc_stop","vnc_refresh","vnc_credential_request","rdp_start","remote_shell_restart")),
+    *((event,{},"worker_operation_terminal_unavailable") for event in ("vnc_start","vnc_stop","vnc_refresh","vnc_credential_request","rdp_start")),
 ))
 def test_worker_active_events_without_terminal_adapter_reject_before_effects(tmp_path, monkeypatch, event, payload, error):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
@@ -692,12 +696,15 @@ def test_worker_active_events_without_terminal_adapter_reject_before_effects(tmp
 
 @pytest.mark.parametrize("event,payload", (
     ("quick_job_run",{"run_mode":"system","context":{"assembly_guid":"fixture-assembly"}}),
+    ("quick_job_run",{"run_mode":"currentuser","context":{"assembly_guid":"fixture-assembly"}}),
     ("service_control_action",{"service_name":"fixture","action":"restart"}),
     ("software_inventory_refresh_request",{}),
     ("patch_inventory_refresh_request",{}),
     ("process_management_request",{"action":"list"}),
     ("registry_management_request",{"action":"list"}),
     ("file_management_request",{"action":"list"}),
+    ("remote_shell_restart",{}),
+    ("patch_policy_enforcement_request",{"request_id":"fixture-policy","enforcement_mode":"managed"}),
 ))
 def test_worker_terminal_receipt_and_preflight_use_authenticated_socket(tmp_path, monkeypatch, event, payload):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
@@ -733,12 +740,13 @@ def test_worker_terminal_receipt_and_preflight_use_authenticated_socket(tmp_path
         agent.disconnect()
 
 
-def test_worker_capability_and_uncertain_emit_do_not_release_or_requeue(tmp_path, monkeypatch):
+@pytest.mark.parametrize("event,payload", (("service_control_action", {"action":"restart"}), ("remote_shell_restart", {}), ("quick_job_run", {"run_mode":"currentuser"}), ("patch_policy_enforcement_request", {"enforcement_mode":"managed"})))
+def test_worker_capability_and_uncertain_emit_do_not_release_or_requeue(tmp_path, monkeypatch, event, payload):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, token = _runtime(tmp_path)
     client = runtime.app.test_client()
-    args = {"headers":{INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")},"json":{"hostname":AGENT_HOSTNAME,"event_name":"service_control_action","payload":{"action":"restart"},"allow_pending":True}}
+    args = {"headers":{INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")},"json":{"hostname":AGENT_HOSTNAME,"event_name":event,"payload":payload,"allow_pending":True}}
     agent = _registered_agent(runtime, token, version=0)
     assert client.post("/remote-ops/host-service/event",**args).get_json() == {"error":"worker_operation_capability_required"}
     assert _claim_count(runtime) == 0
@@ -755,7 +763,8 @@ def test_worker_capability_and_uncertain_emit_do_not_release_or_requeue(tmp_path
     assert _claim_count(runtime) == 1
 
 
-def test_worker_database_connections_return_before_dispatch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("event,payload", (("service_control_action", {"action":"restart"}), ("remote_shell_restart", {}), ("quick_job_run", {"run_mode":"currentuser"}), ("patch_policy_enforcement_request", {"enforcement_mode":"managed"})))
+def test_worker_database_connections_return_before_dispatch(tmp_path, monkeypatch, event, payload):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
     runtime, token = _runtime(tmp_path)
@@ -777,7 +786,7 @@ def test_worker_database_connections_return_before_dispatch(tmp_path, monkeypatc
         assert _claim_count(runtime) == 1
         return True
     monkeypatch.setattr(runtime.registry,"emit_to_host",emit)
-    assert runtime.emit_host_service_event(AGENT_HOSTNAME,"system","service_control_action",{"action":"restart"})
+    assert runtime.emit_host_service_event(AGENT_HOSTNAME,"system",event,payload)
     assert open_connections == []
     agent.disconnect()
 
@@ -1882,3 +1891,372 @@ def test_site_worker_shell_bridges_valid_session_to_agent_tcp(tmp_path: Path, mo
     assert agent_client.emit("quick_job_result",receipt,callback=True)["status"] == "committed"
     assert _claim_count(runtime) == 0
     agent_client.disconnect()
+
+
+@pytest.mark.parametrize("ack_status,terminal_status", (("accepted", "Completed"), ("pending", "Failed")))
+def test_worker_shell_restart_receipt_preserves_original_shell_custody(tmp_path, monkeypatch, ack_status, terminal_status):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    browser = runtime.socketio.test_client(runtime.app)
+    _seed_vpn_lease(runtime)
+
+    def binding(packet):
+        with runtime.db_conn_factory() as conn:
+            return json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (packet["job_id"],)).fetchone()[0])["worker_operation"]
+
+    def grant(packet, nonce):
+        return agent.emit("quick_job_progress", {"job_id":packet["job_id"], "status":"Running", "context":packet["context"], "worker_operation_preflight":{"version":1, "nonce":nonce}}, callback=True)
+
+    def receipt(packet, status="Completed"):
+        return {"job_id":packet["job_id"], "status":status, "stdout":"", "stderr":"", "context":packet["context"]}
+
+    try:
+        with _FakeShellServer() as server:
+            opened = browser.emit("vpn_shell_open", {"agent_id":AGENT_ID, "operation_token":_issue_shell_token(runtime), "shell_port":server.port, "tunnel":{"agent_id":AGENT_ID, "virtual_ip":"127.0.0.1/32"}}, callback=True)
+            assert opened["status"] == "ok"
+            old_shell = server.wait_for_message("worker_operation_bind")
+            assert grant(old_shell, "c" * 32)["status"] == "execute"
+            old_binding = binding(old_shell)
+            assert old_binding["kind"] == "shell"
+            sent = []
+
+            def dispatch(hostname, mode, event, packet, *, timeout):
+                assert (hostname, mode, event) == (AGENT_HOSTNAME, "system", "remote_shell_restart")
+                sent.append(packet)
+                assert _claim_count(runtime) == 2
+                # No Agent completion may precede its durable nonce grant.
+                assert agent.emit("quick_job_result", receipt(packet), callback=True) == {"error":"worker_receipt_uncommitted"}
+                assert grant(packet, "d" * 32)["status"] == "execute"
+                assert grant(packet, "d" * 32)["status"] == "execute"
+                assert grant(packet, "e" * 32)["status"] == "deny"
+                return {"ok":True, "status":ack_status}
+
+            monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+            assert runtime.call_host_service_event(AGENT_HOSTNAME, "system", "remote_shell_restart", {}) == {"ok":True, "status":ack_status}
+            assert _claim_count(runtime) == 2, "restart dispatch ACK released custody"
+            assert len(sent) == 1
+            restart = sent[0]
+            assert restart["job_id"] != old_shell["job_id"]
+            assert restart["context"]["worker_operation"] != old_shell["context"]["worker_operation"]
+            restart_binding = binding(restart)
+            assert restart_binding == {
+                "version":1, "token":restart["context"]["worker_operation"]["token"],
+                "job_id":restart["job_id"], "worker_guid":runtime.worker_guid,
+                "node_name":runtime.admission.node_name, "pod_uid":runtime.admission.pod_uid,
+                "route_generation":1, "site_id":runtime.site_id, "kind":"remote_shell_restart",
+                "agent_guid":AGENT_GUID.upper(), "grant_nonce":"d" * 32,
+            }
+            assert binding(old_shell) == old_binding
+            for forged in (
+                {**receipt(restart), "context":old_shell["context"]},
+                {**receipt(old_shell), "context":restart["context"]},
+                {**receipt(restart), "status":"accepted"},
+            ):
+                assert agent.emit("quick_job_result", forged, callback=True) == {"error":"worker_receipt_uncommitted"}
+                assert _claim_count(runtime) == 2
+            terminal = receipt(restart, terminal_status)
+            ack = agent.emit("quick_job_result", terminal, callback=True)
+            assert ack == {"worker_operation":restart["context"]["worker_operation"], "job_id":restart["job_id"], "status":"committed"}
+            assert _claim_count(runtime) == 1, "restart receipt released old shell custody"
+            assert binding(old_shell) == old_binding
+            assert agent.emit("quick_job_result", terminal, callback=True) == ack
+            assert agent.emit("quick_job_result", {**terminal, "stdout":"forged replacement receipt"}, callback=True) == {"error":"worker_receipt_uncommitted"}
+            with runtime.db_conn_factory() as conn:
+                ledger = json.loads(conn.execute("SELECT metadata_json FROM job_scheduler_worker_routes WHERE worker_guid=?", (runtime.worker_guid,)).fetchone()[0])["worker_admission"]["operations"]
+            assert set(ledger) == {old_binding["token"]}
+            assert browser.emit("vpn_shell_close", {}, callback=True)["status"] == "ok"
+        browser.disconnect()
+        assert _claim_count(runtime) == 1, "shell transport close released custody"
+        assert binding(old_shell) == old_binding
+        assert agent.emit("quick_job_result", receipt(old_shell), callback=True)["status"] == "committed"
+        assert _claim_count(runtime) == 0
+    finally:
+        if browser.is_connected():
+            browser.disconnect()
+        agent.disconnect()
+
+
+@pytest.mark.parametrize("response_kind", ("timeout", "legacy_rejection"))
+def test_worker_shell_restart_uncertain_call_retains_charge(tmp_path, monkeypatch, response_kind):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    sent = []
+
+    def dispatch(_hostname, _mode, event, packet, *, timeout):
+        assert event == "remote_shell_restart"
+        sent.append(packet)
+        if response_kind == "timeout":
+            raise TimeoutError("restart dispatch response lost")
+        # Older Agent with base worker-operation support rejects this tracked
+        # event after grant but before effects. Hold its terminal callback to
+        # prove the ordinary error ACK cannot substitute for that receipt.
+        assert agent.emit("quick_job_progress", {"job_id":packet["job_id"], "status":"Running", "context":packet["context"], "worker_operation_preflight":{"version":1, "nonce":"d" * 32}}, callback=True)["status"] == "execute"
+        return {"ok":False, "status":"rejected", "error":"worker_operation_unavailable"}
+
+    monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+    try:
+        if response_kind == "timeout":
+            with pytest.raises(TimeoutError, match="restart dispatch response lost"):
+                runtime.call_host_service_event(AGENT_HOSTNAME, "system", "remote_shell_restart", {})
+        else:
+            assert runtime.call_host_service_event(AGENT_HOSTNAME, "system", "remote_shell_restart", {}) == {"ok":False, "status":"rejected", "error":"worker_operation_unavailable"}
+        assert len(sent) == 1
+        assert _claim_count(runtime) == 1
+        assert runtime._pending_host_events == {}
+        packet = sent[0]
+        terminal = {"job_id":packet["job_id"], "status":"Failed", "stdout":"", "stderr":"", "context":packet["context"]}
+        if response_kind == "timeout":
+            assert agent.emit("quick_job_result", terminal, callback=True) == {"error":"worker_receipt_uncommitted"}
+            assert _claim_count(runtime) == 1
+        else:
+            assert agent.emit("quick_job_result", terminal, callback=True)["status"] == "committed"
+            assert _claim_count(runtime) == 0
+    finally:
+        agent.disconnect()
+    assert _claim_count(runtime) == (1 if response_kind == "timeout" else 0)
+
+
+def _signed_currentuser_job(runtime):
+    script = b"Write-Output 'fixture-current-user'\r\n"
+    signer = Ed25519PrivateKey.generate()
+    metadata = {"assembly_guid":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "requested_by":"fixture-operator"}
+    with runtime.db_conn_factory() as conn:
+        job_id = insert_activity_history_row(conn, hostname=AGENT_HOSTNAME, script_path="fixture.ps1", script_name="Current user fixture", script_type="powershell", ran_at=int(time.time()), status="Running", metadata=metadata)
+        conn.commit()
+    assert job_id
+    return {
+        "job_id":job_id, "target_hostname":AGENT_HOSTNAME, "run_mode":"currentuser",
+        "target_context":"currentuser", "session_target":"all_active_sessions",
+        "script_type":"powershell", "script_content":base64.b64encode(script).decode(), "script_encoding":"base64",
+        "signature":base64.b64encode(signer.sign(script)).decode(), "sig_alg":"ed25519",
+        "signing_key":base64.b64encode(signer.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode(),
+        "environment":{"FIXTURE_VALUE":"unchanged"}, "context":{"assembly_guid":metadata["assembly_guid"], "activity_metadata":metadata},
+    }
+
+
+@pytest.mark.parametrize("terminal_status", ("Completed", "Failed"))
+def test_worker_currentuser_signed_job_preserves_original_custody(tmp_path, monkeypatch, terminal_status):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token, helper_contexts=("currentuser",))
+    unaffiliated = runtime.socketio.test_client(runtime.app)
+    payload = _signed_currentuser_job(runtime)
+    original = json.loads(json.dumps(payload))
+    try:
+        assert runtime.registry.get_agent_id_for_host_mode(AGENT_HOSTNAME, "currentuser") == AGENT_ID
+        response = runtime.app.test_client().post("/remote-ops/host-service/event", headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}, json={"hostname":AGENT_HOSTNAME, "service_mode":"currentuser", "event_name":"quick_job_run", "payload":payload})
+        assert response.status_code == 200
+        assert response.get_json()["emitted"] is True
+        packet = next(row["args"][0] for row in agent.get_received() if row["name"] == "quick_job_run")
+        operation = packet["context"]["worker_operation"]
+        assert payload == original
+        assert {key:value for key,value in packet.items() if key != "context"} == {key:value for key,value in original.items() if key != "context"}
+        assert {key:value for key,value in packet["context"].items() if key != "worker_operation"} == original["context"]
+        # Worker preserves the actual Ed25519/SPKI payload; Agent companion
+        # tests own signature validation and native process completion proof.
+        public_key = serialization.load_der_public_key(base64.b64decode(packet["signing_key"]))
+        public_key.verify(base64.b64decode(packet["signature"]), base64.b64decode(packet["script_content"]))
+        request = {"job_id":packet["job_id"], "status":"Running", "context":{"worker_operation":operation}, "worker_operation_preflight":{"version":1, "nonce":"a" * 32}}
+        receipt = {"job_id":packet["job_id"], "status":terminal_status, "stdout":"fixture-output", "stderr":"", "context":packet["context"]}
+        assert agent.emit("quick_job_result", receipt, callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert unaffiliated.emit("quick_job_progress", request, callback=True) == {"error":"worker_preflight_unavailable"}
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        assert agent.emit("quick_job_progress", {**request, "worker_operation_preflight":{"version":1, "nonce":"b" * 32}}, callback=True)["status"] == "deny"
+        with runtime.db_conn_factory() as conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (payload["job_id"],)).fetchone()[0])
+            assert conn.execute("SELECT COUNT(*) FROM activity_history").fetchone()[0] == 1
+        assert metadata["worker_operation"] == {
+            "version":1, "token":operation["token"], "job_id":payload["job_id"], "worker_guid":runtime.worker_guid,
+            "node_name":runtime.admission.node_name, "pod_uid":runtime.admission.pod_uid, "route_generation":1,
+            "site_id":runtime.site_id, "kind":"quick_job_run", "agent_guid":AGENT_GUID.upper(), "grant_nonce":"a" * 32,
+        }
+        assert metadata["assembly_guid"] == payload["context"]["assembly_guid"]
+        assert unaffiliated.emit("quick_job_result", receipt, callback=True) == {"error":"worker_receipt_uncommitted"}
+        forged = {**receipt, "context":{"worker_operation":{"version":1, "token":"f" * 32}}}
+        assert agent.emit("quick_job_result", forged, callback=True) == {"error":"worker_receipt_uncommitted"}
+        agent.emit("quick_job_progress", {**receipt, "metadata":{"worker_operation":{"receipt_sha256":"f" * 64}}}, callback=True)
+        assert _claim_count(runtime) == 1
+        with pytest.raises(AdmissionError, match="worker_operation_already_admitted"):
+            runtime.emit_host_service_event(AGENT_HOSTNAME, "currentuser", "quick_job_run", payload)
+        assert not any(row["name"] == "quick_job_run" for row in agent.get_received())
+        ack = agent.emit("quick_job_result", receipt, callback=True)
+        assert ack == {"worker_operation":operation, "job_id":payload["job_id"], "status":"committed"}
+        assert _claim_count(runtime) == 0
+        assert agent.emit("quick_job_result", receipt, callback=True) == ack
+        assert agent.emit("quick_job_result", {**receipt, "stdout":"forged current-user receipt"}, callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert _claim_count(runtime) == 0
+    finally:
+        unaffiliated.disconnect()
+        agent.disconnect()
+
+
+@pytest.mark.parametrize("response_kind", ("missing", "accepted", "pending", "rejected", "timeout"))
+def test_worker_currentuser_nonterminal_dispatch_retains_charge(tmp_path, monkeypatch, response_kind):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token, helper_contexts=("currentuser",))
+    payload = _signed_currentuser_job(runtime)
+    sent = []
+    response = None if response_kind == "missing" else {"ok":response_kind != "rejected", "status":response_kind}
+
+    def dispatch(hostname, mode, event, packet, *, timeout):
+        assert (hostname, mode, event) == (AGENT_HOSTNAME, "currentuser", "quick_job_run")
+        assert packet["job_id"] == payload["job_id"]
+        sent.append(packet)
+        request = {"job_id":packet["job_id"], "status":"Running", "context":{"worker_operation":packet["context"]["worker_operation"]}, "worker_operation_preflight":{"version":1, "nonce":"c" * 32}}
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        if response_kind == "timeout":
+            raise TimeoutError("current-user dispatch response lost after grant")
+        return response
+
+    monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+    try:
+        if response_kind == "timeout":
+            with pytest.raises(TimeoutError, match="response lost after grant"):
+                runtime.call_host_service_event(AGENT_HOSTNAME, "currentuser", "quick_job_run", payload)
+        else:
+            assert runtime.call_host_service_event(AGENT_HOSTNAME, "currentuser", "quick_job_run", payload) == response
+        assert _claim_count(runtime) == 1, "current-user response released custody without terminal receipt"
+        assert len(sent) == 1
+        assert runtime._pending_host_events == {}
+        with runtime.db_conn_factory() as conn:
+            binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (payload["job_id"],)).fetchone()[0])["worker_operation"]
+        assert binding["grant_nonce"] == "c" * 32
+        assert "receipt_sha256" not in binding
+    finally:
+        agent.disconnect()
+    assert _claim_count(runtime) == 1
+
+
+@pytest.mark.parametrize("helper_contexts,version", (((), 1), (("currentuser",), None), (("currentuser",), 0)))
+def test_worker_currentuser_requires_helper_route_and_operation_capability(tmp_path, monkeypatch, helper_contexts, version):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token, version=version, helper_contexts=helper_contexts)
+    payload = _signed_currentuser_job(runtime)
+    try:
+        if not helper_contexts:
+            assert runtime.emit_host_service_event(AGENT_HOSTNAME, "currentuser", "quick_job_run", payload) is False
+        else:
+            with pytest.raises(AdmissionError, match="worker_operation_capability_required"):
+                runtime.emit_host_service_event(AGENT_HOSTNAME, "currentuser", "quick_job_run", payload)
+        assert _claim_count(runtime) == 0
+        assert agent.get_received() == []
+        assert runtime._pending_host_events == {}
+    finally:
+        agent.disconnect()
+
+
+@pytest.mark.parametrize("mode,terminal_status", (("managed", "Completed"), ("frozen", "Completed"), ("unmanaged", "Completed"), ("managed", "Failed")))
+def test_worker_patch_policy_response_requires_original_terminal_receipt(tmp_path, monkeypatch, mode, terminal_status):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    request_id = "fixture-policy-request"
+    with runtime.db_conn_factory() as conn:
+        job_id = insert_activity_history_row(conn, hostname=AGENT_HOSTNAME, script_path="", script_name="Policy enforcement fixture", script_type="", ran_at=int(time.time()), status="Running", metadata={"request_id":request_id})
+        conn.commit()
+    payload = {"job_id":job_id, "hostname":AGENT_HOSTNAME, "request_id":request_id, "enforcement_mode":mode, "context":{"policy_id":7}}
+    original = json.loads(json.dumps(payload))
+    policy_response = {"ok":True, "status":"applied", "request_id":request_id, "mode":mode, "stdout":"", "stderr":"", "exit_code":0, "drift_detected":False}
+    if terminal_status == "Failed":
+        policy_response.update(ok=False, status="failed", exit_code=1, error="patch_policy_enforcement_failed")
+    sent = []
+
+    def dispatch(hostname, service_mode, event, packet, *, timeout):
+        assert (hostname, service_mode, event) == (AGENT_HOSTNAME, "system", "patch_policy_enforcement_request")
+        sent.append(packet)
+        assert {key:value for key,value in packet.items() if key != "context"} == {key:value for key,value in original.items() if key != "context"}
+        assert {key:value for key,value in packet["context"].items() if key != "worker_operation"} == original["context"]
+        request = {"job_id":job_id, "status":"Running", "context":{"worker_operation":packet["context"]["worker_operation"]}, "worker_operation_preflight":{"version":1, "nonce":"a" * 32}}
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        assert agent.emit("quick_job_progress", {**request, "worker_operation_preflight":{"version":1, "nonce":"b" * 32}}, callback=True)["status"] == "deny"
+        return policy_response
+
+    monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+    try:
+        result = runtime.app.test_client().post("/remote-ops/host-service/call", headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}, json={"hostname":AGENT_HOSTNAME, "event_name":"patch_policy_enforcement_request", "payload":payload})
+        assert result.status_code == 200, result.get_json()
+        assert result.get_json() == {"called":True, "response":policy_response}
+        assert _claim_count(runtime) == 1, "policy response released custody without terminal receipt"
+        assert payload == original
+        assert len(sent) == 1
+        packet = sent[0]
+        operation = packet["context"]["worker_operation"]
+        with runtime.db_conn_factory() as conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (job_id,)).fetchone()[0])
+            assert conn.execute("SELECT COUNT(*) FROM activity_history").fetchone()[0] == 1
+        assert metadata["request_id"] == request_id
+        assert metadata["worker_operation"] == {
+            "version":1, "token":operation["token"], "job_id":job_id, "worker_guid":runtime.worker_guid,
+            "node_name":runtime.admission.node_name, "pod_uid":runtime.admission.pod_uid, "route_generation":1,
+            "site_id":runtime.site_id, "kind":"patch_policy_enforcement_request", "agent_guid":AGENT_GUID.upper(), "grant_nonce":"a" * 32,
+        }
+        with pytest.raises(AdmissionError, match="worker_operation_already_admitted"):
+            runtime.call_host_service_event(AGENT_HOSTNAME, "system", "patch_policy_enforcement_request", payload)
+        assert len(sent) == 1
+        receipt = {"job_id":job_id, "status":terminal_status, "stdout":"", "stderr":"", "context":packet["context"]}
+        assert agent.emit("quick_job_result", {**receipt, "status":"applied"}, callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert _claim_count(runtime) == 1
+        ack = agent.emit("quick_job_result", receipt, callback=True)
+        assert ack == {"worker_operation":operation, "job_id":job_id, "status":"committed"}
+        assert _claim_count(runtime) == 0
+        assert agent.emit("quick_job_result", receipt, callback=True) == ack
+        assert agent.emit("quick_job_result", {**receipt, "stdout":"forged policy receipt"}, callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert _claim_count(runtime) == 0
+    finally:
+        agent.disconnect()
+
+
+@pytest.mark.parametrize("response_kind", ("missing", "malformed", "pending", "rejected", "timeout"))
+def test_worker_patch_policy_uncertain_dispatch_retains_charge(tmp_path, monkeypatch, response_kind):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    payload = {"hostname":AGENT_HOSTNAME, "request_id":"fixture-policy-uncertain", "enforcement_mode":"managed"}
+    response = None if response_kind == "missing" else {"ok":response_kind != "rejected", "status":response_kind}
+    if response_kind == "malformed":
+        response = ["not", "a", "policy", "result"]
+    elif response_kind == "pending":
+        response = {"ok":False, "status":"pending", "error":"patch_policy_completion_unconfirmed"}
+    elif response_kind == "rejected":
+        response = {"ok":False, "status":"rejected", "error":"worker_operation_unavailable"}
+    sent = []
+
+    def dispatch(_hostname, _mode, event, packet, *, timeout):
+        assert event == "patch_policy_enforcement_request"
+        sent.append(packet)
+        request = {"job_id":packet["job_id"], "status":"Running", "context":packet["context"], "worker_operation_preflight":{"version":1, "nonce":"c" * 32}}
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        if response_kind == "timeout":
+            raise TimeoutError("policy dispatch response lost after grant")
+        return response
+
+    monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+    try:
+        if response_kind == "timeout":
+            with pytest.raises(TimeoutError, match="response lost after grant"):
+                runtime.call_host_service_event(AGENT_HOSTNAME, "system", "patch_policy_enforcement_request", payload)
+        else:
+            assert runtime.call_host_service_event(AGENT_HOSTNAME, "system", "patch_policy_enforcement_request", payload) == response
+        assert _claim_count(runtime) == 1
+        assert len(sent) == 1
+        assert runtime._pending_host_events == {}
+        with runtime.db_conn_factory() as conn:
+            binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (sent[0]["job_id"],)).fetchone()[0])["worker_operation"]
+        assert binding["grant_nonce"] == "c" * 32
+        assert "receipt_sha256" not in binding
+    finally:
+        agent.disconnect()
+    assert _claim_count(runtime) == 1

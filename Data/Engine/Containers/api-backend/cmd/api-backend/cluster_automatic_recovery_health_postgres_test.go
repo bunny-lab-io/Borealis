@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
-	for _, mode := range []string{"partial health", "holder before", "holder after", "expiry before", "expiry after", "cluster after", "drain after", "node after", "logical cluster mismatch", "runner mismatch", "target mismatch"} {
+	for _, mode := range []string{"partial health", "holder before", "holder after", "expiry before", "expiry after", "cluster after", "drain after", "node after", "logical cluster mismatch", "runner mismatch", "target mismatch", "first close after", "last close after", "cancel close after"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newAutomaticRecoveryPostgresFixture(t)
 			r := f.reserve(t)
@@ -66,8 +70,42 @@ func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(object)
 			}))
 			defer server.Close()
-			runner := &kubernetesClusterStepRunner{controllerHolder: r.Controller, kube: &kubernetesAPIClient{baseURL: server.URL, httpClient: server.Client()}}
+			client := server.Client()
+			base := client.Transport
+			var active, closes atomic.Int64
+			closed, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			defer unblock.Do(func() { close(release) })
+			transport := &cohortMembershipTransport{roundTrip: func(request *http.Request) (*http.Response, error) {
+				response, err := base.RoundTrip(request)
+				if response != nil && response.Body != nil {
+					active.Add(1)
+					response.Body = &cohortMembershipBody{response.Body, func() error {
+						defer active.Add(-1)
+						n := closes.Add(1)
+						if f.c.controller.store.db.Stats().InUse != 0 {
+							t.Error("database connection retained during native health cleanup")
+						}
+						if mode == "cancel close after" && n == 4 {
+							close(closed)
+							<-release
+						}
+						if mode == "first close after" && n == 1 || mode == "last close after" && n == 4 {
+							return errors.New("synthetic private native response cleanup failure")
+						}
+						return nil
+					}}
+				}
+				return response, err
+			}}
+			client.Transport = transport
+			runner := &kubernetesClusterStepRunner{controllerHolder: r.Controller, kube: &kubernetesAPIClient{baseURL: server.URL, httpClient: client}}
 			f.c.controller.runner = runner
+			defer func() {
+				if active.Load() != 0 || transport.idleCalls.Load() != 0 || client.Transport != transport || runner.kube.httpClient != client {
+					t.Error("native health escaped cleanup or changed shared transport")
+				}
+			}()
 			if mode == "logical cluster mismatch" {
 				b.ClusterID = newClusterUUID()
 			}
@@ -79,6 +117,54 @@ func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
 				target.ID = newClusterUUID()
 			}
 			observer := f.c.nodeHealthObserver(b)
+			if mode == "cancel close after" {
+				ctx, cancel := context.WithCancel(f.ctx)
+				defer cancel()
+				type result struct {
+					health clusterAutomaticRecoveryHealth
+					err    error
+				}
+				done := make(chan result, 1)
+				go func() { health, err := observer(ctx, target); done <- result{health, err} }()
+				joined := false
+				defer func() {
+					cancel()
+					unblock.Do(func() { close(release) })
+					if !joined {
+						select {
+						case <-done:
+						case <-time.After(5 * time.Second):
+							t.Error("native health did not join released cleanup")
+						}
+					}
+				}()
+				select {
+				case <-closed:
+				case got := <-done:
+					joined = true
+					t.Fatal("native health returned before cleanup gate", got)
+				case <-ctx.Done():
+					t.Fatal("native health never reached cleanup gate")
+				}
+				cancel()
+				select {
+				case got := <-done:
+					joined = true
+					t.Fatal("native health escaped cancellation before cleanup joined", got)
+				case <-time.After(25 * time.Millisecond):
+				}
+				unblock.Do(func() { close(release) })
+				select {
+				case got := <-done:
+					joined = true
+					if got.err == nil || got.health != (clusterAutomaticRecoveryHealth{}) || calls.Load() != 4 || closes.Load() != 4 {
+						t.Fatal("cancelled cleanup retained health", got)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("native health did not join cleanup")
+				}
+				return
+			}
 			if mode != "partial health" {
 				health, err := observer(f.ctx, target)
 				if err == nil || health != (clusterAutomaticRecoveryHealth{}) {

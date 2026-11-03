@@ -55,6 +55,10 @@ The `Pending Updates` policy column shows approved, deferral-ready unique update
 
 ## Exclusions and Reboots
 
+!!! info
+
+    Saving a policy records desired configuration. Automatic delivery of Windows Update registry enforcement remains incomplete; a saved policy or pending enforcement status does not prove endpoint settings changed. Existing tracked command completion does not qualify patch installation or reboot recovery.
+
 Use `Unmanaged` when Borealis should do no patch installs and no Windows Update enforcement for a device. Use `Frozen` when Borealis should not install updates, but the Agent should still enforce Windows Update lock/freeze settings. Child policies can use `Managed Override` to explicitly clear inherited `Unmanaged` or `Frozen` coverage for matching devices or filters. Hostname exclusions require a site selection so duplicate hostnames in different sites stay distinct. Excluded devices still count as covered during conflict checks.
 
 Reboots are off by default. If enabled, reboot policy can use a separate schedule. Agents skip rebooting devices with a logged-in user unless the policy explicitly allows forced logged-in-user reboots.
@@ -149,7 +153,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Policy evaluation syncs `patch_catalog_entries` from current `device_patch_inventory`, resolves covered Windows devices, applies `Unmanaged`/`Frozen` exclusions, checks deferral, and groups approved pending inventory by KB/update identity.
     - Each policy run writes `patch_policy_runs`, then creates one enabled `job_kind=patch_install` scheduled job per KB/update identity. The scheduled job component carries `trigger=policy`, `policy_id`, and `policy_run_id`.
     - Active install lockout reuses the existing patch active-job identity map and skips policy-created duplicate KB/update deployments while another enabled patch install job owns the same identity.
-    - Agent `patch_policy_enforcement_request` applies Borealis-owned reversible Windows Update policy registry settings. Managed/frozen mode sets Windows Update policy values that prevent automatic installs while preserving the Borealis SYSTEM WUA scan/install path. Unmanaged mode restores Borealis-backed-up values.
+    - Agent `patch_policy_enforcement_request` applies Borealis-owned reversible Windows Update policy registry settings. Managed/frozen mode sets Windows Update policy values that prevent automatic installs while preserving the Borealis SYSTEM WUA scan/install path. Unmanaged mode restores Borealis-backed-up values. The tracked worker adapter uses existing nonce admission and exact terminal receipts. An `applied` acknowledgement alone cannot settle capacity; original command exit, output/cleanup join and exact request/mode result are required. Unknown wait retains custody. The Go evaluator currently writes pending device enforcement state without a production emitter for this event; enabling the private adapter does not complete that integration. See [Agent runtime](../Reference/Core%20Runtimes/agent-runtime.md#durable-worker-operation-custody) for ownership rules.
     - Agent `patch_reboot_request` schedules Windows reboot only when policy asks for it. It skips logged-in users unless `force_logged_in_user` is true.
     - Scheduled patch jobs use names like `[Ad-Hoc Install] KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
     - Bulk scheduled patch jobs use names like `[Bulk Ad-Hoc Install] - KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.

@@ -44,21 +44,30 @@ func (c *clusterAutomaticRecoveryCoordinator) nativeHealthObserver(binding clust
 			return fail()
 		}
 		runner, ok := c.controller.runner.(*kubernetesClusterStepRunner)
-		if !ok || runner == nil || runner.kube == nil || runner.controllerHolder != binding.Controller {
+		if !ok || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != binding.Controller {
 			return fail()
 		}
+		// This observation owns its response accounting, never the shared
+		// transport. A joined but failed body Close cannot supply health proof.
+		transport := runner.kube.httpClient.Transport
+		if transport == nil {
+			transport = http.DefaultTransport
+		}
+		cleanup := &clusterSSHMembershipHTTP{transport: transport}
+		client, kube := *runner.kube.httpClient, *runner.kube
+		client.Transport, kube.httpClient = cleanup, &client
 		ctx, cancel := context.WithTimeout(parent, clusterControllerLeaseAcquireTimeout)
 		defer cancel()
 		before, started, err := readClusterAutomaticRecoverySnapshot(ctx, c.controller.store.db, binding.Controller)
 		if err != nil || before.ClusterID != binding.ClusterID || !reflect.DeepEqual(clusterNodeByID(before.Nodes, binding.NodeID), node) {
 			return fail()
 		}
-		health, err := read(ctx, runner.kube)
-		if err != nil {
+		health, err := read(ctx, &kube)
+		if err != nil || !cleanup.clean() || ctx.Err() != nil {
 			return fail()
 		}
 		after, finished, err := readClusterAutomaticRecoverySnapshot(ctx, c.controller.store.db, binding.Controller)
-		if err != nil || ctx.Err() != nil || finished < started || !reflect.DeepEqual(before, after) ||
+		if err != nil || ctx.Err() != nil || !cleanup.clean() || finished < started || !reflect.DeepEqual(before, after) ||
 			c.controller.holder != binding.Controller || runner.controllerHolder != binding.Controller {
 			return fail()
 		}

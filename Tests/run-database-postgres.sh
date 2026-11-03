@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=Tests/lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
-TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-3300}"
+TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-3600}"
 RESULT_DIR="$(result_dir_for database-postgres)"
 GO_BIN="$(resolve_go 1.25.12)"
 require_command python3
@@ -109,7 +109,7 @@ fi
 if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
-  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json -timeout=50m ./cmd/api-backend \
+  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json -timeout=55m ./cmd/api-backend \
   -run "${TEST_PATTERN}" -count=1 \
   >"${RESULT_DIR}/postgres-go-results.jsonl" 2>"${RESULT_DIR}/postgres-go-stderr.log"; then
   tail -n 160 "${RESULT_DIR}/postgres-go-results.jsonl" "${RESULT_DIR}/postgres-go-stderr.log" >&2 || true

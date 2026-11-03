@@ -391,7 +391,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.patches != nil {
 		socket.On("patch_inventory_refresh_request", operations.async("patch_inventory_refresh_request", a.patches.HandleRefreshRequestWithCompletion))
 		socket.On("patch_install_request", operations.synchronous("patch_install_request", a.patches.HandleInstallRequest, workerOperationUnsupported))
-		socket.On("patch_policy_enforcement_request", operations.synchronous("patch_policy_enforcement_request", a.patches.HandlePolicyEnforcementRequest, workerOperationUnsupported))
+		socket.On("patch_policy_enforcement_request", operations.async("patch_policy_enforcement_request", a.patches.HandlePolicyEnforcementRequestWithCompletion))
 		socket.On("patch_reboot_request", operations.synchronous("patch_reboot_request", a.patches.HandleRebootRequest, workerOperationUnsupported))
 	}
 	if a.software != nil {
@@ -404,7 +404,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	if a.remoteShell != nil {
 		defer a.remoteShell.SetOperationBinder(operations.bindShell)()
-		socket.On("remote_shell_restart", operations.synchronous("remote_shell_restart", a.handleRemoteShellRestart, workerOperationUnsupported))
+		socket.On("remote_shell_restart", operations.async("remote_shell_restart", a.handleRemoteShellRestartWithCompletion))
 	}
 	if a.vnc != nil {
 		socket.On("vnc_start", operations.synchronous("vnc_start", a.vnc.HandleStart, workerOperationUnsupported))

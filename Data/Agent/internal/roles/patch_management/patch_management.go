@@ -37,6 +37,7 @@ type Manager struct {
 	hostname          string
 	serviceMode       string
 	runner            commandRunner
+	policyRunner      policyCommandRunner
 	installRunner     patchInstallCommandRunner
 	progressPoster    patchProgressPoster
 	publisher         func(context.Context, Snapshot) error
@@ -89,6 +90,14 @@ type commandResult struct {
 }
 
 type commandRunner func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error)
+
+// Private native outcome, never inferred from policy JSON or an acknowledgement.
+type commandCompletion struct {
+	started bool
+	joined  bool
+}
+
+type policyCommandRunner func(context.Context, time.Duration, string, ...string) (commandResult, commandCompletion, error)
 type patchInstallCommandRunner func(ctx context.Context, timeout time.Duration, request map[string]any, onProgress func(map[string]any)) (patchInstallResult, error)
 type patchProgressPoster func(ctx context.Context, payload map[string]any) error
 
@@ -99,6 +108,7 @@ func New(authClient *auth.Client, hostname string, serviceMode string) *Manager 
 		hostname:          strings.TrimSpace(hostname),
 		serviceMode:       auth.NormalizeServiceMode(serviceMode),
 		runner:            runCommand,
+		policyRunner:      runCommandWithCompletion,
 		wakeup:            make(chan struct{}, 1),
 		supported:         supported,
 		unsupportedReason: reason,
@@ -286,6 +296,12 @@ func (m *Manager) HandleInstallRequest(ctx context.Context, payload any) (any, e
 }
 
 func (m *Manager) HandlePolicyEnforcementRequest(ctx context.Context, payload any) (any, error) {
+	return m.HandlePolicyEnforcementRequestWithCompletion(ctx, payload, nil)
+}
+
+// Completion belongs to the original command, after Wait and owned output
+// cleanup. Legacy callers retain their response without gaining terminal proof.
+func (m *Manager) HandlePolicyEnforcementRequestWithCompletion(ctx context.Context, payload any, complete func(error)) (any, error) {
 	body, ok := payload.(map[string]any)
 	if !ok {
 		return errorResponse("invalid_request", "Patch policy enforcement payload must be an object."), nil
@@ -301,11 +317,23 @@ func (m *Manager) HandlePolicyEnforcementRequest(ctx context.Context, payload an
 		return errorResponse("invalid_enforcement_mode", "Patch policy enforcement mode must be managed, frozen, or unmanaged."), nil
 	}
 	requestID := fallbackText(cleanText(body["request_id"]), fmt.Sprintf("patch-policy-%d", time.Now().UnixNano()))
-	runner := m.runner
-	if runner == nil {
-		runner = runCommand
+	args := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchPolicyEnforcementScript(mode, requestID)}
+	var result commandResult
+	var ownership commandCompletion
+	var err error
+	if complete == nil {
+		runner := m.runner
+		if runner == nil {
+			runner = runCommand
+		}
+		result, err = runner(ctx, patchPolicyTimeout, "powershell.exe", args...)
+	} else {
+		runner := m.policyRunner
+		if runner == nil {
+			runner = runCommandWithCompletion
+		}
+		result, ownership, err = runner(ctx, patchPolicyTimeout, "powershell.exe", args...)
 	}
-	result, err := runner(ctx, patchPolicyTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchPolicyEnforcementScript(mode, requestID))
 	parsed := parseLastJSONObject(result.Stdout)
 	response := map[string]any{
 		"ok":             err == nil && result.ExitCode == 0,
@@ -325,6 +353,26 @@ func (m *Manager) HandlePolicyEnforcementRequest(ctx context.Context, payload an
 		response["status"] = "failed"
 		response["error"] = "patch_policy_enforcement_failed"
 		response["message"] = commandError(result, err).Error()
+	}
+	if complete != nil {
+		if ownership.started && !ownership.joined {
+			// Unknown wait is neither ordinary failure nor stopped-process proof.
+			response["ok"], response["status"] = false, "pending"
+			response["error"] = "patch_policy_completion_unconfirmed"
+			return response, nil
+		}
+		completionErr := err
+		if !ownership.started || result.ExitCode != 0 {
+			completionErr = commandError(result, err)
+		}
+		if completionErr == nil && (parsed["ok"] != true || parsed["status"] != "applied" || parsed["request_id"] != requestID || parsed["mode"] != mode) {
+			completionErr = fmt.Errorf("Patch policy result does not match the original request.")
+		}
+		if completionErr != nil {
+			response["ok"], response["status"] = false, "failed"
+			response["error"], response["message"] = "patch_policy_enforcement_failed", completionErr.Error()
+		}
+		complete(completionErr)
 	}
 	return response, nil
 }
@@ -1340,6 +1388,11 @@ func commandError(result commandResult, err error) error {
 }
 
 func runCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+	result, _, err := runCommandWithCompletion(ctx, timeout, name, args...)
+	return result, err
+}
+
+func runCommandWithCompletion(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, commandCompletion, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(commandCtx, name, args...)
@@ -1347,17 +1400,24 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 	var stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return commandResult{ExitCode: -1}, commandCompletion{}, err
+	}
+	// Wait joins this exact process and the stdout/stderr copy goroutines and
+	// closes their owned pipes. Cancellation/exit-code values alone do not prove
+	// that an original process whose Wait failed has stopped.
+	err := cmd.Wait()
+	ownership := commandCompletion{started: true, joined: cmd.ProcessState != nil}
 	result := commandResult{Stdout: stdout.String(), Stderr: stderr.String()}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		result.ExitCode = exitErr.ExitCode()
-		return result, err
+		return result, ownership, err
 	}
 	if err != nil {
 		result.ExitCode = -1
-		return result, err
+		return result, ownership, err
 	}
-	return result, nil
+	return result, ownership, nil
 }
 
 func runWindowsPatchInstallCommand(ctx context.Context, timeout time.Duration, request map[string]any, onProgress func(map[string]any)) (patchInstallResult, error) {

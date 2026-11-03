@@ -93,6 +93,8 @@
     "TestClusterSSHPreparationRecoveryPostgresRejectsDrift",
     "TestClusterSSHPreparationRecoveryProgressPostgresCustody",
     "TestClusterSSHPreparationRecoveryProgressPostgresJoinsCancellation",
+    "TestClusterSSHPreparationRecoveryReissueCustodyPostgresFences",
+    "TestClusterSSHPreparationRecoveryReissueCustodyPostgresJoinsCleanup",
     "TestClusterSSHPreparationRecoveryReissuePostgresAtomicLineage",
     "TestClusterSSHPreparationRecoveryReissuePostgresJoinsCancellation",
     "TestClusterSSHPreparationRecoveryReissuePostgresPostWriteFence",

@@ -309,7 +309,7 @@ func (c *workerOperationConnection) scripts(handler transport.Handler, hostname 
 		mode, _ := body["run_mode"].(string)
 		validMode := false
 		switch strings.ToLower(strings.TrimSpace(mode)) {
-		case "", "system":
+		case "", "system", "currentuser":
 			validMode = true
 		}
 		if !validMode || strings.TrimSpace(target) != "" && !strings.EqualFold(strings.TrimSpace(target), strings.TrimSpace(hostname)) {

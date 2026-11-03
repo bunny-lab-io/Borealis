@@ -207,7 +207,7 @@ jobs:
     if: needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
     # Include setup, bounded expanded race coverage, and diagnostic upload.
-    timeout-minutes: 65
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
