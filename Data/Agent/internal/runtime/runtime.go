@@ -413,7 +413,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vnc_credential_request", operations.synchronous("vnc_credential_request", a.vnc.HandleCredentialRequest, workerOperationUnsupported))
 	}
 	if a.rdp != nil {
-		socket.On("rdp_start", operations.synchronous("rdp_start", a.rdp.HandleStart, workerOperationUnsupported))
+		socket.On("rdp_start", operations.async("rdp_start", a.rdp.HandleStartWithCompletion))
 	}
 	socket.On("agent_update_request", operations.synchronous("agent_update_request", a.handleUpdateRequest, workerOperationUnsupported))
 	socket.On("agent_maintenance_request", operations.synchronous("agent_maintenance_request", a.handleAgentMaintenanceRequest, workerOperationUnsupported))

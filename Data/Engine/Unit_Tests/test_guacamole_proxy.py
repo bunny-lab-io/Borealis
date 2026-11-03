@@ -691,3 +691,287 @@ def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypat
     assert websocket.sent[0] == encode_instruction("", "uuid-1")
     assert websocket.sent[1] == encode_instruction("size", "0", "1024", "768") + encode_instruction("sync", "1234")
     assert first_frames == ["size"]
+
+
+class _CleanupPump:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.finish = asyncio.Event()
+        self.cleanup_started = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+        self.task = None
+        self.exited = False
+        self.failure = None
+        self.cleanup_failure = False
+
+    async def run(self) -> None:
+        self.task = asyncio.current_task()
+        self.started.set()
+        try:
+            await self.finish.wait()
+            if self.failure == "cancel":
+                raise asyncio.CancelledError
+            if self.failure:
+                raise RuntimeError("sensitive forwarding fixture")
+        finally:
+            self.cleanup_started.set()
+            await self.release_cleanup.wait()
+            self.exited = True
+            if self.cleanup_failure:
+                raise RuntimeError("sensitive cleanup fixture")
+
+
+class _CleanupWriter(_FakeWriter):
+    def __init__(self, failure=None) -> None:
+        super().__init__()
+        self.failure = failure
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+        self.close_finished = False
+        self.close_cancelled = False
+
+    def close(self) -> None:
+        super().close()
+        if self.failure == "close":
+            raise RuntimeError("sensitive writer fixture")
+
+    async def wait_closed(self) -> None:
+        self.close_started.set()
+        try:
+            await self.release_close.wait()
+        except asyncio.CancelledError:
+            self.close_cancelled = True
+            raise
+        self.close_finished = True
+        if self.failure == "wait":
+            raise RuntimeError("sensitive writer fixture")
+        if self.failure == "cancel":
+            raise asyncio.CancelledError
+
+
+def _cleanup_session():
+    return GuacamoleVncSession(token="fixture", agent_id="agent-1", host="10.255.0.4", port=5900, password="fixture", created_at=0, expires_at=120)
+
+
+def _cleanup_bridge(websocket):
+    return guacamole_proxy.proxy_guacamole_vnc_session(websocket=websocket, session=_cleanup_session(), logger=logging.getLogger("test.guacamole.cleanup"), guacd_host="unused.invalid", guacd_port=4822)
+
+
+async def _assert_cleanup_pending(task, message):
+    done, _pending = await asyncio.wait([task], timeout=0.025)
+    assert not done, message
+
+
+@pytest.mark.parametrize("ending", ("outer_cancel", "browser_error", "server_error", "child_cancel", "child_cancelling", "cleanup_error", "normal"))
+def test_guacamole_bridge_joins_owned_forwarders(monkeypatch, caplog, ending):
+    caplog.set_level(logging.INFO, logger="test.guacamole.cleanup")
+
+    async def exercise():
+        browser, server = _CleanupPump(), _CleanupPump()
+        writer = _FakeWriter()
+
+        class Reader:
+            async def read(self, _size):
+                await server.run()
+                return b""
+
+        class WebSocket(_FakeWebSocket):
+            async def __anext__(self):
+                await browser.run()
+                raise StopAsyncIteration
+
+        async def open_ready(**_kwargs):
+            return Reader(), writer, "fixture", []
+
+        monkeypatch.setattr(guacamole_proxy, "_open_ready_guacd", open_ready)
+        bridge = asyncio.create_task(_cleanup_bridge(WebSocket([])))
+        barrier = None
+        try:
+            await asyncio.wait_for(asyncio.gather(browser.started.wait(), server.started.wait()), 1)
+            if ending == "outer_cancel":
+                bridge.cancel()
+            elif ending == "child_cancelling":
+                browser.task.cancel()
+                await asyncio.wait_for(browser.cleanup_started.wait(), 1)
+                bridge.cancel()
+            else:
+                first = server if ending == "server_error" else browser
+                first.failure = "cancel" if ending == "child_cancel" else ("error" if ending.endswith("_error") and ending != "cleanup_error" else None)
+                first.release_cleanup.set()
+                first.finish.set()
+                if ending == "cleanup_error":
+                    server.cleanup_failure = True
+            barrier = asyncio.ensure_future(asyncio.gather(browser.cleanup_started.wait(), server.cleanup_started.wait()))
+            await asyncio.wait([bridge, barrier], timeout=1, return_when=asyncio.FIRST_COMPLETED)
+            assert not bridge.done(), "bridge escaped with owned forwarding tasks running"
+            assert barrier.done(), "bridge did not cancel both owned forwarding tasks"
+            assert not writer.closed, "writer closed before forwarding cleanup joined"
+            if ending in {"outer_cancel", "child_cancelling"}:
+                bridge.cancel()
+                await _assert_cleanup_pending(bridge, "repeated cancellation detached forwarding cleanup")
+                assert not browser.exited and not server.exited
+                assert browser.task.cancelling() == server.task.cancelling() == 1
+            browser.release_cleanup.set()
+            server.release_cleanup.set()
+            if ending == "outer_cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await bridge
+            elif ending == "normal":
+                await bridge
+            else:
+                with pytest.raises(RuntimeError, match="^guacd_forwarding_failed$"):
+                    await bridge
+            assert browser.exited and server.exited and writer.closed
+            assert browser.task.done() and server.task.done()
+        finally:
+            browser.finish.set()
+            server.finish.set()
+            browser.release_cleanup.set()
+            server.release_cleanup.set()
+            for task in (bridge, browser.task, server.task):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(*(task for task in (bridge, browser.task, server.task, barrier) if task is not None), return_exceptions=True)
+
+    asyncio.run(exercise())
+    completed = [record for record in caplog.records if "bridge completed" in record.message]
+    assert bool(completed) == (ending == "normal")
+    assert "sensitive" not in caplog.text
+
+
+@pytest.mark.parametrize("ending", ("normal", "outer_cancel", "close", "wait", "cancel"))
+def test_guacamole_bridge_waits_for_owned_writer(monkeypatch, caplog, ending):
+    caplog.set_level(logging.INFO, logger="test.guacamole.cleanup")
+
+    async def exercise():
+        writer = _CleanupWriter(ending)
+
+        async def open_ready(**_kwargs):
+            return _FakeReader([]), writer, "fixture", []
+
+        monkeypatch.setattr(guacamole_proxy, "_open_ready_guacd", open_ready)
+        bridge = asyncio.create_task(_cleanup_bridge(_FakeWebSocket([])))
+        try:
+            await asyncio.wait_for(writer.close_started.wait(), 1)
+            await _assert_cleanup_pending(bridge, "bridge returned before writer cleanup")
+            assert not any("bridge completed" in record.message for record in caplog.records)
+            if ending == "outer_cancel":
+                bridge.cancel()
+                await _assert_cleanup_pending(bridge, "cancellation detached writer cleanup")
+                bridge.cancel()
+                await _assert_cleanup_pending(bridge, "repeated cancellation detached writer cleanup")
+                assert not writer.close_cancelled
+            writer.release_close.set()
+            if ending == "outer_cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await bridge
+            elif ending == "normal":
+                await bridge
+            else:
+                with pytest.raises(RuntimeError, match="^guacd_cleanup_failed$"):
+                    await bridge
+            assert writer.closed and writer.close_finished
+        finally:
+            writer.release_close.set()
+            await asyncio.gather(bridge, return_exceptions=True)
+
+    asyncio.run(exercise())
+    assert bool([record for record in caplog.records if "bridge completed" in record.message]) == (ending == "normal")
+    assert "sensitive" not in caplog.text
+
+
+def test_guacamole_handshake_cancellation_joins_current_writer(monkeypatch):
+    async def exercise():
+        started = asyncio.Event()
+        writer = _CleanupWriter()
+
+        class Reader:
+            async def read(self, _size):
+                started.set()
+                await asyncio.Event().wait()
+
+        async def open_connection(_host, _port):
+            return Reader(), writer
+
+        monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", open_connection)
+        bridge = asyncio.create_task(_cleanup_bridge(_FakeWebSocket([])))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            bridge.cancel()
+            await asyncio.wait_for(writer.close_started.wait(), 1)
+            bridge.cancel()
+            await _assert_cleanup_pending(bridge, "handshake cancellation detached owned writer")
+            assert not writer.close_cancelled
+            writer.release_close.set()
+            with pytest.raises(asyncio.CancelledError):
+                await bridge
+            assert writer.close_finished
+        finally:
+            writer.release_close.set()
+            await asyncio.gather(bridge, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_guacamole_failed_writer_cleanup_stops_retry(monkeypatch):
+    attempts = []
+
+    async def exercise():
+        writer = _CleanupWriter("wait")
+        writer.release_close.set()
+
+        async def open_connection(_host, _port):
+            attempts.append(True)
+            return _FakeReader([encode_instruction("unexpected").encode()]), writer
+
+        monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", open_connection)
+        with pytest.raises(RuntimeError, match="^guacd_cleanup_failed$"):
+            await _cleanup_bridge(_FakeWebSocket([]))
+        assert writer.closed and writer.close_finished
+
+    asyncio.run(exercise())
+    assert attempts == [True], "retry started before prior writer cleanup was proven"
+
+
+@pytest.mark.parametrize("cleanup_fails", (False, True))
+def test_guacamole_cleanup_preserves_websocket_close_after_join(monkeypatch, cleanup_fails):
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+    from Data.Engine.services.RemoteDesktop import vnc_proxy
+
+    async def exercise():
+        writer = _CleanupWriter("wait" if cleanup_fails else None)
+        closed = []
+        callbacks = []
+        registry = guacamole_proxy.GuacamoleSessionRegistry(ttl_seconds=120, logger=logging.getLogger("test.guac.registry"))
+        session = registry.create(agent_id="agent-1", host="10.255.0.4", port=5900, password="fixture", on_close=lambda reason: callbacks.append((reason, writer.close_finished)))
+        proxy = vnc_proxy.VncProxyServer(host="unused.invalid", port=4823, guacamole_registry=registry, logger=logging.getLogger("test.guacamole.cleanup"))
+
+        class WebSocket(_FakeWebSocket):
+            close_reason = None
+
+            async def __anext__(self):
+                raise ConnectionClosedError(Close(1001, "fixture close"), Close(1001, "fixture close"), True)
+
+            async def close(self, *, code, reason):
+                closed.append((code, reason))
+
+        async def open_ready(**_kwargs):
+            return _FakeReader([]), writer, "fixture", []
+
+        monkeypatch.setattr(guacamole_proxy, "_open_ready_guacd", open_ready)
+        handle = asyncio.create_task(proxy._handle_client(WebSocket([]), f"/remote-desktop/vnc/guacamole?token={session.token}"))
+        try:
+            await asyncio.wait_for(writer.close_started.wait(), 1)
+            await _assert_cleanup_pending(handle, "session callback escaped writer cleanup")
+            assert callbacks == [] and closed == []
+            writer.release_close.set()
+            await handle
+            assert writer.closed and writer.close_finished
+            assert callbacks == [("guacamole_unavailable" if cleanup_fails else "fixture close", True)]
+            assert closed == ([(1011, "guacamole_unavailable")] if cleanup_fails else [])
+        finally:
+            writer.release_close.set()
+            await asyncio.gather(handle, return_exceptions=True)
+
+    asyncio.run(exercise())

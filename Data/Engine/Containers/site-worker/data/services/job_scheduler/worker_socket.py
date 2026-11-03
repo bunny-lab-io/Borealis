@@ -335,12 +335,13 @@ _TRACKED_HOST_EVENTS = {
     "patch_inventory_refresh_request", "process_management_request", "registry_management_request",
     "file_management_request", "remote_shell_restart",
     "patch_policy_enforcement_request",
+    "rdp_start",
 }
 _PASSIVE_HOST_EVENTS = {
     "vpn_tunnel_start", "vpn_tunnel_stop", "vpn_tunnel_activity",
 }
 _UNSUPPORTED_TERMINAL_EVENTS = {
-    "vnc_start", "vnc_stop", "vnc_refresh", "vnc_credential_request", "rdp_start",
+    "vnc_start", "vnc_stop", "vnc_refresh", "vnc_credential_request",
 }
 
 

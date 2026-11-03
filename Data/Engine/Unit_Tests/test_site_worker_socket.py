@@ -675,7 +675,7 @@ def test_worker_desktop_session_blocks_before_proxy_probe_or_registration(tmp_pa
     ("patch_policy_apply",{},"worker_operation_unsupported"),
     ("agent_update_request",{},"worker_operation_unsupported"),
     ("agent_maintenance_request",{},"worker_operation_unsupported"),
-    *((event,{},"worker_operation_terminal_unavailable") for event in ("vnc_start","vnc_stop","vnc_refresh","vnc_credential_request","rdp_start")),
+    *((event,{},"worker_operation_terminal_unavailable") for event in ("vnc_start","vnc_stop","vnc_refresh","vnc_credential_request")),
 ))
 def test_worker_active_events_without_terminal_adapter_reject_before_effects(tmp_path, monkeypatch, event, payload, error):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
@@ -705,6 +705,7 @@ def test_worker_active_events_without_terminal_adapter_reject_before_effects(tmp
     ("file_management_request",{"action":"list"}),
     ("remote_shell_restart",{}),
     ("patch_policy_enforcement_request",{"request_id":"fixture-policy","enforcement_mode":"managed"}),
+    ("rdp_start",{"agent_id":AGENT_ID,"rdp_port":3389}),
 ))
 def test_worker_terminal_receipt_and_preflight_use_authenticated_socket(tmp_path, monkeypatch, event, payload):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
@@ -740,7 +741,7 @@ def test_worker_terminal_receipt_and_preflight_use_authenticated_socket(tmp_path
         agent.disconnect()
 
 
-@pytest.mark.parametrize("event,payload", (("service_control_action", {"action":"restart"}), ("remote_shell_restart", {}), ("quick_job_run", {"run_mode":"currentuser"}), ("patch_policy_enforcement_request", {"enforcement_mode":"managed"})))
+@pytest.mark.parametrize("event,payload", (("service_control_action", {"action":"restart"}), ("remote_shell_restart", {}), ("quick_job_run", {"run_mode":"currentuser"}), ("patch_policy_enforcement_request", {"enforcement_mode":"managed"}), ("rdp_start", {"agent_id":AGENT_ID,"rdp_port":3389})))
 def test_worker_capability_and_uncertain_emit_do_not_release_or_requeue(tmp_path, monkeypatch, event, payload):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
@@ -763,7 +764,7 @@ def test_worker_capability_and_uncertain_emit_do_not_release_or_requeue(tmp_path
     assert _claim_count(runtime) == 1
 
 
-@pytest.mark.parametrize("event,payload", (("service_control_action", {"action":"restart"}), ("remote_shell_restart", {}), ("quick_job_run", {"run_mode":"currentuser"}), ("patch_policy_enforcement_request", {"enforcement_mode":"managed"})))
+@pytest.mark.parametrize("event,payload", (("service_control_action", {"action":"restart"}), ("remote_shell_restart", {}), ("quick_job_run", {"run_mode":"currentuser"}), ("patch_policy_enforcement_request", {"enforcement_mode":"managed"}), ("rdp_start", {"agent_id":AGENT_ID,"rdp_port":3389})))
 def test_worker_database_connections_return_before_dispatch(tmp_path, monkeypatch, event, payload):
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
@@ -2253,6 +2254,118 @@ def test_worker_patch_policy_uncertain_dispatch_retains_charge(tmp_path, monkeyp
         assert _claim_count(runtime) == 1
         assert len(sent) == 1
         assert runtime._pending_host_events == {}
+        with runtime.db_conn_factory() as conn:
+            binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (sent[0]["job_id"],)).fetchone()[0])["worker_operation"]
+        assert binding["grant_nonce"] == "c" * 32
+        assert "receipt_sha256" not in binding
+    finally:
+        agent.disconnect()
+    assert _claim_count(runtime) == 1
+
+
+def _rdp_readiness_payload():
+    return {"agent_id":AGENT_ID, "port":3389, "rdp_port":3389, "allowed_ips":"10.255.0.1/32", "engine_virtual_ip":"10.255.0.1/32", "virtual_ip":"10.255.0.2/32", "reason":"rdp_establish", "timeout_seconds":60}
+
+
+@pytest.mark.parametrize("terminal_status", ("Completed", "Failed"))
+def test_worker_rdp_readiness_requires_receipt_and_keeps_desktop_blocked(tmp_path, monkeypatch, terminal_status):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    payload = _rdp_readiness_payload()
+    original = dict(payload)
+    response = {"status":"ok", "ready":True, "port":3389}
+    if terminal_status == "Failed":
+        response = {"status":"error", "error":"rdp_service_not_ready", "detail":"fixture readiness timeout", "ready":False}
+    sent = []
+
+    def dispatch(hostname, mode, event, packet, *, timeout):
+        assert (hostname, mode, event) == (AGENT_HOSTNAME, "system", "rdp_start")
+        assert {key:value for key,value in packet.items() if key not in {"job_id", "context"}} == original
+        sent.append(packet)
+        request = {"job_id":packet["job_id"], "status":"Running", "context":packet["context"], "worker_operation_preflight":{"version":1, "nonce":"a" * 32}}
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        assert agent.emit("quick_job_progress", {**request, "worker_operation_preflight":{"version":1, "nonce":"b" * 32}}, callback=True)["status"] == "deny"
+        return response
+
+    monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+    try:
+        result = runtime.app.test_client().post("/remote-ops/host-service/call", headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}, json={"hostname":AGENT_HOSTNAME, "event_name":"rdp_start", "payload":payload, "timeout_seconds":60})
+        assert result.status_code == 200, result.get_json()
+        assert result.get_json() == {"called":True, "response":response}
+        assert _claim_count(runtime) == 1, "RDP readiness response released custody without terminal receipt"
+        assert payload == original and len(sent) == 1
+        packet = sent[0]
+        operation = packet["context"]["worker_operation"]
+        with runtime.db_conn_factory() as conn:
+            binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (packet["job_id"],)).fetchone()[0])["worker_operation"]
+        assert binding == {
+            "version":1, "token":operation["token"], "job_id":packet["job_id"], "worker_guid":runtime.worker_guid,
+            "node_name":runtime.admission.node_name, "pod_uid":runtime.admission.pod_uid, "route_generation":1,
+            "site_id":runtime.site_id, "kind":"rdp_start", "agent_guid":AGENT_GUID.upper(), "grant_nonce":"a" * 32,
+        }
+        with pytest.raises(AdmissionError, match="worker_operation_already_admitted"):
+            runtime.call_host_service_event(AGENT_HOSTNAME, "system", "rdp_start", {**payload, "job_id":packet["job_id"]})
+        assert len(sent) == 1
+        receipt = {"job_id":packet["job_id"], "status":terminal_status, "stdout":"", "stderr":"", "context":packet["context"]}
+        assert agent.emit("quick_job_result", {**receipt, "status":"ok", "ready":True}, callback=True) == {"error":"worker_receipt_uncommitted"}
+        assert _claim_count(runtime) == 1
+        ack = agent.emit("quick_job_result", receipt, callback=True)
+        assert ack == {"worker_operation":operation, "job_id":packet["job_id"], "status":"committed"}
+        assert _claim_count(runtime) == 0
+        assert agent.emit("quick_job_result", receipt, callback=True) == ack
+        assert agent.emit("quick_job_result", {**receipt, "stdout":"forged RDP readiness receipt"}, callback=True) == {"error":"worker_receipt_uncommitted"}
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("RDP readiness enabled a desktop session effect")
+
+        monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", forbidden)
+        monkeypatch.setattr(runtime._guacamole_registry, "create", forbidden)
+        monkeypatch.setattr(worker_socket, "probe_vnc_security", forbidden)
+        for protocol in ("vnc", "rdp"):
+            desktop = runtime.app.test_client().post("/remote-desktop/vnc/session", headers={INTERNAL_TOKEN_HEADER:internal_token("unit-internal-secret")}, json={"operation_token":_issue_remote_desktop_token(runtime), "agent_id":AGENT_ID, "protocol":protocol})
+            assert desktop.status_code == 503
+            assert desktop.get_json() == {"error":"worker_desktop_terminal_unavailable"}
+        assert _claim_count(runtime) == 0
+    finally:
+        agent.disconnect()
+
+
+@pytest.mark.parametrize("response_kind", ("ready", "readiness_timeout", "missing", "malformed", "pending", "rejected", "timeout"))
+def test_worker_rdp_readiness_uncertainty_retains_charge(tmp_path, monkeypatch, response_kind):
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+    agent = _registered_agent(runtime, token)
+    responses = {
+        "ready":{"status":"ok", "ready":True, "port":3389},
+        "readiness_timeout":{"status":"error", "error":"rdp_service_not_ready", "ready":False},
+        "missing":None, "malformed":["not", "a", "readiness", "result"],
+        "pending":{"status":"pending", "error":"rdp_completion_unconfirmed", "ready":False},
+        "rejected":{"ok":False, "status":"rejected", "error":"worker_operation_unavailable"},
+    }
+    sent = []
+
+    def dispatch(_hostname, _mode, event, packet, *, timeout):
+        assert event == "rdp_start"
+        sent.append(packet)
+        request = {"job_id":packet["job_id"], "status":"Running", "context":packet["context"], "worker_operation_preflight":{"version":1, "nonce":"c" * 32}}
+        assert agent.emit("quick_job_progress", request, callback=True)["status"] == "execute"
+        if response_kind == "timeout":
+            raise TimeoutError("RDP readiness response lost after grant")
+        return responses[response_kind]
+
+    monkeypatch.setattr(runtime.registry, "call_to_host", dispatch)
+    try:
+        if response_kind == "timeout":
+            with pytest.raises(TimeoutError, match="response lost after grant"):
+                runtime.call_host_service_event(AGENT_HOSTNAME, "system", "rdp_start", _rdp_readiness_payload())
+        else:
+            assert runtime.call_host_service_event(AGENT_HOSTNAME, "system", "rdp_start", _rdp_readiness_payload()) == responses[response_kind]
+        assert _claim_count(runtime) == 1
+        assert len(sent) == 1 and runtime._pending_host_events == {}
         with runtime.db_conn_factory() as conn:
             binding = json.loads(conn.execute("SELECT metadata_json FROM activity_history WHERE id=?", (sent[0]["job_id"],)).fetchone()[0])["worker_operation"]
         assert binding["grant_nonce"] == "c" * 32
