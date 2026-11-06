@@ -16,17 +16,47 @@ import threading
 import time
 import types
 
+import pytest
+
 import Data.Engine.services.ansible.collections as ansible_collections_module
 from Data.Engine.db import dbapi as sqlite3
 import Data.Engine.services.ansible.runner as ansible_runner_module
 from Data.Engine.services.ansible.runner import EngineAnsibleRunner, RUN_STATUS_TIMED_OUT
 
 from .conftest import EngineTestHarness
+from .test_worker_admission import _initialize, _factory, seed_worker
 
 
 class _DummySocketIO:
     def emit(self, _event: str, _payload: object) -> None:
         return None
+
+
+@pytest.mark.parametrize("terminal", (None, "Success", "Failed"))
+def test_runner_only_releases_admission_after_confirmed_local_completion(tmp_path, monkeypatch, terminal):
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES", "0")
+    factory = _factory(tmp_path / "admission.sqlite")
+    _initialize(factory)
+    owner = seed_worker(factory)
+    ticket = owner.admit(kind="ansible",hostname="fixture")
+    runner = EngineAnsibleRunner(socketio=_DummySocketIO(),db_conn_factory=factory)
+    entered = threading.Event()
+    finish = threading.Event()
+    def execute(**_kwargs):
+        entered.set()
+        assert finish.wait(2)
+        return terminal
+    monkeypatch.setattr(runner,"_run_playbook",execute)
+    thread = threading.Thread(target=runner._run_playbook_with_slot,kwargs={"worker_admission":(owner,ticket)})
+    thread.start()
+    assert entered.wait(2)
+    with factory() as conn:
+        assert conn.execute("SELECT claimed_count FROM job_scheduler_workers").fetchone()[0] == 1
+    finish.set()
+    thread.join(2)
+    assert not thread.is_alive()
+    with factory() as conn:
+        assert conn.execute("SELECT claimed_count FROM job_scheduler_workers").fetchone()[0] == (1 if terminal is None else 0)
 
 
 class TimeoutExpired(Exception):

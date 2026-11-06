@@ -818,6 +818,37 @@ func TestEnsureSecureDirectoryCorrectsExistingPermissions(t *testing.T) {
 	}
 }
 
+func TestEnsureBootstrapMutationRootCreatesAndValidatesPrivateLeaf(t *testing.T) {
+	base := t.TempDir()
+	if err := ensureBootstrapMutationRoot(base); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(base, "borealis", "cluster-bootstrap")
+	info, err := os.Lstat(leaf)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatal("private bootstrap journal leaf missing or unsafe")
+	}
+	if err := ensureBootstrapMutationRoot(base); err != nil {
+		t.Fatal("existing valid bootstrap journal rejected", err)
+	}
+	if err := os.Chmod(leaf, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBootstrapMutationRoot(base); err == nil {
+		t.Fatal("unsafe existing bootstrap journal repaired implicitly")
+	}
+}
+
+func TestEnsureBootstrapMutationRootRejectsSymlinkParent(t *testing.T) {
+	base, other := t.TempDir(), t.TempDir()
+	if err := os.Symlink(other, filepath.Join(base, "borealis")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBootstrapMutationRoot(base); err == nil {
+		t.Fatal("symlink bootstrap journal parent accepted")
+	}
+}
+
 func TestReplaceExecutableUsesAtomicInodeReplacement(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "borealis-node-manager")
 	if err := os.WriteFile(destination, []byte("old"), 0o750); err != nil {

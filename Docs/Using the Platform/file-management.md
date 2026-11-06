@@ -26,6 +26,10 @@ The current working directory is URL-synced so refreshes and shared links can re
 
 Duplicate uploads show a replace-or-skip decision before transfer begins.
 
+After the Engine prepares a download, the browser tries to retrieve it. Keep the prepared transfer visible until you have saved the file. Use `Retry download` if retrieval was blocked by busy workers, then `Dismiss` to clear the row. A prepared transfer does not confirm browser delivery. Retry state belongs to the current page. If the staged file was already consumed or expired, select the file again to request a new download.
+
+Image previews keep `Retry preview` available when retrieval fails. Once an image loads, `Download` saves that loaded image without requesting the staged file again.
+
 ## Edit And Organize
 
 - Right-click files or folders for contextual actions.
@@ -78,4 +82,6 @@ Duplicate uploads show a replace-or-skip decision before transfer begins.
     - Large transfers use site-worker temp-file staging behind Go API proxy routes plus device-authenticated pull/push endpoints.
     - Folder uploads use a manifest so nested paths do not need to fit in one socket payload.
     - Transfer progress doubles as a cancellation checkpoint.
+    - Completed download status means the original Agent/Engine terminal receipt committed. Browser artifact retrieval still acquires its own active-worker reference and can fail when capacity is full. The UI retains the original prepared transfer for explicit retry; it does not submit another Agent download or reserve capacity for an idle browser.
+    - Native browser downloads use the existing content URL without buffering whole files in JavaScript. Their prepared rows remain dismissible because an anchor click cannot prove browser delivery. Preview retries reuse the original transfer; saving a successful preview uses its existing object URL after server artifact cleanup.
     - Inline text editing uses `@uiw/react-codemirror` plus Borealis-owned CodeMirror extensions. Vite dedupes `@codemirror/*` packages and npm overrides `@codemirror/state` so extension `instanceof` checks do not fail when editor setup and app extensions load through different dependency paths.

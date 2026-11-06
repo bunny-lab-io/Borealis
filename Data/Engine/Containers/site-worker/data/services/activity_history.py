@@ -231,8 +231,22 @@ def update_activity_history_row(
         sets.append("activity_kind=?")
         params.append(_clean_text(activity_kind))
     if metadata is not _UNSET and "metadata_json" in columns:
+        # Ordinary activity producers cannot overwrite admission ownership or
+        # its committed receipt. Read fresh custody under the write lock.
+        from Data.Engine.services.job_scheduler.worker_admission import _object
+        lock = "" if getattr(conn, "_dialect", "") == "sqlite" else " FOR UPDATE"
+        current = conn.execute("SELECT metadata_json FROM activity_history WHERE id=?" + lock, (int(activity_id),))
+        try:
+            row = current.fetchone()
+        finally:
+            current.close()
+        retained = _object(row[0] or "{}") if row else {}
+        supplied = dict(metadata) if isinstance(metadata, dict) else {}
+        supplied.pop("worker_operation", None)
+        if "worker_operation" in retained:
+            supplied["worker_operation"] = retained["worker_operation"]
         sets.append("metadata_json=?")
-        params.append(serialize_activity_metadata(metadata))
+        params.append(serialize_activity_metadata(supplied))
     if started_at is not _UNSET and "started_at" in columns:
         sets.append("started_at=?")
         params.append(_coerce_int(started_at, 0) or None)

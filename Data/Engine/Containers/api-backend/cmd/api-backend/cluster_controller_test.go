@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,65 +23,6 @@ type blockingClusterControllerRunner struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
-}
-
-type blockingClusterLeaseDriver struct{}
-
-type blockingClusterLeaseConnection struct{}
-
-type recoveringClusterLeaseDriver struct {
-	opens               atomic.Int64
-	closes              atomic.Int64
-	blockingConnections int64
-}
-
-type recoveringClusterLeaseConnection struct {
-	driver   *recoveringClusterLeaseDriver
-	blocking bool
-}
-
-func (blockingClusterLeaseDriver) Open(string) (driver.Conn, error) {
-	return blockingClusterLeaseConnection{}, nil
-}
-
-func (blockingClusterLeaseConnection) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("prepare is unsupported")
-}
-
-func (blockingClusterLeaseConnection) Close() error { return nil }
-
-func (blockingClusterLeaseConnection) Begin() (driver.Tx, error) {
-	return nil, errors.New("transaction is unsupported")
-}
-
-func (blockingClusterLeaseConnection) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func (d *recoveringClusterLeaseDriver) Open(string) (driver.Conn, error) {
-	return &recoveringClusterLeaseConnection{driver: d, blocking: d.opens.Add(1) <= d.blockingConnections}, nil
-}
-
-func (*recoveringClusterLeaseConnection) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("prepare is unsupported")
-}
-
-func (c *recoveringClusterLeaseConnection) Close() error {
-	c.driver.closes.Add(1)
-	return nil
-}
-
-func (*recoveringClusterLeaseConnection) Begin() (driver.Tx, error) {
-	return nil, errors.New("transaction is unsupported")
-}
-
-func (c *recoveringClusterLeaseConnection) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
-	if !c.blocking {
-		return driver.RowsAffected(1), nil
-	}
-	<-ctx.Done()
-	return nil, ctx.Err()
 }
 
 func (r *blockingClusterControllerRunner) Run(ctx context.Context, _ clusterControllerOperation, _ clusterControllerStep, _ []clusterControllerNode) error {
@@ -456,55 +396,39 @@ func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
 	}
 }
 
-func TestClusterControllerLeaseAcquireTimesOutStalePrimaryConnection(t *testing.T) {
-	leaseDriver := &recoveringClusterLeaseDriver{blockingConnections: 4}
-	driverName := fmt.Sprintf("recovering-cluster-lease-%d", time.Now().UnixNano())
-	sql.Register(driverName, leaseDriver)
-	db, err := sql.Open(driverName, "")
-	if err != nil {
-		t.Fatal(err)
+func TestClusterControllerLeaseGuardBoundsBlockedRenewalAndClose(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	guard := startClusterControllerLeaseGuardWithGrace(context.Background(), time.Millisecond, 250*time.Millisecond, func(context.Context) (bool, error) {
+		close(entered)
+		<-release // Deliberately ignore cancellation like the recorded driver failure.
+		defer close(returned)
+		return true, nil
+	})
+	defer func() {
+		guard.Close()
+		close(release)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("renewal did not start before expiry")
 	}
-	defer db.Close()
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
-	staleConnections := make([]*sql.Conn, 0, 4)
-	for range 4 {
-		conn, connErr := db.Conn(context.Background())
-		if connErr != nil {
-			t.Fatal(connErr)
-		}
-		staleConnections = append(staleConnections, conn)
+	select {
+	case <-guard.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("blocked renewal disabled independent expiry watchdog")
 	}
-	for _, conn := range staleConnections {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Fatal(closeErr)
-		}
+	closed := make(chan struct{})
+	go func() { guard.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("guard shutdown waited for blocked renewal")
 	}
-	if leaseDriver.opens.Load() != 4 {
-		t.Fatalf("stale pool connections=%d want 4", leaseDriver.opens.Load())
-	}
-
-	controller := &clusterController{
-		store:               &postgresOperatorStore{db: db},
-		holder:              "standby-controller",
-		now:                 time.Now,
-		leaseAcquireTimeout: 20 * time.Millisecond,
-		maxIdleConnections:  4,
-	}
-	started := time.Now()
-	owned, err := controller.acquireLease(context.Background())
-	if owned || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("stale lease connection owned=%v err=%v", owned, err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("stale lease acquisition took %s", elapsed)
-	}
-	owned, err = controller.acquireLease(context.Background())
-	if err != nil || !owned {
-		t.Fatalf("replacement lease connection owned=%v err=%v", owned, err)
-	}
-	if leaseDriver.opens.Load() != 5 || leaseDriver.closes.Load() < 4 {
-		t.Fatalf("stale connection pool was not retired: opens=%d closes=%d", leaseDriver.opens.Load(), leaseDriver.closes.Load())
+	if !errors.Is(guard.Err(), errClusterControllerLeaseLost) {
+		t.Fatalf("expiry cause=%v", guard.Err())
 	}
 }
 
