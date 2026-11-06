@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"reflect"
 	"slices"
 	"sort"
@@ -39,25 +41,79 @@ func (c *clusterController) preparationConfigurationRead(snapshot clusterSSHPrep
 	if c != nil {
 		runner, _ = c.runner.(*kubernetesClusterStepRunner)
 	}
+	return newClusterSSHPreparationConfigurationNativeRead(work, check, runner)
+}
+
+// Scope response cleanup to this reader. Shared transports and the original
+// runner remain borrowed; the copied client owns no idle connections or Jobs.
+func newClusterSSHPreparationConfigurationNativeRead(work clusterSSHPreparationWork, check func(context.Context) error,
+	runner *kubernetesClusterStepRunner) func(context.Context, string) (string, error) {
+	if runner == nil || runner.kube == nil || runner.kube.httpClient == nil || check == nil {
+		return newClusterSSHPreparationConfigurationRead(work, nil, nil, nil)
+	}
+	transport := runner.kube.httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
+	client, kube, jobs := *runner.kube.httpClient, *runner.kube, *runner
+	client.Transport = cleanup
+	kube.httpClient, jobs.kube = &client, &kube
+	current := func(ctx context.Context) error {
+		if !cleanup.clean() || runner.namespace != "borealis" || runner.controllerHolder != work.Authorization.ControllerHolder ||
+			ctx.Err() != nil || check(ctx) != nil || !cleanup.clean() || ctx.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
+	}
 	get := func(ctx context.Context, path string, out any) error {
-		if runner == nil || runner.kube == nil || runner.namespace != "borealis" || runner.controllerHolder != work.Authorization.ControllerHolder {
+		if !cleanup.clean() || runner.namespace != "borealis" || runner.controllerHolder != work.Authorization.ControllerHolder {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		if path == "/api/v1/nodes" || path == "/api/v1/namespaces/kube-system" {
-			return runner.kube.getClusterSSHNodeCohortJSON(ctx, path, out)
+			return kube.getClusterSSHNodeCohortJSON(ctx, path, out)
 		}
-		return runner.kube.getClusterSSHPreparationJSON(ctx, path, out)
+		return kube.getClusterSSHPreparationJSON(ctx, path, out)
 	}
 	var version string
 	_ = clusterBootstrapObject([]byte(work.Payload), map[string]any{"source_k3s_version": &version})
 	network := func(ctx context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
-		if runner == nil || runner.controllerHolder != work.Authorization.ControllerHolder || check(ctx) != nil {
+		if current(ctx) != nil {
 			return clusterbootstrap.SourceNetwork{}, clusterbootstrap.ErrPreparationConfig
 		}
-		value, err := runner.readSSHSourceObservation(ctx, member, work.Authorization.OperationID, version, "", false, func() bool { return check(ctx) == nil })
+		value, err := jobs.readSSHSourceObservation(ctx, member, work.Authorization.OperationID, version, "", false, func() bool { return current(ctx) == nil })
 		return value.Network, err
 	}
-	return newClusterSSHPreparationConfigurationRead(work, check, get, network)
+	// The existing serial reader checks current after every synchronous native
+	// read and once more before returning. Close failures remain sticky even if
+	// an underlying reader ignores them; blocked closure joins before SQL recheck.
+	return newClusterSSHPreparationConfigurationRead(work, current, get, network)
+}
+
+// Private requests have their own shorter deadline. A successful body Close
+// cannot erase its expiry while the enclosing 30-second proof is still live.
+// The existing tracker owns closure and records this error permanently.
+type clusterSSHPreparationConfigurationHTTP struct{ http.RoundTripper }
+
+func (t clusterSSHPreparationConfigurationHTTP) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.RoundTripper.RoundTrip(request)
+	if response != nil && response.Body != nil {
+		response.Body = &clusterSSHPreparationConfigurationBody{ReadCloser: response.Body, ctx: request.Context()}
+	}
+	return response, err
+}
+
+type clusterSSHPreparationConfigurationBody struct {
+	io.ReadCloser
+	ctx context.Context
+}
+
+func (b *clusterSSHPreparationConfigurationBody) Close() error {
+	err := b.ReadCloser.Close()
+	if err != nil || b.ctx.Err() != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return nil
 }
 
 // Private composition seam. Production supplies the waiting-proposal checker,

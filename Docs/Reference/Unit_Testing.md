@@ -107,7 +107,7 @@ Netplan fixtures require Ubuntu's `netplan.io`, `python3-netplan` and `python3-y
 
 Run `./Tests/run-database-postgres.sh` when changing cluster membership, controller recovery, operation storage, or scheduler behavior. The runner creates an isolated PostgreSQL 17 container and removes it when validation exits. It never uses the deployed Engine database.
 
-The PostgreSQL lane also executes `Data/Engine/Unit_Tests/test_worker_admission.py --postgres` after canonical schema initialization. All 15 named concurrency and custody cases are mandatory, require an isolated database URL, and emit an exact, zero-skip summary in `worker-admission-postgres.log`. They include separate local upload-stage/remote-transfer references, unchanged cap while a stream remains open, SQL connection closure before the terminal stream guard, and local browser-content receipt replay. Normal scheduler-domain pytest covers bounded portable admission and receipt fixtures.
+The PostgreSQL lane also executes `Data/Engine/Unit_Tests/test_worker_admission.py --postgres` after canonical schema initialization. All 18 named concurrency and custody cases are mandatory, require an isolated database URL, and emit an exact, zero-skip summary in `worker-admission-postgres.log`. They include separate local upload-stage/remote-transfer references, unchanged cap while a stream remains open, SQL connection closure before the terminal stream guard, local browser-content receipt replay, mixed current-rank rejection with unchanged custody, and committed peer-rank drift during an observed candidate-route lock wait. Normal scheduler-domain pytest covers bounded portable admission and receipt fixtures.
 
 Every required database test must run and pass. Missing tests, skipped tests or subtests, and incomplete results fail the lane. Keep the reported result directory when investigating a failure; CI retains database logs for successful and failed runs.
 
@@ -320,6 +320,7 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
     - Use `Tests/helpers/changed_paths.py` for stable CI group selection.
     - Use `Tests/helpers/affected_services.py` for container image selection.
     - Keep workflow YAML thin: checkout, tool setup/cache, repository command invocation, aggregate status, diagnostic artifact upload.
+    - Architecture CI restores the shared Go module/build cache once, with both Engine and admission-policy lockfiles in its key. The second pinned toolchain setup disables only its duplicate cache restore/save; both repository validation commands still run. This avoids extracting overlapping read-only module files over the first restored cache. Toolchain versions, test selection and production runtime behavior are unchanged.
     - Add public API routes to Go source, API docs, and generated route inventory in same change. Generator preserves reviewed route-specific test/exemption choices; new routes remain without evidence and fail policy until author records focused test or reviewed exemption.
     - Add direct dependencies to lockfiles/manifests and `Docs/Reference/SBOM.md` in same change.
 

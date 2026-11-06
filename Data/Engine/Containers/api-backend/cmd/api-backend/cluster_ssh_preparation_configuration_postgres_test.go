@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestClusterSSHPreparationConfigurationPostgresNative(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "controller", "expired controller", "attempt", "claimed target", "credential", "source", "running phase", "Secret replacement", "controller during Job", "foreign receipt", "namespace deleting", "namespace kind", "namespace name", "namespace alias", "source status alias", "source machine alias", "source address alias"} {
+	for _, mode := range []string{"pair", "replacement", "controller", "expired controller", "attempt", "claimed target", "credential", "source", "running phase", "Secret replacement", "controller during Job", "foreign receipt", "namespace deleting", "namespace kind", "namespace name", "namespace alias", "source status alias", "source machine alias", "source address alias", "Secret close", "Job close", "last Secret close", "close cancellation", "controller after Close", "request timeout during Close"} {
 		t.Run(mode, func(t *testing.T) {
 			f, snapshot, _, _ := newSSHPreparationApprovalFixture(t, mode == "replacement")
 			f.c.store.db.SetMaxOpenConns(1)
@@ -130,7 +131,48 @@ func TestClusterSSHPreparationConfigurationPostgresNative(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(value)
 			}))
 			defer server.Close()
-			f.c.runner = &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, httpClient: server.Client(), token: "synthetic-preclaim"}, namespace: "borealis", controllerHolder: f.c.holder,
+			client := server.Client()
+			underlying := client.Transport
+			var active, secretCloses atomic.Int64
+			var closeHit atomic.Bool
+			closed, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			transport := &cohortMembershipTransport{roundTrip: func(r *http.Request) (*http.Response, error) {
+				response, err := underlying.RoundTrip(r)
+				if err != nil || response == nil || response.Body == nil {
+					return response, err
+				}
+				active.Add(1)
+				response.Body = &cohortMembershipBody{ReadCloser: response.Body, close: func() error {
+					defer active.Add(-1)
+					secret := r.URL.Path == clusterSSHRuntimeSecretPath
+					last := secret && secretCloses.Add(1)%2 == 0
+					match := mode == "Secret close" && secret || mode == "Job close" && r.Method == http.MethodPost ||
+						(mode == "last Secret close" || mode == "close cancellation" || mode == "controller after Close" || mode == "request timeout during Close") && last
+					if changed.Load() && match && closeHit.CompareAndSwap(false, true) {
+						if f.c.store.db.Stats().InUse != 0 {
+							t.Error("owned HTTP cleanup retained PostgreSQL connection")
+						}
+						if mode == "close cancellation" {
+							close(closed)
+							<-release
+						}
+						if mode == "request timeout during Close" {
+							<-r.Context().Done()
+							return nil
+						}
+						if mode == "controller after Close" {
+							f.exec(t, `UPDATE engine.cluster_application_leases SET holder='foreign-controller' WHERE name=$1`, clusterControllerLeaseName)
+							return nil
+						}
+						return errClusterConflict
+					}
+					return nil
+				}}
+				return response, nil
+			}}
+			client.Transport = transport
+			f.c.runner = &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, httpClient: client, token: "synthetic-preclaim"}, namespace: "borealis", controllerHolder: f.c.holder,
 				actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}
 			read := f.c.preparationConfigurationRead(snapshot)
 			plan, _ := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
@@ -157,12 +199,56 @@ func TestClusterSSHPreparationConfigurationPostgresNative(t *testing.T) {
 				mu.Lock()
 				secret["metadata"].(map[string]any)["uid"] = newClusterUUID()
 				mu.Unlock()
-			case "controller during Job", "foreign receipt", "namespace deleting", "namespace kind", "namespace name", "namespace alias", "source status alias", "source machine alias", "source address alias":
+			case "controller during Job", "foreign receipt", "namespace deleting", "namespace kind", "namespace name", "namespace alias", "source status alias", "source machine alias", "source address alias", "Secret close", "Job close", "last Secret close", "close cancellation", "controller after Close", "request timeout during Close":
 				changed.Store(true)
 			}
-			second, err := read(f.ctx, plan)
+			var second string
+			if mode == "close cancellation" {
+				ctx, cancel := context.WithCancel(f.ctx)
+				done := make(chan struct{})
+				go func() { second, err = read(ctx, plan); close(done) }()
+				defer func() {
+					cancel()
+					unblock.Do(func() { close(release) })
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("configuration SQL reader survived cleanup")
+					}
+				}()
+				select {
+				case <-closed:
+				case <-done:
+					t.Fatal("SQL reader returned before Close barrier", err)
+				case <-f.ctx.Done():
+					t.Fatal("SQL reader never reached Close barrier")
+				}
+				cancel()
+				select {
+				case <-done:
+					t.Fatal("SQL reader escaped blocked Close after cancellation")
+				case <-time.After(25 * time.Millisecond):
+				}
+				unblock.Do(func() { close(release) })
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("SQL reader failed to join released Close")
+				}
+			} else {
+				second, err = read(f.ctx, plan)
+			}
+			if active.Load() != 0 || client.Transport != transport || transport.idleCalls.Load() != 0 {
+				t.Fatal("SQL reader changed shared client or escaped owned cleanup")
+			}
+			if stringInSet(mode, "Secret close", "Job close", "last Secret close", "close cancellation", "controller after Close", "request timeout during Close") && !closeHit.Load() {
+				t.Fatal("SQL fixture missed intended Close boundary")
+			}
+			if mode == "request timeout during Close" && f.ctx.Err() != nil {
+				t.Fatal("fixture canceled outer proposal scope instead of child request")
+			}
 			valid := mode == "pair" || mode == "replacement"
-			if (err == nil) != valid || (valid && second != first) {
+			if (err == nil) != valid || (valid && second != first) || (!valid && second != "") {
 				t.Fatal(mode, err)
 			}
 			if valid && posts.Load() != int64(4*len(source.Members)) {

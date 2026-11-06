@@ -176,6 +176,26 @@ class WorkerAdmission:
             raise AdmissionError("worker_profile_unavailable")
         return placement
 
+    def _census_placement(self, worker: str, row) -> dict | None:
+        site, generation, status, metadata = row
+        if status != "active":
+            return None
+        placement = metadata.get("worker_placement")
+        if not isinstance(placement, dict) or set(placement) != _PLACEMENT_KEYS:
+            raise AdmissionError("worker_placement_unavailable")
+        if not _integer(generation) or not _integer(placement["route_generation"]):
+            raise AdmissionError("worker_placement_changed")
+        # Retained placement from a prior route generation is historical. Its
+        # operation references still count, but cannot supply current policy.
+        if placement["route_generation"] < generation:
+            return None
+        if placement["route_generation"] > generation:
+            raise AdmissionError("worker_placement_changed")
+        if not isinstance(worker, str) or not _UUID.fullmatch(worker) or not isinstance(placement["pod_uid"], str) or not _UUID.fullmatch(placement["pod_uid"]) or not _name(placement["node_name"], node=True):
+            raise AdmissionError("worker_placement_changed")
+        owner = WorkerAdmission(self.db_factory, worker_guid=worker, site_id=site, pod_uid=placement["pod_uid"], node_name=placement["node_name"])
+        return owner._placement(row)
+
     @staticmethod
     def _activity(conn, job_id: int, *, lock: bool = False):
         cur = conn.execute("SELECT hostname,metadata_json FROM activity_history WHERE id=?" + (WorkerAdmission._locking(conn) if lock else ""), (job_id,))
@@ -205,19 +225,23 @@ class WorkerAdmission:
                 raise AdmissionError("worker_placement_changed")
             metadata = row[3]
             ledger = admission_ledger(metadata)
-            cur = conn.execute("""SELECT r.worker_guid,w.claimed_count,r.metadata_json FROM job_scheduler_worker_routes r
+            cur = conn.execute("""SELECT r.worker_guid,w.claimed_count,r.metadata_json,r.site_id,r.generation,r.status FROM job_scheduler_worker_routes r
                 LEFT JOIN job_scheduler_workers w ON w.worker_guid=r.worker_guid
-                UNION ALL SELECT w.worker_guid,w.claimed_count,NULL FROM job_scheduler_workers w
+                UNION ALL SELECT w.worker_guid,w.claimed_count,NULL,NULL,NULL,NULL FROM job_scheduler_workers w
                 WHERE NOT EXISTS(SELECT 1 FROM job_scheduler_worker_routes r WHERE r.worker_guid=w.worker_guid)""")
             try:
                 rows = cur.fetchall()
             finally:
                 cur.close()
             active = set()
-            for worker, count, raw in rows:
-                operations = admission_ledger(_object(raw) if raw is not None else {})["operations"]
+            for worker, count, raw, site, generation, status in rows:
+                peer_metadata = _object(raw) if raw is not None else {}
+                operations = admission_ledger(peer_metadata)["operations"]
                 if (count is None and operations) or (count is not None and (type(count) is not int or count != len(operations))):
                     raise AdmissionError("worker_admission_unaccounted")
+                peer = self._census_placement(worker, (site, generation, status, peer_metadata))
+                if peer is not None and peer["node_name"] == before["node_name"] and peer["profile_rank"] != before["profile_rank"]:
+                    raise AdmissionError("worker_profile_changed")
                 for ref in operations.values():
                     if ref["node_name"] == before["node_name"]:
                         active.add((worker, ref["pod_uid"]))

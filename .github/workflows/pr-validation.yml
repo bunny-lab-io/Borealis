@@ -243,7 +243,10 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: 1.25.12
-          cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+          # Both toolchains share Go's module/build paths; restore them once.
+          cache-dependency-path: |
+            Data/Engine/Containers/api-backend/go.sum
+            Tests/tools/admissionpolicy/go.sum
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -254,7 +257,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: 1.26.8
-          cache-dependency-path: Tests/tools/admissionpolicy/go.sum
+          cache: false
       - run: ./Tests/run-admission-policy.sh
       - uses: actions/upload-artifact@v7
         if: failure()

@@ -6,6 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
+import time
 import uuid
 
 import pytest
@@ -65,6 +66,114 @@ def _receipt(ticket, **changes):
     receipt = {"job_id": ticket.job_id, "status": "Completed", "stdout": "ok", "stderr": "", "context": {"worker_operation": ticket.wire()}}
     receipt.update(changes)
     return receipt
+
+
+def _admission_snapshot(factory):
+    with factory() as conn:
+        return tuple(tuple(tuple(row) for row in conn.execute(query).fetchall()) for query in (
+            "SELECT * FROM job_scheduler_worker_routes ORDER BY worker_guid",
+            "SELECT * FROM job_scheduler_workers ORDER BY worker_guid",
+            "SELECT * FROM activity_history ORDER BY id",
+        ))
+
+
+def _set_placement(factory, owner, **changes):
+    with factory() as conn:
+        metadata = json.loads(conn.execute("SELECT metadata_json FROM job_scheduler_worker_routes WHERE worker_guid=?", (owner.worker_guid,)).fetchone()[0])
+        metadata["worker_placement"].update(changes)
+        conn.execute("UPDATE job_scheduler_worker_routes SET metadata_json=? WHERE worker_guid=?", (json.dumps(metadata), owner.worker_guid)).close()
+
+
+@pytest.mark.parametrize("rank,peer_rank", [(rank, peer) for rank in range(4) for peer in range(4) if rank != peer])
+@pytest.mark.parametrize("charged", (False, True))
+def test_worker_admission_mixed_current_ranks_reject_without_mutation(tmp_path, rank, peer_rank, charged):
+    factory = _factory(tmp_path / "admission.sqlite")
+    _initialize(factory)
+    owner = seed_worker(factory, rank=rank)
+    peer = seed_worker(factory, rank=rank, site=2)
+    tickets = [_admit(owner), _admit(peer)] if charged else []
+    _set_placement(factory, peer, profile_rank=peer_rank)
+    before = _admission_snapshot(factory)
+    with pytest.raises(AdmissionError, match="worker_profile_changed"):
+        _admit(owner)
+    assert _admission_snapshot(factory) == before
+    if charged:
+        for worker, ticket in zip((owner, peer), tickets):
+            ack = worker.complete(_receipt(ticket), agent_guid=AGENT_GUID)
+            assert ack["status"] == "committed"
+            settled = _admission_snapshot(factory)
+            assert worker.complete(_receipt(ticket), agent_guid=AGENT_GUID) == ack
+            assert _admission_snapshot(factory) == settled
+
+
+def test_worker_admission_mixed_rank_cannot_admit_fifth_worker(tmp_path):
+    factory = _factory(tmp_path / "admission.sqlite")
+    _initialize(factory)
+    workers = [seed_worker(factory, site=i+1) for i in range(5)]
+    tickets = [_admit(worker) for worker in workers[:-1]]
+    _set_placement(factory, workers[-1], profile_rank=1)
+    before = _admission_snapshot(factory)
+    with pytest.raises(AdmissionError, match="worker_profile_changed"):
+        _admit(workers[-1])
+    assert _admission_snapshot(factory) == before
+    assert len(tickets) == 4
+
+
+@pytest.mark.parametrize("state", ("retired", "stale_generation", "moved", "replaced"))
+def test_worker_admission_historical_placement_keeps_charge_without_policy(tmp_path, state):
+    factory = _factory(tmp_path / "admission.sqlite")
+    _initialize(factory)
+    original = seed_worker(factory)
+    ticket = _admit(original)
+    if state == "moved":
+        _set_placement(factory, original, node_name="engine-2", profile_rank=1)
+    elif state == "replaced":
+        _set_placement(factory, original, pod_uid=str(uuid.uuid4()), profile_rank=1)
+    else:
+        with factory() as conn:
+            if state == "retired":
+                conn.execute("UPDATE job_scheduler_worker_routes SET status='retired' WHERE worker_guid=?", (original.worker_guid,)).close()
+            else:
+                conn.execute("UPDATE job_scheduler_worker_routes SET generation=generation+1 WHERE worker_guid=?", (original.worker_guid,)).close()
+    rank = 0 if state == "moved" else 1
+    cap = (4, 8)[rank]
+    peers = [seed_worker(factory, rank=rank, site=i+2) for i in range(cap)]
+    for peer in peers[:-1]:
+        _admit(peer)
+    before = _admission_snapshot(factory)
+    with pytest.raises(AdmissionError, match="capacity_exhausted"):
+        _admit(peers[-1])
+    assert _admission_snapshot(factory) == before
+    ack = original.complete(_receipt(ticket), agent_guid=AGENT_GUID)
+    assert original.complete(_receipt(ticket), agent_guid=AGENT_GUID) == ack
+    _admit(peers[-1])
+
+
+@pytest.mark.parametrize("field,value", (("profile_rank", True), ("profile_rank", None), ("profile_rank", 4), ("worker_guid", str(uuid.uuid4())), ("site_id", True), ("pod_uid", None), ("node_name", "invalid..node"), ("route_generation", True), ("route_generation", 999)))
+def test_worker_admission_current_peer_requires_native_placement(tmp_path, field, value):
+    factory = _factory(tmp_path / "admission.sqlite")
+    _initialize(factory)
+    owner = seed_worker(factory)
+    peer = seed_worker(factory, site=2)
+    _set_placement(factory, peer, **{field: value})
+    before = _admission_snapshot(factory)
+    with pytest.raises(AdmissionError):
+        _admit(owner)
+    assert _admission_snapshot(factory) == before
+
+
+@pytest.mark.parametrize("placement", (None, {}))
+def test_worker_admission_unplaced_active_peer_is_uncertain(tmp_path, placement):
+    factory = _factory(tmp_path / "admission.sqlite")
+    _initialize(factory)
+    owner = seed_worker(factory)
+    peer = seed_worker(factory, site=2, node="engine-2")
+    with factory() as conn:
+        conn.execute("UPDATE job_scheduler_worker_routes SET metadata_json=? WHERE worker_guid=?", (json.dumps({"worker_placement": placement}), peer.worker_guid)).close()
+    before = _admission_snapshot(factory)
+    with pytest.raises(AdmissionError, match="worker_placement_unavailable"):
+        _admit(owner)
+    assert _admission_snapshot(factory) == before
 
 
 @pytest.mark.parametrize("rank,cap", tuple(enumerate((4, 8, 12, 16))))
@@ -342,6 +451,69 @@ def run_postgres_admission_checks():
             if i != winner and ticket is not None:
                 workers[i].complete(_receipt(ticket), agent_guid=AGENT_GUID)
         done("same_worker_partial_terminal_retains_slot")
+
+        tickets = [_admit(worker) for worker in workers[:4]]
+        _set_placement(factory, workers[4], profile_rank=1)
+        before = _admission_snapshot(factory)
+        with pytest.raises(AdmissionError, match="worker_profile_changed"):
+            _admit(workers[4])
+        assert _admission_snapshot(factory) == before
+        done("mixed_current_rank_cannot_admit_fifth_worker")
+        with pytest.raises(AdmissionError, match="worker_profile_changed"):
+            _admit(workers[0])
+        assert _admission_snapshot(factory) == before
+        for worker, ticket in zip(workers[:4], tickets):
+            ack = worker.complete(_receipt(ticket), agent_guid=AGENT_GUID)
+            settled = _admission_snapshot(factory)
+            assert worker.complete(_receipt(ticket), agent_guid=AGENT_GUID) == ack
+            assert _admission_snapshot(factory) == settled
+        _set_placement(factory, workers[4], profile_rank=0)
+        done("mixed_current_rank_preserves_original_terminal_and_replay")
+
+        # Placement writers do not acquire the node advisory lock. A committed
+        # peer update while admission waits for its own route must be present
+        # in the later census snapshot. No peer lock or global ordering added.
+        owner = workers[4]
+        attempted = threading.Event()
+        waiting_pid = []
+        class WaitingAdmissionConnection:
+            def __init__(self): self.conn = factory()
+            def __getattr__(self, name): return getattr(self.conn, name)
+            def execute(self, sql, params=()):
+                if sql.startswith("SELECT site_id,generation,status,metadata_json") and sql.endswith("FOR UPDATE"):
+                    waiting_pid.append(self.conn.execute("SELECT pg_backend_pid()").fetchone()[0])
+                    attempted.set()
+                return self.conn.execute(sql, params)
+        owner.db_factory = WaitingAdmissionConnection
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                blocker = factory()
+                try:
+                    blocker.execute("SET LOCAL lock_timeout='5s'").close()
+                    blocker.execute("SELECT worker_guid FROM job_scheduler_worker_routes WHERE worker_guid=? FOR UPDATE", (owner.worker_guid,)).close()
+                    blocker_pid = blocker.execute("SELECT pg_backend_pid()").fetchone()[0]
+                    future = pool.submit(owner.admit, kind="quick_job_run", hostname="LAB-ONE", agent_guid=AGENT_GUID)
+                    assert attempted.wait(5), "admission never attempted its route lock"
+                    deadline = time.monotonic() + 5
+                    with factory() as observer:
+                        while True:
+                            blockers = observer.execute("SELECT pg_blocking_pids(?)", (waiting_pid[0],)).fetchone()[0]
+                            if blocker_pid in blockers:
+                                break
+                            assert time.monotonic() < deadline, "admission did not wait on held route"
+                            assert not future.done(), "admission escaped held route"
+                            threading.Event().wait(0.01)
+                    _set_placement(factory, workers[0], profile_rank=1)
+                    before = _admission_snapshot(factory)
+                finally:
+                    blocker.close()
+                with pytest.raises(AdmissionError, match="worker_profile_changed"):
+                    future.result(timeout=5)
+                assert _admission_snapshot(factory) == before
+        finally:
+            owner.db_factory = factory
+            _set_placement(factory, workers[0], profile_rank=0)
+        done("peer_rank_commit_during_candidate_route_wait_rejects_atomically")
 
         def custody(owner, ticket):
             with factory() as conn:
@@ -674,7 +846,7 @@ def run_postgres_admission_checks():
             conn.execute(f"DELETE FROM job_scheduler_workers WHERE worker_guid IN ({placeholders})",tuple(owned_workers)).close()
             assert conn.execute(f"SELECT COUNT(*) FROM job_scheduler_worker_routes WHERE worker_guid IN ({placeholders})",tuple(owned_workers)).fetchone()[0] == 0
             assert conn.execute(f"SELECT COUNT(*) FROM job_scheduler_workers WHERE worker_guid IN ({placeholders})",tuple(owned_workers)).fetchone()[0] == 0
-    assert len(passed) == 15 and len(set(passed)) == 15
+    assert len(passed) == 18 and len(set(passed)) == 18
     print(json.dumps({"suite":"worker_admission_postgres","passed":len(passed),"failed":0,"skipped":0,"cases":passed}),flush=True)
 
 
