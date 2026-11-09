@@ -95,6 +95,36 @@ func clusterSSHApplicationBudget(values []clusterSSHApplicationResource) (cpu, m
 	return cpu, memory, true
 }
 
+// Keep the one-copy application subtotal separate from the node reconciler's
+// declared update overlap. Six ordinary applications retain a running candidate
+// while the active Deployment can hold its old replica and one surge replica.
+// Host-port candidates stay stopped and active Deployments use Recreate.
+// Charge two additional copies of each ordinary template without assuming that
+// promotions are serialized. Actual producer parity tests cover both stages.
+// This is planned current-template demand, not a bound on terminating Pods,
+// older runtime envelopes or concurrent/uncertain updates; those remain gates.
+func clusterSSHApplicationUpdateOverlapBudget(values []clusterSSHApplicationResource) (cpu, memory uint64, ok bool) {
+	if _, _, valid := clusterSSHApplicationBudget(values); !valid {
+		return 0, 0, false
+	}
+	for _, value := range values {
+		if value.Name == "traefik-edge" || value.Name == "wireguard-tunnel" {
+			continue
+		}
+		for range 2 {
+			cpu, ok = clusterSSHCapacitySum(cpu, value.CPURequestMilli)
+			if !ok {
+				return 0, 0, false
+			}
+			memory, ok = clusterSSHCapacitySum(memory, value.MemoryLimitBytes)
+			if !ok {
+				return 0, 0, false
+			}
+		}
+	}
+	return cpu, memory, true
+}
+
 func observeClusterSSHApplicationResources(read func(string) (map[string]any, error)) ([]clusterSSHApplicationResource, error) {
 	fail := func() ([]clusterSSHApplicationResource, error) { return nil, clusterbootstrap.ErrPreparationConfig }
 	if read == nil {

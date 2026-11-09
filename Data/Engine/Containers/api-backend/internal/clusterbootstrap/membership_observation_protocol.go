@@ -18,6 +18,10 @@ const MembershipObservationRequestLimit = 48 << 10
 
 const MembershipObservationResponseLimit = 4096
 
+// Capability of the native observer, not a caller-supplied listener identity or
+// proof of quorum/admission. Only the opt-in contract may carry this value.
+const MembershipListenerProofVersion uint8 = 1
+
 func membershipCanonical(raw []byte, maximum int, out any) error {
 	if _, err := sourceJSONObject(raw, maximum); err != nil || json.Unmarshal(raw, out) != nil {
 		return ErrPreparationConfig
@@ -64,6 +68,12 @@ func (r MembershipObservationRequest) SHA256() string {
 	if r.Observer != nil {
 		domain = "settled-cohort-membership-observation-v1"
 	}
+	if r.RequireListenerProof {
+		domain = "original-source-membership-listener-observation-v1"
+		if r.Observer != nil {
+			domain = "settled-cohort-membership-listener-observation-v1"
+		}
+	}
 	raw, err := json.Marshal(struct {
 		Domain  string
 		Request MembershipObservationRequest
@@ -90,6 +100,13 @@ func ParseMembershipActionRequest(raw []byte) (MembershipObservationRequest, err
 
 func (o MembershipObservation) Valid(request MembershipObservationRequest) bool {
 	if !request.Valid() || o.Source != request.Source || o.RequestSHA256 != request.SHA256() || len(o.Membership.Members) != 3 || !o.Membership.Voting {
+		return false
+	}
+	wantProof := uint8(0)
+	if request.RequireListenerProof {
+		wantProof = MembershipListenerProofVersion
+	}
+	if o.ListenerProofVersion != wantProof {
 		return false
 	}
 	if (o.Observer == nil) != (request.Observer == nil) || o.Observer != nil && *o.Observer != *request.Observer {
@@ -172,7 +189,7 @@ func NewMembershipObservationReceipt(raw []byte, request MembershipObservationRe
 	if err != nil {
 		return nil, ErrPreparationConfig
 	}
-	receipt, err := json.Marshal(membershipObservationReceipt{1, nonce, jobUID, podUID, value})
+	receipt, err := json.Marshal(membershipObservationReceipt{request.receiptVersion(), nonce, jobUID, podUID, value})
 	if err != nil || len(receipt) > SourceNetworkReceiptLimit {
 		return nil, ErrPreparationConfig
 	}
@@ -181,7 +198,7 @@ func NewMembershipObservationReceipt(raw []byte, request MembershipObservationRe
 
 func ParseMembershipObservationReceipt(raw []byte, request MembershipObservationRequest, nonce, jobUID, podUID string) (MembershipObservation, error) {
 	var receipt membershipObservationReceipt
-	if !ValidSourceReceiptIdentity(nonce, jobUID, podUID) || membershipCanonical(raw, SourceNetworkReceiptLimit, &receipt) != nil || receipt.Version != 1 || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID || !receipt.Observation.Valid(request) {
+	if !ValidSourceReceiptIdentity(nonce, jobUID, podUID) || membershipCanonical(raw, SourceNetworkReceiptLimit, &receipt) != nil || receipt.Version != request.receiptVersion() || receipt.Nonce != nonce || receipt.JobUID != jobUID || receipt.PodUID != podUID || !receipt.Observation.Valid(request) {
 		return MembershipObservation{}, ErrPreparationConfig
 	}
 	return receipt.Observation, nil
@@ -219,16 +236,27 @@ type MembershipObservationRequest struct {
 	// disjoint union with Prepared must be exactly Nodes. Only the original
 	// controller can authenticate this historical partition from its SQL proof.
 	OriginalSourceNodeUIDs []string `json:",omitempty"`
+	// Explicit opt-in preserves legacy wire bytes and digest domains. A new
+	// request cannot promote a legacy producer's membership-only response.
+	RequireListenerProof bool `json:",omitempty"`
 }
 
 // One selected endpoint's current complete view. This is not independent agreement
 // between endpoints, quorum availability, partition proof or admission authority.
 type MembershipObservation struct {
-	Source        engineidentity.Binding
-	LocalNode     K3sJoinedNode
-	Membership    K3sMembership
-	RequestSHA256 string
-	Observer      *MembershipObserver `json:",omitempty"`
+	Source               engineidentity.Binding
+	LocalNode            K3sJoinedNode
+	Membership           K3sMembership
+	RequestSHA256        string
+	Observer             *MembershipObserver `json:",omitempty"`
+	ListenerProofVersion uint8               `json:",omitempty"`
+}
+
+func (r MembershipObservationRequest) receiptVersion() int {
+	if r.RequireListenerProof {
+		return 2
+	}
+	return 1
 }
 
 func (r MembershipObservationRequest) ObserverUID() string {

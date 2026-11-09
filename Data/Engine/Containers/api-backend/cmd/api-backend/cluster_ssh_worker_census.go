@@ -257,11 +257,25 @@ func clusterSSHWorkerCensusValid(sites []int64) bool {
 // reserves also cover their later rotation; this bounds current demand only,
 // never future worker growth. Native source observation still rejects an
 // in-progress rotation's candidate names/duplicate worker identities.
+// Application candidate/active-surge demand is a separate declared subtotal;
+// never multiply infrastructure or worker envelopes by application copy counts.
 func clusterSSHDesiredWorkerWorkloadBudget(snapshot clusterSSHPreparationSnapshot) (cpu, memory uint64, ok bool) {
 	r := snapshot.Storage.Requirements
 	cpu, memory, ok = clusterSSHNodeWorkloadBudget(r)
 	profile, valid := r.WorkerPolicy.recreationResources()
 	if !ok || !valid || !clusterSSHWorkerCensusValid(snapshot.DesiredWorkerSites) {
+		return 0, 0, false
+	}
+	applicationCPU, applicationMemory, valid := clusterSSHApplicationUpdateOverlapBudget(r.Applications)
+	if !valid {
+		return 0, 0, false
+	}
+	cpu, ok = clusterSSHCapacitySum(cpu, applicationCPU)
+	if !ok {
+		return 0, 0, false
+	}
+	memory, ok = clusterSSHCapacitySum(memory, applicationMemory)
+	if !ok {
 		return 0, 0, false
 	}
 	rotationCPU, rotationMemory, valid := clusterSSHSiteWorkerBudget(r.SiteWorkers)

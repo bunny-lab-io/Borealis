@@ -230,7 +230,7 @@ func TestBootstrapMembershipObserverNativeTLS(t *testing.T) {
 				}
 				return current, nil
 			}
-			got, err := observeBootstrapMembershipAt(ctx, root, r, func(ctx context.Context) error { return ctx.Err() }, source, factory)
+			got, err := observeBootstrapMembershipAt(ctx, root, r, func(ctx context.Context) error { return ctx.Err() }, source, factory, membershipListenerFixture)
 			valid := mode == "source" || mode == "first target" || mode == "second target" || mode == "other source" || mode == "observer frozen" || mode == "original roster frozen"
 			if (err == nil) != valid || !valid && !reflect.DeepEqual(got, bootstrapMembershipObservation{}) {
 				t.Fatal("observer native evidence escaped changed phase or identity", err)
@@ -476,7 +476,7 @@ func TestBootstrapMembershipObservationNativeTLS(t *testing.T) {
 				}
 				return network, nil
 			}
-			got, err := observeBootstrapMembershipAt(ctx, root, r, check, source, factory)
+			got, err := observeBootstrapMembershipAt(ctx, root, r, check, source, factory, membershipListenerFixture)
 			valid := mode == "pair" || mode == "replacement" || mode == "provided remote UID" || mode == "reordered" || mode == "request frozen" || mode == "forbidden paths unused"
 			if (err == nil) != valid {
 				t.Fatal("wrong membership result", err)
@@ -511,7 +511,7 @@ func TestBootstrapMembershipObservationNativeTLS(t *testing.T) {
 				// Other original member has no target receipt and is never read by
 				// this native adapter. Controller must freshly verify its identity.
 				r.Nodes[2].Node.NodeUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-				changed, err := observeBootstrapMembershipAt(ctx, root, r, check, source, factory)
+				changed, err := observeBootstrapMembershipAt(ctx, root, r, check, source, factory, membershipListenerFixture)
 				if err != nil || changed.LocalNode != got.LocalNode || !reflect.DeepEqual(changed.Membership, got.Membership) || changed.RequestSHA256 == got.RequestSHA256 {
 					t.Fatal("provided remote UID was misrepresented as native proof or not bound")
 				}
@@ -589,7 +589,7 @@ func TestBootstrapMembershipObservationPrivateCustody(t *testing.T) {
 				}
 				return
 			}
-			got, err := observeBootstrapMembershipAt(context.Background(), root, r, check, func(context.Context) (clusterbootstrap.SourceNetwork, error) { return r.Network, nil }, factory)
+			got, err := observeBootstrapMembershipAt(context.Background(), root, r, check, func(context.Context) (clusterbootstrap.SourceNetwork, error) { return r.Network, nil }, factory, membershipListenerFixture)
 			if err == nil || !reflect.DeepEqual(got, bootstrapMembershipObservation{}) {
 				t.Fatal("private file failure accepted")
 			}
@@ -671,10 +671,16 @@ func TestBootstrapMembershipObservationRejectsRequest(t *testing.T) {
 			}
 			defer root.Close()
 			called := false
-			got, err := observeBootstrapMembershipAt(context.Background(), root, r, func(context.Context) error { called = true; return nil }, func(context.Context) (clusterbootstrap.SourceNetwork, error) { called = true; return r.Network, nil }, func(*tls.Config) *http.Client { called = true; return nil })
+			got, err := observeBootstrapMembershipAt(context.Background(), root, r, func(context.Context) error { called = true; return nil }, func(context.Context) (clusterbootstrap.SourceNetwork, error) { called = true; return r.Network, nil }, func(*tls.Config) *http.Client { called = true; return nil }, membershipListenerFixture)
 			if err == nil || called || !reflect.DeepEqual(got, bootstrapMembershipObservation{}) {
 				t.Fatal("invalid request reached authority or native reader")
 			}
 		})
 	}
+}
+
+// Other native fixtures inject an independent lifetime. Listener-specific tests
+// exercise the actual procfs producer and every composition boundary.
+func membershipListenerFixture(context.Context, clusterbootstrap.SourceKubelet) (*bootstrapMembershipListenerScope, error) {
+	return &bootstrapMembershipListenerScope{check: func(ctx context.Context) error { return ctx.Err() }, close: func() error { return nil }}, nil
 }

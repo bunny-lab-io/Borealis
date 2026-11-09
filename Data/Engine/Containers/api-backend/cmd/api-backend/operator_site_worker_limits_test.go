@@ -158,9 +158,12 @@ func TestOperatorSiteWorkerEffectiveLimitProducerParity(t *testing.T) {
 			}
 			_, _, snapshot := sshBrokerFixture(t)
 			snapshot.Storage.Requirements = observed.Requirements
-			snapshot.DesiredWorkerSites = []int64{7}
+			snapshot.DesiredWorkerSites = []int64{}
 			snapshot.Storage.Requirements.SiteWorkers = []clusterSSHSiteWorkerResource{}
-			baseCPU, baseMemory, valid := clusterSSHNodeWorkloadBudget(snapshot.Storage.Requirements)
+			// Isolate application update overlap before adding any resident,
+			// prospective worker or worker candidate demand below.
+			baseCPU, baseMemory, valid := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
+			snapshot.DesiredWorkerSites = []int64{7}
 			snapshot.Storage.Requirements.SiteWorkers = observed.Requirements.SiteWorkers
 			cpu, memory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 			prospective, safe := observed.Requirements.WorkerPolicy.recreationResources()

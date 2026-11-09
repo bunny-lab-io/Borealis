@@ -64,7 +64,7 @@ func sourceMembershipClient(args []string) error {
 	return nil
 }
 
-func readSourceMembershipReceipt(ctx context.Context, client *http.Client, token, nonce, jobUID, podUID, payload string) ([]byte, error) {
+func readSourceMembershipReceipt(ctx context.Context, client *http.Client, token, nonce, jobUID, podUID, payload string) (receipt []byte, receiptErr error) {
 	request, err := clusterbootstrap.DecodeMembershipObservationRequest(payload)
 	if client == nil || ctx.Err() != nil || len(token) < 32 || len(token) > 4096 || err != nil || !clusterbootstrap.ValidSourceReceiptIdentity(nonce, jobUID, podUID) {
 		return nil, clusterbootstrap.ErrPreparationConfig
@@ -85,7 +85,16 @@ func readSourceMembershipReceipt(ctx context.Context, client *http.Client, token
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	defer response.Body.Close()
+	defer func() {
+		closeErr := response.Body.Close()
+		// The capability contract joins its owned response body before exposing
+		// proof. Never close the caller's shared client/transport or reuse proof
+		// after late cancellation. Legacy membership-only behavior is unchanged.
+		if request.RequireListenerProof && (closeErr != nil || ctx.Err() != nil) {
+			clear(receipt)
+			receipt, receiptErr = nil, clusterbootstrap.ErrPreparationConfig
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}

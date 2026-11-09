@@ -20,6 +20,9 @@ func sshCohortMembershipResultFixture(request clusterbootstrap.MembershipObserva
 	result := sshMembershipResultFixture(request)
 	observer := *request.Observer
 	result.Observer = &observer
+	if request.RequireListenerProof {
+		result.ListenerProofVersion = clusterbootstrap.MembershipListenerProofVersion
+	}
 	for _, expected := range request.Nodes {
 		if expected.Node.NodeUID == request.ObserverUID() {
 			result.LocalNode = expected.Node
@@ -54,6 +57,32 @@ func sshCohortMembershipPod(t *testing.T, job map[string]any, request clusterboo
 	return pod
 }
 
+// Simulate an older installed daemon despite a current immutable Job client.
+// Retain the new request digest and all identities: only proof/version differs.
+func stripCohortMembershipListenerProof(t *testing.T, pod map[string]any) {
+	t.Helper()
+	status := anySlice(sourceActionMap(pod, "status")["containerStatuses"])[0].(map[string]any)
+	terminated := sourceActionMap(sourceActionMap(status, "state"), "terminated")
+	// Preserve typed canonical field order and exact uint64 IDs. Receipt2 alone
+	// must not upgrade a membership-only native result to listener proof.
+	var receipt struct {
+		Version     int                                    `json:"version"`
+		Nonce       string                                 `json:"nonce"`
+		JobUID      string                                 `json:"job_uid"`
+		PodUID      string                                 `json:"pod_uid"`
+		Observation clusterbootstrap.MembershipObservation `json:"observation"`
+	}
+	if json.Unmarshal([]byte(terminated["message"].(string)), &receipt) != nil {
+		t.Fatal("invalid receipt fixture")
+	}
+	receipt.Observation.ListenerProofVersion = 0
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminated["message"] = string(raw)
+}
+
 type cohortMembershipTransport struct {
 	roundTrip func(*http.Request) (*http.Response, error)
 	idleCalls atomic.Int64
@@ -80,7 +109,7 @@ func (b *cohortMembershipBody) Close() error {
 // Real fixed HTTPS Job/read/receipt transport; only SQL's validated snapshot
 // reader is supplied. Separate PostgreSQL acceptance covers that producer.
 func TestClusterSSHPreparedCohortMembership(t *testing.T) {
-	modes := []string{"pair", "replacement", "network failure", "last network failure", "last member failure", "member disagreement", "wrong observer", "cross-kind Job replay", "cross-kind Pod replay", "membership Job replay", "membership Pod replay", "network Job replay", "SQL before", "SQL during", "SQL final", "proof alias", "receipt alias", "authorization alias", "clock backwards", "namespace late", "Node late", "annotation late", "per-Job Node drift", "close error", "close cancellation", "cancel before", "cancel after", "missing receipt", "missing prejoin"}
+	modes := []string{"pair", "replacement", "old native producer", "network failure", "last network failure", "last member failure", "member disagreement", "wrong observer", "cross-kind Job replay", "cross-kind Pod replay", "membership Job replay", "membership Pod replay", "network Job replay", "SQL before", "SQL during", "SQL final", "proof alias", "receipt alias", "authorization alias", "clock backwards", "namespace late", "Node late", "annotation late", "per-Job Node drift", "close error", "close cancellation", "cancel before", "cancel after", "missing receipt", "missing prejoin"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			a, authority, targetUIDs := sshMembershipAuthorityFixture(t, mode == "replacement")
@@ -225,7 +254,7 @@ func TestClusterSSHPreparedCohortMembership(t *testing.T) {
 				if posts%2 == 0 {
 					container := anySlice(sourceActionMap(sourceActionMap(sourceActionMap(job, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
 					request, err := clusterbootstrap.DecodeMembershipObservationRequest(clusterStringSlice(container["args"])[1])
-					if err != nil || request.Source != originalSource || request.Observer == nil || request.ObserverUID() != network.NodeUID || request.Network != network || !reflect.DeepEqual(request.OriginalSourceNodeUIDs, roster) || len(request.Prepared) != len(a.Cohort.Targets) {
+					if err != nil || !request.RequireListenerProof || request.Source != originalSource || request.Observer == nil || request.ObserverUID() != network.NodeUID || request.Network != network || !reflect.DeepEqual(request.OriginalSourceNodeUIDs, roster) || len(request.Prepared) != len(a.Cohort.Targets) {
 						t.Error("lost original source, complete partition or observer binding", err)
 						w.WriteHeader(500)
 						return
@@ -243,6 +272,9 @@ func TestClusterSSHPreparedCohortMembership(t *testing.T) {
 						}
 					}
 					pod = sshCohortMembershipPod(t, job, request, result, podUIDs[posts-1])
+					if mode == "old native producer" && posts == 6 {
+						stripCohortMembershipListenerProof(t, pod)
+					}
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{pod}, "metadata": map[string]any{}})
 			}))

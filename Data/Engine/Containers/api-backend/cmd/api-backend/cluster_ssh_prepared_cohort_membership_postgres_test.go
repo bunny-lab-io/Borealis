@@ -32,7 +32,7 @@ func preparedCohortSQLState(ctx context.Context, f sshPreparationAuthorityFixtur
 }
 
 func TestClusterSSHPreparedCohortMembershipPostgresCustody(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "final payload drift", "final credential drift", "controller during", "final Node drift", "third view disagreement", "last member failure", "cross-kind Job replay", "late cross-kind Pod replay", "last Close error"} {
+	for _, mode := range []string{"pair", "replacement", "old native producer", "final payload drift", "final credential drift", "controller during", "final Node drift", "third view disagreement", "last member failure", "cross-kind Job replay", "late cross-kind Pod replay", "last Close error"} {
 		t.Run(mode, func(t *testing.T) { exercisePreparedCohortSQL(t, mode) })
 	}
 }
@@ -214,7 +214,7 @@ func exercisePreparedCohortSQL(t *testing.T, mode string) {
 		if posts%2 == 0 {
 			container := anySlice(sourceActionMap(sourceActionMap(sourceActionMap(job, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
 			request, err := clusterbootstrap.DecodeMembershipObservationRequest(clusterStringSlice(container["args"])[1])
-			if err != nil || request.Source != originalSource || request.Observer == nil || request.ObserverUID() != network.NodeUID || request.Network != network || request.KubeSystemUID != before.proof.Source.KubeSystemUID || !reflect.DeepEqual(request.Nodes, nodes) || !reflect.DeepEqual(request.OriginalSourceNodeUIDs, roster) || !reflect.DeepEqual(request.Prepared, prepared) {
+			if err != nil || !request.RequireListenerProof || request.Source != originalSource || request.Observer == nil || request.ObserverUID() != network.NodeUID || request.Network != network || request.KubeSystemUID != before.proof.Source.KubeSystemUID || !reflect.DeepEqual(request.Nodes, nodes) || !reflect.DeepEqual(request.OriginalSourceNodeUIDs, roster) || !reflect.DeepEqual(request.Prepared, prepared) {
 				fault("lost exact original source partition, all prepared receipts or observer binding: %v", err)
 				w.WriteHeader(500)
 				return
@@ -236,6 +236,10 @@ func exercisePreparedCohortSQL(t *testing.T, mode string) {
 			}
 			observations = append(observations, result)
 			pod = sshCohortMembershipPod(t, job, request, result, podUIDs[posts-1])
+			if mode == "old native producer" && posts == 6 {
+				stripCohortMembershipListenerProof(t, pod)
+				injected = true
+			}
 		}
 		if posts == 6 {
 			w.Header().Set("X-Test-Final-Pod", "true")

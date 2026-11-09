@@ -3,7 +3,9 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -11,11 +13,17 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationRequest) clusterbootstrap.MembershipObservation {
 	result := clusterbootstrap.MembershipObservation{Source: r.Source, Observer: r.Observer, RequestSHA256: r.SHA256(), Membership: clusterbootstrap.K3sMembership{Voting: true}}
+	if r.RequireListenerProof {
+		result.ListenerProofVersion = clusterbootstrap.MembershipListenerProofVersion
+	}
 	for i, node := range r.Nodes {
 		id := uint64(math.MaxUint64 - uint64(i))
 		for _, target := range r.Prepared {
@@ -31,6 +39,128 @@ func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationReque
 	}
 	slices.SortFunc(result.Membership.Members, func(a, b clusterbootstrap.K3sEtcdMember) int { return strings.Compare(a.Address, b.Address) })
 	return result
+}
+
+type membershipProofClientTransport struct {
+	roundTrip func(*http.Request) (*http.Response, error)
+	idle      atomic.Int32
+}
+
+func (t *membershipProofClientTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.roundTrip(r)
+}
+func (t *membershipProofClientTransport) CloseIdleConnections() { t.idle.Add(1) }
+
+type membershipProofClientBody struct {
+	io.ReadCloser
+	close func() error
+}
+
+func (b *membershipProofClientBody) Close() error {
+	err := b.ReadCloser.Close()
+	if closeErr := b.close(); closeErr != nil {
+		return closeErr
+	}
+	return err
+}
+
+func TestSourceMembershipClientListenerProofCleanup(t *testing.T) {
+	for _, mode := range []string{"success", "old producer", "close error", "cancel during close", "blocked close success", "status failure cleanup"} {
+		t.Run(mode, func(t *testing.T) {
+			r := clusterbootstrap.MembershipObservationRequest(membershipObserverRequestFixture(t, true, 1))
+			r.RequireListenerProof = true
+			payload, err := clusterbootstrap.EncodeMembershipObservationRequest(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nonce, job, pod := r.Source.ClusterID, r.Source.SourceID, r.Source.SourceUID
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			t.Cleanup(func() { cancel(); unblock.Do(func() { close(release) }) })
+			var calls, closes atomic.Int32
+			transport := &membershipProofClientTransport{roundTrip: func(req *http.Request) (*http.Response, error) {
+				call := calls.Add(1)
+				raw, err := io.ReadAll(req.Body)
+				parsed, parseErr := clusterbootstrap.ParseMembershipActionRequest(raw)
+				if err != nil || parseErr != nil || !reflect.DeepEqual(parsed, r) || req.Method != http.MethodPost || req.URL.String() != "http://node-manager/v1/action" || req.Header.Get(managerTokenHeader) != strings.Repeat("t", 32) {
+					t.Error("capability request lost fixed private transport or binding", err, parseErr)
+				}
+				value := sourceMembershipResultFixture(r)
+				if call == 1 && mode == "old producer" {
+					value.ListenerProofVersion = 0
+				}
+				// Raw producer response tests actual parser instead of its encoder.
+				encoded, _ := json.Marshal(value)
+				raw, _ = json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceMembership", "result": map[string]any{"membership_observation": base64.RawStdEncoding.EncodeToString(encoded)}})
+				status := http.StatusOK
+				if call == 1 && mode == "status failure cleanup" {
+					status = http.StatusForbidden
+				}
+				body := &membershipProofClientBody{io.NopCloser(strings.NewReader(string(raw))), func() error {
+					closes.Add(1)
+					if call == 1 && (mode == "cancel during close" || mode == "blocked close success") {
+						close(entered)
+						<-release
+					}
+					if call == 1 && mode == "close error" {
+						return errors.New("private close diagnostic")
+					}
+					return nil
+				}}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: body}, nil
+			}}
+			client := &http.Client{Transport: transport}
+			type outcome struct {
+				receipt []byte
+				err     error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				receipt, err := readSourceMembershipReceipt(ctx, client, strings.Repeat("t", 32), nonce, job, pod, payload)
+				done <- outcome{receipt, err}
+			}()
+			if mode == "cancel during close" || mode == "blocked close success" {
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("owned body cleanup not entered")
+				}
+				if mode == "cancel during close" {
+					cancel()
+				}
+				select {
+				case <-done:
+					t.Fatal("receipt escaped unjoined body cleanup")
+				case <-time.After(20 * time.Millisecond):
+				}
+				unblock.Do(func() { close(release) })
+			}
+			var result outcome
+			select {
+			case result = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("receipt cleanup failed to join")
+			}
+			if mode == "success" || mode == "blocked close success" {
+				value, err := clusterbootstrap.ParseMembershipObservationReceipt(result.receipt, r, nonce, job, pod)
+				if result.err != nil || err != nil || value.ListenerProofVersion != clusterbootstrap.MembershipListenerProofVersion {
+					t.Fatal("joined capability rejected", result.err, err)
+				}
+			} else if result.err != clusterbootstrap.ErrPreparationConfig || result.receipt != nil {
+				t.Fatal("unproven receipt or private diagnostic escaped", result.err)
+			}
+			if closes.Load() != 1 || transport.idle.Load() != 0 {
+				t.Fatal("owned body cleanup or shared client changed", closes.Load(), transport.idle.Load())
+			}
+			// A failed request cannot cancel or close a sibling's shared client.
+			receipt, err := readSourceMembershipReceipt(context.Background(), client, strings.Repeat("t", 32), nonce, job, pod, payload)
+			if err != nil || len(receipt) == 0 || closes.Load() != 2 || transport.idle.Load() != 0 {
+				t.Fatal("sibling request lost independent lifetime", err)
+			}
+		})
+	}
 }
 
 func TestSourceMembershipClientGenericActionPrecisionAndFailures(t *testing.T) {

@@ -157,7 +157,7 @@ func TestClusterSSHWorkerRecreationPreservesUnprovenProducerBound(t *testing.T) 
 				_, _, snapshot := sshBrokerFixture(t)
 				snapshot.Storage.Requirements.WorkerPolicy = policy
 				snapshot.Storage.Requirements.SiteWorkers = []clusterSSHSiteWorkerResource{}
-				baseCPU, baseMemory, ok := clusterSSHNodeWorkloadBudget(snapshot.Storage.Requirements)
+				baseCPU, baseMemory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 				snapshot.DesiredWorkerSites = []int64{7}
 				cpu, memory, ok2 := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 				if !ok || !ok2 || cpu != baseCPU+2*prospective.CPURequestMilli || memory != baseMemory+2*prospective.MemoryLimitBytes {
@@ -205,6 +205,9 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			// One bounded instance-manager memory cap per joining target.
 			// Native CPU remains outside this partial subtotal.
 			wantMemory += 128 << 20
+			// Six ordinary application templates each retain candidate and surge.
+			wantCPU += 1200
+			wantMemory += 1536 << 20
 			switch mode {
 			case "missing worker":
 				snapshot.DesiredWorkerSites = []int64{2}
@@ -255,7 +258,7 @@ func TestClusterSSHDesiredWorkerWorkloadBudget(t *testing.T) {
 			cpu, memory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 			valid := slices.Contains([]string{"empty", "missing worker", "observed smaller", "observed larger", "two sites"}, mode)
 			// Engine.sh holds one complete candidate cohort alongside the
-			// observed/reconstructed workers; applications stay single-charged.
+			// observed/reconstructed workers, independently of application overlap.
 			rotation := map[string][2]uint64{
 				"empty":            {25, 256 << 20},
 				"missing worker":   {75, 768 << 20},

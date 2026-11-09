@@ -103,7 +103,7 @@ func TestClusterSSHWorkerRotationProducerParity(t *testing.T) {
 			}
 			_, _, snapshot := sshBrokerFixture(t)
 			snapshot.Storage.Requirements.SiteWorkers = []clusterSSHSiteWorkerResource{}
-			baseCPU, baseMemory, valid := clusterSSHNodeWorkloadBudget(snapshot.Storage.Requirements)
+			baseCPU, baseMemory, valid := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 			snapshot.Storage.Requirements.SiteWorkers = workers
 			cpu, memory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 			if !valid || !ok || cpu != baseCPU+2*workers[0].Resources.CPURequestMilli || memory != baseMemory+2*workers[0].Resources.MemoryLimitBytes {
@@ -136,7 +136,7 @@ func TestClusterSSHWorkerRotationDemandAndOverflow(t *testing.T) {
 			_, _, snapshot := sshBrokerFixture(t)
 			r := &snapshot.Storage.Requirements
 			r.SiteWorkers = []clusterSSHSiteWorkerResource{}
-			baseCPU, baseMemory, ok := clusterSSHNodeWorkloadBudget(*r)
+			baseCPU, baseMemory, ok := clusterSSHDesiredWorkerWorkloadBudget(snapshot)
 			if !ok {
 				t.Fatal("invalid non-worker fixture")
 			}
@@ -198,7 +198,9 @@ func TestClusterSSHWorkerRotationTargetFit(t *testing.T) {
 			if !ok || cpu >= 16000 || memory >= 32<<30 {
 				t.Fatal("invalid target baseline")
 			}
-			app := &snapshot.Storage.Requirements.Applications[0]
+			// WireGuard is single-copy during declared application updates, so
+			// balancing this envelope keeps the test about worker rotation only.
+			app := &snapshot.Storage.Requirements.Applications[7]
 			app.CPURequestMilli += 16000 - cpu
 			app.MemoryLimitBytes += (32 << 30) - 7_500_000_000 - memory
 			switch mode {

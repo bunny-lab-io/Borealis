@@ -91,7 +91,7 @@ func readClusterSSHPreparedCohortMembership(parent context.Context, operation cl
 		}
 	}
 	selected := before.receipt.Targets[0].Prejoin.Receipt.Source
-	request := clusterbootstrap.MembershipObservationRequest{Source: selected, KubeSystemUID: before.proof.Source.KubeSystemUID}
+	request := clusterbootstrap.MembershipObservationRequest{Source: selected, KubeSystemUID: before.proof.Source.KubeSystemUID, RequireListenerProof: true}
 	selectedOriginal := false
 	for _, source := range before.proof.Source.Members {
 		request.OriginalSourceNodeUIDs = append(request.OriginalSourceNodeUIDs, source.NodeUID)

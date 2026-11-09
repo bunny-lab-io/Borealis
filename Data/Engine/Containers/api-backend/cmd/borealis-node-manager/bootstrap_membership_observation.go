@@ -67,15 +67,16 @@ func (m *manager) observeBootstrapMembership(parent context.Context, request boo
 		}
 		return value, nil
 	}
-	return observeBootstrapMembershipAt(parent, root, request, check, source, newBootstrapJoinedNodeClient)
+	return observeBootstrapMembershipAt(parent, root, request, check, source, newBootstrapJoinedNodeClient, captureBootstrapMembershipListener)
 }
 
 func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request bootstrapMembershipObservationRequest,
-	check func(context.Context) error, sourceRead func(context.Context) (clusterbootstrap.SourceNetwork, error), clientFor func(*tls.Config) *http.Client) (bootstrapMembershipObservation, error) {
+	check func(context.Context) error, sourceRead func(context.Context) (clusterbootstrap.SourceNetwork, error), clientFor func(*tls.Config) *http.Client,
+	listenerFor func(context.Context, clusterbootstrap.SourceKubelet) (*bootstrapMembershipListenerScope, error)) (observation bootstrapMembershipObservation, observationErr error) {
 	fail := func() (bootstrapMembershipObservation, error) {
 		return bootstrapMembershipObservation{}, errBootstrapSource
 	}
-	if root == nil || check == nil || sourceRead == nil || clientFor == nil || !request.valid() || parent.Err() != nil {
+	if root == nil || check == nil || sourceRead == nil || clientFor == nil || listenerFor == nil || !request.valid() || parent.Err() != nil {
 		return fail()
 	}
 	request.Nodes = slices.Clone(request.Nodes)
@@ -101,6 +102,23 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 	if !prove() {
 		return fail()
 	}
+	listener, listenerErr := listenerFor(ctx, request.Network.Kubelet)
+	if listener != nil && listener.close != nil {
+		defer func() {
+			if listener.close() != nil || ctx.Err() != nil {
+				observation, observationErr = fail()
+				return
+			}
+			// Publish capability only after native custody closes successfully.
+			// Neither the request nor the action-image client supplies this proof.
+			if observationErr == nil && request.RequireListenerProof {
+				observation.ListenerProofVersion = clusterbootstrap.MembershipListenerProofVersion
+			}
+		}()
+	}
+	if listenerErr != nil || listener == nil || listener.check == nil || listener.close == nil || listener.check(ctx) != nil {
+		return fail()
+	}
 	var result bootstrapMembershipObservation
 	err := withBootstrapK3sObservationFiles(ctx, root, request.Network.Hostname, true, check, func(files []bootstrapHostFile, refresh func(context.Context) error, localName string) error {
 		pair, err := tls.X509KeyPair(files[1].data, files[2].data)
@@ -123,11 +141,11 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		}
 		defer client.CloseIdleConnections()
 		get := func(path string) ([]byte, error) {
-			if path != "/version" && path != "/db/info" && path != "/api/v1/nodes/"+request.Network.Hostname || ctx.Err() != nil || refresh(ctx) != nil {
+			if path != "/version" && path != "/db/info" && path != "/api/v1/nodes/"+request.Network.Hostname || ctx.Err() != nil || refresh(ctx) != nil || listener.check(ctx) != nil {
 				return nil, errBootstrapSource
 			}
 			raw, err := sourceNetworkHTTPGet(ctx, client, "https://127.0.0.1:6443", path)
-			if err != nil || refresh(ctx) != nil {
+			if err != nil || listener.check(ctx) != nil || refresh(ctx) != nil {
 				clear(raw)
 				return nil, errBootstrapSource
 			}
@@ -206,7 +224,7 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		result = bootstrapMembershipObservation{Source: request.Source, LocalNode: second, Membership: after, RequestSHA256: requestSHA256, Observer: request.Observer}
 		return nil
 	})
-	if err != nil || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || listener.check(ctx) != nil {
 		return fail()
 	}
 	return result, nil

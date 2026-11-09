@@ -111,6 +111,103 @@ func TestMembershipObservationProtocolPrecisionBoundsAndBinding(t *testing.T) {
 		}
 	}
 }
+
+func TestMembershipObservationListenerProofLegacyBytes(t *testing.T) {
+	// Hashes captured from d0cdda2 before capability fields were introduced.
+	for _, fixture := range []struct{ mode, request, result, receipt, digest string }{
+		{"source", "b33ae7e26d52596e0454d15ec24c8b9ee681a426a7f4a9a5392257ea27455db1", "244b1b3a0ece372ad96d15572770081bf4a95dbe48a3d6e81bff497bc9117f99", "8245fda954ef51a5d64385a5e3a3349a7a51748f62748340f1f2b472fb881574", "835fb8c75b5c1162890e7af336bf42f9e7b07de3a175bc6b25f50a58ed52130e"},
+		{"observer", "4482b90811d17365f13c17f452e78a7d26e9bb388c2f7b3969463290f177a80f", "d4068efc086847d19271f2baf0f227aabeeb3b1124e194c3a0d14e0763ea9f7c", "d624270e1931071c28c1a40ca46f904b8b9bbc05f3d70a3e614fcd30f5384449", "5ffa91cef0c6ed55cc5d5905d53cf9072c8d639d87917bcf1945b198f511d28b"},
+	} {
+		t.Run(fixture.mode, func(t *testing.T) {
+			r, o := membershipProtocolFixture(t, false)
+			if fixture.mode == "observer" {
+				r, o = membershipObserverProtocolFixture(t, true, 1)
+			}
+			request, err := EncodeMembershipObservationRequest(r)
+			result, resultErr := EncodeMembershipObservationResult(o, r)
+			raw, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceMembership", "result": map[string]any{"membership_observation": result}})
+			receipt, receiptErr := NewMembershipObservationReceipt(raw, r, r.Source.ClusterID, r.Source.SourceID, r.Source.SourceUID)
+			hash := func(b []byte) string { value := sha256.Sum256(b); return hex.EncodeToString(value[:]) }
+			if err != nil || resultErr != nil || receiptErr != nil || hash([]byte(request)) != fixture.request || hash([]byte(result)) != fixture.result || hash(receipt) != fixture.receipt || r.SHA256() != fixture.digest {
+				t.Fatal("legacy bytes or digest changed", err, resultErr, receiptErr)
+			}
+		})
+	}
+}
+
+func TestMembershipObservationListenerProofContract(t *testing.T) {
+	for _, mode := range []string{"source", "pair source", "pair first", "pair second", "replacement source", "replacement target", "replacement other source"} {
+		t.Run(mode, func(t *testing.T) {
+			r, o := membershipProtocolFixture(t, true)
+			if mode != "source" {
+				index := 0
+				if strings.Contains(mode, "first") || strings.Contains(mode, "target") {
+					index = 1
+				}
+				if strings.Contains(mode, "second") || strings.Contains(mode, "other") {
+					index = 2
+				}
+				r, o = membershipObserverProtocolFixture(t, strings.HasPrefix(mode, "pair"), index)
+			}
+			legacy, old := r, o
+			r.RequireListenerProof = true
+			o.RequestSHA256, o.ListenerProofVersion = r.SHA256(), MembershipListenerProofVersion
+			if old.Valid(r) || o.Valid(legacy) || r.SHA256() == legacy.SHA256() {
+				t.Fatal("capability crossed legacy binding")
+			}
+			encoded, err := EncodeMembershipObservationRequest(r)
+			decoded, err2 := DecodeMembershipObservationRequest(encoded)
+			if err != nil || err2 != nil || !reflect.DeepEqual(r, decoded) {
+				t.Fatal("capability request lost identity", err, err2)
+			}
+			requestRaw, _ := base64.RawStdEncoding.DecodeString(encoded)
+			for _, field := range []string{`"requirelistenerproof":true`, `"RequireListenerProof":false`, `"RequireListenerProof":null`, `"RequireListenerProof":1`, `"RequireListenerProof":"true"`, `"RequireListenerProof":true,"RequireListenerProof":true`} {
+				bad := bytes.Replace(requestRaw, []byte(`"RequireListenerProof":true`), []byte(field), 1)
+				if bytes.Equal(bad, requestRaw) {
+					t.Fatal("request mutation absent")
+				}
+				if _, err := DecodeMembershipObservationRequest(base64.RawStdEncoding.EncodeToString(bad)); err == nil {
+					t.Fatal("noncanonical capability request accepted", field)
+				}
+			}
+			result, err := EncodeMembershipObservationResult(o, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrap := func(encoded string) []byte {
+				raw, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceMembership", "result": map[string]any{"membership_observation": encoded}})
+				return raw
+			}
+			nonce, job, pod := r.Source.ClusterID, r.Source.SourceID, r.Source.SourceUID
+			receipt, err := NewMembershipObservationReceipt(wrap(result), r, nonce, job, pod)
+			got, err2 := ParseMembershipObservationReceipt(receipt, r, nonce, job, pod)
+			if err != nil || err2 != nil || !reflect.DeepEqual(got, o) || len(receipt) > SourceNetworkReceiptLimit || !bytes.Contains(receipt, []byte(`"version":2`)) {
+				t.Fatal("capability receipt or bounds", err, err2, len(receipt))
+			}
+			if _, err := ParseMembershipObservationReceipt(bytes.Replace(receipt, []byte(`"version":2`), []byte(`"version":1`), 1), r, nonce, job, pod); err == nil {
+				t.Fatal("legacy receipt version promoted")
+			}
+			resultRaw, _ := base64.RawStdEncoding.DecodeString(result)
+			for _, field := range []string{`"listenerproofversion":1`, `"ListenerProofVersion":0`, `"ListenerProofVersion":2`, `"ListenerProofVersion":256`, `"ListenerProofVersion":-1`, `"ListenerProofVersion":1.0`, `"ListenerProofVersion":null`, `"ListenerProofVersion":"1"`, `"ListenerProofVersion":true`, `"ListenerProofVersion":1,"ListenerProofVersion":1`} {
+				bad := bytes.Replace(resultRaw, []byte(`"ListenerProofVersion":1`), []byte(field), 1)
+				if bytes.Equal(bad, resultRaw) {
+					t.Fatal("result mutation absent")
+				}
+				if _, err := NewMembershipObservationReceipt(wrap(base64.RawStdEncoding.EncodeToString(bad)), r, nonce, job, pod); err == nil {
+					t.Fatal("unproven native capability accepted", field)
+				}
+			}
+			// An older producer can echo all current caller input without having
+			// performed listener checks. Digest agreement cannot supply proof.
+			old.RequestSHA256 = r.SHA256()
+			oldRaw, _ := json.Marshal(old)
+			if _, err := NewMembershipObservationReceipt(wrap(base64.RawStdEncoding.EncodeToString(oldRaw)), r, nonce, job, pod); err == nil {
+				t.Fatal("old native producer gained proof from current request")
+			}
+			t.Logf("request=%d result=%d receipt=%d", len(encoded), len(result), len(receipt))
+		})
+	}
+}
 func TestMembershipObservationProtocolRejectsMalformed(t *testing.T) {
 	r, o := membershipProtocolFixture(t, false)
 	encoded, _ := EncodeMembershipObservationRequest(r)

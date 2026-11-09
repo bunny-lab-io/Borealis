@@ -236,6 +236,18 @@ func TestClusterSSHTargetApplicationSizing(t *testing.T) {
 			// Preserve exact fit with the producer's whole candidate cohort.
 			values[0].CPURequestMilli -= workers[0].Resources.CPURequestMilli
 			values[0].MemoryLimitBytes -= workers[0].Resources.MemoryLimitBytes
+			// Retain the exact same 16-CPU/32-GiB boundary with three declared
+			// copies of ordinary applications. Put integer division remainders
+			// in the single-copy WireGuard envelope; no fit assertion changes.
+			for i := range values {
+				if values[i].Name == "traefik-edge" || values[i].Name == "wireguard-tunnel" {
+					continue
+				}
+				values[7].CPURequestMilli += values[i].CPURequestMilli % 3
+				values[7].MemoryLimitBytes += values[i].MemoryLimitBytes % 3
+				values[i].CPURequestMilli /= 3
+				values[i].MemoryLimitBytes /= 3
+			}
 			if _, _, valid := clusterSSHApplicationBudget(values); !valid {
 				t.Fatal("invalid baseline application bounds")
 			}
