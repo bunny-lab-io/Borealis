@@ -26,6 +26,7 @@ const (
 // These wire types are used only inside authenticated encryption. Neither the
 // sealed credential nor source settings belong in generic JSON responses/logs.
 type clusterSSHSourceBrokerRequest struct {
+	Joined     bool                        `json:"joined,omitempty"`
 	Joining    bool                        `json:"joining,omitempty"`
 	Version    int                         `json:"version"`
 	ID         string                      `json:"id"`
@@ -52,13 +53,25 @@ func (r clusterSSHSourceBrokerRequest) valid(now time.Time) bool {
 // Existing broker requests retain their forty-second ceiling. Persisted claim,
 // credential expiry and Aegis authority remain independently authoritative.
 func (r clusterSSHSourceBrokerRequest) validWithin(now time.Time, seconds int64) bool {
-	return (!r.Joining || validClusterSSHPreparationLease(r.Lease)) && seconds > 0 && seconds <= 90 && r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+seconds &&
+	// Other fixed brokers embed this contract. Joined completion is exclusive
+	// to the source route and cannot be smuggled into custody/VIP/join requests.
+	return !r.Joined && r.validSourceWithin(now, seconds)
+}
+
+func (r clusterSSHSourceBrokerRequest) validSource(now time.Time) bool {
+	return r.validSourceWithin(now, 40)
+}
+
+func (r clusterSSHSourceBrokerRequest) validSourceWithin(now time.Time, seconds int64) bool {
+	return (!r.Joining || !r.Joined) && (!(r.Joining || r.Joined) || validClusterSSHPreparationLease(r.Lease)) && seconds > 0 && seconds <= 90 && r.Version == 1 && clusterUUIDRE.MatchString(r.ID) && r.ID != "00000000-0000-0000-0000-000000000000" && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+seconds &&
 		(validClusterSSHObservationLease(r.Lease) || validClusterSSHIdentityRecoveryLease(r.Lease)) && r.Baseline.Validate() == nil && r.Baseline.Repository == clusterGitHubRepo() &&
 		r.Binding.valid() && r.Binding.OperationID == r.Lease.OperationID && r.Binding.TargetID == r.Lease.TargetID &&
 		r.Generation != "" && len(r.Generation) <= 16<<10 && strings.HasPrefix(r.Ciphertext, aegisEnvelopePrefix) && len(r.Ciphertext) <= 256<<10
 }
 
 type clusterSSHSourceBrokerResponse struct {
+	Joined   bool                           `json:"joined,omitempty"`
+	Targets  *clusterSSHJoinedTargets       `json:"targets,omitempty"`
 	Joining  bool                           `json:"joining,omitempty"`
 	Version  int                            `json:"version"`
 	ID       string                         `json:"id"`
@@ -121,6 +134,7 @@ type clusterSSHSourceBroker struct {
 	requestCipher, responseCipher cipher.AEAD
 	read                          func(context.Context, clusterSSHSourceBrokerRequest) (clusterSSHPreparationSnapshot, error)
 	readRecovery                  func(context.Context, clusterSSHSourceBrokerRequest) error
+	readJoined                    func(context.Context, clusterSSHSourceBrokerRequest) (clusterSSHJoinedTargets, error)
 	mu                            sync.Mutex
 	seen                          map[string]int64
 	active                        int
@@ -145,6 +159,19 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 			return readClusterSSHWorkerCensus(ctx, store.db, window)
 		})
 	}
+	b.readJoined = func(ctx context.Context, request clusterSSHSourceBrokerRequest) (clusterSSHJoinedTargets, error) {
+		if !clusterControllerEligible() || runner == nil || runner.kube == nil || runner.controllerHolder != holder ||
+			request.Lease.ControllerHolder != holder || !request.Joined || request.Joining || !validClusterSSHPreparationLease(request.Lease) {
+			return clusterSSHJoinedTargets{}, clusterbootstrap.ErrPreparationConfig
+		}
+		read := func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+			bound, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			return store.loadClusterSSHPreparationAuthority(bound, request.Lease, request.Baseline, request.sealed())
+		}
+		return readClusterSSHJoinedTargetsNative(ctx, runner.kube, read)
+	}
+
 	b.readRecovery = func(ctx context.Context, request clusterSSHSourceBrokerRequest) error {
 		if !clusterControllerEligible() || runner == nil || runner.kube == nil || runner.controllerHolder != holder ||
 			request.Lease.ControllerHolder != holder || !validClusterSSHIdentityRecoveryLease(request.Lease) {
@@ -161,6 +188,49 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 	return b
 }
 
+// Joined settlement uses the existing strict, fixed-path Node/Namespace decoder
+// and owns all response cleanup. A deleted namespace or child-expired response
+// cannot be reduced to an apparently unchanged UID and accepted as fresh proof.
+func readClusterSSHJoinedTargetsNative(ctx context.Context, original *kubernetesAPIClient, authority clusterSSHPreparationAuthorityRead) (clusterSSHJoinedTargets, error) {
+	fail := func() (clusterSSHJoinedTargets, error) {
+		return clusterSSHJoinedTargets{}, clusterbootstrap.ErrSessionAuthority
+	}
+	if original == nil || original.httpClient == nil || authority == nil || ctx.Err() != nil {
+		return fail()
+	}
+	transport := original.httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
+	kube, client := *original, *original.httpClient
+	client.Transport, kube.httpClient = cleanup, &client
+	read := func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+		if !cleanup.clean() || ctx.Err() != nil {
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrSessionAuthority
+		}
+		value, err := authority(ctx)
+		if err != nil || !cleanup.clean() || ctx.Err() != nil {
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrSessionAuthority
+		}
+		return value, nil
+	}
+	get := func(ctx context.Context, path string, out any) error {
+		if !cleanup.clean() || ctx.Err() != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		if err := kube.getClusterSSHNodeCohortJSON(ctx, path, out); err != nil || !cleanup.clean() || ctx.Err() != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		return nil
+	}
+	value, err := readClusterSSHJoinedTargets(ctx, read, get)
+	if err != nil || !cleanup.clean() || ctx.Err() != nil {
+		return fail()
+	}
+	return value, nil
+}
+
 func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -175,12 +245,12 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(5 * time.Second))
 	wire, err := io.ReadAll(io.LimitReader(r.Body, clusterSSHSourceBrokerLimit+1))
 	var request clusterSSHSourceBrokerRequest
-	if err != nil || b == nil || openClusterSSHSourceBroker(b.requestCipher, wire, &request) != nil || !request.valid(time.Now()) {
+	if err != nil || b == nil || openClusterSSHSourceBroker(b.requestCipher, wire, &request) != nil || !request.validSource(time.Now()) {
 		fail(http.StatusUnauthorized)
 		return
 	}
-	reply := func(status string, snapshot *clusterSSHPreparationSnapshot) {
-		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Joining: request.Joining, Version: 53, ID: request.ID, Status: status, Snapshot: snapshot})
+	reply := func(status string, snapshot *clusterSSHPreparationSnapshot, targets *clusterSSHJoinedTargets) {
+		wire, err := sealClusterSSHSourceBroker(b.responseCipher, clusterSSHSourceBrokerResponse{Joining: request.Joining, Joined: request.Joined, Version: 54, ID: request.ID, Status: status, Snapshot: snapshot, Targets: targets})
 		if err != nil {
 			fail(http.StatusServiceUnavailable)
 			return
@@ -189,7 +259,7 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 		_, _ = w.Write(wire)
 	}
 	if request.Lease.ControllerHolder != b.holder {
-		reply("not_owner", nil)
+		reply("not_owner", nil, nil)
 		return
 	}
 	// Replay memory is bounded and fails closed when full. Replays are never
@@ -206,6 +276,9 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 	if validClusterSSHIdentityRecoveryLease(request.Lease) {
 		handlerReady = b.readRecovery != nil
 	}
+	if request.Joined {
+		handlerReady = b.readJoined != nil
+	}
 	accepted := !replay && len(b.seen) < 128 && b.active < 2 && handlerReady
 	if accepted {
 		b.seen[request.ID] = request.ExpiresAt
@@ -213,7 +286,7 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 	}
 	b.mu.Unlock()
 	if !accepted {
-		reply("unavailable", nil)
+		reply("unavailable", nil, nil)
 		return
 	}
 	defer func() { b.mu.Lock(); b.active--; b.mu.Unlock() }()
@@ -221,18 +294,28 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 	ctx, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
-	if validClusterSSHIdentityRecoveryLease(request.Lease) {
-		if b.readRecovery(ctx, request) != nil || ctx.Err() != nil {
-			reply("unavailable", nil)
+	if request.Joined {
+		value, err := b.readJoined(ctx, request)
+		if err != nil || ctx.Err() != nil {
+			reply("unavailable", nil, nil)
 			return
 		}
-		reply("recovery_node_ok", nil)
+		reply("joined_nodes_ok", nil, &value)
+		return
+	}
+
+	if validClusterSSHIdentityRecoveryLease(request.Lease) {
+		if b.readRecovery(ctx, request) != nil || ctx.Err() != nil {
+			reply("unavailable", nil, nil)
+			return
+		}
+		reply("recovery_node_ok", nil, nil)
 		return
 	}
 	value, err := b.read(ctx, request)
 	if err != nil || ctx.Err() != nil {
-		reply("unavailable", nil)
+		reply("unavailable", nil, nil)
 		return
 	}
-	reply("ok", &value)
+	reply("ok", &value, nil)
 }

@@ -7,14 +7,26 @@ import (
 	"encoding/json"
 	"slices"
 	"sync/atomic"
+	"time"
 )
 
-// Callable composition only. Every original target reaches configuration before
-// any startup. Fresh retained scopes re-prove the complete cohort before each
-// start. Approval, production polling and controller admission remain separate.
+// Production composition for the existing API executor. Every original target
+// reaches configuration before any startup. Fresh retained scopes re-prove the
+// complete cohort before each start; controller admission remains separate.
 func newClusterSSHNativePrejoinPreparationWorker(store *postgresOperatorStore, aegis *goAegisService,
 	scratchParent string, process clusterExistingIdentitySourceProcess, getJSON func(context.Context, string, any) error) *clusterSSHPreparationWorker {
-	if store == nil || store.db == nil || aegis == nil {
+	if getJSON == nil {
+		return nil
+	}
+	return newClusterSSHNativePrejoinPreparationWorkerRead(store, aegis, scratchParent, process,
+		func(ctx context.Context, read clusterSSHPreparationAuthorityRead, _ clusterSSHNetworkTargetClaim, _ clusterbootstrap.Expected) (clusterSSHJoinedTargets, error) {
+			return readClusterSSHJoinedTargets(ctx, read, getJSON)
+		})
+}
+
+func newClusterSSHNativePrejoinPreparationWorkerRead(store *postgresOperatorStore, aegis *goAegisService,
+	scratchParent string, process clusterExistingIdentitySourceProcess, joined clusterSSHPrejoinJoinedRead) *clusterSSHPreparationWorker {
+	if store == nil || store.db == nil || aegis == nil || joined == nil {
 		return nil
 	}
 	dispatch := func(ctx context.Context, claims []clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, confirmation string,
@@ -41,7 +53,7 @@ func newClusterSSHNativePrejoinPreparationWorker(store *postgresOperatorStore, a
 		}
 		return dispatchClusterSSHPrejoinCohort(ctx, claims, baseline, binding, scope, current)
 	}
-	return newClusterSSHPrejoinCohortPreparationWorker(store, aegis, dispatch, getJSON)
+	return &clusterSSHPreparationWorker{store: store, aegis: aegis, cohort: dispatch, joined: joined, interval: 5 * time.Second}
 }
 
 type clusterSSHPrejoinWorkerSourceConsumer = func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts,

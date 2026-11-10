@@ -222,6 +222,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /internal/cluster/k3s-join-result` | `internal-cluster` | `operator-derived-aead-and-pending-native-job-receipt` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:381` |
 | `POST /internal/cluster/ssh-k3s-join` | `internal-cluster` | `operator-derived-aead-and-confirmed-source-preparation-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:380` |
 | `POST /internal/cluster/ssh-prejoin-custody` | `internal-cluster` | `operator-derived-aead-and-preparation-phase-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:387` |
+| `POST /internal/cluster/ssh-preparation-clean-targets` | `internal-cluster` | `operator-derived-aead-and-confirmed-waiting-proposal` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_clean_broker.go:103` |
 | `POST /internal/cluster/ssh-preparation-source` | `internal-cluster` | `operator-derived-aead-and-target-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:378` |
 | `POST /internal/cluster/ssh-vip-check` | `internal-cluster` | `operator-derived-aead-and-target-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:390` |
 | `POST /internal/cluster/ssh-vip-scope` | `internal-cluster` | `operator-derived-aead-and-target-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:389` |

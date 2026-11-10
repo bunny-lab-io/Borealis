@@ -685,7 +685,7 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 				if mode == "lost POST" {
 					return nil, errors.New("private transport")
 				}
-				value := clusterSSHSourceBrokerResponse{Version: 53, ID: r.ID, Status: "ok", Snapshot: &snapshot}
+				value := clusterSSHSourceBrokerResponse{Version: 54, ID: r.ID, Status: "ok", Snapshot: &snapshot}
 				if mode == "wrong nonce" {
 					value.ID = newClusterUUID()
 				}
@@ -696,11 +696,11 @@ func TestClusterSSHSourceBrokerClientRejectsResponseAndNeverReplays(t *testing.T
 					value.Snapshot = nil
 				}
 				if mode == "legacy response" {
-					value.Version = 52
+					value.Version = 53
 				}
 				raw, _ := json.Marshal(value)
 				if mode == "response duplicate" {
-					altered := bytes.Replace(raw, []byte(`"version":53`), []byte(`"version":53,"version":53`), 1)
+					altered := bytes.Replace(raw, []byte(`"version":54`), []byte(`"version":54,"version":54`), 1)
 					if bytes.Equal(raw, altered) {
 						t.Fatal("duplicate response fixture unchanged")
 					}

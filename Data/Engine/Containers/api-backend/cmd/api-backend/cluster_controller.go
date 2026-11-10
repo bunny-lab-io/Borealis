@@ -474,7 +474,10 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		if textInSet(operation.CurrentStep, "preflight", clusterSSHInspectionOperationStep) {
 			return c.runSSHInspectionParent(runCtx, operation, observe)
 		}
-		return c.runSSHIdentityRecoveryParent(runCtx, operation, observe)
+		if operation.CurrentStep == clusterSSHIdentityRecoveryOperationStep {
+			return c.runSSHIdentityRecoveryParent(runCtx, operation, observe)
+		}
+		return c.runSSHPreparationParent(runCtx, operation, observe)
 	}
 	nodes, err := c.activeNodes(runCtx)
 	if err != nil {
@@ -1416,7 +1419,8 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
 		   AND o.kind<>'ssh_identity_recovery'
-		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting')
+		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='prepare_ssh_targets'
+		     AND COALESCE(o.payload_json::jsonb->'ssh_preparation'->>'version','')<>'1')
 		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
 		 FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
@@ -1430,6 +1434,14 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 	operation.TargetRelease = targetRelease
 	operation.TargetSHA = targetSHA
 	operation.Payload = parseClusterJSON(payloadJSON)
+	// Waiting SSH proposals retain their exact confirmed payload and phase.
+	// Reading them never starts preparation or replaces original ownership.
+	if operation.Kind == "ssh_onboarding" && operation.State == "waiting" {
+		if err := tx.Commit(); err != nil {
+			return clusterControllerOperation{}, false, err
+		}
+		return operation, true, nil
+	}
 	if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok {
 		actionImage := clusterOperationActionImage(operation, runner.actionImage)
 		if !borealisOperatorImmutableImageRefPattern.MatchString(actionImage) {

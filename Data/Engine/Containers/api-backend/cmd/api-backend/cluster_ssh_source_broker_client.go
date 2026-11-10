@@ -169,10 +169,71 @@ func (c *clusterSSHSourceBrokerClient) fetch(parent context.Context, request clu
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	value, err := c.exchange(parent, request)
-	if err != nil || value.Status != "ok" || value.Snapshot == nil {
+	if err != nil || value.Status != "ok" || value.Snapshot == nil || value.Targets != nil || value.Joined {
 		return fail()
 	}
 	return *value.Snapshot, nil
+}
+
+// The controller observes the exact joined cohort under the original claim;
+// the API independently brackets transport with current SQL/Aegis authority.
+// Only typed identities cross this boundary, never arbitrary Kubernetes reads.
+func (c *clusterSSHSourceBrokerClient) joinedTargetsRead(parent context.Context, authority clusterSSHPreparationAuthorityRead,
+	claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected) (clusterSSHJoinedTargets, error) {
+	fail := func() (clusterSSHJoinedTargets, error) {
+		return clusterSSHJoinedTargets{}, clusterbootstrap.ErrSessionAuthority
+	}
+	if c == nil || c.httpClient == nil || authority == nil || !validClusterSSHPreparationLease(claim.Lease) || baseline.Validate() != nil || parent.Err() != nil {
+		return fail()
+	}
+	// Own this Joined exchange's response lifetime without changing the shared
+	// client or the legacy snapshot/recovery paths. Child request expiry and
+	// failed/blocked Close remain visible after exchange returns.
+	transport := c.httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
+	owned, client := *c, *c.httpClient
+	client.Transport, owned.httpClient = cleanup, &client
+	ctx, cancel := context.WithTimeout(parent, clusterSSHJoinedNodeObservationTimeout)
+	defer cancel()
+	before, err := authority(ctx)
+	if err != nil || before.Lease != claim.Lease || before.Baseline != baseline || before.IdentitySource == nil || before.Recovery != nil {
+		return fail()
+	}
+	before.Cohort.ObservedAt = 0
+	digest, err := clusterSSHPreparationDigest(before)
+	if err != nil {
+		return fail()
+	}
+	request := clusterSSHSourceBrokerRequest{Joined: true, Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 20,
+		Lease: claim.Lease, Baseline: baseline, Binding: claim.Sealed.binding, Generation: claim.Sealed.generation, Ciphertext: claim.Sealed.ciphertext}
+	value, err := owned.exchange(ctx, request)
+	if err != nil || !cleanup.clean() || ctx.Err() != nil || value.Status != "joined_nodes_ok" || !value.Joined || value.Joining || value.Snapshot != nil || value.Targets == nil ||
+		value.Targets.AuthoritySHA256 != digest || len(value.Targets.Nodes) != len(before.Cohort.Targets) {
+		return fail()
+	}
+	seen := map[string]bool{}
+	for _, target := range before.Cohort.Targets {
+		node, ok := value.Targets.Nodes[target.Binding.TargetID]
+		if !ok || !clusterUUIDRE.MatchString(node.NodeUID) || node.NodeUID == "00000000-0000-0000-0000-000000000000" || seen[node.NodeUID] ||
+			node.Hostname != target.Report.Hostname || node.MachineID != target.Report.MachineID || node.BootID != target.Report.BootID ||
+			node.Address != target.Binding.Address || node.K3sVersion != before.K3sVersion || !node.Ready {
+			return fail()
+		}
+		seen[node.NodeUID] = true
+	}
+	after, err := authority(ctx)
+	if err != nil || !cleanup.clean() || ctx.Err() != nil {
+		return fail()
+	}
+	after.Cohort.ObservedAt = 0
+	afterDigest, err := clusterSSHPreparationDigest(after)
+	if err != nil || afterDigest != digest {
+		return fail()
+	}
+	return *value.Targets, nil
 }
 
 // Recovery Node reads reuse controller discovery and encrypted transport, but
@@ -191,7 +252,7 @@ func (c *clusterSSHSourceBrokerClient) recoveryNodeRead(authority clusterSSHPrep
 		request := clusterSSHSourceBrokerRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
 			Lease: claim.Lease, Baseline: claim.Baseline, Binding: claim.Sealed.binding, Generation: claim.Sealed.generation, Ciphertext: claim.Sealed.ciphertext}
 		value, err := c.exchange(parent, request)
-		if err != nil || value.Status != "recovery_node_ok" || value.Snapshot != nil {
+		if err != nil || value.Status != "recovery_node_ok" || value.Snapshot != nil || value.Targets != nil || value.Joined {
 			return fail()
 		}
 		after, err := authority(parent)
@@ -206,7 +267,7 @@ func (c *clusterSSHSourceBrokerClient) exchange(parent context.Context, request 
 	fail := func() (clusterSSHSourceBrokerResponse, error) {
 		return clusterSSHSourceBrokerResponse{}, clusterbootstrap.ErrPreparationConfig
 	}
-	if c == nil || c.peers == nil || c.httpClient == nil || !request.valid(time.Now()) || parent.Err() != nil {
+	if c == nil || c.peers == nil || c.httpClient == nil || !request.validSource(time.Now()) || parent.Err() != nil {
 		return fail()
 	}
 	ctx, cancel := context.WithDeadline(parent, time.Unix(request.ExpiresAt, 0))
@@ -236,14 +297,17 @@ func (c *clusterSSHSourceBrokerClient) exchange(parent context.Context, request 
 			return fail()
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, clusterSSHSourceBrokerLimit+1))
-		_ = resp.Body.Close()
+		closeErr := resp.Body.Close()
+		if request.Joined && closeErr != nil {
+			return fail() // Failed cleanup cannot even advance to another peer.
+		}
 		var value clusterSSHSourceBrokerResponse
 		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
 			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 53 || value.ID != request.ID || value.Joining != request.Joining || ctx.Err() != nil {
+			value.Version != 54 || value.ID != request.ID || value.Joining != request.Joining || value.Joined != request.Joined || ctx.Err() != nil {
 			return fail()
 		}
-		if value.Status == "not_owner" && value.Snapshot == nil {
+		if value.Status == "not_owner" && value.Snapshot == nil && value.Targets == nil {
 			continue
 		}
 		return value, nil

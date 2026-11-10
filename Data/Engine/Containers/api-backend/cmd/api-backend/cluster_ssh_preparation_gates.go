@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"time"
 )
@@ -11,8 +12,27 @@ var clusterSSHPreparationGateCodes = [6]string{"immutable_artifacts", "clean_tar
 
 // Native adapters must produce fresh complete-cohort domain proof for the exact
 // proposed plan. A digest is an equality receipt, never permission by itself.
-// No production adapters are installed yet; a missing entry fails closed.
+// Missing or incomplete native adapters fail closed with their own gate code.
 type clusterSSHPreparationGates [6]func(context.Context, string) (string, error)
+
+// Fixed, nonsecret native diagnostics may cross the controller progress boundary.
+// Never include an underlying transport, credential or private settings error.
+type clusterSSHPreparationGateBlocked struct {
+	Gate   string
+	Reason string
+}
+
+func (e clusterSSHPreparationGateBlocked) Error() string { return e.Gate + ": " + e.Reason }
+func (clusterSSHPreparationGateBlocked) Unwrap() error   { return errClusterConflict }
+
+func clusterSSHPreparationGateError(index int, cause error) error {
+	code := clusterSSHPreparationGateCodes[index]
+	var blocked clusterSSHPreparationGateBlocked
+	if errors.As(cause, &blocked) && blocked.Gate == code {
+		return blocked
+	}
+	return clusterSSHPreparationGateBlocked{code, "Fresh complete-cohort native proof failed; inspect this readiness gate before retrying preparation."}
+}
 
 type clusterSSHPreparationGateReceipt struct {
 	Code   string `json:"code"`
@@ -60,9 +80,9 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 	if parent.Err() != nil || !validClusterSSHPreparationDigest(plan) || source == nil || consume == nil {
 		return errClusterConflict
 	}
-	for _, observe := range gates {
+	for i, observe := range gates {
 		if observe == nil {
-			return errClusterConflict
+			return clusterSSHPreparationGateBlocked{clusterSSHPreparationGateCodes[i], "Native readiness adapter is unavailable; preparation cannot be approved."}
 		}
 	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
@@ -93,7 +113,8 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 		for i, observe := range gates {
 			value, err := observe(bound, plan)
 			if err != nil || !validClusterSSHPreparationDigest(value) || bound.Err() != nil || ctx.Err() != nil {
-				return fail()
+				cancel()
+				return clusterSSHPreparationGateError(i, err)
 			}
 			observed[i] = value
 		}
@@ -105,19 +126,25 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 		}
 		return nil
 	}
-	if recheck(ctx) != nil {
-		return errClusterConflict
+	if err := recheck(ctx); err != nil {
+		return err
 	}
 	proof := clusterSSHPreparationApprovalProof{plan: plan, started: started, lifetime: ctx, recheck: recheck, receipts: retained}
-	if consume(ctx, proof) != nil || !proof.valid(plan) || ctx.Err() != nil {
+	if err := consume(ctx, proof); err != nil {
+		var blocked clusterSSHPreparationGateBlocked
+		if errors.As(err, &blocked) {
+			return blocked
+		}
+		return errClusterConflict
+	}
+	if !proof.valid(plan) || ctx.Err() != nil {
 		return errClusterConflict
 	}
 	return nil
 }
 
-// This coordinator deliberately has no runtime caller while native phase gates
-// and authenticated operator confirmation remain unavailable. It composes only
-// existing controller source observation with the explicit complete proof set.
+// Approval retains the existing source observation and complete proof contract.
+// Native composition cannot approve while any required gate remains blocked.
 func (c *clusterController) approveClusterSSHPreparation(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot,
 	confirmation clusterSSHPreparationConfirmation, getJSON func(context.Context, string, any) error, gates clusterSSHPreparationGates) error {
 	plan, err := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)

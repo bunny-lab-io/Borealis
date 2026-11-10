@@ -1944,6 +1944,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "POST /internal/cluster/ssh-preparation-clean-targets",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_clean_broker.go",
+    "line": 103,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-confirmed-waiting-proposal",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_clean_broker_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "POST /internal/cluster/ssh-preparation-source",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
     "line": 378,

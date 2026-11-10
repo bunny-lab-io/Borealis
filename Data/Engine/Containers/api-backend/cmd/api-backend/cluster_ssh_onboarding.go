@@ -46,6 +46,7 @@ func registerClusterSSHOnboardingRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/server/cluster/onboarding/operations/{id}", service.progress)
 	registerClusterSSHPreparationRoutes(mux, auth)
 	registerClusterExistingIdentityRoutes(mux, auth)
+	registerClusterSSHPreparationCleanBrokerRoute(mux, auth)
 }
 
 type clusterSSHSubmissionTarget struct {

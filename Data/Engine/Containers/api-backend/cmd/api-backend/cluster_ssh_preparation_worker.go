@@ -14,8 +14,8 @@ import (
 
 // A native dispatcher must own fresh domain/source proofs, fixed remote
 // journals and joined cleanup. Returning hashes alone is not an implementation
-// of that contract. The native pre-join adapter is callable only; no polling
-// caller is installed.
+// of that contract. The existing API runtime dispatches the native paired
+// adapter only after the original controller releases approved work.
 type clusterSSHPreparationDispatch func(context.Context, clusterSSHNetworkTargetClaim,
 	clusterbootstrap.Expected, string, engineidentity.Binding, func(context.Context) error) (clusterSSHPreparationResult, error)
 
@@ -34,6 +34,7 @@ type clusterSSHPreparationWorker struct {
 	prejoin  clusterSSHPrejoinPreparationDispatch
 	cohort   clusterSSHPrejoinCohortDispatch
 	getJSON  func(context.Context, string, any) error
+	joined   clusterSSHPrejoinJoinedRead
 }
 
 func newClusterSSHPreparationWorker(store *postgresOperatorStore, aegis *goAegisService, dispatch clusterSSHPreparationDispatch) *clusterSSHPreparationWorker {
@@ -65,7 +66,7 @@ func newClusterSSHPrejoinCohortPreparationWorker(store *postgresOperatorStore, a
 func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clusterSSHPreparationWork) error {
 	if w == nil || w.store == nil || w.store.db == nil || w.aegis == nil ||
 		(w.dispatch == nil && w.prejoin == nil && w.cohort == nil) || w.dispatch != nil && (w.prejoin != nil || w.cohort != nil) || w.prejoin != nil && w.cohort != nil ||
-		(w.prejoin != nil || w.cohort != nil) && w.getJSON == nil ||
+		(w.prejoin != nil || w.cohort != nil) && (w.getJSON == nil) == (w.joined == nil) ||
 		parent.Err() != nil || len(work.Claims) < 1 || len(work.Claims) > 2 || work.Baseline.Validate() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -183,7 +184,13 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	if w.prejoin != nil || w.cohort != nil {
-		if w.store.completeClusterSSHPrejoinPreparation(parent, w.aegis, prepared, w.getJSON) != nil || parent.Err() != nil {
+		joined := w.joined
+		if joined == nil {
+			joined = func(ctx context.Context, read clusterSSHPreparationAuthorityRead, _ clusterSSHNetworkTargetClaim, _ clusterbootstrap.Expected) (clusterSSHJoinedTargets, error) {
+				return readClusterSSHJoinedTargets(ctx, read, w.getJSON)
+			}
+		}
+		if w.store.completeClusterSSHPrejoinPreparationRead(parent, w.aegis, prepared, joined) != nil || parent.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		return nil

@@ -15,7 +15,8 @@ import (
 // This reservation is written only by the guarded controller approval transition,
 // after phase-specific prerequisites and explicit confirmation. A qualification
 // report (including all currently supported checks passing) cannot create it.
-// No production writer or dispatcher is enabled by the claim consumer below.
+// The API executor consumes this reservation only after controller proof-scope
+// cleanup; the claim consumer cannot approve or manufacture any phase proof.
 type clusterSSHPreparationAuthorization struct {
 	Version             int                                     `json:"version"`
 	OperationID         string                                  `json:"operation_id"`
@@ -118,19 +119,28 @@ func parseClusterSSHPreparationAuthorizationContent(raw, qualificationRaw, confi
 // work. The entire cohort acquires fresh claims together, under original
 // controller ownership, before any credential decryption or SSH is possible.
 func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, operation clusterControllerOperation, holder string) (clusterSSHPreparationWork, error) {
+	if c == nil {
+		return clusterSSHPreparationWork{}, errClusterConflict
+	}
+	return c.store.claimClusterSSHPreparation(ctx, operation, c.holder, holder)
+}
+
+// API executors consume only the durable reservation from the original live
+// controller. This grants no controller lease, approval or uncertain-work replay.
+func (s *postgresOperatorStore) claimClusterSSHPreparation(ctx context.Context, operation clusterControllerOperation, controller, holder string) (clusterSSHPreparationWork, error) {
 	fail := func() (clusterSSHPreparationWork, error) { return clusterSSHPreparationWork{}, errClusterConflict }
-	if c == nil || c.store == nil || c.store.db == nil || ctx.Err() != nil || !clusterUUIDRE.MatchString(holder) ||
+	if s == nil || s.db == nil || ctx.Err() != nil || !clusterUUIDRE.MatchString(holder) ||
 		!clusterUUIDRE.MatchString(operation.ID) || operation.Kind != "ssh_onboarding" || operation.State != "running" ||
-		operation.CurrentStep != clusterSSHPreparationOperationStep || operation.Attempt < 1 || c.holder == "" || len(c.holder) > 1024 {
+		operation.CurrentStep != clusterSSHPreparationOperationStep || operation.Attempt < 1 || controller == "" || len(controller) > 1024 {
 		return fail()
 	}
 	var work clusterSSHPreparationWork
-	if c.store.db.QueryRowContext(ctx, `SELECT o.payload_json,c.baseline_release,c.baseline_sha
+	if s.db.QueryRowContext(ctx, `SELECT o.payload_json,c.baseline_release,c.baseline_sha
  FROM engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l
- WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$2 AND o.attempt=$3
+ WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$2 AND o.attempt=$3 AND COALESCE(o.error_text,'')=''
  AND octet_length(o.payload_json)<=262144 AND c.id=1 AND c.active_operation_id=o.id
  AND l.name=$4 AND l.holder=$5 AND l.expires_at>extract(epoch FROM clock_timestamp())`, operation.ID,
-		clusterSSHPreparationOperationStep, operation.Attempt, clusterControllerLeaseName, c.holder).
+		clusterSSHPreparationOperationStep, operation.Attempt, clusterControllerLeaseName, controller).
 		Scan(&work.Payload, &work.Baseline.Release, &work.Baseline.SourceSHA) != nil {
 		return fail()
 	}
@@ -139,7 +149,7 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 	if work.Baseline.Validate() != nil {
 		return fail()
 	}
-	anchor := clusterSSHTargetLease{OperationID: operation.ID, OperationAttempt: operation.Attempt, ControllerHolder: c.holder,
+	anchor := clusterSSHTargetLease{OperationID: operation.ID, OperationAttempt: operation.Attempt, ControllerHolder: controller,
 		OperationKind: "ssh_onboarding", OperationStep: clusterSSHPreparationOperationStep, Step: "stage_source", Holder: holder}
 	var err error
 	var version string
@@ -147,7 +157,7 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 	if err != nil {
 		return fail()
 	}
-	work.Source, err = readClusterSSHQueueSource(ctx, c.store.db)
+	work.Source, err = readClusterSSHQueueSource(ctx, s.db)
 	if err != nil {
 		return fail()
 	}
@@ -195,7 +205,7 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 		keys[target.Binding.TargetID] = base64.StdEncoding.EncodeToString(target.Key.PublicKey)
 		generations[target.Binding.TargetID] = work.Authorization.Targets[i].QualificationGeneration
 		credential := sealedClusterSSHCredentials{binding: target.Binding}
-		if c.store.db.QueryRowContext(ctx, `SELECT aegis_generation,ciphertext FROM engine.cluster_onboarding_credentials
+		if s.db.QueryRowContext(ctx, `SELECT aegis_generation,ciphertext FROM engine.cluster_onboarding_credentials
  WHERE target_id=$1 AND octet_length(aegis_generation) BETWEEN 1 AND 16384 AND octet_length(ciphertext) BETWEEN 1 AND 262144`, target.Binding.TargetID).
 			Scan(&credential.generation, &credential.ciphertext) != nil || !strings.HasPrefix(credential.ciphertext, aegisEnvelopePrefix) {
 			return fail()
@@ -208,7 +218,7 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 		}
 		sealed[target.Binding.TargetID] = credential
 	}
-	tx, err := c.store.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fail()
 	}
@@ -219,7 +229,7 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 	}
 	var present int
 	if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_operations o,engine.cluster_state c
- WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$2 AND o.attempt=$3 AND o.payload_json=$4
+ WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$2 AND o.attempt=$3 AND o.payload_json=$4 AND COALESCE(o.error_text,'')=''
  AND c.id=1 AND c.active_operation_id=o.id
  AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$5`, operation.ID,
 		clusterSSHPreparationOperationStep, operation.Attempt, work.Payload, len(targets)).Scan(&present) != nil {
@@ -262,7 +272,7 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
  WHERE t.operation_id=$5 AND (t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$6
  AND t.lease_expires_at>moment.now AND t.inspected_at>moment.now-$4 AND t.inspected_at<=moment.now
  AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now) IS NOT TRUE)`, clusterControllerLeaseName,
-		c.holder, qualification.ObservedAt, clusterSSHInspectionLifetimeSeconds, operation.ID, holder, confirmation.ConfirmedAt).Scan(&present) != nil {
+		controller, qualification.ObservedAt, clusterSSHInspectionLifetimeSeconds, operation.ID, holder, confirmation.ConfirmedAt).Scan(&present) != nil {
 		return fail()
 	}
 	if tx.Commit() != nil {

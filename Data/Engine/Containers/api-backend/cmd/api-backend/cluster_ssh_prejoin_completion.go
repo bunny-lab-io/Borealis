@@ -20,10 +20,25 @@ type clusterSSHPrejoinCompletion struct {
 func verifyClusterSSHPrejoinCompletion(ctx context.Context, read clusterSSHPreparationAuthorityRead,
 	expected clusterbootstrap.PreparationExpected, receipt clusterbootstrap.PrejoinPreparationReceipt,
 	getJSON func(context.Context, string, any) error, cohortNodes map[string]clusterbootstrap.K3sJoinedNode) (clusterSSHPreparationCompletion, error) {
+	if getJSON == nil {
+		return clusterSSHPreparationCompletion{}, errClusterConflict
+	}
+	return verifyClusterSSHPrejoinCompletionRead(ctx, read, expected, receipt, func(ctx context.Context, read clusterSSHPreparationAuthorityRead) (clusterSSHJoinedTargets, error) {
+		return readClusterSSHJoinedTargets(ctx, read, getJSON)
+	}, cohortNodes)
+}
+
+// A typed broker reader carries only independently observed joined identities,
+// never a generic Kubernetes proxy or permission to accept caller-owned Nodes.
+type clusterSSHPrejoinJoinedRead func(context.Context, clusterSSHPreparationAuthorityRead, clusterSSHNetworkTargetClaim, clusterbootstrap.Expected) (clusterSSHJoinedTargets, error)
+
+func verifyClusterSSHPrejoinCompletionRead(ctx context.Context, read clusterSSHPreparationAuthorityRead,
+	expected clusterbootstrap.PreparationExpected, receipt clusterbootstrap.PrejoinPreparationReceipt,
+	joined func(context.Context, clusterSSHPreparationAuthorityRead) (clusterSSHJoinedTargets, error), cohortNodes map[string]clusterbootstrap.K3sJoinedNode) (clusterSSHPreparationCompletion, error) {
 	fail := func() (clusterSSHPreparationCompletion, error) {
 		return clusterSSHPreparationCompletion{}, errClusterConflict
 	}
-	if read == nil || getJSON == nil || len(cohortNodes) < 1 || len(cohortNodes) > 2 || ctx.Err() != nil {
+	if read == nil || joined == nil || len(cohortNodes) < 1 || len(cohortNodes) > 2 || ctx.Err() != nil {
 		return fail()
 	}
 	authority, err := read(ctx)
@@ -48,7 +63,7 @@ func verifyClusterSSHPrejoinCompletion(ctx context.Context, read clusterSSHPrepa
 	if err != nil {
 		return fail()
 	}
-	observed, err := readClusterSSHJoinedTargets(ctx, read, getJSON)
+	observed, err := joined(ctx, read)
 	if err != nil || observed.AuthoritySHA256 != digest || len(observed.Nodes) != len(authority.Cohort.Targets) || observed.Nodes[expected.Target.TargetID] != receipt.Node {
 		return fail()
 	}
@@ -69,14 +84,25 @@ func verifyClusterSSHPrejoinCompletion(ctx context.Context, read clusterSSHPrepa
 	return clusterSSHPreparationCompletion{Authority: authority, Result: result}, nil
 }
 
-// Original-controller callable boundary, not a production poller. Complete
-// independent Node observations are repeated for the whole exact cohort before
+// Original-controller evidence, read locally or through its fixed authenticated
+// broker. Independent Node observations repeat for the whole exact cohort before
 // the existing short atomic SQL settlement. No DB connection spans network IO.
 // Native voting-member identity is retained; admission still needs independent
 // full membership, health and consumer proof and is deliberately not enabled.
 func (s *postgresOperatorStore) completeClusterSSHPrejoinPreparation(parent context.Context, aegis *goAegisService,
 	targets []clusterSSHPrejoinCompletion, getJSON func(context.Context, string, any) error) error {
-	if s == nil || s.db == nil || aegis == nil || getJSON == nil || len(targets) < 1 || len(targets) > 2 || parent.Err() != nil {
+	if getJSON == nil {
+		return errClusterConflict
+	}
+	return s.completeClusterSSHPrejoinPreparationRead(parent, aegis, targets,
+		func(ctx context.Context, read clusterSSHPreparationAuthorityRead, _ clusterSSHNetworkTargetClaim, _ clusterbootstrap.Expected) (clusterSSHJoinedTargets, error) {
+			return readClusterSSHJoinedTargets(ctx, read, getJSON)
+		})
+}
+
+func (s *postgresOperatorStore) completeClusterSSHPrejoinPreparationRead(parent context.Context, aegis *goAegisService,
+	targets []clusterSSHPrejoinCompletion, joined clusterSSHPrejoinJoinedRead) error {
+	if s == nil || s.db == nil || aegis == nil || joined == nil || len(targets) < 1 || len(targets) > 2 || parent.Err() != nil {
 		return errClusterConflict
 	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
@@ -99,7 +125,9 @@ func (s *postgresOperatorStore) completeClusterSSHPrejoinPreparation(parent cont
 		current := make([]clusterSSHPreparationCompletion, 0, len(targets))
 		for i, target := range targets {
 			read := newClusterSSHPreparationAuthorityRead(s, aegis, target.Claim.Lease, target.Expected.Source, target.Claim.Sealed)
-			value, err := verifyClusterSSHPrejoinCompletion(ctx, read, target.Expected, target.Receipt, getJSON, cohortNodes)
+			value, err := verifyClusterSSHPrejoinCompletionRead(ctx, read, target.Expected, target.Receipt, func(ctx context.Context, read clusterSSHPreparationAuthorityRead) (clusterSSHJoinedTargets, error) {
+				return joined(ctx, read, target.Claim, target.Expected.Source)
+			}, cohortNodes)
 			if err != nil || value.Authority.PayloadSHA256 != target.PayloadSHA256 || len(value.Authority.Cohort.Targets) != len(targets) {
 				return errClusterConflict
 			}

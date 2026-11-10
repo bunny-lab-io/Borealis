@@ -261,6 +261,59 @@ def units():
         result[name] = values
     return result
 
+def supervision(snapshot):
+    # Observe existing prerequisites only. The claimed immutable helper proves
+    # its exact watchdog/cgroup properties before any journaled host effect.
+    # Never launch a transient unit, create a journal or claim a worker here.
+    require(snapshot.read("proc/1/comm", 64) == b"systemd\n")
+    require(snapshot.read("proc/1/cgroup", 4096) == b"0::/init.scope\n")
+    pid = snapshot.directory("proc/1")
+    try:
+        info = os.stat("exe", dir_fd=pid, follow_symlinks=False)
+        require(stat.S_ISLNK(info.st_mode) and info.st_uid == EXPECTED_UID and info.st_gid == EXPECTED_GID)
+        executable = os.readlink("exe", dir_fd=pid)
+        require(executable in ("/usr/lib/systemd/systemd", "/lib/systemd/systemd"))
+        snapshot.files["proc/1/exe"] = [metadata(info), executable]
+    finally:
+        os.close(pid)
+    manager = command(["/usr/bin/systemctl", "show", "--no-pager", "--property=Version,Features"])
+    values = {}
+    for line in text(manager, 16384)[:-1].split("\n"):
+        key, sep, value = line.partition("=")
+        require(sep and key not in values)
+        values[key] = value
+    require(set(values) == {"Version", "Features"} and re.fullmatch(r"[0-9][A-Za-z0-9.+:~\-]{0,199}", values["Version"]))
+    require(values["Features"] and len(values["Features"]) <= 8192)
+    cli = command(["/usr/bin/systemd-run", "--version"], 16384)
+    require(re.fullmatch(r"systemd [0-9]{1,6} .+", text(cli, 16384).splitlines()[0]))
+    version = cli.split(b" ", 2)[1].decode("ascii")
+    require(values["Version"].split(".", 1)[0].split("-", 1)[0] == version)
+    # Kernel mount identity, not the existence of an ordinary lookalike file,
+    # establishes the unified hierarchy. No nested/rebound cgroup mount is used.
+    mountinfo = snapshot.read("proc/self/mountinfo", LIMIT)
+    mounts = []
+    for line in text(mountinfo, LIMIT).splitlines():
+        fields = line.split(" ")
+        require(len(fields) >= 10 and fields.count("-") == 1)
+        separator = fields.index("-")
+        require(separator >= 6 and len(fields) == separator + 4)
+        if fields[4] == "/sys/fs/cgroup":
+            require(fields[3] == "/" and fields[separator + 1] == "cgroup2")
+            mounts.append(line)
+        require(not fields[4].startswith("/sys/fs/cgroup/"))
+    require(len(mounts) == 1)
+    controllers = text(snapshot.read("sys/fs/cgroup/cgroup.controllers", 4096), 4096).split()
+    require(len(controllers) == len(set(controllers)) and all(re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value) for value in controllers))
+    require({"cpu", "memory", "pids"}.issubset(controllers))
+    require(snapshot.absent_path("var/lib/borealis/cluster-bootstrap"))
+    require(command(["/usr/bin/systemctl", "list-units", "--all", "--type=service", "--no-legend", "--plain", "borealis-bootstrap-*.service"], 16384) == b"")
+    cgroups = snapshot.directory("sys/fs/cgroup/system.slice")
+    os.close(cgroups)
+    for path in ("sys/fs/cgroup/system.slice", "run/systemd/transient"):
+        require(not any(name.startswith("borealis-bootstrap-") for name in snapshot.entries(path, 32768)))
+    return {"manager": values, "runner": digest(cli), "mount": mounts[0], "controllers": controllers,
+        "journal_absent": True, "bootstrap_producers_absent": True}
+
 def integer(value):
     require(re.fullmatch(r"0|[1-9][0-9]{0,9}", value) and int(value) <= 4294967295)
     return int(value)
@@ -367,6 +420,7 @@ def observe(proposal):
         sources(snapshot)
         package_digest = packages()
         unit_state = units()
+        supervision_state = supervision(snapshot)
         account_state = accounts(snapshot)
         # Reopen every observed ancestor to detect replacement during this pass.
         for path, identity_before in list(snapshot.parents.items()):
@@ -377,7 +431,7 @@ def observe(proposal):
                 os.close(fd)
         return {"identity": identity, "suite": suite, "parents": snapshot.parents, "files": snapshot.files,
             "absent": snapshot.absent, "listings": snapshot.listings, "packages": package_digest,
-            "units": unit_state, "accounts": account_state, "runtime_uid_absent": True}
+            "units": unit_state, "supervision": supervision_state, "accounts": account_state, "runtime_uid_absent": True}
     finally:
         os.close(snapshot.root)
 
@@ -389,10 +443,11 @@ def main():
     encoded = sys.argv[1]
     raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
     proposal = json.loads(raw)
+    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 2)
     before = observe(proposal)
     after = observe(proposal)
     require(before == after)
-    observation = digest(b"borealis-preparation-native-observation-v1\n" + canonical(before))
-    request = digest(b"borealis-preparation-proposal-v1\n" + raw)
-    print(json.dumps({"version": 1, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation}, separators=(",", ":")))
+    observation = digest(b"borealis-preparation-native-observation-v2\n" + canonical(before))
+    request = digest(b"borealis-preparation-proposal-v2\n" + raw)
+    print(json.dumps({"version": 2, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation}, separators=(",", ":")))
 `

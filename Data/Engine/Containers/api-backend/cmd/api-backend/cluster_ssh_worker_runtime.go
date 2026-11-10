@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"os"
 	"sync"
 	"time"
 )
@@ -43,9 +46,10 @@ func (s *postgresOperatorStore) pendingClusterSSHInspections(ctx context.Context
 }
 
 type clusterSSHInspectionRuntime struct {
-	store  *postgresOperatorStore
-	aegis  *goAegisService
-	worker *clusterSSHInspectionWorker
+	store       *postgresOperatorStore
+	aegis       *goAegisService
+	worker      *clusterSSHInspectionWorker
+	preparation *clusterSSHPreparationRuntime
 }
 
 func (r *clusterSSHInspectionRuntime) runOnce(ctx context.Context) error {
@@ -78,7 +82,10 @@ func (r *clusterSSHInspectionRuntime) runOnce(ctx context.Context) error {
 		}()
 	}
 	joined.Wait()
-	return r.qualifyOnce(ctx)
+	if err := r.qualifyOnce(ctx); err != nil {
+		return err
+	}
+	return r.preparation.runOnce(ctx)
 }
 
 func startClusterSSHInspectionRuntime(parent context.Context, auth *authService) func() {
@@ -93,6 +100,7 @@ func startClusterSSHInspectionRuntime(parent context.Context, auth *authService)
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	r := &clusterSSHInspectionRuntime{store: store, aegis: aegis, worker: newClusterSSHInspectionWorker(store, aegis)}
+	r.preparation = newClusterSSHPreparationRuntime(store, aegis)
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(10 * time.Second)
@@ -107,4 +115,84 @@ func startClusterSSHInspectionRuntime(parent context.Context, auth *authService)
 		}
 	}()
 	return func() { cancel(); <-done }
+}
+
+type clusterSSHPendingPreparation struct {
+	Operation  clusterControllerOperation
+	Controller string
+}
+
+// Only the selected original-source API may consume the entire approved cohort.
+// No uncertain claim is eligible again, even after expiry or process restart.
+func (s *postgresOperatorStore) pendingClusterSSHPreparation(ctx context.Context, sourceNode string) (clusterSSHPendingPreparation, error) {
+	var pending clusterSSHPendingPreparation
+	if s == nil || s.db == nil || len(validateClusterNodeName("node", sourceNode)) != 0 || ctx.Err() != nil {
+		return pending, errClusterConflict
+	}
+	err := s.db.QueryRowContext(ctx, `SELECT o.id,o.kind,o.state,o.current_step,o.attempt,l.holder
+ FROM engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l,engine.cluster_nodes n
+ WHERE o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$1 AND COALESCE(o.error_text,'')=''
+ AND c.id=1 AND c.active_operation_id=o.id AND l.name=$2 AND l.holder<>'' AND l.expires_at>extract(epoch FROM clock_timestamp())
+ AND o.payload_json::jsonb->'ssh_preparation_authorization'->>'controller_holder'=l.holder
+ AND n.id=o.payload_json::jsonb->'ssh_preparation_confirmation'->'identity_source'->>'source_node_id'
+ AND n.node_name=$3 AND n.membership_state='Active'
+ AND EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t WHERE t.operation_id=o.id)
+ AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t WHERE t.operation_id=o.id AND
+ (t.state='queued' AND t.current_step='qualification_complete' AND t.lease_holder='' AND t.lease_expires_at=0) IS NOT TRUE)
+ LIMIT 1`, clusterSSHPreparationOperationStep, clusterControllerLeaseName, sourceNode).Scan(&pending.Operation.ID,
+		&pending.Operation.Kind, &pending.Operation.State, &pending.Operation.CurrentStep, &pending.Operation.Attempt, &pending.Controller)
+	if errors.Is(err, sql.ErrNoRows) {
+		return clusterSSHPendingPreparation{}, nil
+	}
+	if err != nil {
+		return clusterSSHPendingPreparation{}, errClusterUnavailable
+	}
+	return pending, nil
+}
+
+type clusterSSHPreparationRuntime struct {
+	ready   func() bool
+	pending func(context.Context) (clusterSSHPendingPreparation, error)
+	claim   func(context.Context, clusterControllerOperation, string, string) (clusterSSHPreparationWork, error)
+	execute func(context.Context, clusterSSHPreparationWork) error
+}
+
+func (r *clusterSSHPreparationRuntime) runOnce(ctx context.Context) error {
+	if r == nil || r.ready == nil || r.pending == nil || r.claim == nil || r.execute == nil || ctx.Err() != nil || !r.ready() {
+		return nil
+	}
+	lookup, cancel := context.WithTimeout(ctx, 3*time.Second)
+	pending, err := r.pending(lookup)
+	cancel()
+	if err != nil || pending.Operation.ID == "" {
+		return err
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	work, err := r.claim(claimCtx, pending.Operation, pending.Controller, newClusterUUID())
+	cancel()
+	if err != nil {
+		return err
+	}
+	return r.execute(ctx, work)
+}
+
+func newClusterSSHPreparationRuntime(store *postgresOperatorStore, aegis *goAegisService) *clusterSSHPreparationRuntime {
+	client, err := newClusterSSHSourceBrokerClientFromEnv()
+	if store == nil || store.db == nil || aegis == nil || err != nil {
+		return nil
+	}
+	process := clusterExistingIdentitySourceProcess{PodName: os.Getenv("BOREALIS_ENGINE_POD_NAME"),
+		PodUID: os.Getenv("BOREALIS_ENGINE_POD_UID"), NodeName: os.Getenv("BOREALIS_ENGINE_NODE_NAME")}
+	worker := newClusterSSHNativePrejoinPreparationWorkerRead(store, aegis, os.TempDir(), process, client.joinedTargetsRead)
+	if worker == nil {
+		return nil
+	}
+	return &clusterSSHPreparationRuntime{
+		ready: func() bool { key, err := aegis.activeKey(); clear(key); return err == nil },
+		pending: func(ctx context.Context) (clusterSSHPendingPreparation, error) {
+			return store.pendingClusterSSHPreparation(ctx, process.NodeName)
+		},
+		claim:   store.claimClusterSSHPreparation,
+		execute: worker.prepare,
+	}
 }

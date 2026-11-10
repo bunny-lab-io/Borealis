@@ -20,6 +20,11 @@ var ErrPreparationProposal = errors.New("SSH preparation proposal observation un
 var proposalDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var proposalHostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// Version 2 adds read-only supervision prerequisites and absence of retained
+// preparation journals/producers. Version 1 clean-host receipts cannot satisfy
+// supervised preparation readiness.
+const PreparationProposalVersion = 2
+
 // PreparationProposal binds an observation to the original waiting proposal.
 // QualificationGeneration is its reserved generation, never a worker claim.
 // Source identifies immutable source code; it supplies no mutation authority.
@@ -47,7 +52,7 @@ func proposalDigest(value string) bool {
 }
 
 func (p PreparationProposal) Validate() error {
-	if p.Version != 1 || p.Source.Validate() != nil || !validPublicUUID(p.ClusterID) || !validPublicUUID(p.OperationID) ||
+	if p.Version != PreparationProposalVersion || p.Source.Validate() != nil || !validPublicUUID(p.ClusterID) || !validPublicUUID(p.OperationID) ||
 		!validPublicUUID(p.TargetID) || p.OperationAttempt <= 0 || p.QualificationGeneration <= 0 ||
 		len(p.ControllerHolder) == 0 || len(p.ControllerHolder) > 1024 || !utf8.ValidString(p.ControllerHolder) ||
 		strings.IndexFunc(p.ControllerHolder, unicode.IsControl) >= 0 || !proposalDigest(p.PlanSHA256) || !proposalDigest(p.Nonce) ||
@@ -80,7 +85,7 @@ func (p PreparationProposal) RequestSHA256() (string, error) {
 	if err != nil {
 		return "", ErrPreparationProposal
 	}
-	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v1\n"), raw...))
+	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v2\n"), raw...))
 	return hex.EncodeToString(digest[:]), nil
 }
 
@@ -97,7 +102,7 @@ type PreparationProposalProof struct {
 
 func (proof PreparationProposalProof) Validate(p PreparationProposal) error {
 	digest, err := p.RequestSHA256()
-	if err != nil || proof.Version != 1 || proof.RequestSHA256 != digest || proof.Nonce != p.Nonce || !proposalDigest(proof.ObservationSHA256) {
+	if err != nil || proof.Version != PreparationProposalVersion || proof.RequestSHA256 != digest || proof.Nonce != p.Nonce || !proposalDigest(proof.ObservationSHA256) {
 		return ErrPreparationProposal
 	}
 	return nil

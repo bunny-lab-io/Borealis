@@ -61,7 +61,7 @@ func sshPreparationCleanTargetsFixture(t *testing.T, replacement bool) (clusterS
 
 func sshPreparationProposalTestProof(request clusterremote.PreparationProposal, digest string) clusterremote.PreparationProposalProof {
 	hash, _ := request.RequestSHA256()
-	return clusterremote.PreparationProposalProof{Version: 1, RequestSHA256: hash, Nonce: request.Nonce, ObservationSHA256: digest}
+	return clusterremote.PreparationProposalProof{Version: 2, RequestSHA256: hash, Nonce: request.Nonce, ObservationSHA256: digest}
 }
 
 func TestClusterSSHPreparationCleanTargetsFreshCohort(t *testing.T) {

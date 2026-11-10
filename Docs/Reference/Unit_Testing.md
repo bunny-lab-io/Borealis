@@ -1,6 +1,6 @@
 # Borealis Validation and Unit Testing
 
-Repository-owned commands run same correctness rules locally and in pull requests. Start with narrow affected lane, then run full affected lane before review.
+Repository-owned commands run same correctness rules locally and in pull requests. Start with narrow affected lane, then run full affected lane before review. A delegated patch return is not a separate integration checkpoint. Reuse results where source and assumptions are unchanged; repeat checks for changed code, changed assumptions or a concrete failure. Required CI still runs for each meaningful published batch. Use canonical validator summaries; inspect detailed artifacts for failures, missing/conflicting evidence or an explicit verification requirement.
 
 ## Main Commands
 

@@ -67,6 +67,7 @@ Do not call work complete because files changed. Work complete only when request
 * Follow domain docs found through index.
 * Where docs overlap, domain page wins.
 * `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
+* Domain guidance preserves implementation and safety context; agent-authored design detail does not create new operator acceptance requirements. Current operator direction governs scope and cadence. For a new prerequisite, identify blocked acceptance/invariant, concrete missing behavior, why existing mechanisms or safe rejection cannot cover it, and smallest remedy.
 * Do not duplicate domain guidance across multiple docs. Link to canonical page instead.
 
 ## Strong Goal Rule
@@ -243,7 +244,7 @@ When asked to work on Gitea or GitHub issue:
 
 Every issue has corresponding pull request. No exceptions, no matter how small request is.
 
-For Borealis clustering work, [#530](https://github.com/bunny-lab-io/Borealis/issues/530) is the current-state tracker. Read its short resume section, acceptance checklist and new or edited relevant comments/reviews; inspect current checkout and remote state before editing. Update its body in place at meaningful handoffs with active PR/full SHA, actual validation, unresolved approvals, exact next action, unpushed work and runtime/cleanup obligations. This replaces the append-only reporting protocol in #493 for clustering only; historical evidence and approvals remain valid, and all security, runtime, review and release gates remain unchanged. Reuse existing implementation branches/PRs; #530 is an umbrella, not a new implementation workstream. Keep canonical procedures in `Docs/`.
+For Borealis clustering work, [#530](https://github.com/bunny-lab-io/Borealis/issues/530) is the current-state tracker. Read its short resume section, acceptance checklist and new or edited relevant comments/reviews; inspect current checkout and remote state before editing. Update its body in place at meaningful handoffs with active PR/full SHA, actual validation, unresolved approvals, exact next action, unpushed work and runtime/cleanup obligations. This replaces the append-only reporting protocol in #493 for clustering only; historical evidence and approvals remain valid, and all security, runtime, review and release gates remain unchanged. One-time tracker compaction is recorded through `CLUSTERING_MVP_PROGRESS.md`; do not repeat it. Keep Resume at most 200 words and active tracker approximately 1,500-2,500 words. Keep PR scope/review context separate from tracker progress. Report newly connected executable behavior, actual validation and first remaining production gap; do not use percentages or code/test volume as progress. Reuse existing implementation branches/PRs; #530 is an umbrella, not a new implementation workstream. Keep canonical procedures in `Docs/`.
 
 Before implementation, post or retain working understanding:
 
@@ -395,7 +396,7 @@ Before running either command:
   * `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh`
   * `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1`
 * Use documented domain flags while iterating.
-* Run full affected Engine or Agent lane before handoff when practical.
+* Run full affected Engine or Agent lane at product integration/review checkpoints when practical. A worker returning a patch is not a separate product handoff; reuse unchanged-source evidence and repeat checks for changed assumptions or concrete failures.
 * Use narrow tests first for fast iteration, then broader tests for PR readiness.
 * If test cannot run in current environment, state reason and exact command operator should run.
 

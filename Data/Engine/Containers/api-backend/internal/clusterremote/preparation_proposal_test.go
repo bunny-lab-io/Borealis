@@ -21,7 +21,7 @@ import (
 )
 
 func preparationProposalFixture() PreparationProposal {
-	return PreparationProposal{Version: 1,
+	return PreparationProposal{Version: PreparationProposalVersion,
 		Source:    clusterbootstrap.Expected{Repository: "bunny-lab-io/Borealis", Release: "2026.11.1", SourceSHA: strings.Repeat("a", 40)},
 		ClusterID: "11111111-1111-4111-8111-111111111111", OperationID: "22222222-2222-4222-8222-222222222222", OperationAttempt: 1,
 		ControllerHolder: "original-controller", PlanSHA256: strings.Repeat("b", 64), TargetID: "33333333-3333-4333-8333-333333333333",
@@ -31,7 +31,7 @@ func preparationProposalFixture() PreparationProposal {
 
 func preparationProofFixture(p PreparationProposal) PreparationProposalProof {
 	digest, _ := p.RequestSHA256()
-	return PreparationProposalProof{Version: 1, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64)}
+	return PreparationProposalProof{Version: PreparationProposalVersion, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64)}
 }
 
 func TestPreparationProposalContract(t *testing.T) {
@@ -75,6 +75,7 @@ func TestPreparationProposalContract(t *testing.T) {
 		}
 	}
 	for name, change := range map[string]func(*PreparationProposal){
+		"old clean version":    func(p *PreparationProposal) { p.Version = 1 },
 		"version":              func(p *PreparationProposal) { p.Version++ },
 		"source":               func(p *PreparationProposal) { p.Source.SourceSHA = strings.Repeat("e", 40) },
 		"release":              func(p *PreparationProposal) { p.Source.Release = "2026.11.2" },
@@ -114,10 +115,11 @@ func TestPreparationProposalContract(t *testing.T) {
 	}
 	raw, _ := json.Marshal(proof)
 	for _, bad := range []string{
-		strings.Replace(string(raw), `"version":1`, `"version":1,"version":1`, 1),
-		strings.Replace(string(raw), `"version":1`, `"Version":1`, 1),
-		strings.Replace(string(raw), `"version":1`, `"version":1,"inventory":"private-account-fixture"`, 1),
-		strings.Replace(string(raw), `"version":1,`, "", 1),
+		strings.Replace(string(raw), `"version":2`, `"version":2,"version":2`, 1),
+		strings.Replace(string(raw), `"version":2`, `"Version":2`, 1),
+		strings.Replace(string(raw), `"version":2`, `"version":1`, 1),
+		strings.Replace(string(raw), `"version":2`, `"version":2,"inventory":"private-account-fixture"`, 1),
+		strings.Replace(string(raw), `"version":2,`, "", 1),
 		strings.Replace(string(raw), proof.ObservationSHA256, strings.Repeat("0", 64), 1),
 		strings.Replace(string(raw), `"nonce":"`+p.Nonce+`"`, `"nonce":null`, 1),
 		string(raw) + string(raw), strings.Repeat("x", MaxOutputBytes+1),
@@ -248,6 +250,15 @@ func preparationNativeFixture(t *testing.T) (string, func(string, string), strin
 	write("proc/sys/kernel/random/boot_id", p.BootID+"\n")
 	write("proc/sys/kernel/hostname", p.Hostname+"\n")
 	write("proc/123/status", "Name:\tfixture\nUid:\t0\t0\t0\t0\n")
+	write("proc/1/status", "Name:\tsystemd\nUid:\t0\t0\t0\t0\n")
+	write("proc/1/comm", "systemd\n")
+	write("proc/1/cgroup", "0::/init.scope\n")
+	if err := os.Symlink("/usr/lib/systemd/systemd", filepath.Join(root, "proc/1/exe")); err != nil {
+		t.Fatal(err)
+	}
+	write("proc/self/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n")
+	write("sys/fs/cgroup/cgroup.controllers", "cpuset cpu io memory hugetlb pids rdma misc\n")
+	write("sys/fs/cgroup/system.slice/cgroup.events", "populated 1\n")
 	write("etc/os-release", "ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n")
 	write("etc/apt/sources.list.d/ubuntu.sources", "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble\n")
 	write("etc/nsswitch.conf", "passwd: files systemd\ngroup: files systemd\n")
@@ -259,6 +270,9 @@ fixture_groups = b"root:x:0:\n"
 fixture_unit = b"LoadState=not-found\nActiveState=inactive\nSubState=dead\nNeedDaemonReload=no\nJob=\n"
 fixture_pids = b"MainPID=0\nControlPID=0\n"
 fixture_addresses = b'[{"ifindex":2,"ifname":"ens18","flags":["UP"],"addr_info":[{"local":"192.168.3.251","family":"inet","prefixlen":24}]}]'
+fixture_manager = b"Version=255.4-1ubuntu8.11\nFeatures=+PAM +AUDIT\n"
+fixture_runner = b"systemd 255 (255.4-1ubuntu8.11)\n+PAM +AUDIT\n"
+fixture_bootstrap_units = b""
 def command(args, limit=LIMIT, seconds=3):
     if args == ["/usr/bin/dpkg", "--print-architecture"]:
         return b"amd64\n"
@@ -274,6 +288,12 @@ def command(args, limit=LIMIT, seconds=3):
         return fixture_groups
     if args == ["/usr/sbin/ip", "-j", "-4", "address", "show"]:
         return fixture_addresses
+    if args == ["/usr/bin/systemctl", "show", "--no-pager", "--property=Version,Features"]:
+        return fixture_manager
+    if args == ["/usr/bin/systemd-run", "--version"]:
+        return fixture_runner
+    if args == ["/usr/bin/systemctl", "list-units", "--all", "--type=service", "--no-legend", "--plain", "borealis-bootstrap-*.service"]:
+        return fixture_bootstrap_units
     raise ValueError()
 `
 	return root, write, prelude
@@ -489,5 +509,113 @@ func TestPreparationProposalCommandBounds(t *testing.T) {
 		if err == nil || len(raw) != 0 || ctx.Err() == context.DeadlineExceeded {
 			t.Fatal("command bound did not fail and join", err)
 		}
+	}
+}
+
+func TestPreparationProposalNativeSupervision(t *testing.T) {
+	for _, mode := range []string{"fresh", "old request", "PID1 name", "PID1 cgroup", "PID1 executable", "deleted executable", "plain executable", "manager version", "duplicate manager field", "manager alias", "missing manager features", "runner version", "runner mismatch", "cgroup v1", "cgroup submount", "cgroup rebound", "missing cgroup mount", "duplicate cgroup mount", "missing CPU controller", "missing memory controller", "missing PID controller", "duplicate controller", "retained journal", "journal symlink", "journal unsafe parent", "bootstrap unit", "bootstrap failed unit", "bootstrap cgroup", "bootstrap transient", "changed manager", "changed controllers", "late journal", "late producer"} {
+		t.Run(mode, func(t *testing.T) {
+			root, write, prelude := preparationNativeFixture(t)
+			p := preparationProposalFixture()
+			switch mode {
+			case "old request":
+				p.Version = 1
+			case "PID1 name":
+				write("proc/1/comm", "other-init\n")
+			case "PID1 cgroup":
+				write("proc/1/cgroup", "0::/container.scope\n")
+			case "PID1 executable", "deleted executable", "plain executable":
+				if err := os.Remove(filepath.Join(root, "proc/1/exe")); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "plain executable" {
+					write("proc/1/exe", "lookalike")
+				} else {
+					link := "/usr/bin/other-init"
+					if mode == "deleted executable" {
+						link = "/usr/lib/systemd/systemd (deleted)"
+					}
+					if err := os.Symlink(link, filepath.Join(root, "proc/1/exe")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "manager version":
+				prelude += "fixture_manager = fixture_manager.replace(b'255.4-1ubuntu8.11', b'unknown')\n"
+			case "duplicate manager field":
+				prelude += "fixture_manager += b'Version=255.4-1ubuntu8.11\\n'\n"
+			case "manager alias":
+				prelude += "fixture_manager = fixture_manager.replace(b'Version=', b'version=')\n"
+			case "missing manager features":
+				prelude += "fixture_manager = fixture_manager.split(b'Features=')[0]\n"
+			case "runner version":
+				prelude += "fixture_runner = b'not systemd\\n'\n"
+			case "runner mismatch":
+				prelude += "fixture_runner = fixture_runner.replace(b'255', b'256')\n"
+			case "cgroup v1":
+				write("proc/self/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw - tmpfs tmpfs rw\n")
+			case "cgroup submount":
+				write("proc/self/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n22 21 0:25 / /sys/fs/cgroup/foreign rw - tmpfs tmpfs rw\n")
+			case "cgroup rebound":
+				write("proc/self/mountinfo", "21 20 0:24 /foreign /sys/fs/cgroup rw - cgroup2 cgroup rw\n")
+			case "missing cgroup mount":
+				write("proc/self/mountinfo", "21 20 0:24 / /other rw - cgroup2 cgroup rw\n")
+			case "duplicate cgroup mount":
+				write("proc/self/mountinfo", strings.Repeat("21 20 0:24 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n", 2))
+			case "missing CPU controller":
+				write("sys/fs/cgroup/cgroup.controllers", "memory pids\n")
+			case "missing memory controller":
+				write("sys/fs/cgroup/cgroup.controllers", "cpu pids\n")
+			case "missing PID controller":
+				write("sys/fs/cgroup/cgroup.controllers", "cpu memory\n")
+			case "duplicate controller":
+				write("sys/fs/cgroup/cgroup.controllers", "cpu memory pids cpu\n")
+			case "retained journal":
+				write("var/lib/borealis/cluster-bootstrap/mutation.json", "retained")
+			case "journal symlink":
+				write("var/lib/borealis/placeholder", "")
+				if err := os.Symlink("missing", filepath.Join(root, "var/lib/borealis/cluster-bootstrap")); err != nil {
+					t.Fatal(err)
+				}
+			case "journal unsafe parent":
+				write("var/lib/borealis/placeholder", "")
+				if err := os.Chmod(filepath.Join(root, "var/lib/borealis"), 0o777); err != nil {
+					t.Fatal(err)
+				}
+			case "bootstrap unit", "bootstrap failed unit":
+				state := "active running"
+				if mode == "bootstrap failed unit" {
+					state = "failed failed"
+				}
+				prelude += "fixture_bootstrap_units = b'borealis-bootstrap-retained.service loaded " + state + " retained\\n'\n"
+			case "bootstrap cgroup":
+				write("sys/fs/cgroup/system.slice/borealis-bootstrap-retained.service/cgroup.events", "populated 0\n")
+			case "bootstrap transient":
+				write("run/systemd/transient/borealis-bootstrap-retained.service", "retained")
+			case "changed manager":
+				prelude += "original_observe = observe\ndef observe(p):\n    global fixture_manager\n    result = original_observe(p)\n    fixture_manager = fixture_manager.replace(b'255.4', b'255.5')\n    return result\n"
+			case "changed controllers", "late journal", "late producer":
+				path, value := "/sys/fs/cgroup/cgroup.controllers", "cpu memory pids\n"
+				if mode == "late journal" {
+					write("var/lib/borealis/placeholder", "")
+					path, value = "/var/lib/borealis/cluster-bootstrap", "retained"
+				}
+				if mode == "late producer" {
+					path, value = "/sys/fs/cgroup/system.slice/borealis-bootstrap-late.service", "retained"
+				}
+				prelude += "original_observe = observe\ndef observe(p):\n    result = original_observe(p)\n    with open(ROOT + " + strconv.Quote(path) + ", 'w') as output:\n        output.write(" + strconv.Quote(value) + ")\n    return result\n"
+			}
+			raw, err := runPreparationNativeFixture(t, root, prelude, p)
+			if mode == "fresh" {
+				if err != nil {
+					t.Fatal("fresh supervision rejected", err)
+				}
+				proof, err := parsePreparationProposalProof(raw, p)
+				if err != nil || proof.Version != 2 {
+					t.Fatal("stronger proof lacks native semantic version", err)
+				}
+			} else if err == nil || len(raw) != 0 {
+				t.Fatal("unsafe or stale supervision produced proof", err)
+			}
+		})
 	}
 }

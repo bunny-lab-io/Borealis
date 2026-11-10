@@ -40,17 +40,32 @@ func connectClusterSSHPreparationProposal(ctx context.Context, target clusterrem
 // or SSH. The eventual approval transaction retains its separate final locks,
 // database-clock fences and all six independent phase proofs.
 func (c *clusterController) preparationCleanTargetsProposalCheck(snapshot clusterSSHPreparationApprovalSnapshot) func(context.Context) error {
+	if c == nil {
+		return func(context.Context) error { return clusterbootstrap.ErrPreparationConfig }
+	}
+	check := c.store.preparationCleanTargetsProposalCheck(snapshot, c.holder)
+	return func(ctx context.Context) error {
+		if c.holder != snapshot.work.Authorization.ControllerHolder {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return check(ctx)
+	}
+}
+
+// API execution uses the recorded original controller holder, never a synthetic
+// controller or a new lease. The controller wrapper keeps its own holder fence.
+func (s *postgresOperatorStore) preparationCleanTargetsProposalCheck(snapshot clusterSSHPreparationApprovalSnapshot, holder string) func(context.Context) error {
 	wire, wireErr := json.Marshal(snapshot.work)
 	credentials := slices.Clone(snapshot.credentials)
 	operation := clusterControllerOperation{ID: snapshot.work.Authorization.OperationID, Attempt: snapshot.work.Authorization.Attempt,
 		Kind: "ssh_onboarding", State: "waiting", CurrentStep: clusterSSHQualificationStep}
 	return func(parent context.Context) error {
-		if c == nil || c.store == nil || c.store.db == nil || wireErr != nil || parent.Err() != nil {
+		if s == nil || s.db == nil || holder != snapshot.work.Authorization.ControllerHolder || wireErr != nil || parent.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
-		current, _, err := c.loadClusterSSHPreparationApproval(ctx, operation)
+		current, _, err := s.readClusterSSHPreparationProposal(ctx, operation, holder)
 		actual, encodeErr := json.Marshal(current.work)
 		if err != nil || encodeErr != nil || !bytes.Equal(wire, actual) || !slices.Equal(credentials, current.credentials) || ctx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
@@ -145,7 +160,7 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 			if _, err := rand.Read(nonce[:]); err != nil {
 				return "", clusterbootstrap.ErrPreparationConfig
 			}
-			request := clusterremote.PreparationProposal{Version: 1, Source: work.Baseline,
+			request := clusterremote.PreparationProposal{Version: 2, Source: work.Baseline,
 				ClusterID: item.Binding.ClusterID, OperationID: work.Authorization.OperationID, OperationAttempt: work.Authorization.Attempt,
 				ControllerHolder: work.Authorization.ControllerHolder, PlanSHA256: plan, TargetID: item.Binding.TargetID,
 				QualificationGeneration: work.Authorization.Targets[i].QualificationGeneration, Address: item.Binding.Address, Port: item.Binding.Port,
@@ -176,7 +191,7 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 		digest, err := clusterSSHPreparationDigest(struct {
 			Domain, Plan string
 			Targets      []string
-		}{"preparation-clean-targets-v1", plan, first})
+		}{"preparation-clean-targets-v2", plan, first})
 		if err != nil || current(ctx) != nil || (retained != "" && retained != digest) {
 			return fail()
 		}
