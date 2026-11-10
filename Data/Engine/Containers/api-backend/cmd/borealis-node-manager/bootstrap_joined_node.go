@@ -143,13 +143,29 @@ func withBootstrapJoinedK3sClientAt(parent context.Context, root *os.Root, expec
 // No path is caller-selectable; bytes and refresh callback stay synchronous.
 func withBootstrapK3sObservationFiles(ctx context.Context, root *os.Root, hostname string, membership bool,
 	check func(context.Context) error, consume func([]bootstrapHostFile, func(context.Context) error, string) error) error {
+	return withBootstrapK3sObservationFilesForProof(ctx, root, hostname, membership, false, check, consume)
+}
+
+func withBootstrapK3sObservationFilesForProof(ctx context.Context, root *os.Root, hostname string, membership, quorum bool,
+	check func(context.Context) error, consume func([]bootstrapHostFile, func(context.Context) error, string) error) error {
 	fail := func() error { return errBootstrapSource }
-	if root == nil || check == nil || consume == nil || !sourceNetworkHostname.MatchString(hostname) {
+	if root == nil || check == nil || consume == nil || !sourceNetworkHostname.MatchString(hostname) || quorum && !membership {
 		return fail()
 	}
 	files := []bootstrapHostFile{{path: "var/lib/rancher/k3s/agent/server-ca.crt", mode: 0600}, {path: "var/lib/rancher/k3s/agent/client-kubelet.crt", mode: 0600}, {path: "var/lib/rancher/k3s/agent/client-kubelet.key", mode: 0600}}
 	if membership {
 		files = append(files, bootstrapHostFile{path: "var/lib/rancher/k3s/server/db/etcd/name", mode: 0600})
+	}
+	if quorum {
+		// K3s certutil.WriteCert publishes public certificates as 0644;
+		// its private client key remains 0600. Agent files above stay 0600.
+		for _, name := range []string{"server-ca.crt", "client.crt", "client.key"} {
+			mode := os.FileMode(0644)
+			if name == "client.key" {
+				mode = 0600
+			}
+			files = append(files, bootstrapHostFile{path: "var/lib/rancher/k3s/server/tls/etcd/" + name, mode: mode})
+		}
 	}
 	ancestors, err := bootstrapHostFileAncestors(root, files)
 	if err != nil {
@@ -167,7 +183,7 @@ func withBootstrapK3sObservationFiles(ctx context.Context, root *os.Root, hostna
 			return fail()
 		}
 		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() || info.Mode() != 0600 || info.Size() < 1 || info.Size() > 64<<10 {
+		if err != nil || !info.Mode().IsRegular() || info.Mode() != files[i].mode || info.Size() < 1 || info.Size() > 64<<10 {
 			file.Close()
 			return fail()
 		}

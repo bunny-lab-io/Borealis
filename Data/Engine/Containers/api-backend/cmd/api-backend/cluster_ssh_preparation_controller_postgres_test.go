@@ -22,9 +22,9 @@ func TestClusterSSHPreparationControllerPostgresNativeSettlement(t *testing.T) {
 				}
 			}
 			err := f.c.runSSHPreparationParentWithGates(f.ctx, f.op, f.observe, func(ctx context.Context, _ clusterSSHPreparationApprovalSnapshot, consume func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error)) error {
-				_, err := consume(ctx, sshPreparationCPUGatesFixture(snapshot))
+				_, err := consume(ctx, sshPreparationCPUGatesFixture(t, snapshot))
 				return err
-			}, sshPreparationCPUReadFixture(snapshot))
+			}, sshPreparationCPUReadFixture(t, snapshot))
 			if err != nil {
 				t.Fatal("controller approval", err)
 			}
@@ -148,7 +148,7 @@ func TestClusterSSHPreparationControllerPostgresWaiting(t *testing.T) {
 			if state != "waiting" || step != clusterSSHQualificationStep || reason == "" || strings.Contains(payload, "ssh_preparation_authorization") {
 				t.Fatal("blocked preparation advanced", state, step, reason)
 			}
-			if mode == "missing gates" && (!strings.Contains(reason, "complete_capacity") || !strings.Contains(reason, "persistent_storage")) {
+			if mode == "missing gates" && (!strings.Contains(reason, "clean_targets") || !strings.Contains(reason, "persistent_storage") || strings.Contains(reason, "complete_capacity")) {
 				t.Fatal("missing actionable native blockers", reason)
 			}
 			var claimed int
@@ -177,8 +177,8 @@ func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing
 				if f.c.store.db.Stats().InUse != 0 {
 					t.Fatal("SQL held across native scope")
 				}
-				receipt, err := consume(ctx, sshPreparationCPUGatesFixture(snapshot))
-				if err != nil || receipt.Version != 2 {
+				receipt, err := consume(ctx, sshPreparationCPUGatesFixture(t, snapshot))
+				if err != nil || receipt.Version != 3 {
 					t.Fatal("approval did not consume gates", err)
 				}
 				// A competing API claimant sees the commit before cleanup joins.
@@ -205,7 +205,7 @@ func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing
 				}
 				return nil
 			}
-			err := f.c.runSSHPreparationParentWithGates(ctx, f.op, f.observe, scope, sshPreparationCPUReadFixture(snapshot))
+			err := f.c.runSSHPreparationParentWithGates(ctx, f.op, f.observe, scope, sshPreparationCPUReadFixture(t, snapshot))
 			success := mode == "pair" || mode == "replacement"
 			if (err == nil) != success {
 				t.Fatal("cleanup outcome", err)

@@ -20,31 +20,83 @@ func sshPreparationTargetCPUFixture(snapshot clusterSSHPreparationApprovalSnapsh
 	return targets
 }
 
-func sshPreparationCPUReadFixture(snapshot clusterSSHPreparationApprovalSnapshot) clusterSSHPreparationTargetsRead {
+func sshPreparationCPUReadFixture(t *testing.T, snapshot clusterSSHPreparationApprovalSnapshot) clusterSSHPreparationTargetsRead {
+	capacity := sshPreparationApprovalCapacityFixture(t, snapshot)
 	return func(ctx context.Context, _ string) (clusterSSHPreparationCleanObservation, error) {
 		targets := sshPreparationTargetCPUFixture(snapshot)
 		digest, err := clusterSSHPreparationTargetCPUDigest(snapshot, targets)
 		if err != nil || ctx.Err() != nil {
 			return clusterSSHPreparationCleanObservation{}, errClusterConflict
 		}
-		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: targets}, nil
+		owned := capacity.clone()
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: targets, Capacity: &owned}, nil
 	}
 }
 
-func sshPreparationCPUGatesFixture(snapshot clusterSSHPreparationApprovalSnapshot) clusterSSHPreparationGates {
+func sshPreparationCPUGatesFixture(t *testing.T, snapshot clusterSSHPreparationApprovalSnapshot) clusterSSHPreparationGates {
 	gates := sshPreparationGatesFixture()
 	gates[1] = func(ctx context.Context, plan string) (string, error) {
-		value, err := sshPreparationCPUReadFixture(snapshot)(ctx, plan)
+		value, err := sshPreparationCPUReadFixture(t, snapshot)(ctx, plan)
 		return value.Digest, err
 	}
+	capacity := sshPreparationApprovalCapacityFixture(t, snapshot)
+	gates[2] = func(ctx context.Context, plan string) (string, error) {
+		return capacity.digest(plan, sshPreparationTargetCPUFixture(snapshot))
+	}
+	gates[4] = func(context.Context, string) (string, error) { return capacity.ConfigurationSHA256, nil }
 	return gates
+}
+
+// Approval/SQL tests borrow a complete existing workload fixture. Native gate
+// tests separately prove its source transport and waiting-proposal lifetime.
+func sshPreparationApprovalCapacityFixture(t *testing.T, snapshot clusterSSHPreparationApprovalSnapshot) clusterSSHPreparationCapacityProjection {
+	t.Helper()
+	a := clusterSSHPreparationAuthority{Cohort: snapshot.work.Proof.Cohort, Source: snapshot.work.Proof.Source, Baseline: snapshot.work.Baseline, K3sVersion: clusterbootstrap.K3sPins().Version}
+	storage := sshStorageSnapshotFixture(t, a)
+	// This approval seam uses stable mocked source receipts; native gate tests
+	// exercise real complete-object receipts and drift through the transport.
+	storage.Observation = strings.Repeat("c", 64)
+	storage.Requirements.Applications, storage.Requirements.PostgresResources = clusterSSHSmallBusinessApplications(), clusterSSHSmallBusinessPostgres()
+	storage.Requirements.WorkerPolicy.Limits.Memory = "384Mi"
+	value := clusterSSHPreparationSnapshot{Storage: storage, DesiredWorkerSites: []int64{}, Observation: strings.Repeat("a", 64)}
+	targets := sshPreparationTargetCPUFixture(snapshot)
+	clean, _ := clusterSSHPreparationTargetCPUDigest(snapshot, targets)
+	p := clusterSSHPreparationCapacityProjection{Version: 1, CleanSHA256: clean, ConfigurationSHA256: strings.Repeat("b", 64), SecretSHA256: value.Observation,
+		StorageSHA256: storage.Observation, InstancePolicy: storage.Requirements.LonghornInstanceManagerResources}
+	p.CensusSHA256, _ = clusterSSHPreparationDigest(value.DesiredWorkerSites)
+	for i, target := range targets {
+		hostname := snapshot.work.Proof.Cohort.Targets[i].Report.Hostname
+		node := sshStorageObject("longhorn.io/v1beta2", "Node", "longhorn-system", hostname)
+		clusterSSHStorageMap(node, "metadata")["uid"] = target.TargetID
+		node["spec"] = map[string]any{"instanceManagerCPURequest": json.Number("1000")}
+		capacity, err := calculateClusterSSHPreparationTargetCapacity(value, target.CPU, hostname, func(string) (map[string]any, error) { return node, nil })
+		if err != nil {
+			t.Fatal("complete approval capacity fixture", err)
+		}
+		p.Targets = append(p.Targets, clusterSSHPreparationCapacityTarget{target.TargetID, capacity})
+	}
+	return p
+}
+
+func sshPreparationApprovalCapacityProof(t *testing.T, snapshot clusterSSHPreparationApprovalSnapshot, proof *clusterSSHPreparationApprovalProof) {
+	t.Helper()
+	proof.targetCPU = sshPreparationTargetCPUFixture(snapshot)
+	proof.receipts[1], _ = clusterSSHPreparationTargetCPUDigest(snapshot, proof.targetCPU)
+	capacity := sshPreparationApprovalCapacityFixture(t, snapshot)
+	proof.capacity = &capacity
+	var err error
+	proof.receipts[2], err = capacity.digest(proof.plan, proof.targetCPU)
+	if err != nil {
+		t.Fatal("capacity proof fixture", err)
+	}
+	proof.receipts[4] = capacity.ConfigurationSHA256
 }
 
 func TestClusterSSHPreparationTargetCPUProjectionSharesFreshRead(t *testing.T) {
 	snapshot, _ := sshPreparationCleanTargetsFixture(t, false)
 	plan, _ := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
 	calls := 0
-	base := sshPreparationCPUReadFixture(snapshot)
+	base := sshPreparationCPUReadFixture(t, snapshot)
 	clean, project := clusterSSHPreparationTargetCPUReaderPair(snapshot, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
 		calls++
 		return base(ctx, plan)
@@ -126,20 +178,21 @@ func TestClusterSSHPreparationTargetCPUReadinessBinding(t *testing.T) {
 }
 
 func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
-	for _, mode := range []string{"fresh", "changed CPU", "changed clean digest", "consumer mutation", "read failure"} {
+	for _, mode := range []string{"fresh", "changed CPU", "changed clean digest", "consumer mutation", "read failure", "missing capacity", "changed capacity"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot, _ := sshPreparationCleanTargetsFixture(t, false)
 			targets := sshPreparationTargetCPUFixture(snapshot)
 			digest, _ := clusterSSHPreparationTargetCPUDigest(snapshot, targets)
-			var gates clusterSSHPreparationGates
-			for i := range gates {
-				gates[i] = func(context.Context, string) (string, error) { return strings.Repeat("a", 64), nil }
-			}
-			gates[1] = func(context.Context, string) (string, error) { return digest, nil }
+			gates := sshPreparationCPUGatesFixture(t, snapshot)
+			capacity := sshPreparationApprovalCapacityFixture(t, snapshot)
 			calls := 0
 			read := func(ctx context.Context, _ string) (clusterSSHPreparationCleanObservation, error) {
 				calls++
-				out := clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(targets)}
+				copy := capacity.clone()
+				out := clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(targets), Capacity: &copy}
+				if mode == "missing capacity" {
+					out.Capacity = nil
+				}
 				if calls > 1 {
 					switch mode {
 					case "changed CPU":
@@ -149,6 +202,8 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 						out.Digest = strings.Repeat("f", 64)
 					case "read failure":
 						return clusterSSHPreparationCleanObservation{}, errClusterConflict
+					case "changed capacity":
+						out.Capacity.Targets[0].Capacity.LonghornCPU.OverrideMilli++
 					}
 				}
 				return out, ctx.Err()
@@ -161,7 +216,7 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 					p.targetCPU[0].CPU.OnlineCPUs = "0"
 				}
 				r := clusterSSHPreparationReadiness(p.plan, p.receipts)
-				r.Version, r.Targets = 2, p.targetCPU
+				r.Version, r.Targets, r.Capacity = 3, p.targetCPU, p.capacity
 				if validateClusterSSHPreparationReadinessCPU(r, snapshot.work.Authorization) != nil {
 					return errClusterConflict
 				}

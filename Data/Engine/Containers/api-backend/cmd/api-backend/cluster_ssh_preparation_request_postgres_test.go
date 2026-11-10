@@ -105,8 +105,7 @@ func TestClusterSSHPreparationRequestPostgresIntentAndReplay(t *testing.T) {
 	for i := range proof.receipts {
 		proof.receipts[i] = strings.Repeat("a", 64)
 	}
-	proof.targetCPU = sshPreparationTargetCPUFixture(snapshot)
-	proof.receipts[1], _ = clusterSSHPreparationTargetCPUDigest(snapshot, proof.targetCPU)
+	sshPreparationApprovalCapacityProof(t, snapshot, &proof)
 	missing := snapshot
 	var missingPayload map[string]any
 	if json.Unmarshal([]byte(missing.work.Payload), &missingPayload) != nil {

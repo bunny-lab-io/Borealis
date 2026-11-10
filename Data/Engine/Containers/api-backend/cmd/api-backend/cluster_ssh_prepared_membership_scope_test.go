@@ -142,6 +142,13 @@ func newPreparedMembershipNativeForProof(t *testing.T, a clusterSSHPreparationAu
 				return
 			}
 			value := sshCohortMembershipResultFixture(request)
+			if required == clusterbootstrap.MembershipQuorumProofVersion {
+				value.ListenerProofVersion = required
+				value.Quorum = &clusterbootstrap.MembershipQuorumRead{ClusterID: 100, MemberID: value.Membership.LocalID}
+				if mode == "foreign etcd cluster" && post == 4 {
+					value.Quorum.ClusterID++
+				}
+			}
 			if post > 6 && mode == "member drift" {
 				for i, member := range value.Membership.Members {
 					if member.Address == a.Source.Members[0].Address {

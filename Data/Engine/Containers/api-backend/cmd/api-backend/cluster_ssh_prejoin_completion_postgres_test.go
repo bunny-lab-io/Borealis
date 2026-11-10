@@ -16,7 +16,7 @@ func TestClusterSSHPrejoinCompletionPostgres(t *testing.T) {
 			uids := map[string]string{}
 			for i, value := range legacy {
 				a := value.Authority
-				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", a.payload)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -105,7 +105,7 @@ func TestClusterSSHPrejoinWorkerPostgres(t *testing.T) {
 					return clusterSSHPrejoinDispatchResult{}, errClusterConflict
 				}
 				authority = a
-				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", a.payload)
 				if err != nil {
 					return clusterSSHPrejoinDispatchResult{}, err
 				}

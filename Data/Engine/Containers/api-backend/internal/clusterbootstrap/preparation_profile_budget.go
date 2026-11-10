@@ -41,12 +41,16 @@ func (c *PreparationConfiguration) ProfileWorkerLimits() (PreparationWorkerLimit
 	if c == nil {
 		return PreparationWorkerLimits{}, ErrPreparationConfig
 	}
-	rawCPU, rawPIDs := c.wire.Runtime["BOREALIS_SITE_WORKER_CPU_LIMIT"], c.wire.Runtime["BOREALIS_SITE_WORKER_PIDS_LIMIT"]
+	return preparationProfileWorkerLimits(c.wire.Runtime)
+}
+
+func preparationProfileWorkerLimits(runtime map[string]string) (PreparationWorkerLimits, error) {
+	rawCPU, rawPIDs := runtime["BOREALIS_SITE_WORKER_CPU_LIMIT"], runtime["BOREALIS_SITE_WORKER_PIDS_LIMIT"]
 	milli, cpuErr := preparationWorkerMilliCPU(rawCPU)
 	if cpuErr != nil || !preparationWorkerPIDs.MatchString(rawPIDs) {
 		return PreparationWorkerLimits{}, ErrPreparationConfig
 	}
-	memory, err := preparationMemoryBytes(c.wire.Runtime["BOREALIS_SITE_WORKER_MEMORY_LIMIT"])
+	memory, err := preparationMemoryBytes(runtime["BOREALIS_SITE_WORKER_MEMORY_LIMIT"])
 	pids, _ := strconv.ParseUint(rawPIDs, 10, 64)
 	if err != nil || memory > 9007199254740991 {
 		return PreparationWorkerLimits{}, ErrPreparationConfig
@@ -67,7 +71,14 @@ type PreparationApplicationLimit struct {
 // integer truncation and clamps. Overrides stay unsupported by this subtotal.
 func (c *PreparationConfiguration) ProfileApplicationLimits() ([]PreparationApplicationLimit, error) {
 	sizing, err := c.Sizing()
-	if err != nil || c.wire.Runtime["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] != sizingScheduledSlots[sizing.rank] {
+	if err != nil {
+		return nil, ErrPreparationConfig
+	}
+	return preparationProfileApplicationLimits(sizing, c.wire.Runtime)
+}
+
+func preparationProfileApplicationLimits(sizing PreparationSizing, runtime map[string]string) ([]PreparationApplicationLimit, error) {
+	if !sizing.valid() || runtime["BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"] != sizingScheduledSlots[sizing.rank] {
 		return nil, ErrPreparationConfig
 	}
 	limits := make([]PreparationApplicationLimit, 0, 7)
@@ -87,8 +98,8 @@ func (c *PreparationConfiguration) ProfileApplicationLimits() ([]PreparationAppl
 		if service.name == "postgres" {
 			mib = sizing.postgresProfileMiB()
 		}
-		memory, memoryErr := preparationMemoryBytes(c.wire.Runtime["BOREALIS_"+service.setting+"_MEMORY_LIMIT"])
-		cpu, cpuErr := strconv.ParseFloat(c.wire.Runtime["BOREALIS_"+service.setting+"_CPU_LIMIT"], 64)
+		memory, memoryErr := preparationMemoryBytes(runtime["BOREALIS_"+service.setting+"_MEMORY_LIMIT"])
+		cpu, cpuErr := strconv.ParseFloat(runtime["BOREALIS_"+service.setting+"_CPU_LIMIT"], 64)
 		if memoryErr != nil || cpuErr != nil || memory != mib<<20 || cpu != float64(service.milli[sizing.rank])/1000 {
 			return nil, ErrPreparationConfig
 		}

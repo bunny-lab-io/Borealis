@@ -29,6 +29,7 @@ type clusterSSHPreparationApprovalProof struct {
 	lifetime  context.Context
 	recheck   func(context.Context) error
 	targetCPU []clusterSSHPreparationTargetCPU
+	capacity  *clusterSSHPreparationCapacityProjection
 }
 
 func (p clusterSSHPreparationApprovalProof) valid(plan string) bool {
@@ -192,7 +193,7 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 		return errClusterConflict
 	}
 	readiness := clusterSSHPreparationReadiness(plan, proof.receipts)
-	readiness.Version, readiness.Targets = 2, proof.targetCPU
+	readiness.Version, readiness.Targets, readiness.Capacity = 3, proof.targetCPU, proof.capacity
 	if validateClusterSSHPreparationReadinessCPU(readiness, w.Authorization) != nil {
 		return errClusterConflict
 	}

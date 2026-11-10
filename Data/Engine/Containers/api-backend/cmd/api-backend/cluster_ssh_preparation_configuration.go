@@ -15,7 +15,7 @@ import (
 )
 
 // Controller-only waiting-phase reader. It lends no private configuration or
-// worker capability and has no production caller. Every invocation creates
+// worker capability. Every invocation creates
 // fresh native source Jobs; a previous receipt cannot satisfy this gate.
 func (c *clusterController) preparationConfigurationRead(snapshot clusterSSHPreparationApprovalSnapshot) func(context.Context, string) (string, error) {
 	wire, wireErr := json.Marshal(snapshot.work)
@@ -48,8 +48,16 @@ func (c *clusterController) preparationConfigurationRead(snapshot clusterSSHPrep
 // runner remain borrowed; the copied client owns no idle connections or Jobs.
 func newClusterSSHPreparationConfigurationNativeRead(work clusterSSHPreparationWork, check func(context.Context) error,
 	runner *kubernetesClusterStepRunner) func(context.Context, string) (string, error) {
+	current, get, network := clusterSSHPreparationConfigurationNativeInputs(work, check, runner)
+	return newClusterSSHPreparationConfigurationRead(work, current, get, network)
+}
+
+// The capacity adapter borrows these same joined private reads. Fixed storage
+// GETs use the existing allowlist and transport; no new permission is granted.
+func clusterSSHPreparationConfigurationNativeInputs(work clusterSSHPreparationWork, check func(context.Context) error,
+	runner *kubernetesClusterStepRunner) (func(context.Context) error, func(context.Context, string, any) error, clusterSSHSourceNetworkRead) {
 	if runner == nil || runner.kube == nil || runner.kube.httpClient == nil || check == nil {
-		return newClusterSSHPreparationConfigurationRead(work, nil, nil, nil)
+		return nil, nil, nil
 	}
 	transport := runner.kube.httpClient.Transport
 	if transport == nil {
@@ -73,7 +81,10 @@ func newClusterSSHPreparationConfigurationNativeRead(work clusterSSHPreparationW
 		if path == "/api/v1/nodes" || path == "/api/v1/namespaces/kube-system" {
 			return kube.getClusterSSHNodeCohortJSON(ctx, path, out)
 		}
-		return kube.getClusterSSHPreparationJSON(ctx, path, out)
+		if path == clusterSSHRuntimeSecretPath {
+			return kube.getClusterSSHPreparationJSON(ctx, path, out)
+		}
+		return kube.getClusterSSHStorageJSON(ctx, path, out)
 	}
 	var version string
 	_ = clusterBootstrapObject([]byte(work.Payload), map[string]any{"source_k3s_version": &version})
@@ -87,7 +98,7 @@ func newClusterSSHPreparationConfigurationNativeRead(work clusterSSHPreparationW
 	// The existing serial reader checks current after every synchronous native
 	// read and once more before returning. Close failures remain sticky even if
 	// an underlying reader ignores them; blocked closure joins before SQL recheck.
-	return newClusterSSHPreparationConfigurationRead(work, current, get, network)
+	return current, get, network
 }
 
 // Private requests have their own shorter deadline. A successful body Close
@@ -121,6 +132,15 @@ func (b *clusterSSHPreparationConfigurationBody) Close() error {
 // equality survives a call; all source and Secret evidence is reread each time.
 func newClusterSSHPreparationConfigurationRead(work clusterSSHPreparationWork, check func(context.Context) error,
 	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead) func(context.Context, string) (string, error) {
+	return newClusterSSHPreparationConfigurationReadWithProjection(work, check, getJSON, network, nil)
+}
+
+// Publish a private projection only after the existing reader has joined all
+// source/Secret rechecks. Capacity borrows this observation; no second source
+// read, claimed identity or raw runtime Secret is required to extract its bounds.
+func newClusterSSHPreparationConfigurationReadWithProjection(work clusterSSHPreparationWork, check func(context.Context) error,
+	getJSON func(context.Context, string, any) error, network clusterSSHSourceNetworkRead,
+	publish func(clusterSSHPreparationConfigurationProjection) error) func(context.Context, string) (string, error) {
 	wire, wireErr := json.Marshal(work)
 	var owned clusterSSHPreparationWork
 	decodeErr := json.Unmarshal(wire, &owned)
@@ -220,6 +240,12 @@ func newClusterSSHPreparationConfigurationRead(work clusterSSHPreparationWork, c
 		if err != nil || ctx.Err() != nil || (retained != "" && retained != digest) || failed.Load() {
 			return fail()
 		}
+		if publish != nil {
+			projection, err := clusterSSHPreparationConfigurationProjectionFrom(owned, plan, version, secret, sources, digest)
+			if err != nil || publish(projection) != nil || check(ctx) != nil || ctx.Err() != nil || failed.Load() {
+				return fail()
+			}
+		}
 		retained = digest
 		return digest, nil
 	}
@@ -230,9 +256,31 @@ func newClusterSSHPreparationConfigurationRead(work clusterSSHPreparationWork, c
 // retained; equal selected values cannot replace an original observation.
 func clusterSSHPreparationConfigurationReceipt(baseline clusterbootstrap.Expected, proof clusterSSHParentProof, plan, version string,
 	secret clusterbootstrap.PreparationRuntimeSecret, sources []clusterbootstrap.SourceNetwork) (string, error) {
+	return clusterSSHPreparationConfigurationReceiptFromSettings(baseline, proof, plan, version, secret.Settings(), secret.ObservationSHA256(), sources)
+}
+
+func clusterSSHPreparationConfigurationReceiptFromSettings(baseline clusterbootstrap.Expected, proof clusterSSHParentProof, plan, version string,
+	settings map[string]string, secret string, sources []clusterbootstrap.SourceNetwork) (string, error) {
+	projection, err := clusterSSHPreparationConfigurationPlan(baseline, proof, plan, version, sources)
+	if err != nil || !validClusterSSHPreparationDigest(secret) {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	configuration, err := clusterbootstrap.PreparationPlanConfigurationDigest(projection, settings)
+	if err != nil {
+		return "", err
+	}
+	return clusterSSHPreparationDigest(struct {
+		Version                     int
+		Plan, Configuration, Secret string
+		Sources                     []clusterbootstrap.SourceNetwork
+	}{1, plan, configuration, secret, sources})
+}
+
+func clusterSSHPreparationConfigurationPlan(baseline clusterbootstrap.Expected, proof clusterSSHParentProof, plan, version string,
+	sources []clusterbootstrap.SourceNetwork) (clusterbootstrap.PreparationPlan, error) {
 	if baseline.Validate() != nil || validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil ||
 		validateClusterSSHPlannedSourceNetworks(proof.Cohort, proof.Source, version, sources) != nil {
-		return "", clusterbootstrap.ErrPreparationConfig
+		return clusterbootstrap.PreparationPlan{}, clusterbootstrap.ErrPreparationConfig
 	}
 	projection := clusterbootstrap.PreparationPlan{Source: baseline, PlanSHA256: plan, KubeSystemUID: proof.Source.KubeSystemUID, K3sVersion: version,
 		ManagementCIDR: proof.Cohort.Targets[0].Report.ConnectedPrefix, PodCIDR: sources[0].PodCIDR, ServiceCIDR: sources[0].ServiceCIDR,
@@ -245,13 +293,5 @@ func clusterSSHPreparationConfigurationReceipt(baseline clusterbootstrap.Expecte
 		projection.TargetAddresses = append(projection.TargetAddresses, target.Binding.Address)
 	}
 	sort.Strings(projection.PeerAddresses)
-	configuration, err := clusterbootstrap.PreparationPlanConfigurationDigest(projection, secret.Settings())
-	if err != nil {
-		return "", err
-	}
-	return clusterSSHPreparationDigest(struct {
-		Version                     int
-		Plan, Configuration, Secret string
-		Sources                     []clusterbootstrap.SourceNetwork
-	}{1, plan, configuration, secret.ObservationSHA256(), sources})
+	return projection, nil
 }

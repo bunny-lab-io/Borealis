@@ -99,13 +99,17 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		network, err := sourceRead(ctx)
 		return err == nil && network == request.Network && check(ctx) == nil
 	}
-	dual := request.RequiredListenerProofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion
+	quorum := request.RequiredListenerProofVersion == clusterbootstrap.MembershipQuorumProofVersion
+	dual := quorum || request.RequiredListenerProofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion
 	if !dual && !prove() {
 		return fail()
 	}
 	wantProof := clusterbootstrap.MembershipListenerProofVersion
 	if dual {
 		wantProof = clusterbootstrap.MembershipLocalEtcdProofVersion
+	}
+	if quorum {
+		wantProof = clusterbootstrap.MembershipQuorumProofVersion
 	}
 	listener, listenerErr := listenerFor(ctx, request.Network.Kubelet, wantProof)
 	if listener != nil && listener.close != nil {
@@ -130,7 +134,7 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		return fail()
 	}
 	var result bootstrapMembershipObservation
-	err := withBootstrapK3sObservationFiles(ctx, root, request.Network.Hostname, true, check, func(files []bootstrapHostFile, refresh func(context.Context) error, localName string) error {
+	err := withBootstrapK3sObservationFilesForProof(ctx, root, request.Network.Hostname, true, quorum, check, func(files []bootstrapHostFile, refresh func(context.Context) error, localName string) error {
 		pair, err := tls.X509KeyPair(files[1].data, files[2].data)
 		if err != nil || len(pair.Certificate) == 0 {
 			return errBootstrapSource
@@ -219,6 +223,13 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		if err != nil {
 			return errBootstrapSource
 		}
+		var firstQuorum bootstrapMembershipQuorumRead
+		if quorum {
+			firstQuorum, err = readBootstrapMembershipQuorum(ctx, files[4:], before.LocalID, refresh, listener.check, clientFor)
+			if err != nil {
+				return errBootstrapSource
+			}
+		}
 		first, err := localNode(before)
 		if err != nil {
 			return errBootstrapSource
@@ -231,7 +242,15 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		if err != nil || !reflect.DeepEqual(before, after) || version() != nil || !prove() {
 			return errBootstrapSource
 		}
-		result = bootstrapMembershipObservation{Source: request.Source, LocalNode: second, Membership: after, RequestSHA256: requestSHA256, Observer: request.Observer}
+		var proof *clusterbootstrap.MembershipQuorumRead
+		if quorum {
+			last, err := readBootstrapMembershipQuorum(ctx, files[4:], after.LocalID, refresh, listener.check, clientFor)
+			if err != nil || last.identity != firstQuorum.identity || last.revision < firstQuorum.revision || last.term < firstQuorum.term || !prove() || listener.check(ctx) != nil {
+				return errBootstrapSource
+			}
+			proof = &last.identity
+		}
+		result = bootstrapMembershipObservation{Source: request.Source, LocalNode: second, Membership: after, RequestSHA256: requestSHA256, Observer: request.Observer, Quorum: proof}
 		return nil
 	})
 	if err != nil || ctx.Err() != nil || listener.check(ctx) != nil {

@@ -32,7 +32,7 @@ func TestClusterSSHPreparationNativeGatesPostgresBlockedProposal(t *testing.T) {
 					}
 				}
 				consumed := false
-				err := f.c.withPreparationNativeGates(ctx, snapshot, t.TempDir(), clean,
+				err := f.c.withPreparationNativeGates(ctx, snapshot, t.TempDir(), clean, nil, nil,
 					func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error) {
 						consumed = true
 						return clusterSSHPreparationReadinessReceipt{}, nil
@@ -45,7 +45,7 @@ func TestClusterSSHPreparationNativeGatesPostgresBlockedProposal(t *testing.T) {
 					if !errors.As(err, &blocked) {
 						t.Fatal("current waiting proposal lost readiness diagnosis", err)
 					}
-					for _, item := range clusterSSHPreparationNativeBlockers(clean != nil) {
+					for _, item := range clusterSSHPreparationNativeBlockers(clean != nil, false) {
 						if !strings.Contains(err.Error(), item.Error()) {
 							t.Fatal("missing exact gate diagnosis", item.Gate)
 						}

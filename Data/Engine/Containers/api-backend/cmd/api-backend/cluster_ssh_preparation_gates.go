@@ -40,10 +40,11 @@ type clusterSSHPreparationGateReceipt struct {
 }
 
 type clusterSSHPreparationReadinessReceipt struct {
-	Version    int                                `json:"version"`
-	PlanSHA256 string                             `json:"plan_sha256"`
-	Checks     []clusterSSHPreparationGateReceipt `json:"checks"`
-	Targets    []clusterSSHPreparationTargetCPU   `json:"targets,omitempty"`
+	Version    int                                      `json:"version"`
+	PlanSHA256 string                                   `json:"plan_sha256"`
+	Checks     []clusterSSHPreparationGateReceipt       `json:"checks"`
+	Targets    []clusterSSHPreparationTargetCPU         `json:"targets,omitempty"`
+	Capacity   *clusterSSHPreparationCapacityProjection `json:"capacity,omitempty"`
 }
 
 func clusterSSHPreparationReadiness(plan string, receipts [6]string) clusterSSHPreparationReadinessReceipt {
@@ -58,7 +59,7 @@ func parseClusterSSHPreparationReadiness(raw []byte, a clusterSSHPreparationAuth
 	var r clusterSSHPreparationReadinessReceipt
 	plan, err := clusterSSHPreparationPlanDigest(a)
 	if err != nil || len(raw) == 0 || len(raw) > 4096 || json.Unmarshal(raw, &r) != nil ||
-		(r.Version != 1 && r.Version != 2) || r.PlanSHA256 != plan || len(r.Checks) != len(clusterSSHPreparationGateCodes) {
+		(r.Version != 1 && r.Version != 2 && r.Version != 3) || r.PlanSHA256 != plan || len(r.Checks) != len(clusterSSHPreparationGateCodes) {
 		return errClusterConflict
 	}
 	canonical, err := json.Marshal(r)
@@ -70,7 +71,7 @@ func parseClusterSSHPreparationReadiness(raw []byte, a clusterSSHPreparationAuth
 			return errClusterConflict
 		}
 	}
-	if r.Version == 1 && len(r.Targets) != 0 || r.Version == 2 && validateClusterSSHPreparationReadinessCPU(r, a) != nil {
+	if r.Version == 1 && (len(r.Targets) != 0 || r.Capacity != nil) || r.Version >= 2 && validateClusterSSHPreparationReadinessCPU(r, a) != nil {
 		return errClusterConflict
 	}
 	return nil

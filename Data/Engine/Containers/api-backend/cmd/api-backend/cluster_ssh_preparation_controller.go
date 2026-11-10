@@ -26,7 +26,9 @@ func (c *clusterController) runSSHPreparationParent(ctx context.Context, operati
 			if err == nil {
 				clean, projection = clusterSSHPreparationTargetCPUReaderPair(snapshot, client.preparationTargetsRead(snapshot, c.preparationCleanTargetsProposalCheck(snapshot)))
 			}
-			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), clean, consume)
+			capacity, configuration, approvedTargets := c.preparationCapacityRead(snapshot, projection)
+			projection = approvedTargets
+			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), clean, capacity, configuration, consume)
 		}, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
 			if projection == nil {
 				return clusterSSHPreparationCleanObservation{}, errClusterConflict
@@ -184,7 +186,7 @@ func clusterSSHPreparationBlockedReasons(err error) []string {
 	}
 	visit(err)
 	var reasons []string
-	for _, known := range clusterSSHPreparationNativeBlockers(false) {
+	for _, known := range clusterSSHPreparationNativeBlockers(false, false) {
 		if seen[known.Gate] {
 			reasons = append(reasons, known.Gate+": "+known.Reason)
 		}

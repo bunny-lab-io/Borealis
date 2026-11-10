@@ -18,7 +18,7 @@ func newSSHPreparedAuthorityFixture(t *testing.T, replacement bool) (sshPreparat
 	uids := map[string]string{}
 	for i, value := range legacy {
 		a := value.Authority
-		expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+		expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", a.payload)
 		if err != nil {
 			t.Fatal(err)
 		}

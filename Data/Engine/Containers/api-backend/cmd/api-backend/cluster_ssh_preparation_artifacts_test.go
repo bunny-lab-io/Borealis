@@ -361,8 +361,7 @@ func TestClusterSSHPreparationArtifactsPostgresTerminal(t *testing.T) {
 					}
 					return nil
 				}}
-				proof.targetCPU = sshPreparationTargetCPUFixture(snapshot)
-				proof.receipts[1], _ = clusterSSHPreparationTargetCPUDigest(snapshot, proof.targetCPU)
+				sshPreparationApprovalCapacityProof(t, snapshot, &proof)
 				receipts = proof.receipts
 				if err := f.c.commitClusterSSHPreparationApproval(ctx, snapshot, confirmation, proof); err != nil {
 					t.Fatal("exact approval", err)
@@ -396,7 +395,7 @@ func TestClusterSSHPreparationArtifactsPostgresTerminal(t *testing.T) {
 					v.closeErr = errClusterConflict
 				}
 				readiness := clusterSSHPreparationReadiness(plan, receipts)
-				readiness.Version, readiness.Targets = 2, proof.targetCPU
+				readiness.Version, readiness.Targets, readiness.Capacity = 3, proof.targetCPU, proof.capacity
 				return readiness, nil
 			})
 			if (err == nil) != (mode == "waiting" || mode == "exact commit") || v.closes.Load() != 1 {

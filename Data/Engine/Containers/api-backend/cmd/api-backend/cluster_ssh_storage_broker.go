@@ -4,7 +4,9 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"math"
+	"net/http"
 	"slices"
+	"time"
 )
 
 // This wire projection carries no lease or transferable qualification grant.
@@ -20,12 +22,38 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx cont
 }
 
 func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx context.Context, authority clusterSSHPreparationAuthorityRead, joining bool, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
-	if census == nil || authority == nil || r == nil || r.kube == nil || r.namespace != "borealis" {
+	if census == nil || authority == nil || r == nil || r.kube == nil || r.kube.httpClient == nil || r.namespace != "borealis" {
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	// Join every private response Close, including named-target absence reads.
+	// Borrow the existing transport; this scope owns only its copies and tracker.
+	transport := r.kube.httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
+	client, kube, runner := *r.kube.httpClient, *r.kube, *r
+	client.Transport = cleanup
+	kube.httpClient, runner.kube = &client, &kube
+	r = &runner
+	originalAuthority := authority
+	authority = func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+		if cleanup.failed.Load() || ctx.Err() != nil {
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
+		}
+		value, err := originalAuthority(ctx)
+		if err != nil || cleanup.failed.Load() || ctx.Err() != nil {
+			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
+		}
+		return value, nil
 	}
 	censusGate := make(chan struct{}, 1)
 	var sites []int64
 	var policy clusterSSHWorkerPolicy
+	var capacityCheck func(context.Context, clusterSSHPreparationAuthority) error
+	var capacityAuthority string
 	// Once the two initial storage inventories select scheduler policy, bind
 	// census to every existing authority boundary, including the joined final
 	// storage inventory. Never retain a DB connection across another read.
@@ -109,9 +137,40 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		if _, _, ok := clusterSSHDesiredWorkerWorkloadBudget(value); !ok {
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		// Bracket the existing final full inventory with named-target policy
+		// reads. Authority heartbeats must not multiply these private GETs.
+		capacityCheck = func(ctx context.Context, current clusterSSHPreparationAuthority) error {
+			stable := current
+			stable.Cohort.ObservedAt = 0
+			authorityDigest, err := clusterSSHPreparationDigest(stable)
+			if err != nil || capacityAuthority != "" && capacityAuthority != authorityDigest {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			digest, targets, err := recheckClusterSSHPreparationCapacity(ctx, current, value, joining, r.kube.getClusterSSHStorageJSON)
+			if err != nil || !cleanup.clean() || !clusterSSHPreparationCapacityTransition(value.CapacityTargets, targets, joining) {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			capacityAuthority = authorityDigest
+			value.CapacitySHA256, value.CapacityTargets = digest, slices.Clone(targets)
+			return nil
+		}
+		current, err := boundAuthority(ctx)
+		if err != nil || capacityCheck(ctx, current) != nil || checks.Authority(ctx) != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
 		return nil
 	})
-	if err != nil || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || !cleanup.clean() {
+		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+	}
+	before, err := scopedAuthority(ctx)
+	if err != nil || capacityCheck == nil || capacityCheck(ctx, before) != nil {
+		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+	}
+	after, err := scopedAuthority(ctx)
+	after.Cohort.ObservedAt = 0
+	afterDigest, digestErr := clusterSSHPreparationDigest(after)
+	if err != nil || digestErr != nil || afterDigest != capacityAuthority || ctx.Err() != nil || !cleanup.clean() {
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	return value, nil

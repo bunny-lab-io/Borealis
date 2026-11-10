@@ -35,6 +35,15 @@ func clusterSSHProfileApplications(configuration *clusterbootstrap.PreparationCo
 	if err != nil {
 		return nil, clusterSSHApplicationResource{}, clusterbootstrap.ErrPreparationConfig
 	}
+	return clusterSSHProfileApplicationsFromLimits(limits)
+}
+
+// Waiting and claimed paths project the same validated inherited limits onto
+// the existing renderer-backed requests and fixed controller envelopes.
+func clusterSSHProfileApplicationsFromLimits(limits []clusterbootstrap.PreparationApplicationLimit) ([]clusterSSHApplicationResource, clusterSSHApplicationResource, error) {
+	if len(limits) != 7 {
+		return nil, clusterSSHApplicationResource{}, clusterbootstrap.ErrPreparationConfig
+	}
 	applications := clusterSSHSmallBusinessApplications()
 	postgres := clusterSSHSmallBusinessPostgres()
 	for _, limit := range limits {

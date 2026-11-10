@@ -27,6 +27,17 @@ const MembershipListenerProofVersion uint8 = 1
 // never a response Header.MemberID, continuous quorum or admission authority.
 const MembershipLocalEtcdProofVersion uint8 = 2
 
+// Explicit fixed local etcd Range completion, with response cluster/member IDs
+// bound to the independently retained observer and complete membership view.
+// This is an observation at bounded instants, never continuous health or an
+// admission capability outside original controller custody.
+const MembershipQuorumProofVersion uint8 = 3
+
+type MembershipQuorumRead struct {
+	ClusterID uint64
+	MemberID  uint64
+}
+
 func membershipCanonical(raw []byte, maximum int, out any) error {
 	if _, err := sourceJSONObject(raw, maximum); err != nil || json.Unmarshal(raw, out) != nil {
 		return ErrPreparationConfig
@@ -85,6 +96,12 @@ func (r MembershipObservationRequest) SHA256() string {
 			domain = "settled-cohort-membership-local-etcd-observation-v1"
 		}
 	}
+	if r.RequiredListenerProofVersion == MembershipQuorumProofVersion {
+		domain = "original-source-membership-quorum-observation-v1"
+		if r.Observer != nil {
+			domain = "settled-cohort-membership-quorum-observation-v1"
+		}
+	}
 	raw, err := json.Marshal(struct {
 		Domain  string
 		Request MembershipObservationRequest
@@ -119,6 +136,14 @@ func (o MembershipObservation) Valid(request MembershipObservationRequest) bool 
 	}
 	if request.RequiredListenerProofVersion == MembershipLocalEtcdProofVersion {
 		wantProof = MembershipLocalEtcdProofVersion
+	}
+	if request.RequiredListenerProofVersion == MembershipQuorumProofVersion {
+		wantProof = MembershipQuorumProofVersion
+		if o.Quorum == nil || o.Quorum.ClusterID == 0 || o.Quorum.MemberID == 0 || o.Quorum.MemberID != o.Membership.LocalID {
+			return false
+		}
+	} else if o.Quorum != nil {
+		return false
 	}
 	if o.ListenerProofVersion != wantProof {
 		return false
@@ -256,21 +281,27 @@ type MembershipObservationRequest struct {
 	// Zero preserves both historical contracts exactly. Version2 explicitly
 	// requests measured6443+2379 custody; an installed marker1 producer cannot
 	// satisfy this request even when it echoes the current request digest.
+	// Version3 additionally requests fixed gateway custody and direct Range proof.
 	RequiredListenerProofVersion uint8 `json:",omitempty"`
 }
 
-// One selected endpoint's current complete view. This is not independent agreement
-// between endpoints, quorum availability, partition proof or admission authority.
+// One selected endpoint's current complete view. Optional Quorum binds direct
+// linearizable completion at its observation instants. Neither form supplies
+// continuous availability, partition tolerance or admission authority.
 type MembershipObservation struct {
 	Source               engineidentity.Binding
 	LocalNode            K3sJoinedNode
 	Membership           K3sMembership
 	RequestSHA256        string
-	Observer             *MembershipObserver `json:",omitempty"`
-	ListenerProofVersion uint8               `json:",omitempty"`
+	Observer             *MembershipObserver   `json:",omitempty"`
+	ListenerProofVersion uint8                 `json:",omitempty"`
+	Quorum               *MembershipQuorumRead `json:",omitempty"`
 }
 
 func (r MembershipObservationRequest) receiptVersion() int {
+	if r.RequiredListenerProofVersion == MembershipQuorumProofVersion {
+		return 4
+	}
 	if r.RequiredListenerProofVersion == MembershipLocalEtcdProofVersion {
 		return 3
 	}
@@ -295,7 +326,7 @@ func (MembershipObservationRequest) GoString() string {
 }
 
 func (r MembershipObservationRequest) Valid() bool {
-	if r.RequiredListenerProofVersion != 0 && (r.RequiredListenerProofVersion != MembershipLocalEtcdProofVersion || !r.RequireListenerProof) {
+	if r.RequiredListenerProofVersion != 0 && ((r.RequiredListenerProofVersion != MembershipLocalEtcdProofVersion && r.RequiredListenerProofVersion != MembershipQuorumProofVersion) || !r.RequireListenerProof) {
 		return false
 	}
 	uuid := func(value string) bool {

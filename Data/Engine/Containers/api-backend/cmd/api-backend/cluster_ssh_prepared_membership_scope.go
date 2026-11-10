@@ -38,10 +38,20 @@ func (c *clusterController) withClusterSSHPreparedMembership(parent context.Cont
 // One complete collection precedes synchronous consumption; another follows
 // joined consumer/check cleanup. Both share the collector's existing 60-second
 // ceiling. Successful reads describe their observation instants, not continuous
-// quorum, independent local-etcd routing, or permission to mutate membership.
+// quorum or permission to mutate membership. The opt-in admission proof also
+// requires direct member-attributed linearizable completion on each observer.
 func withClusterSSHPreparedMembershipScope(parent context.Context, operation clusterControllerOperation, holder string,
 	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error),
 	consume func(context.Context, clusterSSHPreparedCohortMembershipObservation, clusterSSHPreparedMembershipChecks) error) error {
+	return withClusterSSHPreparedMembershipScopeForProof(parent, operation, holder, runner, read, clusterbootstrap.MembershipLocalEtcdProofVersion, consume)
+}
+
+func withClusterSSHPreparedMembershipScopeForProof(parent context.Context, operation clusterControllerOperation, holder string,
+	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error), requiredProof uint8,
+	consume func(context.Context, clusterSSHPreparedCohortMembershipObservation, clusterSSHPreparedMembershipChecks) error) error {
+	if requiredProof != clusterbootstrap.MembershipLocalEtcdProofVersion && requiredProof != clusterbootstrap.MembershipQuorumProofVersion {
+		return errClusterConflict
+	}
 	if parent.Err() != nil || holder == "" || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != holder || read == nil || consume == nil {
 		return errClusterConflict
 	}
@@ -115,7 +125,7 @@ func withClusterSSHPreparedMembershipScope(parent context.Context, operation clu
 			case <-ctx.Done():
 				return errClusterConflict
 			}
-			value, err := readClusterSSHPreparedCohortMembershipWithJobs(ctx, operation, holder, runner, current, seen, clusterbootstrap.MembershipLocalEtcdProofVersion)
+			value, err := readClusterSSHPreparedCohortMembershipWithJobs(ctx, operation, holder, runner, current, seen, requiredProof)
 			if err != nil || ctx.Err() != nil || len(value.Views) != 3 {
 				return errClusterConflict
 			}

@@ -9,13 +9,15 @@ type clusterSSHPreparationNativeGateConsumer func(context.Context, clusterSSHPre
 
 // Return fresh fixed diagnostics, not proof receipts or a caller-controlled
 // readiness override. Claimed observers cannot break the approval/claim cycle.
-func clusterSSHPreparationNativeBlockers(cleanTargets bool) []clusterSSHPreparationGateBlocked {
+func clusterSSHPreparationNativeBlockers(cleanTargets, capacity bool) []clusterSSHPreparationGateBlocked {
 	var blocked []clusterSSHPreparationGateBlocked
 	if !cleanTargets {
 		blocked = append(blocked, clusterSSHPreparationGateBlocked{"clean_targets", "Fresh pinned-SSH proposal observation is unavailable through the authenticated API executor; its original credentials and unlocked Aegis must remain bound to the waiting proposal."})
 	}
+	if !capacity {
+		blocked = append(blocked, clusterSSHPreparationGateBlocked{"complete_capacity", "Preclaim capacity proof is unavailable: bind native target CPU/memory, target Longhorn policy and complete inherited-profile workload demand to the waiting proposal and recheck before effects."})
+	}
 	blocked = append(blocked,
-		clusterSSHPreparationGateBlocked{"complete_capacity", "Preclaim capacity proof is incomplete: bind target kubelet reservations/effective allocatable CPU, target Longhorn CPU override policy and complete inherited-profile workload demand to the waiting proposal. Existing claimed sizing scopes cannot authorize approval."},
 		clusterSSHPreparationGateBlocked{"persistent_storage", "Preclaim storage proof is incomplete: bind complete installation/download/runtime demand and fresh persistent filesystem, mount and inode evidence to every original target. Conditional claimed storage budgets cannot authorize approval."},
 	)
 	if !cleanTargets {
@@ -24,8 +26,8 @@ func clusterSSHPreparationNativeBlockers(cleanTargets bool) []clusterSSHPreparat
 	return blocked
 }
 
-func clusterSSHPreparationNativeBlockedError(cleanTargets bool) error {
-	blocked := clusterSSHPreparationNativeBlockers(cleanTargets)
+func clusterSSHPreparationNativeBlockedError(cleanTargets, capacity bool) error {
+	blocked := clusterSSHPreparationNativeBlockers(cleanTargets, capacity)
 	errs := make([]error, len(blocked))
 	for i := range blocked {
 		errs[i] = blocked[i]
@@ -40,18 +42,18 @@ func clusterSSHPreparationNativeBlockedError(cleanTargets bool) error {
 // native producers exist, acquisition owns the immutable gate throughout the
 // synchronous approval callback and verifies its exact returned readiness.
 func (c *clusterController) withPreparationNativeGates(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot,
-	scratch string, cleanTargets func(context.Context, string) (string, error), consume clusterSSHPreparationNativeGateConsumer) error {
+	scratch string, cleanTargets, capacity, configuration func(context.Context, string) (string, error), consume clusterSSHPreparationNativeGateConsumer) error {
 	if c == nil || consume == nil || ctx.Err() != nil || c.holder != snapshot.work.Authorization.ControllerHolder {
 		return errClusterConflict
 	}
 	if _, err := clusterSSHPreparationPlanDigest(snapshot.work.Authorization); err != nil || c.preparationCleanTargetsProposalCheck(snapshot)(ctx) != nil {
 		return errClusterConflict
 	}
-	if err := clusterSSHPreparationNativeBlockedError(cleanTargets != nil); err != nil {
+	if err := clusterSSHPreparationNativeBlockedError(cleanTargets != nil, capacity != nil); err != nil {
 		return err
 	}
 	return c.withPreparationArtifacts(ctx, snapshot, scratch, func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
-		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, cleanTargets, c.preparationConfigurationRead(snapshot))
+		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, cleanTargets, capacity, configuration)
 		return consumeClusterSSHPreparationNativeGates(ctx, gates, consume)
 	})
 }
@@ -99,11 +101,11 @@ func consumeClusterSSHPreparationNativeGates(parent context.Context, gates clust
 // an error with no digest; qualification/profile minima and source-only storage
 // observations are never promoted into complete readiness evidence.
 func clusterSSHPreparationNativeGates(snapshot clusterSSHPreparationApprovalSnapshot, artifacts clusterSSHPreparationArtifactGate,
-	cleanTargets, configuration func(context.Context, string) (string, error)) clusterSSHPreparationGates {
+	cleanTargets, capacity, configuration func(context.Context, string) (string, error)) clusterSSHPreparationGates {
 	var gates clusterSSHPreparationGates
-	gates[0], gates[1], gates[4] = artifacts, cleanTargets, configuration
+	gates[0], gates[1], gates[2], gates[4] = artifacts, cleanTargets, capacity, configuration
 	gates[5] = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, artifacts, cleanTargets)
-	for _, blocked := range clusterSSHPreparationNativeBlockers(cleanTargets != nil) {
+	for _, blocked := range clusterSSHPreparationNativeBlockers(cleanTargets != nil, capacity != nil) {
 		for i, code := range clusterSSHPreparationGateCodes {
 			if code == blocked.Gate {
 				gates[i] = func(context.Context, string) (string, error) { return "", blocked }

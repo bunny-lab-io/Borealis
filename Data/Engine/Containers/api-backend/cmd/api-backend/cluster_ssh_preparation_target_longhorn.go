@@ -34,6 +34,7 @@ func clusterSSHPreparationLonghornNotFound(path string, body io.Reader) error {
 type clusterSSHPreparationTargetInstanceCPU struct {
 	Present                     bool
 	OverrideMilli, RequestMilli uint64
+	NodeUID                     string
 	ObservationSHA256           string
 }
 
@@ -64,7 +65,7 @@ func observeClusterSSHPreparationTargetInstanceCPU(read func(string) (map[string
 		if err != nil || !ok || id.Name != hostname || !number || uint64(override) > clusterSSHCapacityLimit {
 			return fail()
 		}
-		result.Present, result.OverrideMilli = true, uint64(override)
+		result.Present, result.OverrideMilli, result.NodeUID = true, uint64(override), id.UID
 		result.ObservationSHA256, err = clusterSSHPreparationDigest(value)
 	}
 	request, ok := clusterSSHInstanceCPURequest(cpu.AllocatableMilli, result.OverrideMilli, percentage)

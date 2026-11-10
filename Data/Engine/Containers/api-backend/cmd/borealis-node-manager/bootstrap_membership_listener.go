@@ -179,7 +179,7 @@ func captureBootstrapMembershipListenerAt(ctx context.Context, proc string, want
 // same measured PID, executable and namespace scope; no caller supplies a port.
 func captureBootstrapMembershipListenersAt(ctx context.Context, proc string, want clusterbootstrap.SourceKubelet, serviceRead func(context.Context) ([]byte, error), proofVersion uint8) (*bootstrapMembershipListenerScope, error) {
 	if ctx.Err() != nil || want.Validate() != nil || serviceRead == nil ||
-		proofVersion != clusterbootstrap.MembershipListenerProofVersion && proofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
+		proofVersion != clusterbootstrap.MembershipListenerProofVersion && proofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion && proofVersion != clusterbootstrap.MembershipQuorumProofVersion {
 		return nil, errBootstrapSource
 	}
 	pidfd, err := unix.PidfdOpen(int(want.PID), 0)
@@ -231,8 +231,8 @@ func captureBootstrapMembershipListenersAt(ctx context.Context, proc string, wan
 	if uint64(exeStat.Dev) != want.ExecutableDevice || exeStat.Ino != want.ExecutableInode {
 		return fail()
 	}
-	var retained [2]bootstrapMembershipTCPListener
-	var retainedFD [2]string
+	var retained [3]bootstrapMembershipTCPListener
+	var retainedFD [3]string
 	check := func(ctx context.Context) error {
 		mu.Lock()
 		defer mu.Unlock()
@@ -295,14 +295,18 @@ func captureBootstrapMembershipListenersAt(ctx context.Context, proc string, wan
 		if err != nil || heldErr != nil || !sourceKubeletExecutableUnchanged(exe, now) || !sourceKubeletExecutableUnchanged(exe, held) {
 			return reject()
 		}
-		for i, port := range [...]uint16{6443, 2379} {
-			if i == 1 && proofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
+		for i, port := range [...]uint16{6443, 2379, 2382} {
+			if i >= int(proofVersion) {
 				break
 			}
 			listener, fd, err := readBootstrapMembershipTCP(ctx, process, port)
-			if err != nil || listener.uid != 0 || retained[i].inode != 0 && (listener != retained[i] || fd != retainedFD[i]) ||
-				i == 1 && (listener.inode == retained[0].inode || fd == retainedFD[0]) {
+			if err != nil || listener.uid != 0 || retained[i].inode != 0 && (listener != retained[i] || fd != retainedFD[i]) {
 				return reject()
+			}
+			for previous := 0; previous < i; previous++ {
+				if listener.inode == retained[previous].inode || fd == retainedFD[previous] {
+					return reject()
+				}
 			}
 			retained[i], retainedFD[i] = listener, fd
 		}

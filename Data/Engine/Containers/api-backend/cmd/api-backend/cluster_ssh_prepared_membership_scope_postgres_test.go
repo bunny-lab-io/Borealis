@@ -9,6 +9,53 @@ import (
 	"time"
 )
 
+// New capability uses the same original settled authority and SQL-free native
+// transport boundaries. Protocol/native/pure collector tests cover downgrade,
+// foreign responder and cross-cluster rejection without replaying all SQL modes.
+func TestClusterSSHPreparedAdmissionPostgresProof(t *testing.T) {
+	f, a, targets := newSSHPreparedAuthorityFixture(t, false)
+	authority, _, err := f.c.loadClusterSSHPreparedAuthority(f.ctx, f.op)
+	if err != nil {
+		t.Fatal("original settled authority", err)
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.ctx), 60*time.Second)
+	defer cancel()
+	f.c.store.db.SetMaxOpenConns(1)
+	before, err := preparedCohortSQLState(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := newPreparedMembershipNativeForProof(t, a, authority, targets, "", clusterbootstrap.MembershipQuorumProofVersion)
+	n.before = func(ctx context.Context) error { return recoveryProgressSQLPoolAvailable(ctx, f) }
+	n.closeHook = func(ctx context.Context, _ int) error { return recoveryProgressSQLPoolAvailable(ctx, f) }
+	f.c.runner = n.runner
+	consumed := false
+	var escaped clusterSSHPreparedMembershipChecks
+	err = f.c.withClusterSSHPreparedAdmissionProof(ctx, f.op, func(ctx context.Context, value clusterSSHPreparedCohortMembershipObservation, checks clusterSSHPreparedMembershipChecks) error {
+		consumed, escaped = true, checks
+		if n.posts.Load() != 6 || len(value.Views) != 3 || value.Prepared.OperationID != f.op.ID || value.Prepared.Controller != f.c.holder || value.Prepared.Attempt != f.op.Attempt {
+			t.Fatal("lost original settled binding")
+		}
+		for _, view := range value.Views {
+			o := view.Observation
+			if o.ListenerProofVersion != clusterbootstrap.MembershipQuorumProofVersion || o.Quorum == nil || o.Quorum.ClusterID != 100 || o.Quorum.MemberID != o.Membership.LocalID {
+				t.Fatal("missing exact local quorum proof")
+			}
+		}
+		return recoveryProgressSQLPoolAvailable(ctx, f)
+	})
+	if err != nil || !consumed || n.posts.Load() != 12 {
+		t.Fatal("original controller quorum scope", err, consumed, n.posts.Load())
+	}
+	if escaped.Inputs(ctx) == nil || escaped.Authority(ctx) == nil || n.posts.Load() != 12 {
+		t.Fatal("closed proof revived")
+	}
+	after, err := preparedCohortSQLState(ctx, f)
+	if err != nil || before != after || f.c.store.db.Stats().InUse != 0 || n.active.Load() != 0 {
+		t.Fatal("proof mutated SQL or retained resources", err)
+	}
+}
+
 func TestClusterSSHPreparedMembershipScopePostgresCustody(t *testing.T) {
 	for _, mode := range []string{"pair", "replacement", "explicit refresh", "old capability", "listener-only producer", "listener-only receipt", "final listener-only producer", "final listener-only receipt", "native read failure", "payload drift", "credential expiry", "controller expiry", "heartbeat expiry", "source row drift", "target row drift", "ignored authority failure", "expiry during cleanup", "cancel during cleanup", "request expiry during cleanup", "client expiry during cleanup"} {
 		t.Run(mode, func(t *testing.T) { exercisePreparedMembershipScopeSQL(t, mode) })

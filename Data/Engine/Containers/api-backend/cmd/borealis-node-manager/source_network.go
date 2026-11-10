@@ -77,6 +77,20 @@ func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path s
 	if client == nil || !strings.HasPrefix(base, "https://") {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	if err != nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	request.Header.Set("Accept", "application/json")
+	return sourceNetworkHTTPRequest(client, request, 128<<10)
+}
+
+// Shared bounded response lifetime; callers construct their own fixed requests.
+func sourceNetworkHTTPRequest(client *http.Client, request *http.Request, maximum int64) (raw []byte, resultErr error) {
+	if client == nil || request == nil || request.URL == nil || request.URL.Scheme != "https" || maximum < 1 || maximum > 128<<10 {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	ctx := request.Context()
 	copyClient := *client
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	transport := client.Transport
@@ -84,11 +98,6 @@ func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path s
 		transport = http.DefaultTransport
 	}
 	copyClient.Transport = sourceNetworkResponseTransport{transport}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
-	if err != nil {
-		return nil, clusterbootstrap.ErrPreparationConfig
-	}
-	request.Header.Set("Accept", "application/json")
 	response, err := copyClient.Do(request)
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
@@ -102,8 +111,8 @@ func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path s
 	if response.StatusCode != http.StatusOK {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	raw, err = io.ReadAll(io.LimitReader(response.Body, (128<<10)+1))
-	if err != nil || ctx.Err() != nil || len(raw) == 0 || len(raw) > 128<<10 {
+	raw, err = io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if err != nil || ctx.Err() != nil || len(raw) == 0 || int64(len(raw)) > maximum {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	return raw, nil

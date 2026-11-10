@@ -28,7 +28,7 @@ func TestClusterSSHPrejoinCohortWorkerPostgres(t *testing.T) {
 						return nil, errClusterConflict
 					}
 					authority = a
-					expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+					expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", a.payload)
 					if err != nil {
 						return nil, err
 					}

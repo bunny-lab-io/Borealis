@@ -4,6 +4,7 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,8 @@ type clusterSSHPreparationTargetCPU struct {
 type clusterSSHPreparationCleanObservation struct {
 	Digest  string                           `json:"digest"`
 	Targets []clusterSSHPreparationTargetCPU `json:"targets"`
+	// Private adjacent capacity projection; never supplied by the clean broker.
+	Capacity *clusterSSHPreparationCapacityProjection `json:"-"`
 }
 
 type clusterSSHPreparationTargetsRead func(context.Context, string) (clusterSSHPreparationCleanObservation, error)
@@ -86,7 +89,7 @@ func (o clusterSSHPreparationCleanObservation) validate(snapshot clusterSSHPrepa
 }
 
 func validateClusterSSHPreparationReadinessCPU(r clusterSSHPreparationReadinessReceipt, a clusterSSHPreparationAuthorization) error {
-	if r.Version != 2 || len(r.Targets) != len(a.Targets) || len(r.Targets) < 1 || len(r.Targets) > 2 || len(r.Checks) != 6 {
+	if (r.Version != 2 && r.Version != 3) || len(r.Targets) != len(a.Targets) || len(r.Targets) < 1 || len(r.Targets) > 2 || len(r.Checks) != 6 {
 		return errClusterConflict
 	}
 	for i, target := range r.Targets {
@@ -100,6 +103,18 @@ func validateClusterSSHPreparationReadinessCPU(r clusterSSHPreparationReadinessR
 	}{"preparation-clean-targets-v3", r.PlanSHA256, r.Targets})
 	if err != nil || digest != r.Checks[1].SHA256 {
 		return errClusterConflict
+	}
+	if r.Version == 2 && r.Capacity != nil {
+		return errClusterConflict
+	}
+	if r.Version == 3 {
+		if r.Capacity == nil || r.Capacity.CleanSHA256 != r.Checks[1].SHA256 || r.Capacity.ConfigurationSHA256 != r.Checks[4].SHA256 {
+			return errClusterConflict
+		}
+		capacity, err := r.Capacity.digest(r.PlanSHA256, r.Targets)
+		if err != nil || capacity != r.Checks[2].SHA256 {
+			return errClusterConflict
+		}
 	}
 	return nil
 }
@@ -116,11 +131,17 @@ func withClusterSSHPreparationCPUApprovalProof(ctx context.Context, snapshot clu
 	}
 	return withClusterSSHPreparationApprovalProof(ctx, plan, gates, source, func(ctx context.Context, proof clusterSSHPreparationApprovalProof) error {
 		observed, err := read(ctx, plan)
-		if err != nil || observed.validate(snapshot) != nil || observed.Digest != proof.receipts[1] {
+		if err != nil || observed.validate(snapshot) != nil || observed.Digest != proof.receipts[1] || observed.Capacity == nil {
+			return errClusterConflict
+		}
+		capacity := observed.Capacity.clone()
+		capacityDigest, err := capacity.digest(plan, observed.Targets)
+		if err != nil || capacityDigest != proof.receipts[2] || capacity.CleanSHA256 != proof.receipts[1] || capacity.ConfigurationSHA256 != proof.receipts[4] {
 			return errClusterConflict
 		}
 		retained := slices.Clone(observed.Targets)
 		proof.targetCPU = slices.Clone(retained)
+		proof.capacity = &capacity
 		original := proof.recheck
 		var failed atomic.Bool
 		proof.recheck = func(ctx context.Context) error {
@@ -129,7 +150,8 @@ func withClusterSSHPreparationCPUApprovalProof(ctx context.Context, snapshot clu
 				return errClusterConflict
 			}
 			fresh, err := read(ctx, plan)
-			if err != nil || fresh.validate(snapshot) != nil || fresh.Digest != proof.receipts[1] || !slices.Equal(fresh.Targets, retained) {
+			if err != nil || fresh.validate(snapshot) != nil || fresh.Digest != proof.receipts[1] || !slices.Equal(fresh.Targets, retained) ||
+				fresh.Capacity == nil || !reflect.DeepEqual(*fresh.Capacity, capacity) {
 				failed.Store(true)
 				return errClusterConflict
 			}

@@ -511,7 +511,7 @@ func TestMembershipObservationLocalEtcdProofContract(t *testing.T) {
 				t.Fatal("capability request lost identity", err, err2)
 			}
 			requestRaw, _ := base64.RawStdEncoding.DecodeString(encoded)
-			for _, field := range []string{`"requiredlistenerproofversion":2`, `"RequiredListenerProofVersion":0`, `"RequiredListenerProofVersion":1`, `"RequiredListenerProofVersion":3`, `"RequiredListenerProofVersion":256`, `"RequiredListenerProofVersion":-1`, `"RequiredListenerProofVersion":2.0`, `"RequiredListenerProofVersion":null`, `"RequiredListenerProofVersion":"2"`, `"RequiredListenerProofVersion":true`, `"RequiredListenerProofVersion":2,"RequiredListenerProofVersion":2`} {
+			for _, field := range []string{`"requiredlistenerproofversion":2`, `"RequiredListenerProofVersion":0`, `"RequiredListenerProofVersion":1`, `"RequiredListenerProofVersion":4`, `"RequiredListenerProofVersion":256`, `"RequiredListenerProofVersion":-1`, `"RequiredListenerProofVersion":2.0`, `"RequiredListenerProofVersion":null`, `"RequiredListenerProofVersion":"2"`, `"RequiredListenerProofVersion":true`, `"RequiredListenerProofVersion":2,"RequiredListenerProofVersion":2`} {
 				bad := bytes.Replace(requestRaw, []byte(`"RequiredListenerProofVersion":2`), []byte(field), 1)
 				if bytes.Equal(bad, requestRaw) {
 					t.Fatal("request mutation absent")
@@ -560,5 +560,66 @@ func TestMembershipObservationLocalEtcdProofContract(t *testing.T) {
 			}
 			t.Logf("request=%d result=%d receipt=%d", len(encoded), len(result), len(receipt))
 		})
+	}
+}
+
+func TestMembershipObservationQuorumProofContract(t *testing.T) {
+	for _, longest := range []bool{false, true} {
+		r, o := membershipProtocolFixture(t, longest)
+		r.RequireListenerProof, r.RequiredListenerProofVersion = true, MembershipQuorumProofVersion
+		o.ListenerProofVersion, o.RequestSHA256 = MembershipQuorumProofVersion, r.SHA256()
+		o.Quorum = &MembershipQuorumRead{ClusterID: math.MaxUint64, MemberID: o.Membership.LocalID}
+		encoded, err := EncodeMembershipObservationRequest(r)
+		decoded, err2 := DecodeMembershipObservationRequest(encoded)
+		if err != nil || err2 != nil || !reflect.DeepEqual(decoded, r) {
+			t.Fatal("quorum request", err, err2)
+		}
+		result, err := EncodeMembershipObservationResult(o, r)
+		raw, _ := json.Marshal(map[string]any{"ok": true, "verb": "InspectSourceMembership", "result": map[string]any{"membership_observation": result}})
+		receipt, err2 := NewMembershipObservationReceipt(raw, r, r.Source.ClusterID, r.Source.SourceID, r.Source.SourceUID)
+		got, err3 := ParseMembershipObservationReceipt(receipt, r, r.Source.ClusterID, r.Source.SourceID, r.Source.SourceUID)
+		if err != nil || err2 != nil || err3 != nil || !reflect.DeepEqual(got, o) || !bytes.Contains(receipt, []byte(`"version":4`)) {
+			t.Fatal("quorum receipt", err, err2, err3, len(receipt))
+		}
+		t.Logf("quorum receipt bytes=%d", len(receipt))
+		for _, version := range []uint8{0, 1, 2} {
+			older := r
+			older.RequiredListenerProofVersion = version
+			if version == 0 {
+				older.RequireListenerProof = false
+			}
+			if older.SHA256() == r.SHA256() || o.Valid(older) {
+				t.Fatal("new proof crossed old request")
+			}
+			stale := o
+			stale.ListenerProofVersion = version
+			if stale.Valid(r) {
+				t.Fatal("old marker gained quorum proof")
+			}
+			stale = o
+			stale.Quorum = nil
+			if stale.Valid(r) {
+				t.Fatal("missing quorum accepted")
+			}
+		}
+		for _, proof := range []*MembershipQuorumRead{nil, {}, {ClusterID: 1}, {ClusterID: 1, MemberID: o.Membership.LocalID - 1}} {
+			bad := o
+			bad.Quorum = proof
+			if bad.Valid(r) {
+				t.Fatal("foreign/missing responder accepted")
+			}
+		}
+		for _, field := range []string{`"Quorum":null`, `"quorum":{"ClusterID":1,"MemberID":1}`, `"Quorum":{"ClusterID":1,"MemberID":1,"extra":true}`, `"Quorum":{"ClusterID":1,"ClusterID":2,"MemberID":1}`} {
+			rawResult, _ := json.Marshal(o)
+			start := bytes.Index(rawResult, []byte(`"Quorum":`))
+			bad := append(bytes.Clone(rawResult[:start]), []byte(field+"}")...)
+			if _, err := decodeMembershipObservationResult(base64.RawStdEncoding.EncodeToString(bad), r); err == nil {
+				t.Fatal("malformed quorum accepted", field)
+			}
+		}
+		r.RequireListenerProof = false
+		if r.Valid() {
+			t.Fatal("quorum without listener custody")
+		}
 	}
 }

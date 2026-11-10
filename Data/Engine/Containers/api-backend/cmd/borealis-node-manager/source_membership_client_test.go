@@ -40,6 +40,10 @@ func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationReque
 			result.Membership.LocalID = id
 		}
 	}
+	if r.RequiredListenerProofVersion == clusterbootstrap.MembershipQuorumProofVersion {
+		result.ListenerProofVersion = clusterbootstrap.MembershipQuorumProofVersion
+		result.Quorum = &clusterbootstrap.MembershipQuorumRead{ClusterID: 100, MemberID: result.Membership.LocalID}
+	}
 	slices.SortFunc(result.Membership.Members, func(a, b clusterbootstrap.K3sEtcdMember) int { return strings.Compare(a.Address, b.Address) })
 	return result
 }
@@ -75,12 +79,16 @@ func TestSourceMembershipClientLocalEtcdProofCleanup(t *testing.T) {
 	exerciseSourceMembershipClientProofCleanup(t, clusterbootstrap.MembershipLocalEtcdProofVersion)
 }
 
+func TestSourceMembershipClientQuorumProofCleanup(t *testing.T) {
+	exerciseSourceMembershipClientProofCleanup(t, clusterbootstrap.MembershipQuorumProofVersion)
+}
+
 func exerciseSourceMembershipClientProofCleanup(t *testing.T, proof uint8) {
 	for _, mode := range []string{"success", "old producer", "close error", "cancel during close", "blocked close success", "status failure cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			r := clusterbootstrap.MembershipObservationRequest(membershipObserverRequestFixture(t, true, 1))
 			r.RequireListenerProof = true
-			if proof == clusterbootstrap.MembershipLocalEtcdProofVersion {
+			if proof == clusterbootstrap.MembershipLocalEtcdProofVersion || proof == clusterbootstrap.MembershipQuorumProofVersion {
 				r.RequiredListenerProofVersion = proof
 			}
 			payload, err := clusterbootstrap.EncodeMembershipObservationRequest(r)

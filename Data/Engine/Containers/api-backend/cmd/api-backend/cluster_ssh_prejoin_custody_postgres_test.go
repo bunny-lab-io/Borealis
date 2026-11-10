@@ -107,7 +107,7 @@ func TestClusterSSHPrejoinCustodyPostgresAuthorityAndPoolRelease(t *testing.T) {
 				if f.c.store.db.Stats().InUse != 0 || !material.Equal(want) {
 					t.Fatal("material or connection custody failed")
 				}
-				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", a.payload)
 				if err != nil {
 					t.Fatal(err)
 				}

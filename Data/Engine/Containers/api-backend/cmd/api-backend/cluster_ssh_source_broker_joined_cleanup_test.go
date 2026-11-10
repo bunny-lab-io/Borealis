@@ -21,7 +21,7 @@ func TestClusterSSHSourceBrokerJoinedStopsPeerAfterFailedClose(t *testing.T) {
 	calls := 0
 	client.httpClient.Transport = bootstrapRoundTripper(func(r *http.Request) (*http.Response, error) {
 		calls++
-		wire, err := sealClusterSSHSourceBroker(client.responseCipher, clusterSSHSourceBrokerResponse{Version: 54, ID: request.ID, Joined: true, Status: "not_owner"})
+		wire, err := sealClusterSSHSourceBroker(client.responseCipher, clusterSSHSourceBrokerResponse{Version: 55, ID: request.ID, Joined: true, Status: "not_owner"})
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +96,7 @@ func TestClusterSSHSourceBrokerJoinedCleanup(t *testing.T) {
 						if err != nil {
 							return nil, err
 						}
-						wire, err = sealClusterSSHSourceBroker(client.responseCipher, clusterSSHSourceBrokerResponse{Version: 54, ID: input.ID, Joined: true, Status: "joined_nodes_ok", Targets: &proof})
+						wire, err = sealClusterSSHSourceBroker(client.responseCipher, clusterSSHSourceBrokerResponse{Version: 55, ID: input.ID, Joined: true, Status: "joined_nodes_ok", Targets: &proof})
 						if err != nil {
 							return nil, err
 						}

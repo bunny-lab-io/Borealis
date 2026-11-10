@@ -58,7 +58,7 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 		return clusterSSHPreparedCohortMembershipObservation{}, errClusterConflict
 	}
 	if parent.Err() != nil || holder == "" || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != holder || read == nil || jobIDs[0] == nil || jobIDs[1] == nil || jobIDs[2] == nil ||
-		requiredProof != 0 && requiredProof != clusterbootstrap.MembershipLocalEtcdProofVersion {
+		requiredProof != 0 && requiredProof != clusterbootstrap.MembershipLocalEtcdProofVersion && requiredProof != clusterbootstrap.MembershipQuorumProofVersion {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
@@ -169,6 +169,10 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 		if err != nil || !cleanup.clean() || !o.Valid(request) || !retainClusterSSHMembershipJob(jobIDs, receipt.Nonce, receipt.JobUID, receipt.PodUID) ||
 			uids[o.LocalNode.NodeUID] || localIDs[o.Membership.LocalID] ||
 			len(views) > 0 && !reflect.DeepEqual(views[0].Observation.Membership.Members, o.Membership.Members) {
+			return fail()
+		}
+		if requiredProof == clusterbootstrap.MembershipQuorumProofVersion &&
+			(o.Quorum == nil || len(views) > 0 && o.Quorum.ClusterID != views[0].Observation.Quorum.ClusterID) {
 			return fail()
 		}
 		uids[o.LocalNode.NodeUID], localIDs[o.Membership.LocalID] = true, true

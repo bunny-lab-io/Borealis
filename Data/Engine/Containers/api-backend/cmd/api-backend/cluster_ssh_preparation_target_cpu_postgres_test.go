@@ -7,7 +7,7 @@ import (
 )
 
 func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
-	for _, mode := range []string{"fresh", "missing projection", "changed CPU", "changed clean digest", "changed target"} {
+	for _, mode := range []string{"fresh", "missing projection", "changed CPU", "changed clean digest", "changed target", "missing capacity", "changed capacity", "changed demand receipt"} {
 		t.Run(mode, func(t *testing.T) {
 			f, snapshot, confirmation, proof := newSSHPreparationApprovalFixture(t, false)
 			switch mode {
@@ -19,6 +19,12 @@ func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
 				proof.receipts[1] = strings.Repeat("f", 64)
 			case "changed target":
 				proof.targetCPU[0].TargetID = newClusterUUID()
+			case "missing capacity":
+				proof.capacity = nil
+			case "changed capacity":
+				proof.capacity.Targets[0].Capacity.LonghornCPU.OverrideMilli++
+			case "changed demand receipt":
+				proof.capacity.CensusSHA256 = strings.Repeat("f", 64)
 			}
 			err := f.c.commitClusterSSHPreparationApproval(f.ctx, snapshot, confirmation, proof)
 			if (err == nil) != (mode == "fresh") {
@@ -42,7 +48,7 @@ func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
 				t.Fatal("readiness missing")
 			}
 			var readiness clusterSSHPreparationReadinessReceipt
-			if json.Unmarshal(raw, &readiness) != nil || readiness.Version != 2 || len(readiness.Targets) != 2 {
+			if json.Unmarshal(raw, &readiness) != nil || readiness.Version != 3 || len(readiness.Targets) != 2 {
 				t.Fatal("typed CPU not committed atomically")
 			}
 			f.op.State, f.op.CurrentStep = "running", clusterSSHPreparationOperationStep

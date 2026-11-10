@@ -18,6 +18,31 @@ type PreparationPlan struct {
 	PeerAddresses, TargetAddresses        []string
 }
 
+// PreparationPlanProfileLimits projects the same inherited profile used after
+// claim, without inventing a future worker identity. These are workload bounds;
+// target hardware, infrastructure and resident/overlap demand remain required.
+func PreparationPlanProfileLimits(plan PreparationPlan, runtime map[string]string) (PreparationSizing, []PreparationApplicationLimit, PreparationWorkerLimits, error) {
+	fail := func() (PreparationSizing, []PreparationApplicationLimit, PreparationWorkerLimits, error) {
+		return PreparationSizing{}, nil, PreparationWorkerLimits{}, ErrPreparationConfig
+	}
+	if _, err := PreparationPlanConfigurationDigest(plan, runtime); err != nil {
+		return fail()
+	}
+	sizing, err := preparationSizingFromRuntime(runtime)
+	if err != nil {
+		return fail()
+	}
+	applications, err := preparationProfileApplicationLimits(sizing, runtime)
+	if err != nil {
+		return fail()
+	}
+	workers, err := preparationProfileWorkerLimits(runtime)
+	if err != nil {
+		return fail()
+	}
+	return sizing, applications, workers, nil
+}
+
 // PreparationPlanConfigurationDigest validates current source settings and
 // the whole planned network. Private runtime values remain local. The digest
 // is an equality receipt, never a substitute for fresh source authority or the
