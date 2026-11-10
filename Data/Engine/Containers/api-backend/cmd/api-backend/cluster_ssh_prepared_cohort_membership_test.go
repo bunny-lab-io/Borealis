@@ -23,6 +23,9 @@ func sshCohortMembershipResultFixture(request clusterbootstrap.MembershipObserva
 	if request.RequireListenerProof {
 		result.ListenerProofVersion = clusterbootstrap.MembershipListenerProofVersion
 	}
+	if request.RequiredListenerProofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion {
+		result.ListenerProofVersion = clusterbootstrap.MembershipLocalEtcdProofVersion
+	}
 	for _, expected := range request.Nodes {
 		if expected.Node.NodeUID == request.ObserverUID() {
 			result.LocalNode = expected.Node
@@ -60,6 +63,10 @@ func sshCohortMembershipPod(t *testing.T, job map[string]any, request clusterboo
 // Simulate an older installed daemon despite a current immutable Job client.
 // Retain the new request digest and all identities: only proof/version differs.
 func stripCohortMembershipListenerProof(t *testing.T, pod map[string]any) {
+	replaceCohortMembershipProof(t, pod, 0, 0)
+}
+
+func replaceCohortMembershipProof(t *testing.T, pod map[string]any, proof uint8, version int) {
 	t.Helper()
 	status := anySlice(sourceActionMap(pod, "status")["containerStatuses"])[0].(map[string]any)
 	terminated := sourceActionMap(sourceActionMap(status, "state"), "terminated")
@@ -75,7 +82,10 @@ func stripCohortMembershipListenerProof(t *testing.T, pod map[string]any) {
 	if json.Unmarshal([]byte(terminated["message"].(string)), &receipt) != nil {
 		t.Fatal("invalid receipt fixture")
 	}
-	receipt.Observation.ListenerProofVersion = 0
+	receipt.Observation.ListenerProofVersion = proof
+	if version != 0 {
+		receipt.Version = version
+	}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +264,7 @@ func TestClusterSSHPreparedCohortMembership(t *testing.T) {
 				if posts%2 == 0 {
 					container := anySlice(sourceActionMap(sourceActionMap(sourceActionMap(job, "spec"), "template"), "spec")["containers"])[0].(map[string]any)
 					request, err := clusterbootstrap.DecodeMembershipObservationRequest(clusterStringSlice(container["args"])[1])
-					if err != nil || !request.RequireListenerProof || request.Source != originalSource || request.Observer == nil || request.ObserverUID() != network.NodeUID || request.Network != network || !reflect.DeepEqual(request.OriginalSourceNodeUIDs, roster) || len(request.Prepared) != len(a.Cohort.Targets) {
+					if err != nil || !request.RequireListenerProof || request.RequiredListenerProofVersion != 0 || request.Source != originalSource || request.Observer == nil || request.ObserverUID() != network.NodeUID || request.Network != network || !reflect.DeepEqual(request.OriginalSourceNodeUIDs, roster) || len(request.Prepared) != len(a.Cohort.Targets) {
 						t.Error("lost original source, complete partition or observer binding", err)
 						w.WriteHeader(500)
 						return
@@ -480,7 +490,7 @@ func TestClusterSSHPreparedCohortMembershipCloseExpiry(t *testing.T) {
 			a, authority, targets := sshMembershipAuthorityFixture(t, false)
 			authority.payload, authority.baseline, authority.queue.ClusterID = `{"settled":"cleanup"}`, a.Baseline, a.Source.ClusterID
 			op := clusterControllerOperation{ID: a.Lease.OperationID, Kind: "ssh_onboarding", State: "running", CurrentStep: clusterSSHPreparationOperationStep, Attempt: a.Lease.OperationAttempt}
-			n := newPreparedMembershipScopeNative(t, a, authority, targets, "")
+			n := newPreparedMembershipNativeForProof(t, a, authority, targets, "", 0)
 			client := n.runner.kube.httpClient
 			transport := client.Transport
 			client.Timeout = 7 * time.Second

@@ -107,7 +107,7 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 			defer server.Close()
 			payload := bytes.Repeat([]byte("bounded authenticated artifact transport"), 80000)
 			want := sha256.Sum256(payload)
-			var verified, received atomic.Bool
+			var verified, received, partialSent, partialReceived, revoked, producerExited atomic.Bool
 			result := make(chan error, 1)
 			go func() {
 				result <- servePreparationSessionProfile(ctx, server, server, r.Session.Nonce,
@@ -117,7 +117,19 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 							return PreparationProgress{}, ErrSessionProtocol
 						}
 						h := sha256.New()
-						n, err := io.Copy(h, in)
+						var n int64
+						if mode == "authority loss" {
+							prefix := make([]byte, profile.chunk)
+							read, err := io.ReadFull(in, prefix)
+							if err != nil || read != len(prefix) {
+								return PreparationProgress{}, ErrSessionProtocol
+							}
+							n = int64(read)
+							_, _ = h.Write(prefix)
+							partialReceived.Store(true)
+						}
+						more, err := io.Copy(h, in)
+						n += more
 						if err != nil || n != int64(len(payload)) || !bytes.Equal(h.Sum(nil), want[:]) {
 							return PreparationProgress{}, ErrSessionProtocol
 						}
@@ -129,24 +141,37 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 					}, func(time.Time) error { return nil }, sessionTiming{50 * time.Millisecond, 2 * time.Second, time.Second}, profile)
 			}()
 			var produced atomic.Bool
-			err := ExchangePreparationSession(ctx, client, client, r, func(_ context.Context, out io.Writer) error {
+			err := ExchangePreparationSession(ctx, client, client, r, func(producerCtx context.Context, out io.Writer) error {
 				if !verified.Load() {
 					return ErrSessionProtocol
 				}
 				produced.Store(true)
+				defer producerExited.Store(true)
+				if mode == "authority loss" {
+					n, err := out.Write(payload[:profile.chunk])
+					if err != nil || n != profile.chunk {
+						return ErrSessionProtocol
+					}
+					partialSent.Store(true)
+					<-producerCtx.Done()
+					return producerCtx.Err()
+				}
 				_, err := io.Copy(out, bytes.NewReader(payload))
 				return err
 			}, func(context.Context) error {
-				// Revoke at first post-verification boundary. Waiting until the
-				// producer fills its pipe can let receiver finish before sender's
-				// final authority check, making server outcome scheduler-dependent.
-				if mode == "authority loss" && verified.Load() {
+				// Hold the producer after one observed chunk so the next challenge
+				// revokes authority during transfer, before receiver completion.
+				if mode == "authority loss" && partialReceived.Load() {
+					revoked.Store(true)
 					_ = client.Close()
 					return ErrSessionAuthority
 				}
 				return nil
 			})
 			serverErr := <-result
+			if mode == "authority loss" && (!revoked.Load() || !partialSent.Load() || !partialReceived.Load() || !producerExited.Load() || received.Load()) {
+				t.Fatalf("authority loss did not revoke partial transfer before joined completion: revoked=%v sent=%v received=%v exited=%v complete=%v", revoked.Load(), partialSent.Load(), partialReceived.Load(), producerExited.Load(), received.Load())
+			}
 			if (err == nil) != (mode == "complete") || (serverErr == nil) != (mode == "complete") {
 				t.Fatal("wrong session outcome", err, serverErr)
 			}

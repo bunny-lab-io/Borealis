@@ -73,12 +73,17 @@ func (m *manager) inspectSourceNetwork(ctx context.Context) (map[string]any, err
 	return map[string]any{"source_network": observed}, nil
 }
 
-func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path string) ([]byte, error) {
+func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path string) (raw []byte, resultErr error) {
 	if client == nil || !strings.HasPrefix(base, "https://") {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	copyClient := *client
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	copyClient.Transport = sourceNetworkResponseTransport{transport}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
@@ -88,15 +93,46 @@ func sourceNetworkHTTPGet(ctx context.Context, client *http.Client, base, path s
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	defer response.Body.Close()
+	defer func() {
+		if response.Body.Close() != nil || ctx.Err() != nil {
+			clear(raw)
+			raw, resultErr = nil, clusterbootstrap.ErrPreparationConfig
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, (128<<10)+1))
+	raw, err = io.ReadAll(io.LimitReader(response.Body, (128<<10)+1))
 	if err != nil || ctx.Err() != nil || len(raw) == 0 || len(raw) > 128<<10 {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	return raw, nil
+}
+
+// http.Client may impose a shorter request timeout than the native scope.
+// Capture that actual transport context and check it inside owned Close,
+// before Client's outer cancelTimerBody cancels a healthy completed request.
+// The copied client neither mutates nor closes the borrowed transport.
+type sourceNetworkResponseTransport struct{ http.RoundTripper }
+
+func (t sourceNetworkResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.RoundTripper.RoundTrip(request)
+	if response != nil && response.Body != nil {
+		response.Body = &sourceNetworkResponseBody{ReadCloser: response.Body, ctx: request.Context()}
+	}
+	return response, err
+}
+
+type sourceNetworkResponseBody struct {
+	io.ReadCloser
+	ctx context.Context
+}
+
+func (b *sourceNetworkResponseBody) Close() error {
+	if err := b.ReadCloser.Close(); err != nil || b.ctx.Err() != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return nil
 }
 
 func observeSourceNetwork(ctx context.Context, name string, identity func() (string, string, error), get func(context.Context, string) ([]byte, error), linkRead func(context.Context, string) (clusterbootstrap.ManagementLink, error), kubeletRead func(context.Context) (clusterbootstrap.SourceKubelet, error)) (clusterbootstrap.SourceNetwork, error) {

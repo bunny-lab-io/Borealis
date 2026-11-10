@@ -5,9 +5,75 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestPreparationRuntimeSourcePrivateOperatorURL(t *testing.T) {
+	base, _ := json.Marshal(sourceRuntimeFixture())
+	baseline, err := ParsePreparationRuntimeSecret(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(PreparationRuntimeKeys(), "BOREALIS_OPERATOR_BASE_URL") {
+		t.Fatal("private URL became bootstrap setting")
+	}
+	for _, mode := range []string{"valid", "absent", "null", "number", "bad base64", "newline", "non UTF8", "empty", "oversize"} {
+		t.Run(mode, func(t *testing.T) {
+			object := sourceRuntimeFixture()
+			data := object["data"].(map[string]any)
+			url := " http://borealis-operator.borealis.svc:8050/ "
+			data["BOREALIS_OPERATOR_BASE_URL"] = base64.StdEncoding.EncodeToString([]byte(url))
+			switch mode {
+			case "absent":
+				delete(data, "BOREALIS_OPERATOR_BASE_URL")
+			case "null":
+				data["BOREALIS_OPERATOR_BASE_URL"] = nil
+			case "number":
+				data["BOREALIS_OPERATOR_BASE_URL"] = 7
+			case "bad base64":
+				data["BOREALIS_OPERATOR_BASE_URL"] = "!"
+			case "newline":
+				data["BOREALIS_OPERATOR_BASE_URL"] = "YQ==\n"
+			case "non UTF8":
+				data["BOREALIS_OPERATOR_BASE_URL"] = "/w=="
+			case "empty":
+				data["BOREALIS_OPERATOR_BASE_URL"] = ""
+			case "oversize":
+				data["BOREALIS_OPERATOR_BASE_URL"] = strings.Repeat("YQ==", MaxPreparationConfigBytes)
+			}
+			raw, _ := json.Marshal(object)
+			secret, err := ParsePreparationRuntimeSecret(raw)
+			if err != nil || !reflect.DeepEqual(secret.Settings(), baseline.Settings()) {
+				t.Fatal("optional URL changed original parse/settings contract", err)
+			}
+			got, err := secret.OperatorBaseURL()
+			if (err == nil) != (mode == "valid") || (err == nil && got != url) {
+				t.Fatal("wrong private extraction outcome")
+			}
+			if baseline.SameObservation(secret) != (mode == "absent") {
+				t.Fatal("full Secret receipt ignored optional data")
+			}
+			if _, err := json.Marshal(secret); err == nil {
+				t.Fatal("private URL serialized")
+			}
+			// Extraction owns bytes; neither caller buffer nor returned settings alias it.
+			for i := range raw {
+				raw[i] = 0
+			}
+			if mode == "valid" {
+				if again, err := secret.OperatorBaseURL(); err != nil || again != url {
+					t.Fatal("URL aliases caller bytes")
+				}
+			}
+		})
+	}
+	if _, err := (PreparationRuntimeSecret{}).OperatorBaseURL(); err == nil {
+		t.Fatal("zero source accepted")
+	}
+}
 
 func sourceRuntimeFixture() map[string]any {
 	_, settings := preparationFixture()

@@ -22,6 +22,11 @@ const MembershipObservationResponseLimit = 4096
 // proof of quorum/admission. Only the opt-in contract may carry this value.
 const MembershipListenerProofVersion uint8 = 1
 
+// Distinct native capability: both fixed loopback listeners belong to the
+// measured K3s process. Pinned routing supplies local embedded read attribution,
+// never a response Header.MemberID, continuous quorum or admission authority.
+const MembershipLocalEtcdProofVersion uint8 = 2
+
 func membershipCanonical(raw []byte, maximum int, out any) error {
 	if _, err := sourceJSONObject(raw, maximum); err != nil || json.Unmarshal(raw, out) != nil {
 		return ErrPreparationConfig
@@ -74,6 +79,12 @@ func (r MembershipObservationRequest) SHA256() string {
 			domain = "settled-cohort-membership-listener-observation-v1"
 		}
 	}
+	if r.RequiredListenerProofVersion == MembershipLocalEtcdProofVersion {
+		domain = "original-source-membership-local-etcd-observation-v1"
+		if r.Observer != nil {
+			domain = "settled-cohort-membership-local-etcd-observation-v1"
+		}
+	}
 	raw, err := json.Marshal(struct {
 		Domain  string
 		Request MembershipObservationRequest
@@ -105,6 +116,9 @@ func (o MembershipObservation) Valid(request MembershipObservationRequest) bool 
 	wantProof := uint8(0)
 	if request.RequireListenerProof {
 		wantProof = MembershipListenerProofVersion
+	}
+	if request.RequiredListenerProofVersion == MembershipLocalEtcdProofVersion {
+		wantProof = MembershipLocalEtcdProofVersion
 	}
 	if o.ListenerProofVersion != wantProof {
 		return false
@@ -239,6 +253,10 @@ type MembershipObservationRequest struct {
 	// Explicit opt-in preserves legacy wire bytes and digest domains. A new
 	// request cannot promote a legacy producer's membership-only response.
 	RequireListenerProof bool `json:",omitempty"`
+	// Zero preserves both historical contracts exactly. Version2 explicitly
+	// requests measured6443+2379 custody; an installed marker1 producer cannot
+	// satisfy this request even when it echoes the current request digest.
+	RequiredListenerProofVersion uint8 `json:",omitempty"`
 }
 
 // One selected endpoint's current complete view. This is not independent agreement
@@ -253,6 +271,9 @@ type MembershipObservation struct {
 }
 
 func (r MembershipObservationRequest) receiptVersion() int {
+	if r.RequiredListenerProofVersion == MembershipLocalEtcdProofVersion {
+		return 3
+	}
 	if r.RequireListenerProof {
 		return 2
 	}
@@ -274,6 +295,9 @@ func (MembershipObservationRequest) GoString() string {
 }
 
 func (r MembershipObservationRequest) Valid() bool {
+	if r.RequiredListenerProofVersion != 0 && (r.RequiredListenerProofVersion != MembershipLocalEtcdProofVersion || !r.RequireListenerProof) {
+		return false
+	}
 	uuid := func(value string) bool {
 		return sessionUUID.MatchString(value) && value != "00000000-0000-0000-0000-000000000000"
 	}

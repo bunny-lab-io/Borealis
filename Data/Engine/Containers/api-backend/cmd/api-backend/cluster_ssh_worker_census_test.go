@@ -2,10 +2,140 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
+	"encoding/json"
+	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
+
+func sshCustodyRouteRow(t *testing.T, pod, service map[string]any, previous string) clusterSSHCurrentWorkerRouteRow {
+	t.Helper()
+	meta, spec := clusterSSHStorageMap(pod, "metadata"), clusterSSHStorageMap(pod, "spec")
+	labels := clusterSSHStorageMap(meta, "labels")
+	site, siteErr := strconv.ParseInt(clusterSSHStorageText(labels, "borealis.io/site-id"), 10, 64)
+	if siteErr != nil {
+		t.Fatal(siteErr)
+	}
+	guid, name, uid, node := clusterSSHStorageText(labels, "borealis.io/worker-guid"), clusterSSHStorageText(meta, "name"), clusterSSHStorageText(meta, "uid"), clusterSSHStorageText(spec, "nodeName")
+	host := clusterSSHStorageText(clusterSSHStorageMap(service, "spec"), "clusterIP")
+	metadata := schedulerWorkerRouteMetadataForHost(guid, host, 56001, 61001, "borealis-operator")
+	metadata[schedulerWorkerPlacementKey] = schedulerWorkerPlacement(map[string]any{"worker_guid": guid, "site_id": site, "uid": uid, "name": name, "node_name": node})
+	route := schedulerBuildRoute(guid, name, site, 56001, metadata)
+	merged, generation, err := schedulerMergeAdmissionMetadata(previous, route.Metadata, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := func(v string) sql.NullString { return sql.NullString{String: v, Valid: true} }
+	number := func(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: true} }
+	return clusterSSHCurrentWorkerRouteRow{Worker: text(guid), WorkerPod: text(name), WorkerSite: number(site), WorkerStatus: text(schedulerWorkerStatusRunning),
+		RouteWorker: text(guid), RoutePod: text(name), RouteSite: number(site), RouteStatus: text(schedulerRouteStatusActive), Generation: number(generation),
+		Scheme: text(route.UpstreamScheme), Host: text(route.UpstreamHost), Port: number(route.UpstreamPort), Metadata: text(string(raw))}
+}
+
+func TestClusterSSHCurrentWorkerRouteProducerProjection(t *testing.T) {
+	t.Setenv("BOREALIS_DEPLOYMENT_PROFILE_RANK", "2")
+	t.Setenv("BOREALIS_CLUSTER_SIZING_RANK", "2")
+	pod, service := operatorInventoryFixture(t, false)
+	// Nonempty old-incarnation ledger remains byte-retained history. It neither
+	// grants current custody nor makes valid current placement unavailable.
+	previous := `{"worker_admission":{"version":1,"operations":{"old":{"pod_uid":"old-incarnation","state":"terminal"}}}}`
+	baseline := sshCustodyRouteRow(t, pod, service, previous)
+	want, ok := clusterSSHCurrentWorkerRouteFromRow(baseline)
+	if !ok || want.Generation != 1 || want.ProfileRank != 2 || want.PodUID != clusterSSHStorageMap(pod, "metadata")["uid"] {
+		t.Fatal("actual placement/route producer rejected")
+	}
+	for _, mode := range []string{"success", "idle", "starting", "missing worker", "missing route", "terminal worker", "retired route", "old generation", "old Pod", "wrong site", "wrong GUID", "wrong host", "wrong port", "bad JSON", "duplicate placement", "duplicate field", "trailing", "null placement", "unknown placement field", "fractional rank", "exponent generation", "oversize generation", "ledger change", "missing metadata", "old ledger UID only"} {
+		t.Run(mode, func(t *testing.T) {
+			row := baseline
+			switch mode {
+			case "idle":
+				row.WorkerStatus.String = schedulerWorkerStatusIdle
+			case "starting":
+				row.WorkerStatus.String = schedulerWorkerStatusStarting
+			case "missing worker":
+				row.Worker.Valid = false
+			case "missing route":
+				row.RouteWorker.Valid = false
+			case "terminal worker":
+				row.WorkerStatus.String = "complete"
+			case "retired route":
+				row.RouteStatus.String = schedulerRouteStatusRetired
+			case "old generation":
+				row.Generation.Int64++
+			case "old Pod":
+				row.WorkerPod.String += "-old"
+			case "wrong site":
+				row.RouteSite.Int64++
+			case "wrong GUID":
+				row.RouteWorker.String += "-old"
+			case "wrong host":
+				row.Host.String = "10.43.0.88"
+			case "wrong port":
+				row.Port.Int64++
+			case "bad JSON":
+				row.Metadata.String = "{"
+			case "duplicate placement":
+				row.Metadata.String = strings.Replace(row.Metadata.String, `"worker_placement":`, `"worker_placement":null,"worker_placement":`, 1)
+			case "duplicate field":
+				row.Metadata.String = strings.Replace(row.Metadata.String, `"pod_uid":`, `"pod_uid":"other","pod_uid":`, -1)
+			case "trailing":
+				row.Metadata.String += " {}"
+			case "missing metadata":
+				row.Metadata.Valid = false
+			case "null placement", "unknown placement field", "fractional rank", "exponent generation", "oversize generation", "ledger change", "old ledger UID only":
+				var fields map[string]any
+				d := json.NewDecoder(strings.NewReader(row.Metadata.String))
+				d.UseNumber()
+				if err := d.Decode(&fields); err != nil {
+					t.Fatal(err)
+				}
+				placement := clusterSSHStorageMap(fields, schedulerWorkerPlacementKey)
+				switch mode {
+				case "null placement":
+					fields[schedulerWorkerPlacementKey] = nil
+				case "unknown placement field":
+					placement["authority"] = true
+				case "fractional rank":
+					placement["profile_rank"] = json.Number("2.0000000000000000001")
+				case "exponent generation":
+					placement["route_generation"] = json.Number("1e0")
+				case "oversize generation":
+					row.Generation.Int64 = 1 << 53
+					placement["route_generation"] = json.Number("9007199254740992")
+				case "ledger change":
+					fields[schedulerWorkerAdmissionKey] = map[string]any{"unqualified": "history"}
+				case "old ledger UID only":
+					delete(fields, schedulerWorkerPlacementKey)
+				}
+				raw, _ := json.Marshal(fields)
+				row.Metadata.String = string(raw)
+			}
+			got, ok := clusterSSHCurrentWorkerRouteFromRow(row)
+			valid := mode == "success" || mode == "idle" || mode == "starting" || mode == "ledger change"
+			if ok != valid {
+				t.Fatal("current placement contract mismatch", mode)
+			}
+			if mode == "ledger change" {
+				if got.SHA256 == want.SHA256 {
+					t.Fatal("complete SQL receipt ignored ledger drift")
+				}
+				got.SHA256 = want.SHA256
+				got.observation = want.observation
+				if !reflect.DeepEqual(got, want) {
+					t.Fatal("historical ledger became current placement")
+				}
+			}
+		})
+	}
+}
 
 func sshWorkerPolicyFixture(f *sshStorageFixture) {
 	c := clusterSSHStorageMap(clusterSSHStorageMap(clusterSSHStorageMap(f.objects[clusterSSHApplicationDeploymentPrefix+"job-scheduler"], "spec"), "template"), "spec")["containers"].([]any)[0].(map[string]any)

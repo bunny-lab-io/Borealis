@@ -28,6 +28,10 @@ type preparedMembershipScopeNative struct {
 }
 
 func newPreparedMembershipScopeNative(t *testing.T, a clusterSSHPreparationAuthority, authority clusterSSHPreparedAuthority, targets map[string]string, mode string) *preparedMembershipScopeNative {
+	return newPreparedMembershipNativeForProof(t, a, authority, targets, mode, clusterbootstrap.MembershipLocalEtcdProofVersion)
+}
+
+func newPreparedMembershipNativeForProof(t *testing.T, a clusterSSHPreparationAuthority, authority clusterSSHPreparedAuthority, targets map[string]string, mode string, required uint8) *preparedMembershipScopeNative {
 	t.Helper()
 	n := &preparedMembershipScopeNative{}
 	get := func(_ context.Context, path string, out any) error {
@@ -132,7 +136,7 @@ func newPreparedMembershipScopeNative(t *testing.T, a clusterSSHPreparationAutho
 		if post%2 == 0 {
 			container := anySlice(spec["containers"])[0].(map[string]any)
 			request, err := clusterbootstrap.DecodeMembershipObservationRequest(clusterStringSlice(container["args"])[1])
-			if err != nil || !request.RequireListenerProof || request.Network != network {
+			if err != nil || !request.RequireListenerProof || request.RequiredListenerProofVersion != required || request.Network != network {
 				t.Error("scope lost current listener capability", err)
 				w.WriteHeader(500)
 				return
@@ -152,6 +156,13 @@ func newPreparedMembershipScopeNative(t *testing.T, a clusterSSHPreparationAutho
 			if post > 6 && mode == "old capability" {
 				stripCohortMembershipListenerProof(t, pod)
 			}
+			if mode == "listener-only producer" || mode == "final listener-only producer" && post > 6 {
+				replaceCohortMembershipProof(t, pod, clusterbootstrap.MembershipListenerProofVersion, 0)
+			}
+			if mode == "listener-only receipt" || mode == "final listener-only receipt" && post > 6 {
+				replaceCohortMembershipProof(t, pod, clusterbootstrap.MembershipLocalEtcdProofVersion, 2)
+			}
+
 		}
 		w.Header().Set("X-Scope-Post", fmt.Sprint(post))
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{pod}, "metadata": map[string]any{}})
@@ -187,7 +198,7 @@ func newPreparedMembershipScopeNative(t *testing.T, a clusterSSHPreparationAutho
 }
 
 func TestClusterSSHPreparedMembershipScope(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "explicit refresh", "consumer copy", "native read failure", "Node drift", "member drift", "process drift", "old capability", "Job replay", "Pod replay", "network Job replay", "network Pod replay", "cross-kind Job replay", "cross-kind Pod replay", "payload drift", "receipt alias", "source alias", "credential alias", "clock backwards", "controller drift", "image drift", "endpoint drift", "token drift", "consumer error", "ignored input failure", "ignored authority failure", "canceled caller", "final close error"} {
+	for _, mode := range []string{"pair", "replacement", "explicit refresh", "consumer copy", "native read failure", "Node drift", "member drift", "process drift", "old capability", "listener-only producer", "listener-only receipt", "final listener-only producer", "final listener-only receipt", "Job replay", "Pod replay", "network Job replay", "network Pod replay", "cross-kind Job replay", "cross-kind Pod replay", "payload drift", "receipt alias", "source alias", "credential alias", "clock backwards", "controller drift", "image drift", "endpoint drift", "token drift", "consumer error", "ignored input failure", "ignored authority failure", "canceled caller", "final close error"} {
 		t.Run(mode, func(t *testing.T) {
 			a, authority, targets := sshMembershipAuthorityFixture(t, mode == "replacement")
 			authority.payload, authority.baseline, authority.queue.ClusterID = `{"settled":"scope"}`, a.Baseline, a.Source.ClusterID
@@ -239,6 +250,11 @@ func TestClusterSSHPreparedMembershipScope(t *testing.T) {
 				}
 				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 60*time.Second {
 					t.Error("scope deadline enlarged")
+				}
+				for _, view := range value.Views {
+					if view.Observation.ListenerProofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
+						t.Error("consumer received weaker listener proof")
+					}
 				}
 				n.phase.Store(1)
 				mu.Lock()
@@ -302,9 +318,17 @@ func TestClusterSSHPreparedMembershipScope(t *testing.T) {
 			}
 			err := withClusterSSHPreparedMembershipScope(context.Background(), op, a.Lease.ControllerHolder, n.runner, read, consume)
 			valid := mode == "pair" || mode == "replacement" || mode == "explicit refresh" || mode == "consumer copy"
-			if !consumed || (err == nil) != valid || err != nil && err != errClusterConflict {
+			wantConsumed := mode != "listener-only producer" && mode != "listener-only receipt"
+			if consumed != wantConsumed || (err == nil) != valid || err != nil && err != errClusterConflict {
 				t.Fatal("wrong scoped result", err, consumed)
 			}
+			if !wantConsumed && n.posts.Load() != 2 {
+				t.Fatal("old capability rejection missed initial membership producer", n.posts.Load())
+			}
+			if (mode == "final listener-only producer" || mode == "final listener-only receipt") && n.posts.Load() != 8 {
+				t.Fatal("old capability rejection missed final membership producer", n.posts.Load())
+			}
+
 			if valid {
 				want := int32(12)
 				if mode == "explicit refresh" || mode == "consumer copy" {
@@ -315,7 +339,7 @@ func TestClusterSSHPreparedMembershipScope(t *testing.T) {
 				}
 			}
 			before := n.posts.Load()
-			if escaped.Inputs(context.Background()) == nil || escaped.Authority(context.Background()) == nil || n.posts.Load() != before {
+			if consumed && (escaped.Inputs(context.Background()) == nil || escaped.Authority(context.Background()) == nil || n.posts.Load() != before) {
 				t.Fatal("escaped callbacks revived closed evidence")
 			}
 		})

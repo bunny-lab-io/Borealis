@@ -17,8 +17,9 @@ import (
 // Private lifetime only: no listener identity is accepted from a request or
 // exported as authority. Existing source proof authenticates the K3s executable.
 type bootstrapMembershipListenerScope struct {
-	check func(context.Context) error
-	close func() error
+	check        func(context.Context) error
+	close        func() error
+	proofVersion uint8
 }
 
 type bootstrapMembershipTCPListener struct {
@@ -164,14 +165,21 @@ func readBootstrapMembershipTCP(ctx context.Context, process *os.Root, port uint
 	return listener, fd, nil
 }
 
-func captureBootstrapMembershipListener(ctx context.Context, want clusterbootstrap.SourceKubelet) (*bootstrapMembershipListenerScope, error) {
-	return captureBootstrapMembershipListenerAt(ctx, "/proc", want, func(ctx context.Context) ([]byte, error) {
+func captureBootstrapMembershipListener(ctx context.Context, want clusterbootstrap.SourceKubelet, proofVersion uint8) (*bootstrapMembershipListenerScope, error) {
+	return captureBootstrapMembershipListenersAt(ctx, "/proc", want, func(ctx context.Context) ([]byte, error) {
 		return sourceLinkCommand(ctx, "/usr/bin/systemctl", "show", "k3s.service", "--property=Id,MainPID,InvocationID,ActiveState,SubState", "--no-pager")
-	})
+	}, proofVersion)
 }
 
 func captureBootstrapMembershipListenerAt(ctx context.Context, proc string, want clusterbootstrap.SourceKubelet, serviceRead func(context.Context) ([]byte, error)) (*bootstrapMembershipListenerScope, error) {
-	if ctx.Err() != nil || want.Validate() != nil || serviceRead == nil {
+	return captureBootstrapMembershipListenersAt(ctx, proc, want, serviceRead, clusterbootstrap.MembershipListenerProofVersion)
+}
+
+// The capability selects only reviewed fixed ports. Both listeners retain the
+// same measured PID, executable and namespace scope; no caller supplies a port.
+func captureBootstrapMembershipListenersAt(ctx context.Context, proc string, want clusterbootstrap.SourceKubelet, serviceRead func(context.Context) ([]byte, error), proofVersion uint8) (*bootstrapMembershipListenerScope, error) {
+	if ctx.Err() != nil || want.Validate() != nil || serviceRead == nil ||
+		proofVersion != clusterbootstrap.MembershipListenerProofVersion && proofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
 		return nil, errBootstrapSource
 	}
 	pidfd, err := unix.PidfdOpen(int(want.PID), 0)
@@ -223,8 +231,8 @@ func captureBootstrapMembershipListenerAt(ctx context.Context, proc string, want
 	if uint64(exeStat.Dev) != want.ExecutableDevice || exeStat.Ino != want.ExecutableInode {
 		return fail()
 	}
-	var retained bootstrapMembershipTCPListener
-	var retainedFD string
+	var retained [2]bootstrapMembershipTCPListener
+	var retainedFD [2]string
 	check := func(ctx context.Context) error {
 		mu.Lock()
 		defer mu.Unlock()
@@ -287,18 +295,24 @@ func captureBootstrapMembershipListenerAt(ctx context.Context, proc string, want
 		if err != nil || heldErr != nil || !sourceKubeletExecutableUnchanged(exe, now) || !sourceKubeletExecutableUnchanged(exe, held) {
 			return reject()
 		}
-		listener, fd, err := readBootstrapMembershipTCP(ctx, process, 6443)
-		if err != nil || listener.uid != 0 || retained.inode != 0 && (listener != retained || fd != retainedFD) {
-			return reject()
+		for i, port := range [...]uint16{6443, 2379} {
+			if i == 1 && proofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
+				break
+			}
+			listener, fd, err := readBootstrapMembershipTCP(ctx, process, port)
+			if err != nil || listener.uid != 0 || retained[i].inode != 0 && (listener != retained[i] || fd != retainedFD[i]) ||
+				i == 1 && (listener.inode == retained[0].inode || fd == retainedFD[0]) {
+				return reject()
+			}
+			retained[i], retainedFD[i] = listener, fd
 		}
 		if !alive() || ctx.Err() != nil {
 			return reject()
 		}
-		retained, retainedFD = listener, fd
 		return nil
 	}
 	if check(ctx) != nil {
 		return fail()
 	}
-	return &bootstrapMembershipListenerScope{check: check, close: closeOwned}, nil
+	return &bootstrapMembershipListenerScope{check: check, close: closeOwned, proofVersion: proofVersion}, nil
 }

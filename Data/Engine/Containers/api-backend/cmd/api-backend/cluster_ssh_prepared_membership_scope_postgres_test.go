@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"errors"
 	"sync"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestClusterSSHPreparedMembershipScopePostgresCustody(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "explicit refresh", "old capability", "native read failure", "payload drift", "credential expiry", "controller expiry", "heartbeat expiry", "source row drift", "target row drift", "ignored authority failure", "expiry during cleanup", "cancel during cleanup", "request expiry during cleanup", "client expiry during cleanup"} {
+	for _, mode := range []string{"pair", "replacement", "explicit refresh", "old capability", "listener-only producer", "listener-only receipt", "final listener-only producer", "final listener-only receipt", "native read failure", "payload drift", "credential expiry", "controller expiry", "heartbeat expiry", "source row drift", "target row drift", "ignored authority failure", "expiry during cleanup", "cancel during cleanup", "request expiry during cleanup", "client expiry during cleanup"} {
 		t.Run(mode, func(t *testing.T) { exercisePreparedMembershipScopeSQL(t, mode) })
 	}
 }
@@ -99,6 +100,11 @@ func exercisePreparedMembershipScopeSQL(t *testing.T, mode string) {
 				t.Error("consumer pool release", err)
 				return err
 			}
+			for _, view := range value.Views {
+				if view.Observation.ListenerProofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
+					t.Error("SQL consumer received weaker native proof")
+				}
+			}
 			n.phase.Store(1)
 			switch mode {
 			case "payload drift", "ignored authority failure":
@@ -180,9 +186,17 @@ func exercisePreparedMembershipScopeSQL(t *testing.T, mode string) {
 		t.Fatal("scope failed to join")
 	}
 	success := mode == "pair" || mode == "replacement" || mode == "explicit refresh"
-	if !consumed || (err == nil) != success || err != nil && err != errClusterConflict {
+	wantConsumed := mode != "listener-only producer" && mode != "listener-only receipt"
+	if consumed != wantConsumed || (err == nil) != success || err != nil && err != errClusterConflict {
 		t.Fatal("wrong SQL scope result", err, consumed)
 	}
+	if !wantConsumed && n.posts.Load() != 2 {
+		t.Fatal("old capability rejection missed initial membership producer", n.posts.Load())
+	}
+	if (mode == "final listener-only producer" || mode == "final listener-only receipt") && n.posts.Load() != 8 {
+		t.Fatal("old capability rejection missed final membership producer", n.posts.Load())
+	}
+
 	if success {
 		want := int32(12)
 		if mode == "explicit refresh" {
@@ -193,7 +207,7 @@ func exercisePreparedMembershipScopeSQL(t *testing.T, mode string) {
 		}
 	}
 	posts := n.posts.Load()
-	if escaped.Inputs(context.Background()) == nil || escaped.Authority(context.Background()) == nil || posts != n.posts.Load() {
+	if consumed && (escaped.Inputs(context.Background()) == nil || escaped.Authority(context.Background()) == nil || posts != n.posts.Load()) {
 		t.Fatal("escaped SQL scope revived")
 	}
 	if childExpiry {

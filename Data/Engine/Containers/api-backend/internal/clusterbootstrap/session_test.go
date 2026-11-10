@@ -466,32 +466,90 @@ func TestSupervisedSessionRejectsObserverBeforeVerification(t *testing.T) {
 }
 
 func TestSupervisedSessionSharesIssuedChallengeDeadline(t *testing.T) {
-	in, writer := io.Pipe()
-	reader, out := io.Pipe()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	defer writer.Close()
-	defer reader.Close()
-	deadlines := make(chan time.Time, 4)
-	done := make(chan error, 1)
-	go func() {
-		done <- serveSessionObserved(ctx, in, out, sessionFixture().Nonce, func(context.Context, SessionRequest) error { return nil }, nil, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error { deadlines <- deadline; return nil })
-	}()
-	c := &sessionFixtureClient{in: writer, out: reader}
-	challenge := c.start(t, "")
-	challengeObserved := time.Now()
-	initial, waiting := <-deadlines, <-deadlines
-	time.Sleep(20 * time.Millisecond) // Receipt must not move expiry by this delay.
-	c.heartbeat(t, challenge)
-	confirmed := <-deadlines
-	if confirmed.Before(waiting) || confirmed.After(challengeObserved.Add(150*time.Millisecond)) || !waiting.After(initial) {
-		t.Fatal("supervisor deadline was extended from delayed receipt")
-	}
-	var result SessionMessage
-	if ReadSessionFrame(reader, &result) != nil || result.State != "verified" {
-		t.Fatal("supervised verification did not complete")
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	for _, mode := range []string{"immediate", "intervening challenge"} {
+		t.Run(mode, func(t *testing.T) {
+			in, writer := io.Pipe()
+			reader, out := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			deadlines := make(chan time.Time, 4)
+			done := make(chan error, 1)
+			release := make(chan struct{})
+			released := mode == "immediate"
+			if released {
+				close(release)
+			}
+			request := sessionFixture()
+			go func() {
+				done <- serveSessionObserved(ctx, in, out, request.Nonce, func(ctx context.Context, observed SessionRequest) error {
+					if observed != request {
+						return ErrSessionProtocol
+					}
+					select {
+					case <-release:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}, nil, sessionTiming{10 * time.Millisecond, 150 * time.Millisecond, 20 * time.Millisecond}, func(deadline time.Time) error { deadlines <- deadline; return nil })
+			}()
+			joined := false
+			t.Cleanup(func() {
+				cancel()
+				_ = writer.Close()
+				_ = reader.Close()
+				if !joined {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("supervised session did not stop")
+					}
+				}
+			})
+			c := &sessionFixtureClient{in: writer, out: reader}
+			challenge := c.start(t, "")
+			challengeObserved := time.Now()
+			initial, waiting := <-deadlines, <-deadlines
+			time.Sleep(20 * time.Millisecond) // Receipt must not move expiry by this delay.
+			c.heartbeat(t, challenge)
+			confirmed := <-deadlines
+			if confirmed.Before(waiting) || confirmed.After(challengeObserved.Add(150*time.Millisecond)) || !waiting.After(initial) {
+				t.Fatal("supervisor deadline was extended from delayed receipt")
+			}
+			var result SessionMessage
+			intervening := 0
+			for {
+				if err := ReadSessionFrame(reader, &result); err != nil {
+					t.Fatalf("supervised completion unavailable: %v", err)
+				}
+				if result.State != "challenge" {
+					break
+				}
+				intervening++
+				if intervening != 1 || !digestPattern.MatchString(result.Nonce) || result.Nonce == challenge.Nonce || result != (SessionMessage{Protocol: 1, State: "challenge", Nonce: result.Nonce}) {
+					t.Fatal("invalid intervening challenge")
+				}
+				// Verification may finish under the confirmed first deadline while a
+				// second challenge is pending. Do not renew authority for this test.
+				if !released {
+					close(release)
+					released = true
+				}
+			}
+			if result.Binding == nil || *result.Binding != request.Binding {
+				t.Fatal("supervised verification binding changed")
+			}
+			result.Binding = nil
+			if result != (SessionMessage{Protocol: 1, State: "verified", Nonce: request.Nonce, SourceSHA: request.SourceSHA, ManagerSHA256: request.ManagerSHA256}) || (mode == "intervening challenge" && intervening != 1) {
+				t.Fatal("supervised verification did not complete")
+			}
+			err := <-done
+			joined = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(deadlines) != 0 {
+				t.Fatal("pending challenge unexpectedly renewed supervisor deadline")
+			}
+		})
 	}
 }

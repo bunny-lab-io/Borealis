@@ -681,6 +681,6 @@ func TestBootstrapMembershipObservationRejectsRequest(t *testing.T) {
 
 // Other native fixtures inject an independent lifetime. Listener-specific tests
 // exercise the actual procfs producer and every composition boundary.
-func membershipListenerFixture(context.Context, clusterbootstrap.SourceKubelet) (*bootstrapMembershipListenerScope, error) {
-	return &bootstrapMembershipListenerScope{check: func(ctx context.Context) error { return ctx.Err() }, close: func() error { return nil }}, nil
+func membershipListenerFixture(_ context.Context, _ clusterbootstrap.SourceKubelet, proof uint8) (*bootstrapMembershipListenerScope, error) {
+	return &bootstrapMembershipListenerScope{check: func(ctx context.Context) error { return ctx.Err() }, close: func() error { return nil }, proofVersion: proof}, nil
 }

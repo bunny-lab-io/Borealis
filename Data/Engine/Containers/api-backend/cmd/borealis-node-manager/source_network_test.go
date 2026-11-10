@@ -11,8 +11,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -200,5 +202,150 @@ func TestSourceNetworkHTTPSRejectsRedirectsUntrustedTLSAndOversize(t *testing.T)
 	cancel()
 	if _, err := sourceNetworkHTTPGet(ctx, client, server.URL, "/ok"); err == nil {
 		t.Fatal("cancelled request accepted")
+	}
+}
+
+type sourceNetworkCleanupTransport struct {
+	roundTrip func(*http.Request) (*http.Response, error)
+	idle      atomic.Int32
+}
+
+func (t *sourceNetworkCleanupTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.roundTrip(r)
+}
+func (t *sourceNetworkCleanupTransport) CloseIdleConnections() { t.idle.Add(1) }
+
+type sourceNetworkCleanupBody struct {
+	io.ReadCloser
+	close func() error
+}
+
+func (b *sourceNetworkCleanupBody) Close() error {
+	err := b.ReadCloser.Close()
+	if closeErr := b.close(); closeErr != nil {
+		return closeErr
+	}
+	return err
+}
+
+func TestSourceNetworkHTTPJoinedCleanup(t *testing.T) {
+	for _, mode := range []string{"healthy timeout", "close error", "client expiry", "outer cancel", "blocked healthy", "blocked cancel", "status failure", "read failure"} {
+		t.Run(mode, func(t *testing.T) {
+			outer, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			defer unblock.Do(func() { close(release) })
+			var calls, closes, active atomic.Int32
+			transport := &sourceNetworkCleanupTransport{}
+			transport.roundTrip = func(r *http.Request) (*http.Response, error) {
+				call := calls.Add(1)
+				active.Add(1)
+				var reader io.Reader = strings.NewReader(`{"public":"source"}`)
+				if call == 1 && mode == "read failure" {
+					reader = iotest.ErrReader(errors.New("private read failure"))
+				}
+				status := http.StatusOK
+				if call == 1 && mode == "status failure" {
+					status = http.StatusForbidden
+				}
+				body := &sourceNetworkCleanupBody{ReadCloser: io.NopCloser(reader), close: func() error {
+					defer active.Add(-1)
+					closes.Add(1)
+					if call != 1 {
+						return nil
+					}
+					if mode == "client expiry" {
+						deadline, ok := r.Context().Deadline()
+						outerDeadline, _ := outer.Deadline()
+						if !ok || !deadline.Before(outerDeadline) || r.Context().Err() != nil {
+							t.Error("fixture missed live shorter client request")
+						}
+						<-r.Context().Done()
+						if outer.Err() != nil {
+							t.Error("client expiry consumed outer15s scope")
+						}
+					}
+					if mode == "outer cancel" {
+						cancel()
+					}
+					if strings.HasPrefix(mode, "blocked ") {
+						close(entered)
+						<-release
+					}
+					if mode == "close error" {
+						return errors.New("private close failure")
+					}
+					return nil
+				}}
+				return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
+			}
+			redirectErr := errors.New("original redirect policy")
+			client := &http.Client{Transport: transport, Timeout: 250 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return redirectErr }}
+			type result struct {
+				raw []byte
+				err error
+			}
+			done := make(chan result, 1)
+			joined := false
+			defer func() {
+				cancel()
+				unblock.Do(func() { close(release) })
+				if !joined {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("fixture failed joining source read")
+					}
+				}
+			}()
+			go func() {
+				raw, err := sourceNetworkHTTPGet(outer, client, "https://127.0.0.1:6443", "/v1-k3s/config")
+				done <- result{raw, err}
+			}()
+			if strings.HasPrefix(mode, "blocked ") {
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Close never entered")
+				}
+				if mode == "blocked cancel" {
+					cancel()
+				}
+				select {
+				case <-done:
+					joined = true
+					t.Fatal("source read escaped owned Close")
+				case <-time.After(20 * time.Millisecond):
+				}
+				unblock.Do(func() { close(release) })
+			}
+			var got result
+			select {
+			case got = <-done:
+				joined = true
+			case <-time.After(5 * time.Second):
+				t.Fatal("source cleanup failed to join")
+			}
+			success := mode == "healthy timeout" || mode == "blocked healthy"
+			if success {
+				if got.err != nil || string(got.raw) != `{"public":"source"}` {
+					t.Fatal("healthy timeout client rejected", got.err)
+				}
+			} else if got.err != clusterbootstrap.ErrPreparationConfig || got.raw != nil {
+				t.Fatal("failed source cleanup returned evidence", got.err, len(got.raw))
+			}
+			if closes.Load() != 1 || active.Load() != 0 {
+				t.Fatal("response cleanup not joined")
+			}
+			// A failed request owns no client/transport lifetime. Fresh same-client
+			// request retains healthy deadlines and exact redirect policy.
+			sibling, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			defer stop()
+			raw, err := sourceNetworkHTTPGet(sibling, client, "https://127.0.0.1:6443", "/v1-k3s/config")
+			if err != nil || string(raw) != `{"public":"source"}` || calls.Load() != 2 || closes.Load() != 2 || active.Load() != 0 || transport.idle.Load() != 0 || client.Transport != transport || client.Timeout != 250*time.Millisecond || client.CheckRedirect(nil, nil) != redirectErr {
+				t.Fatal("source cleanup changed borrowed client or sibling", err)
+			}
+		})
 	}
 }

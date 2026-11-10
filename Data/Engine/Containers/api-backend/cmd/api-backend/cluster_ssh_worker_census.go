@@ -3,13 +3,160 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+// Current placement is independent of worker_admission's historical execution
+// ledger. No field here settles old work or authorizes replacement capacity.
+type clusterSSHCurrentWorkerRoute struct {
+	Worker, PodName, PodUID, Node, Host      string
+	SiteID, Generation, OpsPort, DesktopPort int64
+	ProfileRank                              int64
+	SHA256                                   string
+	observation                              clusterSSHCurrentWorkerRouteRow
+}
+
+type clusterSSHCurrentWorkerRouteRow struct {
+	Worker, WorkerPod, WorkerStatus, RouteWorker, RoutePod, RouteStatus, Scheme, Host, Metadata sql.NullString
+	WorkerSite, RouteSite, Generation, Port                                                     sql.NullInt64
+}
+
+// Retain both sides before validation: worker and route writes are separate
+// transactions. Inner joins or filtering both sides to active rows can hide an
+// orphan, terminal counterpart or mixed old/new placement. Read metadata TEXT,
+// never jsonb extraction, which would erase duplicate-key evidence. Historical
+// terminal-only pairs are not current custody; stale stopped_at/retired_at fields
+// are not status because the producer does not clear them on reactivation.
+func readClusterSSHCurrentWorkerRoutes(ctx context.Context, db *sql.DB) ([]clusterSSHCurrentWorkerRoute, error) {
+	fail := func() ([]clusterSSHCurrentWorkerRoute, error) { return nil, clusterbootstrap.ErrPreparationConfig }
+	if db == nil || ctx.Err() != nil {
+		return fail()
+	}
+	rows, err := db.QueryContext(ctx, `
+SELECT left(w.worker_guid,254), left(w.container_name,254), w.site_id, left(w.status,254),
+ left(r.worker_guid,254), left(r.container_name,254), r.site_id, left(r.status,254),
+ r.generation, left(r.upstream_scheme,254), left(r.upstream_host,254), r.upstream_port,
+ CASE WHEN octet_length(r.metadata_json) <= $5 THEN r.metadata_json ELSE NULL END
+FROM engine.job_scheduler_workers w FULL OUTER JOIN engine.job_scheduler_worker_routes r ON r.worker_guid=w.worker_guid
+WHERE w.status IN ($1,$2,$3) OR r.status=$4
+ORDER BY COALESCE(w.worker_guid,r.worker_guid) LIMIT $6`,
+		schedulerWorkerStatusStarting, schedulerWorkerStatusRunning, schedulerWorkerStatusIdle, schedulerRouteStatusActive,
+		operatorSiteWorkerInventoryMaxBytes, clusterSSHSiteWorkerLimit+1)
+	if err != nil {
+		return fail()
+	}
+	retained := make([]clusterSSHCurrentWorkerRouteRow, 0)
+	total := 0
+	for rows.Next() {
+		var row clusterSSHCurrentWorkerRouteRow
+		if rows.Scan(&row.Worker, &row.WorkerPod, &row.WorkerSite, &row.WorkerStatus, &row.RouteWorker, &row.RoutePod, &row.RouteSite,
+			&row.RouteStatus, &row.Generation, &row.Scheme, &row.Host, &row.Port, &row.Metadata) != nil {
+			_ = rows.Close()
+			return fail()
+		}
+		total += len(row.Metadata.String)
+		if len(retained) >= clusterSSHSiteWorkerLimit || total > operatorSiteWorkerInventoryMaxBytes {
+			_ = rows.Close()
+			return fail()
+		}
+		retained = append(retained, row)
+	}
+	readErr, closeErr := rows.Err(), rows.Close() // Release before parsing, hashing, joining or network IO.
+	if readErr != nil || closeErr != nil || ctx.Err() != nil {
+		return fail()
+	}
+	result := make([]clusterSSHCurrentWorkerRoute, 0, len(retained))
+	sites, uids := map[int64]bool{}, map[string]bool{}
+	previous := ""
+	for _, row := range retained {
+		value, ok := clusterSSHCurrentWorkerRouteFromRow(row)
+		if !ok || value.Worker <= previous || sites[value.SiteID] || uids[value.PodUID] {
+			return fail()
+		}
+		previous, sites[value.SiteID], uids[value.PodUID] = value.Worker, true, true
+		result = append(result, value)
+	}
+	if ctx.Err() != nil {
+		return fail()
+	}
+	return result, nil
+}
+
+func clusterSSHCurrentWorkerRouteFromRow(row clusterSSHCurrentWorkerRouteRow) (clusterSSHCurrentWorkerRoute, bool) {
+	fail := func() (clusterSSHCurrentWorkerRoute, bool) { return clusterSSHCurrentWorkerRoute{}, false }
+	for _, value := range []sql.NullString{row.Worker, row.WorkerPod, row.WorkerStatus, row.RouteWorker, row.RoutePod, row.RouteStatus, row.Scheme, row.Host, row.Metadata} {
+		if !value.Valid || !utf8.ValidString(value.String) {
+			return fail()
+		}
+	}
+	for _, value := range []sql.NullInt64{row.WorkerSite, row.RouteSite, row.Generation, row.Port} {
+		if !value.Valid {
+			return fail()
+		}
+	}
+	if row.WorkerSite.Int64 < 1 || uint64(row.WorkerSite.Int64) > clusterSSHCapacityLimit || row.RouteSite.Int64 != row.WorkerSite.Int64 ||
+		row.Worker.String != schedulerK3sSiteWorkerGUID(row.WorkerSite.Int64) || row.RouteWorker.String != row.Worker.String ||
+		!borealisOperatorKubernetesObjectNameAllowed(row.WorkerPod.String) || row.RoutePod.String != row.WorkerPod.String ||
+		!slices.Contains([]string{schedulerWorkerStatusStarting, schedulerWorkerStatusRunning, schedulerWorkerStatusIdle}, row.WorkerStatus.String) ||
+		row.RouteStatus.String != schedulerRouteStatusActive || row.Scheme.String != "http" || row.Generation.Int64 < 1 || uint64(row.Generation.Int64) > clusterSSHCapacityLimit ||
+		row.Port.Int64 < 1 || row.Port.Int64 > 65535 || len(row.Metadata.String) == 0 || len(row.Metadata.String) > operatorSiteWorkerInventoryMaxBytes {
+		return fail()
+	}
+	ip, err := netip.ParseAddr(row.Host.String)
+	if err != nil || ip.String() != row.Host.String || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+		return fail()
+	}
+	d := json.NewDecoder(strings.NewReader(row.Metadata.String))
+	d.UseNumber()
+	value, err := clusterSSHPrivateJSONValue(d, 0)
+	metadata, ok := value.(map[string]any)
+	if err != nil || !ok || metadata == nil {
+		return fail()
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return fail()
+	}
+	placement := clusterSSHStorageMap(metadata, schedulerWorkerPlacementKey)
+	version, versionOK := clusterSSHStorageInteger(placement["version"])
+	site, siteOK := clusterSSHStorageInteger(placement["site_id"])
+	generation, generationOK := clusterSSHStorageInteger(placement["route_generation"])
+	rank, rankOK := clusterSSHStorageInteger(placement["profile_rank"])
+	uid, node := clusterSSHStorageText(placement, "pod_uid"), clusterSSHStorageText(placement, "node_name")
+	if len(placement) != 8 || !versionOK || version != 1 || !siteOK || site != row.WorkerSite.Int64 || !generationOK || generation != row.Generation.Int64 ||
+		!rankOK || rank > 3 || !vipScopeUUID(uid) || !schedulerPlacementName(node) || placement["worker_guid"] != row.Worker.String || placement["pod_name"] != row.WorkerPod.String ||
+		metadata["lifecycle_owner"] != "borealis-operator" || metadata["route_kind"] != "site_worker" || metadata["worker_guid"] != row.Worker.String || metadata["upstream_host"] != row.Host.String {
+		return fail()
+	}
+	ops, desktop := clusterSSHStorageMap(metadata, "remote_ops_socket"), clusterSSHStorageMap(metadata, "remote_desktop_guacamole")
+	opsPort, opsOK := clusterSSHStorageInteger(ops["port"])
+	desktopPort, desktopOK := clusterSSHStorageInteger(desktop["port"])
+	if !opsOK || opsPort != row.Port.Int64 || !desktopOK || desktopPort < 1 || desktopPort > 65535 || opsPort == desktopPort ||
+		ops["host"] != row.Host.String || ops["worker_guid"] != row.Worker.String || ops["path"] != "/socket.io/" ||
+		desktop["host"] != row.Host.String || desktop["worker_guid"] != row.Worker.String || desktop["scheme"] != "http" ||
+		desktop["path"] != "/remote-desktop/vnc/guacamole" || desktop["path_prefix"] != "/remote-desktop/vnc" {
+		return fail()
+	}
+	// Preserve the complete raw SQL projection, including historical ledger bytes,
+	// as drift evidence only. Never inspect ledger occupancy or rewrite its charge.
+	raw, err := json.Marshal(row)
+	if err != nil {
+		return fail()
+	}
+	digest := sha256.Sum256(raw)
+	return clusterSSHCurrentWorkerRoute{Worker: row.Worker.String, PodName: row.WorkerPod.String, PodUID: uid, Node: node, Host: row.Host.String,
+		SiteID: site, Generation: generation, OpsPort: opsPort, DesktopPort: desktopPort, ProfileRank: rank, SHA256: hex.EncodeToString(digest[:]), observation: row}, true
+}
 
 const clusterSSHWorkerSecretName = "borealis-job-scheduler-runtime-env"
 const clusterSSHWorkerSecretPath = "/api/v1/namespaces/borealis/secrets/" + clusterSSHWorkerSecretName

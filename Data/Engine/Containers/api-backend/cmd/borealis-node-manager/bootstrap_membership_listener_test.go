@@ -429,11 +429,32 @@ func TestBootstrapMembershipListenerRealKernelTable(t *testing.T) {
 }
 
 func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
-	for _, mode := range []string{"valid", "native stable", "native postread drift", "capture failed", "nil factory", "nil scope", "nil check", "nil close", "initial check", "before request", "after request", "final check", "close failed", "cancel during close"} {
+	exerciseBootstrapMembershipListenerFences(t, clusterbootstrap.MembershipListenerProofVersion)
+}
+
+func TestBootstrapMembershipObservationLocalEtcdFences(t *testing.T) {
+	exerciseBootstrapMembershipListenerFences(t, clusterbootstrap.MembershipLocalEtcdProofVersion)
+}
+
+func exerciseBootstrapMembershipListenerFences(t *testing.T, proofVersion uint8) {
+	modes := []string{"valid", "native stable", "native postread drift", "capture failed", "nil factory", "nil scope", "nil check", "nil close", "initial check", "before request", "after request", "final check", "close failed", "cancel during close", "wrong capability", "source config changed", "HTTP close error", "HTTP client expiry"}
+	if proofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion {
+		modes = append(modes, "config etcd disabled initial", "config etcd override initial", "config reset initial", "config etcd disabled final")
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			r := membershipObservationFixture(t, true)
 			r.RequireListenerProof = true
+			if proofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion {
+				r.RequiredListenerProofVersion = proofVersion
+			}
+			finalCheck := 14
+			if proofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion {
+				finalCheck++
+			}
 			f := newMembershipProcFixture(t, os.Getpid())
+			f.write(t, f.pid+"/net/tcp", membershipTCP4Header+membershipTCPRow("0100007F", 6443, 123)+membershipTCPRow("0100007F", 2379, 456))
+			f.link(t, f.pid+"/fd/6", "socket:[456]")
 			if strings.HasPrefix(mode, "native ") {
 				r.Network.Kubelet = f.want
 				r.Network.ManagementLink.NetworkNamespace = f.want.NetworkNamespace
@@ -467,6 +488,7 @@ func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
 			server.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, ClientCAs: roots, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}
 			server.StartTLS()
 			defer server.Close()
+			var nativeScope context.Context
 			factory := func(config *tls.Config) *http.Client {
 				client := newBootstrapJoinedNodeClient(config)
 				client.Transport.(*http.Transport).DialContext = func(ctx context.Context, kind, address string) (net.Conn, error) {
@@ -475,25 +497,54 @@ func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
 					}
 					return (&net.Dialer{}).DialContext(ctx, kind, server.Listener.Addr().String())
 				}
+
+				if strings.HasPrefix(mode, "HTTP ") {
+					transport := client.Transport
+					client.Transport = &sourceNetworkCleanupTransport{roundTrip: func(req *http.Request) (*http.Response, error) {
+						response, err := transport.RoundTrip(req)
+						if response != nil && response.Body != nil {
+							response.Body = &sourceNetworkCleanupBody{ReadCloser: response.Body, close: func() error {
+								if requests.Load() == 6 {
+									if mode == "HTTP close error" {
+										return errors.New("native response close failed")
+									}
+									deadline, ok := req.Context().Deadline()
+									scopeDeadline, scopeOK := nativeScope.Deadline()
+									if !ok || !scopeOK || !deadline.Before(scopeDeadline) || req.Context().Err() != nil {
+										t.Error("native fixture missed actual3s client deadline")
+									}
+									<-req.Context().Done()
+									if nativeScope.Err() != nil {
+										t.Error("native client expiry consumed outer15s scope")
+									}
+								}
+								return nil
+							}}
+						}
+						return response, err
+					}}
+				}
 				return client
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			checks, closes := 0, 0
+			checks, closes, sources := 0, 0, 0
+			captured := false
 			entered, release := make(chan struct{}), make(chan struct{})
-			capture := func(ctx context.Context, want clusterbootstrap.SourceKubelet) (*bootstrapMembershipListenerScope, error) {
-				if want != r.Network.Kubelet {
+			capture := func(ctx context.Context, want clusterbootstrap.SourceKubelet, proof uint8) (*bootstrapMembershipListenerScope, error) {
+				captured = true
+				if want != r.Network.Kubelet || proof != proofVersion {
 					t.Error("listener did not receive measured process")
 				}
 				if mode == "nil scope" {
 					return nil, nil
 				}
 				if strings.HasPrefix(mode, "native ") {
-					return captureBootstrapMembershipListenerAt(ctx, f.proc, want, func(context.Context) ([]byte, error) { return f.service, nil })
+					return captureBootstrapMembershipListenersAt(ctx, f.proc, want, func(context.Context) ([]byte, error) { return f.service, nil }, proof)
 				}
-				scope := &bootstrapMembershipListenerScope{check: func(ctx context.Context) error {
+				scope := &bootstrapMembershipListenerScope{proofVersion: proof, check: func(ctx context.Context) error {
 					checks++
-					if ctx.Err() != nil || mode == "initial check" && checks == 1 || mode == "before request" && checks == 2 || mode == "after request" && checks == 3 || mode == "final check" && checks == 14 {
+					if ctx.Err() != nil || mode == "initial check" && checks == 1 || mode == "before request" && checks == finalCheck-12 || mode == "after request" && checks == finalCheck-11 || mode == "final check" && checks == finalCheck {
 						return errors.New("private listener diagnostic")
 					}
 					return nil
@@ -508,6 +559,9 @@ func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
 					}
 					return nil
 				}}
+				if mode == "wrong capability" {
+					scope.proofVersion = proof - 1
+				}
 				if mode == "capture failed" {
 					return scope, errors.New("private capture diagnostic")
 				}
@@ -528,7 +582,49 @@ func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
 			}
 			done := make(chan outcome, 1)
 			go func() {
-				value, err := observeBootstrapMembershipAt(ctx, root, r, func(ctx context.Context) error { return ctx.Err() }, func(context.Context) (clusterbootstrap.SourceNetwork, error) { return r.Network, nil }, factory, capture)
+				value, err := observeBootstrapMembershipAt(ctx, root, r, func(ctx context.Context) error { return ctx.Err() }, func(sourceCtx context.Context) (clusterbootstrap.SourceNetwork, error) {
+					nativeScope = sourceCtx
+					sources++
+					if proofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion && (!captured || closes != 0) {
+						t.Error("source config escaped retained dual listener scope")
+					}
+					if mode == "source config changed" && sources == 2 {
+						return clusterbootstrap.SourceNetwork{}, errBootstrapSource
+					}
+					raw, readErr := os.ReadFile("../../internal/clusterbootstrap/testdata/source-supervisor.json")
+					var control map[string]any
+					if readErr != nil || json.Unmarshal(raw, &control) != nil {
+						t.Error("Control fixture unavailable")
+						return clusterbootstrap.SourceNetwork{}, errBootstrapSource
+					}
+					control["ServerNodeName"] = r.Network.Hostname
+					_, pods, podErr := net.ParseCIDR(r.Network.PodCIDR)
+					_, services, serviceErr := net.ParseCIDR(r.Network.ServiceCIDR)
+					if podErr != nil || serviceErr != nil {
+						t.Error("Control fixture network invalid")
+						return clusterbootstrap.SourceNetwork{}, errBootstrapSource
+					}
+					control["ClusterIPRange"], control["ClusterIPRanges"] = pods, []any{pods}
+					control["ServiceIPRange"], control["ServiceIPRanges"] = services, []any{services}
+					baseline, _ := json.Marshal(control)
+					if value, err := clusterbootstrap.ParseSourceNetwork(baseline, r.Network); err != nil || value != r.Network {
+						t.Error("stable actual Control fixture invalid", err)
+						return clusterbootstrap.SourceNetwork{}, errBootstrapSource
+					}
+					if strings.HasPrefix(mode, "config ") && (strings.HasSuffix(mode, "initial") || sources == 2) {
+						if strings.Contains(mode, "disabled") {
+							control["DisableETCD"] = true
+						}
+						if strings.Contains(mode, "override") {
+							control["ExtraEtcdArgs"] = []string{"listen-client-urls=https://192.0.2.1:2379"}
+						}
+						if strings.Contains(mode, "reset") {
+							control["DisableAPIServer"] = true
+						}
+					}
+					actual, _ := json.Marshal(control)
+					return clusterbootstrap.ParseSourceNetwork(actual, r.Network)
+				}, factory, capture)
 				done <- outcome{value, err}
 			}()
 			if mode == "cancel during close" {
@@ -550,7 +646,7 @@ func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
 			}
 			got := <-done
 			if mode == "valid" || mode == "native stable" {
-				if got.err != nil || got.value.ListenerProofVersion != clusterbootstrap.MembershipListenerProofVersion || !got.value.Valid(clusterbootstrap.MembershipObservationRequest(r)) || got.value.LocalNode != r.Nodes[0].Node || requests.Load() != 6 || mode == "valid" && checks != 14 {
+				if got.err != nil || got.value.ListenerProofVersion != proofVersion || !got.value.Valid(clusterbootstrap.MembershipObservationRequest(r)) || got.value.LocalNode != r.Nodes[0].Node || requests.Load() != 6 || mode == "valid" && checks != finalCheck {
 					t.Fatal("stable provenance rejected", got.err, requests.Load(), checks)
 				}
 			} else if got.err != errBootstrapSource || !reflect.DeepEqual(got.value, bootstrapMembershipObservation{}) {
@@ -568,6 +664,90 @@ func TestBootstrapMembershipObservationListenerFences(t *testing.T) {
 			}
 			if (mode == "after request" || mode == "native postread drift") && requests.Load() != 1 {
 				t.Fatal("drift allowed additional requests")
+			}
+		})
+	}
+}
+
+func TestBootstrapMembershipLocalEtcdProcessCustody(t *testing.T) {
+	for _, mode := range []string{"valid", "missing2379", "foreign2379", "wrong port", "duplicate2379", "same inode", "nonroot2379", "late missing2379", "late fd replacement", "late inode replacement", "late PID start", "late service invocation", "late namespace", "late 6443", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newMembershipProcFixture(t, os.Getpid())
+			stable := membershipTCP4Header + membershipTCPRow("0100007F", 6443, 123) + membershipTCPRow("0100007F", 2379, 456)
+			f.write(t, f.pid+"/net/tcp", stable)
+			f.link(t, f.pid+"/fd/6", "socket:[456]")
+			switch mode {
+			case "missing2379":
+				f.write(t, f.pid+"/net/tcp", membershipTCP4Header+membershipTCPRow("0100007F", 6443, 123))
+			case "foreign2379":
+				f.link(t, "99999/fd/6", "socket:[456]")
+				if os.Remove(filepath.Join(f.proc, f.pid, "fd/6")) != nil {
+					t.Fatal("fixture descriptor")
+				}
+			case "wrong port":
+				f.write(t, f.pid+"/net/tcp", strings.Replace(stable, ":094B", ":094C", 1))
+			case "duplicate2379":
+				f.write(t, f.pid+"/net/tcp", stable+membershipTCPRow("00000000", 2379, 789))
+			case "same inode":
+				f.write(t, f.pid+"/net/tcp", membershipTCP4Header+membershipTCPRow("0100007F", 6443, 123)+membershipTCPRow("0100007F", 2379, 123))
+			case "nonroot2379":
+				f.write(t, f.pid+"/net/tcp", strings.Replace(stable, " 0 0 456 ", " 1 0 456 ", 1))
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			before, err := os.ReadDir("/proc/self/fd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			scope, err := captureBootstrapMembershipListenersAt(ctx, f.proc, f.want, func(context.Context) ([]byte, error) { return f.service, nil }, clusterbootstrap.MembershipLocalEtcdProofVersion)
+			initial := mode == "valid" || strings.HasPrefix(mode, "late ") || mode == "canceled"
+			if !initial {
+				if err != errBootstrapSource || scope != nil {
+					t.Fatal("unowned local etcd listener captured", err)
+				}
+			} else {
+				if err != nil || scope == nil || scope.proofVersion != clusterbootstrap.MembershipLocalEtcdProofVersion {
+					t.Fatal("stable dual custody rejected", err)
+				}
+				defer scope.close()
+				switch mode {
+				case "late missing2379":
+					f.write(t, f.pid+"/net/tcp", membershipTCP4Header+membershipTCPRow("0100007F", 6443, 123))
+				case "late fd replacement":
+					f.link(t, f.pid+"/fd/7", "socket:[456]")
+					if os.Remove(filepath.Join(f.proc, f.pid, "fd/6")) != nil {
+						t.Fatal("fixture descriptor")
+					}
+				case "late inode replacement":
+					f.write(t, f.pid+"/net/tcp", strings.Replace(stable, " 456 ", " 789 ", 1))
+					f.link(t, f.pid+"/fd/6", "socket:[789]")
+				case "late PID start":
+					f.write(t, f.pid+"/stat", strings.Replace(sourceKubeletStatFixture("101"), "42 (", f.pid+" (", 1))
+				case "late service invocation":
+					f.service = []byte(strings.Replace(string(f.service), strings.Repeat("a", 32), strings.Repeat("b", 32), 1))
+				case "late namespace":
+					f.link(t, f.pid+"/ns/net", filepath.Join(f.proc, "other"))
+				case "late 6443":
+					f.link(t, f.pid+"/fd/5", "socket:[789]")
+				case "canceled":
+					cancel()
+				}
+				checkErr := scope.check(ctx)
+				closeErr := scope.close()
+				if mode == "valid" {
+					if checkErr != nil || closeErr != nil {
+						t.Fatal("stable dual check failed", checkErr, closeErr)
+					}
+				} else if checkErr != errBootstrapSource || closeErr != errBootstrapSource {
+					t.Fatal("dual custody drift retained proof", checkErr, closeErr)
+				}
+				if scope.check(context.Background()) != errBootstrapSource {
+					t.Fatal("closed dual scope revived")
+				}
+			}
+			after, err := os.ReadDir("/proc/self/fd")
+			if err != nil || len(after) != len(before) {
+				t.Fatal("dual capture leaked owned descriptors", len(before), len(after), err)
 			}
 		})
 	}

@@ -47,17 +47,18 @@ func (c *clusterController) observeClusterSSHPreparedCohortMembership(parent con
 // orchestration without manufacturing a worker lease or an alternate producer.
 func readClusterSSHPreparedCohortMembership(parent context.Context, operation clusterControllerOperation, holder string,
 	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error)) (clusterSSHPreparedCohortMembershipObservation, error) {
-	return readClusterSSHPreparedCohortMembershipWithJobs(parent, operation, holder, runner, read, [3]map[string]bool{{}, {}, {}})
+	return readClusterSSHPreparedCohortMembershipWithJobs(parent, operation, holder, runner, read, [3]map[string]bool{{}, {}, {}}, 0)
 }
 
 // A scoped consumer shares identity custody across rounds, including the
 // network Jobs whose receipts are absent from the returned observation.
 func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, operation clusterControllerOperation, holder string,
-	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error), jobIDs [3]map[string]bool) (clusterSSHPreparedCohortMembershipObservation, error) {
+	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error), jobIDs [3]map[string]bool, requiredProof uint8) (clusterSSHPreparedCohortMembershipObservation, error) {
 	fail := func() (clusterSSHPreparedCohortMembershipObservation, error) {
 		return clusterSSHPreparedCohortMembershipObservation{}, errClusterConflict
 	}
-	if parent.Err() != nil || holder == "" || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != holder || read == nil || jobIDs[0] == nil || jobIDs[1] == nil || jobIDs[2] == nil {
+	if parent.Err() != nil || holder == "" || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != holder || read == nil || jobIDs[0] == nil || jobIDs[1] == nil || jobIDs[2] == nil ||
+		requiredProof != 0 && requiredProof != clusterbootstrap.MembershipLocalEtcdProofVersion {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
@@ -101,7 +102,7 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 		}
 	}
 	selected := before.receipt.Targets[0].Prejoin.Receipt.Source
-	request := clusterbootstrap.MembershipObservationRequest{Source: selected, KubeSystemUID: before.proof.Source.KubeSystemUID, RequireListenerProof: true}
+	request := clusterbootstrap.MembershipObservationRequest{Source: selected, KubeSystemUID: before.proof.Source.KubeSystemUID, RequireListenerProof: true, RequiredListenerProofVersion: requiredProof}
 	selectedOriginal := false
 	for _, source := range before.proof.Source.Members {
 		request.OriginalSourceNodeUIDs = append(request.OriginalSourceNodeUIDs, source.NodeUID)

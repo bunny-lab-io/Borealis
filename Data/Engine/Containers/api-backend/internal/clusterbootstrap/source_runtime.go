@@ -16,6 +16,7 @@ type PreparationRuntimeSecret struct {
 	uid, revision string
 	digest        [32]byte
 	settings      map[string]string
+	operatorURL   json.RawMessage
 }
 
 func (PreparationRuntimeSecret) String() string               { return "preparation runtime source [redacted]" }
@@ -25,6 +26,22 @@ func (PreparationRuntimeSecret) MarshalJSON() ([]byte, error) { return nil, ErrP
 // Settings returns a private copy for NewPreparationConfiguration. It must
 // never be sourced, logged, placed in argv or sent through ordinary Job output.
 func (s PreparationRuntimeSecret) Settings() map[string]string { return maps.Clone(s.settings) }
+
+// OperatorBaseURL extracts an optional private transport setting without adding
+// it to bootstrap configuration. Its availability never changes Secret parsing,
+// selected settings, serialization or the complete-data observation receipt.
+func (s PreparationRuntimeSecret) OperatorBaseURL() (string, error) {
+	var encoded string
+	if s.uid == "" || len(s.operatorURL) == 0 || bytes.Equal(bytes.TrimSpace(s.operatorURL), []byte("null")) ||
+		json.Unmarshal(s.operatorURL, &encoded) != nil || len(encoded) > MaxPreparationConfigBytes {
+		return "", ErrPreparationConfig
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil || base64.StdEncoding.EncodeToString(decoded) != encoded || !utf8.Valid(decoded) || len(decoded) == 0 {
+		return "", ErrPreparationConfig
+	}
+	return string(decoded), nil
+}
 
 func (s PreparationRuntimeSecret) SameObservation(other PreparationRuntimeSecret) bool {
 	return s.uid != "" && s.uid == other.uid && s.revision == other.revision && s.digest == other.digest
@@ -102,5 +119,6 @@ func ParsePreparationRuntimeSecret(raw []byte) (PreparationRuntimeSecret, error)
 	if err != nil {
 		return fail()
 	}
-	return PreparationRuntimeSecret{uid: uid, revision: revision, digest: sha256.Sum256(canonical), settings: settings}, nil
+	return PreparationRuntimeSecret{uid: uid, revision: revision, digest: sha256.Sum256(canonical), settings: settings,
+		operatorURL: bytes.Clone(data["BOREALIS_OPERATOR_BASE_URL"])}, nil
 }

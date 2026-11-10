@@ -72,7 +72,7 @@ func (m *manager) observeBootstrapMembership(parent context.Context, request boo
 
 func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request bootstrapMembershipObservationRequest,
 	check func(context.Context) error, sourceRead func(context.Context) (clusterbootstrap.SourceNetwork, error), clientFor func(*tls.Config) *http.Client,
-	listenerFor func(context.Context, clusterbootstrap.SourceKubelet) (*bootstrapMembershipListenerScope, error)) (observation bootstrapMembershipObservation, observationErr error) {
+	listenerFor func(context.Context, clusterbootstrap.SourceKubelet, uint8) (*bootstrapMembershipListenerScope, error)) (observation bootstrapMembershipObservation, observationErr error) {
 	fail := func() (bootstrapMembershipObservation, error) {
 		return bootstrapMembershipObservation{}, errBootstrapSource
 	}
@@ -99,10 +99,15 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 		network, err := sourceRead(ctx)
 		return err == nil && network == request.Network && check(ctx) == nil
 	}
-	if !prove() {
+	dual := request.RequiredListenerProofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion
+	if !dual && !prove() {
 		return fail()
 	}
-	listener, listenerErr := listenerFor(ctx, request.Network.Kubelet)
+	wantProof := clusterbootstrap.MembershipListenerProofVersion
+	if dual {
+		wantProof = clusterbootstrap.MembershipLocalEtcdProofVersion
+	}
+	listener, listenerErr := listenerFor(ctx, request.Network.Kubelet, wantProof)
 	if listener != nil && listener.close != nil {
 		defer func() {
 			if listener.close() != nil || ctx.Err() != nil {
@@ -112,11 +117,16 @@ func observeBootstrapMembershipAt(parent context.Context, root *os.Root, request
 			// Publish capability only after native custody closes successfully.
 			// Neither the request nor the action-image client supplies this proof.
 			if observationErr == nil && request.RequireListenerProof {
-				observation.ListenerProofVersion = clusterbootstrap.MembershipListenerProofVersion
+				observation.ListenerProofVersion = listener.proofVersion
 			}
 		}()
 	}
-	if listenerErr != nil || listener == nil || listener.check == nil || listener.close == nil || listener.check(ctx) != nil {
+	if listenerErr != nil || listener == nil || listener.check == nil || listener.close == nil || listener.proofVersion != wantProof || listener.check(ctx) != nil {
+		return fail()
+	}
+	// The new route claim requires actual Control projection while both native
+	// listeners are retained. Reuse the initial source read, not an extra round.
+	if dual && (!prove() || listener.check(ctx) != nil) {
 		return fail()
 	}
 	var result bootstrapMembershipObservation

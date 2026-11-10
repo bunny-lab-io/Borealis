@@ -24,6 +24,9 @@ func sourceMembershipResultFixture(r clusterbootstrap.MembershipObservationReque
 	if r.RequireListenerProof {
 		result.ListenerProofVersion = clusterbootstrap.MembershipListenerProofVersion
 	}
+	if r.RequiredListenerProofVersion == clusterbootstrap.MembershipLocalEtcdProofVersion {
+		result.ListenerProofVersion = clusterbootstrap.MembershipLocalEtcdProofVersion
+	}
 	for i, node := range r.Nodes {
 		id := uint64(math.MaxUint64 - uint64(i))
 		for _, target := range r.Prepared {
@@ -65,10 +68,21 @@ func (b *membershipProofClientBody) Close() error {
 }
 
 func TestSourceMembershipClientListenerProofCleanup(t *testing.T) {
+	exerciseSourceMembershipClientProofCleanup(t, clusterbootstrap.MembershipListenerProofVersion)
+}
+
+func TestSourceMembershipClientLocalEtcdProofCleanup(t *testing.T) {
+	exerciseSourceMembershipClientProofCleanup(t, clusterbootstrap.MembershipLocalEtcdProofVersion)
+}
+
+func exerciseSourceMembershipClientProofCleanup(t *testing.T, proof uint8) {
 	for _, mode := range []string{"success", "old producer", "close error", "cancel during close", "blocked close success", "status failure cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			r := clusterbootstrap.MembershipObservationRequest(membershipObserverRequestFixture(t, true, 1))
 			r.RequireListenerProof = true
+			if proof == clusterbootstrap.MembershipLocalEtcdProofVersion {
+				r.RequiredListenerProofVersion = proof
+			}
 			payload, err := clusterbootstrap.EncodeMembershipObservationRequest(r)
 			if err != nil {
 				t.Fatal(err)
@@ -89,7 +103,7 @@ func TestSourceMembershipClientListenerProofCleanup(t *testing.T) {
 				}
 				value := sourceMembershipResultFixture(r)
 				if call == 1 && mode == "old producer" {
-					value.ListenerProofVersion = 0
+					value.ListenerProofVersion = proof - 1
 				}
 				// Raw producer response tests actual parser instead of its encoder.
 				encoded, _ := json.Marshal(value)
@@ -145,7 +159,7 @@ func TestSourceMembershipClientListenerProofCleanup(t *testing.T) {
 			}
 			if mode == "success" || mode == "blocked close success" {
 				value, err := clusterbootstrap.ParseMembershipObservationReceipt(result.receipt, r, nonce, job, pod)
-				if result.err != nil || err != nil || value.ListenerProofVersion != clusterbootstrap.MembershipListenerProofVersion {
+				if result.err != nil || err != nil || value.ListenerProofVersion != proof {
 					t.Fatal("joined capability rejected", result.err, err)
 				}
 			} else if result.err != clusterbootstrap.ErrPreparationConfig || result.receipt != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -114,7 +115,7 @@ func withClusterSSHPreparedMembershipScope(parent context.Context, operation clu
 			case <-ctx.Done():
 				return errClusterConflict
 			}
-			value, err := readClusterSSHPreparedCohortMembershipWithJobs(ctx, operation, holder, runner, current, seen)
+			value, err := readClusterSSHPreparedCohortMembershipWithJobs(ctx, operation, holder, runner, current, seen, clusterbootstrap.MembershipLocalEtcdProofVersion)
 			if err != nil || ctx.Err() != nil || len(value.Views) != 3 {
 				return errClusterConflict
 			}
