@@ -406,6 +406,7 @@ func TestOperatorSiteWorkerPublicStatusPreservesPrivateCustody(t *testing.T) {
 			result["workloads"] = []any{}
 		case "ListSiteWorkers":
 			result["workers"] = []any{worker}
+			result["source_inventory"] = map[string]any{"version": 1, "pods": []any{}, "services": []any{map[string]any{"uid": "private-service-inventory-uid"}}}
 		default:
 			t.Error("unexpected operator command", request.Verb)
 		}
@@ -424,7 +425,7 @@ func TestOperatorSiteWorkerPublicStatusPreservesPrivateCustody(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 	recorder := httptest.NewRecorder()
 	borealisOperatorStatusHandler(auth).ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "private-uid") || strings.Contains(recorder.Body.String(), "deletion_timestamp") || !strings.Contains(recorder.Body.String(), "assigned-node") {
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "private-uid") || strings.Contains(recorder.Body.String(), "private-service-inventory-uid") || strings.Contains(recorder.Body.String(), "source_inventory") || strings.Contains(recorder.Body.String(), "deletion_timestamp") || !strings.Contains(recorder.Body.String(), "assigned-node") {
 		t.Fatalf("public status shape changed: %d %s", recorder.Code, recorder.Body.String())
 	}
 }

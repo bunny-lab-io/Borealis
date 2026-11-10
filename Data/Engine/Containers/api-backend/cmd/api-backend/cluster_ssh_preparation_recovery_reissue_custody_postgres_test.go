@@ -82,7 +82,7 @@ func recoveryReissuedCustodySQLState(ctx context.Context, f sshPreparationAuthor
 }
 
 func TestClusterSSHPreparationRecoveryReissueCustodyPostgresFences(t *testing.T) {
-	for _, mode := range []string{"pair Q3", "replacement Q4", "worker process mismatch", "incomplete cohort", "target UID during read", "source Pod during read", "source Node after callback", "local process after callback", "payload after callback", "sibling credential after callback", "tip holder after callback", "material after callback", "Close failure after callback"} {
+	for _, mode := range []string{"pair Q3", "replacement Q4", "worker process mismatch", "incomplete cohort", "target UID during read", "source Pod during read", "source Node after callback", "local process after callback", "payload after callback", "sibling credential after callback", "tip holder after callback", "material after callback", "Close failure after callback", "namespace child expiry", "Pod child expiry", "client expiry"} {
 		t.Run(mode, func(t *testing.T) { exerciseReissuedCustodySQL(t, mode) })
 	}
 }
@@ -123,6 +123,11 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 	}
 	reads, nodeReads, podReads, consumed := 0, 0, 0, 0
 	afterCallback, injected := false, false
+	expiry := strings.Contains(mode, "expiry")
+	var proofScope context.Context
+	var proofCheck func(context.Context) error
+	var readStarted time.Time
+	var siblingChecked bool
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -196,6 +201,10 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 	defer unblock.Do(func() { close(release) })
 	var active, closes atomic.Int64
 	client := server.Client()
+	if mode == "client expiry" {
+		client.Timeout = 500 * time.Millisecond
+	}
+	borrowedTimeout := client.Timeout
 	base := client.Transport
 	transport := &cohortMembershipTransport{roundTrip: func(r *http.Request) (*http.Response, error) {
 		response, err := base.RoundTrip(r)
@@ -211,10 +220,31 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 				}
 				block := late && mode == "cancel during Close" && !injected
 				fail := late && mode == "Close failure after callback" && !injected
-				if block || fail {
+				expire := !injected && (mode == "namespace child expiry" && r.URL.Path == "/api/v1/namespaces/kube-system" ||
+					mode == "Pod child expiry" && strings.Contains(r.URL.Path, "/pods/") || mode == "client expiry")
+				if block || fail || expire {
 					injected = true
 				}
 				mu.Unlock()
+				if expire {
+					deadline, ok := r.Context().Deadline()
+					bound := 5 * time.Second
+					if mode == "Pod child expiry" {
+						bound = 10 * time.Second
+					} else if mode == "client expiry" {
+						bound = borrowedTimeout
+					}
+					remaining := time.Until(deadline)
+					if !ok || remaining > bound || remaining < bound/2 || r.Context().Err() != nil {
+						t.Error("fixture missed actual live native request deadline")
+					}
+					<-r.Context().Done()
+					// The request deadline expires inside nil-error Close, before
+					// the reader's unchanged fifteen-second bound and SQL scope.
+					if proofScope.Err() != nil || ctx.Err() != nil || time.Since(readStarted) >= 15*time.Second || proofCheck(proofScope) != nil {
+						t.Error("native child expiry lost enclosing original authority")
+					}
+				}
 				if block {
 					close(closed)
 					<-release
@@ -242,11 +272,15 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 		}
 		escaped = refresh
 		mu.Unlock()
+		refreshStarted := time.Now()
 		if err := refresh(scope); err != nil {
 			mu.Lock()
-			fault("valid in-scope refresh failed: %v", err)
+			fault("valid in-scope refresh failed after %s (outer context %v): %v", time.Since(refreshStarted), scope.Err(), err)
 			mu.Unlock()
 			return err
+		}
+		if mode == "pair Q3" || mode == "replacement Q4" {
+			t.Logf("material refresh completed in %s inside unchanged 3s challenge", time.Since(refreshStarted))
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -292,7 +326,45 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 		// exists yet; this direct callback is not production role integration.
 		return f.c.withClusterSSHPreparationRecoveryReissuedProof(parent, f.aegis, claim,
 			func(scope context.Context, value clusterSSHPreparationRecoveryReissuedProofAuthority, check func(context.Context) error) error {
-				controllerRead = f.c.preparationRecoveryReissuedCustodyRead(value, claim.payload, source, check)
+				var readerChecks atomic.Int64
+				trackedCheck := func(ctx context.Context) error { readerChecks.Add(1); return check(ctx) }
+				originalRead := f.c.preparationRecoveryReissuedCustodyRead(value, claim.payload, source, trackedCheck)
+				controllerRead = originalRead
+				if expiry {
+					proofScope, proofCheck = scope, check
+					controllerRead = func(caller context.Context) (clusterSSHPreparationRecoveryReissuedCustody, error) {
+						readStarted = time.Now()
+						proof, err := originalRead(caller)
+						if injected && err != nil && !siblingChecked {
+							siblingChecked = true
+							if proofCheck(scope) != nil {
+								t.Error("native request failure destroyed original SQL authority")
+							}
+							// The failed reader must reject before SQL/native IO even
+							// after the original request's closure has completed.
+							beforeChecks, beforeReads := readerChecks.Load(), reads
+							replayCtx, replayCancel := context.WithTimeout(scope, 250*time.Millisecond)
+							replayed, replayErr := originalRead(replayCtx)
+							if replayErr == nil || !reflect.DeepEqual(replayed, clusterSSHPreparationRecoveryReissuedCustody{}) || replayCtx.Err() != nil ||
+								readerChecks.Load() != beforeChecks || reads != beforeReads {
+								t.Error("expired reader revived or reached SQL/native IO")
+							}
+							replayCancel()
+							fresh := f.c.preparationRecoveryReissuedCustodyRead(value, claim.payload, source, check)
+							sibling, siblingErr := fresh(scope)
+							if siblingErr != nil || sibling.Original.Source != source || sibling.Original.Pod != wantPod || !maps.Equal(sibling.Targets, targets) {
+								t.Error("failed reader poisoned fresh borrowed-client sibling", siblingErr)
+							}
+						}
+						return proof, err
+					}
+					// The material helper's refresh has its own three-second
+					// challenge bound. Exercise this controller reader directly
+					// under its original SQL scope to reach real 5s/10s children
+					// inside its unchanged 15s limit, without relaxing either.
+					_, err := controllerRead(scope)
+					return err
+				}
 				if mode == "pair Q3" || mode == "replacement Q4" || mode == "worker process mismatch" {
 					// Controller proves selected API Pod without requiring its
 					// own downward identity to impersonate that API process.
@@ -370,7 +442,7 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 		t.Fatalf("wrong reissued custody result: %s err=%v native=%d nodes=%d pods=%d consumed=%d", mode, err, reads, nodeReads, podReads, consumed)
 	}
 	wantConsumed := 1
-	if mode == "worker process mismatch" || mode == "incomplete cohort" || mode == "target UID during read" || mode == "source Pod during read" {
+	if mode == "worker process mismatch" || mode == "incomplete cohort" || mode == "target UID during read" || mode == "source Pod during read" || expiry {
 		wantConsumed = 0
 	}
 	if consumed != wantConsumed || !success && !injected || success && (nodeReads < 12 || podReads < 12) {
@@ -378,7 +450,7 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 		t.Fatal("incomplete input escaped or late fault never reached", consumed, nodeReads, podReads, injected)
 	}
 	mu.Unlock()
-	if active.Load() != 0 || closes.Load() == 0 || transport.idleCalls.Load() != 0 || client.Transport != transport || runner.kube.httpClient != client {
+	if active.Load() != 0 || closes.Load() == 0 || transport.idleCalls.Load() != 0 || client.Transport != transport || runner.kube.httpClient != client || client.Timeout != borrowedTimeout || expiry && !siblingChecked {
 		t.Fatal("owned cleanup escaped or shared transport changed")
 	}
 	assertCtx, assertCancel := context.WithTimeout(context.WithoutCancel(f.ctx), 5*time.Second)

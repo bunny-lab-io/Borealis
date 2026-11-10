@@ -73,6 +73,10 @@ func (o *borealisOperator) siteWorkerObjects(ctx context.Context, resource strin
 	if err := o.kube.getJSON(ctx, o.kubePath("core", resource, ""), &payload); err != nil {
 		return nil, err
 	}
+	return operatorSiteWorkerObjects(payload)
+}
+
+func operatorSiteWorkerObjects(payload operatorSiteWorkerJSONObject) ([]map[string]any, error) {
 	items, ok := payload["items"].([]any)
 	if !ok {
 		return nil, errors.New("site-worker inventory must contain items array")
@@ -85,8 +89,12 @@ func (o *borealisOperator) siteWorkerObjects(ctx context.Context, resource strin
 		if continuation, exists := metadata["continue"]; exists && continuation != "" {
 			return nil, errors.New("incomplete site-worker inventory")
 		}
-		if remaining, exists := metadata["remainingItemCount"]; exists && remaining != float64(0) {
-			return nil, errors.New("incomplete site-worker inventory")
+		if remaining, exists := metadata["remainingItemCount"]; exists {
+			// The legacy view keeps float64; the private receipt preserves the
+			// original number. Neither projection may hide a partial list.
+			if remaining != float64(0) && remaining != json.Number("0") {
+				return nil, errors.New("incomplete site-worker inventory")
+			}
 		}
 	}
 	objects := make([]map[string]any, 0, len(items))

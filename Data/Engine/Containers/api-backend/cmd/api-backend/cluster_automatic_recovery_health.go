@@ -48,12 +48,13 @@ func (c *clusterAutomaticRecoveryCoordinator) nativeHealthObserver(binding clust
 			return fail()
 		}
 		// This observation owns its response accounting, never the shared
-		// transport. A joined but failed body Close cannot supply health proof.
+		// transport. Failed Close or expiry of the actual request context during
+		// joined closure cannot supply health proof, even with a live outer scope.
 		transport := runner.kube.httpClient.Transport
 		if transport == nil {
 			transport = http.DefaultTransport
 		}
-		cleanup := &clusterSSHMembershipHTTP{transport: transport}
+		cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
 		client, kube := *runner.kube.httpClient, *runner.kube
 		client.Transport, kube.httpClient = cleanup, &client
 		ctx, cancel := context.WithTimeout(parent, clusterControllerLeaseAcquireTimeout)

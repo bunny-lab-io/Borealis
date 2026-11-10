@@ -14,7 +14,7 @@ import (
 )
 
 func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
-	for _, mode := range []string{"partial health", "holder before", "holder after", "expiry before", "expiry after", "cluster after", "drain after", "node after", "logical cluster mismatch", "runner mismatch", "target mismatch", "first close after", "last close after", "cancel close after"} {
+	for _, mode := range []string{"partial health", "holder before", "holder after", "expiry before", "expiry after", "cluster after", "drain after", "node after", "logical cluster mismatch", "runner mismatch", "target mismatch", "first close after", "last close after", "cancel close after", "first client expiry after", "last client expiry after"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newAutomaticRecoveryPostgresFixture(t)
 			r := f.reserve(t)
@@ -71,6 +71,31 @@ func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
 			}))
 			defer server.Close()
 			client := server.Client()
+			expiry := strings.Contains(mode, "client expiry")
+			if expiry {
+				// The fixed private request and observation both have a five-second
+				// ceiling. Only a shorter borrowed client deadline expires first.
+				client.Timeout = 500 * time.Millisecond
+			}
+			var observation context.Context
+			var expired atomic.Bool
+			state := func() string {
+				var raw string
+				err := f.c.controller.store.db.QueryRowContext(f.ctx, `SELECT json_build_array(
+ (SELECT to_jsonb(c) FROM engine.cluster_state c WHERE id=1),
+ (SELECT json_agg(to_jsonb(n) ORDER BY n.id) FROM engine.cluster_nodes n),
+ (SELECT json_agg(to_jsonb(o) ORDER BY o.id) FROM engine.cluster_operations o),
+ (SELECT json_agg(to_jsonb(e) ORDER BY e.id) FROM engine.cluster_operation_events e),
+ (SELECT json_agg(to_jsonb(l) ORDER BY l.name) FROM engine.cluster_application_leases l))::text`).Scan(&raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			var beforeState string
+			if expiry {
+				beforeState = state()
+			}
 			base := client.Transport
 			var active, closes atomic.Int64
 			closed, release := make(chan struct{}), make(chan struct{})
@@ -92,6 +117,21 @@ func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
 						}
 						if mode == "first close after" && n == 1 || mode == "last close after" && n == 4 {
 							return errors.New("synthetic private native response cleanup failure")
+						}
+						if mode == "first client expiry after" && n == 1 || mode == "last client expiry after" && n == 4 {
+							childDeadline, childOK := request.Context().Deadline()
+							outerDeadline, outerOK := observation.Deadline()
+							if !childOK || !outerOK || !childDeadline.Before(outerDeadline) || request.Context().Err() != nil {
+								t.Error("fixture did not isolate live shorter client request")
+							}
+							<-request.Context().Done()
+							if observation.Err() != nil || f.ctx.Err() != nil {
+								t.Error("client expiry consumed enclosing observation lifetime")
+							}
+							if _, _, err := readClusterAutomaticRecoverySnapshot(observation, f.c.controller.store.db, b.Controller); err != nil {
+								t.Error("SQL authority expired with client request", err)
+							}
+							expired.Store(true)
 						}
 						return nil
 					}}
@@ -117,6 +157,12 @@ func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
 				target.ID = newClusterUUID()
 			}
 			observer := f.c.nodeHealthObserver(b)
+			if expiry {
+				observer = f.c.nativeHealthObserver(b, func(ctx context.Context, kube *kubernetesAPIClient) (clusterAutomaticRecoveryHealth, error) {
+					observation = ctx
+					return readClusterAutomaticRecoveryNodeHealth(ctx, kube.getClusterAutomaticRecoveryJSON, b)
+				})
+			}
 			if mode == "cancel close after" {
 				ctx, cancel := context.WithCancel(f.ctx)
 				defer cancel()
@@ -172,6 +218,19 @@ func TestClusterAutomaticRecoveryPostgresNativeNodeAuthority(t *testing.T) {
 				}
 				if !strings.HasSuffix(mode, " after") && calls.Load() != 0 {
 					t.Fatal("unowned native health reached Kubernetes")
+				}
+				if expiry {
+					if !expired.Load() || calls.Load() != 4 || closes.Load() != 4 {
+						t.Fatal("client expiry missed complete native read or joined cleanup")
+					}
+					// A fresh observation owns fresh accounting on the same borrowed
+					// client. The failed observation must neither escape nor poison it.
+					health, err := observer(f.ctx, target)
+					if err != nil || health != (clusterAutomaticRecoveryHealth{NodeName: b.NodeName, NodeUID: b.NodeUID, Node: true}) ||
+						calls.Load() != 8 || closes.Load() != 8 || client.Timeout != 500*time.Millisecond || state() != beforeState {
+						t.Fatal("client expiry changed sibling observation, borrowed client or SQL state", health, err)
+					}
+					f.assertInert(t, r.OperationID)
 				}
 				return
 			}

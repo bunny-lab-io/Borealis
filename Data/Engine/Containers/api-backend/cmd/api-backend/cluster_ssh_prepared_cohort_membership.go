@@ -47,10 +47,17 @@ func (c *clusterController) observeClusterSSHPreparedCohortMembership(parent con
 // orchestration without manufacturing a worker lease or an alternate producer.
 func readClusterSSHPreparedCohortMembership(parent context.Context, operation clusterControllerOperation, holder string,
 	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error)) (clusterSSHPreparedCohortMembershipObservation, error) {
+	return readClusterSSHPreparedCohortMembershipWithJobs(parent, operation, holder, runner, read, [3]map[string]bool{{}, {}, {}})
+}
+
+// A scoped consumer shares identity custody across rounds, including the
+// network Jobs whose receipts are absent from the returned observation.
+func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, operation clusterControllerOperation, holder string,
+	runner *kubernetesClusterStepRunner, read func(context.Context) (clusterSSHPreparedAuthority, int64, error), jobIDs [3]map[string]bool) (clusterSSHPreparedCohortMembershipObservation, error) {
 	fail := func() (clusterSSHPreparedCohortMembershipObservation, error) {
 		return clusterSSHPreparedCohortMembershipObservation{}, errClusterConflict
 	}
-	if parent.Err() != nil || holder == "" || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != holder || read == nil {
+	if parent.Err() != nil || holder == "" || runner == nil || runner.kube == nil || runner.kube.httpClient == nil || runner.controllerHolder != holder || read == nil || jobIDs[0] == nil || jobIDs[1] == nil || jobIDs[2] == nil {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
@@ -62,7 +69,10 @@ func readClusterSSHPreparedCohortMembership(parent context.Context, operation cl
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	cleanup := &clusterSSHMembershipHTTP{transport: transport}
+	// The private reader checks its child deadline before deferred Body.Close.
+	// Reuse the existing wrapper so nil-error cleanup after child/client expiry
+	// becomes a sticky tracker failure while the outer scope remains live.
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
 	client, kube, jobs := *runner.kube.httpClient, *runner.kube, *runner
 	client.Transport = cleanup
 	kube.httpClient, jobs.kube = &client, &kube
@@ -135,7 +145,6 @@ func readClusterSSHPreparedCohortMembership(parent context.Context, operation cl
 	}
 	views := make([]clusterSSHMembershipReceipt, 0, 3)
 	uids := map[string]bool{}
-	jobIDs := [3]map[string]bool{{}, {}, {}}
 	localIDs := map[uint64]bool{}
 	for _, node := range nodes {
 		// Both roles come only from the complete retained partition above and

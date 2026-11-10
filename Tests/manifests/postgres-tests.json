@@ -126,6 +126,7 @@
     "TestClusterSSHPreparedCohortMembershipPostgresCustody",
     "TestClusterSSHPreparedCohortMembershipPostgresJoinsCleanup",
     "TestClusterSSHPreparedMembershipPostgresAuthority",
+    "TestClusterSSHPreparedMembershipScopePostgresCustody",
     "TestClusterSSHQualificationPostgresClaimAndCompletionFences",
     "TestClusterSSHQualificationPostgresExpiredClaimResume",
     "TestClusterSSHQualificationPostgresReadOnlyLifecycle",

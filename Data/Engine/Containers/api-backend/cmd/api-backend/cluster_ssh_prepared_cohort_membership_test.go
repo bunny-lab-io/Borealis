@@ -470,3 +470,50 @@ func TestClusterSSHPreparedCohortHTTPCleanup(t *testing.T) {
 		})
 	}
 }
+
+// The private reader has a 5s child deadline, and the shared HTTP client may
+// impose a shorter one. Both must remain authoritative through Body.Close,
+// even while the collector's outer scope and original SQL authority stay live.
+func TestClusterSSHPreparedCohortMembershipCloseExpiry(t *testing.T) {
+	for _, mode := range []string{"request deadline", "client deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			a, authority, targets := sshMembershipAuthorityFixture(t, false)
+			authority.payload, authority.baseline, authority.queue.ClusterID = `{"settled":"cleanup"}`, a.Baseline, a.Source.ClusterID
+			op := clusterControllerOperation{ID: a.Lease.OperationID, Kind: "ssh_onboarding", State: "running", CurrentStep: clusterSSHPreparationOperationStep, Attempt: a.Lease.OperationAttempt}
+			n := newPreparedMembershipScopeNative(t, a, authority, targets, "")
+			client := n.runner.kube.httpClient
+			transport := client.Transport
+			client.Timeout = 7 * time.Second
+			if mode == "client deadline" {
+				client.Timeout = time.Second
+			}
+			timeout := client.Timeout
+			outer, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			defer stop()
+			expired := false
+			n.closeHook = func(ctx context.Context, post int) error {
+				if post == 6 {
+					<-ctx.Done()
+					expired = ctx.Err() == context.DeadlineExceeded
+					if outer.Err() != nil {
+						t.Error("fixture expired outer scope instead of request")
+					}
+				}
+				return nil
+			}
+			read := func(ctx context.Context) (clusterSSHPreparedAuthority, int64, error) {
+				return authority, 100, ctx.Err()
+			}
+			got, err := readClusterSSHPreparedCohortMembership(outer, op, a.Lease.ControllerHolder, n.runner, read)
+			if !expired || outer.Err() != nil || err != errClusterConflict || !reflect.DeepEqual(got, clusterSSHPreparedCohortMembershipObservation{}) || n.posts.Load() != 6 {
+				t.Fatal("child deadline during Close escaped collector", err, expired, n.posts.Load())
+			}
+			// A failed private wrapper cannot poison the original shared client or an
+			// independently owned sibling collection using that same client.
+			got, err = readClusterSSHPreparedCohortMembership(outer, op, a.Lease.ControllerHolder, n.runner, read)
+			if err != nil || len(got.Views) != 3 || n.posts.Load() != 12 || n.active.Load() != 0 || n.runner.kube.httpClient != client || client.Transport != transport || client.Timeout != timeout {
+				t.Fatal("failed cleanup poisoned sibling or shared client", err, n.posts.Load())
+			}
+		})
+	}
+}

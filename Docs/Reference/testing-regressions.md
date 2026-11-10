@@ -136,6 +136,10 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 | REG-TEST-088 | Inherited configuration joins private HTTP cleanup | `TestClusterSSHPreparationConfigurationNativeCleanup` and `TestClusterSSHPreparationConfigurationPostgresNative` | fixed | Review found inherited configuration could escape after ignored response-close errors, or after a child request expired during closure while the outer approval lifetime remained live. | Track only owned responses on copied clients, join closure before authority recheck, and retain sticky failure for errors or child expiry. Preserve shared transport/sibling independence, released SQL connections and unchanged approval bounds. Local closure supplies no remote Job cleanup or stopped-producer proof. |
 
+| REG-TEST-089 | Candidate-marked residents cannot supply source sizing | `TestClusterSSHSiteWorkerCandidateMarkers`, `TestClusterSSHSiteWorkerCandidateMarkerScope` and worker rotation producer controls | fixed | Source resource observation accepted candidate-marked Pods when their names otherwise matched a primary resident. A true-only check also accepted false, empty or null markers. | Reject label presence before projecting worker demand. Preserve unmarked legacy/current residents, full-source drift and sticky scope failures. Naming, historical charges and this guard cannot supply completed-rotation or Service custody. |
+
+| REG-TEST-090 | Native observation child deadlines survive body cleanup | `TestClusterSSHPreparedCohortMembershipCloseExpiry`, prepared membership scope SQL, automatic-recovery native authority and reissued-custody SQL cases | fixed | Cleanup accounting recorded close errors but could accept a nil-error closure after the shorter request/client lifetime expired while outer authority remained live. | Compose actual request-context checking beneath owned response accounting. Retain sticky failure, joined cancellation, released SQL and independent siblings. Keep health, typed-reader and material-challenge bounds distinct; partial evidence never enables recovery or admission. |
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation

@@ -119,6 +119,18 @@ func TestClusterSSHWorkerRotationProducerParity(t *testing.T) {
 					t.Fatal("observed candidate reused as another prospective cohort")
 				}
 			}
+			// A canonical name must not hide the actual producer's outstanding
+			// candidate marker. Naming and lifecycle checks are independent.
+			producedName := meta["name"]
+			meta["name"] = clusterSSHStorageMap(original, "metadata")["name"]
+			if _, err := observe(candidate); err == nil {
+				t.Fatal("canonical resident name masked real candidate marker")
+			}
+			meta["name"] = producedName
+			delete(clusterSSHStorageMap(meta, "labels"), "borealis.io/redeploy-agent-candidate")
+			if _, err := observe(candidate); err == nil {
+				t.Fatal("marker removal qualified unsupported rotated Pod/Service naming")
+			}
 			duplicate := workers[0]
 			duplicate.Name += "-next-dddddddd"
 			duplicate.UID = newClusterUUID()

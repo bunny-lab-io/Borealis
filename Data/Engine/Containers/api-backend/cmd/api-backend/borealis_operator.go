@@ -296,11 +296,20 @@ func (o *borealisOperator) executeCommand(ctx context.Context, verb string, para
 	case "GetWorkloadStatus":
 		return o.getWorkloadStatus(ctx, cleanText(params["service_key"]))
 	case "ListSiteWorkers":
-		workers, err := o.listSiteWorkers(ctx)
+		workers, inventory, err := o.listSiteWorkersWithInventory(ctx, true)
 		if err != nil {
 			return nil, http.StatusBadGateway, err
 		}
-		return map[string]any{"workers": workers}, http.StatusOK, nil
+		result := map[string]any{"workers": workers, "source_inventory": inventory}
+		if !operatorSiteWorkerInventoryResponseBounded(result) {
+			result["source_inventory"] = nil
+			if !operatorSiteWorkerInventoryResponseBounded(result) {
+				// Even null has wire overhead. Preserve the exact legacy view
+				// at its existing bound; absent proof is unavailable too.
+				delete(result, "source_inventory")
+			}
+		}
+		return result, http.StatusOK, nil
 	case "RolloutKnownWorkload":
 		var req borealisOperatorRolloutRequest
 		if err := decodeBorealisOperatorParams(params, &req); err != nil {
@@ -751,13 +760,34 @@ func (o *borealisOperator) runPostRestoreRefresh(delay time.Duration, workloads 
 }
 
 func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]any, error) {
-	pods, err := o.siteWorkerObjects(ctx, "pods")
-	if err != nil {
-		return nil, err
+	workers, _, err := o.listSiteWorkersWithInventory(ctx, false)
+	return workers, err
+}
+
+// Both views use these same complete lists. Legacy lifecycle/display callers
+// retain their existing summaries; only ListSiteWorkers adds private evidence.
+func (o *borealisOperator) listSiteWorkersWithInventory(ctx context.Context, includeInventory bool) ([]map[string]any, *operatorSiteWorkerInventory, error) {
+	read := func(resource string) ([]map[string]any, []map[string]any, error) {
+		if includeInventory {
+			return o.siteWorkerObjectsWithInventory(ctx, resource)
+		}
+		objects, err := o.siteWorkerObjects(ctx, resource)
+		return objects, nil, err
 	}
-	services, err := o.siteWorkerObjects(ctx, "services")
+	pods, exactPods, err := read("pods")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	services, exactServices, err := read("services")
+	if err != nil {
+		return nil, nil, err
+	}
+	var inventory *operatorSiteWorkerInventory
+	if includeInventory {
+		// Legacy worker/display views remain available when the stronger
+		// projection cannot represent an object. Null is unavailable proof,
+		// distinct from version 1 with complete empty arrays.
+		inventory, _ = projectOperatorSiteWorkerInventory(exactPods, exactServices, o.namespace)
 	}
 	servicesByGUID := borealisSiteWorkerServiceSummariesByGUID(services)
 	podMetricsByName, _ := o.kubernetesPodMetricsByName(ctx)
@@ -780,7 +810,7 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 		}
 		workers = append(workers, worker)
 	}
-	return workers, nil
+	return workers, inventory, nil
 }
 
 func (o *borealisOperator) kubernetesPodMetricsByName(ctx context.Context) (map[string]map[string]any, error) {
@@ -2020,6 +2050,9 @@ func (c *kubernetesAPIClient) doJSON(ctx context.Context, method string, path st
 	}
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
+	}
+	if strict, ok := out.(*operatorSiteWorkerInventoryJSONObject); ok {
+		return strict.decode(resp.Body)
 	}
 	if strict, ok := out.(*operatorSiteWorkerJSONObject); ok {
 		payload, err := decodeOperatorSiteWorkerObject(resp.Body)

@@ -42,12 +42,13 @@ func (c *clusterController) preparationRecoveryReissuedCustodyRead(value cluster
 		return unavailableClusterSSHPreparationRecoveryReissuedCustody
 	}
 	// Own response accounting, never the shared transport. Deferred body Close
-	// is synchronous; an ignored Close error still poisons the typed reader.
+	// is synchronous; ignored Close errors or actual child-request expiry during
+	// closure still poison the typed reader while its outer authority stays live.
 	transport := runner.kube.httpClient.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	cleanup := &clusterSSHMembershipHTTP{transport: transport}
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
 	client, kube := *runner.kube.httpClient, *runner.kube
 	client.Transport, kube.httpClient = cleanup, &client
 	holder := value.Lineage.Original.ControllerHolder

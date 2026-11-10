@@ -353,3 +353,83 @@ func TestClusterSSHSiteWorkerResourcesBoundToScope(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterSSHSiteWorkerCandidateMarkers(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		for _, legacy := range []bool{false, true} {
+			for _, marker := range []struct {
+				name    string
+				value   any
+				present bool
+			}{{"absent", nil, false}, {"true", "true", true}, {"false", "false", true}, {"empty", "", true}, {"null", nil, true}} {
+				t.Run(fmt.Sprintf("replacement=%t/legacy=%t/%s", replacement, legacy, marker.name), func(t *testing.T) {
+					f := newSSHStorageFixture(t, replacement)
+					sshSiteWorkerPopulate(t, f)
+					// Replacement exercises rejection on the second source member,
+					// after the first member supplied a valid resident inventory.
+					node := f.a.Source.Members[len(f.a.Source.Members)-1].Name
+					name := "site-worker-site-7"
+					if legacy {
+						name = "site-worker-original-site"
+					}
+					pod := sshSiteWorkerPodFixtureWithNames(t, node, 7, "Original Site", schedulerK3sSiteWorkerGUID(7), name, name)
+					if marker.present {
+						clusterSSHStorageMap(clusterSSHStorageMap(pod, "metadata"), "labels")["borealis.io/redeploy-agent-candidate"] = marker.value
+					}
+					f.objects[clusterSSHSiteWorkerPodsPath(node)]["items"] = []any{pod}
+					value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
+					if !marker.present {
+						if err != nil || len(value.Requirements.SiteWorkers) != len(f.a.Source.Members) {
+							t.Fatal("unmarked canonical resident rejected", err)
+						}
+					} else if err == nil || value.Requirements.SiteWorkers != nil {
+						t.Fatal("candidate marker returned usable resident inventory", marker.name, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestClusterSSHSiteWorkerCandidateMarkerScope(t *testing.T) {
+	for _, mode := range []string{"before", "after", "ignored failure then removed"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSSHStorageFixture(t, true)
+			sshSiteWorkerPopulate(t, f)
+			setMarker := func(present bool) {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				labels := clusterSSHStorageMap(clusterSSHStorageMap(sshSiteWorkerPod(f, 1), "metadata"), "labels")
+				if present {
+					labels["borealis.io/redeploy-agent-candidate"] = "false"
+				} else {
+					delete(labels, "borealis.io/redeploy-agent-candidate")
+				}
+			}
+			if mode == "before" {
+				setMarker(true)
+			}
+			consumed := false
+			err := withClusterSSHSourceStorage(context.Background(), f.authority, f.get, func(ctx context.Context, _ clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
+				consumed = true
+				setMarker(true)
+				if mode == "ignored failure then removed" {
+					if checks.Inputs(ctx) == nil {
+						t.Fatal("candidate marker did not invalidate live source proof")
+					}
+					setMarker(false)
+				}
+				return nil
+			})
+			if err == nil || consumed != (mode != "before") {
+				t.Fatal("candidate marker escaped original source lifetime", consumed, err)
+			}
+			// A fresh scope may observe an unmarked canonical resident; removing
+			// a marker cannot revive the failed scope or prove rotated identity.
+			setMarker(false)
+			if err := withClusterSSHSourceStorage(context.Background(), f.authority, f.get, func(context.Context, clusterSSHStorageRequirements, clusterSSHPreparationChecks) error { return nil }); err != nil {
+				t.Fatal("fresh unmarked resident observation rejected", err)
+			}
+		})
+	}
+}
