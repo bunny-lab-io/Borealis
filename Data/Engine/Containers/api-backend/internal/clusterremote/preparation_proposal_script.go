@@ -1,11 +1,13 @@
 package clusterremote
 
+import "borealis/api-backend/internal/clusterbootstrap"
+
 // This fixed observer runs using the target's existing Python. It never imports
 // a helper, writes a file, repairs packages/accounts or invokes Engine/K3s.
 // Native fresh-host contracts live in bootstrap_docker_preflight.go,
 // bootstrap_host_prepare.go and bootstrap_runtime_account.go. This proposal
 // observation is deliberately separate from their claimed mutation executor.
-const preparationProposalScript = preparationProposalLibraryScript + `
+const preparationProposalScript = preparationProposalLibraryScript + clusterbootstrap.PreparationTargetCPUObserverLibrary + `
 if __name__ == "__main__":
     main()
 `
@@ -106,7 +108,7 @@ class Snapshot:
         finally:
             os.close(fd)
 
-    def read(self, path, limit):
+    def read(self, path, limit, projection=None):
         parent, leaf = path.rsplit("/", 1)
         directory = self.directory(parent)
         try:
@@ -119,7 +121,7 @@ class Snapshot:
                 raw = source.read(limit + 1)
                 require(len(raw) <= limit and metadata(os.fstat(source.fileno())) == metadata(before))
             require(metadata(os.stat(leaf, dir_fd=directory, follow_symlinks=False)) == metadata(before))
-            value = [metadata(before), digest(raw)]
+            value = [metadata(before), digest(projection(raw) if projection else raw)]
             require(path not in self.files or self.files[path] == value)
             self.files[path] = value
             return raw
@@ -290,7 +292,7 @@ def supervision(snapshot):
     require(values["Version"].split(".", 1)[0].split("-", 1)[0] == version)
     # Kernel mount identity, not the existence of an ordinary lookalike file,
     # establishes the unified hierarchy. No nested/rebound cgroup mount is used.
-    mountinfo = snapshot.read("proc/self/mountinfo", LIMIT)
+    mountinfo = snapshot.read("proc/1/mountinfo", LIMIT)
     mounts = []
     for line in text(mountinfo, LIMIT).splitlines():
         fields = line.split(" ")
@@ -421,6 +423,18 @@ def observe(proposal):
         package_digest = packages()
         unit_state = units()
         supervision_state = supervision(snapshot)
+        def cpu_read(path, limit, projection=None):
+            # Supervision retains the complete mount table. Use that same
+            # observation here; the shared CPU reader still validates cgroup
+            # mounts in the returned bytes. Other CPU projections stay intact.
+            if path == "proc/1/mountinfo":
+                projection = None
+            return snapshot.read(path, limit, projection)
+        def cpu_entries(path, limit, optional=False):
+            if optional and snapshot.absent_path(path):
+                return None
+            return snapshot.entries(path, limit)
+        cpu_state = preparation_target_cpu(cpu_read, cpu_entries)
         account_state = accounts(snapshot)
         # Reopen every observed ancestor to detect replacement during this pass.
         for path, identity_before in list(snapshot.parents.items()):
@@ -431,7 +445,7 @@ def observe(proposal):
                 os.close(fd)
         return {"identity": identity, "suite": suite, "parents": snapshot.parents, "files": snapshot.files,
             "absent": snapshot.absent, "listings": snapshot.listings, "packages": package_digest,
-            "units": unit_state, "supervision": supervision_state, "accounts": account_state, "runtime_uid_absent": True}
+            "units": unit_state, "supervision": supervision_state, "cpu": cpu_state, "accounts": account_state, "runtime_uid_absent": True}
     finally:
         os.close(snapshot.root)
 
@@ -443,11 +457,13 @@ def main():
     encoded = sys.argv[1]
     raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
     proposal = json.loads(raw)
-    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 2)
+    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 3)
     before = observe(proposal)
     after = observe(proposal)
     require(before == after)
-    observation = digest(b"borealis-preparation-native-observation-v2\n" + canonical(before))
-    request = digest(b"borealis-preparation-proposal-v2\n" + raw)
-    print(json.dumps({"version": 2, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation}, separators=(",", ":")))
+    observation = digest(b"borealis-preparation-native-observation-v3\n" + canonical(before))
+    request = digest(b"borealis-preparation-proposal-v3\n" + raw)
+    cpu = {"version": 1, "plan_sha256": proposal["cpu_plan_sha256"], "online_cpus": before["cpu"]["online_cpus"],
+        "allocatable_milli": before["cpu"]["allocatable_milli"], "memory_kib": before["cpu"]["memory_kib"], "observation_sha256": digest(b"borealis-preparation-target-cpu-v1\n" + canonical(before["cpu"]))}
+    print(json.dumps({"version": 3, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation, "cpu": cpu}, separators=(",", ":")))
 `

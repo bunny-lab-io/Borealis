@@ -9,13 +9,13 @@ import (
 )
 
 // Fresh-target supervision permits a safe halt, not automatic effect replay.
-// The native v2 proposal proves current systemd/cgroup prerequisites and absence
+// The native v3 proposal proves current systemd/cgroup prerequisites and absence
 // of prior journals/producers. The immutable helper checks its actual executor
 // before creating a journal, persists intent before effects, and requires a
 // distinct stopped producer for uncertainty reconciliation. The original worker
 // retains uncertain claims and settles only a complete joined cohort.
 //
-// Production must supply its actual v2 proposal reader and the live gate owned
+// Production must supply its actual v3 proposal reader and the live gate owned
 // by withPreparationArtifacts. Neither historical qualification nor a receipt
 // loaded from SQL can construct these capabilities. Final byte reproof and
 // cleanup remain owned by that synchronous artifact scope.
@@ -25,7 +25,7 @@ func newClusterSSHPreparationSupervisedRecoveryRead(snapshot clusterSSHPreparati
 	var work clusterSSHPreparationWork
 	decodeErr := json.Unmarshal(wire, &work)
 	plan, planErr := clusterSSHPreparationPlanDigest(work.Authorization)
-	valid := wireErr == nil && decodeErr == nil && planErr == nil && clusterremote.PreparationProposalVersion == 2 &&
+	valid := wireErr == nil && decodeErr == nil && planErr == nil && clusterremote.PreparationProposalVersion == 3 &&
 		len(work.Claims) == 0 && work.Baseline.Validate() == nil && validateClusterSSHInspectionCohort(work.Proof.Cohort, work.Proof.Source) == nil &&
 		work.Authorization.OperationID == work.Proof.Cohort.OperationID && work.Authorization.Attempt == work.Proof.Cohort.Attempt &&
 		work.Authorization.ControllerHolder == work.Proof.Cohort.ControllerHolder && artifacts != nil && cleanTargets != nil
@@ -35,7 +35,7 @@ func newClusterSSHPreparationSupervisedRecoveryRead(snapshot clusterSSHPreparati
 	return func(parent context.Context, requested string) (string, error) {
 		fail := func() (string, error) {
 			failed.Store(true)
-			return "", clusterSSHPreparationGateBlocked{"supervised_recovery", "Fresh proposal-v2 supervision or immutable helper proof is unavailable or changed; preserve retained journals and inspect stopped-producer evidence before retrying preparation."}
+			return "", clusterSSHPreparationGateBlocked{"supervised_recovery", "Fresh proposal-v3 supervision or immutable helper proof is unavailable or changed; preserve retained journals and inspect stopped-producer evidence before retrying preparation."}
 		}
 		if !valid || failed.Load() || parent.Err() != nil || requested != plan {
 			return fail()

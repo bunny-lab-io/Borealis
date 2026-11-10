@@ -63,6 +63,14 @@ func (c *clusterController) preparationCleanTargetsBrokerRead(snapshot clusterSS
 // observations. The original proposal checker remains local; receipt equality
 // cannot substitute for fresh SQL authority or extend the approval's deadline.
 func (c *clusterSSHPreparationCleanBrokerClient) preparationRead(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error) func(context.Context, string) (string, error) {
+	read := c.preparationTargetsRead(snapshot, check)
+	return func(ctx context.Context, plan string) (string, error) {
+		value, err := read(ctx, plan)
+		return value.Digest, err
+	}
+}
+
+func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsRead(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error) clusterSSHPreparationTargetsRead {
 	plan, proposal, bindingErr := clusterSSHPreparationCleanBrokerBinding(snapshot)
 	authorization := snapshot.work.Authorization
 	serial := make(chan struct{}, 1)
@@ -84,8 +92,11 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationRead(snapshot cluste
 		}
 		client = &copy
 	}
-	return func(parent context.Context, requested string) (string, error) {
-		fail := func() (string, error) { failed.Store(true); return "", clusterbootstrap.ErrPreparationConfig }
+	return func(parent context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
+		fail := func() (clusterSSHPreparationCleanObservation, error) {
+			failed.Store(true)
+			return clusterSSHPreparationCleanObservation{}, clusterbootstrap.ErrPreparationConfig
+		}
 		if c == nil || client == nil || cleanup == nil || c.endpoint == nil || check == nil || bindingErr != nil || requested != plan || failed.Load() || parent.Err() != nil {
 			return fail()
 		}
@@ -136,12 +147,12 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationRead(snapshot cluste
 		requestDigest, digestErr := clusterSSHPreparationDigest(request)
 		if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || response.Header.Get("Content-Encoding") != "" ||
 			openClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, raw, &result, clusterSSHPreparationCleanBrokerLimit) != nil ||
-			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || !validClusterSSHPreparationDigest(result.Digest) ||
+			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}).validate(snapshot) != nil ||
 			!cleanup.clean() || requestCtx.Err() != nil || check(requestCtx) != nil || requestCtx.Err() != nil ||
 			(retained != "" && retained != result.Digest) {
 			return fail()
 		}
 		retained = result.Digest
-		return result.Digest, nil
+		return clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}, nil
 	}
 }

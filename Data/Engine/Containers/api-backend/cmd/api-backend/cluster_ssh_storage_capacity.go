@@ -195,7 +195,7 @@ func withClusterSSHTargetStorageCapacity(parent context.Context, readers cluster
 		if err != nil || !validClusterSSHStorageSnapshot(value.Storage, a.Source) {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, value.Expected.PodCIDR, value.Expected.ServiceCIDR)
+		expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, value.Expected.PodCIDR, value.Expected.ServiceCIDR, a.payload)
 		if err != nil || !reflect.DeepEqual(expected, value.Expected) {
 			return clusterbootstrap.ErrPreparationConfig
 		}

@@ -26,7 +26,7 @@ func withClusterSSHTargetSizing(parent context.Context, readers clusterSSHNetwor
 		if err != nil || ctx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		bound, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, expected.PodCIDR, expected.ServiceCIDR)
+		bound, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, expected.PodCIDR, expected.ServiceCIDR, a.payload)
 		if err != nil || !reflect.DeepEqual(bound, expected) {
 			return clusterbootstrap.ErrPreparationConfig
 		}

@@ -52,7 +52,7 @@ func (r *kubernetesClusterStepRunner) readSSHSourceK3sJoin(parent context.Contex
 		before.IdentitySource == nil || *before.IdentitySource != source || before.Recovery != nil || validateClusterSSHInspectionCohort(before.Cohort, before.Source) != nil {
 		return nil, fail
 	}
-	built, err := buildClusterSSHPreparationExpected(before.Cohort, before.Source, before.Lease, before.Baseline, before.K3sVersion, network.PodCIDR, network.ServiceCIDR)
+	built, err := buildClusterSSHPreparationExpected(before.Cohort, before.Source, before.Lease, before.Baseline, before.K3sVersion, network.PodCIDR, network.ServiceCIDR, before.payload)
 	if err != nil || !reflect.DeepEqual(built, expected) || source.ClusterID != before.Source.ClusterID {
 		return nil, fail
 	}

@@ -19,7 +19,7 @@ func clusterSSHPreparationNativeBlockers(cleanTargets bool) []clusterSSHPreparat
 		clusterSSHPreparationGateBlocked{"persistent_storage", "Preclaim storage proof is incomplete: bind complete installation/download/runtime demand and fresh persistent filesystem, mount and inode evidence to every original target. Conditional claimed storage budgets cannot authorize approval."},
 	)
 	if !cleanTargets {
-		blocked = append(blocked, clusterSSHPreparationGateBlocked{"supervised_recovery", "Fresh proposal-v2 systemd/cgroup and prior journal/producer absence proof is unavailable through the authenticated API executor; preparation cannot rely on an older clean-host receipt."})
+		blocked = append(blocked, clusterSSHPreparationGateBlocked{"supervised_recovery", "Fresh proposal-v3 systemd/cgroup and prior journal/producer absence proof is unavailable through the authenticated API executor; preparation cannot rely on an older clean-host receipt."})
 	}
 	return blocked
 }

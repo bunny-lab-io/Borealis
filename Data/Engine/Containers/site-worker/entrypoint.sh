@@ -3,6 +3,10 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Pod-local /tmp survives container restarts, including a killed preStop hook.
+# Clear only the prior container's transient drain before this worker starts.
+rm -f -- /tmp/borealis-draining
+
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"
 

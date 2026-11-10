@@ -168,12 +168,25 @@ func TestClusterSSHParentPostgresInspectionLifecycle(t *testing.T) {
 		}
 		before = f.events(t)
 		for range 2 {
-			if _, claimed, err := resumed.claimOperation(f.ctx); err != nil || claimed {
-				t.Fatalf("waiting qualification automatically reclaimed: %v", err)
+			// Selection lets the controller inspect waiting intent; it must not
+			// start preparation or grant another target claim.
+			selected, ok, err := resumed.claimOperation(f.ctx)
+			if err != nil || !ok || selected.ID != f.op.ID || selected.Attempt != f.op.Attempt ||
+				selected.Kind != f.op.Kind || selected.State != "waiting" || selected.CurrentStep != clusterSSHQualificationStep {
+				t.Fatalf("waiting qualification not selected intact: %v", err)
+			}
+			if current := f.assertState(t, "waiting", clusterSSHQualificationStep, true); current != raw {
+				t.Fatal("waiting selection changed stored payload")
 			}
 		}
 		if f.events(t) != before {
 			t.Fatal("qualification wait emitted repeated events")
+		}
+		var targets, unclaimed int
+		if err := f.c.store.db.QueryRowContext(f.ctx, `SELECT count(*),count(*) FILTER (
+ WHERE state='queued' AND current_step='inspection_complete' AND lease_holder='' AND lease_expires_at=0)
+ FROM engine.cluster_onboarding_targets WHERE operation_id=$1`, f.op.ID).Scan(&targets, &unclaimed); err != nil || targets != len(f.targets) || unclaimed != targets {
+			t.Fatalf("waiting selection changed original target claims: %v", err)
 		}
 		if _, err := f.c.store.claimClusterSSHTarget(f.ctx, f.op.ID, f.targets[0].Binding.TargetID, newClusterUUID()); err == nil {
 			t.Fatal("qualification granted more target work")

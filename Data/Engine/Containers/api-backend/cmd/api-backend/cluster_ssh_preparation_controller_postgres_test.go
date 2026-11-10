@@ -22,9 +22,9 @@ func TestClusterSSHPreparationControllerPostgresNativeSettlement(t *testing.T) {
 				}
 			}
 			err := f.c.runSSHPreparationParentWithGates(f.ctx, f.op, f.observe, func(ctx context.Context, _ clusterSSHPreparationApprovalSnapshot, consume func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error)) error {
-				_, err := consume(ctx, sshPreparationGatesFixture())
+				_, err := consume(ctx, sshPreparationCPUGatesFixture(snapshot))
 				return err
-			})
+			}, sshPreparationCPUReadFixture(snapshot))
 			if err != nil {
 				t.Fatal("controller approval", err)
 			}
@@ -60,7 +60,7 @@ func TestClusterSSHPreparationControllerPostgresNativeSettlement(t *testing.T) {
 					if err != nil {
 						return nil, err
 					}
-					expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, claim.Lease, baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+					expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, claim.Lease, baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", a.payload)
 					if err != nil {
 						return nil, err
 					}
@@ -177,8 +177,8 @@ func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing
 				if f.c.store.db.Stats().InUse != 0 {
 					t.Fatal("SQL held across native scope")
 				}
-				receipt, err := consume(ctx, sshPreparationGatesFixture())
-				if err != nil || receipt.Version != 1 {
+				receipt, err := consume(ctx, sshPreparationCPUGatesFixture(snapshot))
+				if err != nil || receipt.Version != 2 {
 					t.Fatal("approval did not consume gates", err)
 				}
 				// A competing API claimant sees the commit before cleanup joins.
@@ -205,7 +205,7 @@ func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing
 				}
 				return nil
 			}
-			err := f.c.runSSHPreparationParentWithGates(ctx, f.op, f.observe, scope)
+			err := f.c.runSSHPreparationParentWithGates(ctx, f.op, f.observe, scope, sshPreparationCPUReadFixture(snapshot))
 			success := mode == "pair" || mode == "replacement"
 			if (err == nil) != success {
 				t.Fatal("cleanup outcome", err)

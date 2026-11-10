@@ -37,7 +37,7 @@ func (r clusterSSHJoinBrokerRequest) authorityMatches(a clusterSSHPreparationAut
 	if a.Lease != r.Request.Lease || a.Baseline != r.Request.Baseline || a.IdentitySource == nil || *a.IdentitySource != r.Source || a.Recovery != nil {
 		return false
 	}
-	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, r.Network.PodCIDR, r.Network.ServiceCIDR)
+	expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, r.Network.PodCIDR, r.Network.ServiceCIDR, a.payload)
 	if err != nil || !reflect.DeepEqual(expected, r.Expected) || r.Source.ClusterID != a.Source.ClusterID {
 		return false
 	}

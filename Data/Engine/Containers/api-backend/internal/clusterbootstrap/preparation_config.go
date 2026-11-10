@@ -41,11 +41,15 @@ type PreparationExpected struct {
 	PodCIDR         string         `json:"pod_cidr"`
 	ServiceCIDR     string         `json:"service_cidr"`
 	PeerAddresses   []string       `json:"peer_addresses"`
+	// Absent only for retained legacy recovery. Fresh publication must carry
+	// the approved native observation and recheck it before its first effect.
+	TargetCPU *PreparationTargetCPU `json:"target_cpu,omitempty"`
 }
 
 func (e PreparationExpected) Validate() error {
 	if e.Source.Validate() != nil || e.Target.Validate() != nil || !digestPattern.MatchString(e.CohortSHA256) || !nonzeroPreparationUUID(e.TargetBootID) ||
-		!nonzeroPreparationUUID(e.KubeSystemUID) || len(e.K3sVersion) > 32 || !preparationK3s.MatchString(e.K3sVersion) || len(e.PeerAddresses) != 3 {
+		!nonzeroPreparationUUID(e.KubeSystemUID) || len(e.K3sVersion) > 32 || !preparationK3s.MatchString(e.K3sVersion) || len(e.PeerAddresses) != 3 ||
+		e.TargetCPU != nil && e.TargetCPU.Validate(e.K3sVersion) != nil {
 		return ErrPreparationConfig
 	}
 	return validatePreparationNetwork(e.ManagementCIDR, e.PodCIDR, e.ServiceCIDR, e.ControlPlaneVIP, e.EdgeVIP, e.Target.Address, e.PeerAddresses)

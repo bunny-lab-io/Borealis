@@ -202,7 +202,7 @@ func (s *postgresOperatorStore) completeClusterSSHPreparationVersion(ctx context
 			observed := authority
 			observed.Cohort.ObservedAt = 0
 			digest, digestErr := clusterSSHPreparationDigest(observed)
-			expected, expectedErr := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, authority.Lease, authority.Baseline, authority.K3sVersion, p.Expected.PodCIDR, p.Expected.ServiceCIDR)
+			expected, expectedErr := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, authority.Lease, authority.Baseline, authority.K3sVersion, p.Expected.PodCIDR, p.Expected.ServiceCIDR, authority.payload)
 			if digestErr != nil || expectedErr != nil || p.ControllerSHA256 != digest || p.Receipt.Source != selected || !reflect.DeepEqual(p.Expected, expected) {
 				return errClusterConflict
 			}

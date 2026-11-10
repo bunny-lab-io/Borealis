@@ -8,6 +8,8 @@ import (
 
 func TestPrejoinK3sJoinConfigurationKeepsNodeFenced(t *testing.T) {
 	expected, _ := preparationFixture()
+	plan, _ := PreparationTargetCPUPlanDigest(expected.K3sVersion)
+	expected.TargetCPU = &PreparationTargetCPU{Version: 1, PlanSHA256: plan, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("f", 64)}
 	raw, err := PrejoinK3sJoinConfiguration(expected)
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +35,21 @@ func TestPrejoinK3sJoinConfigurationKeepsNodeFenced(t *testing.T) {
 		if strings.Contains(raw, forbidden) {
 			t.Fatal("configuration bypassed guarded join", forbidden)
 		}
+	}
+	args, _ := PreparationTargetCPUArguments(expected.K3sVersion)
+	if strings.Count(raw, "kubelet-arg:\n") != 1 {
+		t.Fatal("missing fixed CPU argument list")
+	}
+	for _, arg := range args {
+		if strings.Count(raw, "  - "+strconv.Quote(arg)+"\n") != 1 {
+			t.Fatal("planned CPU setting not enforced", arg)
+		}
+	}
+	legacy := expected
+	legacy.TargetCPU = nil
+	legacyRaw, err := PrejoinK3sJoinConfiguration(legacy)
+	if err != nil || strings.Contains(legacyRaw, "kubelet-arg:") {
+		t.Fatal("legacy recovery rendering was rewritten")
 	}
 	for _, mutate := range []func(*PreparationExpected){
 		func(e *PreparationExpected) { e.Target.Hostname = "engine\ntoken: injected" },

@@ -18,7 +18,7 @@ const (
 	clusterSSHPreparationCleanBrokerPath    = "/internal/cluster/ssh-preparation-clean-targets"
 	clusterSSHPreparationCleanBrokerScope   = "ssh-preparation-clean-targets"
 	clusterSSHPreparationCleanBrokerLimit   = 8 << 10
-	clusterSSHPreparationCleanBrokerVersion = 2
+	clusterSSHPreparationCleanBrokerVersion = 3
 )
 
 // Private read-only contract. The source broker runs in the keyless controller
@@ -28,8 +28,8 @@ const (
 // Authenticated callers supply no target, command, URL, key or credential. SQL
 // must still prove the exact original owner, waiting plan and explicit intent.
 // Replay starts fresh native reads within the same expiry; it grants no claim.
-// Version 2 requires the native v2 clean-host/supervision observation. An older
-// API broker cannot satisfy a v2 request or relabel its v1 receipt.
+// Version 3 carries typed native effective-CPU evidence with the clean-host
+// observation. Older brokers cannot relabel digest-only receipts as CPU proof.
 type clusterSSHPreparationCleanBrokerRequest struct {
 	Version          int    `json:"version"`
 	ID               string `json:"id"`
@@ -71,10 +71,11 @@ func clusterSSHPreparationCleanBrokerBinding(snapshot clusterSSHPreparationAppro
 }
 
 type clusterSSHPreparationCleanBrokerResponse struct {
-	Version       int    `json:"version"`
-	ID            string `json:"id"`
-	RequestSHA256 string `json:"request_sha256"`
-	Digest        string `json:"digest"`
+	Version       int                              `json:"version"`
+	ID            string                           `json:"id"`
+	RequestSHA256 string                           `json:"request_sha256"`
+	Digest        string                           `json:"digest"`
+	Targets       []clusterSSHPreparationTargetCPU `json:"targets"`
 }
 
 type clusterSSHPreparationCleanBroker struct {
@@ -138,14 +139,14 @@ func (b *clusterSSHPreparationCleanBroker) handle(w http.ResponseWriter, r *http
 		return
 	}
 	check := b.store.preparationCleanTargetsProposalCheck(snapshot, request.ControllerHolder)
-	read := newClusterSSHPreparationCleanTargetsRead(snapshot, check, b.aegis, b.connect)
-	digest, err := read(ctx, plan)
-	if err != nil || !validClusterSSHPreparationDigest(digest) || check(ctx) != nil || ctx.Err() != nil {
+	read := newClusterSSHPreparationTargetsRead(snapshot, check, b.aegis, b.connect)
+	observed, err := read(ctx, plan)
+	if err != nil || observed.validate(snapshot) != nil || check(ctx) != nil || ctx.Err() != nil {
 		fail(http.StatusServiceUnavailable)
 		return
 	}
 	requestDigest, err := clusterSSHPreparationDigest(request)
-	response := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: requestDigest, Digest: digest}
+	response := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: requestDigest, Digest: observed.Digest, Targets: observed.Targets}
 	wire, sealErr := sealClusterSSHVIP(b.responseCipher, clusterSSHPreparationCleanBrokerPath, response, clusterSSHPreparationCleanBrokerLimit)
 	if err != nil || sealErr != nil || ctx.Err() != nil {
 		fail(http.StatusServiceUnavailable)

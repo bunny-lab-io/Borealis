@@ -21,7 +21,8 @@ import (
 )
 
 func preparationProposalFixture() PreparationProposal {
-	return PreparationProposal{Version: PreparationProposalVersion,
+	plan, _ := clusterbootstrap.PreparationTargetCPUPlanDigest(clusterbootstrap.K3sPins().Version)
+	return PreparationProposal{Version: PreparationProposalVersion, CPUPlanSHA256: plan,
 		Source:    clusterbootstrap.Expected{Repository: "bunny-lab-io/Borealis", Release: "2026.11.1", SourceSHA: strings.Repeat("a", 40)},
 		ClusterID: "11111111-1111-4111-8111-111111111111", OperationID: "22222222-2222-4222-8222-222222222222", OperationAttempt: 1,
 		ControllerHolder: "original-controller", PlanSHA256: strings.Repeat("b", 64), TargetID: "33333333-3333-4333-8333-333333333333",
@@ -31,7 +32,7 @@ func preparationProposalFixture() PreparationProposal {
 
 func preparationProofFixture(p PreparationProposal) PreparationProposalProof {
 	digest, _ := p.RequestSHA256()
-	return PreparationProposalProof{Version: PreparationProposalVersion, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64)}
+	return PreparationProposalProof{Version: PreparationProposalVersion, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64), CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: p.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
 }
 
 func TestPreparationProposalContract(t *testing.T) {
@@ -115,11 +116,11 @@ func TestPreparationProposalContract(t *testing.T) {
 	}
 	raw, _ := json.Marshal(proof)
 	for _, bad := range []string{
-		strings.Replace(string(raw), `"version":2`, `"version":2,"version":2`, 1),
-		strings.Replace(string(raw), `"version":2`, `"Version":2`, 1),
-		strings.Replace(string(raw), `"version":2`, `"version":1`, 1),
-		strings.Replace(string(raw), `"version":2`, `"version":2,"inventory":"private-account-fixture"`, 1),
-		strings.Replace(string(raw), `"version":2,`, "", 1),
+		strings.Replace(string(raw), `"version":3`, `"version":3,"version":2`, 1),
+		strings.Replace(string(raw), `"version":3`, `"Version":3`, 1),
+		strings.Replace(string(raw), `"version":3`, `"version":1`, 1),
+		strings.Replace(string(raw), `"version":3`, `"version":3,"inventory":"private-account-fixture"`, 1),
+		strings.Replace(string(raw), `"version":3,`, "", 1),
 		strings.Replace(string(raw), proof.ObservationSHA256, strings.Repeat("0", 64), 1),
 		strings.Replace(string(raw), `"nonce":"`+p.Nonce+`"`, `"nonce":null`, 1),
 		string(raw) + string(raw), strings.Repeat("x", MaxOutputBytes+1),
@@ -232,6 +233,11 @@ func TestPreparationProposalPinnedTransport(t *testing.T) {
 	}
 }
 
+const preparationNativeMountinfo = "23 1 8:1 / / rw,relatime - ext4 /dev/vda1 rw\n" +
+	"24 23 0:5 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n" +
+	"25 23 0:6 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro\n" +
+	"26 25 0:24 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n"
+
 func preparationNativeFixture(t *testing.T) (string, func(string, string), string) {
 	t.Helper()
 	root := t.TempDir()
@@ -250,15 +256,31 @@ func preparationNativeFixture(t *testing.T) (string, func(string, string), strin
 	write("proc/sys/kernel/random/boot_id", p.BootID+"\n")
 	write("proc/sys/kernel/hostname", p.Hostname+"\n")
 	write("proc/123/status", "Name:\tfixture\nUid:\t0\t0\t0\t0\n")
-	write("proc/1/status", "Name:\tsystemd\nUid:\t0\t0\t0\t0\n")
+	write("proc/1/status", "Name:\tsystemd\nUid:\t0\t0\t0\t0\nCpus_allowed_list:\t0-15\n")
 	write("proc/1/comm", "systemd\n")
 	write("proc/1/cgroup", "0::/init.scope\n")
 	if err := os.Symlink("/usr/lib/systemd/systemd", filepath.Join(root, "proc/1/exe")); err != nil {
 		t.Fatal(err)
 	}
-	write("proc/self/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n")
+	write("proc/1/mountinfo", preparationNativeMountinfo)
 	write("sys/fs/cgroup/cgroup.controllers", "cpuset cpu io memory hugetlb pids rdma misc\n")
+	write("sys/fs/cgroup/cgroup.subtree_control", "cpuset cpu memory pids\n")
 	write("sys/fs/cgroup/system.slice/cgroup.events", "populated 1\n")
+	write("proc/meminfo", "MemTotal:       33554432 kB\nMemFree:        20000000 kB\n")
+	write("sys/devices/system/cpu/online", "0-15\n")
+	write("sys/devices/system/cpu/present", "0-15\n")
+	for i := 0; i < 16; i++ {
+		write("sys/devices/system/cpu/cpu"+strconv.Itoa(i)+"/topology/core_id", strconv.Itoa(i)+"\n")
+	}
+	for _, path := range []string{"sys/fs/cgroup", "sys/fs/cgroup/system.slice", "sys/fs/cgroup/init.scope"} {
+		write(path+"/cpuset.cpus.effective", "0-15\n")
+		write(path+"/cpuset.mems.effective", "0\n")
+		if path != "sys/fs/cgroup" {
+			write(path+"/cpu.max", "max 100000\n")
+			write(path+"/memory.max", "max\n")
+			write(path+"/memory.high", "max\n")
+		}
+	}
 	write("etc/os-release", "ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n")
 	write("etc/apt/sources.list.d/ubuntu.sources", "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble\n")
 	write("etc/nsswitch.conf", "passwd: files systemd\ngroup: files systemd\n")
@@ -307,12 +329,44 @@ func runPreparationNativeFixture(t *testing.T, root, prelude string, p Preparati
 	raw, _ := json.Marshal(p)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script+"\n"+prelude+"\nmain()\n", base64.RawStdEncoding.EncodeToString(raw))
+	command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script+clusterbootstrap.PreparationTargetCPUObserverLibrary+"\n"+prelude+"\nmain()\n", base64.RawStdEncoding.EncodeToString(raw))
 	output, err := command.Output()
 	if ctx.Err() != nil {
 		t.Fatal("fixture deadline", ctx.Err())
 	}
 	return output, err
+}
+
+func TestPreparationProposalNativeMountinfoComposition(t *testing.T) {
+	for _, mode := range []string{"stable full mount table", "drift before CPU read", "drift between rounds"} {
+		t.Run(mode, func(t *testing.T) {
+			root, _, prelude := preparationNativeFixture(t)
+			p := preparationProposalFixture()
+			if mode != "stable full mount table" {
+				// Change only an ordinary mount row. Retain the complete original
+				// supervision observation, including drift outside cgroup mounts.
+				function := "supervision"
+				if mode == "drift between rounds" {
+					function = "observe"
+				}
+				changed := strings.Replace(preparationNativeMountinfo, "/dev/vda1", "/dev/vdb1", 1)
+				prelude += "original_mount_observer = " + function + "\ndef " + function + "(value):\n" +
+					"    result = original_mount_observer(value)\n" +
+					"    with open(ROOT + '/proc/1/mountinfo', 'w') as output:\n" +
+					"        output.write(" + strconv.Quote(changed) + ")\n" +
+					"    return result\n"
+			}
+			raw, err := runPreparationNativeFixture(t, root, prelude, p)
+			if mode == "stable full mount table" {
+				proof, parseErr := parsePreparationProposalProof(raw, p)
+				if err != nil || parseErr != nil || proof.Validate(p) != nil {
+					t.Fatal("full proposal rejected stable ordinary mounts", err, parseErr)
+				}
+			} else if err == nil || len(raw) != 0 {
+				t.Fatal("mount drift produced full proposal proof", err)
+			}
+		})
+	}
 }
 
 func TestPreparationProposalNativeSnapshots(t *testing.T) {
@@ -552,15 +606,15 @@ func TestPreparationProposalNativeSupervision(t *testing.T) {
 			case "runner mismatch":
 				prelude += "fixture_runner = fixture_runner.replace(b'255', b'256')\n"
 			case "cgroup v1":
-				write("proc/self/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw - tmpfs tmpfs rw\n")
+				write("proc/1/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw - tmpfs tmpfs rw\n")
 			case "cgroup submount":
-				write("proc/self/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n22 21 0:25 / /sys/fs/cgroup/foreign rw - tmpfs tmpfs rw\n")
+				write("proc/1/mountinfo", "21 20 0:24 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n22 21 0:25 / /sys/fs/cgroup/foreign rw - tmpfs tmpfs rw\n")
 			case "cgroup rebound":
-				write("proc/self/mountinfo", "21 20 0:24 /foreign /sys/fs/cgroup rw - cgroup2 cgroup rw\n")
+				write("proc/1/mountinfo", "21 20 0:24 /foreign /sys/fs/cgroup rw - cgroup2 cgroup rw\n")
 			case "missing cgroup mount":
-				write("proc/self/mountinfo", "21 20 0:24 / /other rw - cgroup2 cgroup rw\n")
+				write("proc/1/mountinfo", "21 20 0:24 / /other rw - cgroup2 cgroup rw\n")
 			case "duplicate cgroup mount":
-				write("proc/self/mountinfo", strings.Repeat("21 20 0:24 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n", 2))
+				write("proc/1/mountinfo", strings.Repeat("21 20 0:24 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n", 2))
 			case "missing CPU controller":
 				write("sys/fs/cgroup/cgroup.controllers", "memory pids\n")
 			case "missing memory controller":
@@ -610,7 +664,7 @@ func TestPreparationProposalNativeSupervision(t *testing.T) {
 					t.Fatal("fresh supervision rejected", err)
 				}
 				proof, err := parsePreparationProposalProof(raw, p)
-				if err != nil || proof.Version != 2 {
+				if err != nil || proof.Version != PreparationProposalVersion {
 					t.Fatal("stronger proof lacks native semantic version", err)
 				}
 			} else if err == nil || len(raw) != 0 {

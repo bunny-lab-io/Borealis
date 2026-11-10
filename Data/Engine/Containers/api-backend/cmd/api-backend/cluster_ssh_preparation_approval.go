@@ -23,11 +23,12 @@ func (clusterSSHPreparationApprovalSnapshot) GoString() string {
 // Only a synchronous phase-proof scope may supply this live capability. It
 // cannot be serialized, restored from a digest or inferred from qualification.
 type clusterSSHPreparationApprovalProof struct {
-	receipts [6]string
-	plan     string
-	started  time.Time
-	lifetime context.Context
-	recheck  func(context.Context) error
+	receipts  [6]string
+	plan      string
+	started   time.Time
+	lifetime  context.Context
+	recheck   func(context.Context) error
+	targetCPU []clusterSSHPreparationTargetCPU
 }
 
 func (p clusterSSHPreparationApprovalProof) valid(plan string) bool {
@@ -190,7 +191,12 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	if err != nil {
 		return errClusterConflict
 	}
-	payload["ssh_preparation_readiness"], err = json.Marshal(clusterSSHPreparationReadiness(plan, proof.receipts))
+	readiness := clusterSSHPreparationReadiness(plan, proof.receipts)
+	readiness.Version, readiness.Targets = 2, proof.targetCPU
+	if validateClusterSSHPreparationReadinessCPU(readiness, w.Authorization) != nil {
+		return errClusterConflict
+	}
+	payload["ssh_preparation_readiness"], err = json.Marshal(readiness)
 	if err != nil {
 		return errClusterConflict
 	}

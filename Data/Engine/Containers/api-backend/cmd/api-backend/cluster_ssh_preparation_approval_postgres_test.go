@@ -46,6 +46,8 @@ func newSSHPreparationApprovalFixture(t *testing.T, replacement bool) (sshPrepar
 	for i := range proof.receipts {
 		proof.receipts[i] = strings.Repeat("a", 64)
 	}
+	proof.targetCPU = sshPreparationTargetCPUFixture(snapshot)
+	proof.receipts[1], _ = clusterSSHPreparationTargetCPUDigest(snapshot, proof.targetCPU)
 	return f, snapshot, confirmation, proof
 }
 
@@ -92,7 +94,7 @@ func TestClusterSSHPreparationApprovalPostgresFreshCoordinator(t *testing.T) {
 	for _, mode := range []string{"success", "missing gate", "changed source", "changed gate"} {
 		t.Run(mode, func(t *testing.T) {
 			f, snapshot, confirmation, _ := newSSHPreparationApprovalFixture(t, false)
-			gates := sshPreparationGatesFixture()
+			gates := sshPreparationCPUGatesFixture(snapshot)
 			calls := 0
 			gates[0] = func(context.Context, string) (string, error) {
 				calls++
@@ -116,7 +118,7 @@ func TestClusterSSHPreparationApprovalPostgresFreshCoordinator(t *testing.T) {
 				}
 				return f.observe(ctx, path, out)
 			}
-			err := f.c.approveClusterSSHPreparation(f.ctx, snapshot, confirmation, get, gates)
+			err := f.c.approveClusterSSHPreparation(f.ctx, snapshot, confirmation, get, gates, sshPreparationCPUReadFixture(snapshot))
 			if (err == nil) != (mode == "success") {
 				t.Fatal("coordinator outcome", err)
 			}

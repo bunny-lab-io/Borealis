@@ -18,14 +18,25 @@ type clusterSSHPreparationGateScope func(context.Context, clusterSSHPreparationA
 // Only the sole controller evaluates waiting confirmation and commits approval.
 // API executors retain Aegis/identity custody and consume the durable reservation.
 func (c *clusterController) runSSHPreparationParent(ctx context.Context, operation clusterControllerOperation, getJSON func(context.Context, string, any) error) error {
+	var projection clusterSSHPreparationTargetsRead
 	return c.runSSHPreparationParentWithGates(ctx, operation, getJSON,
 		func(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot, consume func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error)) error {
-			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), c.preparationCleanTargetsBrokerRead(snapshot), consume)
+			client, err := newClusterSSHPreparationCleanBrokerClientFromEnv()
+			var clean func(context.Context, string) (string, error)
+			if err == nil {
+				clean, projection = clusterSSHPreparationTargetCPUReaderPair(snapshot, client.preparationTargetsRead(snapshot, c.preparationCleanTargetsProposalCheck(snapshot)))
+			}
+			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), clean, consume)
+		}, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
+			if projection == nil {
+				return clusterSSHPreparationCleanObservation{}, errClusterConflict
+			}
+			return projection(ctx, plan)
 		})
 }
 
 func (c *clusterController) runSSHPreparationParentWithGates(parent context.Context, operation clusterControllerOperation,
-	getJSON func(context.Context, string, any) error, scope clusterSSHPreparationGateScope) error {
+	getJSON func(context.Context, string, any) error, scope clusterSSHPreparationGateScope, targets ...clusterSSHPreparationTargetsRead) error {
 	if c == nil || c.store == nil || c.store.db == nil || operation.Kind != "ssh_onboarding" || parent.Err() != nil {
 		return errClusterConflict
 	}
@@ -75,7 +86,7 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 		if err := c.recordSSHPreparationBlocked(ctx, operation, clusterSSHPreparationCleanupPending); err != nil {
 			return committed, err
 		}
-		if err = c.approveClusterSSHPreparation(ctx, snapshot, confirmation, getJSON, gates); err != nil {
+		if err = c.approveClusterSSHPreparation(ctx, snapshot, confirmation, getJSON, gates, targets...); err != nil {
 			return committed, err
 		}
 		// The artifact scope validates the exact committed payload after approval,

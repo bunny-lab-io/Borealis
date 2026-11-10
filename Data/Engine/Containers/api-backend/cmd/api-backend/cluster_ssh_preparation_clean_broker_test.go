@@ -172,7 +172,9 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 					return nil, errClusterConflict
 				}
 				digest, _ := clusterSSHPreparationDigest(request)
-				value := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: digest, Digest: strings.Repeat("a", 64)}
+				value := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: digest}
+				value.Targets = sshPreparationTargetCPUFixture(snapshot)
+				value.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, value.Targets)
 				switch mode {
 				case "wrong request":
 					value.RequestSHA256 = strings.Repeat("f", 64)

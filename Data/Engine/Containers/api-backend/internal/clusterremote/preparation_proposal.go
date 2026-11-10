@@ -20,10 +20,9 @@ var ErrPreparationProposal = errors.New("SSH preparation proposal observation un
 var proposalDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var proposalHostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Version 2 adds read-only supervision prerequisites and absence of retained
-// preparation journals/producers. Version 1 clean-host receipts cannot satisfy
-// supervised preparation readiness.
-const PreparationProposalVersion = 2
+// Version 3 adds native effective-CPU observation and the fixed kubelet plan.
+// Older clean-host/supervision receipts cannot stand for CPU evidence.
+const PreparationProposalVersion = 3
 
 // PreparationProposal binds an observation to the original waiting proposal.
 // QualificationGeneration is its reserved generation, never a worker claim.
@@ -45,6 +44,7 @@ type PreparationProposal struct {
 	MachineID               string                    `json:"machine_id"`
 	BootID                  string                    `json:"boot_id"`
 	Nonce                   string                    `json:"nonce"`
+	CPUPlanSHA256           string                    `json:"cpu_plan_sha256"`
 }
 
 func proposalDigest(value string) bool {
@@ -52,12 +52,13 @@ func proposalDigest(value string) bool {
 }
 
 func (p PreparationProposal) Validate() error {
+	cpuPlan, cpuErr := clusterbootstrap.PreparationTargetCPUPlanDigest(clusterbootstrap.K3sPins().Version)
 	if p.Version != PreparationProposalVersion || p.Source.Validate() != nil || !validPublicUUID(p.ClusterID) || !validPublicUUID(p.OperationID) ||
 		!validPublicUUID(p.TargetID) || p.OperationAttempt <= 0 || p.QualificationGeneration <= 0 ||
 		len(p.ControllerHolder) == 0 || len(p.ControllerHolder) > 1024 || !utf8.ValidString(p.ControllerHolder) ||
 		strings.IndexFunc(p.ControllerHolder, unicode.IsControl) >= 0 || !proposalDigest(p.PlanSHA256) || !proposalDigest(p.Nonce) ||
 		(Target{Address: p.Address, Port: p.Port}).Validate() != nil || !proposalHostnamePattern.MatchString(p.Hostname) ||
-		!machineIDPattern.MatchString(p.MachineID) || p.MachineID == strings.Repeat("0", 32) || !validPublicUUID(p.BootID) {
+		!machineIDPattern.MatchString(p.MachineID) || p.MachineID == strings.Repeat("0", 32) || !validPublicUUID(p.BootID) || cpuErr != nil || p.CPUPlanSHA256 != cpuPlan {
 		return ErrPreparationProposal
 	}
 	if !strings.HasPrefix(p.HostKeyFingerprint, "SHA256:") {
@@ -85,7 +86,7 @@ func (p PreparationProposal) RequestSHA256() (string, error) {
 	if err != nil {
 		return "", ErrPreparationProposal
 	}
-	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v2\n"), raw...))
+	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v3\n"), raw...))
 	return hex.EncodeToString(digest[:]), nil
 }
 
@@ -94,15 +95,17 @@ func (p PreparationProposal) RequestSHA256() (string, error) {
 // must retain it with the exact proposal and recheck their own durable authority.
 // This observation is not a preparation claim, effect receipt or readiness proof.
 type PreparationProposalProof struct {
-	Version           int    `json:"version"`
-	RequestSHA256     string `json:"request_sha256"`
-	Nonce             string `json:"nonce"`
-	ObservationSHA256 string `json:"observation_sha256"`
+	Version           int                                   `json:"version"`
+	RequestSHA256     string                                `json:"request_sha256"`
+	Nonce             string                                `json:"nonce"`
+	ObservationSHA256 string                                `json:"observation_sha256"`
+	CPU               clusterbootstrap.PreparationTargetCPU `json:"cpu"`
 }
 
 func (proof PreparationProposalProof) Validate(p PreparationProposal) error {
 	digest, err := p.RequestSHA256()
-	if err != nil || proof.Version != PreparationProposalVersion || proof.RequestSHA256 != digest || proof.Nonce != p.Nonce || !proposalDigest(proof.ObservationSHA256) {
+	if err != nil || proof.Version != PreparationProposalVersion || proof.RequestSHA256 != digest || proof.Nonce != p.Nonce || !proposalDigest(proof.ObservationSHA256) ||
+		proof.CPU.Validate(clusterbootstrap.K3sPins().Version) != nil || proof.CPU.PlanSHA256 != p.CPUPlanSHA256 {
 		return ErrPreparationProposal
 	}
 	return nil

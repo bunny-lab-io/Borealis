@@ -20,7 +20,7 @@ const clusterSSHPreparationOperationStep = "prepare_ssh_targets"
 // Pod/service CIDRs come from a fixed source observer, never installer defaults.
 // Caller must compare baseline and all observations under current authority.
 func buildClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, lease clusterSSHTargetLease,
-	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string) (clusterbootstrap.PreparationExpected, error) {
+	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string, payload ...string) (clusterbootstrap.PreparationExpected, error) {
 	fail := func() (clusterbootstrap.PreparationExpected, error) {
 		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -29,13 +29,13 @@ func buildClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, sourc
 		!validClusterSSHObservationLease(lease) {
 		return fail()
 	}
-	return assembleClusterSSHPreparationExpected(cohort, source, lease, baseline, k3sVersion, podCIDR, serviceCIDR)
+	return assembleClusterSSHPreparationExpected(cohort, source, lease, baseline, k3sVersion, podCIDR, serviceCIDR, payload...)
 }
 
 // Value assembly only. Callers must independently establish their exact phase
 // and current lease authority; this helper does not accept or create authority.
 func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, lease clusterSSHTargetLease,
-	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string) (clusterbootstrap.PreparationExpected, error) {
+	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string, payload ...string) (clusterbootstrap.PreparationExpected, error) {
 	fail := func() (clusterbootstrap.PreparationExpected, error) {
 		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -70,6 +70,15 @@ func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, so
 			CohortSHA256:    hex.EncodeToString(digest[:]),
 			ControlPlaneVIP: source.ControlPlaneVIP, EdgeVIP: source.EdgeVIP, ManagementCIDR: target.Report.ConnectedPrefix, K3sVersion: k3sVersion,
 			PodCIDR: podCIDR, ServiceCIDR: serviceCIDR, PeerAddresses: peers}
+		if len(payload) > 1 {
+			return fail()
+		}
+		if len(payload) == 1 {
+			expected.TargetCPU, err = clusterSSHPreparationExpectedCPU(payload[0], target.Binding.TargetID)
+			if err != nil || expected.TargetCPU != nil && (expected.TargetCPU.AllocatableMilli != uint64(target.Report.CPUCount)*1000 || expected.TargetCPU.MemoryKiB != target.Report.MemoryKiB) {
+				return fail()
+			}
+		}
 		if expected.Validate() != nil {
 			return fail()
 		}

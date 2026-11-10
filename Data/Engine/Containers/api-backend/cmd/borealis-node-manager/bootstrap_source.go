@@ -257,6 +257,9 @@ func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.Prepara
 	if err != nil || ctx.Err() != nil {
 		return errBootstrapSource
 	}
+	if verifyBootstrapTargetCPU(ctx, expected, request.Action, clusterbootstrap.ObservePreparationTargetCPU) != nil {
+		return errBootstrapSource
+	}
 	root, err := os.OpenRoot("/")
 	if err != nil {
 		return errBootstrapSource

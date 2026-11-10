@@ -102,7 +102,7 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		if err != nil || (retainedSources != nil && !slices.Equal(retainedSources, sources)) {
 			return fail()
 		}
-		expected, err := buildClusterSSHPreparationExpected(before.Cohort, observed, before.Lease, before.Baseline, before.K3sVersion, sources[0].PodCIDR, sources[0].ServiceCIDR)
+		expected, err := buildClusterSSHPreparationExpected(before.Cohort, observed, before.Lease, before.Baseline, before.K3sVersion, sources[0].PodCIDR, sources[0].ServiceCIDR, before.payload)
 		if err != nil {
 			return fail()
 		}
@@ -411,6 +411,12 @@ func (c *kubernetesAPIClient) clusterSSHPrivateJSON(ctx context.Context, method,
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	defer response.Body.Close()
+	if method == http.MethodGet && response.StatusCode == http.StatusNotFound && clusterSSHPreparationLonghornNodePath(path) {
+		if ctx.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return clusterSSHPreparationLonghornNotFound(path, response.Body)
+	}
 	if method == http.MethodGet && response.StatusCode == http.StatusNotFound && clusterSSHCNPGOptionalConfigPath(path) {
 		if ctx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig

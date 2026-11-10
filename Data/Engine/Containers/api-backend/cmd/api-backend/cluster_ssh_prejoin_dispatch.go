@@ -47,7 +47,7 @@ func clusterSSHPrejoinDispatchKey(authority clusterSSHPreparationAuthority, sour
 		return invalid, clusterbootstrap.ErrSessionAuthority
 	}
 	current, err := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, claim.Lease, baseline,
-		authority.K3sVersion, expected.PodCIDR, expected.ServiceCIDR)
+		authority.K3sVersion, expected.PodCIDR, expected.ServiceCIDR, authority.payload)
 	if err != nil || !reflect.DeepEqual(current, expected) {
 		return invalid, clusterbootstrap.ErrSessionAuthority
 	}

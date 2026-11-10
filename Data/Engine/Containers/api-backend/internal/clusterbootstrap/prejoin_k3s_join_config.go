@@ -1,6 +1,10 @@
 package clusterbootstrap
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // Accepted bound for K3s's generated admin kubeconfig. Account for this private
 // output separately from the input token/YAML before starting the target.
@@ -17,6 +21,17 @@ func PrejoinK3sJoinConfiguration(expected PreparationExpected) (string, error) {
 	if expected.Validate() != nil || expected.K3sVersion != K3sPins().Version {
 		return "", ErrPreparationConfig
 	}
+	args, err := PreparationTargetCPUArguments(expected.K3sVersion)
+	if err != nil {
+		return "", err
+	}
+	var cpu strings.Builder
+	if expected.TargetCPU != nil {
+		cpu.WriteString("kubelet-arg:\n")
+		for _, arg := range args {
+			cpu.WriteString("  - " + strconv.Quote(arg) + "\n")
+		}
+	}
 	return fmt.Sprintf("server: %q\ntoken-file: %q\nnode-name: %q\nnode-ip: %q\ntls-san:\n  - %q\ndisable:\n  - traefik\n  - servicelb\nsecrets-encryption: true\nembedded-registry: true\nnode-label:\n  - borealis.io/engine-node=true\n  - borealis.io/application-state=drained\n  - borealis.io/control-plane-eligible=false\n  - borealis.io/edge-eligible=false\n  - borealis.io/scheduler-eligible=false\n  - borealis.io/postgres-primary-eligible=false\n",
-		"https://"+expected.ControlPlaneVIP+":6443", PrejoinK3sJoinTokenPath, expected.Target.Hostname, expected.Target.Address, expected.ControlPlaneVIP), nil
+		"https://"+expected.ControlPlaneVIP+":6443", PrejoinK3sJoinTokenPath, expected.Target.Hostname, expected.Target.Address, expected.ControlPlaneVIP) + cpu.String(), nil
 }

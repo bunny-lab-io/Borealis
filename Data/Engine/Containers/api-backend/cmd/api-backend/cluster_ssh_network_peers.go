@@ -127,7 +127,7 @@ func withClusterSSHNetworkInputs(parent context.Context, authority clusterSSHPre
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			expected, err := buildClusterSSHPreparationExpected(baseline.Cohort, baseline.Source, baseline.Lease, baseline.Baseline,
-				baseline.K3sVersion, snapshot.Sources[0].PodCIDR, snapshot.Sources[0].ServiceCIDR)
+				baseline.K3sVersion, snapshot.Sources[0].PodCIDR, snapshot.Sources[0].ServiceCIDR, baseline.payload)
 			if err != nil || !reflect.DeepEqual(expected, snapshot.Expected) {
 				return clusterbootstrap.ErrPreparationConfig
 			}

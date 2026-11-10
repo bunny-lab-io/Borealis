@@ -43,6 +43,7 @@ type clusterSSHPreparationReadinessReceipt struct {
 	Version    int                                `json:"version"`
 	PlanSHA256 string                             `json:"plan_sha256"`
 	Checks     []clusterSSHPreparationGateReceipt `json:"checks"`
+	Targets    []clusterSSHPreparationTargetCPU   `json:"targets,omitempty"`
 }
 
 func clusterSSHPreparationReadiness(plan string, receipts [6]string) clusterSSHPreparationReadinessReceipt {
@@ -57,7 +58,7 @@ func parseClusterSSHPreparationReadiness(raw []byte, a clusterSSHPreparationAuth
 	var r clusterSSHPreparationReadinessReceipt
 	plan, err := clusterSSHPreparationPlanDigest(a)
 	if err != nil || len(raw) == 0 || len(raw) > 4096 || json.Unmarshal(raw, &r) != nil ||
-		r.Version != 1 || r.PlanSHA256 != plan || len(r.Checks) != len(clusterSSHPreparationGateCodes) {
+		(r.Version != 1 && r.Version != 2) || r.PlanSHA256 != plan || len(r.Checks) != len(clusterSSHPreparationGateCodes) {
 		return errClusterConflict
 	}
 	canonical, err := json.Marshal(r)
@@ -68,6 +69,9 @@ func parseClusterSSHPreparationReadiness(raw []byte, a clusterSSHPreparationAuth
 		if check.Code != clusterSSHPreparationGateCodes[i] || !validClusterSSHPreparationDigest(check.SHA256) {
 			return errClusterConflict
 		}
+	}
+	if r.Version == 1 && len(r.Targets) != 0 || r.Version == 2 && validateClusterSSHPreparationReadinessCPU(r, a) != nil {
+		return errClusterConflict
 	}
 	return nil
 }
@@ -146,8 +150,8 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 // Approval retains the existing source observation and complete proof contract.
 // Native composition cannot approve while any required gate remains blocked.
 func (c *clusterController) approveClusterSSHPreparation(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot,
-	confirmation clusterSSHPreparationConfirmation, getJSON func(context.Context, string, any) error, gates clusterSSHPreparationGates) error {
-	plan, err := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
+	confirmation clusterSSHPreparationConfirmation, getJSON func(context.Context, string, any) error, gates clusterSSHPreparationGates, targetReaders ...clusterSSHPreparationTargetsRead) error {
+	_, err := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
 	if c == nil || err != nil || getJSON == nil || !confirmation.valid(snapshot.work.Authorization, snapshot.work.Proof.Source) {
 		return errClusterConflict
 	}
@@ -158,7 +162,22 @@ func (c *clusterController) approveClusterSSHPreparation(ctx context.Context, sn
 		}
 		return nil
 	}
-	return withClusterSSHPreparationApprovalProof(ctx, plan, gates, source, func(ctx context.Context, proof clusterSSHPreparationApprovalProof) error {
+	var targets clusterSSHPreparationTargetsRead
+	if len(targetReaders) > 1 {
+		return errClusterConflict
+	}
+	if len(targetReaders) == 1 {
+		targets = targetReaders[0]
+	} else {
+		client, err := newClusterSSHPreparationCleanBrokerClientFromEnv()
+		if err == nil {
+			targets = client.preparationTargetsRead(snapshot, c.preparationCleanTargetsProposalCheck(snapshot))
+		}
+	}
+	if targets == nil {
+		return clusterSSHPreparationGateBlocked{"complete_capacity", "Fresh native target CPU and memory evidence is unavailable through the authenticated API executor; preparation cannot be approved."}
+	}
+	return withClusterSSHPreparationCPUApprovalProof(ctx, snapshot, gates, source, targets, func(ctx context.Context, proof clusterSSHPreparationApprovalProof) error {
 		return c.commitClusterSSHPreparationApproval(ctx, snapshot, confirmation, proof)
 	})
 }

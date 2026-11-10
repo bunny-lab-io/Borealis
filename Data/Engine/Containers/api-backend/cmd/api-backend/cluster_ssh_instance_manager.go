@@ -55,8 +55,17 @@ func clusterSSHInstanceNativeCPU(read func(string) (map[string]any, error), memb
 	if err != nil || !ok || !valid || id.Name != member.Name || id.UID != member.NodeUID {
 		return 0, false
 	}
+	return clusterSSHInstanceCPURequest(allocatable, uint64(override), percentage)
+}
+
+// Shared pinned Longhorn calculation for observed source Nodes and a target's
+// separately proved planned allocatable/own override. Never copy a source Node.
+func clusterSSHInstanceCPURequest(allocatable, override uint64, percentage float64) (uint64, bool) {
+	if allocatable == 0 || allocatable > clusterSSHCapacityLimit || override > clusterSSHCapacityLimit || math.IsNaN(percentage) || math.IsInf(percentage, 0) || percentage < 0 || percentage > 40 {
+		return 0, false
+	}
 	if override != 0 {
-		return uint64(override), true
+		return override, true
 	}
 	// Match pinned Longhorn1.12's float64 math.Round; do not copy another node's
 	// CPU request or substitute host hardware for Kubernetes allocatable CPU.

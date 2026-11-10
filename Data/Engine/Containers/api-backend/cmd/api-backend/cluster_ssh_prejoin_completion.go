@@ -45,7 +45,7 @@ func verifyClusterSSHPrejoinCompletionRead(ctx context.Context, read clusterSSHP
 	if err != nil || authority.IdentitySource == nil || receipt.Validate(expected, *authority.IdentitySource) != nil {
 		return fail()
 	}
-	owned, err := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, authority.Lease, authority.Baseline, authority.K3sVersion, expected.PodCIDR, expected.ServiceCIDR)
+	owned, err := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, authority.Lease, authority.Baseline, authority.K3sVersion, expected.PodCIDR, expected.ServiceCIDR, authority.payload)
 	if err != nil || !reflect.DeepEqual(owned, expected) {
 		return fail()
 	}

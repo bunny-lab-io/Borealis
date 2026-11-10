@@ -79,6 +79,15 @@ func (s *postgresOperatorStore) preparationCleanTargetsProposalCheck(snapshot cl
 // an old receipt. One failure permanently invalidates this reader.
 func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationApprovalSnapshot, proposal func(context.Context) error,
 	aegis clusterSSHWorkerAegis, connect clusterSSHPreparationProposalConnect) func(context.Context, string) (string, error) {
+	read := newClusterSSHPreparationTargetsRead(snapshot, proposal, aegis, connect)
+	return func(ctx context.Context, plan string) (string, error) {
+		value, err := read(ctx, plan)
+		return value.Digest, err
+	}
+}
+
+func newClusterSSHPreparationTargetsRead(snapshot clusterSSHPreparationApprovalSnapshot, proposal func(context.Context) error,
+	aegis clusterSSHWorkerAegis, connect clusterSSHPreparationProposalConnect) clusterSSHPreparationTargetsRead {
 	wire, wireErr := json.Marshal(snapshot.work)
 	var work clusterSSHPreparationWork
 	decodeErr := json.Unmarshal(wire, &work)
@@ -105,8 +114,11 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 	serial := make(chan struct{}, 1)
 	var failed atomic.Bool
 	var retained string
-	return func(parent context.Context, requested string) (string, error) {
-		fail := func() (string, error) { failed.Store(true); return "", clusterbootstrap.ErrPreparationConfig }
+	return func(parent context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
+		fail := func() (clusterSSHPreparationCleanObservation, error) {
+			failed.Store(true)
+			return clusterSSHPreparationCleanObservation{}, clusterbootstrap.ErrPreparationConfig
+		}
 		if !valid || failed.Load() || parent.Err() != nil || requested != plan {
 			return fail()
 		}
@@ -127,19 +139,19 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 		if current(ctx) != nil {
 			return fail()
 		}
-		read := func(i int) (digest string, result error) {
+		read := func(i int) (observed clusterSSHPreparationTargetCPU, result error) {
 			item, sealed := work.Proof.Cohort.Targets[i], credentials[i]
 			if current(ctx) != nil {
-				return "", clusterbootstrap.ErrPreparationConfig
+				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
 			envelope, err := aegis.openClusterSSHCredentials(ctx, sealed, item.Binding)
 			if err != nil || envelope.Binding != item.Binding || envelope.validate() != nil || current(ctx) != nil {
-				return "", clusterbootstrap.ErrPreparationConfig
+				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
 			credential, sudo, err := clusterSSHNetworkCredential(envelope)
 			envelope = clusterSSHCredentialEnvelope{}
 			if err != nil {
-				return "", clusterbootstrap.ErrPreparationConfig
+				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
 			defer credential.Destroy()
 			defer clear(sudo)
@@ -149,18 +161,19 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 			if client != nil {
 				defer func() {
 					if client.Close() != nil {
-						digest, result = "", clusterbootstrap.ErrPreparationConfig
+						observed, result = clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 					}
 				}()
 			}
 			if err != nil || client == nil || current(ctx) != nil {
-				return "", clusterbootstrap.ErrPreparationConfig
+				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
 			var nonce [32]byte
 			if _, err := rand.Read(nonce[:]); err != nil {
-				return "", clusterbootstrap.ErrPreparationConfig
+				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
-			request := clusterremote.PreparationProposal{Version: 2, Source: work.Baseline,
+			cpuPlan, _ := clusterbootstrap.PreparationTargetCPUPlanDigest(clusterbootstrap.K3sPins().Version)
+			request := clusterremote.PreparationProposal{Version: clusterremote.PreparationProposalVersion, Source: work.Baseline, CPUPlanSHA256: cpuPlan,
 				ClusterID: item.Binding.ClusterID, OperationID: work.Authorization.OperationID, OperationAttempt: work.Authorization.Attempt,
 				ControllerHolder: work.Authorization.ControllerHolder, PlanSHA256: plan, TargetID: item.Binding.TargetID,
 				QualificationGeneration: work.Authorization.Targets[i].QualificationGeneration, Address: item.Binding.Address, Port: item.Binding.Port,
@@ -168,16 +181,16 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 				BootID: item.Report.BootID, Nonce: hex.EncodeToString(nonce[:])}
 			proof, err := client.InspectPreparationProposal(ctx, sudo, request, current)
 			if err != nil || proof.Validate(request) != nil || current(ctx) != nil {
-				return "", clusterbootstrap.ErrPreparationConfig
+				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
-			return proof.ObservationSHA256, nil
+			return clusterSSHPreparationTargetCPU{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, CPU: proof.CPU}, nil
 		}
-		var first []string
+		var first []clusterSSHPreparationTargetCPU
 		for round := 0; round < 2; round++ {
-			values := make([]string, 0, len(work.Proof.Cohort.Targets))
+			values := make([]clusterSSHPreparationTargetCPU, 0, len(work.Proof.Cohort.Targets))
 			for i := range work.Proof.Cohort.Targets {
 				digest, err := read(i)
-				if err != nil || !validClusterSSHPreparationDigest(digest) || current(ctx) != nil {
+				if err != nil || !validClusterSSHPreparationDigest(digest.ObservationSHA256) || current(ctx) != nil {
 					return fail()
 				}
 				values = append(values, digest)
@@ -188,14 +201,11 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 				return fail()
 			}
 		}
-		digest, err := clusterSSHPreparationDigest(struct {
-			Domain, Plan string
-			Targets      []string
-		}{"preparation-clean-targets-v2", plan, first})
+		digest, err := clusterSSHPreparationTargetCPUDigest(clusterSSHPreparationApprovalSnapshot{work: work}, first)
 		if err != nil || current(ctx) != nil || (retained != "" && retained != digest) {
 			return fail()
 		}
 		retained = digest
-		return digest, nil
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(first)}, nil
 	}
 }
