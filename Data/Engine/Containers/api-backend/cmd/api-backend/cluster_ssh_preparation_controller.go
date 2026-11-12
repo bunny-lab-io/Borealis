@@ -52,6 +52,9 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 			if json.Unmarshal(raw, &receipt) == nil && receipt.Version == 1 {
 				return c.runSSHIdentityRecoveryParent(parent, operation, getJSON)
 			}
+			if receipt.Version == 2 {
+				return c.runSSHPreparedAdmissionParent(parent, operation)
+			}
 		}
 		return nil // Reserved work belongs to the existing API executor.
 	}

@@ -106,6 +106,14 @@ func readClusterSSHJoinedTargets(parent context.Context, authority clusterSSHPre
 // Sharing this projection never manufactures a preparation worker lease.
 func observeClusterSSHJoinedNodes(ctx context.Context, getJSON func(context.Context, string, any) error,
 	cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, k3sVersion string) (map[string]clusterbootstrap.K3sJoinedNode, error) {
+	return observeClusterSSHJoinedNodesWithParser(ctx, getJSON, cohort, source, k3sVersion, nil)
+}
+
+// Admission supplies its exact prepared-receipt parser only after original SQL
+// phase validation. Every existing preparation/recovery caller stays drained.
+func observeClusterSSHJoinedNodesWithParser(ctx context.Context, getJSON func(context.Context, string, any) error,
+	cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, k3sVersion string,
+	parseTarget func([]byte, clusterSSHInspectedTarget) (clusterbootstrap.K3sJoinedNode, error)) (map[string]clusterbootstrap.K3sJoinedNode, error) {
 	targets := map[string]clusterbootstrap.K3sJoinedNode{}
 	observed, err := observeClusterSSHSourceCohort(ctx, func(ctx context.Context, path string, out any) error {
 		if path != "/api/v1/nodes" {
@@ -159,6 +167,9 @@ func observeClusterSSHJoinedNodes(ctx context.Context, getJSON func(context.Cont
 				}
 				identity := clusterbootstrap.K3sJoinedNodeIdentity{Hostname: target.Report.Hostname, MachineID: target.Report.MachineID, BootID: target.Report.BootID, Address: target.Binding.Address, K3sVersion: k3sVersion}
 				observed, err := clusterbootstrap.ParseK3sJoinedNodeIdentity(raw, identity)
+				if parseTarget != nil {
+					observed, err = parseTarget(raw, target)
+				}
 				if err != nil {
 					return clusterbootstrap.ErrSessionAuthority
 				}

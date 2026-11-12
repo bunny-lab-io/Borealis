@@ -280,6 +280,7 @@ func client(args []string) {
 	removalNodeName := flags.String("node-name", "", "Expected target node name")
 	nodeUID := flags.String("node-uid", "", "Expected Kubernetes Node UID")
 	etcdMemberName := flags.String("etcd-member-name", "", "Expected K3s etcd member name")
+	preparedAdmission := flags.String("prepared-admission", "", "Exact private prepared admission request")
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
@@ -290,10 +291,11 @@ func client(args []string) {
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"StageRevisionImages": true,
 		"InspectHealth":       true, "InspectSourceNetwork": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
-		"RunSchemaPhase":         true,
-		"PrepareMemberRemoval":   true,
-		"RunK3sProbeConformance": true,
-		"CreateEtcdSnapshot":     true,
+		"RunSchemaPhase":                       true,
+		"PrepareMemberRemoval":                 true,
+		"RunK3sProbeConformance":               true,
+		"CreateEtcdSnapshot":                   true,
+		clusterbootstrap.PreparedAdmissionVerb: true,
 	}
 	if !allowed[strings.TrimSpace(*verb)] {
 		fatalf("unsupported fixed verb %q", *verb)
@@ -321,6 +323,15 @@ func client(args []string) {
 		if value != "" {
 			params[key] = value
 		}
+	}
+	if *preparedAdmission != "" || strings.TrimSpace(*verb) == clusterbootstrap.PreparedAdmissionVerb {
+		if strings.TrimSpace(*verb) != clusterbootstrap.PreparedAdmissionVerb || len(params) != 0 || flags.NArg() != 0 {
+			fatalf("invalid prepared admission request")
+		}
+		if _, err := clusterbootstrap.DecodePreparedAdmissionRequest(*preparedAdmission); err != nil {
+			fatalf("invalid prepared admission request")
+		}
+		params["payload"] = *preparedAdmission
 	}
 	var removalTarget memberRemovalIdentity
 	var identityTarget identityConsumerTarget
@@ -350,6 +361,17 @@ func client(args []string) {
 		return dialer.DialContext(ctx, "unix", socketPath)
 	}}
 	httpClient := &http.Client{Transport: transport, Timeout: nodeManagerActionTimeout(strings.TrimSpace(*verb)) + time.Minute}
+	if strings.TrimSpace(*verb) == clusterbootstrap.PreparedAdmissionVerb {
+		ctx, cancel := context.WithTimeout(context.Background(), nodeManagerActionTimeout(clusterbootstrap.PreparedAdmissionVerb)+time.Minute)
+		defer cancel()
+		defer transport.CloseIdleConnections()
+		responseRaw, err := readPreparedAdmissionAcknowledgement(ctx, httpClient, strings.TrimSpace(string(secret)), *preparedAdmission)
+		if err != nil {
+			fatalf("prepared admission action failed; retain operation for reconciliation")
+		}
+		fmt.Println(string(responseRaw))
+		return
+	}
 	request, err := http.NewRequest(http.MethodPost, "http://node-manager/v1/action", bytes.NewReader(raw))
 	if err != nil {
 		fatalf("create node-manager request: %v", err)
@@ -536,6 +558,12 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if strings.TrimSpace(request.Verb) == clusterbootstrap.PreparedAdmissionVerb {
+		if _, err := clusterbootstrap.ParsePreparedAdmissionActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
@@ -552,7 +580,7 @@ func nodeManagerActionTimeout(verb string) time.Duration {
 		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
-	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
+	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate", clusterbootstrap.PreparedAdmissionVerb:
 		return 60 * time.Minute
 	case "RunSchemaPhase":
 		return 20 * time.Minute
@@ -566,6 +594,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		request.Params = map[string]any{}
 	}
 	switch strings.TrimSpace(request.Verb) {
+	case clusterbootstrap.PreparedAdmissionVerb:
+		return m.preparedAdmission(ctx, request.Params)
 	case "Status":
 		return m.status(ctx)
 	case "EnterApplicationDrain":
@@ -2310,11 +2340,23 @@ func normalizeRemote(value string) string {
 }
 
 func run(ctx context.Context, workdir, binary string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, binary, args...)
-	if workdir != "" {
-		command.Dir = workdir
+	if err := checkPreparedAdmissionCommand(ctx); err != nil {
+		return "", err
 	}
-	output, err := command.CombinedOutput()
+	var output []byte
+	var err error
+	if _, guarded := ctx.Value(preparedAdmissionCheckKey{}).(func(context.Context) error); guarded {
+		output, err = runPreparedAdmissionCommand(ctx, workdir, binary, args...)
+	} else {
+		command := exec.CommandContext(ctx, binary, args...)
+		if workdir != "" {
+			command.Dir = workdir
+		}
+		output, err = command.CombinedOutput()
+	}
+	if guardErr := checkPreparedAdmissionCommand(ctx); guardErr != nil {
+		return "", guardErr
+	}
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w: %s", filepath.Base(binary), err, truncateDiagnostic(strings.TrimSpace(string(output)), 2048))
 	}

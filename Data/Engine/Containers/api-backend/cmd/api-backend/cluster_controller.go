@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"database/sql"
 	"errors"
@@ -467,6 +468,9 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 		}
 	}
 	if operation.Kind == "ssh_onboarding" {
+		if textInSet(operation.CurrentStep, "apply_membership", "verify_quorum") {
+			return c.runSSHPreparedAdmissionParent(runCtx, operation)
+		}
 		var observe func(context.Context, string, any) error
 		if runner, ok := c.runner.(*kubernetesClusterStepRunner); ok && runner.kube != nil {
 			observe = runner.kube.getJSON
@@ -1420,10 +1424,11 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		 WHERE o.state IN ('queued','running','waiting')
 		   AND o.kind<>'ssh_identity_recovery'
 		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='prepare_ssh_targets'
-		     AND COALESCE(o.payload_json::jsonb->'ssh_preparation'->>'version','')<>'1')
+		     AND COALESCE(o.payload_json::jsonb->'ssh_preparation'->>'version','') NOT IN ('1','2'))
 		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
+		   AND NOT (o.kind='ssh_onboarding' AND COALESCE(o.error_text,'') IN ($1,$2))
 		 FOR UPDATE OF o SKIP LOCKED
-	`).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
+	`, clusterSSHPreparedAdmissionRunning, clusterSSHPreparedAdmissionBlocked).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return clusterControllerOperation{}, false, nil
 	}
@@ -1436,7 +1441,7 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 	operation.Payload = parseClusterJSON(payloadJSON)
 	// Waiting SSH proposals retain their exact confirmed payload and phase.
 	// Reading them never starts preparation or replaces original ownership.
-	if operation.Kind == "ssh_onboarding" && operation.State == "waiting" {
+	if operation.Kind == "ssh_onboarding" && (operation.State == "waiting" || clusterSSHPreparedAuthorityPhase(operation.CurrentStep)) {
 		if err := tx.Commit(); err != nil {
 			return clusterControllerOperation{}, false, err
 		}
@@ -2329,10 +2334,22 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		}
 		pending = append(pending, node)
 	}
+	mutated := false
+	preparedContainment := clusterSSHPreparedAdmissionRuntimeFrom(ctx) != nil
+	contain := func(cause error) error {
+		if !mutated || !preparedContainment {
+			return cause
+		}
+		return errors.Join(cause, r.containClusterSSHPreparedAdmissionTargets(ctx, operation, pending))
+	}
 	newSize := len(activeNodes) + len(pending)
 	for _, node := range pending {
 		if err := r.waitNodeReady(ctx, node.Name); err != nil {
-			return err
+			return contain(err)
+		}
+		mutated = true
+		if bound := clusterSSHPreparedAdmissionRuntimeFrom(ctx); bound != nil {
+			bound.mutated = true
 		}
 		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{
 			"borealis.io/application-state":         "drained",
@@ -2342,7 +2359,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 			"borealis.io/postgres-primary-eligible": "false",
 			"borealis.io/hmr-target":                "false",
 		}); err != nil {
-			return err
+			return contain(err)
 		}
 	}
 	k3sVersion := cleanText(operation.Payload["k3s_version"])
@@ -2355,15 +2372,15 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 		conformance.TargetNodeID = node.ID
 		conformance.TargetRelease = action.targetRelease
 		if err := r.nodeActionJob(ctx, conformance, clusterControllerStep{Name: action.stepName, NodeID: node.ID}, node, action.verb); err != nil {
-			return err
+			return contain(err)
 		}
 	}
 	if err := r.scaleCNPG(ctx, newSize); err != nil {
-		return err
+		return contain(err)
 	}
 	storageNodes := append(append(make([]clusterControllerNode, 0, newSize), activeNodes...), pending...)
 	if err := r.waitForSharedArtifactStorageHA(ctx, storageNodes); err != nil {
-		return fmt.Errorf("shared Agent artifact storage did not reach one healthy replica per Engine: %w", err)
+		return contain(fmt.Errorf("shared Agent artifact storage did not reach one healthy replica per Engine: %w", err))
 	}
 	for _, node := range pending {
 		redeploy := operation
@@ -2376,31 +2393,31 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 				actionOperation.TargetRelease = action.targetRelease
 			}
 			if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName, NodeID: node.ID}, node, action.verb); err != nil {
-				return err
+				return contain(err)
 			}
 			if action.soakAfter {
 				if err := r.waitOperationSoak(ctx, action.stepName); err != nil {
-					return err
+					return contain(err)
 				}
 				if err := r.nodeActionJob(ctx, actionOperation, clusterControllerStep{Name: action.stepName + ":soak", NodeID: node.ID}, node, action.verb); err != nil {
-					return err
+					return contain(err)
 				}
 			}
 		}
 		// Start and prove local WireGuard while all cluster roles remain fenced.
 		// Eligibility is enabled only after active workload soak completes.
 		if err := r.scaleNodeWorkload(ctx, node.Name, "wireguard-tunnel", true); err != nil {
-			return err
+			return contain(err)
 		}
 		healthStep := clusterControllerStep{Name: "admit:" + node.ID + ":active_health", NodeID: node.ID}
 		if err := r.nodeActionJob(ctx, redeploy, healthStep, node, "InspectHealth"); err != nil {
-			return err
+			return contain(err)
 		}
 		if err := r.waitOperationSoak(ctx, healthStep.Name); err != nil {
-			return err
+			return contain(err)
 		}
 		if err := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: healthStep.Name + ":soak", NodeID: node.ID}, node, "InspectHealth"); err != nil {
-			return err
+			return contain(err)
 		}
 		if err := r.patchNodeLabels(ctx, node.Name, map[string]string{
 			"borealis.io/control-plane-eligible":    "true",
@@ -2408,7 +2425,7 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 			"borealis.io/scheduler-eligible":        "true",
 			"borealis.io/postgres-primary-eligible": "true",
 		}); err != nil {
-			return err
+			return contain(err)
 		}
 		activationErr := r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":role_health", NodeID: node.ID}, node, "InspectHealth")
 		if activationErr == nil {
@@ -2421,17 +2438,22 @@ func (r *kubernetesClusterStepRunner) admitPendingMembers(ctx context.Context, o
 			activationErr = r.nodeActionJob(ctx, redeploy, clusterControllerStep{Name: "admit:" + node.ID + ":exit_drain", NodeID: node.ID}, node, "ExitApplicationDrain")
 		}
 		if activationErr != nil {
-			_ = r.patchNodeLabels(ctx, node.Name, map[string]string{
-				"borealis.io/control-plane-eligible":    "false",
-				"borealis.io/edge-eligible":             "false",
-				"borealis.io/scheduler-eligible":        "false",
-				"borealis.io/postgres-primary-eligible": "false",
-			})
-			_ = r.scaleNodeWorkload(ctx, node.Name, "wireguard-tunnel", false)
-			return activationErr
+			if !preparedContainment {
+				_ = r.patchNodeLabels(ctx, node.Name, map[string]string{
+					"borealis.io/control-plane-eligible":    "false",
+					"borealis.io/edge-eligible":             "false",
+					"borealis.io/scheduler-eligible":        "false",
+					"borealis.io/postgres-primary-eligible": "false",
+				})
+				_ = r.scaleNodeWorkload(ctx, node.Name, "wireguard-tunnel", false)
+			}
+			return contain(activationErr)
 		}
 	}
-	return r.recordClusterIntent(ctx, operation, clusterControllerStep{Name: "apply_membership"})
+	if err := r.recordClusterIntent(ctx, operation, clusterControllerStep{Name: "apply_membership"}); err != nil {
+		return contain(err)
+	}
+	return nil
 }
 
 func (r *kubernetesClusterStepRunner) waitForSharedArtifactStorageHA(ctx context.Context, nodes []clusterControllerNode) error {
@@ -3588,8 +3610,13 @@ func (r *kubernetesClusterStepRunner) patchNodeLabelValues(ctx context.Context, 
 	if !clusterControllerNodeRegex.MatchString(nodeName) {
 		return errors.New("invalid Kubernetes node name")
 	}
+	metadata, err := r.preparedAdmissionNodeMetadata(ctx, nodeName)
+	if err != nil {
+		return err
+	}
+	metadata["labels"] = labels
 	var output map[string]any
-	return r.kube.doJSON(ctx, http.MethodPatch, "/api/v1/nodes/"+nodeName, map[string]any{"metadata": map[string]any{"labels": labels}}, "application/strategic-merge-patch+json", &output, 30*time.Second)
+	return r.kube.doJSON(ctx, http.MethodPatch, "/api/v1/nodes/"+nodeName, map[string]any{"metadata": metadata}, "application/strategic-merge-patch+json", &output, 30*time.Second)
 }
 
 func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operation clusterControllerOperation, step clusterControllerStep, node clusterControllerNode, verb string) error {
@@ -3603,6 +3630,24 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	jobName := clusterActionJobName(operation.ID, fmt.Sprintf("attempt:%d:%s", operation.Attempt, step.Name))
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, jobName)
 	args := clusterNodeActionArgs(operation, verb)
+	var preparedRequest *clusterbootstrap.PreparedAdmissionRequest
+	if bound := clusterSSHPreparedAdmissionRuntimeFrom(ctx); bound != nil {
+		if operation.Kind != "ssh_onboarding" || operation.ID != bound.operation.ID || operation.Attempt != bound.operation.Attempt {
+			return errClusterConflict
+		}
+		request, err := bound.request(ctx, node, verb)
+		if err != nil {
+			return err
+		}
+		encoded, err := clusterbootstrap.EncodePreparedAdmissionRequest(request)
+		if err != nil {
+			return err
+		}
+		preparedRequest = &request
+		args = []string{"client", "--verb", clusterbootstrap.PreparedAdmissionVerb, "--prepared-admission", encoded}
+	} else if operation.Kind == "ssh_onboarding" {
+		return errClusterConflict // A name-only action cannot consume SSH preparation.
+	}
 	if verb == "PrepareMemberRemoval" {
 		fence, exists, err := removalFenceRecord(operation, node)
 		if err != nil {
@@ -3614,6 +3659,9 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		args = append(args, removalFenceArgs(fence)...)
 	}
 	manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, actionImage, args, operation.ID, step.Name)
+	if preparedRequest != nil {
+		return r.runClusterSSHPreparedAdmissionJob(ctx, operation, step, node, manifest, *preparedRequest)
+	}
 	var existing map[string]any
 	if err := r.kube.getJSON(ctx, path, &existing); err != nil {
 		if !kubernetesAPIErrorHasStatus(err, http.StatusNotFound) {

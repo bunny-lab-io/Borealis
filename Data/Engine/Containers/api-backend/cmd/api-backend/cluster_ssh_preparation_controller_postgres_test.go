@@ -256,11 +256,19 @@ func TestClusterSSHPreparationControllerPostgresLegacyRouting(t *testing.T) {
 			f.op.Payload["ssh_preparation"] = map[string]any{"version": version}
 			f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
 			op, ok, err := f.c.claimOperation(f.ctx)
-			if err != nil || ok != (version == 1) {
+			if err != nil || !ok {
 				t.Fatal("preparation routing", err)
 			}
 			if version == 1 && f.c.runSSHPreparationParent(f.ctx, op, f.observe) == nil {
 				t.Fatal("partial legacy receipt bypassed existing recovery validation")
+			}
+			if version == 2 {
+				if err := f.c.runSSHPreparationParent(f.ctx, op, f.observe); err != nil {
+					t.Fatal("native receipt failure not recorded", err)
+				}
+				if _, selected, err := f.c.claimOperation(f.ctx); err != nil || selected {
+					t.Fatal("partial native receipt escaped admission fence", err)
+				}
 			}
 		})
 	}

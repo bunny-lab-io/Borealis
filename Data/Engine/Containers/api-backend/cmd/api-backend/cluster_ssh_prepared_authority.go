@@ -4,7 +4,6 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"reflect"
@@ -39,7 +38,7 @@ func parseClusterSSHPreparedAuthority(payload string, baseline clusterbootstrap.
 	operation clusterControllerOperation, holder string) (clusterSSHPreparedAuthority, error) {
 	fail := func() (clusterSSHPreparedAuthority, error) { return clusterSSHPreparedAuthority{}, errClusterConflict }
 	if baseline.Validate() != nil || holder == "" || len(holder) > 1024 || operation.Kind != "ssh_onboarding" ||
-		operation.State != "running" || operation.CurrentStep != clusterSSHPreparationOperationStep || operation.Attempt < 1 {
+		operation.State != "running" || !clusterSSHPreparedAuthorityPhase(operation.CurrentStep) || operation.Attempt < 1 {
 		return fail()
 	}
 	// Inspection parser uses only these original parent identities. This is not
@@ -155,59 +154,18 @@ func (c *clusterController) loadClusterSSHPreparedAuthority(ctx context.Context,
 	if err != nil {
 		return fail()
 	}
-	targets := slices.Clone(a.proof.Cohort.Targets)
-	slices.SortFunc(targets, func(a, b clusterSSHInspectedTarget) int {
-		return strings.Compare(a.Binding.TargetID, b.Binding.TargetID)
-	})
-	reports, keys := map[string]string{}, map[string]string{}
-	for _, target := range targets {
-		report, err := json.Marshal(target.Report)
-		if err != nil {
-			return fail()
-		}
-		reports[target.Binding.TargetID], keys[target.Binding.TargetID] = string(report), base64.StdEncoding.EncodeToString(target.Key.PublicKey)
+	binding, err := readClusterSSHPreparedStoreBinding(ctx, c.store.db, a, operation, c.holder)
+	if err != nil {
+		return fail()
 	}
 	tx, err := c.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fail()
 	}
 	defer tx.Rollback()
-	if lockClusterSSHQualification(ctx, tx, operation.ID, targets) != nil ||
-		checkClusterSSHQualificationSource(ctx, tx, clusterSSHQualificationWork{Proof: a.proof, Source: queue}) != nil {
+	now, err := binding.lock(ctx, tx)
+	if err != nil || ctx.Err() != nil || tx.Commit() != nil {
 		return fail()
-	}
-	credentials := make([][2]string, len(a.proof.Cohort.Targets))
-	for i, target := range a.proof.Cohort.Targets {
-		if tx.QueryRowContext(ctx, `SELECT p.aegis_generation,p.ciphertext FROM engine.cluster_onboarding_targets t
- JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id JOIN engine.aegis_cipher_state a ON a.id=1 AND a.verification_token=p.aegis_generation
- WHERE t.id=$1 AND t.operation_id=$2 AND t.cluster_id=$3 AND t.operation_attempt=$4
- AND t.state='prepared' AND t.current_step=$5 AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=$6
- AND t.credential_state='available' AND t.management_ip=$7 AND t.ssh_port=$8 AND t.host_key_algorithm=$9 AND t.host_key_fingerprint=$10
- AND t.host_key_base64=$11 AND t.ordinal=$12 AND t.inspected_attempt=$4 AND t.inspected_generation=$13 AND t.inspected_at=$14 AND t.inspection_json=$15
- AND octet_length(p.aegis_generation) BETWEEN 1 AND 16384 AND octet_length(p.ciphertext) BETWEEN 1 AND 262144`,
-			target.Binding.TargetID, operation.ID, queue.ClusterID, operation.Attempt, clusterSSHPreparationCompleteStep,
-			a.receipt.Targets[i].Generation, target.Binding.Address, target.Binding.Port, target.Key.Algorithm, target.Key.Fingerprint,
-			keys[target.Binding.TargetID], target.Ordinal, target.Generation, target.InspectedAt, reports[target.Binding.TargetID]).
-			Scan(&credentials[i][0], &credentials[i][1]) != nil {
-			return fail()
-		}
-	}
-	var now int64
-	if tx.QueryRowContext(ctx, `WITH moment AS MATERIALIZED (SELECT extract(epoch FROM clock_timestamp()) AS now)
- SELECT floor(moment.now)::bigint FROM moment,engine.cluster_operations o,engine.cluster_application_leases l
- WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.current_step=$2 AND o.attempt=$3 AND o.payload_json=$4
- AND l.name=$5 AND l.holder=$6 AND l.expires_at>moment.now
- AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$7
- AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
- WHERE t.operation_id=o.id AND (p.expires_at>moment.now AND t.inspected_at<=moment.now) IS NOT TRUE)`,
-		operation.ID, clusterSSHPreparationOperationStep, operation.Attempt, payload, clusterControllerLeaseName, c.holder, len(targets)).Scan(&now) != nil || tx.Commit() != nil {
-		return fail()
-	}
-	for i, credential := range credentials {
-		digest, err := clusterSSHPreparationDigest([]string{credential[0], credential[1]})
-		if err != nil || digest != a.authorization.Targets[i].CredentialSHA256 || ctx.Err() != nil {
-			return fail()
-		}
 	}
 	return a, now, nil
 }

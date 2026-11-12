@@ -149,15 +149,16 @@ func TestBootstrapMembershipQuorumParser(t *testing.T) {
 }
 
 func TestBootstrapMembershipQuorumNative(t *testing.T) {
-	for _, mode := range []string{"valid source", "valid target", "missing gateway listener", "foreign gateway listener", "gateway drift", "wrong member", "cluster drift", "revision backwards", "term backwards", "gateway redirect", "gateway error", "key mode", "certificate mode", "certificate writable", "key replaced", "key late drift", "old capability", "listener close failed", "close failed", "client expiry", "cancel close"} {
+	for _, mode := range []string{"valid source", "valid target", "valid admitted target", "admitted target missing flag", "admitted mixed roles", "admitted stale UID", "missing gateway listener", "foreign gateway listener", "gateway drift", "wrong member", "cluster drift", "revision backwards", "term backwards", "gateway redirect", "gateway error", "key mode", "certificate mode", "certificate writable", "key replaced", "key late drift", "old capability", "listener close failed", "close failed", "client expiry", "cancel close"} {
 		t.Run(mode, func(t *testing.T) {
 			index := 0
-			if mode == "valid target" {
+			if mode == "valid target" || strings.Contains(mode, "admitted") {
 				index = 1
 			}
 			request := membershipObserverRequestFixture(t, true, index)
 			request.RequireListenerProof = true
 			request.RequiredListenerProofVersion = clusterbootstrap.MembershipQuorumProofVersion
+			request.PreparedAdmission = strings.Contains(mode, "admitted") && mode != "admitted target missing flag"
 			f := newMembershipProcFixture(t, os.Getpid())
 			request.Network.Kubelet = f.want
 			request.Network.ManagementLink.NetworkNamespace = f.want.NetworkNamespace
@@ -185,6 +186,20 @@ func TestBootstrapMembershipQuorumNative(t *testing.T) {
 				root.Chmod("var/lib/rancher/k3s/server/tls/etcd/server-ca.crt", 0664)
 			}
 			node, members := membershipNativeDocuments(request)
+			if strings.Contains(mode, "admitted") {
+				metadata := node["metadata"].(map[string]any)
+				labels := metadata["labels"].(map[string]any)
+				labels["borealis.io/application-state"], labels["borealis.io/hmr-target"] = "active", "false"
+				for _, role := range []string{"control-plane", "edge", "scheduler", "postgres-primary"} {
+					labels["borealis.io/"+role+"-eligible"] = "true"
+				}
+				if mode == "admitted mixed roles" {
+					labels["borealis.io/edge-eligible"] = "false"
+				}
+				if mode == "admitted stale UID" {
+					metadata["uid"] = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+				}
+			}
 			localID := uint64(0)
 			for _, raw := range members["members"].([]any) {
 				m := raw.(map[string]any)

@@ -352,6 +352,9 @@ func observeBootstrapMembershipLocalNode(raw []byte, r bootstrapMembershipObserv
 				// A settled target retains its exact drained/ineligible phase.
 				// Original sources below still require active application state.
 				observed, err := clusterbootstrap.ParseK3sJoinedNode(raw, target.Expected)
+				if r.PreparedAdmission {
+					observed, err = clusterbootstrap.ParsePreparedAdmissionNode(raw, clusterbootstrap.PreparedAdmissionRequest{Version: 1, Action: "InspectHealth", Expected: target.Expected, Receipt: target.Receipt})
+				}
 				if err != nil || observed != target.Receipt.Node || observed != want || member.ID != target.Receipt.MemberID {
 					return fail()
 				}

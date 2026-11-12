@@ -98,14 +98,46 @@ func (c *clusterController) observeClusterSSHPreparedMembership(parent context.C
 // Capture the same complete strict Node body used by existing source/target
 // identity proof. Additional annotations never come from an unrelated read.
 func readClusterSSHPreparedMembershipNodes(ctx context.Context, getJSON func(context.Context, string, any) error, a clusterSSHPreparedAuthority) ([]clusterbootstrap.MembershipNodeExpectation, map[string]clusterbootstrap.K3sJoinedNode, error) {
+	return readClusterSSHPreparedMembershipNodesForPhase(ctx, getJSON, a, clusterSSHPreparationOperationStep)
+}
+
+func readClusterSSHPreparedMembershipNodesForPhase(ctx context.Context, getJSON func(context.Context, string, any) error, a clusterSSHPreparedAuthority, phase string) ([]clusterbootstrap.MembershipNodeExpectation, map[string]clusterbootstrap.K3sJoinedNode, error) {
 	fail := func() ([]clusterbootstrap.MembershipNodeExpectation, map[string]clusterbootstrap.K3sJoinedNode, error) {
 		return nil, nil, errClusterConflict
 	}
-	if getJSON == nil {
+	if getJSON == nil || !clusterSSHPreparedAuthorityPhase(phase) {
 		return fail()
 	}
+	var parseTarget func([]byte, clusterSSHInspectedTarget) (clusterbootstrap.K3sJoinedNode, error)
+	if phase != clusterSSHPreparationOperationStep {
+		parseTarget = func(raw []byte, target clusterSSHInspectedTarget) (clusterbootstrap.K3sJoinedNode, error) {
+			if phase == "verify_quorum" {
+				var node clusterNativeObservationObject
+				if json.Unmarshal(raw, &node) != nil {
+					return clusterbootstrap.K3sJoinedNode{}, errClusterConflict
+				}
+				labels := clusterSSHStorageMap(clusterSSHStorageMap(node, "metadata"), "labels")
+				if labels["borealis.io/application-state"] != "active" {
+					return clusterbootstrap.K3sJoinedNode{}, errClusterConflict
+				}
+				for _, role := range []string{"control-plane", "edge", "scheduler", "postgres-primary"} {
+					if labels["borealis.io/"+role+"-eligible"] != "true" {
+						return clusterbootstrap.K3sJoinedNode{}, errClusterConflict
+					}
+				}
+			}
+			for _, prepared := range a.receipt.Targets {
+				if prepared.TargetID == target.Binding.TargetID && prepared.Prejoin != nil {
+					return clusterbootstrap.ParsePreparedAdmissionNode(raw, clusterbootstrap.PreparedAdmissionRequest{
+						Version: 1, Action: "InspectHealth", Expected: prepared.Prejoin.Expected, Receipt: prepared.Prejoin.Receipt,
+					})
+				}
+			}
+			return clusterbootstrap.K3sJoinedNode{}, errClusterConflict
+		}
+	}
 	var raw json.RawMessage
-	targets, err := observeClusterSSHJoinedNodes(ctx, func(ctx context.Context, path string, out any) error {
+	targets, err := observeClusterSSHJoinedNodesWithParser(ctx, func(ctx context.Context, path string, out any) error {
 		if path != "/api/v1/nodes" {
 			return getJSON(ctx, path, out)
 		}
@@ -113,7 +145,7 @@ func readClusterSSHPreparedMembershipNodes(ctx context.Context, getJSON func(con
 			return err
 		}
 		return json.Unmarshal(raw, out)
-	}, a.proof.Cohort, a.proof.Source, a.version)
+	}, a.proof.Cohort, a.proof.Source, a.version, parseTarget)
 	if err != nil || len(targets) != len(a.receipt.Targets) {
 		return fail()
 	}

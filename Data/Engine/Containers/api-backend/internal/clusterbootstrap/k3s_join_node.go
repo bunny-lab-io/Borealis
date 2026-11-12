@@ -33,6 +33,10 @@ func ParseK3sJoinedNode(raw []byte, expected PreparationExpected) (K3sJoinedNode
 // Identity-only variant lets original controller derive expectations directly
 // from confirmed inspection; it must not invent another target's lease claim.
 func ParseK3sJoinedNodeIdentity(raw []byte, expected K3sJoinedNodeIdentity) (K3sJoinedNode, error) {
+	return parseK3sJoinedNodeIdentity(raw, expected, true)
+}
+
+func parseK3sJoinedNodeIdentity(raw []byte, expected K3sJoinedNodeIdentity, drained bool) (K3sJoinedNode, error) {
 	fail := func() (K3sJoinedNode, error) { return K3sJoinedNode{}, ErrPreparationConfig }
 	address, addressErr := netip.ParseAddr(expected.Address)
 	if addressErr != nil || !address.Is4() || !address.IsPrivate() || address.String() != expected.Address || !sessionHostname.MatchString(expected.Hostname) || !sessionMachineID.MatchString(expected.MachineID) || expected.MachineID == strings.Repeat("0", 32) || !nonzeroPreparationUUID(expected.BootID) || expected.K3sVersion != K3sPins().Version {
@@ -116,7 +120,28 @@ func ParseK3sJoinedNodeIdentity(raw []byte, expected K3sJoinedNodeIdentity) (K3s
 		node.Status.NodeInfo.KubeletVersion != expected.K3sVersion || node.Status.NodeInfo.Architecture != "amd64" || node.Status.NodeInfo.OperatingSystem != "linux" {
 		return fail()
 	}
-	for key, want := range map[string]string{"borealis.io/engine-node": "true", "borealis.io/application-state": "drained", "borealis.io/control-plane-eligible": "false", "borealis.io/edge-eligible": "false", "borealis.io/scheduler-eligible": "false", "borealis.io/postgres-primary-eligible": "false"} {
+	labels := map[string]string{"borealis.io/engine-node": "true"}
+	if drained {
+		labels = map[string]string{"borealis.io/engine-node": "true", "borealis.io/application-state": "drained", "borealis.io/control-plane-eligible": "false", "borealis.io/edge-eligible": "false", "borealis.io/scheduler-eligible": "false", "borealis.io/postgres-primary-eligible": "false"}
+	} else {
+		state := node.Metadata.Labels["borealis.io/application-state"]
+		eligible := node.Metadata.Labels["borealis.io/control-plane-eligible"]
+		if state != "active" && state != "drained" || eligible != "true" && eligible != "false" {
+			return fail()
+		}
+		// Fresh native join configuration omits this opt-in marker. Absence
+		// means no HMR target; an explicit value must still be literal false.
+		const hmr = "borealis.io/hmr-target"
+		for key, value := range node.Metadata.Labels {
+			if strings.EqualFold(key, hmr) && (key != hmr || value != "false") {
+				return fail()
+			}
+		}
+		for _, role := range []string{"control-plane", "edge", "scheduler", "postgres-primary"} {
+			labels["borealis.io/"+role+"-eligible"] = eligible
+		}
+	}
+	for key, want := range labels {
 		if node.Metadata.Labels[key] != want {
 			return fail()
 		}

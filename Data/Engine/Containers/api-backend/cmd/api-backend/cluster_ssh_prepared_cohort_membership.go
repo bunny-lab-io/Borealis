@@ -82,6 +82,10 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 	if err != nil || ctx.Err() != nil {
 		return fail()
 	}
+	admission := textInSet(operation.CurrentStep, "apply_membership", "verify_quorum")
+	if admission && requiredProof != clusterbootstrap.MembershipQuorumProofVersion {
+		return fail()
+	}
 	// SQL readers may reuse nested allocations. Keep a wholly owned copy of
 	// proof, receipts and sealed-credential digests before the first callback.
 	frozen := clusterSSHPreparedAuthority{payload: before.payload, baseline: before.baseline, queue: before.queue, version: before.version}
@@ -102,7 +106,7 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 		}
 	}
 	selected := before.receipt.Targets[0].Prejoin.Receipt.Source
-	request := clusterbootstrap.MembershipObservationRequest{Source: selected, KubeSystemUID: before.proof.Source.KubeSystemUID, RequireListenerProof: true, RequiredListenerProofVersion: requiredProof}
+	request := clusterbootstrap.MembershipObservationRequest{Source: selected, KubeSystemUID: before.proof.Source.KubeSystemUID, RequireListenerProof: true, RequiredListenerProofVersion: requiredProof, PreparedAdmission: admission}
 	selectedOriginal := false
 	for _, source := range before.proof.Source.Members {
 		request.OriginalSourceNodeUIDs = append(request.OriginalSourceNodeUIDs, source.NodeUID)
@@ -117,7 +121,7 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 	nativeNodes := func(readCtx context.Context) ([]clusterbootstrap.MembershipNodeExpectation, map[string]clusterbootstrap.K3sJoinedNode, error) {
 		nodeCtx, nodeCancel := context.WithTimeout(readCtx, clusterSSHJoinedNodeObservationTimeout)
 		defer nodeCancel()
-		return readClusterSSHPreparedMembershipNodes(nodeCtx, kube.getClusterSSHNodeCohortJSON, before)
+		return readClusterSSHPreparedMembershipNodesForPhase(nodeCtx, kube.getClusterSSHNodeCohortJSON, before, operation.CurrentStep)
 	}
 	nodes, targets, err := nativeNodes(ctx)
 	if err != nil || !cleanup.clean() || len(nodes) != 3 {

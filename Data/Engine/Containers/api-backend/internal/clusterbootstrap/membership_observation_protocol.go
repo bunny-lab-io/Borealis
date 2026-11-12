@@ -283,6 +283,9 @@ type MembershipObservationRequest struct {
 	// satisfy this request even when it echoes the current request digest.
 	// Version3 additionally requests fixed gateway custody and direct Range proof.
 	RequiredListenerProofVersion uint8 `json:",omitempty"`
+	// Only actual admission/verification phases may opt into intentional label
+	// transitions. Exact settled target identity and quorum capability remain.
+	PreparedAdmission bool `json:"prepared_admission,omitempty"`
 }
 
 // One selected endpoint's current complete view. Optional Quorum binds direct
@@ -326,6 +329,9 @@ func (MembershipObservationRequest) GoString() string {
 }
 
 func (r MembershipObservationRequest) Valid() bool {
+	if r.PreparedAdmission && (r.Observer == nil || !r.RequireListenerProof || r.RequiredListenerProofVersion != MembershipQuorumProofVersion) {
+		return false
+	}
 	if r.RequiredListenerProofVersion != 0 && ((r.RequiredListenerProofVersion != MembershipLocalEtcdProofVersion && r.RequiredListenerProofVersion != MembershipQuorumProofVersion) || !r.RequireListenerProof) {
 		return false
 	}
