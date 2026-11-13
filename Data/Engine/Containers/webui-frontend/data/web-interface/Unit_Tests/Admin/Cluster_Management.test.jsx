@@ -261,6 +261,47 @@ describe("Cluster Management", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("not freshly measured");
   });
 
+  it("refreshes per-node task status and clears finished or failed work back to actual node state", async () => {
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+    const now = Date.now() / 1000;
+    state.hmrState = "inactive";
+    state.nodes = ids.map((id, index) => ({ id, node_name: `engine-${index + 1}`, membership_state: "Active", application_state: "active", roles: {} }));
+    state.operations = [{ id: "update", kind: "engine_update", state: "running", attempt: 1, updated_at: now,
+      current_step: `node:${ids[1]}:inspect_health`, payload: { scope: "all", update_node_ids: ids } }];
+    state.events = [{ id: 1, operation_id: "update", event_type: "operation_step_passed", created_at: now - 1,
+      message: "Native candidate passed its health checks.", details: { step: `node:${ids[1]}:promote_candidate`, next_step: `node:${ids[1]}:inspect_health` } }];
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    vi.stubGlobal("fetch", vi.fn(async (path) => ({ ok: true, json: async () => path === "/api/server/cluster"
+      ? { enabled: true, nodes: state.nodes, operations: state.operations, active_size: 3, status: "Healthy", hmr: { state: "inactive" } }
+      : path === "/api/server/time" ? { utc: new Date().toISOString(), epoch: Math.floor(Date.now() / 1000) } : { events: state.events, releases: [] } })));
+    renderClusterManagement("/cluster-management?tab=nodes");
+    const row = (name) => screen.getByText(name).closest('[role="row"]');
+    expect(await screen.findByText("engine-2")).toBeInTheDocument();
+    expect(within(row("engine-1")).getByText("Active / Active")).toBeInTheDocument();
+    expect(within(row("engine-2")).getByText("Promote Candidate — passed")).toBeInTheDocument();
+    expect(within(row("engine-2")).getByText("In progress · Verify workload health")).toBeInTheDocument();
+    expect(within(row("engine-3")).getByText("Pending · Waiting for node turn")).toBeInTheDocument();
+    expect(screen.queryByText("Native candidate passed its health checks.")).not.toBeInTheDocument();
+    fireEvent.mouseOver(within(row("engine-2")).getByText("Promote Candidate — passed").closest("li"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Native candidate passed its health checks.");
+    state.operations = [{ ...state.operations[0], current_step: `node:${ids[2]}:enter_drain`, updated_at: now + 2 }];
+    await act(async () => { poll(); });
+    await waitFor(() => expect(within(row("engine-2")).queryByRole("list", { name: "Node task timeline" })).not.toBeInTheDocument());
+    expect(within(row("engine-2")).getByText("Active / Active")).toBeInTheDocument();
+    expect(within(row("engine-3")).getByText("In progress · Enter maintenance")).toBeInTheDocument();
+    state.operations = [{ ...state.operations[0], state: "failed", updated_at: now + 3 }];
+    state.nodes = state.nodes.map((node, index) => index === 2 ? { ...node, application_state: "drained" } : node);
+    await act(async () => { poll(); });
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Node task timeline" })).not.toBeInTheDocument());
+    expect(within(row("engine-2")).getByText("Active / Active")).toBeInTheDocument();
+    expect(within(row("engine-3")).getByText("Active / Drained")).toBeInTheDocument();
+  });
+
   it("anchors soak countdown to server clock, ticks once per second and stops after clock failure", async () => {
     const serverMS = Date.parse("2026-10-28T12:00:00Z");
     let browserMS = serverMS + 6 * 60 * 60 * 1000;
@@ -285,14 +326,16 @@ describe("Cluster Management", () => {
         : path === "/api/server/time" ? { utc: new Date(serverMS).toISOString(), epoch: serverMS / 1000 } : { events: [], releases: [] } };
     }));
     renderClusterManagement("/cluster-management?tab=operations");
-    expect(await screen.findByText(/Soak timing unavailable/)).toBeInTheDocument();
+    const timeline = await screen.findByRole("list", { name: "Operation timeline" });
+    fireEvent.mouseOver(within(timeline).getAllByRole("listitem").at(-1));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/Soak timing unavailable/);
     await act(async () => { poll(); });
-    expect(await screen.findByText("Configured soak wait: 30s remaining")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("Configured soak wait: 30s remaining"));
     act(() => { browserMS += 1000; monotonic += 1000; tick(); });
-    expect(await screen.findByText("Configured soak wait: 29s remaining")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("Configured soak wait: 29s remaining"));
     clockFailure = true;
     await act(async () => { poll(); });
-    expect(await screen.findByText(/Soak timing unavailable/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/Soak timing unavailable/));
     expect(screen.queryByText(/\ds remaining/)).not.toBeInTheDocument();
   });
 
@@ -464,7 +507,8 @@ describe("Cluster Management", () => {
     await act(async () => { poll(); });
     // Generation 2 snapshot failed; generation 1 history still completes independently.
     await act(async () => { histories[0]({ ok: true, json: async () => ({ events: [{ id: 42, operation_id: operationID, event_type: "operation_step_passed", message: "History arrived while snapshots were offline", state: "running", created_at: 1_787_770_010 }] }) }); });
-    expect(await screen.findByText("History arrived while snapshots were offline")).toBeInTheDocument();
+    fireEvent.mouseOver((await screen.findByText("Operation step passed")).closest("li"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("History arrived while snapshots were offline");
     await act(async () => { catalogs[0]({ ok: true, json: async () => ({ releases: [{ tag: "2026.09.2", channel: "stable", selectable: true }] }) }); });
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
     fireEvent.mouseDown(screen.getByRole("combobox", { name: "Target Engine Version" }));
@@ -943,7 +987,9 @@ describe("Cluster Management", () => {
     renderClusterManagement("/cluster-management?tab=operations");
 
     expect(await screen.findByText("engine-2, engine-3")).toBeInTheDocument();
-    expect(screen.getByText("Kubernetes membership applied; node conformance started.")).toBeInTheDocument();
+    expect(screen.queryByText("Kubernetes membership applied; node conformance started.")).not.toBeInTheDocument();
+    fireEvent.mouseOver(screen.getByText("Apply Membership — passed").closest("li"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Kubernetes membership applied; node conformance started.");
     fireEvent.click(screen.getByRole("button", { name: "Copy details for Cluster Node Added" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
     const copied = writeText.mock.calls[0][0];

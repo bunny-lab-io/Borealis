@@ -43,7 +43,7 @@ import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-communi
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import ClusterSSHInspection from "./Cluster_SSH_Inspection.jsx";
 import ClusterSSHOnboarding, { validSSHInspectionID } from "./Cluster_SSH_Onboarding.jsx";
-import ClusterOperationTimeline, { buildClusterOperationTimeline, clusterSoakClock } from "./ClusterOperationTimeline.jsx";
+import ClusterOperationTimeline, { buildClusterNodeTimeline, buildClusterOperationTimeline, clusterSoakClock } from "./ClusterOperationTimeline.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -1191,24 +1191,6 @@ export default function ClusterManagement() {
     return undefined;
   }, [canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedQualificationRelease, selectedRelease]);
 
-  const nodeRows = useMemo(
-    () => {
-      const activeMemberCount = nodes.filter((member) => String(member?.membership_state || "").toLowerCase() === "active").length;
-      return nodes.map((node) => {
-        const rolesPresentation = clusterNodeRolesPresentation(node);
-        return {
-          ...node,
-          statusLabel: clusterNodeStatusLabel(node),
-          databaseStatus: clusterNodeDatabaseStatus(node, cluster?.leaders?.postgres_primary, database, activeMemberCount),
-          rolesLabel: rolesPresentation.label,
-          probeSummary: clusterNodeProbeSummary(node),
-          engineVersion: clusterNodeVersionPresentation(node, operations, versionClock, snapshotUnavailable || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS),
-        };
-      });
-    },
-    [cluster?.leaders?.postgres_primary, database, nodes, operations, snapshotReceivedAt, snapshotUnavailable, versionClock]
-  );
-
   const operationRows = useMemo(
     () => {
       const eventsByOperation = new Map();
@@ -1241,6 +1223,27 @@ export default function ClusterManagement() {
       });
     },
     [admissions, events, nodes, operations, eventError, eventsReceivedAt, snapshotUnavailable, snapshotReceivedAt, versionClock, soakClock]
+  );
+
+  const nodeRows = useMemo(
+    () => {
+      const activeMemberCount = nodes.filter((member) => String(member?.membership_state || "").toLowerCase() === "active").length;
+      return nodes.map((node) => {
+        const rolesPresentation = clusterNodeRolesPresentation(node);
+        const currentTask = operationRows.map((operation) => ({ operation, timeline: buildClusterNodeTimeline(node, operation, operation.timeline) }))
+          .filter((task) => task.timeline).sort((left, right) => Number(right.timeline.current.timestamp) - Number(left.timeline.current.timestamp))[0];
+        return {
+          ...node,
+          statusLabel: clusterNodeStatusLabel(node),
+          currentTask,
+          databaseStatus: clusterNodeDatabaseStatus(node, cluster?.leaders?.postgres_primary, database, activeMemberCount),
+          rolesLabel: rolesPresentation.label,
+          probeSummary: clusterNodeProbeSummary(node),
+          engineVersion: clusterNodeVersionPresentation(node, operations, versionClock, snapshotUnavailable || versionClock - snapshotReceivedAt > CLUSTER_SNAPSHOT_STALE_MS),
+        };
+      });
+    },
+    [cluster?.leaders?.postgres_primary, database, nodes, operations, operationRows, snapshotReceivedAt, snapshotUnavailable, versionClock]
   );
 
   const closeNodeActionMenu = useCallback(() => {
@@ -1317,7 +1320,21 @@ export default function ClusterManagement() {
       field: "statusLabel",
       headerName: "Status",
       cellClass: "auto-col-tight status-pill-cell",
-      cellRenderer: (params) => <StatusPill value={params.value} />,
+      minWidth: 150,
+      maxWidth: 420,
+      autoHeight: true,
+      wrapText: true,
+      equals: () => false,
+      filterValueGetter: (params) => params.data?.currentTask?.timeline.current.label || params.data?.statusLabel,
+      cellRenderer: (params) => {
+        const task = params.data?.currentTask;
+        return task ? (
+          <Box sx={{ width: "100%", minWidth: 0, lineHeight: 1.3 }}>
+            <Typography sx={{ color: "#cbd5e1", fontSize: "0.75rem", pt: 0.5 }}>{task.operation.operationLabel}</Typography>
+            <ClusterOperationTimeline timeline={task.timeline} stale={task.operation.timelineStale} compact formatTimestamp={formatClusterTimestamp} />
+          </Box>
+        ) : <StatusPill value={params.value} />;
+      },
     },
     {
       colId: "node",

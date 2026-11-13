@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Box, Button, Typography } from "@mui/material";
+import { Box, Button, Tooltip, Typography } from "@mui/material";
 import { CheckCircleOutlineRounded, ErrorOutlineRounded, PendingOutlined, SyncRounded } from "@mui/icons-material";
 
 const humanize = (value) => String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -228,7 +228,8 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
       transition = { ...next, timestamp: Number(event.created_at), attempt };
     }
     return {
-      id: `event-${event.id}`, label, tone, timestamp: event.created_at,
+      id: `event-${event.id}`, eventType: event.event_type, label, tone, timestamp: event.created_at,
+      step: detail.step || "", nodeID: /^(?:node|admit):([^:]+):/.exec(detail.step || "")?.[1] || event.node_id || "", attempt: eventAttempt,
       message: [event.message, detail.error].filter(Boolean).join("\n"),
     };
   });
@@ -257,6 +258,7 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
     // Full durable observations remain available in copied diagnostics.
     entries: entries.filter((_, index) => ordered[index].event_type !== "operation_soak_observed"),
     current: {
+      state, step: current.step || "", attempt: current.attempt || Number(operation.attempt || 1),
       id: "current", label: state !== "superseded" && current.label ? current.label
         : preparationRecovery ? PREPARATION_RECOVERY_LABEL
         : `${status}${step && ["running", "queued", "waiting", "failed"].includes(state) ? ` · ${step}` : ""}`,
@@ -269,47 +271,77 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
   };
 }
 
+// Project the same reconciled progress onto one exact node. Pinned cohorts can
+// show a waiting turn; no client-side plan invents future steps or successful work.
+export function buildClusterNodeTimeline(node, operation, timeline) {
+  const current = timeline.current;
+  if (!node?.id || !["running", "queued", "waiting"].includes(current.state) || current.step === "complete") return null;
+  const scopedID = /^(?:node|admit):([^:]+):/.exec(current.step)?.[1];
+  const payload = operation.payload || {};
+  const pinned = payload.update_node_ids || payload.removal_node_ids;
+  const targets = Array.isArray(pinned) && pinned.length ? pinned : Array.isArray(payload.node_ids) ? payload.node_ids : [];
+  const history = timeline.entries.filter((entry) => entry.eventType === "operation_step_passed" && entry.attempt === current.attempt
+    && (entry.nodeID === node.id || (!entry.nodeID && operation.target_node_id === node.id && !targets.length)));
+  const shorten = (entry) => ({ ...entry, label: entry.label.replace(`${node.node_name || node.id} · `, "") });
+  if (scopedID === node.id || (!scopedID && operation.target_node_id === node.id && !targets.length)) {
+    return { entries: history.map(shorten), current: shorten(current) };
+  }
+  // Once recorded work moves to another node or final cluster verification,
+  // this row returns to its current membership/application status.
+  const beforeNodeWork = ["preflight", "pre_change_snapshot", "prepare_postgres_removal", "scale_postgres_membership"].includes(current.step);
+  const position = targets.indexOf(node.id);
+  const currentPosition = targets.indexOf(scopedID);
+  const selected = position >= 0 || operation.target_node_id === node.id
+    || (["engine_update", "k3s_update"].includes(operation.kind) && payload.scope === "all" && node.membership_state === "Active");
+  const awaitingTurn = scopedID && currentPosition >= 0 && position > currentPosition;
+  if (!selected || (!beforeNodeWork && !awaitingTurn)) return null;
+  return { entries: [], current: { ...current, label: "Pending · Waiting for node turn", active: false, tone: "recorded", soakLabel: "",
+    message: "Node is in the selected operation cohort, waiting for its node-scoped step." } };
+}
+
 const COLORS = { recorded: "#94a3b8", active: "#7dd3fc", complete: "#00d18c", failed: "#ff8a8a" };
 
-export default function ClusterOperationTimeline({ timeline, stale, formatTimestamp }) {
+export default function ClusterOperationTimeline({ timeline, stale, formatTimestamp, compact = false }) {
   const [expanded, setExpanded] = useState(false);
   const history = timeline.entries;
   const hiddenCount = Math.max(0, history.length - 3);
-  const entries = [...(expanded ? history : history.slice(-3)), timeline.current];
+  const entries = [...(compact ? history.slice(-2) : expanded ? history : history.slice(-3)), timeline.current];
   return (
     <Box sx={{ flex: 1, minWidth: 0, py: 1, whiteSpace: "normal", lineHeight: 1.4 }}>
-      {hiddenCount > 0 && (
+      {!compact && hiddenCount > 0 && (
         <Button size="small" aria-expanded={expanded} onClick={(event) => { event.stopPropagation(); setExpanded(!expanded); }}
           sx={{ color: "#8fbfff", p: 0, mb: 0.75, textTransform: "none", fontSize: "0.75rem" }}>
           {expanded ? "Show recent steps" : `Show ${hiddenCount} earlier events`}
         </Button>
       )}
-      <Box component="ol" aria-label="Operation timeline" sx={{ m: 0, p: 0, listStyle: "none", maxHeight: expanded ? 360 : "none", overflowY: expanded ? "auto" : "visible",
+      <Box component="ol" aria-label={compact ? "Node task timeline" : "Operation timeline"} sx={{ m: 0, p: 0, listStyle: "none", maxHeight: expanded ? 360 : "none", overflowY: expanded ? "auto" : "visible",
         "@keyframes clusterTimelineSpin": { to: { transform: "rotate(360deg)" } } }}>
         {entries.map((entry, index) => {
           const animate = entry.active && !stale;
           const color = COLORS[entry.active && stale ? "recorded" : entry.tone];
           const Icon = entry.tone === "failed" ? ErrorOutlineRounded : entry.tone === "complete" ? CheckCircleOutlineRounded : animate ? SyncRounded : PendingOutlined;
+          const details = [entry.label, entry.message,
+            entry.soakLabel && (stale ? "Soak timing unavailable · Updates delayed" : entry.soakLabel),
+            `Last recorded: ${formatTimestamp(entry.timestamp)}`, entry.step && `Step: ${entry.step}`].filter(Boolean).join("\n");
           return (
-            <Box component="li" key={entry.id} aria-current={entry.id === "current" ? "step" : undefined}
+            <Tooltip key={entry.id} title={<Box sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 320, overflowY: "auto" }}>{details}</Box>} placement="top-start" arrow describeChild
+              slotProps={{ tooltip: { sx: { maxWidth: 560 } } }}>
+            <Box component="li" tabIndex={0} aria-current={entry.id === "current" ? "step" : undefined}
               sx={{ display: "flex", gap: 1, position: "relative", pb: index === entries.length - 1 ? 0 : 1,
+                cursor: "help", borderRadius: 1, "&:focus-visible": { outline: "1px solid #7dd3fc", outlineOffset: 2 },
                 "&:not(:last-child)::before": { content: '""', position: "absolute", left: 8, top: 20, bottom: 2, width: 1, bgcolor: "rgba(148,163,184,0.3)" } }}>
               <Icon aria-hidden="true" sx={{ fontSize: 18, mt: 0.2, flexShrink: 0, color,
                 animation: animate ? "clusterTimelineSpin 1.15s linear infinite" : "none",
                 "@media (prefers-reduced-motion: reduce)": { animation: "none" } }} />
               <Box sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
-                <Typography sx={{ color, fontSize: "0.8rem", fontWeight: entry.id === "current" ? 600 : 500 }}>{entry.id === "current" ? "Current: " : ""}{entry.label}</Typography>
-                {entry.soakLabel && <Typography sx={{ color: "#cbd5e1", fontSize: "0.75rem" }}>{stale ? "Soak timing unavailable · Updates delayed" : entry.soakLabel}</Typography>}
-                {entry.message && <Typography sx={{ color: "#cbd5e1", fontSize: "0.75rem", whiteSpace: "pre-wrap" }}>{entry.message}</Typography>}
-                <Typography sx={{ color: "#94a3b8", fontSize: "0.7rem" }}>
-                  {entry.id === "current" ? "Last recorded: " : ""}{formatTimestamp(entry.timestamp)}
-                </Typography>
+                <Typography sx={{ color, fontSize: compact ? "0.75rem" : "0.8rem", fontWeight: entry.id === "current" ? 600 : 500 }}>{entry.id === "current" && !compact ? "Current: " : ""}{entry.label}</Typography>
               </Box>
             </Box>
+            </Tooltip>
           );
         })}
       </Box>
-      {!history.length && <Typography sx={{ color: "#94a3b8", fontSize: "0.75rem", mt: 0.5 }}>No lifecycle events available.</Typography>}
+      {!compact && !history.length && <Typography sx={{ color: "#94a3b8", fontSize: "0.75rem", mt: 0.5 }}>No lifecycle events available.</Typography>}
       {stale && <Typography role="status" sx={{ color: "#fbbf24", fontSize: "0.75rem", mt: 0.5 }}>Updates delayed · showing last recorded progress</Typography>}
     </Box>
   );

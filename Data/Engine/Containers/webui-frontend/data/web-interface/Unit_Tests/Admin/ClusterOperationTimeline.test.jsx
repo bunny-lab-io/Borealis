@@ -1,7 +1,7 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import ClusterOperationTimeline, { buildClusterOperationTimeline, clusterSoakClock } from "@/Admin/ClusterOperationTimeline.jsx";
+import ClusterOperationTimeline, { buildClusterNodeTimeline, buildClusterOperationTimeline, clusterSoakClock } from "@/Admin/ClusterOperationTimeline.jsx";
 
 const operation = { id: "op-1", state: "running", current_step: "preflight", updated_at: 100, attempt: 1 };
 const event = (id, event_type, details = {}) => ({ id, operation_id: operation.id, event_type, details, created_at: 100 + id });
@@ -117,13 +117,19 @@ describe("cluster operation timeline", () => {
     expect(build([], { current_step: "complete" }).current.active).toBe(false);
   });
 
-  it("shows snapshot fallback without inventing completed steps", () => {
+  it("shows snapshot fallback and keeps diagnostic detail behind keyboard focus", async () => {
     const timeline = build([], { state: "failed", current_step: "future_step", error: "Failed safely" });
     render(<ClusterOperationTimeline timeline={timeline} formatTimestamp={String} />);
     expect(screen.getByText("No lifecycle events available.")).toBeInTheDocument();
     expect(screen.getByText("Current: Failed · Future Step")).toBeInTheDocument();
-    expect(screen.getByText("Failed safely")).toBeInTheDocument();
+    expect(screen.queryByText("Failed safely")).not.toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    const step = screen.getByRole("listitem");
+    expect(step).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(document, { key: "Tab" });
+    act(() => { step.focus(); });
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Failed safely");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Last recorded: 100");
   });
 
   it("keeps automatic recovery observations separate from maintenance and return authority", () => {
@@ -331,5 +337,66 @@ describe("cluster operation timeline", () => {
     view.rerender(<ClusterOperationTimeline timeline={timeline} stale={false} formatTimestamp={String} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(within(current).getByTestId("SyncRoundedIcon")).toBeInTheDocument();
+  });
+});
+
+describe("node task projection", () => {
+  afterEach(cleanup);
+  const nodes = ["n1", "n2", "n3"].map((id) => ({ id, node_name: `engine-${id.slice(1)}`, membership_state: "Active" }));
+  const op = { ...operation, kind: "engine_update", payload: { scope: "all", update_node_ids: nodes.map(({ id }) => id) }, current_step: "node:n2:inspect_health", updated_at: 200 };
+  const passed = [event(1, "operation_step_passed", { step: "node:n1:exit_drain", next_step: "node:n2:enter_drain" }),
+    event(2, "operation_step_passed", { step: "node:n2:enter_drain", next_step: "node:n2:inspect_health" })];
+  const forNode = (node, events = passed, patch = {}) => {
+    const current = { ...op, ...patch };
+    return buildClusterNodeTimeline(node, current, buildClusterOperationTimeline(current, events, nodes));
+  };
+
+  it("shows only current node history and pending pinned turns; completed node returns to node status", () => {
+    expect(forNode(nodes[0])).toBeNull();
+    const current = forNode(nodes[1]);
+    expect(current.entries).toHaveLength(1);
+    expect(current.entries[0]).toMatchObject({ label: "Enter maintenance — passed", tone: "complete" });
+    expect(current.current).toMatchObject({ label: "In progress · Verify workload health", active: true });
+    expect(forNode(nodes[2])).toMatchObject({ entries: [], current: { label: "Pending · Waiting for node turn", active: false } });
+    expect(forNode({ id: "foreign", membership_state: "Active" })).toBeNull();
+    expect(forNode(nodes[0], [], { current_step: "node:n2:inspect_health" })).toBeNull();
+    expect(forNode(nodes[1], []).current.active).toBe(true);
+    expect(forNode(nodes[2], []).current.label).toContain("Pending");
+    const observations = [event(3, "future_observation", { step: "node:n3:inspect_health" }),
+      event(4, "operation_soak_started", { step: "node:n2:inspect_health" })];
+    expect(forNode(nodes[2], observations).current.label).toContain("Pending");
+    expect(forNode(nodes[1], [...passed, ...observations]).entries).toHaveLength(1);
+  });
+
+  it.each(["failed", "succeeded", "cancelled"])("clears task after %s, retaining normal node status separately", (state) => {
+    for (const node of nodes) expect(forNode(node, passed, { state })).toBeNull();
+  });
+
+  it("clears superseded tasks and final cluster verification, without inventing missing node success", () => {
+    expect(forNode(nodes[1], passed, { superseded_by: "replacement" })).toBeNull();
+    for (const node of nodes) expect(forNode(node, passed, { current_step: "verify_cluster" })).toBeNull();
+  });
+
+  it("uses newer durable transitions and isolates previous attempts", () => {
+    const moved = [...passed, event(201, "operation_step_passed", { step: "node:n2:exit_drain", next_step: "node:n3:enter_drain", attempt: 1 })];
+    expect(forNode(nodes[1], moved)).toBeNull();
+    expect(forNode(nodes[2], moved).current.active).toBe(true);
+    const retried = forNode(nodes[1], passed, { attempt: 2, current_step: "node:n2:enter_drain" });
+    expect(retried.entries).toHaveLength(0);
+    expect(retried.current.active).toBe(true);
+  });
+
+  it("supports explicit single-node queued work and pauses stale compact indicators", async () => {
+    const single = { ...operation, kind: "node_maintenance", target_node_id: "n1", state: "queued", current_step: "preflight" };
+    const pending = buildClusterNodeTimeline(nodes[0], single, buildClusterOperationTimeline(single, [], nodes));
+    expect(pending.current).toMatchObject({ label: "Queued · Preflight checks", active: false });
+    expect(buildClusterNodeTimeline(nodes[1], single, buildClusterOperationTimeline(single, [], nodes))).toBeNull();
+    render(<ClusterOperationTimeline timeline={forNode(nodes[1])} compact stale formatTimestamp={String} />);
+    const list = screen.getByRole("list", { name: "Node task timeline" });
+    expect(within(list).queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Updates delayed");
+    expect(screen.queryByText(/Last recorded:/)).not.toBeInTheDocument();
+    fireEvent.mouseOver(within(list).getAllByRole("listitem").at(-1));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Step: node:n2:inspect_health");
   });
 });
