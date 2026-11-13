@@ -327,9 +327,8 @@ export default function ClusterOperationTimeline({ timeline, stale, formatTimest
             <Tooltip key={entry.id} title={<Box sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 320, overflowY: "auto" }}>{details}</Box>} placement="top-start" arrow describeChild
               slotProps={{ tooltip: { sx: { maxWidth: 560 } } }}>
             <Box component="li" tabIndex={0} aria-current={entry.id === "current" ? "step" : undefined}
-              sx={{ display: "flex", gap: 1, position: "relative", pb: index === entries.length - 1 ? 0 : 1,
-                cursor: "help", borderRadius: 1, "&:focus-visible": { outline: "1px solid #7dd3fc", outlineOffset: 2 },
-                "&:not(:last-child)::before": { content: '""', position: "absolute", left: 8, top: 20, bottom: 2, width: 1, bgcolor: "rgba(148,163,184,0.3)" } }}>
+              sx={{ display: "flex", gap: 1, pb: index === entries.length - 1 ? 0 : 1,
+                cursor: "help", borderRadius: 1, "&:focus-visible": { outline: "1px solid #7dd3fc", outlineOffset: 2 } }}>
               <Icon aria-hidden="true" sx={{ fontSize: 18, mt: 0.2, flexShrink: 0, color,
                 animation: animate ? "clusterTimelineSpin 1.15s linear infinite" : "none",
                 "@media (prefers-reduced-motion: reduce)": { animation: "none" } }} />
