@@ -1,18 +1,40 @@
 package clusterremote
 
-import "borealis/api-backend/internal/clusterbootstrap"
+import (
+	"borealis/api-backend/internal/clusterbootstrap"
+	"encoding/json"
+)
 
 // This fixed observer runs using the target's existing Python. It never imports
 // a helper, writes a file, repairs packages/accounts or invokes Engine/K3s.
 // Native fresh-host contracts live in bootstrap_docker_preflight.go,
 // bootstrap_host_prepare.go and bootstrap_runtime_account.go. This proposal
 // observation is deliberately separate from their claimed mutation executor.
-const preparationProposalScript = preparationProposalLibraryScript + clusterbootstrap.PreparationTargetCPUObserverLibrary + `
+var preparationProposalScript = preparationProposalLibraryScript + clusterbootstrap.PreparationTargetCPUObserverLibrary + `
 if __name__ == "__main__":
     main()
 `
 
-const preparationProposalLibraryScript = `import base64, hashlib, json, os, re, resource, selectors, stat, subprocess, sys, time
+// This fixed program embeds only compiled pin identity, never caller selections.
+func preparationProposalPackageConstants() string {
+	plan, digest, err := clusterbootstrap.HostPackagePins()
+	if err != nil {
+		return "raise ValueError()\n"
+	}
+	pins := make([][2]string, 0, len(plan.Packages))
+	for _, pin := range plan.Packages {
+		pins = append(pins, [2]string{pin.Name, pin.Architecture})
+	}
+	raw, err := json.Marshal(pins)
+	if err != nil {
+		return "raise ValueError()\n"
+	}
+	suite, _ := json.Marshal(plan.Suite)
+	return "HOST_PACKAGE_PLAN_SHA256 = \"" + digest + "\"\nHOST_PACKAGE_SUITE = " + string(suite) + "\nHOST_PACKAGE_PINS = " + string(raw) + "\n"
+}
+
+var preparationProposalLibraryScript = `import base64, hashlib, json, os, re, resource, selectors, stat, subprocess, sys, time
+` + preparationProposalPackageConstants() + `
 
 ROOT = "/"
 EXPECTED_UID = 0
@@ -204,9 +226,10 @@ def platform(snapshot):
     require(command(["/usr/bin/dpkg", "--print-architecture"]) == b"amd64\n")
     return suite
 
-def packages():
+def packages(suite):
+    require(suite == HOST_PACKAGE_SUITE)
     raw = command(["/usr/bin/dpkg-query", "--show", "--showformat=${Package}\t${Architecture}\t${Status}\t${Version}\n"])
-    seen, required = set(), {"apt": False, "dpkg": False, "base-files": False}
+    seen, required, states = set(), {"apt": False, "dpkg": False, "base-files": False}, {}
     for line in text(raw, LIMIT)[:-1].split("\n"):
         fields = line.split("\t")
         require(len(fields) == 4)
@@ -216,11 +239,18 @@ def packages():
         require(state in ("install ok installed", "deinstall ok config-files"))
         require(not name.startswith(("docker", "containerd")) and name not in ("runc", "podman-docker"))
         seen.add((name, arch))
+        states.setdefault(name, []).append((arch, state))
         if name in required:
-            require(state == "install ok installed" and arch in ("amd64", "all"))
+            require(not required[name] and state == "install ok installed" and arch in ("amd64", "all"))
             required[name] = True
     require(all(required.values()))
-    return digest(raw)
+    missing = []
+    for name, architecture in HOST_PACKAGE_PINS:
+        entries = states.get(name, [])
+        require(not entries or entries == [(architecture, "install ok installed")])
+        if not entries:
+            missing.append(name)
+    return {"plan_sha256": HOST_PACKAGE_PLAN_SHA256, "inventory_sha256": digest(raw), "missing": sorted(missing)}
 
 def sources(snapshot):
     paths = []
@@ -420,7 +450,7 @@ def observe(proposal):
         for path in ABSENT_PATHS:
             require(snapshot.absent_path(path))
         sources(snapshot)
-        package_digest = packages()
+        package_selection = packages(suite)
         unit_state = units()
         supervision_state = supervision(snapshot)
         def cpu_read(path, limit, projection=None):
@@ -444,7 +474,7 @@ def observe(proposal):
             finally:
                 os.close(fd)
         return {"identity": identity, "suite": suite, "parents": snapshot.parents, "files": snapshot.files,
-            "absent": snapshot.absent, "listings": snapshot.listings, "packages": package_digest,
+            "absent": snapshot.absent, "listings": snapshot.listings, "packages": package_selection,
             "units": unit_state, "supervision": supervision_state, "cpu": cpu_state, "accounts": account_state, "runtime_uid_absent": True}
     finally:
         os.close(snapshot.root)
@@ -457,13 +487,13 @@ def main():
     encoded = sys.argv[1]
     raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
     proposal = json.loads(raw)
-    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 3)
+    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 4)
     before = observe(proposal)
     after = observe(proposal)
     require(before == after)
-    observation = digest(b"borealis-preparation-native-observation-v3\n" + canonical(before))
-    request = digest(b"borealis-preparation-proposal-v3\n" + raw)
+    observation = digest(b"borealis-preparation-native-observation-v4\n" + canonical(before))
+    request = digest(b"borealis-preparation-proposal-v4\n" + raw)
     cpu = {"version": 1, "plan_sha256": proposal["cpu_plan_sha256"], "online_cpus": before["cpu"]["online_cpus"],
         "allocatable_milli": before["cpu"]["allocatable_milli"], "memory_kib": before["cpu"]["memory_kib"], "observation_sha256": digest(b"borealis-preparation-target-cpu-v1\n" + canonical(before["cpu"]))}
-    print(json.dumps({"version": 3, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation, "cpu": cpu}, separators=(",", ":")))
+    print(json.dumps({"version": 4, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation, "cpu": cpu, "packages": before["packages"]}, separators=(",", ":")))
 `

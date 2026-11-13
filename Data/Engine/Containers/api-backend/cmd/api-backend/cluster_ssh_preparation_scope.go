@@ -13,6 +13,9 @@ type clusterSSHPreparationChecks struct {
 	Inputs    func(context.Context) error
 	Authority func(context.Context) error
 	K3sJoin   func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error
+	// Copied storage projection from the same owned source acquisition. Full
+	// Inputs proof brackets its use; this accessor launches no source Jobs.
+	Storage func(context.Context) (clusterSSHStorageSnapshot, error)
 }
 
 // One scope owns acquisition and synchronous consumption. Callers must honor

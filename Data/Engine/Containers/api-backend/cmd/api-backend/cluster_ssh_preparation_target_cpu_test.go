@@ -99,7 +99,9 @@ func TestClusterSSHPreparationTargetCPUProjectionSharesFreshRead(t *testing.T) {
 	base := sshPreparationCPUReadFixture(t, snapshot)
 	clean, project := clusterSSHPreparationTargetCPUReaderPair(snapshot, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
 		calls++
-		return base(ctx, plan)
+		value, err := base(ctx, plan)
+		value.Packages = sshPreparationTargetPackagesFixture(value.Targets)
+		return value, err
 	})
 	if _, err := project(context.Background(), plan); err == nil || calls != 0 {
 		t.Fatal("unobserved projection became proof")
@@ -113,6 +115,10 @@ func TestClusterSSHPreparationTargetCPUProjectionSharesFreshRead(t *testing.T) {
 		if err != nil || value.Digest != digest || calls != 1 {
 			t.Fatal("projection caused redundant native observation", err)
 		}
+		if !validClusterSSHPreparationPackages(value.Targets, value.Packages) {
+			t.Fatal("package projection missing or borrowed")
+		}
+		value.Packages[0].Selection.Missing[0] = "foreign"
 		value.Targets[0].CPU.MemoryKiB = 1
 	}
 	if _, err := clean(context.Background(), plan); err != nil || calls != 2 {

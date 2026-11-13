@@ -53,7 +53,7 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"unauthenticated", "wrong key", "wrong path AAD", "extra field", "duplicate", "alias", "expired", "future expiry", "wrong version", "old v1 request", "zero operation", "zero request", "attempt", "holder control", "holder oversize", "zero plan", "filesystem relative", "filesystem duplicate", "filesystem unsorted", "query", "content encoding", "oversize", "authenticated unavailable"} {
+	for _, mode := range []string{"unauthenticated", "wrong key", "wrong path AAD", "extra field", "duplicate", "alias", "expired", "future expiry", "wrong version", "old v1 request", "old v3 filesystem request", "zero operation", "zero request", "attempt", "holder control", "holder oversize", "zero plan", "filesystem relative", "filesystem duplicate", "filesystem unsorted", "query", "content encoding", "oversize", "authenticated unavailable", "v4 filesystem unavailable"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("BOREALIS_OPERATOR_SECRET", sshPreparationCleanBrokerTestSecret)
 			mux := http.NewServeMux()
@@ -71,6 +71,14 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 				request.Version++
 			case "old v1 request":
 				request.Version = 1
+			case "old v3 filesystem request", "v4 filesystem unavailable":
+				// Both contracts can carry these three paths. Compatibility must
+				// fail at the version boundary, never an increased path-count limit.
+				request.Version = 4
+				request.FilesystemPaths = []string{"/etc", "/usr", "/var"}
+				if mode == "old v3 filesystem request" {
+					request.Version = 3
+				}
 			case "zero operation":
 				request.OperationID = "00000000-0000-0000-0000-000000000000"
 			case "zero request":
@@ -129,7 +137,7 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 			if mode == "query" || mode == "content encoding" {
 				want = http.StatusBadRequest
 			}
-			if mode == "authenticated unavailable" {
+			if mode == "authenticated unavailable" || mode == "v4 filesystem unavailable" {
 				want = http.StatusServiceUnavailable
 			}
 			if w.Code != want {
@@ -150,7 +158,7 @@ type sshPreparationCleanBrokerBody struct {
 func (b *sshPreparationCleanBrokerBody) Close() error { return b.close() }
 
 func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
-	for _, mode := range []string{"success", "wrong plan", "missing intent", "wrong request", "wrong ID", "wrong digest", "wrong version", "old v1 response", "redirect", "encoding", "close error", "changed repeat", "cancel during close", "request expiry during close", "child expiry during close"} {
+	for _, mode := range []string{"success", "wrong plan", "missing intent", "wrong request", "wrong ID", "wrong digest", "wrong version", "old v1 response", "redirect", "encoding", "close error", "changed repeat", "changed package repeat", "missing packages", "null missing", "unknown package", "duplicate package", "wrong package target", "wrong package observation", "response overflow", "cancel during close", "request expiry during close", "child expiry during close"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot := sshPreparationCleanBrokerSnapshot(t)
 			plan, _, _ := clusterSSHPreparationCleanBrokerBinding(snapshot)
@@ -180,6 +188,7 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 				digest, _ := clusterSSHPreparationDigest(request)
 				value := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: digest}
 				value.Targets = sshPreparationTargetCPUFixture(snapshot)
+				value.Packages = sshPreparationTargetPackagesFixture(value.Targets)
 				value.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, value.Targets)
 				switch mode {
 				case "wrong request":
@@ -192,14 +201,33 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 					value.Version++
 				case "old v1 response":
 					value.Version = 1
+				case "missing packages":
+					value.Packages = nil
+				case "null missing":
+					value.Packages[0].Selection.Missing = nil
+				case "unknown package":
+					value.Packages[0].Selection.Missing = []string{"foreign"}
+				case "duplicate package":
+					value.Packages[0].Selection.Missing = []string{value.Packages[0].Selection.Missing[0], value.Packages[0].Selection.Missing[0]}
+				case "wrong package target":
+					value.Packages[0].TargetID = newClusterUUID()
+				case "wrong package observation":
+					value.Packages[0].ObservationSHA256 = strings.Repeat("f", 64)
+				case "changed package repeat":
+					if calls.Load() > 1 {
+						value.Packages[0].Selection.Missing = value.Packages[0].Selection.Missing[1:]
+					}
 				case "changed repeat":
 					if calls.Load() > 1 {
 						value.Digest = strings.Repeat("b", 64)
 					}
 				}
-				raw, err := sealClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, value, clusterSSHPreparationCleanBrokerLimit)
+				raw, err := sealClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, value, clusterSSHPreparationCleanBrokerResponseLimit)
 				if err != nil {
 					return nil, err
+				}
+				if mode == "response overflow" {
+					raw = bytes.Repeat([]byte("x"), clusterSSHPreparationCleanBrokerResponseLimit+1)
 				}
 				body := &sshPreparationCleanBrokerBody{Reader: bytes.NewReader(raw), close: func() error {
 					closes.Add(1)
@@ -267,7 +295,7 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("reader did not finish")
 			}
-			positive := mode == "success" || mode == "changed repeat"
+			positive := mode == "success" || mode == "changed repeat" || mode == "changed package repeat"
 			if (got.err == nil) != positive || got.err != nil && got.value != "" {
 				t.Fatal("unexpected read outcome", got.err)
 			}
@@ -277,7 +305,7 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 				if err != nil || again != got.value || calls.Load() != before+1 {
 					t.Fatal("no fresh repeated request", err)
 				}
-			} else if err == nil || again != "" || mode != "changed repeat" && calls.Load() != before {
+			} else if err == nil || again != "" || mode != "changed repeat" && mode != "changed package repeat" && calls.Load() != before {
 				t.Fatal("failed reader revived", err)
 			}
 			if calls.Load() != closes.Load() {

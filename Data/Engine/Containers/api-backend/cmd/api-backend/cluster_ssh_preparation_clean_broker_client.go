@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -83,6 +84,7 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsFilesystemRea
 	var failed atomic.Bool
 	retained := ""
 	var retainedFilesystems []clusterSSHTargetFilesystemEvidence
+	var retainedPackages []clusterSSHPreparationTargetPackages
 	var cleanup *clusterSSHMembershipHTTP
 	var client *http.Client
 	if c != nil && c.httpClient != nil && c.httpClient.Jar == nil {
@@ -148,15 +150,16 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsFilesystemRea
 		if err != nil {
 			return fail()
 		}
-		raw, readErr := io.ReadAll(io.LimitReader(response.Body, clusterSSHPreparationCleanBrokerLimit+1))
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, clusterSSHPreparationCleanBrokerResponseLimit+1))
 		closeErr := response.Body.Close() // Join every owned body before SQL or proof.
 		var result clusterSSHPreparationCleanBrokerResponse
 		requestDigest, digestErr := clusterSSHPreparationDigest(request)
 		// Proposal evidence carries conservative current minima; the waiting
 		// storage gate independently recalculates every fit before approval.
 		if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || response.Header.Get("Content-Encoding") != "" ||
-			openClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, raw, &result, clusterSSHPreparationCleanBrokerLimit) != nil ||
-			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}).validate(snapshot) != nil ||
+			openClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, raw, &result, clusterSSHPreparationCleanBrokerResponseLimit) != nil ||
+			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}).validate(snapshot) != nil || !validClusterSSHPreparationPackages(result.Targets, result.Packages) ||
+			retainedPackages != nil && !reflect.DeepEqual(retainedPackages, result.Packages) ||
 			!validClusterSSHPreparationFilesystems(snapshot, paths, result.Filesystems) ||
 			!cleanup.clean() || requestCtx.Err() != nil || check(requestCtx) != nil || requestCtx.Err() != nil ||
 			(retained != "" && retained != result.Digest) || retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, result.Filesystems, false) {
@@ -166,6 +169,7 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsFilesystemRea
 		if retainedFilesystems == nil {
 			retainedFilesystems = cloneClusterSSHPreparationFilesystems(result.Filesystems)
 		}
-		return clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets, Filesystems: cloneClusterSSHPreparationFilesystems(retainedFilesystems)}, nil
+		retainedPackages = cloneClusterSSHPreparationPackages(result.Packages)
+		return clusterSSHPreparationCleanObservation{Packages: cloneClusterSSHPreparationPackages(retainedPackages), Digest: result.Digest, Targets: result.Targets, Filesystems: cloneClusterSSHPreparationFilesystems(retainedFilesystems)}, nil
 	}
 }

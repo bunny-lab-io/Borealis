@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -121,6 +122,7 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 	var failed atomic.Bool
 	var retained string
 	var retainedFilesystems []clusterSSHTargetFilesystemEvidence
+	var retainedPackages []clusterSSHPreparationTargetPackages
 	return func(parent context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
 		fail := func() (clusterSSHPreparationCleanObservation, error) {
 			failed.Store(true)
@@ -147,6 +149,7 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 			return fail()
 		}
 		var filesystems []clusterSSHTargetFilesystemEvidence
+		var packages []clusterSSHPreparationTargetPackages
 		read := func(i int) (observed clusterSSHPreparationTargetCPU, result error) {
 			item, sealed := work.Proof.Cohort.Targets[i], credentials[i]
 			if current(ctx) != nil {
@@ -191,6 +194,7 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 			if err != nil || proof.Validate(request) != nil || current(ctx) != nil {
 				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
+			selectionPackages := proof.Packages.Clone()
 			if paths != nil {
 				filesystem, ok := client.(clusterSSHPreparationFilesystemClient)
 				if !ok {
@@ -214,17 +218,19 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 				}
 				request.Nonce = hex.EncodeToString(nonce[:])
 				last, err := client.InspectPreparationProposal(ctx, sudo, request, current)
-				if err != nil || last.Validate(request) != nil || last.ObservationSHA256 != proof.ObservationSHA256 || last.CPU != proof.CPU || current(ctx) != nil {
+				if err != nil || last.Validate(request) != nil || last.ObservationSHA256 != proof.ObservationSHA256 || last.CPU != proof.CPU || !reflect.DeepEqual(*last.Packages, selectionPackages) || current(ctx) != nil {
 					return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 				}
 				filesystems = append(filesystems, clusterSSHTargetFilesystemEvidence{TargetID: item.Binding.TargetID, Storage: storage})
 			}
+			packages = append(packages, clusterSSHPreparationTargetPackages{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, Selection: selectionPackages})
 			return clusterSSHPreparationTargetCPU{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, CPU: proof.CPU}, nil
 		}
 		var first []clusterSSHPreparationTargetCPU
 		var firstFilesystems []clusterSSHTargetFilesystemEvidence
+		var firstPackages []clusterSSHPreparationTargetPackages
 		for round := 0; round < 2; round++ {
-			filesystems = nil
+			filesystems, packages = nil, nil
 			values := make([]clusterSSHPreparationTargetCPU, 0, len(work.Proof.Cohort.Targets))
 			for i := range work.Proof.Cohort.Targets {
 				digest, err := read(i)
@@ -233,10 +239,14 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 				}
 				values = append(values, digest)
 			}
+			if !validClusterSSHPreparationPackages(values, packages) {
+				return fail()
+			}
 			if round == 0 {
 				first = values
+				firstPackages = cloneClusterSSHPreparationPackages(packages)
 				firstFilesystems = cloneClusterSSHPreparationFilesystems(filesystems)
-			} else if !slices.Equal(first, values) || !mergeClusterSSHFilesystemAvailability(firstFilesystems, filesystems, false) {
+			} else if !slices.Equal(first, values) || !reflect.DeepEqual(firstPackages, packages) || !mergeClusterSSHFilesystemAvailability(firstFilesystems, filesystems, false) {
 				return fail()
 			}
 		}
@@ -244,14 +254,15 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 		// Waiting storage approval recalculates every required budget on every
 		// read. Retain conservative free-counter minima while requiring the same
 		// persistent identity; a harmless decrease is not an authority change.
-		if err != nil || current(ctx) != nil || (retained != "" && retained != digest) ||
+		if err != nil || current(ctx) != nil || (retained != "" && (retained != digest || !reflect.DeepEqual(retainedPackages, firstPackages))) ||
 			retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, firstFilesystems, false) {
 			return fail()
 		}
 		retained = digest
+		retainedPackages = cloneClusterSSHPreparationPackages(firstPackages)
 		if retainedFilesystems == nil {
 			retainedFilesystems = firstFilesystems
 		}
-		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(first), Filesystems: cloneClusterSSHPreparationFilesystems(retainedFilesystems)}, nil
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(first), Filesystems: cloneClusterSSHPreparationFilesystems(retainedFilesystems), Packages: cloneClusterSSHPreparationPackages(retainedPackages)}, nil
 	}
 }

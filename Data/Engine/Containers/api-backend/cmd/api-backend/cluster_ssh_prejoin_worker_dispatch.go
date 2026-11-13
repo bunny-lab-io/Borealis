@@ -35,13 +35,16 @@ func newClusterSSHNativePrejoinPreparationWorkerRead(store *postgresOperatorStor
 		if !clusterSSHPrejoinLocalProcessMatches(source) {
 			return nil, clusterbootstrap.ErrSessionAuthority
 		}
+		storage := newClusterSSHPrejoinWorkerStorageCheck(baseline, claims, func(ctx context.Context, consume func(context.Context, clusterSSHNetworkTargetReaders) error) error {
+			return withClusterSSHNetworkTargets(ctx, store, aegis, baseline, claims, consume)
+		})
 		scope := func(ctx context.Context, index int, consume func(context.Context, clusterbootstrap.PreparationExpected, clusterSSHPrejoinNativeTarget) error) error {
 			claim := claims[index]
 			acquire := func(ctx context.Context, consume clusterSSHPrejoinWorkerSourceConsumer) error {
 				return withClusterSSHPreparationSourceFor(ctx, scratchParent, store, aegis, claim.Lease, baseline, claim.Sealed, true, consume)
 			}
 			return withClusterSSHPrejoinWorkerInputs(ctx, claim, baseline, confirmation, source,
-				newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed), acquire,
+				newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed), acquire, storage,
 				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
 					postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
 					return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
@@ -67,12 +70,12 @@ type clusterSSHPrejoinWorkerNativeDispatch func(context.Context, *clusterbootstr
 // cleanup and all current-authority callbacks have joined successfully.
 func dispatchClusterSSHPrejoinWorker(parent context.Context, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	confirmation string, source clusterSSHPrejoinSource, authority clusterSSHPreparationAuthorityRead,
-	acquire func(context.Context, clusterSSHPrejoinWorkerSourceConsumer) error, native clusterSSHPrejoinWorkerNativeDispatch,
+	acquire func(context.Context, clusterSSHPrejoinWorkerSourceConsumer) error, storage clusterSSHPrejoinWorkerStorageCheck, native clusterSSHPrejoinWorkerNativeDispatch,
 	current func(context.Context) error) (result clusterSSHPrejoinDispatchResult, resultErr error) {
 	if native == nil {
 		return result, clusterbootstrap.ErrSessionAuthority
 	}
-	err := withClusterSSHPrejoinWorkerInputs(parent, claim, baseline, confirmation, source, authority, acquire,
+	err := withClusterSSHPrejoinWorkerInputs(parent, claim, baseline, confirmation, source, authority, acquire, storage,
 		func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
 			postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
 			owned := expected
@@ -95,11 +98,11 @@ type clusterSSHPrejoinWorkerInputConsumer func(context.Context, *clusterbootstra
 
 func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected,
 	confirmation string, source clusterSSHPrejoinSource, authority clusterSSHPreparationAuthorityRead,
-	acquire func(context.Context, clusterSSHPrejoinWorkerSourceConsumer) error, consume clusterSSHPrejoinWorkerInputConsumer,
+	acquire func(context.Context, clusterSSHPrejoinWorkerSourceConsumer) error, storage clusterSSHPrejoinWorkerStorageCheck, consume clusterSSHPrejoinWorkerInputConsumer,
 	current func(context.Context) error) (resultErr error) {
 	fail := clusterbootstrap.ErrSessionAuthority
 	if parent.Err() != nil || !validClusterSSHPreparationLease(claim.Lease) || baseline.Validate() != nil ||
-		!validClusterSSHPreparationDigest(confirmation) || !source.validIdentity() || authority == nil || acquire == nil || consume == nil || current == nil {
+		!validClusterSSHPreparationDigest(confirmation) || !source.validIdentity() || authority == nil || acquire == nil || storage == nil || consume == nil || current == nil {
 		return fail
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -139,8 +142,8 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 	}
 	var called atomic.Bool
 	err := acquire(ctx, func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
-		postgres string, _ clusterSSHPreparedImageCapacity, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
-		if !called.CompareAndSwap(false, true) || inputs == nil || artifacts == nil || checks.Inputs == nil || checks.Authority == nil || checks.K3sJoin == nil ||
+		postgres string, capacity clusterSSHPreparedImageCapacity, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
+		if !called.CompareAndSwap(false, true) || inputs == nil || artifacts == nil || checks.Inputs == nil || checks.Authority == nil || checks.K3sJoin == nil || checks.Storage == nil || !validClusterSSHPrejoinWorkerCapacity(capacity) ||
 			expected.Validate() != nil || !clusterbootstrap.ValidPostgresImageReference(postgres) || check(ctx) != nil {
 			cancel()
 			return fail
@@ -165,6 +168,25 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 				})
 			}
 		}
+		storageRead := checks.Storage
+		checks.Storage = func(caller context.Context) (clusterSSHStorageSnapshot, error) {
+			var value clusterSSHStorageSnapshot
+			err := lifetime.run(caller, func(bound context.Context) error {
+				var err error
+				if check(bound) != nil {
+					return fail
+				}
+				value, err = storageRead(bound)
+				if err != nil || check(bound) != nil {
+					return fail
+				}
+				return nil
+			})
+			if err != nil {
+				return clusterSSHStorageSnapshot{}, fail
+			}
+			return value, nil
+		}
 		joined := checks.K3sJoin
 		checks.Inputs, checks.Authority = wrap(checks.Inputs), wrap(checks.Authority)
 		checks.K3sJoin = func(caller context.Context, binding engineidentity.Binding, consume clusterSSHJoinMaterialConsumer) error {
@@ -183,7 +205,10 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 				return nil
 			})
 		}
-		if checks.Inputs(ctx) != nil {
+		capacity.Target = slices.Clone(capacity.Target)
+		// Finish the read-only storage scope, including terminal observations and
+		// joined cleanup, before any native preparation mutation.
+		if checks.Inputs(ctx) != nil || storage(ctx, value.payload, expected, capacity, checks) != nil || checks.Inputs(ctx) != nil {
 			return fail
 		}
 		nativeExpected := expected

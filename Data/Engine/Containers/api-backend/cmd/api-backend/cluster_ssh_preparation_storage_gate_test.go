@@ -31,7 +31,7 @@ func sshPreparationStorageGateFixture(t *testing.T, setup ...func(*sshWaitingCap
 		if plan != f.plan || ctx.Err() != nil {
 			err = errClusterConflict
 		}
-		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: f.targets}, err
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: f.targets, Packages: sshPreparationTargetPackagesFixture(f.targets)}, err
 	}
 	capacity, _, source := newClusterSSHPreparationCapacityStorageRead(f.snapshot, f.check, f.get, configuration, targets,
 		func(ctx context.Context, window int64) ([]int64, error) { f.censusReads++; return f.sites, ctx.Err() })
@@ -67,6 +67,7 @@ func TestClusterSSHPreparationStorageGateProposalReaderMinima(t *testing.T) {
 				}
 				binding, _ := clusterSSHPreparationDigest(input)
 				response := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: input.ID, RequestSHA256: binding, Targets: slices.Clone(f.targets)}
+				response.Packages = sshPreparationTargetPackagesFixture(response.Targets)
 				response.Digest, _ = clusterSSHPreparationTargetCPUDigest(f.snapshot, response.Targets)
 				for _, target := range f.targets {
 					e := sshCapacityEvidence()
@@ -89,7 +90,7 @@ func TestClusterSSHPreparationStorageGateProposalReaderMinima(t *testing.T) {
 					}
 					response.Filesystems = append(response.Filesystems, clusterSSHTargetFilesystemEvidence{TargetID: target.TargetID, Storage: e})
 				}
-				raw, err = sealClusterSSHVIP(client.responseCipher, clusterSSHPreparationCleanBrokerPath, response, clusterSSHPreparationCleanBrokerLimit)
+				raw, err = sealClusterSSHVIP(client.responseCipher, clusterSSHPreparationCleanBrokerPath, response, clusterSSHPreparationCleanBrokerResponseLimit)
 				if err != nil {
 					return nil, err
 				}
@@ -170,6 +171,10 @@ func TestClusterSSHPreparationStorageSourceBorrowsVerifiedCapacity(t *testing.T)
 	one.Storage.Requirements.Applications[0].MemoryLimitBytes++
 	one.Configuration.Sources[0].PodCIDR = "10.99.0.0/16"
 	one.Configuration.Applications[0].MemoryLimitBytes++
+	if !validClusterSSHPreparationPackages(one.Targets.Targets, one.Targets.Packages) {
+		t.Fatal("storage discarded package projection")
+	}
+	one.Targets.Packages[0].Selection.Missing[0] = "foreign"
 	one.Targets.Targets[0].CPU.MemoryKiB++
 	one.Targets.Capacity.Targets[0].Capacity.MemoryLimitBytes++
 	two, err := source(ctx, f.plan)

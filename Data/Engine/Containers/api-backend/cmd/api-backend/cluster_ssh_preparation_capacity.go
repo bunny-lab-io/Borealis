@@ -303,12 +303,12 @@ func newClusterSSHPreparationCapacityStorageRead(snapshot clusterSSHPreparationA
 		}
 		projectedCapacity := first.clone()
 		ownedSource, cloneErr := (clusterSSHPreparationStorageGateSource{Configuration: profile, Storage: storageSnapshot,
-			Targets: clusterSSHPreparationCleanObservation{Digest: clean.Digest, Targets: clean.Targets, Capacity: &projectedCapacity}}).clone()
+			Targets: clusterSSHPreparationCleanObservation{Digest: clean.Digest, Targets: clean.Targets, Packages: clean.Packages, Capacity: &projectedCapacity}}).clone()
 		if cloneErr != nil || check(ctx) != nil || ctx.Err() != nil || failed.Load() {
 			return fail("Verified storage projection could not retain its complete source inputs; retry preparation.")
 		}
 		retained, retainedDigest = first.clone(), digest
-		retainedTargets = clusterSSHPreparationCleanObservation{Digest: clean.Digest, Targets: slices.Clone(clean.Targets)}
+		retainedTargets = clusterSSHPreparationCleanObservation{Digest: clean.Digest, Targets: slices.Clone(clean.Targets), Packages: cloneClusterSSHPreparationPackages(clean.Packages)}
 		retainedSource = ownedSource
 		return digest, nil
 	}
@@ -321,6 +321,7 @@ func newClusterSSHPreparationCapacityStorageRead(snapshot clusterSSHPreparationA
 		}
 		value := retainedTargets
 		value.Targets = slices.Clone(value.Targets)
+		value.Packages = cloneClusterSSHPreparationPackages(value.Packages)
 		projected := retained.clone()
 		value.Capacity = &projected
 		return value, nil

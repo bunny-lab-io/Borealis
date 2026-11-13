@@ -210,11 +210,35 @@ func TestClusterSSHPreparationStorageFilesystemsNative(t *testing.T) {
 }
 
 func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
-	for _, mode := range []string{"success", "missing", "wrong target", "wrong paths", "wrong request", "mount drift", "lower free", "lower inodes", "close failure"} {
+	for _, mode := range []string{"success", "full preparation paths", "v4 package paths", "old v3 package paths", "missing", "wrong target", "wrong paths", "wrong request", "mount drift", "lower free", "lower inodes", "close failure"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot := sshPreparationCleanBrokerSnapshot(t)
 			plan, _, _ := clusterSSHPreparationCleanBrokerBinding(snapshot)
 			paths := []string{"/opt/Borealis", "/var/lib/longhorn"}
+			if mode == "v4 package paths" || mode == "old v3 package paths" {
+				paths = []string{"/etc", "/usr", "/var"}
+			}
+			if mode == "full preparation paths" {
+				_, _, native := sshBrokerFixture(t)
+				generated, err := clusterSSHPreparationHostFileDemands(native.Expected, "noble")
+				if err != nil {
+					t.Fatal(err)
+				}
+				demand, err := mergeClusterSSHFilesystemDemands(generated, []clusterSSHFilesystemDemand{
+					{Path: "/opt/Borealis", Bytes: 1, Entries: 1}, {Path: "/var/lib/rancher/k3s", Bytes: 1, Entries: 1},
+					{Path: "/usr/local/bin", Bytes: 1, Entries: 1}, {Path: "/var/tmp", Bytes: 1, Entries: 1},
+					{Path: "/usr", Bytes: 1, Entries: 1}, {Path: "/var", Bytes: 1, Entries: 1},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixture := newSSHStorageFixture(t, false)
+				var ok bool
+				paths, ok = clusterSSHStorageDemandPaths(sshStorageSnapshotFixture(t, fixture.a).Requirements.Policy, demand)
+				if !ok || len(paths) < 15 {
+					t.Fatal("actual generated/install demand paths absent", len(paths))
+				}
+			}
 			var calls int
 			var client *clusterSSHPreparationCleanBrokerClient
 			client = sshPreparationCleanBrokerTestClient(t, bootstrapRoundTripper(func(request *http.Request) (*http.Response, error) {
@@ -227,15 +251,34 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 				}
 				binding, _ := clusterSSHPreparationDigest(input)
 				response := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: input.ID, RequestSHA256: binding, Targets: sshPreparationTargetCPUFixture(snapshot)}
+				response.Packages = sshPreparationTargetPackagesFixture(response.Targets)
 				response.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, response.Targets)
 				for _, target := range snapshot.work.Proof.Cohort.Targets {
 					var parsed struct {
 						Evidence clusterremote.FilesystemEvidence `json:"evidence"`
 					}
 					_ = json.Unmarshal(sshFilesystemFixtureWire(target), &parsed)
+					if mode == "full preparation paths" || mode == "v4 package paths" || mode == "old v3 package paths" {
+						// The old persistent observer could return this valid shape
+						// without proving package ancestors. Only broker version
+						// distinguishes that meaning on this authenticated wire.
+						path := parsed.Evidence.Paths[0]
+						parsed.Evidence.Paths = nil
+						for _, destination := range paths {
+							path.Path, path.Ancestor = destination, "/"
+							parsed.Evidence.Paths = append(parsed.Evidence.Paths, path)
+						}
+					}
 					response.Filesystems = append(response.Filesystems, clusterSSHTargetFilesystemEvidence{TargetID: target.Binding.TargetID, Storage: parsed.Evidence})
 				}
 				switch mode {
+				case "v4 package paths":
+					if input.Version != 4 {
+						t.Error("current filesystem request did not require broker v4")
+					}
+					response.Version = 4
+				case "old v3 package paths":
+					response.Version = 3
 				case "missing":
 					response.Filesystems = nil
 				case "wrong target":
@@ -257,7 +300,11 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 						response.Filesystems[0].Storage.Filesystems[0].AvailableInodes--
 					}
 				}
-				raw, err := sealClusterSSHVIP(client.responseCipher, clusterSSHPreparationCleanBrokerPath, response, clusterSSHPreparationCleanBrokerLimit)
+				if mode == "full preparation paths" && calls == 1 {
+					measured, _ := json.Marshal(response)
+					t.Logf("supported paths=%d, plaintext bytes=%d", len(paths), len(measured))
+				}
+				raw, err := sealClusterSSHVIP(client.responseCipher, clusterSSHPreparationCleanBrokerPath, response, clusterSSHPreparationCleanBrokerResponseLimit)
 				if err != nil {
 					return nil, err
 				}
@@ -271,7 +318,7 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 			}))
 			read := client.preparationTargetsFilesystemRead(snapshot, func(ctx context.Context) error { return ctx.Err() }, paths)
 			value, err := read(context.Background(), plan)
-			positive := mode == "success" || mode == "mount drift" || mode == "lower free" || mode == "lower inodes"
+			positive := mode == "success" || mode == "full preparation paths" || mode == "v4 package paths" || mode == "mount drift" || mode == "lower free" || mode == "lower inodes"
 			if (err == nil) != positive {
 				t.Fatal("wrong first bound result", err)
 			}
@@ -279,8 +326,9 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 				value.Filesystems[0].Storage.Paths[0].Path = "/foreign"
 				value.Filesystems[0].Storage.Filesystems[0].AvailableBytes = 1
 			}
+			before := calls
 			again, err := read(context.Background(), plan)
-			if mode == "success" || mode == "lower free" || mode == "lower inodes" {
+			if mode == "success" || mode == "full preparation paths" || mode == "v4 package paths" || mode == "lower free" || mode == "lower inodes" {
 				available := uint64(700000)
 				if mode == "lower free" {
 					available--
@@ -299,6 +347,9 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 				}
 			} else if err == nil || again.Digest != "" {
 				t.Fatal("failed/drifting response accepted")
+			}
+			if mode == "old v3 package paths" && (value.Digest != "" || len(value.Filesystems) != 0 || calls != before) {
+				t.Fatal("old broker response escaped or failed reader revived")
 			}
 		})
 	}

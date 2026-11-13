@@ -10,9 +10,7 @@ import (
 	"time"
 )
 
-type bootstrapHostPackageState struct {
-	name, architecture, state, version string
-}
+type bootstrapHostPackageState = clusterbootstrap.HostPackageState
 
 // This is an in-scope command selection, not a receipt or permission to install.
 // The caller must own and reprove the extracted archive set, package snapshot,
@@ -25,33 +23,9 @@ type bootstrapHostPackagePlan struct {
 }
 
 func parseBootstrapHostPackageState(raw []byte) (map[string]bootstrapHostPackageState, error) {
-	if len(raw) == 0 || len(raw) > bootstrapDockerInventoryLimit || raw[len(raw)-1] != '\n' {
+	states, err := clusterbootstrap.ParseHostPackageState(raw)
+	if err != nil {
 		return nil, errBootstrapSource
-	}
-	states := map[string]bootstrapHostPackageState{}
-	required := map[string]bool{"apt": false, "dpkg": false, "base-files": false}
-	for _, line := range strings.Split(string(raw[:len(raw)-1]), "\n") {
-		f := strings.Split(line, "\t")
-		if len(f) != 4 || !bootstrapDockerPackage.MatchString(f[0]) || !bootstrapDockerPackage.MatchString(f[1]) ||
-			!bootstrapHostPackageVersion.MatchString(f[3]) || f[2] != "install ok installed" && f[2] != "deinstall ok config-files" {
-			return nil, errBootstrapSource
-		}
-		key := f[0] + ":" + f[1]
-		if _, exists := states[key]; exists {
-			return nil, errBootstrapSource
-		}
-		states[key] = bootstrapHostPackageState{f[0], f[1], f[2], f[3]}
-		if _, exists := required[f[0]]; exists {
-			if required[f[0]] || f[2] != "install ok installed" || f[1] != "amd64" && f[1] != "all" {
-				return nil, errBootstrapSource
-			}
-			required[f[0]] = true
-		}
-	}
-	for _, present := range required {
-		if !present {
-			return nil, errBootstrapSource
-		}
 	}
 	return states, nil
 }
@@ -90,32 +64,21 @@ func newBootstrapHostPackagePlanFor(directory, phase string, installed []byte, p
 	if err != nil {
 		return nil, err
 	}
-	pins, _, err := clusterbootstrap.HostPackagePins()
+	selection, err := clusterbootstrap.SelectHostPackages(installed)
+	if err != nil {
+		return nil, errBootstrapSource
+	}
+	pins, err := selection.Pins()
 	if err != nil {
 		return nil, errBootstrapSource
 	}
 	p := &bootstrapHostPackagePlan{directory: directory, before: before, preflight: preflight}
-	for _, pin := range pins.Packages {
-		if !preflight && pin.Phase != phase {
-			continue
-		}
-		present := false
-		for _, state := range before {
-			if state.name != pin.Name {
-				continue
-			}
-			if present || state.architecture != pin.Architecture || state.state != "install ok installed" {
-				return nil, errBootstrapSource
-			}
-			present = true
-		}
-		// Existing configured packages retain their versions. The native solver
-		// must leave them unchanged while satisfying every selected dependency.
-		// Residual or ambiguous selected-package state is not a fresh install.
-		if !present {
+	for _, pin := range pins {
+		if preflight || pin.Phase == phase {
 			p.selected = append(p.selected, pin)
 		}
 	}
+
 	return p, nil
 }
 
@@ -169,7 +132,7 @@ func (p *bootstrapHostPackagePlan) validateResult(raw []byte) error {
 	}
 	want := maps.Clone(p.before)
 	for _, pin := range p.selected {
-		want[pin.Name+":"+pin.Architecture] = bootstrapHostPackageState{pin.Name, pin.Architecture, "install ok installed", pin.Version}
+		want[pin.Name+":"+pin.Architecture] = bootstrapHostPackageState{Name: pin.Name, Architecture: pin.Architecture, State: "install ok installed", Version: pin.Version}
 	}
 	if !maps.Equal(want, current) {
 		return errBootstrapSource

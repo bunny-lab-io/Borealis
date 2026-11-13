@@ -32,7 +32,11 @@ func preparationProposalFixture() PreparationProposal {
 
 func preparationProofFixture(p PreparationProposal) PreparationProposalProof {
 	digest, _ := p.RequestSHA256()
-	return PreparationProposalProof{Version: PreparationProposalVersion, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64), CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: p.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
+	selection, err := clusterbootstrap.SelectHostPackages([]byte("apt\tamd64\tinstall ok installed\t2.7.14\ndpkg\tamd64\tinstall ok installed\t1.22.6\nbase-files\tamd64\tinstall ok installed\t13\n"))
+	if err != nil {
+		panic(err)
+	}
+	return PreparationProposalProof{Packages: &selection, Version: PreparationProposalVersion, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64), CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: p.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
 }
 
 func TestPreparationProposalContract(t *testing.T) {
@@ -116,11 +120,12 @@ func TestPreparationProposalContract(t *testing.T) {
 	}
 	raw, _ := json.Marshal(proof)
 	for _, bad := range []string{
-		strings.Replace(string(raw), `"version":3`, `"version":3,"version":2`, 1),
-		strings.Replace(string(raw), `"version":3`, `"Version":3`, 1),
-		strings.Replace(string(raw), `"version":3`, `"version":1`, 1),
-		strings.Replace(string(raw), `"version":3`, `"version":3,"inventory":"private-account-fixture"`, 1),
-		strings.Replace(string(raw), `"version":3,`, "", 1),
+		strings.Replace(string(raw), `"version":4`, `"version":4,"version":2`, 1),
+		strings.Replace(string(raw), `"version":4`, `"Version":4`, 1),
+		strings.Replace(string(raw), `"version":4`, `"version":1`, 1),
+		strings.Replace(string(raw), `"version":4`, `"version":3`, 1),
+		strings.Replace(string(raw), `"version":4`, `"version":4,"inventory":"private-account-fixture"`, 1),
+		strings.Replace(string(raw), `"version":4,`, "", 1),
 		strings.Replace(string(raw), proof.ObservationSHA256, strings.Repeat("0", 64), 1),
 		strings.Replace(string(raw), `"nonce":"`+p.Nonce+`"`, `"nonce":null`, 1),
 		string(raw) + string(raw), strings.Repeat("x", MaxOutputBytes+1),
@@ -370,7 +375,7 @@ func TestPreparationProposalNativeMountinfoComposition(t *testing.T) {
 }
 
 func TestPreparationProposalNativeSnapshots(t *testing.T) {
-	for _, mode := range []string{"fresh", "maximum holder", "compatible account", "compatible partial account", "OS link", "old OS", "foreign arch", "missing apt", "second apt foreign arch", "residual docker", "unpacked package", "duplicate package", "oversized packages", "runtime binary", "K3s data", "kubelet state", "Kubernetes config", "source checkout", "generated file", "pending host file", "pending repository", "Docker source", "missing sources", "source symlink", "source hardlink", "ancestor symlink", "unsafe parent", "unsafe file", "FIFO", "oversized source", "too many sources", "loaded unit", "unit job", "unit main PID", "unit control PID", "manager unit", "duplicate unit", "NSS provider", "NSS duplicate", "UID collision", "GID collision", "supplementary group", "login account", "UID process", "malformed process", "oversized account", "changed package", "changed source", "replaced source", "changed parent", "changed machine", "changed boot", "changed hostname", "extra identity newline", "foreign address", "duplicate address", "duplicate address key", "malformed flags", "command failure"} {
+	for _, mode := range []string{"fresh", "maximum holder", "compatible account", "compatible partial account", "OS link", "old OS", "foreign arch", "missing apt", "second apt foreign arch", "second apt all arch", "residual docker", "unpacked package", "duplicate package", "oversized packages", "runtime binary", "K3s data", "kubelet state", "Kubernetes config", "source checkout", "generated file", "pending host file", "pending repository", "Docker source", "missing sources", "source symlink", "source hardlink", "ancestor symlink", "unsafe parent", "unsafe file", "FIFO", "oversized source", "too many sources", "loaded unit", "unit job", "unit main PID", "unit control PID", "manager unit", "duplicate unit", "NSS provider", "NSS duplicate", "UID collision", "GID collision", "supplementary group", "login account", "UID process", "malformed process", "oversized account", "changed package", "changed source", "replaced source", "changed parent", "changed machine", "changed boot", "changed hostname", "extra identity newline", "foreign address", "duplicate address", "duplicate address key", "malformed flags", "command failure"} {
 		t.Run(mode, func(t *testing.T) {
 			root, write, prelude := preparationNativeFixture(t)
 			p := preparationProposalFixture()
@@ -404,6 +409,8 @@ func TestPreparationProposalNativeSnapshots(t *testing.T) {
 				prelude += "fixture_packages = fixture_packages.split(b'\\n', 1)[1]\n"
 			case "second apt foreign arch":
 				prelude += "fixture_packages += b'apt\\tarm64\\tinstall ok installed\\t2.7.14\\n'\n"
+			case "second apt all arch":
+				prelude += "fixture_packages += b'apt\\tall\\tinstall ok installed\\t2.7.14\\n'\n"
 			case "residual docker":
 				prelude += "fixture_packages += b'docker-ce\\tamd64\\tdeinstall ok config-files\\t5:27.0\\n'\n"
 			case "unpacked package":

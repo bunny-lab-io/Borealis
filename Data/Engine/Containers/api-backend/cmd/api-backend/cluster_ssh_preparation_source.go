@@ -219,6 +219,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
 			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
 		}
+		checks.Storage = newClusterSSHPrejoinWorkerStorageRead(ctx, initial.Storage, checks.Authority)
 		packages, err := resolveClusterSSHHostPackageInventory(ctx, expected.Source)
 		if err != nil {
 			return err

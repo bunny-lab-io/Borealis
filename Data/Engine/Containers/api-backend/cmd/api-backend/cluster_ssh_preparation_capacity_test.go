@@ -128,7 +128,7 @@ func (f *sshWaitingCapacityFixture) readers() (func(context.Context, string) (st
 			err = errClusterConflict
 		}
 		// Deliberately return shared storage: the gate must own retained values.
-		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: f.targets}, err
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: f.targets, Packages: sshPreparationTargetPackagesFixture(f.targets)}, err
 	}
 	census := func(ctx context.Context, window int64) ([]int64, error) {
 		f.censusReads++
@@ -318,6 +318,10 @@ func TestClusterSSHPreparationCapacityWaitingProjectionLifetime(t *testing.T) {
 			}
 			if mode == "copies" {
 				value, _ := approval(context.Background(), f.plan)
+				if !validClusterSSHPreparationPackages(value.Targets, value.Packages) {
+					t.Fatal("capacity discarded package projection")
+				}
+				value.Packages[0].Selection.Missing[0] = "foreign"
 				value.Targets[0].CPU.MemoryKiB++
 				value.Capacity.Targets[0].Capacity.CPURequestMilli++
 				f.targets[0].CPU.ObservationSHA256 = strings.Repeat("f", 64)

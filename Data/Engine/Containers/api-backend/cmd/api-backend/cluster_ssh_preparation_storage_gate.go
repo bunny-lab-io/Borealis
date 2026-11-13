@@ -33,6 +33,7 @@ func (v clusterSSHPreparationStorageGateSource) clone() (clusterSSHPreparationSt
 	v.Configuration.Sources = slices.Clone(v.Configuration.Sources)
 	v.Configuration.Applications = slices.Clone(v.Configuration.Applications)
 	v.Targets.Targets = slices.Clone(v.Targets.Targets)
+	v.Targets.Packages = cloneClusterSSHPreparationPackages(v.Targets.Packages)
 	v.Targets.Filesystems = cloneClusterSSHPreparationFilesystems(v.Targets.Filesystems)
 	if v.Targets.Capacity != nil {
 		capacity := v.Targets.Capacity.clone()

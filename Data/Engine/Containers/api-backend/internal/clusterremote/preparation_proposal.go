@@ -20,9 +20,9 @@ var ErrPreparationProposal = errors.New("SSH preparation proposal observation un
 var proposalDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var proposalHostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Version 3 adds native effective-CPU observation and the fixed kubelet plan.
-// Older clean-host/supervision receipts cannot stand for CPU evidence.
-const PreparationProposalVersion = 3
+// Version 4 adds exact missing-package selection from the fixed release plan.
+// Older clean-host/CPU receipts contain no transaction selection.
+const PreparationProposalVersion = 4
 
 // PreparationProposal binds an observation to the original waiting proposal.
 // QualificationGeneration is its reserved generation, never a worker claim.
@@ -86,26 +86,27 @@ func (p PreparationProposal) RequestSHA256() (string, error) {
 	if err != nil {
 		return "", ErrPreparationProposal
 	}
-	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v3\n"), raw...))
+	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v4\n"), raw...))
 	return hex.EncodeToString(digest[:]), nil
 }
 
-// PreparationProposalProof contains no account rows, package inventory or host
+// PreparationProposalProof contains no account rows, full package inventory or host
 // configuration. Stable ObservationSHA256 excludes the request/nonce; callers
 // must retain it with the exact proposal and recheck their own durable authority.
 // This observation is not a preparation claim, effect receipt or readiness proof.
 type PreparationProposalProof struct {
-	Version           int                                   `json:"version"`
-	RequestSHA256     string                                `json:"request_sha256"`
-	Nonce             string                                `json:"nonce"`
-	ObservationSHA256 string                                `json:"observation_sha256"`
-	CPU               clusterbootstrap.PreparationTargetCPU `json:"cpu"`
+	Version           int                                    `json:"version"`
+	RequestSHA256     string                                 `json:"request_sha256"`
+	Nonce             string                                 `json:"nonce"`
+	ObservationSHA256 string                                 `json:"observation_sha256"`
+	CPU               clusterbootstrap.PreparationTargetCPU  `json:"cpu"`
+	Packages          *clusterbootstrap.HostPackageSelection `json:"packages"`
 }
 
 func (proof PreparationProposalProof) Validate(p PreparationProposal) error {
 	digest, err := p.RequestSHA256()
 	if err != nil || proof.Version != PreparationProposalVersion || proof.RequestSHA256 != digest || proof.Nonce != p.Nonce || !proposalDigest(proof.ObservationSHA256) ||
-		proof.CPU.Validate(clusterbootstrap.K3sPins().Version) != nil || proof.CPU.PlanSHA256 != p.CPUPlanSHA256 {
+		proof.CPU.Validate(clusterbootstrap.K3sPins().Version) != nil || proof.CPU.PlanSHA256 != p.CPUPlanSHA256 || proof.Packages == nil || proof.Packages.Validate() != nil {
 		return ErrPreparationProposal
 	}
 	return nil

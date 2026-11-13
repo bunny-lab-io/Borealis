@@ -19,11 +19,41 @@ type clusterSSHPreparationTargetCPU struct {
 }
 
 type clusterSSHPreparationCleanObservation struct {
-	Digest      string                               `json:"digest"`
-	Targets     []clusterSSHPreparationTargetCPU     `json:"targets"`
-	Filesystems []clusterSSHTargetFilesystemEvidence `json:"-"`
+	Digest      string                                `json:"digest"`
+	Targets     []clusterSSHPreparationTargetCPU      `json:"targets"`
+	Filesystems []clusterSSHTargetFilesystemEvidence  `json:"-"`
+	Packages    []clusterSSHPreparationTargetPackages `json:"-"`
 	// Private adjacent capacity projection; never supplied by the clean broker.
 	Capacity *clusterSSHPreparationCapacityProjection `json:"-"`
+}
+
+// Adjacent read-only transaction selection. The native clean observation binds
+// it to the same exact target and full package inventory; it grants no install
+// authority and does not reduce the existing conservative package charge.
+type clusterSSHPreparationTargetPackages struct {
+	TargetID          string                                `json:"target_id"`
+	ObservationSHA256 string                                `json:"observation_sha256"`
+	Selection         clusterbootstrap.HostPackageSelection `json:"selection"`
+}
+
+func cloneClusterSSHPreparationPackages(values []clusterSSHPreparationTargetPackages) []clusterSSHPreparationTargetPackages {
+	values = slices.Clone(values)
+	for i := range values {
+		values[i].Selection = values[i].Selection.Clone()
+	}
+	return values
+}
+
+func validClusterSSHPreparationPackages(targets []clusterSSHPreparationTargetCPU, packages []clusterSSHPreparationTargetPackages) bool {
+	if len(targets) < 1 || len(targets) > 2 || len(packages) != len(targets) {
+		return false
+	}
+	for i, target := range targets {
+		if packages[i].TargetID != target.TargetID || packages[i].ObservationSHA256 != target.ObservationSHA256 || packages[i].Selection.Validate() != nil {
+			return false
+		}
+	}
+	return true
 }
 
 type clusterSSHPreparationTargetsRead func(context.Context, string) (clusterSSHPreparationCleanObservation, error)
@@ -49,7 +79,7 @@ func clusterSSHPreparationTargetCPUReaderPair(snapshot clusterSSHPreparationAppr
 			failed = true
 			return "", errClusterConflict
 		}
-		retained = clusterSSHPreparationCleanObservation{Digest: value.Digest, Targets: slices.Clone(value.Targets), Filesystems: cloneClusterSSHPreparationFilesystems(value.Filesystems)}
+		retained = clusterSSHPreparationCleanObservation{Digest: value.Digest, Targets: slices.Clone(value.Targets), Filesystems: cloneClusterSSHPreparationFilesystems(value.Filesystems), Packages: cloneClusterSSHPreparationPackages(value.Packages)}
 		return value.Digest, nil
 	}
 	projection := func(ctx context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
@@ -58,7 +88,7 @@ func clusterSSHPreparationTargetCPUReaderPair(snapshot clusterSSHPreparationAppr
 		if err != nil || failed || ctx.Err() != nil || requested != plan || retained.validate(snapshot) != nil {
 			return clusterSSHPreparationCleanObservation{}, errClusterConflict
 		}
-		return clusterSSHPreparationCleanObservation{Digest: retained.Digest, Targets: slices.Clone(retained.Targets), Filesystems: cloneClusterSSHPreparationFilesystems(retained.Filesystems)}, nil
+		return clusterSSHPreparationCleanObservation{Digest: retained.Digest, Targets: slices.Clone(retained.Targets), Filesystems: cloneClusterSSHPreparationFilesystems(retained.Filesystems), Packages: cloneClusterSSHPreparationPackages(retained.Packages)}, nil
 	}
 	return clean, projection
 }

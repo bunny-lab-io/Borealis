@@ -42,7 +42,7 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 			var escaped clusterSSHPreparationChecks
 			var escapedJoin func(context.Context) error
 			inputCalls, renewals := 0, 0
-			checks := clusterSSHPreparationChecks{
+			checks := clusterSSHPreparationChecks{Storage: func(context.Context) (clusterSSHStorageSnapshot, error) { return clusterSSHStorageSnapshot{}, nil },
 				Inputs: func(context.Context) error {
 					inputCalls++
 					if mode == "input failure" || mode == "late input failure" && dispatched {
@@ -79,11 +79,11 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 				if mode == "sibling drift" {
 					a.Cohort.Targets[1].Report.BootID = newClusterUUID()
 				}
-				if err := consume(ctx, inputs, artifacts, postgres, clusterSSHPreparedImageCapacity{}, expected, checks); err != nil {
+				if err := consume(ctx, inputs, artifacts, postgres, sshPrejoinWorkerCapacityFixture(), expected, checks); err != nil {
 					return err
 				}
 				if mode == "duplicate callback" {
-					_ = consume(ctx, inputs, artifacts, postgres, clusterSSHPreparedImageCapacity{}, expected, checks)
+					_ = consume(ctx, inputs, artifacts, postgres, sshPrejoinWorkerCapacityFixture(), expected, checks)
 				}
 				if mode == "source slice ownership" {
 					expected.PeerAddresses[0] = "192.0.2.99"
@@ -137,7 +137,9 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 				claim.Lease.OperationStep, claim.Lease.Step = clusterSSHQualificationStep, "qualify"
 			}
 			result, err := dispatchClusterSSHPrejoinWorker(ctx, claim, a.Baseline, confirmation, source,
-				func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, acquire, native,
+				func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, acquire, func(context.Context, string, clusterbootstrap.PreparationExpected, clusterSSHPreparedImageCapacity, clusterSSHPreparationChecks) error {
+					return nil
+				}, native,
 				func(context.Context) error {
 					renewals++
 					if mode == "cohort renewal failure" && dispatched {
@@ -185,14 +187,14 @@ func TestClusterSSHPrejoinWorkerDispatchJoinsOutstandingCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	started, joined := make(chan struct{}), make(chan struct{})
-	checks := clusterSSHPreparationChecks{Inputs: func(context.Context) error { return nil }, Authority: func(ctx context.Context) error {
+	checks := clusterSSHPreparationChecks{Storage: func(context.Context) (clusterSSHStorageSnapshot, error) { return clusterSSHStorageSnapshot{}, nil }, Inputs: func(context.Context) error { return nil }, Authority: func(ctx context.Context) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
 	}, K3sJoin: func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error { return nil }}
 	acquire := func(ctx context.Context, consume clusterSSHPrejoinWorkerSourceConsumer) error {
 		return consume(ctx, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{},
-			clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), clusterSSHPreparedImageCapacity{}, expected, checks)
+			clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), sshPrejoinWorkerCapacityFixture(), expected, checks)
 	}
 	native := func(ctx context.Context, _ *clusterbootstrap.PreparationInputs, _ *clusterbootstrap.PreparationArtifacts, _ string,
 		_ clusterbootstrap.PreparationExpected, c clusterSSHPreparationChecks) (clusterbootstrap.PrejoinPreparationReceipt, error) {
@@ -207,7 +209,9 @@ func TestClusterSSHPrejoinWorkerDispatchJoinsOutstandingCheck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	result, err := dispatchClusterSSHPrejoinWorker(ctx, claim, a.Baseline, authorization.ConfirmationSHA256, source,
-		func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, acquire, native, func(context.Context) error { return nil })
+		func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, acquire, func(context.Context, string, clusterbootstrap.PreparationExpected, clusterSSHPreparedImageCapacity, clusterSSHPreparationChecks) error {
+			return nil
+		}, native, func(context.Context) error { return nil })
 	if err == nil || !reflect.DeepEqual(result, clusterSSHPrejoinDispatchResult{}) {
 		t.Fatal("in-flight authority check became completion")
 	}

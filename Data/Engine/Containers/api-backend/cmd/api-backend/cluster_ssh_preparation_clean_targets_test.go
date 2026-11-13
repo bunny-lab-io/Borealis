@@ -61,11 +61,27 @@ func sshPreparationCleanTargetsFixture(t *testing.T, replacement bool) (clusterS
 
 func sshPreparationProposalTestProof(request clusterremote.PreparationProposal, digest string) clusterremote.PreparationProposalProof {
 	hash, _ := request.RequestSHA256()
-	return clusterremote.PreparationProposalProof{Version: clusterremote.PreparationProposalVersion, RequestSHA256: hash, Nonce: request.Nonce, ObservationSHA256: digest, CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: request.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
+	selection, err := clusterbootstrap.SelectHostPackages([]byte("apt\tamd64\tinstall ok installed\t2.7.14\ndpkg\tamd64\tinstall ok installed\t1.22.6\nbase-files\tamd64\tinstall ok installed\t13\n"))
+	if err != nil {
+		panic(err)
+	}
+	return clusterremote.PreparationProposalProof{Packages: &selection, Version: clusterremote.PreparationProposalVersion, RequestSHA256: hash, Nonce: request.Nonce, ObservationSHA256: digest, CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: request.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
+}
+
+func sshPreparationTargetPackagesFixture(targets []clusterSSHPreparationTargetCPU) []clusterSSHPreparationTargetPackages {
+	selection, err := clusterbootstrap.SelectHostPackages([]byte("apt\tamd64\tinstall ok installed\t2.7.14\ndpkg\tamd64\tinstall ok installed\t1.22.6\nbase-files\tamd64\tinstall ok installed\t13\n"))
+	if err != nil {
+		panic(err)
+	}
+	values := make([]clusterSSHPreparationTargetPackages, len(targets))
+	for i, target := range targets {
+		values[i] = clusterSSHPreparationTargetPackages{TargetID: target.TargetID, ObservationSHA256: target.ObservationSHA256, Selection: selection.Clone()}
+	}
+	return values
 }
 
 func TestClusterSSHPreparationCleanTargetsFreshCohort(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "copied inputs", "wrong plan", "claimed work", "missing credential", "wrong credential", "wrong generation", "wrong target", "controller mismatch", "open error", "open binding", "Aegis locked", "connect error", "close error", "native error", "wrong nonce", "wrong request", "bad digest", "changed cohort round", "changed next read", "authority during native", "cancel", "deadline"} {
+	for _, mode := range []string{"pair", "replacement", "copied inputs", "wrong plan", "claimed work", "missing credential", "wrong credential", "wrong generation", "wrong target", "controller mismatch", "open error", "open binding", "Aegis locked", "connect error", "close error", "native error", "wrong nonce", "wrong request", "bad digest", "changed cohort round", "changed next read", "missing packages", "null missing", "unknown package", "duplicate package", "wrong package lock", "changed package round", "changed package next read", "authority during native", "cancel", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot, aegis := sshPreparationCleanTargetsFixture(t, mode == "replacement")
 			plan, _ := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
@@ -143,6 +159,24 @@ func TestClusterSSHPreparationCleanTargetsFreshCohort(t *testing.T) {
 						}
 						proof := sshPreparationProposalTestProof(request, digest)
 						switch mode {
+						case "missing packages":
+							proof.Packages = nil
+						case "null missing":
+							proof.Packages.Missing = nil
+						case "unknown package":
+							proof.Packages.Missing = []string{"foreign"}
+						case "duplicate package":
+							proof.Packages.Missing = []string{proof.Packages.Missing[0], proof.Packages.Missing[0]}
+						case "wrong package lock":
+							proof.Packages.PlanSHA256 = strings.Repeat("f", 64)
+						case "changed package round", "changed package next read":
+							threshold := len(expected)
+							if mode == "changed package next read" {
+								threshold *= 2
+							}
+							if reads > threshold {
+								proof.Packages.Missing = proof.Packages.Missing[1:]
+							}
 						case "native error":
 							return proof, errClusterConflict
 						case "wrong nonce":
@@ -175,7 +209,7 @@ func TestClusterSSHPreparationCleanTargetsFreshCohort(t *testing.T) {
 				requested = strings.Repeat("f", 64)
 			}
 			digest, err := read(ctx, requested)
-			positive := mode == "pair" || mode == "replacement" || mode == "copied inputs" || mode == "changed next read"
+			positive := mode == "pair" || mode == "replacement" || mode == "copied inputs" || mode == "changed next read" || mode == "changed package next read"
 			if (err == nil) != positive || err != nil && digest != "" {
 				t.Fatal("unexpected proof result", err)
 			}
@@ -184,7 +218,7 @@ func TestClusterSSHPreparationCleanTargetsFreshCohort(t *testing.T) {
 					t.Fatal("incomplete fresh cohort rounds", reads)
 				}
 				again, nextErr := read(ctx, plan)
-				if mode == "changed next read" {
+				if mode == "changed next read" || mode == "changed package next read" {
 					if nextErr == nil || again != "" {
 						t.Fatal("changed observation retained old proof")
 					}

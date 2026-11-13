@@ -1354,8 +1354,33 @@ func (m *manager) preflightRelease(ctx context.Context, release, targetSHA strin
 	if strings.TrimSpace(dirty) != "" {
 		return nil, errors.New("worktree is not clean; refusing stash, reset, or checkout")
 	}
-	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", "HEAD", targetSHA); err != nil {
-		return nil, errors.New("target is not a fast-forward descendant")
+	head, err := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	head = strings.TrimSpace(head)
+	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+		shallow, shallowErr := runGit(ctx, m.repoRoot, "rev-parse", "--is-shallow-repository")
+		if shallowErr != nil || strings.TrimSpace(shallow) != "true" {
+			return nil, errors.New("target is not a fast-forward descendant")
+		}
+		origin, originErr := runGit(ctx, m.repoRoot, "remote", "get-url", "origin")
+		if originErr != nil || normalizeRemote(origin) != normalizeRemote(envDefault("BOREALIS_ENGINE_REPOSITORY_URL", "https://github.com/bunny-lab-io/Borealis.git")) {
+			return nil, errors.New("origin does not match configured Borealis repository")
+		}
+		// A prior shallow boundary can hide even a fetched target's ancestry.
+		// Fetch only that pinned history once, within the existing action bound.
+		if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "--unshallow", "origin", targetSHA); err != nil {
+			return nil, err
+		}
+		if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+			return nil, errors.New("target is not a fast-forward descendant")
+		}
+		current, headErr := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+		dirty, statusErr := runGit(ctx, m.repoRoot, "status", "--porcelain", "--untracked-files=normal")
+		if headErr != nil || statusErr != nil || strings.TrimSpace(current) != head || strings.TrimSpace(dirty) != "" {
+			return nil, errors.New("worktree changed while fetching pinned ancestry; refusing checkout or mutation")
+		}
 	}
 	return map[string]any{"release_tag": release, "revision": targetSHA, "worktree_clean": true, "fast_forward": true}, nil
 }
