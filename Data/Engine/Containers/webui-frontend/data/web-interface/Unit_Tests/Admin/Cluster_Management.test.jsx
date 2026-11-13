@@ -540,10 +540,10 @@ describe("Cluster Management", () => {
     ));
   });
 
-  it("offers retry for retained cancelled admission operations without unsafe cancellation", async () => {
+  it.each(["failed", "cancelled"])("offers retry for retained %s admission operations without unsafe cancellation", async (operationState) => {
     state.operations = [
       { id: "44444444-4444-4444-8444-444444444444", kind: "membership_admit", state: "queued", current_step: "preflight", created_at: 1787770000 },
-      { id: "55555555-5555-4555-8555-555555555555", kind: "membership_admit", state: "cancelled", current_step: "cancelled", created_at: 1787770001 },
+      { id: "55555555-5555-4555-8555-555555555555", kind: "membership_admit", state: operationState, current_step: "apply_membership", created_at: 1787770001 },
     ];
     renderClusterManagement("/cluster-management?tab=operations");
     expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
@@ -928,7 +928,7 @@ describe("Cluster Management", () => {
     expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
   });
 
-  it("renders failed operations with friendly timestamp and no inline retry affordance", async () => {
+  it("renders failed node removal with friendly timestamp and retries through existing operation contract", async () => {
     state.operations = [{
       id: "11111111-1111-4111-8111-111111111199",
       kind: "node_remove",
@@ -940,6 +940,11 @@ describe("Cluster Management", () => {
       target_node_id: "11111111-1111-4111-8111-111111111111",
       payload: { emergency: false },
     }];
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") return { ok: true, status: 202, json: async () => ({ operation_id: state.operations[0].id }) };
+      return { ok: true, json: async () => ({ releases: [], events: [], nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
     renderClusterManagement("/cluster-management?tab=operations");
 
     for (const column of ["Node", "Status", "Operation", "Details", "Timestamp"]) {
@@ -957,7 +962,32 @@ describe("Cluster Management", () => {
     expect(screen.getByText("Node Pair Removed")).toBeInTheDocument();
     expect(screen.getByText(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/)).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/operations/11111111-1111-4111-8111-111111111199/retry",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ confirmation: "RETRY OPERATION" }) })
+    ));
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
+  });
+
+  it.each([
+    ["running", { state: "running" }],
+    ["queued", { state: "queued" }],
+    ["waiting", { state: "waiting" }],
+    ["cancelled", { state: "cancelled" }],
+    ["succeeded", { state: "succeeded" }],
+    ["superseded", { superseded_by: "22222222-2222-4222-8222-222222222299" }],
+    ["invalid operation ID", { id: "invalid/operation" }],
+    ["unsupported operation kind", { kind: "engine_update" }],
+  ])("omits removal Retry for %s records", async (_, patch) => {
+    state.operations = [{
+      id: "11111111-1111-4111-8111-111111111199", kind: "node_remove", state: "failed",
+      current_step: "delete_member_node", target_node_id: "11111111-1111-4111-8111-111111111111",
+      created_at: 1_787_770_000, ...patch,
+    }];
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("engine-1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 
   it("shows linked lifecycle details and copies redacted diagnostics", async () => {

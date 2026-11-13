@@ -1425,7 +1425,9 @@ export default function ClusterManagement() {
         const label = clusterOperationStatusLabel(operation);
         const sshInspection = operation.kind === "ssh_onboarding" && validSSHInspectionID(operation.id);
         const cancellable = !["ssh_onboarding", "membership_admit"].includes(operation.kind) && ["queued", "waiting"].includes(state);
-        const retryable = operation.kind === "membership_admit" && !operation.superseded_by && ["failed", "cancelled"].includes(state);
+        const retryable = validSSHInspectionID(operation.id) && !operation.superseded_by
+          && ((operation.kind === "membership_admit" && ["failed", "cancelled"].includes(state))
+            || (operation.kind === "node_remove" && state === "failed"));
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
             <StatusPill value={label} />

@@ -2696,19 +2696,42 @@ func (r *kubernetesClusterStepRunner) preparePostgresRemoval(ctx context.Context
 	for _, node := range selected {
 		targetNames[node.Name] = true
 	}
-	occupied, err := r.cnpgPodsOnNodes(ctx, targetNames)
-	if err != nil {
-		return err
+	// Ready instance counts can settle before the removed Pods disappear.
+	// Even terminating or completed Pods block fencing until their deletion.
+	pollInterval := r.jobPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
 	}
-	if len(occupied) == 0 {
-		return nil
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	occupied := make([]string, 0, len(targetNames))
+	for nodeName := range targetNames {
+		occupied = append(occupied, nodeName)
 	}
-	restoreErr := r.scaleCNPG(ctx, len(nodes))
-	message := fmt.Errorf("CloudNativePG retained instances on removal targets %s; select nodes hosting scale-down instances", strings.Join(occupied, ", "))
-	if restoreErr != nil {
-		return errors.Join(message, fmt.Errorf("restore PostgreSQL membership: %w", restoreErr))
+	sort.Strings(occupied)
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("CloudNativePG did not vacate removal targets %s: %w", strings.Join(occupied, ", "), err)
+		}
+		observed, err := r.cnpgPodsOnNodes(ctx, targetNames)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("CloudNativePG did not vacate removal targets %s: %w", strings.Join(occupied, ", "), ctx.Err())
+			}
+			return err
+		}
+		occupied = observed
+		if len(occupied) == 0 {
+			return ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			// The step deadline or lost controller lease ends mutation authority;
+			// never restore membership with a fresh context after cancellation.
+			return fmt.Errorf("CloudNativePG did not vacate removal targets %s: %w", strings.Join(occupied, ", "), ctx.Err())
+		case <-ticker.C:
+		}
 	}
-	return message
 }
 
 func (r *kubernetesClusterStepRunner) cnpgPodsOnNodes(ctx context.Context, nodeNames map[string]bool) ([]string, error) {
@@ -2717,11 +2740,34 @@ func (r *kubernetesClusterStepRunner) cnpgPodsOnNodes(ctx context.Context, nodeN
 	if err := r.kube.getJSON(ctx, path, &payload); err != nil {
 		return nil, err
 	}
+	items, ok := payload["items"].([]any)
+	if !ok || cleanText(nestedMap(payload, "metadata")["continue"]) != "" {
+		return nil, errors.New("CloudNativePG Pod observation is not a complete list")
+	}
 	occupied := make([]string, 0, len(nodeNames))
 	seen := map[string]bool{}
-	for _, raw := range anySlice(payload["items"]) {
-		pod, _ := raw.(map[string]any)
-		nodeName := cleanText(nestedMap(pod, "spec")["nodeName"])
+	for _, raw := range items {
+		pod, ok := raw.(map[string]any)
+		if !ok || pod == nil {
+			return nil, errors.New("CloudNativePG Pod observation contains an invalid Pod")
+		}
+		rawNodeName := nestedMap(pod, "spec")["nodeName"]
+		nodeName, validNodeName := rawNodeName.(string)
+		if rawNodeName != nil && !validNodeName {
+			return nil, errors.New("CloudNativePG Pod observation contains an invalid node name")
+		}
+		nodeName = strings.TrimSpace(nodeName)
+		if nodeName == "" {
+			// A Pending Pod may not have a node yet. Unknown placement cannot
+			// prove either removal target is clear; wait for a later census.
+			for target := range nodeNames {
+				if !seen[target] {
+					seen[target] = true
+					occupied = append(occupied, target)
+				}
+			}
+			continue
+		}
 		if nodeNames[nodeName] && !seen[nodeName] {
 			seen[nodeName] = true
 			occupied = append(occupied, nodeName)

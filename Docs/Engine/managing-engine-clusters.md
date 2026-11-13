@@ -368,7 +368,9 @@ In the Nodes view, select both removal targets and type `REMOVE NODE PAIR`.
 
 The controller first snapshots state, moves the synchronized PostgreSQL primary onto the surviving member, waits for healthy replication, and then scales CloudNativePG.  Failure to prepare the survivor stops the operation before database membership changes.
 
-The controller also refuses fencing unless PostgreSQL has vacated both targets.  Each target is then processed in sequence:
+The controller also refuses fencing unless PostgreSQL has vacated both targets. Borealis waits for all target PostgreSQL Pods to disappear, including terminating or completed Pods. If observation fails or the wait expires, fencing stops; PostgreSQL may already be running only on the survivor. Resolve the reported blocker and retry the recorded operation without clearing its fences.
+
+Each target is then processed in sequence:
 
 * Drain the target
 * Write the persistent removal-fence marker
@@ -490,7 +492,7 @@ Refresh the browser to reload recorded progress. If updates fail or stall, the t
 
 Cluster-wide work is labeled `Cluster-wide`.  Credentials and invitation secrets are redacted from copied structured data.
 
-An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried. The same rule applies to admission operations cancelled by older releases. Unsuperseded failed or cancelled admission operations expose **Retry** for the original cohort; other failed records remain diagnostic-only. Queued or waiting admission operations cannot be cancelled because a target may already have joined. Other queued or waiting operations retain cancellation at their supported safe boundary.
+An older cluster-enable or membership failure becomes `Superseded` after a newer operation of the same kind succeeds and cannot be retried. The same rule applies to admission operations cancelled by older releases. Unsuperseded failed or cancelled admission operations expose **Retry** for the original cohort. Failed node removals also expose **Retry**, retaining the original targets, fences and failed checkpoint; the controller rechecks authority before resuming. Other failed records remain diagnostic-only. Queued or waiting admission operations cannot be cancelled because a target may already have joined. Other queued or waiting operations retain cancellation at their supported safe boundary.
 
 Maintenance explains an empty release catalog when no published stable cluster-compatible release exists at or above the pinned baseline.
 
