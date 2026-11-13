@@ -11,21 +11,21 @@ import (
 
 // Only PreparationInputs.PreparePrejoinHost may consume this adapter: it must
 // retain source/account/identity custody, durable prepare_host intent and BOTH
-// locks. Only the fixed supervised host action selects it; no poller invokes
-// preparation yet. The caller's custody check uses the separate host phase; earlier source
+// locks. Only the fixed supervised host action selects it, behind complete
+// controller readiness approval. Custody uses the separate host phase; earlier source
 // and identity-prefix checks deliberately still reject prepared host files.
 func bootstrapNativeHostActions(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
-	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) clusterbootstrap.PrejoinHostActions {
-	return bootstrapNativeHostActionsFor(expected, guard, identity, check, false)
+	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error, packageDirectory string) clusterbootstrap.PrejoinHostActions {
+	return bootstrapNativeHostActionsFor(expected, guard, identity, check, false, packageDirectory)
 }
 
 func bootstrapNativeRepositoryHostActions(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
-	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) clusterbootstrap.PrejoinHostActions {
-	return bootstrapNativeHostActionsFor(expected, guard, identity, check, true)
+	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error, packageDirectory string) clusterbootstrap.PrejoinHostActions {
+	return bootstrapNativeHostActionsFor(expected, guard, identity, check, true, packageDirectory)
 }
 
 func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
-	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error, repositoryContinuation bool) clusterbootstrap.PrejoinHostActions {
+	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error, repositoryContinuation bool, packageDirectory string) clusterbootstrap.PrejoinHostActions {
 	callerCheck := check
 	check = func(ctx context.Context) error {
 		if guard == nil || callerCheck == nil || ctx.Err() != nil || guard.CheckAuthority(ctx) != nil ||
@@ -76,12 +76,21 @@ func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected
 				return boundary(ctx)
 			}
 			command := func(ctx context.Context, step bootstrapHostCommand, host, identityFile *os.File) error {
+				if step == bootstrapHostInstallBase || step == bootstrapHostInstallDocker {
+					return prepareBootstrapHostPackages(ctx, packageDirectory, step, false, host, identityFile, guard, identity, boundary)
+				}
 				return runBootstrapHostCommand(ctx, step, host, identityFile, guard, identity, boundary)
 			}
 			return prepareBootstrapNativeHostPhaseWith(ctx, expected, hostLock, identityLock, boundary, repositoryContinuation, bootstrapNativeHostOperations{
 				preflight: func(ctx context.Context) error {
 					clean, err = observeBootstrapEarlyHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit, repositoryContinuation)
-					return err
+					pins, _, pinsErr := clusterbootstrap.HostPackagePins()
+					if err != nil || pinsErr != nil || clean.suite != pins.Suite {
+						return errBootstrapSource
+					}
+					// The combined solver proves both fixed phases before the first
+					// effect. It runs under durable intent and both inherited fences.
+					return prepareBootstrapHostPackages(ctx, packageDirectory, 0, true, hostLock, identityLock, guard, identity, boundary)
 				},
 				base: func(ctx context.Context) error {
 					after, err := observeBootstrapDockerHost(ctx, root, nil, check, readBootstrapDockerProbe)
@@ -203,14 +212,14 @@ func prepareBootstrapNativeHostPhaseWith(ctx context.Context, expected clusterbo
 	// after Docker so Docker's iptables changes cannot invalidate its prefix.
 	steps := []func(context.Context) error{o.preflight}
 	if !repositoryContinuation {
-		steps = append(steps, command(bootstrapHostAPTUpdate), command(bootstrapHostInstallBase), o.base)
+		steps = append(steps, command(bootstrapHostInstallBase), o.base)
 	} else {
 		// Base packages already supply iptables. Preserve the pre-Docker
 		// fresh-filter proof otherwise performed by the base-package phase.
 		steps = append(steps, o.firewall)
 	}
 	steps = append(steps,
-		o.repository, command(bootstrapHostAPTUpdate), command(bootstrapHostInstallDocker), o.files,
+		o.repository, command(bootstrapHostInstallDocker), o.files,
 		command(bootstrapHostLoadISCSI), o.multipath, command(bootstrapHostReloadUnits),
 		command(bootstrapHostEnableDocker), command(bootstrapHostEnableISCSI), o.firewall,
 		command(bootstrapHostEnableFirewall), o.prove,

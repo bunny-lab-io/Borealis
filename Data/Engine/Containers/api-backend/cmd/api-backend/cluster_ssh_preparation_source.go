@@ -219,6 +219,18 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
 			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
 		}
+		packages, err := resolveClusterSSHHostPackageInventory(ctx, expected.Source)
+		if err != nil {
+			return err
+		}
+		packageBytes, err := packages.stage(ctx, scratchParent, checks.Inputs)
+		if err != nil {
+			return err
+		}
+		if err := inputs.BindHostPackages(ctx, expected, packageBytes, checks.Inputs); err != nil {
+			_ = packageBytes.Close()
+			return err
+		}
 		joinClient, err := newClusterSSHJoinBrokerClient()
 		if err != nil {
 			return clusterbootstrap.ErrK3sJoinMaterial
@@ -317,6 +329,9 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				if err != nil {
 					return err
 				}
+				if err := packages.refresh(ctx); err != nil {
+					return err
+				}
 				if err := consume(ctx, inputs, artifacts, initial.Storage.Requirements.PostgresImage.Resolved, capacity, expected, checks); err != nil {
 					return err
 				}
@@ -335,6 +350,9 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			return err
 		}
 		if err := inventory.refresh(ctx); err != nil {
+			return err
+		}
+		if err := packages.refresh(ctx); err != nil {
 			return err
 		}
 		// A short session heartbeat must not spawn source Jobs. Revalidate full

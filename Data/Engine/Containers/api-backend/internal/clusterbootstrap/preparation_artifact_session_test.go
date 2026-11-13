@@ -89,7 +89,7 @@ func TestArtifactPreparationRequestAndLimits(t *testing.T) {
 }
 
 func TestArtifactPreparationSessionTransfer(t *testing.T) {
-	for _, mode := range []string{"complete", "old executor", "old action", "authority loss", "consumer failure"} {
+	for _, mode := range []string{"complete", "host packages", "old executor", "old action", "authority loss", "consumer failure"} {
 		t.Run(mode, func(t *testing.T) {
 			r := artifactSessionRequestFixture(t)
 			profile := preparationProfile(true)
@@ -97,8 +97,11 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 				profile = preparationProfile(false)
 			}
 			if mode == "old action" {
-				r.Action = "prepare_prejoin_host"
+				r.Action = "install_prejoin_identity"
 				r.PostgresReference = ""
+			}
+			if mode == "host packages" {
+				r.Action, r.PostgresReference = "prepare_prejoin_host", ""
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -172,10 +175,11 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 			if mode == "authority loss" && (!revoked.Load() || !partialSent.Load() || !partialReceived.Load() || !producerExited.Load() || received.Load()) {
 				t.Fatalf("authority loss did not revoke partial transfer before joined completion: revoked=%v sent=%v received=%v exited=%v complete=%v", revoked.Load(), partialSent.Load(), partialReceived.Load(), producerExited.Load(), received.Load())
 			}
-			if (err == nil) != (mode == "complete") || (serverErr == nil) != (mode == "complete") {
+			valid := mode == "complete" || mode == "host packages"
+			if (err == nil) != valid || (serverErr == nil) != valid {
 				t.Fatal("wrong session outcome", err, serverErr)
 			}
-			if mode == "complete" && !received.Load() {
+			if valid && !received.Load() {
 				t.Fatal("incomplete transfer accepted")
 			}
 			if (mode == "old action" || mode == "old executor") && (verified.Load() || produced.Load()) {

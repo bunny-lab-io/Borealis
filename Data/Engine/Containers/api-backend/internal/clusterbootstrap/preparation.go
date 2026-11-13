@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -23,6 +24,7 @@ import (
 type PreparationInputs struct {
 	bundle        *Bundle
 	configuration *PreparationConfiguration
+	hostPackages  *HostPackageSet
 }
 
 func (PreparationInputs) String() string               { return "node preparation inputs [redacted]" }
@@ -96,8 +98,12 @@ func (p *PreparationInputs) Close() error {
 	if p.bundle != nil {
 		err = p.bundle.Close()
 	}
+	if p.hostPackages != nil {
+		err = errors.Join(err, p.hostPackages.Close())
+	}
 	// Drop references; Go strings and allocator copies cannot promise zeroization.
 	p.bundle, p.configuration = nil, nil
+	p.hostPackages = nil
 	return err
 }
 

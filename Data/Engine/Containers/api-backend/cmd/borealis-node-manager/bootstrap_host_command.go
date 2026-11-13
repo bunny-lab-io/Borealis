@@ -38,21 +38,9 @@ func bootstrapHostCommandPlan(step bootstrapHostCommand) (bootstrapHostCommandSp
 	spec := bootstrapHostCommandSpec{timeout: 30 * time.Second}
 	switch step {
 	case bootstrapHostAPTUpdate, bootstrapHostInstallBase, bootstrapHostInstallDocker:
-		spec.program, spec.timeout = "/usr/bin/apt-get", 2*time.Minute
-		// ExtraFiles fixes borrowed locks at FDs3/4. APT otherwise closes them
-		// before dpkg/maintainer scripts. Preserve them without writing to them.
-		spec.args = []string{"-o", "APT::Keep-Fds::=3", "-o", "APT::Keep-Fds::=4", "-o", "Dpkg::Use-Pty=0",
-			"-o", "DPkg::Lock::Timeout=15", "-o", "Acquire::Retries=0", "-o", "Acquire::http::Timeout=30", "-o", "Acquire::https::Timeout=30"}
-		if step == bootstrapHostAPTUpdate {
-			spec.args = append(spec.args, "update", "--error-on=any")
-		} else {
-			spec.args = append(spec.args, "--yes", "--no-remove", "--no-upgrade", "--no-install-recommends", "install", "--")
-			if step == bootstrapHostInstallBase {
-				spec.args = append(spec.args, "python3", "ca-certificates", "curl", "gnupg", "iptables", "open-iscsi", "nfs-common")
-			} else {
-				spec.args = append(spec.args, "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin")
-			}
-		}
+		// Package commands require the owned release archive plan. The old
+		// unversioned repository resolver cannot execute through this runner.
+		return bootstrapHostCommandSpec{}, errBootstrapSource
 	case bootstrapHostLoadISCSI:
 		spec.program, spec.args = "/usr/sbin/modprobe", []string{"iscsi_tcp"}
 	case bootstrapHostDisableMultipathService, bootstrapHostDisableMultipathSocket:
@@ -81,20 +69,30 @@ func bootstrapHostCommandPlan(step bootstrapHostCommand) (bootstrapHostCommandSp
 	return spec, nil
 }
 
-// This is not a preparation dispatcher. Caller must own both locks, immutable
-// source/identity custody, durable host intent and exact host preflight. No
-// production caller enables this command vocabulary yet.
+// The fixed native host action calls this runner under both locks, immutable
+// source/identity custody, durable host intent and exact host preflight.
+// Production approval remains subject to all six preparation gates.
 func runBootstrapHostCommand(ctx context.Context, step bootstrapHostCommand, hostLock, identityLock *os.File,
 	guard *clusterbootstrap.ExecutorGuard, identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) error {
+	spec, err := bootstrapHostCommandPlan(step)
+	if err != nil {
+		return errBootstrapSource
+	}
+	return runBootstrapHostSpec(ctx, spec, hostLock, identityLock, guard, identity, check, executeBootstrapHostCommand)
+}
+
+func runBootstrapHostSpec(ctx context.Context, spec bootstrapHostCommandSpec, hostLock, identityLock *os.File,
+	guard *clusterbootstrap.ExecutorGuard, identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error,
+	run func(context.Context, bootstrapHostCommandSpec, *os.File, *os.File) error) error {
 	if os.Geteuid() != 0 || os.Getegid() != 0 || guard == nil || check == nil {
 		return errBootstrapSource
 	}
-	return runBootstrapHostCommandWith(ctx, step, hostLock, identityLock, func(ctx context.Context) error {
+	return runBootstrapCommandSpecWith(ctx, spec, hostLock, identityLock, func(ctx context.Context) error {
 		if guard.CheckAuthority(ctx) != nil || check(ctx) != nil || guard.CheckAuthority(ctx) != nil {
 			return errBootstrapSource
 		}
 		return nil
-	}, func(ctx context.Context) error { return clusterbootstrap.ObserveExecutorIdle(ctx, identity) }, executeBootstrapHostCommand,
+	}, func(ctx context.Context) error { return clusterbootstrap.ObserveExecutorIdle(ctx, identity) }, run,
 		func() {
 			// A child/unknown cgroup cannot unwind held fences into successful
 			// control flow. Stop feeding watchdog and exit this verified helper;
@@ -158,11 +156,15 @@ func runBootstrapCommandSpecWith(ctx context.Context, spec bootstrapHostCommandS
 }
 
 func executeBootstrapHostCommand(ctx context.Context, spec bootstrapHostCommandSpec, hostLock, identityLock *os.File) error {
+	return executeBootstrapHostCommandOutput(ctx, spec, hostLock, identityLock, io.Discard)
+}
+
+func executeBootstrapHostCommandOutput(ctx context.Context, spec bootstrapHostCommandSpec, hostLock, identityLock *os.File, output io.Writer) error {
 	command := exec.CommandContext(ctx, spec.program, spec.args...)
 	command.Dir = "/"
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "DEBIAN_FRONTEND=noninteractive"}
 	command.ExtraFiles = []*os.File{hostLock, identityLock}
-	command.Stdin, command.Stdout, command.Stderr = nil, io.Discard, io.Discard
+	command.Stdin, command.Stdout, command.Stderr = nil, output, io.Discard
 	command.WaitDelay = 250 * time.Millisecond
 	if command.Run() != nil || ctx.Err() != nil {
 		return errBootstrapSource

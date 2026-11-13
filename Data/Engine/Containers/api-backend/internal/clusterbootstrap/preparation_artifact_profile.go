@@ -8,6 +8,10 @@ func artifactPreparationAction(action string) bool {
 	return action == "publish_prejoin_artifacts" || action == "reconcile_prejoin_artifacts" || action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s" || action == "configure_prejoin_k3s" || action == "reconcile_prejoin_k3s_configuration" || action == "start_prepared_k3s" || action == "reconcile_prepared_k3s_start" || action == "verify_prepared_images" || action == "reconcile_prepared_images" || action == "activate_prejoin_identity" || action == "reconcile_prejoin_identity_activation"
 }
 
+func bulkPreparationAction(action string) bool {
+	return artifactPreparationAction(action) || HostPackagePreparationAction(action)
+}
+
 type preparationTransportProfile struct {
 	artifacts                bool
 	chunk, frame, challenges int

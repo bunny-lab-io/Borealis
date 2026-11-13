@@ -60,7 +60,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 	if err != nil || input == nil || output == nil || produce == nil || refresh == nil {
 		return ErrSessionProtocol
 	}
-	profile := preparationProfile(artifactPreparationAction(request.Action))
+	profile := preparationProfile(bulkPreparationAction(request.Action))
 	ctx, cancel := context.WithTimeout(parent, profile.lifetime)
 	completed := false
 	stop := context.AfterFunc(ctx, func() { input.Close(); output.Close() })

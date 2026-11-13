@@ -274,15 +274,15 @@ func TestClusterSSHPrejoinBulkIdentityDeadline(t *testing.T) {
 	defer consumer.Close()
 	for _, flags := range [][3]bool{{false, false, false}, {true, false, false}, {true, true, false}, {true, true, true}} {
 		maximum := clusterSSHStartupDispatchBudget(flags[0], flags[1], flags[2])
-		want := 10 * time.Minute
+		want := 100 * time.Minute
 		if flags[0] {
-			want = 130 * time.Minute
+			want = 220 * time.Minute
 		}
 		if flags[1] {
-			want = 190 * time.Minute
+			want = 280 * time.Minute
 		}
 		if flags[2] {
-			want = 370 * time.Minute
+			want = 460 * time.Minute
 		}
 		if maximum != want {
 			t.Fatal("wrong bounded dispatch budget")

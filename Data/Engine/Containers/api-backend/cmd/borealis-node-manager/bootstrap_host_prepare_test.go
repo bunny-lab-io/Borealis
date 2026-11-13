@@ -12,7 +12,7 @@ import (
 )
 
 func TestBootstrapNativeHostOrderingAndFailure(t *testing.T) {
-	want := []string{"preflight", "command1", "command2", "base", "repository", "command1", "command3", "files",
+	want := []string{"preflight", "command2", "base", "repository", "command3", "files",
 		"command4", "multipath", "command7", "command8", "command9", "firewall", "command10", "prove"}
 	for failAt := -1; failAt < len(want); failAt++ {
 		for _, failure := range []string{"error", "cancel", "authority"} {
@@ -187,7 +187,7 @@ func TestBootstrapNativeHostBaseInventory(t *testing.T) {
 }
 
 func TestBootstrapRepositoryHostOrderingAndFailure(t *testing.T) {
-	want := []string{"preflight", "firewall", "repository", "command1", "command3", "files",
+	want := []string{"preflight", "firewall", "repository", "command3", "files",
 		"command4", "multipath", "command7", "command8", "command9", "firewall", "command10", "prove"}
 	for failAt := -1; failAt < len(want); failAt++ {
 		for _, failure := range []string{"error", "cancel", "authority"} {

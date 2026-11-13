@@ -164,19 +164,28 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				case "reconcile_prejoin_identity":
 					_, err = inputs.ReconcilePreparedPrejoinIdentity(ctx, journal, install, material)
 				case "prepare_prejoin_host":
-					_, err = inputs.PreparePrejoinHost(ctx, journal, install, material, bootstrapNativeHostActions(expected, guard, executor, authority))
+					err = withBootstrapHostPackageCache(ctx, inputs, expected, authority, func(ctx context.Context, directory string) error {
+						_, err := inputs.PreparePrejoinHost(ctx, journal, install, material, bootstrapNativeHostActions(expected, guard, executor, authority, directory))
+						return err
+					})
 				case "complete_prejoin_host":
 					_, err = inputs.CompletePrejoinHost(ctx, journal, install, material, bootstrapNativeHostRecovery(expected, guard, executor, authority))
 				case "complete_prejoin_firewall":
 					_, err = inputs.CompletePrejoinFirewall(ctx, journal, install, material, bootstrapNativeFirewallRecovery(expected, guard, executor, authority))
 				case "resume_fresh_prejoin_host":
-					_, err = inputs.ResumeFreshPrejoinHost(ctx, journal, install, material, bootstrapNativeHostActions(expected, guard, executor, authority))
+					err = withBootstrapHostPackageCache(ctx, inputs, expected, authority, func(ctx context.Context, directory string) error {
+						_, err := inputs.ResumeFreshPrejoinHost(ctx, journal, install, material, bootstrapNativeHostActions(expected, guard, executor, authority, directory))
+						return err
+					})
 				case "resume_repository_prejoin_host":
-					_, err = inputs.ResumeRepositoryPrejoinHost(ctx, journal, install, material, bootstrapNativeRepositoryHostActions(expected, guard, executor, authority))
+					err = withBootstrapHostPackageCache(ctx, inputs, expected, authority, func(ctx context.Context, directory string) error {
+						_, err := inputs.ResumeRepositoryPrejoinHost(ctx, journal, install, material, bootstrapNativeRepositoryHostActions(expected, guard, executor, authority, directory))
+						return err
+					})
 				case "reconcile_prejoin_host":
 					// Proof-only API deliberately receives no preparation callback.
 					_, err = inputs.ReconcilePrejoinHost(ctx, journal, install, material,
-						bootstrapNativeHostActions(expected, guard, executor, authority).Prove)
+						bootstrapNativeHostActions(expected, guard, executor, authority, "").Prove)
 				default:
 					err = errBootstrapSource
 				}
@@ -213,8 +222,14 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			return errors.Join(err, journal.Close())
 		}
 		if artifacts {
-			if request.IdentitySource == nil || !bootstrapArtifactAction(request.Action) {
+			if request.IdentitySource == nil || !(bootstrapArtifactAction(request.Action) || clusterbootstrap.HostPackagePreparationAction(request.Action)) {
 				return errBootstrapSource
+			}
+			if clusterbootstrap.HostPackagePreparationAction(request.Action) {
+				return clusterbootstrap.ConsumePrejoinHostPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check,
+					func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
+						return consume(ctx, inputs, material, nil, nil)
+					})
 			}
 			if bootstrapK3sConfigurationAction(request.Action) || bootstrapK3sStartupAction(request.Action) {
 				return clusterbootstrap.ConsumePrejoinK3sJoinPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)

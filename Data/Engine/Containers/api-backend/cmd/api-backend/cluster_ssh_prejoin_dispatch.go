@@ -689,7 +689,10 @@ func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context
 // ten-minute parent must not truncate otherwise bounded bulk sessions. This
 // grants no extension to credential expiry, leases or per-command deadlines.
 func clusterSSHPrejoinDispatchBudget(artifacts, configuration bool) time.Duration {
-	maximum := 10 * time.Minute
+	// Host packages use the existing bulk transport for initial preparation
+	// and the two separately guarded fresh/repository continuations. Include
+	// those bounded sessions; credential expiry and every lease still govern.
+	maximum := 10*time.Minute + 3*clusterbootstrap.ArtifactPreparationLifetime
 	if artifacts {
 		maximum += 4 * clusterbootstrap.ArtifactPreparationLifetime
 		if configuration {

@@ -230,6 +230,9 @@ func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clu
 	}
 	return client.transferPreparationCompletion(ctx, bundle.ManagerPath(), digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
+			if clusterbootstrap.HostPackagePreparationAction(action) {
+				return inputs.WritePrejoinHostPreparation(ctx, expected, *source, material, output, serialized)
+			}
 			if join != nil {
 				return inputs.WritePrejoinK3sJoinPreparation(ctx, expected, *source, material, artifacts, postgresReference, join, output, serialized)
 			}
@@ -274,7 +277,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 		return ErrBootstrapVerification
 	}
 	lifetime := clusterbootstrap.SessionLifetime
-	if artifactPreparationAction(action) {
+	if artifactPreparationAction(action) || clusterbootstrap.HostPackagePreparationAction(action) {
 		lifetime = clusterbootstrap.ArtifactPreparationLifetime
 	}
 	ctx, cancel := context.WithTimeout(parent, lifetime)
@@ -324,7 +327,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	defer stdin.Close()
 	stdout, err := session.StdoutPipe()
 	command := preparationCommand(size, digest, nonce)
-	if artifactPreparationAction(action) {
+	if artifactPreparationAction(action) || clusterbootstrap.HostPackagePreparationAction(action) {
 		command = artifactPreparationCommand(size, digest, nonce)
 	}
 	if err != nil || session.Start(command) != nil {

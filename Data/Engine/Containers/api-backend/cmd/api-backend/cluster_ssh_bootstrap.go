@@ -226,7 +226,11 @@ func openClusterPackagedAsset(ctx context.Context, asset clusterBootstrapAsset, 
 	}
 	if response.StatusCode == http.StatusFound {
 		location := response.Header.Get("Location")
-		_ = response.Body.Close()
+		// The next acquisition cannot outlive or ignore the first response's
+		// cleanup. Close is synchronous even when the request has expired.
+		if closeErr := response.Body.Close(); closeErr != nil || ctx.Err() != nil {
+			return nil, invalid
+		}
 		target, err := url.Parse(location)
 		if err != nil || len(location) > 8192 || target.Scheme != "https" || target.Host != "release-assets.githubusercontent.com" ||
 			target.User != nil || target.Fragment != "" || !strings.HasPrefix(target.Path, "/github-production-release-asset/") {

@@ -233,7 +233,7 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 		return ErrSessionProtocol
 	}
 	digest, err := request.Digest()
-	if err != nil || ctx.Err() != nil || artifactPreparationAction(request.Action) != profile.artifacts {
+	if err != nil || ctx.Err() != nil || bulkPreparationAction(request.Action) != profile.artifacts {
 		return ErrSessionProtocol
 	}
 	frames := make(chan PreparationSessionFrame)

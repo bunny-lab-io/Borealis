@@ -39,7 +39,12 @@ func TestBootstrapHostCommandFixedPlan(t *testing.T) {
 	if startErr != nil || start.program != "/usr/bin/systemctl" || strings.Join(start.args, " ") != "start -- k3s.service" || start.timeout != 10*time.Minute {
 		t.Fatal("prepared startup command changed", startErr)
 	}
-	for step := bootstrapHostAPTUpdate; step <= bootstrapHostEnableFirewall; step++ {
+	for _, step := range []bootstrapHostCommand{bootstrapHostAPTUpdate, bootstrapHostInstallBase, bootstrapHostInstallDocker} {
+		if _, err := bootstrapHostCommandPlan(step); err == nil {
+			t.Fatal("unversioned package command remained executable", step)
+		}
+	}
+	for step := bootstrapHostLoadISCSI; step <= bootstrapHostEnableFirewall; step++ {
 		spec, err := bootstrapHostCommandPlan(step)
 		if err != nil || !filepath.IsAbs(spec.program) || len(spec.args) == 0 || spec.timeout <= 0 || spec.timeout > 2*time.Minute {
 			t.Fatal("invalid fixed command", step, err)
@@ -48,19 +53,6 @@ func TestBootstrapHostCommandFixedPlan(t *testing.T) {
 			if spec.program == forbidden || slices.Contains(spec.args, forbidden) {
 				t.Fatal("host command broadened", step, forbidden)
 			}
-		}
-		if spec.program == "/usr/bin/apt-get" {
-			for _, required := range []string{"APT::Keep-Fds::=3", "APT::Keep-Fds::=4", "DPkg::Lock::Timeout=15", "Acquire::Retries=0", "Dpkg::Use-Pty=0"} {
-				if !slices.Contains(spec.args, required) {
-					t.Fatal("APT containment missing", required)
-				}
-			}
-			if step != bootstrapHostAPTUpdate && (!slices.Contains(spec.args, "--no-remove") || !slices.Contains(spec.args, "--no-upgrade")) {
-				t.Fatal("package action can remove/upgrade unrelated dependencies")
-			}
-		}
-		if step == bootstrapHostInstallDocker && strings.Join(spec.args[len(spec.args)-4:], " ") != "docker-ce docker-ce-cli containerd.io docker-buildx-plugin" {
-			t.Fatal("Docker package family diverged")
 		}
 		spec.args[0] = "foreign"
 		again, err := bootstrapHostCommandPlan(step)
@@ -102,7 +94,7 @@ func TestBootstrapHostCommandScope(t *testing.T) {
 			run := func(ctx context.Context, spec bootstrapHostCommandSpec, hostFD, identityFD *os.File) error {
 				commands++
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > 2*time.Minute || hostFD != host || identityFD != identity || spec.program != "/usr/bin/apt-get" || checks != 2 || idleCalls != 1 {
+				if !ok || time.Until(deadline) > 2*time.Minute || hostFD != host || identityFD != identity || spec.program != "/usr/bin/systemctl" || checks != 2 || idleCalls != 1 {
 					t.Fatal("unfenced or unbounded command")
 				}
 				if mode == "command failure" {
@@ -114,7 +106,7 @@ func TestBootstrapHostCommandScope(t *testing.T) {
 				return nil
 			}
 			abort := func() { aborts++ }
-			step := bootstrapHostInstallBase
+			step := bootstrapHostEnableDocker
 			switch mode {
 			case "nil check":
 				check = nil

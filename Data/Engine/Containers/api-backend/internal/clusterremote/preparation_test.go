@@ -58,7 +58,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					}
 				}
 				wantCommand := preparationCommand(int64(len(manager)), digest, nonce)
-				if artifactPreparationAction(phase) {
+				if artifactPreparationAction(phase) || clusterbootstrap.HostPackagePreparationAction(phase) {
 					wantCommand = artifactPreparationCommand(int64(len(manager)), digest, nonce)
 				}
 				if nonce == "" || command != wantCommand || strings.Contains(command, "private sudo fixture") {
@@ -86,7 +86,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				}()
 				defer func() { pipeReader.Close(); outWriter.Close(); <-copied; <-outputDone }()
 				serve := clusterbootstrap.ServePreparationSessionWithProgress
-				if artifactPreparationAction(phase) {
+				if artifactPreparationAction(phase) || clusterbootstrap.HostPackagePreparationAction(phase) {
 					serve = func(ctx context.Context, in io.ReadCloser, out io.WriteCloser, nonce string, verify func(context.Context, clusterbootstrap.PreparationSessionRequest) error, receive clusterbootstrap.PreparationSessionProgressReceiver, observe func(time.Time) error) error {
 						return clusterbootstrap.ServeArtifactPreparationSessionWithResult(ctx, in, out, nonce, verify, func(ctx context.Context, r clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
 							progress, err := receive(ctx, r, input)
