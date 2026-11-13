@@ -1064,6 +1064,59 @@ describe("Cluster Management", () => {
     expect(screen.getByText("Type EMERGENCY REMOVE NODE")).toBeInTheDocument();
   });
 
+  it.each([
+    ["Remove Pair", "REMOVE NODE PAIR", false],
+    ["Emergency Remove", "EMERGENCY REMOVE NODE", true],
+  ])("preserves sequential spaces for %s drafts and normalizes only submitted text", async (action, expectedConfirmation, emergency) => {
+    state.hmrState = "inactive";
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") {
+        const accepted = JSON.parse(options.body).confirmation === expectedConfirmation;
+        return { ok: accepted, status: accepted ? 202 : 400, json: async () => accepted
+          ? { operation_id: "removal-operation" } : { message: "Exact removal confirmation required." } };
+      }
+      return { ok: true, json: async () => ({ releases: [], events: [], nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=nodes");
+    await openNodeActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(action) }));
+    const typeSequentially = (input, text) => {
+      // Each character starts from the current controlled input, as normal typing does.
+      for (const character of text) fireEvent.change(input, { target: { value: input.value + character } });
+    };
+    const confirmationInput = screen.getByLabelText("Typed confirmation");
+    typeSequentially(confirmationInput, expectedConfirmation.slice(0, -1));
+    expect(confirmationInput).toHaveValue(expectedConfirmation.slice(0, -1));
+    const reasonInput = screen.getByLabelText("Reason");
+    typeSequentially(reasonInput, "  Planned  cluster maintenance  ");
+    expect(reasonInput).toHaveValue("  Planned  cluster maintenance  ");
+    if (emergency) {
+      const fencingInput = screen.getByLabelText("External fencing confirmation");
+      typeSequentially(fencingInput, "TARGET IS POWERED OFF");
+      expect(fencingInput).toHaveValue("TARGET IS POWERED OFF");
+    }
+    const submit = screen.getByRole("button", { name: emergency ? "Remove Node" : "Submit" });
+    fireEvent.click(submit);
+    expect(await screen.findByText("Exact removal confirmation required.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    typeSequentially(confirmationInput, expectedConfirmation.at(-1));
+    expect(confirmationInput).toHaveValue(expectedConfirmation);
+    // Boundary whitespace still receives the existing submission normalization.
+    fireEvent.change(confirmationInput, { target: { value: ` ${confirmationInput.value} ` } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const submissions = fetchMock.mock.calls.filter(([, options]) => options?.method === "POST");
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1][0]).toBe("/api/server/cluster/nodes/11111111-1111-4111-8111-111111111111/remove");
+    expect(JSON.parse(submissions[1][1].body)).toEqual({
+      emergency,
+      ...(emergency ? { fencing_confirmation: "TARGET IS POWERED OFF" } : { paired_node_id: "22222222-2222-4222-8222-222222222222" }),
+      confirmation: expectedConfirmation,
+      reason: "Planned cluster maintenance",
+    });
+  });
+
   it("fences expansion after supported three-node membership", async () => {
     renderClusterManagement();
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));

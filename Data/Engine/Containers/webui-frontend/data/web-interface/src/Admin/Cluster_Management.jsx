@@ -1134,16 +1134,19 @@ export default function ClusterManagement() {
   const submitDialog = useCallback(() => {
     const kind = dialog?.kind;
     const node = dialog?.node;
+    // Preserve spaces while typing; normalize operational text at submission.
+    const sanitizedConfirmation = sanitizeSingleLineInput(confirmation);
+    const sanitizedFencingConfirmation = sanitizeSingleLineInput(fencingConfirmation);
     const sanitizedReason = sanitizeSingleLineInput(reason).slice(0, 256);
     const maintenanceDisablesIsolation = kind === "maintenance"
       && node?.application_state === "drained"
       && ["active", "restore_failed"].includes(String(cluster?.hmr?.state || "inactive").toLowerCase());
-    if (maintenanceDisablesIsolation) return mutate("/api/server/cluster/hmr/exit", { confirmation });
+    if (maintenanceDisablesIsolation) return mutate("/api/server/cluster/hmr/exit", { confirmation: sanitizedConfirmation });
     if (["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(kind)) {
       const validation = validateInputValue("reason", sanitizedReason, FIELD_CLASS.PLAIN_SINGLE_LINE);
       if (validation) return setError(validation);
     }
-    if (kind === "hmr_exit") return mutate("/api/server/cluster/hmr/exit", { confirmation });
+    if (kind === "hmr_exit") return mutate("/api/server/cluster/hmr/exit", { confirmation: sanitizedConfirmation });
     if (kind === "update_all" || kind === "update_node" || kind === "update_qualification") {
       const oneNode = Number(cluster?.active_size || 1) === 1;
       const qualification = kind === "update_qualification";
@@ -1151,7 +1154,7 @@ export default function ClusterManagement() {
         scope: qualification || kind === "update_all" ? "all" : "node",
         node_ids: qualification || kind === "update_all" ? [] : [selectedNode],
         release_tag: qualification ? selectedQualificationRelease : selectedRelease,
-        confirmation,
+        confirmation: sanitizedConfirmation,
         maintenance_outage_acknowledgement: oneNode ? "ACCEPT OUTAGE" : "",
       });
     }
@@ -1163,7 +1166,7 @@ export default function ClusterManagement() {
         scope: "all",
         node_ids: [],
         k3s_version: k3sTargetVersion,
-        confirmation,
+        confirmation: sanitizedConfirmation,
         maintenance_outage_acknowledgement: oneNode ? "ACCEPT OUTAGE" : "",
       });
     }
@@ -1184,10 +1187,10 @@ export default function ClusterManagement() {
       if (!canExpandToThree || Number(desiredSize) !== 3) return setError("Current release supports only one-to-three membership expansion.");
       return mutate("/api/server/cluster/membership/scale", { desired_size: 3, reason: sanitizedReason });
     }
-    if (kind === "remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: false, paired_node_id: pairedNode, confirmation, reason: sanitizedReason });
-    if (kind === "emergency_remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: true, confirmation, fencing_confirmation: fencingConfirmation, reason: sanitizedReason });
+    if (kind === "remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: false, paired_node_id: pairedNode, confirmation: sanitizedConfirmation, reason: sanitizedReason });
+    if (kind === "emergency_remove") return mutate(`/api/server/cluster/nodes/${node.id}/remove`, { emergency: true, confirmation: sanitizedConfirmation, fencing_confirmation: sanitizedFencingConfirmation, reason: sanitizedReason });
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
-    if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation, reason: sanitizedReason });
+    if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation: sanitizedConfirmation, reason: sanitizedReason });
     return undefined;
   }, [canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedQualificationRelease, selectedRelease]);
 
@@ -1710,9 +1713,9 @@ export default function ClusterManagement() {
           {dialog?.kind === "invite" ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }} label="New node name" value={nodeName} onChange={(event) => setNodeName(sanitizeSingleLineInput(event.target.value).toLowerCase())} inputProps={{ maxLength: 63 }} /> : null}
           {dialog?.kind === "k3s_update" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 1.25, mb: 2 }} label="Stable K3s target" value={k3sTargetVersion} onChange={(event) => setK3sTargetVersion(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 32 }} helperText="vX.Y.Z+k3sN; immutable upgrade image and source conformance required" /> : null}
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
-          {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(sanitizeSingleLineInput(event.target.value))} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
-          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(sanitizeSingleLineInput(event.target.value).slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(sanitizeSingleLineInput(event.target.value))} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
+          {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(event.target.value)} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
+          {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(event.target.value.slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
+          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
           {dialog?.kind !== "cluster_enable" ? <Typography variant="body2" sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2 }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography> : null}
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button color={dialog?.kind === "update_qualification" ? "warning" : "primary"} sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
