@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -154,7 +155,7 @@ func TestPreparedAdmissionCommandStopsDescendants(t *testing.T) {
 			}
 			if mode == "legacy direct-child control" {
 				fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
-				if _, err := unix.Poll(fds, 2000); err != nil || fds[0].Revents&unix.POLLIN == 0 {
+				if _, err := pollPreparedAdmissionCommandWait(fds, 2000); err != nil || fds[0].Revents&unix.POLLIN == 0 {
 					t.Fatal("legacy control child did not finish", err)
 				}
 			}
@@ -163,6 +164,22 @@ func TestPreparedAdmissionCommandStopsDescendants(t *testing.T) {
 				t.Fatal("late effect result", err)
 			}
 		})
+	}
+}
+
+func pollPreparedAdmissionCommandWait(fds []unix.PollFd, timeout int) (int, error) {
+	deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+	for {
+		count, err := unix.Poll(fds, timeout)
+		if !errors.Is(err, unix.EINTR) {
+			return count, err
+		}
+		// Signals may interrupt a wait; retries retain its original deadline.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return 0, nil
+		}
+		timeout = int(remaining / time.Millisecond)
 	}
 }
 
@@ -238,7 +255,7 @@ func TestPreparedAdmissionCommandStaleProcessSnapshot(t *testing.T) {
 		}
 		if calls == 2 {
 			fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
-			if _, err := unix.Poll(fds, 1000); err != nil || fds[0].Revents&unix.POLLIN == 0 {
+			if _, err := pollPreparedAdmissionCommandWait(fds, 1000); err != nil || fds[0].Revents&unix.POLLIN == 0 {
 				t.Error("group kill did not precede final absence scan", err)
 			}
 		}
@@ -256,5 +273,89 @@ func TestPreparedAdmissionCommandStaleProcessSnapshot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "effect")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("missed descendant applied late effect", err)
+	}
+}
+
+func TestPreparedAdmissionCommandZombieLeaderRetainsLiveThread(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal("Python 3 is required for the native thread fixture:", err)
+	}
+	dir := t.TempDir()
+	// pthread_exit terminates only the main thread, without an architecture-
+	// specific syscall number. Its sibling remains a real potential producer.
+	command := exec.Command(python, "-c", `
+import ctypes
+import pathlib
+import sys
+import threading
+import time
+
+root = pathlib.Path(sys.argv[1])
+ready = threading.Event()
+
+def producer():
+    ready.set()
+    while not (root / "release").exists():
+        time.sleep(0.01)
+    (root / "effect").write_text("late workload apply")
+
+threading.Thread(target=producer).start()
+ready.wait()
+libc = ctypes.CDLL(None)
+libc.pthread_exit.argtypes = [ctypes.c_void_p]
+libc.pthread_exit.restype = None
+libc.pthread_exit(None)
+`, dir)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := command.Process.Pid
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = command.Wait()
+	})
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(pidfd)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		end := strings.LastIndexByte(string(raw), ')')
+		fields := strings.Fields(string(raw[end+1:]))
+		if end >= 0 && len(fields) >= 18 && fields[0] == "Z" && fields[17] == "2" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("fixture did not retain a zombie leader and live sibling: %s", raw)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	if _, err := unix.Poll(fds, 0); err != nil || fds[0].Revents&unix.POLLIN != 0 {
+		t.Fatal("fixture did not retain a live thread group", err)
+	}
+	if live, err := preparedAdmissionGroupLive(pid); err != nil || !live {
+		t.Fatalf("zombie leader hid live producer: live=%v err=%v", live, err)
+	}
+	if err := stopPreparedAdmissionGroup(pid, preparedAdmissionGroupLive); !errors.Is(err, errPreparedAdmission) {
+		t.Fatal("escaped live producer was not rejected", err)
+	}
+	if _, err := unix.Poll(fds, 0); err != nil || fds[0].Revents&unix.POLLIN == 0 {
+		t.Fatal("stop proof returned before every thread exited", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "effect")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("stopped thread applied late effect", err)
 	}
 }

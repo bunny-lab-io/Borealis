@@ -2744,13 +2744,13 @@ func TestMemberRemovalVerificationRetiresResidentWorkloads(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/apis/apps/v1/namespaces/borealis/deployments":
 			selector := r.URL.Query().Get("labelSelector")
 			appName := ""
-			for _, candidate := range []string{"borealis-operator", "wireguard-tunnel"} {
-				if strings.Contains(selector, "app.kubernetes.io/name="+candidate) {
+			for _, candidate := range []string{"borealis-operator", "wireguard-tunnel", "borealis-cluster-controller"} {
+				if selector == "borealis.io/engine-node=engine-1,borealis.io/node-workload=true,app.kubernetes.io/name="+candidate {
 					appName = candidate
 					break
 				}
 			}
-			if appName == "" || !strings.Contains(selector, "borealis.io/engine-node=engine-1") {
+			if appName == "" {
 				t.Fatalf("unexpected removed-node workload selector %q", selector)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{
@@ -2783,10 +2783,18 @@ func TestMemberRemovalVerificationRetiresResidentWorkloads(t *testing.T) {
 	if err := runner.verifyMemberRemoved(context.Background(), operation, "engine-1", nodes); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"borealis-operator-engine-1", "wireguard-tunnel-engine-1"} {
+	for _, name := range []string{"borealis-operator-engine-1", "wireguard-tunnel-engine-1", "borealis-cluster-controller-engine-1"} {
 		if scaled[name] != 1 {
 			t.Fatalf("removed-node workload %s scaled %d times", name, scaled[name])
 		}
+	}
+	for _, survivor := range []string{"engine-2", "engine-3"} {
+		if name := "borealis-cluster-controller-" + survivor; scaled[name] != 0 {
+			t.Fatalf("survivor controller %s scaled %d times", name, scaled[name])
+		}
+	}
+	if len(scaled) != 3 {
+		t.Fatalf("unexpected workload retirement beyond exact removed-node residents: %v", scaled)
 	}
 }
 

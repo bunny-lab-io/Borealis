@@ -1111,26 +1111,30 @@ describe("Cluster Management", () => {
     renderClusterManagement("/cluster-management?tab=nodes");
     await openNodeActions();
     fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(action) }));
-    const typeSequentially = (input, text) => {
-      // Each character starts from the current controlled input, as normal typing does.
-      for (const character of text) fireEvent.change(input, { target: { value: input.value + character } });
+    const typeAcrossSpace = (input, prefix, suffix, space = " ") => {
+      // Isolate the space keystroke and read back its controlled value before continuing.
+      fireEvent.change(input, { target: { value: prefix } });
+      fireEvent.change(input, { target: { value: input.value + space } });
+      expect(input).toHaveValue(prefix + space);
+      fireEvent.change(input, { target: { value: input.value + suffix } });
     };
     const confirmationInput = screen.getByLabelText("Typed confirmation");
-    typeSequentially(confirmationInput, expectedConfirmation.slice(0, -1));
+    const firstSpace = expectedConfirmation.indexOf(" ");
+    typeAcrossSpace(confirmationInput, expectedConfirmation.slice(0, firstSpace), expectedConfirmation.slice(firstSpace + 1, -1));
     expect(confirmationInput).toHaveValue(expectedConfirmation.slice(0, -1));
     const reasonInput = screen.getByLabelText("Reason");
-    typeSequentially(reasonInput, "  Planned  cluster maintenance  ");
+    typeAcrossSpace(reasonInput, "  Planned", "cluster maintenance  ", "  ");
     expect(reasonInput).toHaveValue("  Planned  cluster maintenance  ");
     if (emergency) {
       const fencingInput = screen.getByLabelText("External fencing confirmation");
-      typeSequentially(fencingInput, "TARGET IS POWERED OFF");
+      typeAcrossSpace(fencingInput, "TARGET", "IS POWERED OFF");
       expect(fencingInput).toHaveValue("TARGET IS POWERED OFF");
     }
     const submit = screen.getByRole("button", { name: emergency ? "Remove Node" : "Submit" });
     fireEvent.click(submit);
     expect(await screen.findByText("Exact removal confirmation required.")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    typeSequentially(confirmationInput, expectedConfirmation.at(-1));
+    fireEvent.change(confirmationInput, { target: { value: confirmationInput.value + expectedConfirmation.at(-1) } });
     expect(confirmationInput).toHaveValue(expectedConfirmation);
     // Boundary whitespace still receives the existing submission normalization.
     fireEvent.change(confirmationInput, { target: { value: ` ${confirmationInput.value} ` } });

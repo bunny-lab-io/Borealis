@@ -4590,7 +4590,7 @@ func (r *kubernetesClusterStepRunner) memberRemovalStateHealthy(ctx context.Cont
 }
 
 func (r *kubernetesClusterStepRunner) retireMemberWorkloads(ctx context.Context, nodeName string) error {
-	for _, appName := range []string{"borealis-operator", "wireguard-tunnel"} {
+	for _, appName := range []string{"borealis-operator", "wireguard-tunnel", "borealis-cluster-controller"} {
 		if err := r.scaleNodeWorkload(ctx, nodeName, appName, false); err != nil {
 			return fmt.Errorf("retire %s workload on removed node %s: %w", appName, nodeName, err)
 		}

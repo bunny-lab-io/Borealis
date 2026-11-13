@@ -122,7 +122,19 @@ func preparedAdmissionGroupLive(group int) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if pgid == group && fields[0] != "Z" && fields[0] != "X" {
+		if pgid != group {
+			continue
+		}
+		if len(fields) < 18 {
+			return false, errPreparedAdmission
+		}
+		threads, err := strconv.Atoi(fields[17])
+		if err != nil || threads < 1 {
+			return false, errPreparedAdmission
+		}
+		// A zombie leader can retain live sibling threads. Root procfs entries
+		// enumerate leaders only, so its state alone cannot prove group exit.
+		if threads > 1 || (fields[0] != "Z" && fields[0] != "X") {
 			return true, nil
 		}
 	}
