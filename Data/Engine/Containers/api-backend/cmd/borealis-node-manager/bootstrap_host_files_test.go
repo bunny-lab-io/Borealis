@@ -4,8 +4,11 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +64,9 @@ func TestBootstrapHostFilesInstallerParity(t *testing.T) {
 		expected := bootstrapHostFilesFixture()
 		if alternate {
 			expected.PodCIDR, expected.ServiceCIDR = "172.20.0.0/16", "172.21.0.0/16"
+			expected.ManagementCIDR = "10.1.0.0/16"
+			expected.Target.Address, expected.ControlPlaneVIP, expected.EdgeVIP = "10.1.0.10", "10.1.0.1", "10.1.0.2"
+			expected.PeerAddresses = []string{"10.1.0.10", "10.1.0.11", "10.1.0.9"}
 		}
 		files, err := bootstrapPrejoinHostFiles(expected)
 		if err != nil || len(files) != 4 {
@@ -77,6 +83,102 @@ func TestBootstrapHostFilesInstallerParity(t *testing.T) {
 				t.Fatal("fixed file path/mode changed")
 			}
 		}
+	}
+}
+
+func TestBootstrapHostFilesDemandMatchesPublishedBytesAndRename(t *testing.T) {
+	expected, key := bootstrapHostFilesFixture(), bootstrapDockerKeyFixture(t)
+	files, err := bootstrapPrejoinHostFiles(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docker, err := bootstrapDockerRepositoryFiles(expected, "noble", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, docker...)
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	for _, file := range files {
+		if err := bootstrapHostParents(context.Background(), root, filepath.Dir(file.path), func() error { return nil }, true); err != nil {
+			t.Fatal(err)
+		}
+		var staged os.FileInfo
+		check := func() error {
+			info, err := root.Lstat(filepath.Join(filepath.Dir(file.path), file.pending))
+			if err == nil {
+				staged = info
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+		if err := publishBootstrapHostFile(root, file, check); err != nil {
+			t.Fatal(err)
+		}
+		final, err := root.Lstat(file.path)
+		if err != nil || staged == nil || !os.SameFile(staged, final) {
+			t.Fatal("pending publication became a second file allocation", err)
+		}
+		if raw, err := root.ReadFile(file.path); err != nil || !bytes.Equal(raw, file.data) {
+			t.Fatal("published data changed", err)
+		}
+	}
+	type usage struct{ bytes, entries uint64 }
+	actual, budget := map[string]usage{}, map[string]usage{}
+	err = filepath.WalkDir(root.Name(), func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if name == root.Name() {
+			return nil
+		}
+		relative, err := filepath.Rel(root.Name(), name)
+		if err != nil {
+			return err
+		}
+		key := "/" + relative
+		size := uint64(0)
+		if !entry.IsDir() {
+			if strings.HasPrefix(entry.Name(), ".borealis-") {
+				t.Fatal("pending rename copy retained", name)
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			size = uint64(info.Size())
+			key = filepath.Dir(key)
+		}
+		value := actual[key]
+		value.bytes += size
+		value.entries++
+		actual[key] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	demand, err := clusterbootstrap.PreparationHostFileDemands(expected, "noble")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range demand {
+		value := budget[row.Path]
+		value.bytes += row.Bytes
+		value.entries += row.Entries
+		budget[row.Path] = value
+	}
+	// Only the existing key input limit is conservative; every other byte and
+	// all created parent/file entries must match the actual empty-root writes.
+	value := actual["/etc/apt/keyrings"]
+	value.bytes += uint64(bootstrapDockerKeyLimit - len(key))
+	actual["/etc/apt/keyrings"] = value
+	if !reflect.DeepEqual(budget, actual) {
+		t.Fatal("demand differs from native publication", budget, actual)
 	}
 }
 

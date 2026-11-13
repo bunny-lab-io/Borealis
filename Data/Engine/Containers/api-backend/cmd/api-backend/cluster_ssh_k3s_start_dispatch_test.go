@@ -236,7 +236,7 @@ func TestClusterSSHK3sStartupDispatch(t *testing.T) {
 			}
 		})
 	}
-	if clusterSSHStartupDispatchBudget(true, true, true) != 370*time.Minute || clusterSSHStartupDispatchBudget(true, true, false) != 190*time.Minute || clusterSSHStartupDispatchBudget(true, false, false) != 130*time.Minute || clusterSSHStartupDispatchBudget(false, false, false) != 10*time.Minute {
+	if clusterSSHStartupDispatchBudget(true, true, true) != 460*time.Minute || clusterSSHStartupDispatchBudget(true, true, false) != 280*time.Minute || clusterSSHStartupDispatchBudget(true, false, false) != 220*time.Minute || clusterSSHStartupDispatchBudget(false, false, false) != 100*time.Minute {
 		t.Fatal("startup/legacy budgets diverged")
 	}
 }

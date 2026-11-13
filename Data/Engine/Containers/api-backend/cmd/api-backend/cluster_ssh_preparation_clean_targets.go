@@ -241,8 +241,11 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 			}
 		}
 		digest, err := clusterSSHPreparationTargetCPUDigest(clusterSSHPreparationApprovalSnapshot{work: work}, first)
+		// Waiting storage approval recalculates every required budget on every
+		// read. Retain conservative free-counter minima while requiring the same
+		// persistent identity; a harmless decrease is not an authority change.
 		if err != nil || current(ctx) != nil || (retained != "" && retained != digest) ||
-			retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, firstFilesystems, true) {
+			retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, firstFilesystems, false) {
 			return fail()
 		}
 		retained = digest

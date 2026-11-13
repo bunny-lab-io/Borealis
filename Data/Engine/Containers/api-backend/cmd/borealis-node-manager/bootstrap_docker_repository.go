@@ -2,7 +2,6 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -18,14 +17,13 @@ import (
 )
 
 const bootstrapDockerKeyURL = "https://download.docker.com/linux/ubuntu/gpg"
-const bootstrapDockerKeySHA256 = "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
-const bootstrapDockerKeyLimit = 16 << 10
+const bootstrapDockerKeySHA256 = clusterbootstrap.PreparationDockerKeySHA256
+const bootstrapDockerKeyLimit = clusterbootstrap.PreparationDockerKeyLimit
 
 // Exact reviewed public-key bytes, not a caller-supplied fingerprint or trust
 // on first use. A changed upstream key needs a reviewed source update.
 func validBootstrapDockerKey(raw []byte) bool {
-	digest := sha256.Sum256(raw)
-	return len(raw) > 0 && len(raw) <= bootstrapDockerKeyLimit && hex.EncodeToString(digest[:]) == bootstrapDockerKeySHA256
+	return clusterbootstrap.ValidPreparationDockerKey(raw)
 }
 
 func downloadBootstrapDockerKey(ctx context.Context) ([]byte, error) {
@@ -73,13 +71,11 @@ func downloadBootstrapDockerKeyWith(ctx context.Context, do func(*http.Request) 
 }
 
 func bootstrapDockerRepositoryFiles(expected clusterbootstrap.PreparationExpected, suite string, key []byte) ([]bootstrapHostFile, error) {
-	if expected.Validate() != nil || !bootstrapDockerSuite.MatchString(suite) || !validBootstrapDockerKey(key) {
+	rendered, err := clusterbootstrap.RenderPreparationDockerFiles(expected, suite, key)
+	if err != nil {
 		return nil, errBootstrapSource
 	}
-	files := []bootstrapHostFile{
-		{path: "etc/apt/keyrings/docker.asc", mode: 0644, data: bytes.Clone(key)},
-		{path: "etc/apt/sources.list.d/docker.sources", mode: 0644, data: []byte("Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: " + suite + "\nComponents: stable\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/docker.asc\n")},
-	}
+	files := bootstrapHostFileSpecs(rendered)
 	target := expected.Target
 	target.HolderID, target.Generation, target.OperationAttempt = "", 0, 0
 	for i := range files {

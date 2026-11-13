@@ -4,13 +4,13 @@ package clusterremote
 // No mount, daemon reload, generator execution or host file creation occurs.
 // Reuse the bounded no-activation bus transport and safe file readers already
 // used by startup observation. Unused network/cloud helpers are not invoked.
-const persistentFilesystemScript = persistentNetworkLibraryScript + activeNetworkLibraryScript + systemdObservationLibraryScript + filesystemLibraryScript + persistentFilesystemLibraryScript + `
+const persistentFilesystemMainScript = `
 if __name__ == "__main__":
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_AS, (268435456, 268435456))
         resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        if len(sys.argv) != 2 or len(sys.argv[1]) > 16384:
+        if len(sys.argv) != 2 or len(sys.argv[1]) > 32768:
             raise ValueError()
         result = observe_persistent_filesystems(json.loads(base64.b64decode(sys.argv[1], validate=True)))
         wire = json.dumps(result, separators=(",", ":"), ensure_ascii=True)
@@ -121,6 +121,16 @@ def pfs_files(root, paths):
     proof, raw = pfs_file(root, "etc/fstab")
     declaration = pfs_fstab(raw, paths)
     result = {"fstab": proof, "lib": lib}
+    if any(p in ("/etc", "/usr", "/var") for p in paths):
+        result["package_ancestors"] = pfs_package_directories(root, paths)
+    # Fixed Noble package contents use /sbin as well as /lib. A complete /usr
+    # projection may fold that archive path only under observed merged-/usr,
+    # never from distribution assumptions. Final pfs_files reproof binds drift.
+    if "/usr" in paths:
+        sbin = boot_entry(root, "sbin")
+        if sbin[1] not in ("usr/sbin", "/usr/sbin"):
+            raise ValueError()
+        result["sbin"] = sbin
     generated = None
     count = 0
     for area in BOOT_PATHS:
@@ -308,7 +318,7 @@ def pfs_snapshot(paths):
         os.close(root)
 
 def observe_persistent_filesystems(paths):
-    if type(paths) is not list or not 1 <= len(paths) <= 8 or any(type(p) is not str for p in paths) or paths != sorted(set(paths)):
+    if type(paths) is not list or not 1 <= len(paths) <= 21 or any(type(p) is not str for p in paths) or paths != sorted(set(paths)):
         raise ValueError()
     for p in paths:
         fs_path(p)

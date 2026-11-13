@@ -22,7 +22,7 @@ sys.path.pop(0)
 def fixture_plan(root):
     cache = root / "archives"
     cache.mkdir()
-    plan = dict(version=1, os="ubuntu", os_version="24.04", suite="noble", platform="linux-amd64", packages=[])
+    plan = dict(version=1, os="ubuntu", os_version="24.04", suite="noble", platform="linux-amd64", packages=[], data_directories=["/etc", "/usr", "/var"])
     for name, phase in sorted(packages.ROOTS.items()):
         file = f"{name}_1.0_all.deb"
         # Opaque inert bytes exercise archive/pin contracts. Native package
@@ -31,6 +31,8 @@ def fixture_plan(root):
         (cache / file).write_bytes(data)
         plan["packages"].append(dict(name=name, version="1.0", architecture="all", file=file, phase=phase,
                                      size=len(data), sha256=hashlib.sha256(data).hexdigest(), file_bytes=13, entries=2,
+                                     data_paths=[dict(path="/usr", file_bytes=13, link_bytes=3, entries=1)], data_root_entries=1,
+                                     control=dict(file_bytes=7, link_bytes=0, entries=1, root_entries=1),
                                      url=f"https://archive.ubuntu.com/ubuntu/pool/main/f/fixture/{file}"))
     return plan, cache
 
@@ -158,6 +160,45 @@ class NodeHostPackageAssetsTests(unittest.TestCase):
                 packages.build_assets(**args)
             self.assertFalse(args["output_dir"].exists())
 
+    def test_destination_measurements_are_strict_and_match_existing_totals(self):
+        original, _ = packages.parse_plan((ROOT / packages.LOCK).read_bytes())
+        for mode in ("missing", "unknown path", "order", "duplicate", "file total", "entry total", "root count", "negative links", "boolean", "unknown field", "null control", "control root", "control bounds", "alias", "duplicate JSON"):
+            with self.subTest(mode=mode):
+                plan = copy.deepcopy(original)
+                pin = plan["packages"][0]
+                row = pin["data_paths"][0]
+                if mode == "missing": del pin["data_paths"]
+                elif mode == "unknown path": row["path"] = "/elsewhere"
+                elif mode == "order": pin["data_paths"].reverse()
+                elif mode == "duplicate": pin["data_paths"].append(copy.deepcopy(row))
+                elif mode == "file total": row["file_bytes"] += 1
+                elif mode == "entry total": row["entries"] += 1
+                elif mode == "root count": pin["data_root_entries"] = 2
+                elif mode == "negative links": row["link_bytes"] = -1
+                elif mode == "boolean": row["entries"] = True
+                elif mode == "unknown field": row["extra"] = 1
+                elif mode == "null control": pin["control"] = None
+                elif mode == "control root": pin["control"]["root_entries"] = 0
+                elif mode == "control bounds": pin["control"]["file_bytes"] = packages.MAX_EXPANDED + 1
+                raw = wire(plan)
+                if mode == "alias": raw = raw.replace(b'"link_bytes":', b'"Link_Bytes":', 1)
+                elif mode == "duplicate JSON": raw = raw.replace(b'"link_bytes":', b'"link_bytes":0,"link_bytes":', 1)
+                with self.assertRaises((ValueError, KeyError)):
+                    packages.parse_plan(raw)
+
+    def test_directory_ancestors_are_canonical_complete_and_bound(self):
+        plan, _ = packages.parse_plan((ROOT / packages.LOCK).read_bytes())
+        self.assertEqual(len(plan["data_directories"]), 360)
+        for directories in (None, [], ["/etc", "/usr", "/usr", "/var"], ["/var", "/usr", "/etc"],
+                            ["/etc", "/usr", "/usr/./share", "/var"], ["/etc", "/opt", "/usr", "/var"],
+                            ["/etc", "/lib", "/usr", "/var"], ["/etc", "/usr", "/usr/share/doc", "/var"],
+                            ["/", "/etc", "/usr", "/var"], ["/etc", "/usr", "/usr/bad\npath", "/var"],
+                            ["/etc", "/usr", "/usr/" + "x" * 256, "/var"]):
+            with self.subTest(directories=directories):
+                value = copy.deepcopy(plan)
+                value["data_directories"] = directories
+                with self.assertRaises(ValueError):
+                    packages.parse_plan(wire(value))
     def test_cached_bytes_and_concurrent_mutation_reject(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -50,14 +50,14 @@ func clusterSSHCapacitySum(left, right uint64) (uint64, bool) {
 }
 
 func clusterSSHStorageDemandPaths(policy clusterSSHStoragePolicy, demands []clusterSSHFilesystemDemand) ([]string, bool) {
-	if len(demands) < 1 || len(demands) > 7 {
+	if len(demands) < 1 || len(demands) >= clusterremote.MaxFilesystemPaths {
 		return nil, false
 	}
 	paths := []string{policy.DefaultPath}
 	seen := map[string]bool{}
 	for _, d := range demands {
 		p, ok := clusterSSHStoragePath(d.Path)
-		if !ok || p != d.Path || d.Bytes == 0 || d.Bytes > clusterSSHCapacityLimit || d.Entries > clusterSSHCapacityLimit || seen[d.Path] {
+		if !ok || p != d.Path || (d.Bytes == 0 && d.Entries == 0) || d.Bytes > clusterSSHCapacityLimit || d.Entries > clusterSSHCapacityLimit || seen[d.Path] {
 			return nil, false
 		}
 		seen[d.Path] = true

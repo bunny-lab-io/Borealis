@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -131,7 +132,7 @@ func TestBootstrapHostPackagePreflightCannotInstall(t *testing.T) {
 		t.Fatal("preflight became a mutation plan", err)
 	}
 	pins, _, err := clusterbootstrap.HostPackagePins()
-	if err != nil || !slices.Equal(p.selected, pins.Packages) {
+	if err != nil || !reflect.DeepEqual(p.selected, pins.Packages) {
 		t.Fatal("preflight omitted future phase dependencies", err)
 	}
 	spec, err := p.simulationCommand()

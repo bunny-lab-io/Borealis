@@ -16,6 +16,10 @@ import (
 
 var ErrFilesystem = errors.New("SSH filesystem evidence unavailable; host diagnostics withheld")
 
+// MaxFilesystemPaths bounds the original seven demand paths, thirteen fixed
+// generated-file ancestor directories, and one Longhorn destination.
+const MaxFilesystemPaths = 21
+
 const filesystemIntegerLimit = uint64(1<<53 - 1)
 
 // Paths must be explicitly selected by the caller. Observation does not choose
@@ -52,7 +56,7 @@ func validFilesystemPath(value string) bool {
 
 func (r FilesystemRequest) Validate() error {
 	if !machineIDPattern.MatchString(r.MachineID) || r.MachineID == strings.Repeat("0", 32) || !validPublicUUID(r.BootID) ||
-		len(r.Paths) < 1 || len(r.Paths) > 8 || !slices.IsSorted(r.Paths) {
+		len(r.Paths) < 1 || len(r.Paths) > MaxFilesystemPaths || !slices.IsSorted(r.Paths) {
 		return ErrFilesystem
 	}
 	for i, value := range r.Paths {
@@ -191,7 +195,10 @@ func filesystemCommand(request FilesystemRequest) (string, error) {
 	}
 	script := filesystemScript
 	if request.RequirePersistent {
-		script = persistentFilesystemScript
+		script, err = buildPersistentFilesystemScript()
+		if err != nil {
+			return "", ErrFilesystem
+		}
 	}
 	return buildPrivilegedInspectionCommand("/usr/sbin:/usr/bin:/sbin:/bin", "exec /usr/bin/python3 -I -B -c "+shellConstant(script)+" "+shellConstant(base64.StdEncoding.EncodeToString(raw))+" 2>/dev/null"), nil
 }

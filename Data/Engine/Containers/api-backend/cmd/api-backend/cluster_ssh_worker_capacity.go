@@ -3,13 +3,14 @@ package main
 import "borealis/api-backend/internal/clusterbootstrap"
 
 // One preparation attempt retains its owned bootstrap bundle, all application
-// and external archives, all three K3s assets, and the PostgreSQL acquisition's content+archive peak.
+// and external archives, frozen host-package tar, all three K3s assets, and the
+// PostgreSQL acquisition's content+archive peak.
 // No extracted image layers or target/PGDATA charge belongs on the API worker.
-func clusterSSHPreparationWorkerCapacity(bundle clusterbootstrap.PreparationScratchDemand, images clusterSSHImageInventory, external clusterSSHExternalInventory, k3s clusterSSHK3sInventory, capacity clusterSSHPreparedImageCapacity) (clusterSSHPreparedImageCapacity, error) {
+func clusterSSHPreparationWorkerCapacity(bundle clusterbootstrap.PreparationScratchDemand, images clusterSSHImageInventory, external clusterSSHExternalInventory, k3s clusterSSHK3sInventory, packages clusterSSHHostPackageInventory, capacity clusterSSHPreparedImageCapacity) (clusterSSHPreparedImageCapacity, error) {
 	fail := func() (clusterSSHPreparedImageCapacity, error) {
 		return clusterSSHPreparedImageCapacity{}, clusterbootstrap.ErrImageArchive
 	}
-	if images.inventory == nil || external.inventory == nil || k3s.inventory == nil || images.expected != external.expected || images.expected != k3s.expected || k3s.version != clusterbootstrap.K3sPins().Version || images.expected.Validate() != nil ||
+	if images.inventory == nil || external.inventory == nil || k3s.inventory == nil || packages.inventory == nil || images.expected != packages.expected || images.expected != external.expected || images.expected != k3s.expected || k3s.version != clusterbootstrap.K3sPins().Version || images.expected.Validate() != nil ||
 		bundle.Bytes == 0 || bundle.Bytes > clusterbootstrap.MaxBundleBytes+clusterbootstrap.MaxExpandedBytes || bundle.Entries < 3 || bundle.Entries > clusterbootstrap.MaxEntries+3 ||
 		capacity.PostgresWorkerPeakBytes == 0 || capacity.PostgresWorkerPeakEntries == 0 {
 		return fail()
@@ -43,6 +44,12 @@ func clusterSSHPreparationWorkerCapacity(bundle clusterbootstrap.PreparationScra
 		if size < 1 || size > clusterbootstrap.MaxImageArchiveBytes || !add(uint64(size), 1) {
 			return fail()
 		}
+	}
+	// Worker retains only the verified package tar and its owned set directory.
+	// Archive extraction and private APT cache belong on each remote target.
+	size := packages.inventory.Archive().Size
+	if size < 1 || size > clusterbootstrap.MaxImageArchiveBytes || !add(uint64(size), 2) {
+		return fail()
 	}
 	capacity.WorkerScratchBytes, capacity.WorkerScratchEntries = bytes, entries
 	return capacity, nil

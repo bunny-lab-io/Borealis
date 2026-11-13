@@ -313,6 +313,7 @@ type clusterSSHOwnedPreparationArtifacts struct {
 	failed      bool
 	bundle      *clusterbootstrap.Bundle
 	artifacts   *clusterbootstrap.PreparationArtifacts
+	packages    *clusterbootstrap.HostPackageSet
 	expected    clusterbootstrap.Expected
 	version     string
 	manifest    *clusterbootstrap.Manifest
@@ -331,7 +332,7 @@ func (v *clusterSSHOwnedPreparationArtifacts) prove(ctx context.Context, check f
 }
 
 func (v *clusterSSHOwnedPreparationArtifacts) proveOwned(ctx context.Context, check func(context.Context) error) (string, error) {
-	if v.failed || v.bundle == nil || v.artifacts == nil || v.publication == nil || check == nil || ctx.Err() != nil || check(ctx) != nil || v.publication(ctx) != nil || check(ctx) != nil {
+	if v.failed || v.bundle == nil || v.artifacts == nil || v.packages == nil || v.publication == nil || check == nil || ctx.Err() != nil || check(ctx) != nil || v.publication(ctx) != nil || check(ctx) != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
 	bundle, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
@@ -342,15 +343,19 @@ func (v *clusterSSHOwnedPreparationArtifacts) proveOwned(ctx context.Context, ch
 	if v.artifacts.WriteArtifacts(ctx, h, check) != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
+	packages := sha256.New()
+	if v.packages.WriteArchive(ctx, packages, check) != nil {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
 	again, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
 	if err != nil || again != bundle || v.publication(ctx) != nil || check(ctx) != nil || ctx.Err() != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
-	return clusterSSHPreparationDigest([]string{bundle, hex.EncodeToString(h.Sum(nil))})
+	return clusterSSHPreparationDigest([]string{bundle, hex.EncodeToString(h.Sum(nil)), hex.EncodeToString(packages.Sum(nil))})
 }
 
-// Artifact content demand only: packages, generated host/join configuration and
-// Longhorn replicas remain separate inputs. This cannot make storage ready.
+// Artifact materialization only: installed package content, generated host/join
+// configuration and Longhorn replicas remain separate inputs. Not storage ready.
 // Reproof lends already-acquired bytes; it never reacquires another archive.
 func (v *clusterSSHOwnedPreparationArtifacts) storageDemand(ctx context.Context, check func(context.Context) error) ([]clusterSSHFilesystemDemand, error) {
 	return v.storageDemandWith(ctx, check, v.proveOwned)
@@ -384,6 +389,10 @@ func (v *clusterSSHOwnedPreparationArtifacts) Close() error {
 	defer v.mu.Unlock()
 	v.failed, v.demand = true, nil
 	var errs []error
+	if v.packages != nil {
+		errs = append(errs, v.packages.Close())
+		v.packages = nil
+	}
 	if v.artifacts != nil {
 		errs = append(errs, v.artifacts.Close())
 		v.artifacts = nil
@@ -455,6 +464,21 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	packages, err := resolveClusterSSHHostPackageInventory(ctx, expected)
+	if err != nil {
+		return nil, err
+	}
+	packageBytes, err := packages.stage(ctx, scratch, check)
+	if packageBytes != nil {
+		closes = append(closes, packageBytes.Close)
+	}
+	if err != nil {
+		return nil, err
+	}
+	packageDemand, err := packages.demands(ctx, packageBytes, check)
+	if err != nil {
+		return nil, err
+	}
 	application, err := resolveClusterSSHImageInventory(ctx, expected)
 	if err != nil {
 		return nil, err
@@ -507,23 +531,27 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil {
 		return nil, err
 	}
+	demand, err = mergeClusterSSHFilesystemDemands(demand, packageDemand)
+	if err != nil {
+		return nil, err
+	}
 	artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected, version, postgres, images, k3sInputs, externalImages, pg, check)
 	if err != nil {
 		return nil, err
 	}
-	closes = []func() error{bundle.Close, artifacts.Close}
-	publication, err := clusterSSHPreparationArtifactPublication(expected, bootstrap, application.assets, external.assets, k3s.assets)
+	closes = []func() error{bundle.Close, artifacts.Close, packageBytes.Close}
+	publication, err := clusterSSHPreparationArtifactPublication(expected, bootstrap, application.assets, external.assets, k3s.assets, packages.assets)
 	if err != nil || publication(ctx) != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	return &clusterSSHOwnedPreparationArtifacts{bundle: bundle, artifacts: artifacts, expected: expected, version: version, manifest: manifest, publication: publication, demand: demand}, nil
+	return &clusterSSHOwnedPreparationArtifacts{bundle: bundle, artifacts: artifacts, packages: packageBytes, expected: expected, version: version, manifest: manifest, publication: publication, demand: demand}, nil
 }
 
 // Retain the exact asset generation used by each native staging resolver.
 // Fresh metadata must still publish those same bytes, including after other
 // families were acquired. A reverted publication cannot relabel owned bytes.
 func clusterSSHPreparationArtifactPublication(expected clusterbootstrap.Expected, groups ...map[string]clusterBootstrapAsset) (func(context.Context) error, error) {
-	if expected.Validate() != nil || len(groups) != 4 {
+	if expected.Validate() != nil || len(groups) != 5 {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	assets, limits, ids := map[string]clusterBootstrapAsset{}, map[string]int64{}, map[int64]bool{}

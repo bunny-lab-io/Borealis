@@ -138,6 +138,14 @@ func clusterSSHPreparationConfigurationProjectionReader(work clusterSSHPreparati
 // Returned approval projection is valid only after this capacity gate ran.
 func (c *clusterController) preparationCapacityRead(snapshot clusterSSHPreparationApprovalSnapshot, targets clusterSSHPreparationTargetsRead) (
 	capacity, configuration func(context.Context, string) (string, error), approval clusterSSHPreparationTargetsRead) {
+	capacity, configuration, approval, _ = c.preparationCapacityStorageRead(snapshot, targets)
+	return capacity, configuration, approval
+}
+
+// The storage projection borrows the same verified capacity rounds; it adds no
+// source inventory or native network observation.
+func (c *clusterController) preparationCapacityStorageRead(snapshot clusterSSHPreparationApprovalSnapshot, targets clusterSSHPreparationTargetsRead) (
+	capacity, configuration func(context.Context, string) (string, error), approval clusterSSHPreparationTargetsRead, storage clusterSSHPreparationStorageGateSourceRead) {
 	var runner *kubernetesClusterStepRunner
 	if c != nil {
 		runner, _ = c.runner.(*kubernetesClusterStepRunner)
@@ -150,8 +158,8 @@ func (c *clusterController) preparationCapacityRead(snapshot clusterSSHPreparati
 		}
 		return readClusterSSHWorkerCensus(ctx, c.store.db, window)
 	}
-	capacity, approval = newClusterSSHPreparationCapacityRead(snapshot, check, get, projection, targets, census)
-	return capacity, configuration, approval
+	capacity, approval, storage = newClusterSSHPreparationCapacityStorageRead(snapshot, check, get, projection, targets, census)
+	return capacity, configuration, approval, storage
 }
 
 // Two complete storage/census/Longhorn rounds borrow the fresh clean gate's
@@ -161,6 +169,13 @@ func (c *clusterController) preparationCapacityRead(snapshot clusterSSHPreparati
 func newClusterSSHPreparationCapacityRead(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error,
 	getJSON func(context.Context, string, any) error, configuration clusterSSHPreparationConfigurationProjectionRead,
 	targets clusterSSHPreparationTargetsRead, census clusterSSHWorkerCensusRead) (func(context.Context, string) (string, error), clusterSSHPreparationTargetsRead) {
+	gate, approval, _ := newClusterSSHPreparationCapacityStorageRead(snapshot, check, getJSON, configuration, targets, census)
+	return gate, approval
+}
+
+func newClusterSSHPreparationCapacityStorageRead(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error,
+	getJSON func(context.Context, string, any) error, configuration clusterSSHPreparationConfigurationProjectionRead,
+	targets clusterSSHPreparationTargetsRead, census clusterSSHWorkerCensusRead) (func(context.Context, string) (string, error), clusterSSHPreparationTargetsRead, clusterSSHPreparationStorageGateSourceRead) {
 	wire, wireErr := json.Marshal(snapshot.work)
 	var work clusterSSHPreparationWork
 	decodeErr := json.Unmarshal(wire, &work)
@@ -172,6 +187,7 @@ func newClusterSSHPreparationCapacityRead(snapshot clusterSSHPreparationApproval
 	var retained clusterSSHPreparationCapacityProjection
 	var retainedTargets clusterSSHPreparationCleanObservation
 	var retainedDigest string
+	var retainedSource clusterSSHPreparationStorageGateSource
 	gate := func(parent context.Context, requested string) (string, error) {
 		fail := func(reason string) (string, error) {
 			failed.Store(true)
@@ -202,6 +218,7 @@ func newClusterSSHPreparationCapacityRead(snapshot clusterSSHPreparationApproval
 		}
 		var first clusterSSHPreparationCapacityProjection
 		var clean clusterSSHPreparationCleanObservation
+		var storageSnapshot clusterSSHStorageSnapshot
 		// One fresh typed profile serves both storage/census rounds. Gate 4 uses
 		// the same retained configuration reader for its later network/Secret
 		// recheck; extracting limits must not create extra native source Jobs.
@@ -236,6 +253,7 @@ func newClusterSSHPreparationCapacityRead(snapshot clusterSSHPreparationApproval
 			storageReceipt := storage.Requirements.observation
 			storage.Requirements.observation = ""
 			subtotal := clusterSSHPreparationSnapshot{Observation: profile.Secret, Storage: clusterSSHStorageSnapshot{storage.Requirements, storageReceipt}, DesiredWorkerSites: sites}
+			storageSnapshot = subtotal.Storage
 			nodeReadFailed := false
 			readNode := func(path string) (map[string]any, error) {
 				var raw json.RawMessage
@@ -283,8 +301,15 @@ func newClusterSSHPreparationCapacityRead(snapshot clusterSSHPreparationApproval
 		if err != nil || check(ctx) != nil || ctx.Err() != nil || failed.Load() || retainedDigest != "" && retainedDigest != digest {
 			return fail("Capacity inputs or original proposal changed after observation; inspect and retry preparation.")
 		}
+		projectedCapacity := first.clone()
+		ownedSource, cloneErr := (clusterSSHPreparationStorageGateSource{Configuration: profile, Storage: storageSnapshot,
+			Targets: clusterSSHPreparationCleanObservation{Digest: clean.Digest, Targets: clean.Targets, Capacity: &projectedCapacity}}).clone()
+		if cloneErr != nil || check(ctx) != nil || ctx.Err() != nil || failed.Load() {
+			return fail("Verified storage projection could not retain its complete source inputs; retry preparation.")
+		}
 		retained, retainedDigest = first.clone(), digest
 		retainedTargets = clusterSSHPreparationCleanObservation{Digest: clean.Digest, Targets: slices.Clone(clean.Targets)}
+		retainedSource = ownedSource
 		return digest, nil
 	}
 	approval := func(ctx context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
@@ -300,7 +325,21 @@ func newClusterSSHPreparationCapacityRead(snapshot clusterSSHPreparationApproval
 		value.Capacity = &projected
 		return value, nil
 	}
-	return gate, approval
+	storage := func(ctx context.Context, requested string) (clusterSSHPreparationStorageGateSource, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if failed.Load() || ctx.Err() != nil || requested != plan || retainedDigest == "" || check == nil || check(ctx) != nil || ctx.Err() != nil {
+			failed.Store(true)
+			return clusterSSHPreparationStorageGateSource{}, clusterbootstrap.ErrPreparationConfig
+		}
+		value, err := retainedSource.clone()
+		if err != nil || check(ctx) != nil || ctx.Err() != nil {
+			failed.Store(true)
+			return clusterSSHPreparationStorageGateSource{}, clusterbootstrap.ErrPreparationConfig
+		}
+		return value, err
+	}
+	return gate, approval, storage
 }
 
 func clusterSSHPreparationCapacityReadiness(payload string) (*clusterSSHPreparationReadinessReceipt, error) {

@@ -260,9 +260,10 @@ func TestClusterSSHPreparationArtifactsCleanupKeepsProofDeadline(t *testing.T) {
 }
 
 func TestClusterSSHPreparationArtifactsAcquiredPublication(t *testing.T) {
-	for _, family := range []string{"bootstrap", "application", "external", "K3s"} {
+	for _, family := range []string{"bootstrap", "application", "external", "K3s", "packages"} {
 		t.Run(family, func(t *testing.T) {
 			f := preparationPublicationFixture(t)
+			addHostPackageReleaseFixture(t, f, "valid")
 			ctx := bootstrapContext()
 			_, bootstrap, err := readClusterSSHBootstrapPublication(ctx, f.expected)
 			if err != nil {
@@ -280,8 +281,15 @@ func TestClusterSSHPreparationArtifactsAcquiredPublication(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			groups := map[string]map[string]clusterBootstrapAsset{"bootstrap": bootstrap, "application": application.assets, "external": external.assets, "K3s": k3s.assets}
-			check, err := clusterSSHPreparationArtifactPublication(f.expected, bootstrap, application.assets, external.assets, k3s.assets)
+			packages, err := resolveClusterSSHHostPackageInventory(ctx, f.expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := clusterSSHPreparationArtifactPublication(f.expected, bootstrap, application.assets, external.assets, k3s.assets); err == nil {
+				t.Fatal("missing acquired package publication accepted")
+			}
+			groups := map[string]map[string]clusterBootstrapAsset{"bootstrap": bootstrap, "application": application.assets, "external": external.assets, "K3s": k3s.assets, "packages": packages.assets}
+			check, err := clusterSSHPreparationArtifactPublication(f.expected, bootstrap, application.assets, external.assets, k3s.assets, packages.assets)
 			if err != nil || check(ctx) != nil {
 				t.Fatal("acquired publication", err)
 			}

@@ -10,19 +10,27 @@ import (
 )
 
 func TestFilesystemPersistentNative(t *testing.T) {
-	for _, mode := range []string{"root", "uuid syntax", "xfs", "unrelated mount", "escaped path", "missing fstab", "unsafe fstab", "symlink fstab", "duplicate root", "unstable source", "future ancestor", "future descendant", "noexec", "nofail", "automount option", "mount override", "automount", "mount dropin", "prefix dropin", "future unit", "unsafe unit", "generator override", "missing mask", "runtime mask", "bad device link", "wrong device", "regular device", "quota", "bind root", "current child mount", "stale mount", "loaded automount", "manager reload", "nonrunning manager", "degraded manager", "boolean generation", "negative generation", "wrong PID", "wrong bus", "pending root job", "loaded override", "loaded dropin", "loaded noexec", "fstab drift", "final file removal", "device drift", "manager drift", "mount drift", "lower availability"} {
+	for _, mode := range []string{"root", "package paths", "package ancestor inserted", "package ancestor deleted", "package ancestor replaced", "package ancestor symlink", "sbin redirect", "sbin final drift", "package descendant mount", "uuid syntax", "xfs", "unrelated mount", "escaped path", "missing fstab", "unsafe fstab", "symlink fstab", "duplicate root", "unstable source", "future ancestor", "future descendant", "noexec", "nofail", "automount option", "mount override", "automount", "mount dropin", "prefix dropin", "future unit", "unsafe unit", "generator override", "missing mask", "runtime mask", "bad device link", "wrong device", "regular device", "quota", "bind root", "current child mount", "stale mount", "loaded automount", "manager reload", "nonrunning manager", "degraded manager", "boolean generation", "negative generation", "wrong PID", "wrong bus", "pending root job", "loaded override", "loaded dropin", "loaded noexec", "fstab drift", "final file removal", "device drift", "manager drift", "mount drift", "lower availability"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			script := persistentNetworkLibraryScript + activeNetworkLibraryScript + systemdObservationLibraryScript + filesystemLibraryScript + persistentFilesystemLibraryScript + persistentFilesystemFixture
+			library, buildErr := persistentFilesystemLibraries()
+			if buildErr != nil {
+				t.Fatal(buildErr)
+			}
+			script := library + persistentFilesystemFixture
 			out, err := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-B", "-c", script, t.TempDir(), mode).CombinedOutput()
-			good := mode == "root" || mode == "uuid syntax" || mode == "xfs" || mode == "unrelated mount" || mode == "escaped path" || mode == "lower availability" || mode == "degraded manager"
+			good := mode == "root" || mode == "package paths" || mode == "uuid syntax" || mode == "xfs" || mode == "unrelated mount" || mode == "escaped path" || mode == "lower availability" || mode == "degraded manager"
 			if (err == nil) != good || ctx.Err() != nil {
 				t.Fatalf("persistent native outcome: %v; %s", err, out)
 			}
 			if good {
 				var value filesystemObservation
-				if json.Unmarshal(out, &value) != nil || value.Version != 4 || value.Evidence.validate([]string{"/opt/Borealis", "/var/lib/longhorn"}) != nil {
+				paths := []string{"/opt/Borealis", "/var/lib/longhorn"}
+				if mode == "package paths" {
+					paths = []string{"/etc", "/usr", "/var"}
+				}
+				if json.Unmarshal(out, &value) != nil || value.Version != 4 || value.Evidence.validate(paths) != nil {
 					t.Fatal("invalid native persistent evidence")
 				}
 				if mode == "lower availability" && value.Evidence.Filesystems[0].AvailableBytes != 30<<30 {
@@ -53,6 +61,8 @@ r = pathlib.Path(ROOT)
 r.chmod(0o700)
 os.umask(0o077)
 paths = ["/opt/Borealis", "/var/lib/longhorn"]
+if mode.startswith("package ancestor") or mode in ("package paths", "sbin redirect", "sbin final drift", "package descendant mount"):
+    paths = ["/etc", "/usr", "/var"]
 uuid = "12345678-1234-1234-1234-123456789abc"
 kind = "xfs" if mode == "xfs" else "ext4"
 for area in BOOT_PATHS:
@@ -60,11 +70,18 @@ for area in BOOT_PATHS:
 for area in ("dev/disk/by-uuid", "etc/systemd/system-generators"):
     (r/area).mkdir(parents=True, exist_ok=True)
 (r/"lib").symlink_to("usr/lib")
+(r/"sbin").symlink_to("var/elsewhere" if mode == "sbin redirect" else "usr/sbin")
+package_changed = False
+package_directory = r/"usr/share/doc"
+if mode.startswith("package ancestor"):
+    package_directory.parent.mkdir(parents=True, exist_ok=True)
+    if mode != "package ancestor inserted": package_directory.mkdir()
 fstab = r/"etc/fstab"
 text = "/dev/disk/by-uuid/"+uuid+" / "+kind+" defaults 0 1\n/swap.img none swap sw 0 0\n"
 if mode == "uuid syntax": text = text.replace("/dev/disk/by-uuid/", "UUID=")
 if mode == "duplicate root": text += text.splitlines()[0]+"\n"
 if mode == "unstable source": text = text.replace("/dev/disk/by-uuid/"+uuid, "/dev/sda2")
+if mode == "package descendant mount": text += "/dev/other /usr/share ext4 defaults 0 2\n"
 if mode == "future ancestor": text += "/dev/other /var ext4 defaults 0 2\n"
 if mode == "future descendant": text += "/dev/other /opt/Borealis/Engine ext4 defaults 0 2\n"
 if mode == "unrelated mount": text += "/dev/other /home ext4 defaults 0 2\n"
@@ -116,7 +133,7 @@ def fixture_snapshot(paths):
     snapshots += 1
     return {'version':3,'machine_id':'a'*32,'boot_id':'11111111-1111-4111-8111-111111111111','evidence':{
         'mount_namespace':21,'receipt':('b' if mode=='mount drift' and snapshots>1 else 'a')*64,
-        'paths':[{'path':p,'ancestor':'/opt' if p.startswith('/opt') else '/var/lib','inode':123+i,'mount_id':29,'mount_root':'/','mount_point':'/','filesystem':'0000000000000001'} for i,p in enumerate(paths)],
+        'paths':[{'path':p,'ancestor':'/' if p in ('/etc','/usr','/var') else '/opt' if p.startswith('/opt') else '/var/lib','inode':123+i,'mount_id':29,'mount_root':'/','mount_point':'/','filesystem':'0000000000000001'} for i,p in enumerate(paths)],
         'filesystems':[{'id':'0000000000000001','device':'8:1','type':kind,'total_bytes':100<<30,'allocation_unit':4096,'total_inodes':1000000,'available_inodes':800000,'available_bytes':(30 if mode=='lower availability' and snapshots>2 else 70)<<30}]}}
 fs_snapshot = fixture_snapshot
 def value(signature, data): return {'type':signature,'data':data}
@@ -131,7 +148,7 @@ if mode == 'loaded noexec': mount_props['Options']=value('s','rw,noexec')
 if mode == 'pending root job': unit_props['Job']=value('(uo)',[1,'/job/1'])
 bus_calls=0
 def fixture_reply(dest,path,interface,method,*params):
-    global bus_calls
+    global bus_calls, package_changed
     bus_calls += 1
     def wire(signature,data): return {'type':signature,'data':[data]}
     if method=='GetId': return wire('s','0'*32 if mode=='wrong bus' else 'a'*32)
@@ -144,7 +161,17 @@ def fixture_reply(dest,path,interface,method,*params):
     if method=='GetAll':
         if params[-1]=='org.freedesktop.systemd1.Unit': return wire('a{sv}',unit_props)
         if params[-1]=='org.freedesktop.systemd1.Mount':
+            if mode.startswith("package ancestor") and snapshots>=3 and not package_changed:
+                package_changed = True
+                if mode == "package ancestor inserted": package_directory.mkdir()
+                elif mode == "package ancestor deleted": package_directory.rmdir()
+                elif mode == "package ancestor replaced":
+                    package_directory.rename(package_directory.with_name("retained")); package_directory.mkdir()
+                elif mode == "package ancestor symlink":
+                    package_directory.rmdir(); package_directory.symlink_to(str(r/"etc"))
             if mode=='fstab drift': fstab.write_text(text+'#changed\n')
+            if mode=='sbin final drift' and snapshots>=3 and (r/'sbin').readlink()==pathlib.Path('usr/sbin'):
+                (r/'sbin').unlink(); (r/'sbin').symlink_to('var/elsewhere')
             if mode=='final file removal' and snapshots>=3: unit.unlink()
             return wire('a{sv}',mount_props)
     if method=='ListUnitsByPatterns':

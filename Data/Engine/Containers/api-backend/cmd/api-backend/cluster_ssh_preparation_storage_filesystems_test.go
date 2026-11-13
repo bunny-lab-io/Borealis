@@ -191,10 +191,9 @@ func TestClusterSSHPreparationStorageFilesystemsNative(t *testing.T) {
 				value.Filesystems[0].Storage.Paths[0].Path = "/foreign"
 				again, err := read(ctx, plan)
 				if mode == "lower next availability" {
-					if err == nil || again.Digest != "" {
-						t.Fatal("decreased availability revived retained proof")
-					}
-				} else if err != nil || again.Filesystems[0].Storage.Filesystems[0].AvailableBytes != available || again.Filesystems[0].Storage.Paths[0].Path != "/opt/Borealis" {
+					available = 600000
+				}
+				if err != nil || again.Filesystems[0].Storage.Filesystems[0].AvailableBytes != available || again.Filesystems[0].Storage.Paths[0].Path != "/opt/Borealis" {
 					t.Fatal("caller mutated retained filesystem proof", err)
 				}
 			} else {
@@ -281,9 +280,22 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 				value.Filesystems[0].Storage.Filesystems[0].AvailableBytes = 1
 			}
 			again, err := read(context.Background(), plan)
-			if mode == "success" {
-				if err != nil || again.Filesystems[0].Storage.Paths[0].Path != paths[0] || again.Filesystems[0].Storage.Filesystems[0].AvailableBytes != 700000 {
+			if mode == "success" || mode == "lower free" || mode == "lower inodes" {
+				available := uint64(700000)
+				if mode == "lower free" {
+					available--
+				}
+				if err != nil || again.Filesystems[0].Storage.Paths[0].Path != paths[0] || again.Filesystems[0].Storage.Filesystems[0].AvailableBytes != available {
 					t.Fatal("bound result alias", err)
+				}
+				if mode == "lower inodes" {
+					var parsed struct {
+						Evidence clusterremote.FilesystemEvidence `json:"evidence"`
+					}
+					_ = json.Unmarshal(sshFilesystemFixtureWire(snapshot.work.Proof.Cohort.Targets[0]), &parsed)
+					if again.Filesystems[0].Storage.Filesystems[0].AvailableInodes != parsed.Evidence.Filesystems[0].AvailableInodes-1 {
+						t.Fatal("decreased inode minimum lost")
+					}
 				}
 			} else if err == nil || again.Digest != "" {
 				t.Fatal("failed/drifting response accepted")

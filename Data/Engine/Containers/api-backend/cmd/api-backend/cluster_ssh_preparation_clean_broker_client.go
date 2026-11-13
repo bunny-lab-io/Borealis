@@ -152,12 +152,14 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsFilesystemRea
 		closeErr := response.Body.Close() // Join every owned body before SQL or proof.
 		var result clusterSSHPreparationCleanBrokerResponse
 		requestDigest, digestErr := clusterSSHPreparationDigest(request)
+		// Proposal evidence carries conservative current minima; the waiting
+		// storage gate independently recalculates every fit before approval.
 		if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || response.Header.Get("Content-Encoding") != "" ||
 			openClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, raw, &result, clusterSSHPreparationCleanBrokerLimit) != nil ||
 			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}).validate(snapshot) != nil ||
 			!validClusterSSHPreparationFilesystems(snapshot, paths, result.Filesystems) ||
 			!cleanup.clean() || requestCtx.Err() != nil || check(requestCtx) != nil || requestCtx.Err() != nil ||
-			(retained != "" && retained != result.Digest) || retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, result.Filesystems, true) {
+			(retained != "" && retained != result.Digest) || retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, result.Filesystems, false) {
 			return fail()
 		}
 		retained = result.Digest

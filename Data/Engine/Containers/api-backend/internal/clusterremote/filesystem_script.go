@@ -5,7 +5,7 @@ package clusterremote
 const filesystemScript = filesystemLibraryScript + `
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 2 or len(sys.argv[1]) > 16384:
+        if len(sys.argv) != 2 or len(sys.argv[1]) > 32768:
             raise ValueError()
         paths = json.loads(base64.b64decode(sys.argv[1], validate=True))
         result = observe_filesystems(paths)
@@ -178,7 +178,7 @@ def fs_snapshot(paths):
     return {"version": 3, "machine_id": identity[0], "boot_id": identity[1], "evidence": evidence}
 
 def observe_filesystems(paths):
-    if type(paths) is not list or not 1 <= len(paths) <= 8 or any(type(item) is not str for item in paths) or paths != sorted(set(paths)):
+    if type(paths) is not list or not 1 <= len(paths) <= 21 or any(type(item) is not str for item in paths) or paths != sorted(set(paths)):
         raise ValueError()
     for path in paths:
         fs_path(path)

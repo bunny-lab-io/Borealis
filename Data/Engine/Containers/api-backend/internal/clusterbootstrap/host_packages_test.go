@@ -17,13 +17,15 @@ import (
 
 func hostPackageTestPlan(t *testing.T) (HostPackagePlan, string) {
 	t.Helper()
-	plan := HostPackagePlan{Version: 1, OS: "ubuntu", OSVersion: "24.04", Suite: "noble", Platform: "linux-amd64"}
+	plan := HostPackagePlan{Version: 1, OS: "ubuntu", OSVersion: "24.04", Suite: "noble", Platform: "linux-amd64", DataDirectories: []string{"/etc", "/usr", "/var"}}
 	for name, phase := range hostPackageRoots {
 		body := []byte("fixture " + name)
 		hash := sha256.Sum256(body)
 		plan.Packages = append(plan.Packages, HostPackagePin{Name: name, Version: "1.0", Architecture: "all", File: name + "_1.0_all.deb",
 			Phase: phase, Size: int64(len(body)), SHA256: hex.EncodeToString(hash[:]), FileBytes: 100, Entries: 3,
-			URL: "https://archive.ubuntu.com/ubuntu/pool/main/f/fixture/" + name + "_1.0_all.deb"})
+			DataPaths: []HostPackagePathContent{{Path: "/usr", FileBytes: 100, LinkBytes: 7, Entries: 2}}, DataRootEntries: 1,
+			Control: HostPackageControlContent{FileBytes: 20, Entries: 2, RootEntries: 1},
+			URL:     "https://archive.ubuntu.com/ubuntu/pool/main/f/fixture/" + name + "_1.0_all.deb"})
 	}
 	slices.SortFunc(plan.Packages, func(a, b HostPackagePin) int { return strings.Compare(a.Name, b.Name) })
 	raw, _ := json.Marshal(plan)
@@ -101,7 +103,8 @@ func hostPackageTestInventory(t *testing.T, plan HostPackagePlan, digest string,
 	hash := sha256.Sum256(archive)
 	return expected, hostPackageInventoryWire{Version: 1, Repository: expected.Repository, Release: expected.Release, SourceSHA: expected.SourceSHA,
 		OS: plan.OS, OSVersion: plan.OSVersion, Suite: plan.Suite, Platform: plan.Platform, PlanSHA256: digest, Packages: slices.Clone(plan.Packages),
-		Archive: HostPackageAsset{Name: HostPackageArchiveName, Size: int64(len(archive)), SHA256: hex.EncodeToString(hash[:])}}
+		DataDirectories: slices.Clone(plan.DataDirectories),
+		Archive:         HostPackageAsset{Name: HostPackageArchiveName, Size: int64(len(archive)), SHA256: hex.EncodeToString(hash[:])}}
 }
 
 func TestHostPackagePinsAndLockBoundaries(t *testing.T) {
@@ -175,6 +178,57 @@ func TestHostPackagePinsAndLockBoundaries(t *testing.T) {
 				t.Fatal("invalid suite lock accepted")
 			}
 		})
+	}
+}
+
+func TestHostPackageDirectoryContract(t *testing.T) {
+	directories, err := HostPackageDirectories()
+	if err != nil || len(directories) != 360 {
+		t.Fatal("locked ancestors unavailable", len(directories), err)
+	}
+	directories[0] = "/elsewhere"
+	again, err := HostPackageDirectories()
+	if err != nil || again[0] != "/etc" {
+		t.Fatal("caller changed compiled ancestors")
+	}
+	for _, mode := range []string{"valid", "missing", "duplicate", "order", "noncanonical", "unknown root", "alias", "missing parent", "root", "control", "oversized"} {
+		t.Run(mode, func(t *testing.T) {
+			plan, _ := hostPackageTestPlan(t)
+			switch mode {
+			case "missing":
+				plan.DataDirectories = nil
+			case "duplicate":
+				plan.DataDirectories = []string{"/etc", "/usr", "/usr", "/var"}
+			case "order":
+				slices.Reverse(plan.DataDirectories)
+			case "noncanonical":
+				plan.DataDirectories = []string{"/etc", "/usr", "/usr/./share", "/var"}
+			case "unknown root":
+				plan.DataDirectories = []string{"/etc", "/opt", "/usr", "/var"}
+			case "alias":
+				plan.DataDirectories = []string{"/etc", "/lib", "/usr", "/var"}
+			case "missing parent":
+				plan.DataDirectories = []string{"/etc", "/usr", "/usr/share/doc", "/var"}
+			case "root":
+				plan.DataDirectories = append([]string{"/"}, plan.DataDirectories...)
+			case "control":
+				plan.DataDirectories = []string{"/etc", "/usr", "/usr/bad\npath", "/var"}
+			case "oversized":
+				plan.DataDirectories = []string{"/etc", "/usr", "/usr/" + strings.Repeat("x", 256), "/var"}
+			}
+			raw, _ := json.Marshal(plan)
+			_, _, err := parseHostPackagePlan(append(raw, '\n'))
+			if (err == nil) != (mode == "valid") {
+				t.Fatal("ancestor contract decision", err)
+			}
+		})
+	}
+	plan, digest := hostPackageTestPlan(t)
+	expected, wire := hostPackageTestInventory(t, plan, digest, hostPackageTestArchive(t, plan, "valid"))
+	wire.DataDirectories = []string{"/etc", "/usr", "/usr/share", "/var"}
+	raw, _ := json.Marshal(wire)
+	if _, err := parseHostPackageInventory(raw, expected, plan, digest); err == nil {
+		t.Fatal("manifest changed compiled ancestor inventory")
 	}
 }
 

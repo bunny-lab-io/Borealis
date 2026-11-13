@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,7 +30,7 @@ func addHostPackageReleaseFixture(t *testing.T, f *bootstrapReleaseFixture, mode
 	archive := clusterbootstrap.HostPackageAsset{Name: clusterbootstrap.HostPackageArchiveName, Size: size, SHA256: strings.Repeat("b", 64)}
 	wire := map[string]any{"version": 1, "repository": f.expected.Repository, "release": f.expected.Release, "source_sha": f.expected.SourceSHA,
 		"os": plan.OS, "os_version": plan.OSVersion, "suite": plan.Suite, "platform": plan.Platform, "packages": plan.Packages,
-		"plan_sha256": digest, "archive": archive}
+		"plan_sha256": digest, "archive": archive, "data_directories": plan.DataDirectories}
 	if mode == "foreign source" {
 		wire["source_sha"] = strings.Repeat("c", 40)
 	}
@@ -36,9 +38,12 @@ func addHostPackageReleaseFixture(t *testing.T, f *bootstrapReleaseFixture, mode
 		wire["plan_sha256"] = strings.Repeat("c", 64)
 	}
 	raw, _ := json.Marshal(wire)
-	f.extraBodies = map[string]string{fmt.Sprintf("/repos/%s/releases/assets/200", f.expected.Repository): string(raw)}
+	if f.extraBodies == nil {
+		f.extraBodies = map[string]string{}
+	}
+	f.extraBodies[fmt.Sprintf("/repos/%s/releases/assets/600", f.expected.Repository)] = string(raw)
 	for i, name := range []string{clusterbootstrap.HostPackageInventoryName, clusterbootstrap.HostPackageArchiveName} {
-		id := int64(200 + i)
+		id := int64(600 + i)
 		a := clusterBootstrapAsset{ID: id, Name: name, State: "uploaded", Size: archive.Size, Digest: "sha256:" + archive.SHA256,
 			URL: fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), f.expected.Repository, id), BrowserDownloadURL: clusterbootstrap.AssetURL(f.expected, name)}
 		if i == 0 {
@@ -50,6 +55,108 @@ func addHostPackageReleaseFixture(t *testing.T, f *bootstrapReleaseFixture, mode
 		if mode != "missing archive" || i == 0 {
 			f.release.Assets = append(f.release.Assets, a)
 		}
+	}
+}
+
+func TestClusterSSHHostPackageOwnedDemand(t *testing.T) {
+	if got, err := (clusterSSHHostPackageInventory{}).demands(context.Background(), nil, nil); err == nil || got != nil {
+		t.Fatal("missing owned package bytes supplied demand", got, err)
+	}
+	// Retained actual producer output extends the ordinary ownership tests;
+	// committed small native fixtures cover failures without download/install.
+	directory := os.Getenv("BOREALIS_TEST_HOST_PACKAGE_ASSETS")
+	if directory == "" {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(directory, clusterbootstrap.HostPackageInventoryName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Repository string `json:"repository"`
+		Release    string `json:"release"`
+		SourceSHA  string `json:"source_sha"`
+	}
+	if err := json.Unmarshal(raw, &identity); err != nil {
+		t.Fatal(err)
+	}
+	expected := clusterbootstrap.Expected{Repository: identity.Repository, Release: identity.Release, SourceSHA: identity.SourceSHA, AllowQualification: true}
+	inventory, err := clusterbootstrap.ParseHostPackageInventory(raw, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	check := func(ctx context.Context) error { return ctx.Err() }
+	for _, mode := range []string{"valid", "cleanup failure", "scope failure"} {
+		t.Run(mode, func(t *testing.T) {
+			parent := t.TempDir()
+			packages, err := clusterbootstrap.StageHostPackages(ctx, parent, expected, inventory, func(context.Context) (io.ReadCloser, error) {
+				return os.Open(filepath.Join(directory, clusterbootstrap.HostPackageArchiveName))
+			}, check)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := &clusterSSHOwnedPreparationArtifacts{packages: packages}
+			defer owner.Close()
+			v := clusterSSHHostPackageInventory{expected: expected, inventory: inventory}
+			got, err := v.demands(ctx, packages, check)
+			want := clusterSSHFilesystemDemand{Path: "/opt/Borealis", Bytes: uint64(inventory.Archive().Size), Entries: uint64(len(inventory.Packages())) + 5}
+			for _, pin := range inventory.Packages() {
+				want.Bytes += uint64(pin.Size)
+			}
+			if err != nil || len(got) != 4 || got[1] != want {
+				t.Fatal("native package materialization charge", got, want, err)
+			}
+			var installedBytes, installedEntries uint64
+			for _, row := range got {
+				if row.Path != "/opt/Borealis" {
+					installedBytes += row.Bytes
+					installedEntries += row.Entries
+				}
+			}
+			if got[0].Path != "/etc" || got[2].Path != "/usr" || got[3].Path != "/var" || installedBytes != 403735996 || installedEntries != 4744 {
+				t.Fatal("measured installed contents lost during filesystem projection", got)
+			}
+			if mode == "scope failure" {
+				d := sshApprovalArtifactDependencies(&sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)})
+				d.acquire = func(context.Context, string, func(context.Context) error) (clusterSSHPreparationArtifactBytes, error) {
+					return owner, errors.New("fixture acquisition failed after owning packages")
+				}
+				consumed := false
+				err := runClusterSSHPreparationArtifacts(ctx, strings.Repeat("a", 64), d, func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+					consumed = true
+					return clusterSSHPreparationReadinessReceipt{}, nil
+				})
+				if err == nil || consumed || owner.packages != nil {
+					t.Fatal("failed scope retained package owner or reached consumer", err)
+				}
+			}
+			var unrelated string
+			if mode == "cleanup failure" {
+				entries, err := os.ReadDir(parent)
+				if err != nil || len(entries) != 1 {
+					t.Fatal("staged owner unavailable", entries, err)
+				}
+				unrelated = filepath.Join(parent, entries[0].Name(), "unrelated")
+				if err := os.WriteFile(unrelated, []byte("preserve"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if (owner.Close() == nil) != (mode != "cleanup failure") {
+				t.Fatal("artifact owner lost package cleanup result")
+			}
+			if got, err := v.demands(ctx, packages, check); err == nil || got != nil {
+				t.Fatal("artifact owner released live package demand", got, err)
+			}
+			if mode != "cleanup failure" {
+				entries, err := os.ReadDir(parent)
+				if err != nil || len(entries) != 0 {
+					t.Fatal("artifact owner leaked package bytes", entries, err)
+				}
+			} else if raw, err := os.ReadFile(unrelated); err != nil || string(raw) != "preserve" {
+				t.Fatal("artifact cleanup removed unrelated contents", err)
+			}
+		})
 	}
 }
 
@@ -80,7 +187,7 @@ func TestClusterSSHHostPackagePublication(t *testing.T) {
 			closes := 0
 			client.Transport = hostPackageHTTPTransport(func(r *http.Request) (*http.Response, error) {
 				response, err := transport.RoundTrip(r)
-				if err == nil && strings.HasSuffix(r.URL.Path, "/assets/200") {
+				if err == nil && strings.HasSuffix(r.URL.Path, "/assets/600") {
 					response.Body = hostPackageHTTPBody{response.Body, func() error {
 						closes++
 						if mode == "cancel during close" {

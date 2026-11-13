@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterremote"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,7 +17,7 @@ func mergeClusterSSHFilesystemDemands(groups ...[]clusterSSHFilesystemDemand) ([
 	for _, group := range groups {
 		for _, d := range group {
 			p, ok := clusterSSHStoragePath(d.Path)
-			if !ok || p != d.Path || d.Bytes == 0 {
+			if !ok || p != d.Path || (d.Bytes == 0 && d.Entries == 0) {
 				return nil, clusterbootstrap.ErrImageArchive
 			}
 			current := byPath[p]
@@ -32,7 +33,7 @@ func mergeClusterSSHFilesystemDemands(groups ...[]clusterSSHFilesystemDemand) ([
 			byPath[p] = current
 		}
 	}
-	if len(byPath) < 1 || len(byPath) > 7 {
+	if len(byPath) < 1 || len(byPath) >= clusterremote.MaxFilesystemPaths {
 		return nil, clusterbootstrap.ErrImageArchive
 	}
 	result := make([]clusterSSHFilesystemDemand, 0, len(byPath))

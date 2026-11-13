@@ -231,6 +231,10 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			_ = packageBytes.Close()
 			return err
 		}
+		packageDemand, err := packages.demands(ctx, packageBytes, checks.Inputs)
+		if err != nil {
+			return err
+		}
 		joinClient, err := newClusterSSHJoinBrokerClient()
 		if err != nil {
 			return clusterbootstrap.ErrK3sJoinMaterial
@@ -315,7 +319,16 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		if err != nil {
 			return err
 		}
-		baseDemand, err := mergeClusterSSHFilesystemDemands(appDemand, externalDemand, k3sDemand, joinDemand)
+		packagePlan, _, err := clusterbootstrap.HostPackagePins()
+		if err != nil {
+			return err
+		}
+		hostFiles, err := clusterSSHPreparationHostFileDemands(expected, packagePlan.Suite)
+		if err != nil {
+			return err
+		}
+		baseDemand, err := mergeClusterSSHFilesystemDemands(appDemand, externalDemand, k3sDemand, joinDemand, hostFiles,
+			packageDemand)
 		if err != nil {
 			return err
 		}
@@ -325,7 +338,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		}
 		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checks.Inputs, baseDemand,
 			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
-				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, k3s, capacity)
+				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, k3s, packages, capacity)
 				if err != nil {
 					return err
 				}
@@ -337,6 +350,10 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				}
 				fresh, err := inputs.StorageDemand(ctx, expected, checks.Inputs)
 				if err != nil || fresh != bundleDemand {
+					return clusterbootstrap.ErrImageArchive
+				}
+				freshPackages, err := packages.demands(ctx, packageBytes, checks.Inputs)
+				if err != nil || !reflect.DeepEqual(freshPackages, packageDemand) {
 					return clusterbootstrap.ErrImageArchive
 				}
 				return nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -252,32 +253,40 @@ func TestFilesystemNativeObservation(t *testing.T) {
 }
 
 func TestFilesystemPathContract(t *testing.T) {
+	maximum := make([]string, MaxFilesystemPaths)
+	for i := range maximum {
+		maximum[i] = fmt.Sprintf("/path%02d", i)
+	}
+	tooMany := append(append([]string{}, maximum...), "/path99")
 	corpus := [][]string{
 		{"/"}, {"/opt/Borealis", "/var/lib/longhorn"}, {"/space <&> ' \" $()"},
+		maximum,
 		{}, {""}, {"relative"}, {"//opt"}, {"/opt/"}, {"/opt//sub"}, {"/opt/../sub"}, {"/opt/./sub"},
 		{"/b", "/a"}, {"/a", "/a"}, {"/line\nbreak"}, {"/tab\there"}, {"/nul\x00"}, {"/nonascii-é"},
-		{"/" + strings.Repeat("a", 256)}, {strings.Repeat("/a", 65)}, {"/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h", "/i"},
+		{"/" + strings.Repeat("a", 256)}, {strings.Repeat("/a", 65)}, tooMany,
 	}
 	for i, paths := range corpus {
 		request, _ := filesystemFixture()
 		request.Paths = paths
-		good := i < 3
+		good := i < 4
 		if (request.Validate() == nil) != good {
 			t.Fatalf("Go path contract: %d", i)
 		}
 	}
 	raw, _ := json.Marshal(corpus)
-	script := filesystemLibraryScript + `
+	script := filesystemLibraryScript + persistentFilesystemLibraryScript + `
 def forbidden(paths):
     return {"evidence": {"filesystems": []}}
 fs_snapshot = forbidden
+pfs_snapshot = forbidden
 for index, paths in enumerate(json.loads(sys.argv[1])):
     try:
         observe_filesystems(paths)
+        observe_persistent_filesystems(paths)
         good = True
     except ValueError:
         good = False
-    assert good == (index < 3), index
+    assert good == (index < 4), index
 `
 	cmd := exec.Command("python3", "-I", "-B", "-c", script, string(raw))
 	if out, err := cmd.CombinedOutput(); err != nil {

@@ -86,3 +86,36 @@ func (v clusterSSHHostPackageInventory) stage(ctx context.Context, parent string
 		return response.Body, nil
 	}, check)
 }
+
+// Materialization stays under the owned /opt bootstrap wrapper. Installed data
+// is charged to /etc, /usr and /var only under the persistent observer's fixed
+// usrmerge/ancestor proof. This remains a subtotal: dpkg/generated/service
+// demand is separate and cannot be replaced by these content measurements.
+func (v clusterSSHHostPackageInventory) demands(ctx context.Context, owned *clusterbootstrap.HostPackageSet, check func(context.Context) error) ([]clusterSSHFilesystemDemand, error) {
+	if v.inventory == nil || owned == nil {
+		return nil, clusterbootstrap.ErrImageArchive
+	}
+	demand, err := owned.StorageDemand(ctx, v.expected, check)
+	if err != nil {
+		return nil, err
+	}
+	installed, err := owned.InstalledContentDemand(ctx, v.expected, check)
+	if err != nil {
+		return nil, err
+	}
+	rows := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: demand.Bytes, Entries: demand.Entries}}
+	for _, content := range installed {
+		destination := content.Path
+		switch destination {
+		case "/lib", "/sbin":
+			// Fixed Noble aliases are requirements, never inferred observations.
+			// RequirePersistent proves both aliases and destination ancestry.
+			destination = "/usr"
+		case "/etc", "/usr", "/var":
+		default:
+			return nil, clusterbootstrap.ErrImageArchive
+		}
+		rows = append(rows, clusterSSHFilesystemDemand{Path: destination, Bytes: content.Bytes, Entries: content.Entries})
+	}
+	return mergeClusterSSHFilesystemDemands(rows)
+}

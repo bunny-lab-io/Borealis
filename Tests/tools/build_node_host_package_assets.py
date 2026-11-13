@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import shutil
@@ -32,8 +33,51 @@ ROOTS = {
     "iptables": "base", "open-iscsi": "base", "nfs-common": "base",
     "docker-ce": "docker", "docker-ce-cli": "docker", "containerd.io": "docker", "docker-buildx-plugin": "docker",
 }
-FIELDS = {"name", "version", "architecture", "file", "phase", "size", "sha256", "url", "file_bytes", "entries"}
+FIELDS = {"name", "version", "architecture", "file", "phase", "size", "sha256", "url", "file_bytes", "entries", "data_paths", "data_root_entries", "control"}
+DATA_PATHS = {"/etc", "/lib", "/sbin", "/usr", "/var"}
 MAX_ARCHIVE, MAX_EXPANDED, MAX_ENTRIES = (2 << 30) - 1, 32 << 30, 1_000_000
+
+
+def validate_directories(directories) -> None:
+    if not isinstance(directories, list) or not 3 <= len(directories) <= MAX_ENTRIES:
+        raise ValueError("invalid package ancestor inventory")
+    seen = set()
+    for directory in directories:
+        if (not isinstance(directory, str) or not directory.startswith("/") or directory == "/" or
+                len(directory) > 1024 or posixpath.normpath(directory) != directory or directory.startswith("//") or
+                any(not 32 <= ord(c) <= 126 for c in directory)):
+            raise ValueError("invalid package ancestor path")
+        parts = directory.split("/")
+        if (len(parts) > 65 or parts[1] not in ("etc", "usr", "var") or any(len(p) > 255 for p in parts) or
+                directory in seen or posixpath.dirname(directory) != "/" and posixpath.dirname(directory) not in seen):
+            raise ValueError("invalid package ancestor chain")
+        seen.add(directory)
+    if directories != sorted(seen) or not {"/etc", "/usr", "/var"} <= seen:
+        raise ValueError("incomplete package ancestor inventory")
+
+
+def validate_content(pin: dict) -> None:
+    rows, control = pin["data_paths"], pin["control"]
+    if (type(pin["data_root_entries"]) is not int or pin["data_root_entries"] != 1 or
+            not isinstance(rows, list) or not 1 <= len(rows) <= len(DATA_PATHS)):
+        raise ValueError("invalid package destination metadata")
+    paths, files, links, entries = [], 0, 0, 0
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {"path", "file_bytes", "link_bytes", "entries"} or
+                not isinstance(row["path"], str) or row["path"] not in DATA_PATHS or
+                any(type(row[k]) is not int for k in ("file_bytes", "link_bytes", "entries")) or
+                not 0 <= row["file_bytes"] <= MAX_EXPANDED or not 0 <= row["link_bytes"] <= MAX_EXPANDED or
+                not 0 < row["entries"] <= MAX_ENTRIES):
+            raise ValueError("invalid package destination row")
+        paths.append(row["path"])
+        files, links, entries = files + row["file_bytes"], links + row["link_bytes"], entries + row["entries"]
+    if (paths != sorted(set(paths)) or files != pin["file_bytes"] or entries + pin["data_root_entries"] != pin["entries"] or
+            files + links > MAX_EXPANDED or not isinstance(control, dict) or
+            set(control) != {"file_bytes", "link_bytes", "entries", "root_entries"} or
+            any(type(control[k]) is not int for k in control) or not 0 < control["file_bytes"] <= MAX_EXPANDED or
+            not 0 <= control["link_bytes"] <= MAX_EXPANDED or control["file_bytes"] + control["link_bytes"] > MAX_EXPANDED or
+            not 0 < control["entries"] < MAX_ENTRIES or control["root_entries"] != 1):
+        raise ValueError("inconsistent package content measurements")
 
 
 def unique_object(pairs):
@@ -75,16 +119,17 @@ def parse_plan(raw: bytes) -> tuple[dict, str]:
     if not 0 < len(raw) <= 512 << 10 or not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
         raise ValueError("invalid host package lock framing")
     plan = json.loads(raw, object_pairs_hook=unique_object)
-    if (not isinstance(plan, dict) or set(plan) != {"version", "os", "os_version", "suite", "platform", "packages"} or
+    if (not isinstance(plan, dict) or set(plan) != {"version", "os", "os_version", "suite", "platform", "packages", "data_directories"} or
             type(plan["version"]) is not int or plan["version"] != 1 or plan["os"] != "ubuntu" or
             plan["os_version"] != "24.04" or plan["suite"] != "noble" or plan["platform"] != "linux-amd64" or
             not isinstance(plan["packages"], list) or not len(ROOTS) <= len(plan["packages"]) <= 256):
         raise ValueError("unsupported host package plan")
+    validate_directories(plan["data_directories"])
     files, names, roots = set(), [], set()
     compressed = expanded = entries = 0
     for p in plan["packages"]:
         if (not isinstance(p, dict) or set(p) != FIELDS or
-                any(not isinstance(p[k], str) for k in FIELDS - {"size", "file_bytes", "entries"}) or
+                any(not isinstance(p[k], str) for k in FIELDS - {"size", "file_bytes", "entries", "data_paths", "data_root_entries", "control"}) or
                 not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,199}", p["name"]) or
                 not re.fullmatch(r"[0-9][A-Za-z0-9.+:~\-]{0,199}", p["version"]) or
                 p["architecture"] not in ("amd64", "all") or p["phase"] not in ("base", "docker") or
@@ -94,6 +139,7 @@ def parse_plan(raw: bytes) -> tuple[dict, str]:
                 not 0 < p["size"] <= MAX_ARCHIVE or not 0 <= p["file_bytes"] <= MAX_EXPANDED or
                 not 0 < p["entries"] <= MAX_ENTRIES):
             raise ValueError("invalid host package pin")
+        validate_content(p)
         if p["name"] in ROOTS:
             if p["phase"] != ROOTS[p["name"]]:
                 raise ValueError("host package root phase changed")

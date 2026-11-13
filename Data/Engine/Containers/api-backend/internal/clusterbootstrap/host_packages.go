@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/url"
+	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -27,25 +29,29 @@ const (
 var hostPackageLock []byte
 
 type HostPackagePin struct {
-	Name         string `json:"name"`
-	Version      string `json:"version"`
-	Architecture string `json:"architecture"`
-	File         string `json:"file"`
-	Phase        string `json:"phase"`
-	Size         int64  `json:"size"`
-	SHA256       string `json:"sha256"`
-	URL          string `json:"url"`
-	FileBytes    int64  `json:"file_bytes"`
-	Entries      int64  `json:"entries"`
+	Name            string                    `json:"name"`
+	Version         string                    `json:"version"`
+	Architecture    string                    `json:"architecture"`
+	File            string                    `json:"file"`
+	Phase           string                    `json:"phase"`
+	Size            int64                     `json:"size"`
+	SHA256          string                    `json:"sha256"`
+	URL             string                    `json:"url"`
+	FileBytes       int64                     `json:"file_bytes"`
+	Entries         int64                     `json:"entries"`
+	DataPaths       []HostPackagePathContent  `json:"data_paths"`
+	DataRootEntries int64                     `json:"data_root_entries"`
+	Control         HostPackageControlContent `json:"control"`
 }
 
 type HostPackagePlan struct {
-	Version   int              `json:"version"`
-	OS        string           `json:"os"`
-	OSVersion string           `json:"os_version"`
-	Suite     string           `json:"suite"`
-	Platform  string           `json:"platform"`
-	Packages  []HostPackagePin `json:"packages"`
+	Version         int              `json:"version"`
+	OS              string           `json:"os"`
+	OSVersion       string           `json:"os_version"`
+	Suite           string           `json:"suite"`
+	Platform        string           `json:"platform"`
+	Packages        []HostPackagePin `json:"packages"`
+	DataDirectories []string         `json:"data_directories"`
 }
 
 var hostPackageName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,199}$`)
@@ -64,10 +70,52 @@ func HostPackagePins() (HostPackagePlan, string, error) {
 	return parseHostPackagePlan(hostPackageLock)
 }
 
+// HostPackageDirectories returns reviewed canonical directory ancestors of all
+// locked data.tar destinations. Only /lib and /sbin were normalized using
+// HostPackagePathAliases; callers still require actual target alias evidence.
+func HostPackageDirectories() ([]string, error) {
+	plan, _, err := HostPackagePins()
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(plan.DataDirectories), nil
+}
+
+func validHostPackageDirectories(directories []string) bool {
+	if len(directories) < 3 || int64(len(directories)) > MaxImageEntries {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, directory := range directories {
+		if directory == "/" || len(directory) > 1024 || path.Clean(directory) != directory || !path.IsAbs(directory) || seen[directory] {
+			return false
+		}
+		parts := strings.Split(directory, "/")
+		if len(parts) > 65 || len(parts) < 2 || !slices.Contains([]string{"etc", "usr", "var"}, parts[1]) {
+			return false
+		}
+		for _, part := range parts {
+			if len(part) > 255 {
+				return false
+			}
+		}
+		for _, c := range directory {
+			if c < 32 || c > 126 {
+				return false
+			}
+		}
+		if parent := path.Dir(directory); parent != "/" && !seen[parent] {
+			return false
+		}
+		seen[directory] = true
+	}
+	return slices.IsSorted(directories) && seen["/etc"] && seen["/usr"] && seen["/var"]
+}
+
 func parseHostPackagePlan(raw []byte) (HostPackagePlan, string, error) {
 	var plan HostPackagePlan
 	if len(raw) == 0 || len(raw) > MaxImageInventoryBytes || raw[len(raw)-1] != '\n' ||
-		bytes.HasSuffix(raw, []byte("\n\n")) || imageFields(raw, []string{"version", "os", "os_version", "suite", "platform", "packages"}, nil) != nil ||
+		bytes.HasSuffix(raw, []byte("\n\n")) || imageFields(raw, []string{"version", "os", "os_version", "suite", "platform", "packages", "data_directories"}, nil) != nil ||
 		imageJSON(raw, &plan) != nil || validateHostPackagePlan(plan) != nil {
 		return HostPackagePlan{}, "", ErrImageArchive
 	}
@@ -76,7 +124,7 @@ func parseHostPackagePlan(raw []byte) (HostPackagePlan, string, error) {
 	}
 	_ = json.Unmarshal(raw, &fields)
 	for _, item := range fields.Packages {
-		if imageFields(item, []string{"name", "version", "architecture", "file", "phase", "size", "sha256", "url", "file_bytes", "entries"}, nil) != nil {
+		if hostPackageContentFields(item) != nil {
 			return HostPackagePlan{}, "", ErrImageArchive
 		}
 	}
@@ -86,7 +134,7 @@ func parseHostPackagePlan(raw []byte) (HostPackagePlan, string, error) {
 
 func validateHostPackagePlan(plan HostPackagePlan) error {
 	if plan.Version != 1 || plan.OS != "ubuntu" || plan.OSVersion != "24.04" || plan.Suite != "noble" || plan.Platform != "linux-amd64" ||
-		len(plan.Packages) < len(hostPackageRoots) || len(plan.Packages) > 256 {
+		len(plan.Packages) < len(hostPackageRoots) || len(plan.Packages) > 256 || !validHostPackageDirectories(plan.DataDirectories) {
 		return ErrImageArchive
 	}
 	files, roots := map[string]bool{}, map[string]bool{}
@@ -96,7 +144,7 @@ func validateHostPackagePlan(plan HostPackagePlan) error {
 			(p.Architecture != "amd64" && p.Architecture != "all") || !hostPackageFile.MatchString(p.File) ||
 			(p.Phase != "base" && p.Phase != "docker") || (i > 0 && plan.Packages[i-1].Name >= p.Name) || files[p.File] ||
 			p.Size < 1 || p.Size > MaxImageArchiveBytes || !digestPattern.MatchString(p.SHA256) || p.SHA256 == strings.Repeat("0", 64) || !validHostPackageURL(p) ||
-			p.FileBytes < 0 || p.FileBytes > MaxImageExpandedBytes || p.Entries < 1 || p.Entries > MaxImageEntries {
+			p.FileBytes < 0 || p.FileBytes > MaxImageExpandedBytes || p.Entries < 1 || p.Entries > MaxImageEntries || validateHostPackageContent(p) != nil {
 			return ErrImageArchive
 		}
 		if phase, ok := hostPackageRoots[p.Name]; ok {
@@ -164,17 +212,18 @@ type HostPackageAsset struct {
 }
 
 type hostPackageInventoryWire struct {
-	Version    int              `json:"version"`
-	Repository string           `json:"repository"`
-	Release    string           `json:"release"`
-	SourceSHA  string           `json:"source_sha"`
-	OS         string           `json:"os"`
-	OSVersion  string           `json:"os_version"`
-	Suite      string           `json:"suite"`
-	Platform   string           `json:"platform"`
-	PlanSHA256 string           `json:"plan_sha256"`
-	Archive    HostPackageAsset `json:"archive"`
-	Packages   []HostPackagePin `json:"packages"`
+	Version         int              `json:"version"`
+	Repository      string           `json:"repository"`
+	Release         string           `json:"release"`
+	SourceSHA       string           `json:"source_sha"`
+	OS              string           `json:"os"`
+	OSVersion       string           `json:"os_version"`
+	Suite           string           `json:"suite"`
+	Platform        string           `json:"platform"`
+	PlanSHA256      string           `json:"plan_sha256"`
+	Archive         HostPackageAsset `json:"archive"`
+	Packages        []HostPackagePin `json:"packages"`
+	DataDirectories []string         `json:"data_directories"`
 }
 
 // This source-bound immutable inventory is content evidence only. It supplies
@@ -196,10 +245,10 @@ func ParseHostPackageInventory(raw []byte, expected Expected) (*HostPackageInven
 func parseHostPackageInventory(raw []byte, expected Expected, plan HostPackagePlan, digest string) (*HostPackageInventory, error) {
 	var wire hostPackageInventoryWire
 	if expected.Validate() != nil || validateHostPackagePlan(plan) != nil || !digestPattern.MatchString(digest) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes ||
-		imageFields(raw, []string{"version", "repository", "release", "source_sha", "os", "os_version", "suite", "platform", "plan_sha256", "archive", "packages"}, nil) != nil ||
+		imageFields(raw, []string{"version", "repository", "release", "source_sha", "os", "os_version", "suite", "platform", "plan_sha256", "archive", "packages", "data_directories"}, nil) != nil ||
 		imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.Release || wire.SourceSHA != expected.SourceSHA ||
 		wire.OS != plan.OS || wire.OSVersion != plan.OSVersion || wire.Suite != plan.Suite || wire.Platform != plan.Platform || wire.PlanSHA256 != digest ||
-		!slices.Equal(wire.Packages, plan.Packages) || wire.Archive.Name != HostPackageArchiveName || wire.Archive.Size != hostPackageArchiveSize(plan.Packages) ||
+		!reflect.DeepEqual(wire.Packages, plan.Packages) || !slices.Equal(wire.DataDirectories, plan.DataDirectories) || wire.Archive.Name != HostPackageArchiveName || wire.Archive.Size != hostPackageArchiveSize(plan.Packages) ||
 		!digestPattern.MatchString(wire.Archive.SHA256) || wire.Archive.SHA256 == strings.Repeat("0", 64) {
 		return nil, ErrImageArchive
 	}
@@ -212,7 +261,7 @@ func parseHostPackageInventory(raw []byte, expected Expected, plan HostPackagePl
 		return nil, ErrImageArchive
 	}
 	for _, item := range fields.Packages {
-		if imageFields(item, []string{"name", "version", "architecture", "file", "phase", "size", "sha256", "url", "file_bytes", "entries"}, nil) != nil {
+		if hostPackageContentFields(item) != nil {
 			return nil, ErrImageArchive
 		}
 	}
@@ -223,7 +272,11 @@ func (v *HostPackageInventory) Packages() []HostPackagePin {
 	if v == nil {
 		return nil
 	}
-	return slices.Clone(v.wire.Packages)
+	pins := slices.Clone(v.wire.Packages)
+	for i := range pins {
+		pins[i].DataPaths = slices.Clone(pins[i].DataPaths)
+	}
+	return pins
 }
 
 func (v *HostPackageInventory) Archive() HostPackageAsset {
