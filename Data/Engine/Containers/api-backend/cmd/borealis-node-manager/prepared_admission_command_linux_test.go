@@ -25,7 +25,12 @@ func TestPreparedAdmissionCommandProcess(t *testing.T) {
 	}
 	mode, dir := os.Args[len(os.Args)-2], os.Args[len(os.Args)-1]
 	if mode == "descendant" {
-		if err := os.WriteFile(filepath.Join(dir, "descendant"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		pidPath := filepath.Join(dir, "descendant")
+		if err := os.WriteFile(pidPath+".tmp", []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+			os.Exit(2)
+		}
+		// Both PID readers and the orphan's existence check need complete content.
+		if err := os.Rename(pidPath+".tmp", pidPath); err != nil {
 			os.Exit(2)
 		}
 		deadline := time.Now().Add(10 * time.Second)
