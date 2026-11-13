@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -71,11 +72,17 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationRead(snapshot cluste
 }
 
 func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsRead(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error) clusterSSHPreparationTargetsRead {
+	return c.preparationTargetsFilesystemRead(snapshot, check, nil)
+}
+
+func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsFilesystemRead(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error, paths []string) clusterSSHPreparationTargetsRead {
+	paths = slices.Clone(paths)
 	plan, proposal, bindingErr := clusterSSHPreparationCleanBrokerBinding(snapshot)
 	authorization := snapshot.work.Authorization
 	serial := make(chan struct{}, 1)
 	var failed atomic.Bool
 	retained := ""
+	var retainedFilesystems []clusterSSHTargetFilesystemEvidence
 	var cleanup *clusterSSHMembershipHTTP
 	var client *http.Client
 	if c != nil && c.httpClient != nil && c.httpClient.Jar == nil {
@@ -97,7 +104,7 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsRead(snapshot
 			failed.Store(true)
 			return clusterSSHPreparationCleanObservation{}, clusterbootstrap.ErrPreparationConfig
 		}
-		if c == nil || client == nil || cleanup == nil || c.endpoint == nil || check == nil || bindingErr != nil || requested != plan || failed.Load() || parent.Err() != nil {
+		if !validClusterSSHPreparationFilesystemPaths(paths) || c == nil || client == nil || cleanup == nil || c.endpoint == nil || check == nil || bindingErr != nil || requested != plan || failed.Load() || parent.Err() != nil {
 			return fail()
 		}
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
@@ -114,7 +121,7 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsRead(snapshot
 		deadline, _ := ctx.Deadline()
 		request := clusterSSHPreparationCleanBrokerRequest{Version: clusterSSHPreparationCleanBrokerVersion, ID: newClusterUUID(), ExpiresAt: deadline.Unix(),
 			OperationID: authorization.OperationID, Attempt: authorization.Attempt, ControllerHolder: authorization.ControllerHolder,
-			PlanSHA256: plan, ProposalSHA256: proposal}
+			PlanSHA256: plan, ProposalSHA256: proposal, FilesystemPaths: slices.Clone(paths)}
 		if !request.valid(time.Now()) {
 			return fail()
 		}
@@ -148,11 +155,15 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsRead(snapshot
 		if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || response.Header.Get("Content-Encoding") != "" ||
 			openClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, raw, &result, clusterSSHPreparationCleanBrokerLimit) != nil ||
 			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}).validate(snapshot) != nil ||
+			!validClusterSSHPreparationFilesystems(snapshot, paths, result.Filesystems) ||
 			!cleanup.clean() || requestCtx.Err() != nil || check(requestCtx) != nil || requestCtx.Err() != nil ||
-			(retained != "" && retained != result.Digest) {
+			(retained != "" && retained != result.Digest) || retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, result.Filesystems, true) {
 			return fail()
 		}
 		retained = result.Digest
-		return clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}, nil
+		if retainedFilesystems == nil {
+			retainedFilesystems = cloneClusterSSHPreparationFilesystems(result.Filesystems)
+		}
+		return clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets, Filesystems: cloneClusterSSHPreparationFilesystems(retainedFilesystems)}, nil
 	}
 }

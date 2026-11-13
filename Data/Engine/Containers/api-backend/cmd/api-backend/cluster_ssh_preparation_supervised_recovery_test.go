@@ -104,7 +104,7 @@ func TestClusterSSHPreparationSupervisedRecoveryOwnsArtifactLifetime(t *testing.
 	var escaped func(context.Context, string) (string, error)
 	reads := 0
 	err := runClusterSSHPreparationArtifacts(context.Background(), plan, sshApprovalArtifactDependencies(bytes),
-		func(ctx context.Context, artifact clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
+		func(ctx context.Context, artifact clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
 			escaped = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, artifact, func(context.Context, string) (string, error) {
 				reads++
 				return strings.Repeat("a", 64), nil

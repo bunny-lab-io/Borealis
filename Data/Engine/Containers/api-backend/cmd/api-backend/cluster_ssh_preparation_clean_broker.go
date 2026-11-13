@@ -31,14 +31,15 @@ const (
 // Version 3 carries typed native effective-CPU evidence with the clean-host
 // observation. Older brokers cannot relabel digest-only receipts as CPU proof.
 type clusterSSHPreparationCleanBrokerRequest struct {
-	Version          int    `json:"version"`
-	ID               string `json:"id"`
-	ExpiresAt        int64  `json:"expires_at"`
-	OperationID      string `json:"operation_id"`
-	Attempt          int64  `json:"attempt"`
-	ControllerHolder string `json:"controller_holder"`
-	PlanSHA256       string `json:"plan_sha256"`
-	ProposalSHA256   string `json:"proposal_sha256"`
+	Version          int      `json:"version"`
+	ID               string   `json:"id"`
+	ExpiresAt        int64    `json:"expires_at"`
+	OperationID      string   `json:"operation_id"`
+	Attempt          int64    `json:"attempt"`
+	ControllerHolder string   `json:"controller_holder"`
+	PlanSHA256       string   `json:"plan_sha256"`
+	ProposalSHA256   string   `json:"proposal_sha256"`
+	FilesystemPaths  []string `json:"filesystem_paths,omitempty"`
 }
 
 func (clusterSSHPreparationCleanBrokerRequest) String() string {
@@ -53,7 +54,7 @@ func (r clusterSSHPreparationCleanBrokerRequest) valid(now time.Time) bool {
 		clusterUUIDRE.MatchString(r.OperationID) && r.OperationID != "00000000-0000-0000-0000-000000000000" && r.Attempt > 0 &&
 		r.ControllerHolder != "" && len(r.ControllerHolder) <= 1024 && utf8.ValidString(r.ControllerHolder) &&
 		strings.IndexFunc(r.ControllerHolder, unicode.IsControl) < 0 && r.ExpiresAt > now.Unix() && r.ExpiresAt <= now.Unix()+30 &&
-		validClusterSSHPreparationDigest(r.PlanSHA256) && validClusterSSHPreparationDigest(r.ProposalSHA256)
+		validClusterSSHPreparationDigest(r.PlanSHA256) && validClusterSSHPreparationDigest(r.ProposalSHA256) && validClusterSSHPreparationFilesystemPaths(r.FilesystemPaths)
 }
 
 func clusterSSHPreparationCleanBrokerBinding(snapshot clusterSSHPreparationApprovalSnapshot) (string, string, error) {
@@ -71,11 +72,12 @@ func clusterSSHPreparationCleanBrokerBinding(snapshot clusterSSHPreparationAppro
 }
 
 type clusterSSHPreparationCleanBrokerResponse struct {
-	Version       int                              `json:"version"`
-	ID            string                           `json:"id"`
-	RequestSHA256 string                           `json:"request_sha256"`
-	Digest        string                           `json:"digest"`
-	Targets       []clusterSSHPreparationTargetCPU `json:"targets"`
+	Version       int                                  `json:"version"`
+	ID            string                               `json:"id"`
+	RequestSHA256 string                               `json:"request_sha256"`
+	Digest        string                               `json:"digest"`
+	Targets       []clusterSSHPreparationTargetCPU     `json:"targets"`
+	Filesystems   []clusterSSHTargetFilesystemEvidence `json:"filesystems,omitempty"`
 }
 
 type clusterSSHPreparationCleanBroker struct {
@@ -139,14 +141,14 @@ func (b *clusterSSHPreparationCleanBroker) handle(w http.ResponseWriter, r *http
 		return
 	}
 	check := b.store.preparationCleanTargetsProposalCheck(snapshot, request.ControllerHolder)
-	read := newClusterSSHPreparationTargetsRead(snapshot, check, b.aegis, b.connect)
+	read := newClusterSSHPreparationTargetsFilesystemRead(snapshot, check, b.aegis, b.connect, request.FilesystemPaths)
 	observed, err := read(ctx, plan)
-	if err != nil || observed.validate(snapshot) != nil || check(ctx) != nil || ctx.Err() != nil {
+	if err != nil || observed.validate(snapshot) != nil || !validClusterSSHPreparationFilesystems(snapshot, request.FilesystemPaths, observed.Filesystems) || check(ctx) != nil || ctx.Err() != nil {
 		fail(http.StatusServiceUnavailable)
 		return
 	}
 	requestDigest, err := clusterSSHPreparationDigest(request)
-	response := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: requestDigest, Digest: observed.Digest, Targets: observed.Targets}
+	response := clusterSSHPreparationCleanBrokerResponse{Version: clusterSSHPreparationCleanBrokerVersion, ID: request.ID, RequestSHA256: requestDigest, Digest: observed.Digest, Targets: observed.Targets, Filesystems: observed.Filesystems}
 	wire, sealErr := sealClusterSSHVIP(b.responseCipher, clusterSSHPreparationCleanBrokerPath, response, clusterSSHPreparationCleanBrokerLimit)
 	if err != nil || sealErr != nil || ctx.Err() != nil {
 		fail(http.StatusServiceUnavailable)

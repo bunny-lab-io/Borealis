@@ -125,6 +125,7 @@
     "TestClusterSSHPreparationRequestPostgresWaitFence",
     "TestClusterSSHPreparationScopePostgresRenewsAndFences",
     "TestClusterSSHPreparationSelectedSourcePostgres",
+    "TestClusterSSHPreparationStorageFilesystemsPostgresCustody",
     "TestClusterSSHPreparationTargetCPUPostgresApproval",
     "TestClusterSSHPreparationWorkerPostgres",
     "TestClusterSSHPreparationWorkerPostgresRenewsCohort",

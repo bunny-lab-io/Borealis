@@ -88,12 +88,18 @@ func newClusterSSHPreparationCleanTargetsRead(snapshot clusterSSHPreparationAppr
 
 func newClusterSSHPreparationTargetsRead(snapshot clusterSSHPreparationApprovalSnapshot, proposal func(context.Context) error,
 	aegis clusterSSHWorkerAegis, connect clusterSSHPreparationProposalConnect) clusterSSHPreparationTargetsRead {
+	return newClusterSSHPreparationTargetsFilesystemRead(snapshot, proposal, aegis, connect, nil)
+}
+
+func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparationApprovalSnapshot, proposal func(context.Context) error,
+	aegis clusterSSHWorkerAegis, connect clusterSSHPreparationProposalConnect, paths []string) clusterSSHPreparationTargetsRead {
+	paths = slices.Clone(paths)
 	wire, wireErr := json.Marshal(snapshot.work)
 	var work clusterSSHPreparationWork
 	decodeErr := json.Unmarshal(wire, &work)
 	credentials := slices.Clone(snapshot.credentials)
 	plan, planErr := clusterSSHPreparationPlanDigest(work.Authorization)
-	valid := wireErr == nil && decodeErr == nil && planErr == nil && len(work.Claims) == 0 && work.Baseline.Validate() == nil &&
+	valid := validClusterSSHPreparationFilesystemPaths(paths) && wireErr == nil && decodeErr == nil && planErr == nil && len(work.Claims) == 0 && work.Baseline.Validate() == nil &&
 		validateClusterSSHInspectionCohort(work.Proof.Cohort, work.Proof.Source) == nil && len(credentials) == len(work.Proof.Cohort.Targets) &&
 		len(work.Authorization.Targets) == len(credentials) && len(credentials) > 0 && proposal != nil && aegis != nil && connect != nil &&
 		work.Authorization.OperationID == work.Proof.Cohort.OperationID && work.Authorization.Attempt == work.Proof.Cohort.Attempt &&
@@ -114,6 +120,7 @@ func newClusterSSHPreparationTargetsRead(snapshot clusterSSHPreparationApprovalS
 	serial := make(chan struct{}, 1)
 	var failed atomic.Bool
 	var retained string
+	var retainedFilesystems []clusterSSHTargetFilesystemEvidence
 	return func(parent context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
 		fail := func() (clusterSSHPreparationCleanObservation, error) {
 			failed.Store(true)
@@ -139,6 +146,7 @@ func newClusterSSHPreparationTargetsRead(snapshot clusterSSHPreparationApprovalS
 		if current(ctx) != nil {
 			return fail()
 		}
+		var filesystems []clusterSSHTargetFilesystemEvidence
 		read := func(i int) (observed clusterSSHPreparationTargetCPU, result error) {
 			item, sealed := work.Proof.Cohort.Targets[i], credentials[i]
 			if current(ctx) != nil {
@@ -183,10 +191,40 @@ func newClusterSSHPreparationTargetsRead(snapshot clusterSSHPreparationApprovalS
 			if err != nil || proof.Validate(request) != nil || current(ctx) != nil {
 				return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 			}
+			if paths != nil {
+				filesystem, ok := client.(clusterSSHPreparationFilesystemClient)
+				if !ok {
+					return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
+				}
+				selection := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: slices.Clone(paths), RequirePersistent: true}
+				target := clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}
+				filesystemKey := item.Key
+				filesystemKey.PublicKey = bytes.Clone(filesystemKey.PublicKey)
+				started := time.Now()
+				value, err := filesystem.InspectFilesystem(ctx, sudo, target, filesystemKey, selection, current)
+				selection.Paths = slices.Clone(paths)
+				storage, evidenceErr := value.Evidence(started, target, item.Key, selection)
+				if err != nil || evidenceErr != nil || current(ctx) != nil {
+					return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
+				}
+				// A fresh clean proposal closes the same pinned SSH acquisition.
+				// Filesystem inspection cannot substitute for clean-host evidence.
+				if _, err := rand.Read(nonce[:]); err != nil {
+					return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
+				}
+				request.Nonce = hex.EncodeToString(nonce[:])
+				last, err := client.InspectPreparationProposal(ctx, sudo, request, current)
+				if err != nil || last.Validate(request) != nil || last.ObservationSHA256 != proof.ObservationSHA256 || last.CPU != proof.CPU || current(ctx) != nil {
+					return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
+				}
+				filesystems = append(filesystems, clusterSSHTargetFilesystemEvidence{TargetID: item.Binding.TargetID, Storage: storage})
+			}
 			return clusterSSHPreparationTargetCPU{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, CPU: proof.CPU}, nil
 		}
 		var first []clusterSSHPreparationTargetCPU
+		var firstFilesystems []clusterSSHTargetFilesystemEvidence
 		for round := 0; round < 2; round++ {
+			filesystems = nil
 			values := make([]clusterSSHPreparationTargetCPU, 0, len(work.Proof.Cohort.Targets))
 			for i := range work.Proof.Cohort.Targets {
 				digest, err := read(i)
@@ -197,15 +235,20 @@ func newClusterSSHPreparationTargetsRead(snapshot clusterSSHPreparationApprovalS
 			}
 			if round == 0 {
 				first = values
-			} else if !slices.Equal(first, values) {
+				firstFilesystems = cloneClusterSSHPreparationFilesystems(filesystems)
+			} else if !slices.Equal(first, values) || !mergeClusterSSHFilesystemAvailability(firstFilesystems, filesystems, false) {
 				return fail()
 			}
 		}
 		digest, err := clusterSSHPreparationTargetCPUDigest(clusterSSHPreparationApprovalSnapshot{work: work}, first)
-		if err != nil || current(ctx) != nil || (retained != "" && retained != digest) {
+		if err != nil || current(ctx) != nil || (retained != "" && retained != digest) ||
+			retainedFilesystems != nil && !mergeClusterSSHFilesystemAvailability(retainedFilesystems, firstFilesystems, true) {
 			return fail()
 		}
 		retained = digest
-		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(first)}, nil
+		if retainedFilesystems == nil {
+			retainedFilesystems = firstFilesystems
+		}
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(first), Filesystems: cloneClusterSSHPreparationFilesystems(retainedFilesystems)}, nil
 	}
 }

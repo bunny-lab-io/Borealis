@@ -10,6 +10,51 @@ import (
 	"testing"
 )
 
+func TestBootstrapSourceScratchRequiresOwnedPreparationWrapper(t *testing.T) {
+	valid := "/opt/borealis-bootstrap-root.aB12345678/manager"
+	for _, mode := range []string{"valid", "old tmp wrapper", "direct opt", "other wrapper", "short suffix", "bad suffix", "other executable", "unclean path", "unsafe directory", "missing observer"} {
+		t.Run(mode, func(t *testing.T) {
+			path, calls := valid, 0
+			safe := func(parent string) error {
+				calls++
+				if parent != filepath.Dir(valid) {
+					t.Fatal("checked unrelated scratch parent", parent)
+				}
+				if mode == "unsafe directory" {
+					return errors.New("unsafe")
+				}
+				return nil
+			}
+			switch mode {
+			case "old tmp wrapper":
+				path = strings.Replace(valid, "/opt/", "/var/tmp/", 1)
+			case "direct opt":
+				path = "/opt/manager"
+			case "other wrapper":
+				path = strings.Replace(valid, "bootstrap-root", "ssh-bootstrap", 1)
+			case "short suffix":
+				path = strings.Replace(valid, "aB12345678", "aB1234567", 1)
+			case "bad suffix":
+				path = strings.Replace(valid, "aB12345678", "aB1234567-", 1)
+			case "other executable":
+				path = strings.Replace(valid, "/manager", "/other", 1)
+			case "unclean path":
+				path = strings.Replace(valid, "/manager", "/./manager", 1)
+			case "missing observer":
+				safe = nil
+			}
+			parent, err := bootstrapSourceScratch(path, safe)
+			if mode == "valid" {
+				if err != nil || parent != filepath.Dir(valid) || calls != 1 {
+					t.Fatal("owned wrapper rejected", parent, err, calls)
+				}
+			} else if err == nil || parent != "" || calls != 0 && mode != "unsafe directory" {
+				t.Fatal("unowned/unsafe scratch accepted", parent, err, calls)
+			}
+		})
+	}
+}
+
 func TestBootstrapSourceNativeProofBindings(t *testing.T) {
 	r := identityRuntimeRequestFixture()
 	expected := clusterbootstrap.PreparationExpected{

@@ -11,8 +11,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -251,5 +253,116 @@ func TestArtifactPreparationCommandBoundaries(t *testing.T) {
 	}
 	if strings.Count(command, "--kill-after=2s 32m") != 2 || strings.Contains(command, "--kill-after=2s 6m") || strings.Contains(preparationCommand(123, digest, nonce), "32m") {
 		t.Fatal("artifact lifetime leaked across command classes")
+	}
+}
+
+func TestPreparationWrapperOwnsScratchAfterHelperExit(t *testing.T) {
+	for _, artifacts := range []bool{false, true} {
+		verb := "bootstrap-source-session"
+		if artifacts {
+			verb = "bootstrap-artifact-session"
+		}
+		t.Run(verb, func(t *testing.T) {
+			for _, mode := range []string{"success", "helper exit", "helper killed", "unowned control", "wrong digest", "unsafe opt", "symlink opt", "missing opt"} {
+				t.Run(mode, func(t *testing.T) {
+					root := t.TempDir()
+					opt, upload := filepath.Join(root, "opt"), filepath.Join(root, "upload")
+					for _, dir := range []string{opt, upload} {
+						if err := os.Mkdir(dir, 0755); err != nil {
+							t.Fatal(err)
+						}
+					}
+					// Similar names from other invocations must never be glob-cleaned.
+					retained := filepath.Join(opt, "borealis-bootstrap-root.retained")
+					if err := os.Mkdir(retained, 0700); err != nil {
+						t.Fatal(err)
+					}
+					marker := filepath.Join(root, "executed")
+					payload := "#!/bin/sh\nset -eu\ntest \"$1\" = " + verb + "\ntest \"$2\" = --nonce\n" +
+						"scratch=$(dirname -- \"$0\")/borealis-node-bootstrap-partial\n"
+					if mode == "unowned control" {
+						// Reproduce the former direct-/opt receiver: helper death leaves
+						// scratch outside the wrapper's exact cleanup ownership.
+						payload += "scratch=" + shellConstant(filepath.Join(opt, "borealis-node-bootstrap-unowned")) + "\n"
+					}
+					payload += "mkdir -- \"$scratch\"\nprintf partial > \"$scratch/archive\"\nprintf executed > " + shellConstant(marker) + "\ncat\n"
+					switch mode {
+					case "helper exit":
+						payload += "exit 1\n"
+					case "helper killed", "unowned control":
+						payload += "kill -KILL $$\n"
+					}
+					digest := sha256.Sum256([]byte(payload))
+					hash := hex.EncodeToString(digest[:])
+					if mode == "wrong digest" {
+						hash = strings.Repeat("a", 64)
+					}
+					command := preparationCommand(int64(len(payload)), hash, strings.Repeat("b", 64))
+					if artifacts {
+						command = artifactPreparationCommand(int64(len(payload)), hash, strings.Repeat("b", 64))
+					}
+					original := preparationRootScript(artifacts)
+					// Only isolated paths, fixture owner UID and sudo selection change.
+					// Actual copy/hash, child execution and traps run in both shells.
+					fixture := strings.Replace(original, "test \"$(stat -c '%u' -- /opt)\" = 0", "test \"$(stat -c '%u' -- /opt)\" = "+strconv.Itoa(os.Geteuid()), 1)
+					fixture = strings.ReplaceAll(fixture, "/opt", opt)
+					// The root script is itself quoted inside the outer shell text.
+					quotedOriginal, quotedFixture := shellConstant(shellConstant(original)), shellConstant(shellConstant(fixture))
+					quotedOriginal, quotedFixture = quotedOriginal[1:len(quotedOriginal)-1], quotedFixture[1:len(quotedFixture)-1]
+					if strings.Count(command, quotedOriginal) != 2 {
+						t.Fatal("production wrapper composition changed")
+					}
+					command = strings.ReplaceAll(command, quotedOriginal, quotedFixture)
+					command = strings.ReplaceAll(command, "/var/tmp/borealis-", upload+"/borealis-")
+					command = strings.ReplaceAll(command, "if [ \"$(id -u)\" = 0 ]; then", "if true; then")
+					switch mode {
+					case "unsafe opt":
+						if err := os.Chmod(opt, 0777); err != nil {
+							t.Fatal(err)
+						}
+					case "symlink opt", "missing opt":
+						if err := os.Rename(opt, opt+"-retained"); err != nil {
+							t.Fatal(err)
+						}
+						if mode == "symlink opt" {
+							if err := os.Symlink(opt+"-retained", opt); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					shell := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+					shell.Stdin = io.MultiReader(strings.NewReader(payload), strings.NewReader("inert protocol bytes\n"))
+					output, err := shell.Output()
+					if ctx.Err() != nil || (err == nil) != (mode == "success") {
+						t.Fatal("unexpected wrapper result", err, ctx.Err())
+					}
+					ran := mode == "success" || mode == "helper exit" || mode == "helper killed" || mode == "unowned control"
+					_, markerErr := os.Stat(marker)
+					if ran != (markerErr == nil) || ran && string(output) != "inert protocol bytes\n" {
+						t.Fatal("helper execution or input framing mismatch", markerErr)
+					}
+					if mode == "symlink opt" || mode == "missing opt" {
+						opt += "-retained"
+					}
+					entries, err := os.ReadDir(opt)
+					want := 1
+					if mode == "unowned control" {
+						want++
+					}
+					if err != nil || len(entries) != want {
+						t.Fatal("wrapper scratch leaked or unrelated scratch removed", entries, err)
+					}
+					if _, err := os.Stat(filepath.Join(opt, "borealis-bootstrap-root.retained")); err != nil {
+						t.Fatal("unrelated invocation removed", err)
+					}
+					entries, err = os.ReadDir(upload)
+					if err != nil || len(entries) != 0 {
+						t.Fatal("upload scratch leaked", entries, err)
+					}
+				})
+			}
+		})
 	}
 }

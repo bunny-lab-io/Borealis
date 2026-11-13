@@ -19,8 +19,9 @@ type clusterSSHPreparationTargetCPU struct {
 }
 
 type clusterSSHPreparationCleanObservation struct {
-	Digest  string                           `json:"digest"`
-	Targets []clusterSSHPreparationTargetCPU `json:"targets"`
+	Digest      string                               `json:"digest"`
+	Targets     []clusterSSHPreparationTargetCPU     `json:"targets"`
+	Filesystems []clusterSSHTargetFilesystemEvidence `json:"-"`
 	// Private adjacent capacity projection; never supplied by the clean broker.
 	Capacity *clusterSSHPreparationCapacityProjection `json:"-"`
 }
@@ -48,7 +49,7 @@ func clusterSSHPreparationTargetCPUReaderPair(snapshot clusterSSHPreparationAppr
 			failed = true
 			return "", errClusterConflict
 		}
-		retained = clusterSSHPreparationCleanObservation{Digest: value.Digest, Targets: slices.Clone(value.Targets)}
+		retained = clusterSSHPreparationCleanObservation{Digest: value.Digest, Targets: slices.Clone(value.Targets), Filesystems: cloneClusterSSHPreparationFilesystems(value.Filesystems)}
 		return value.Digest, nil
 	}
 	projection := func(ctx context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
@@ -57,7 +58,7 @@ func clusterSSHPreparationTargetCPUReaderPair(snapshot clusterSSHPreparationAppr
 		if err != nil || failed || ctx.Err() != nil || requested != plan || retained.validate(snapshot) != nil {
 			return clusterSSHPreparationCleanObservation{}, errClusterConflict
 		}
-		return clusterSSHPreparationCleanObservation{Digest: retained.Digest, Targets: slices.Clone(retained.Targets)}, nil
+		return clusterSSHPreparationCleanObservation{Digest: retained.Digest, Targets: slices.Clone(retained.Targets), Filesystems: cloneClusterSSHPreparationFilesystems(retained.Filesystems)}, nil
 	}
 	return clean, projection
 }

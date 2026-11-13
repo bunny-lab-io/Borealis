@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func clusterSSHCredentialsFixture(t *testing.T) (*postgresOperatorStore, *goAegisService, context.Context, string, []clusterSSHPlannedTarget, []clusterSSHCredentialEnvelope) {
+func clusterSSHCredentialsFixture(t *testing.T, retainSigners ...map[string]ssh.Signer) (*postgresOperatorStore, *goAegisService, context.Context, string, []clusterSSHPlannedTarget, []clusterSSHCredentialEnvelope) {
 	t.Helper()
 	store, ctx, clusterID, _ := clusterAdmissionFixture(t)
 	// A single available connection catches accidental crypto/integration lookups
@@ -69,7 +69,7 @@ func clusterSSHCredentialsFixture(t *testing.T) (*postgresOperatorStore, *goAegi
 	var targets []clusterSSHPlannedTarget
 	var envelopes []clusterSSHCredentialEnvelope
 	for index := 0; index < 2; index++ {
-		public, _, err := ed25519.GenerateKey(rand.Reader)
+		public, private, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,6 +83,13 @@ func clusterSSHCredentialsFixture(t *testing.T) (*postgresOperatorStore, *goAegi
 		}
 		binding := clusterSSHCredentialBinding{ClusterID: clusterID, OperationID: operationID, TargetID: newClusterUUID(),
 			Address: fmt.Sprintf("192.168.90.%d", 21+index), Port: 22, Fingerprint: ssh.FingerprintSHA256(key)}
+		for _, signers := range retainSigners {
+			signer, err := ssh.NewSignerFromKey(private)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signers[binding.TargetID] = signer
+		}
 		envelope := clusterSSHCredentialEnvelope{Version: 1, Binding: binding, Username: "operator", Method: "password",
 			Password: "  " + base64.RawURLEncoding.EncodeToString(random) + " <&>$  ", SudoPassword: "  " + base64.RawURLEncoding.EncodeToString(random) + " sudo  "}
 		sealed, err := aegis.sealClusterSSHCredentials(ctx, envelope)

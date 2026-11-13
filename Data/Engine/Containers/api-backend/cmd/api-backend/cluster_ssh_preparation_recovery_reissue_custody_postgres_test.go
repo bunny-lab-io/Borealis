@@ -122,7 +122,7 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 		invariantFailure = errors.Join(invariantFailure, fmt.Errorf(format, args...))
 	}
 	reads, nodeReads, podReads, consumed := 0, 0, 0, 0
-	afterCallback, injected := false, false
+	afterCallback, injected, closeFaultObservedLive := false, false, false
 	expiry := strings.Contains(mode, "expiry")
 	var proofScope context.Context
 	var proofCheck func(context.Context) error
@@ -225,6 +225,9 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 				if block || fail || expire {
 					injected = true
 				}
+				if fail {
+					closeFaultObservedLive = r.Context().Err() == nil && ctx.Err() == nil
+				}
 				mu.Unlock()
 				if expire {
 					deadline, ok := r.Context().Deadline()
@@ -272,18 +275,27 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 		}
 		escaped = refresh
 		mu.Unlock()
-		refreshStarted := time.Now()
-		if err := refresh(scope); err != nil {
-			mu.Lock()
-			fault("valid in-scope refresh failed after %s (outer context %v): %v", time.Since(refreshStarted), scope.Err(), err)
-			mu.Unlock()
-			return err
-		}
 		if mode == "pair Q3" || mode == "replacement Q4" {
+			// Positive cases exercise the explicit transport challenge. Late
+			// fault cases already reached this callback through both original
+			// custody/material observations; inject their fault now so an
+			// unrelated successful challenge cannot prevent fault coverage.
+			// The unchanged final challenge must still detect every late fault.
+			refreshStarted := time.Now()
+			if err := refresh(scope); err != nil {
+				mu.Lock()
+				fault("valid in-scope refresh failed after %s (outer context %v): %v", time.Since(refreshStarted), scope.Err(), err)
+				mu.Unlock()
+				return err
+			}
 			t.Logf("material refresh completed in %s inside unchanged 3s challenge", time.Since(refreshStarted))
 		}
 		mu.Lock()
 		defer mu.Unlock()
+		if scope.Err() != nil {
+			fault("material callback lost authority before late fault: %v", scope.Err())
+			return scope.Err()
+		}
 		afterCallback = true
 		var query string
 		var args []any
@@ -448,6 +460,10 @@ func exerciseReissuedCustodySQL(t *testing.T, mode string) {
 	if consumed != wantConsumed || !success && !injected || success && (nodeReads < 12 || podReads < 12) {
 		mu.Unlock()
 		t.Fatal("incomplete input escaped or late fault never reached", consumed, nodeReads, podReads, injected)
+	}
+	if mode == "Close failure after callback" && !closeFaultObservedLive {
+		mu.Unlock()
+		t.Fatal("Close fault did not reach live request and operation scope")
 	}
 	mu.Unlock()
 	if active.Load() != 0 || closes.Load() == 0 || transport.idleCalls.Load() != 0 || client.Transport != transport || runner.kube.httpClient != client || client.Timeout != borrowedTimeout || expiry && !siblingChecked {

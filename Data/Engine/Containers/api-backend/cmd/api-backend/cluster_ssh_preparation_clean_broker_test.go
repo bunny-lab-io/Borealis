@@ -53,7 +53,7 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"unauthenticated", "wrong key", "wrong path AAD", "extra field", "duplicate", "alias", "expired", "future expiry", "wrong version", "old v1 request", "zero operation", "zero request", "attempt", "holder control", "holder oversize", "zero plan", "query", "content encoding", "oversize", "authenticated unavailable"} {
+	for _, mode := range []string{"unauthenticated", "wrong key", "wrong path AAD", "extra field", "duplicate", "alias", "expired", "future expiry", "wrong version", "old v1 request", "zero operation", "zero request", "attempt", "holder control", "holder oversize", "zero plan", "filesystem relative", "filesystem duplicate", "filesystem unsorted", "query", "content encoding", "oversize", "authenticated unavailable"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("BOREALIS_OPERATOR_SECRET", sshPreparationCleanBrokerTestSecret)
 			mux := http.NewServeMux()
@@ -83,6 +83,12 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 				request.ControllerHolder = strings.Repeat("h", 1025)
 			case "zero plan":
 				request.PlanSHA256 = strings.Repeat("0", 64)
+			case "filesystem relative":
+				request.FilesystemPaths = []string{"relative/path"}
+			case "filesystem duplicate":
+				request.FilesystemPaths = []string{"/opt/Borealis", "/opt/Borealis"}
+			case "filesystem unsorted":
+				request.FilesystemPaths = []string{"/var/lib/longhorn", "/opt/Borealis"}
 			}
 			raw, _ := json.Marshal(request)
 			switch mode {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 type sshParentFixture struct {
@@ -19,11 +21,13 @@ type sshParentFixture struct {
 	targets []clusterSSHPlannedTarget
 	reports []clusterSSHInspectionReport
 	observe func(context.Context, string, any) error
+	signers map[string]ssh.Signer
 }
 
 func newSSHParentFixture(t *testing.T) sshParentFixture {
 	t.Helper()
-	store, aegis, ctx, id, targets, _ := clusterSSHCredentialsFixture(t)
+	signers := map[string]ssh.Signer{}
+	store, aegis, ctx, id, targets, _ := clusterSSHCredentialsFixture(t, signers)
 	insertSSHFixtureTargets(t, store, ctx, id, targets)
 	var holder string
 	if err := store.db.QueryRowContext(ctx, `SELECT holder FROM engine.cluster_application_leases WHERE name=$1`, clusterControllerLeaseName).Scan(&holder); err != nil {
@@ -39,7 +43,7 @@ func newSSHParentFixture(t *testing.T) sshParentFixture {
 	member := source.Members[0]
 	member.NodeUID, member.BootID, member.MachineID = newClusterUUID(), newClusterUUID(), strings.Repeat("b", 32)
 	namespace := newClusterUUID()
-	f := sshParentFixture{c: &clusterController{store: store, holder: holder, now: time.Now}, aegis: aegis, ctx: ctx,
+	f := sshParentFixture{c: &clusterController{store: store, holder: holder, now: time.Now}, aegis: aegis, ctx: ctx, signers: signers,
 		op: clusterControllerOperation{ID: id, Kind: "ssh_onboarding", State: "running", CurrentStep: clusterSSHInspectionOperationStep, Attempt: 1, Payload: map[string]any{}}, targets: targets}
 	sample, _ := sshInspectionCohortFixture(t)
 	for _, target := range sample.Targets {

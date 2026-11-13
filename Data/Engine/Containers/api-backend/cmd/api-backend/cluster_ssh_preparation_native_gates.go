@@ -52,7 +52,7 @@ func (c *clusterController) withPreparationNativeGates(ctx context.Context, snap
 	if err := clusterSSHPreparationNativeBlockedError(cleanTargets != nil, capacity != nil); err != nil {
 		return err
 	}
-	return c.withPreparationArtifacts(ctx, snapshot, scratch, func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
+	return c.withPreparationArtifacts(ctx, snapshot, scratch, func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
 		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, cleanTargets, capacity, configuration)
 		return consumeClusterSSHPreparationNativeGates(ctx, gates, consume)
 	})

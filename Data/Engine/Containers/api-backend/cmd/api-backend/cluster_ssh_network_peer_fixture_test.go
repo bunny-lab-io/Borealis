@@ -79,6 +79,11 @@ func sshNetworkFixtureObserve(t *testing.T, ctx context.Context, item clusterSSH
 
 func sshNetworkFixtureTransport(t *testing.T, item clusterSSHInspectedTarget, signer ssh.Signer,
 	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, username, expectedPassword string, editHost ...func(string) string) (clusterremote.Transport, <-chan struct{}, func()) {
+	return sshNetworkFixtureTransportWithSudo(t, item, signer, link, peers, observationWire, username, expectedPassword, "fixture-sudo", editHost...)
+}
+
+func sshNetworkFixtureTransportWithSudo(t *testing.T, item clusterSSHInspectedTarget, signer ssh.Signer,
+	link clusterbootstrap.ManagementLink, peers []string, observationWire []byte, username, expectedPassword, sudoPassword string, editHost ...func(string) string) (clusterremote.Transport, <-chan struct{}, func()) {
 	t.Helper()
 	prefix := netip.MustParsePrefix(link.Address)
 	routing := clusterremote.RoutedNetworkOwnership{Version: 1, Targets: clusterremote.RouteTargets{Management: item.Binding.Address, Peers: peers}, Resolved: peers,
@@ -143,7 +148,7 @@ func sshNetworkFixtureTransport(t *testing.T, item clusterSSHInspectedTarget, si
 					_, _ = io.WriteString(channel, host)
 				} else {
 					stdin, err := io.ReadAll(channel)
-					if err != nil || !bytes.Equal(stdin, []byte("fixture-sudo\n")) {
+					if err != nil || !bytes.Equal(stdin, []byte(sudoPassword+"\n")) {
 						status = 1
 					} else if observationWire != nil && (strings.Contains(command.Command, "observe_arp") || strings.Contains(command.Command, "observe_network_render") || strings.Contains(command.Command, "observe_filesystems")) {
 						_, _ = channel.Write(observationWire)

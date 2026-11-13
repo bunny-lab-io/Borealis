@@ -14,16 +14,34 @@ import (
 	"time"
 )
 
-// Only this compile-time verb differs from joined recovery. No request supplies
-// shell text, executable path, unit properties or a command to execute.
+// Preparation owns its bulk payload beneath the root wrapper's one private
+// directory on the qualified /opt filesystem. The wrapper survives helper
+// failure and removes only that directory, including incomplete input scratch.
+// The unprivileged upload stays on /var/tmp. No request chooses either path.
+const preparationRootStage = `test -d /opt && test ! -L /opt
+test "$(stat -c '%u' -- /opt)" = 0
+opt_mode=$(stat -c '%a' -- /opt)
+test "$((0$opt_mode & 0022))" = 0
+root_stage=$(mktemp -d /opt/borealis-bootstrap-root.XXXXXXXXXX)`
+
+func preparationRootScript(artifacts bool) string {
+	script := strings.Replace(bootstrapRootScript, "root_stage=$(mktemp -d /var/tmp/borealis-bootstrap-root.XXXXXXXXXX)", preparationRootStage, 1)
+	verb := "bootstrap-source-session"
+	if artifacts {
+		verb = "bootstrap-artifact-session"
+	}
+	return strings.Replace(script, "bootstrap-session --nonce", verb+" --nonce", 1)
+}
+
+// Fixed preparation verbs retain the shared copy/hash/cleanup and sudo protocol.
 func preparationCommand(size int64, digest, nonce string) string {
-	return bootstrapCommandWithRoot(size, digest, nonce, strings.Replace(bootstrapRootScript, "bootstrap-session --nonce", "bootstrap-source-session --nonce", 1))
+	return bootstrapCommandWithRoot(size, digest, nonce, preparationRootScript(false))
 }
 
 // Fixed artifact command extends only its outer containment budget. The root
 // helper still uses the same private upload, digest pin, sudo and cleanup path.
 func artifactPreparationCommand(size int64, digest, nonce string) string {
-	command := bootstrapCommandWithRoot(size, digest, nonce, strings.Replace(bootstrapRootScript, "bootstrap-session --nonce", "bootstrap-artifact-session --nonce", 1))
+	command := bootstrapCommandWithRoot(size, digest, nonce, preparationRootScript(true))
 	return strings.ReplaceAll(command, "--kill-after=2s 6m", "--kill-after=2s 32m")
 }
 

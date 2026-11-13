@@ -10,14 +10,17 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 )
 
 type clusterSSHPreparationArtifactGate func(context.Context, string) (string, error)
-type clusterSSHPreparationArtifactConsumer func(context.Context, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error)
+type clusterSSHPreparationArtifactDemandRead func(context.Context, string) ([]clusterSSHFilesystemDemand, error)
+type clusterSSHPreparationArtifactConsumer func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error)
 
 type clusterSSHPreparationArtifactBytes interface {
 	prove(context.Context, func(context.Context) error) (string, error)
+	storageDemand(context.Context, func(context.Context) error) ([]clusterSSHFilesystemDemand, error)
 	Close() error
 }
 
@@ -154,7 +157,35 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		}
 		return digest, nil
 	}
-	readiness, err := consume(readerCtx, gate)
+	demand := func(parent context.Context, requested string) ([]clusterSSHFilesystemDemand, error) {
+		var value []clusterSSHFilesystemDemand
+		err := lifetime.run(parent, func(ctx context.Context) error {
+			if requested != plan {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			select {
+			case serial <- struct{}{}:
+				defer func() { <-serial }()
+			case <-ctx.Done():
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			if observe(ctx, d.proposal) != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			var err error
+			value, err = owned.storageDemand(ctx, d.proposal)
+			if err != nil || len(value) == 0 || observe(ctx, d.proposal) != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			value = slices.Clone(value)
+			return nil
+		})
+		if err != nil {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return value, nil
+	}
+	readiness, err := consume(readerCtx, gate, demand)
 	if err != nil {
 		cancel()
 	}
@@ -278,16 +309,29 @@ func readClusterSSHPreparationArtifactSource(ctx context.Context, expected clust
 }
 
 type clusterSSHOwnedPreparationArtifacts struct {
+	mu          sync.Mutex
+	failed      bool
 	bundle      *clusterbootstrap.Bundle
 	artifacts   *clusterbootstrap.PreparationArtifacts
 	expected    clusterbootstrap.Expected
 	version     string
 	manifest    *clusterbootstrap.Manifest
 	publication func(context.Context) error
+	demand      []clusterSSHFilesystemDemand
 }
 
-func (v *clusterSSHOwnedPreparationArtifacts) prove(ctx context.Context, check func(context.Context) error) (string, error) {
-	if v == nil || v.bundle == nil || v.artifacts == nil || v.publication == nil || check == nil || check(ctx) != nil || v.publication(ctx) != nil || check(ctx) != nil {
+func (v *clusterSSHOwnedPreparationArtifacts) prove(ctx context.Context, check func(context.Context) error) (proof string, result error) {
+	if v == nil {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	defer func() { v.failed = v.failed || result != nil }()
+	return v.proveOwned(ctx, check)
+}
+
+func (v *clusterSSHOwnedPreparationArtifacts) proveOwned(ctx context.Context, check func(context.Context) error) (string, error) {
+	if v.failed || v.bundle == nil || v.artifacts == nil || v.publication == nil || check == nil || ctx.Err() != nil || check(ctx) != nil || v.publication(ctx) != nil || check(ctx) != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
 	bundle, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
@@ -305,10 +349,40 @@ func (v *clusterSSHOwnedPreparationArtifacts) prove(ctx context.Context, check f
 	return clusterSSHPreparationDigest([]string{bundle, hex.EncodeToString(h.Sum(nil))})
 }
 
+// Artifact content demand only: packages, generated host/join configuration and
+// Longhorn replicas remain separate inputs. This cannot make storage ready.
+// Reproof lends already-acquired bytes; it never reacquires another archive.
+func (v *clusterSSHOwnedPreparationArtifacts) storageDemand(ctx context.Context, check func(context.Context) error) ([]clusterSSHFilesystemDemand, error) {
+	return v.storageDemandWith(ctx, check, v.proveOwned)
+}
+
+// Private seam exercises the owned lifetime without downloading pinned runtime
+// artifacts. Production always supplies the same owner's complete byte proof.
+func (v *clusterSSHOwnedPreparationArtifacts) storageDemandWith(ctx context.Context, check func(context.Context) error,
+	prove func(context.Context, func(context.Context) error) (string, error)) (demand []clusterSSHFilesystemDemand, result error) {
+	if v == nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	defer func() { v.failed = v.failed || result != nil }()
+	if v.failed || len(v.demand) == 0 || check == nil || prove == nil || ctx.Err() != nil || check(ctx) != nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	proof, err := prove(ctx, check)
+	if err != nil || !validClusterSSHPreparationDigest(proof) || check(ctx) != nil || ctx.Err() != nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	return slices.Clone(v.demand), nil
+}
+
 func (v *clusterSSHOwnedPreparationArtifacts) Close() error {
 	if v == nil {
 		return nil
 	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.failed, v.demand = true, nil
 	var errs []error
 	if v.artifacts != nil {
 		errs = append(errs, v.artifacts.Close())
@@ -319,6 +393,41 @@ func (v *clusterSSHOwnedPreparationArtifacts) Close() error {
 		v.bundle = nil
 	}
 	return errors.Join(errs...)
+}
+
+// Reuse the inventories already verified during acquisition, including the
+// PostgreSQL archive's native measurement. Preserve existing retained-generation
+// and expanded-entry accounting; worker scratch is not a target charge.
+func clusterSSHPreparationArtifactDemand(expected clusterbootstrap.Expected, version, postgres string,
+	application clusterSSHImageInventory, external clusterSSHExternalInventory, k3s clusterSSHK3sInventory,
+	managerBytes int64, pg clusterbootstrap.PostgresImageDemand) ([]clusterSSHFilesystemDemand, error) {
+	if expected.Validate() != nil || version != clusterbootstrap.K3sPins().Version || application.expected != expected || external.expected != expected ||
+		k3s.expected != expected || k3s.version != version || !clusterbootstrap.ValidPostgresImageReference(postgres) || pg.Reference != postgres ||
+		managerBytes < 1 || managerBytes > clusterbootstrap.MaxBundleBytes ||
+		pg.IncomingBytes == 0 || pg.IncomingEntries != 1 || pg.RuntimeBytes == 0 || pg.RuntimeEntries == 0 {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	appDemand, err := application.demands()
+	if err != nil {
+		return nil, err
+	}
+	externalDemand, err := external.demands()
+	if err != nil {
+		return nil, err
+	}
+	k3sDemand, err := k3s.demands()
+	if err != nil {
+		return nil, err
+	}
+	return mergeClusterSSHFilesystemDemands(appDemand, externalDemand, k3sDemand, []clusterSSHFilesystemDemand{
+		{Path: "/opt/Borealis", Bytes: pg.IncomingBytes, Entries: pg.IncomingEntries + 1},
+		{Path: "/var/lib/rancher/k3s", Bytes: pg.RuntimeBytes, Entries: pg.RuntimeEntries},
+		// Fixed preparation transport owns one upload on /var/tmp and one root
+		// copy under /opt. The root wrapper owns all source/artifact scratch,
+		// already covered above; charge only its extra directory and helper here.
+		{Path: "/opt/Borealis", Bytes: uint64(managerBytes), Entries: 2},
+		{Path: "/var/tmp", Bytes: uint64(managerBytes), Entries: 2},
+	})
 }
 
 func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, expected clusterbootstrap.Expected, version, postgres string, check func(context.Context) error) (_ clusterSSHPreparationArtifactBytes, result error) {
@@ -386,6 +495,18 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	pgDemand, err := pg.StorageDemand(ctx, check)
+	if err != nil {
+		return nil, err
+	}
+	managerSource, _, managerBytes, err := bundle.ManagerProof()
+	if err != nil || managerSource != expected || check(ctx) != nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	demand, err := clusterSSHPreparationArtifactDemand(expected, version, postgres, application, external, k3s, managerBytes, pgDemand)
+	if err != nil {
+		return nil, err
+	}
 	artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected, version, postgres, images, k3sInputs, externalImages, pg, check)
 	if err != nil {
 		return nil, err
@@ -395,7 +516,7 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil || publication(ctx) != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	return &clusterSSHOwnedPreparationArtifacts{bundle: bundle, artifacts: artifacts, expected: expected, version: version, manifest: manifest, publication: publication}, nil
+	return &clusterSSHOwnedPreparationArtifacts{bundle: bundle, artifacts: artifacts, expected: expected, version: version, manifest: manifest, publication: publication, demand: demand}, nil
 }
 
 // Retain the exact asset generation used by each native staging resolver.

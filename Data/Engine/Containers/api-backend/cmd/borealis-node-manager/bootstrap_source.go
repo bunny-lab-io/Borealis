@@ -61,6 +61,13 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		if err != nil {
 			return errBootstrapSource
 		}
+		// The outer root wrapper owns this entire parent and removes it even
+		// when this helper exits without running input cleanup. Never stage
+		// direct /opt children beyond that wrapper's exact cleanup ownership.
+		scratch, err := bootstrapSourceScratch(executable, bootstrapSourceSafeDirectory)
+		if err != nil {
+			return errBootstrapSource
+		}
 		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts, join *clusterbootstrap.K3sJoinMaterial) error {
 			if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
 				return errBootstrapSource
@@ -206,25 +213,23 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			return errors.Join(err, journal.Close())
 		}
 		if artifacts {
-			if request.IdentitySource == nil || !bootstrapArtifactAction(request.Action) || bootstrapSourceSafeDirectory("/opt") != nil {
+			if request.IdentitySource == nil || !bootstrapArtifactAction(request.Action) {
 				return errBootstrapSource
 			}
-			// Bulk scratch shares the qualified /opt source filesystem; the uploaded
-			// helper remains in its existing bounded private /var/tmp wrapper.
 			if bootstrapK3sConfigurationAction(request.Action) || bootstrapK3sStartupAction(request.Action) {
-				return clusterbootstrap.ConsumePrejoinK3sJoinPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
+				return clusterbootstrap.ConsumePrejoinK3sJoinPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
 			}
-			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, "/opt", expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check,
+			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check,
 				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts) error {
 					return consume(ctx, inputs, material, assets, nil)
 				})
 		}
 		if request.IdentitySource != nil {
-			return clusterbootstrap.ConsumePrejoinPreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check, func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
+			return clusterbootstrap.ConsumePrejoinPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, input, check, func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material) error {
 				return consume(ctx, inputs, material, nil, nil)
 			})
 		}
-		return clusterbootstrap.ConsumePreparation(ctx, filepath.Dir(executable), expected, request.Session.ManagerSHA256, input, check,
+		return clusterbootstrap.ConsumePreparation(ctx, scratch, expected, request.Session.ManagerSHA256, input, check,
 			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
 				return consume(ctx, inputs, nil, nil, nil)
 			})
@@ -247,6 +252,24 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		fatalf("source preparation failed; inspect journal before any write retry")
 	}
 
+}
+
+func bootstrapSourceScratch(executable string, safe func(string) error) (string, error) {
+	parent := filepath.Dir(executable)
+	suffix, prefix := strings.CutPrefix(filepath.Base(parent), "borealis-bootstrap-root.")
+	if safe == nil || filepath.Base(executable) != "manager" || filepath.Clean(executable) != executable ||
+		filepath.Dir(parent) != "/opt" || !prefix || len(suffix) != 10 {
+		return "", errBootstrapSource
+	}
+	for _, c := range suffix {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return "", errBootstrapSource
+		}
+	}
+	if safe(parent) != nil {
+		return "", errBootstrapSource
+	}
+	return parent, nil
 }
 
 // Source/identity phases keep their narrow paths; host actions select an exact
