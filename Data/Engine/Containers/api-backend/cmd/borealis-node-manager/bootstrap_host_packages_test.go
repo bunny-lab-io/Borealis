@@ -77,6 +77,7 @@ func TestBootstrapHostPackageCommandsAreFixedAndOffline(t *testing.T) {
 			}
 			for _, required := range []string{"APT::Keep-Fds::=3", "APT::Keep-Fds::=4", "Dpkg::Use-Pty=0", "DPkg::Lock::Timeout=15",
 				"Dir::Cache::archives=" + p.directory + "/", "Dir::Cache::pkgcache=", "Dir::Cache::srcpkgcache=",
+				"Dir::Etc::sourcelist=", "Dir::Etc::sourceparts=",
 				"--no-download", "--no-remove", "--no-upgrade", "--no-install-recommends"} {
 				if !slices.Contains(spec.args, required) {
 					t.Fatal("missing fixed package boundary", required)
@@ -138,6 +139,11 @@ func TestBootstrapHostPackagePreflightCannotInstall(t *testing.T) {
 	spec, err := p.simulationCommand()
 	if err != nil || !slices.Contains(spec.args, "--simulate") || p.validateSimulation(bootstrapHostPackageSimulationFixture(p)) != nil {
 		t.Fatal("whole host preflight unavailable", err)
+	}
+	for _, required := range []string{"Dir::Etc::sourcelist=", "Dir::Etc::sourceparts=", "Dir::Cache::pkgcache=", "Dir::Cache::srcpkgcache="} {
+		if !slices.Contains(spec.args, required) {
+			t.Fatal("whole host preflight can consume ambient repository candidates", required)
+		}
 	}
 	if _, err := p.installCommand(); err == nil {
 		t.Fatal("union preflight allowed install")
@@ -211,7 +217,7 @@ func TestBootstrapHostPackageSimulationBindsExactLocalPlan(t *testing.T) {
 		pin := p.selected[0]
 		inst := fmt.Sprintf("Inst %s (%s local-deb [%s])\n", pin.Name, pin.Version, pin.Architecture)
 		conf := strings.Replace(inst, "Inst", "Conf", 1)
-		for _, mode := range []string{"valid", "qualified name", "note", "upgrade", "downgrade", "reinstall", "remove", "unlocked", "wrong version", "wrong architecture", "foreign origin", "duplicate install", "duplicate configure", "configure before install", "missing install", "missing configure", "summary count", "duplicate summary", "error", "truncated", "prefix", "control", "oversized"} {
+		for _, mode := range []string{"valid", "qualified name", "note", "upgrade", "downgrade", "reinstall", "remove", "unlocked", "wrong version", "wrong architecture", "foreign origin", "mixed repository origin", "duplicate install", "duplicate configure", "configure before install", "missing install", "missing configure", "summary count", "duplicate summary", "error", "truncated", "prefix", "control", "oversized"} {
 			t.Run(fmt.Sprintf("%d/%s", phase, mode), func(t *testing.T) {
 				raw := valid
 				switch mode {
@@ -232,6 +238,8 @@ func TestBootstrapHostPackageSimulationBindsExactLocalPlan(t *testing.T) {
 					raw = strings.Replace(raw, "["+pin.Architecture+"])", "[arm64])", 1)
 				case "foreign origin":
 					raw = strings.Replace(raw, "local-deb", "Ubuntu:noble", 1)
+				case "mixed repository origin":
+					raw = strings.Replace(raw, "local-deb", "Ubuntu:24.04/noble-updates, local-deb", 1)
 				case "duplicate install":
 					raw = strings.Replace(raw, inst, inst+inst, 1)
 				case "duplicate configure":

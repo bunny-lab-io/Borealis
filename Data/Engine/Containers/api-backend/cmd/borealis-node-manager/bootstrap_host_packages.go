@@ -100,10 +100,13 @@ func (p *bootstrapHostPackagePlan) command(simulate bool) (bootstrapHostCommandS
 	}
 	// No repositories are updated and no archives can be downloaded. APT may
 	// only consume the verified private cache; normal package/cache locks stay
-	// enabled for installation. Empty pkgcache paths prevent persistent caches.
+	// enabled for installation. Empty source lists exclude ambient repository
+	// candidates, including identical versions with mixed-origin simulation rows.
+	// Empty pkgcache paths prevent old compiled indexes from reintroducing them.
 	args := []string{"-o", "APT::Keep-Fds::=3", "-o", "APT::Keep-Fds::=4", "-o", "Dpkg::Use-Pty=0",
 		"-o", "DPkg::Lock::Timeout=15", "-o", "Acquire::Retries=0", "-o", "Acquire::http::Timeout=30", "-o", "Acquire::https::Timeout=30",
 		"-o", "Dir::Cache::archives=" + p.directory + "/", "-o", "Dir::Cache::pkgcache=", "-o", "Dir::Cache::srcpkgcache=",
+		"-o", "Dir::Etc::sourcelist=", "-o", "Dir::Etc::sourceparts=",
 		"--no-download", "--no-remove", "--no-upgrade", "--no-install-recommends"}
 	if simulate {
 		args = append(args, "--simulate")

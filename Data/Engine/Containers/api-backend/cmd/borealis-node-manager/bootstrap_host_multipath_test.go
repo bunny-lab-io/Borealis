@@ -18,17 +18,20 @@ func bootstrapActiveMultipathFixture(unit string) []byte {
 		raw = strings.Replace(raw, "SubState=dead\n", "SubState=running\n", 1)
 		raw = strings.Replace(raw, "MainPID=0\n", "MainPID=123\n", 1)
 	} else {
-		raw = strings.Replace(raw, "SubState=dead\n", "SubState=listening\n", 1)
+		// Ubuntu's active socket reports running while its service is active.
+		raw = strings.Replace(raw, "SubState=dead\n", "SubState=running\n", 1)
 	}
 	return []byte(raw)
 }
 
 func TestBootstrapMultipathDecision(t *testing.T) {
 	for _, unit := range []string{"multipathd.service", "multipathd.socket"} {
-		for _, mode := range []string{"absent", "disabled", "enabled inactive", "active", "unknown", "masked", "override", "job", "reload", "failed", "foreign", "duplicate", "truncated", "state", "pid"} {
+		for _, mode := range []string{"absent", "disabled", "enabled inactive", "active", "listening", "unknown", "masked", "override", "job", "reload", "failed", "foreign", "duplicate", "truncated", "state", "substate", "pid"} {
 			t.Run(unit+"/"+mode, func(t *testing.T) {
 				raw := string(bootstrapActiveMultipathFixture(unit))
 				switch mode {
+				case "listening":
+					raw = strings.Replace(raw, "SubState=running\n", "SubState=listening\n", 1)
 				case "absent":
 					raw = string(bootstrapHostDependencyFixture(unit))
 				case "disabled", "enabled inactive":
@@ -59,6 +62,8 @@ func TestBootstrapMultipathDecision(t *testing.T) {
 					raw = strings.TrimSuffix(raw, "\n")
 				case "state":
 					raw = strings.Replace(raw, "ActiveState=active", "ActiveState=activating", 1)
+				case "substate":
+					raw = strings.Replace(raw, "SubState=running", "SubState=unknown", 1)
 				case "pid":
 					if unit == "multipathd.service" {
 						raw = strings.Replace(raw, "MainPID=123", "MainPID=1", 1)
@@ -67,8 +72,9 @@ func TestBootstrapMultipathDecision(t *testing.T) {
 					}
 				}
 				stop, err := bootstrapMultipathNeedsStop(unit, []byte(raw))
-				valid := mode == "absent" || mode == "disabled" || mode == "enabled inactive" || mode == "active"
-				if (err == nil) != valid || stop != (mode == "active" || mode == "enabled inactive") {
+				active := mode == "active" || mode == "listening" && unit == "multipathd.socket"
+				valid := mode == "absent" || mode == "disabled" || mode == "enabled inactive" || active
+				if (err == nil) != valid || stop != (active || mode == "enabled inactive") {
 					t.Fatal("unsafe stop/skip", stop, err)
 				}
 			})

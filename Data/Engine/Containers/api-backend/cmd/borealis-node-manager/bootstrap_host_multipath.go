@@ -102,7 +102,9 @@ func bootstrapMultipathNeedsStop(unit string, raw []byte) (bool, error) {
 	}
 	if values["ActiveState"] == "active" {
 		if unit == "multipathd.socket" {
-			if values["SubState"] != "listening" {
+			// Active sockets become running while their service is active.
+			// Both states require shutdown; neither is final readiness proof.
+			if values["SubState"] != "listening" && values["SubState"] != "running" {
 				return false, errBootstrapSource
 			}
 		} else {
