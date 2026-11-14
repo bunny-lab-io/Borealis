@@ -273,7 +273,7 @@ func NormalizeDependencyName(value string) string {
 
 func Load(path string) (AgentConfig, error) {
 	var cfg AgentConfig
-	data, err := os.ReadFile(path)
+	data, err := readConfigFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			cfg = Default()
@@ -423,7 +423,7 @@ func saveUnlocked(path string, cfg *AgentConfig, writer string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceConfigFile(tmpPath, path); err != nil {
 		return err
 	}
 	return RestrictFile(path)
@@ -450,7 +450,7 @@ func UpdateWithWriter(path string, writer string, update func(*AgentConfig)) err
 
 func loadUnlocked(path string) (AgentConfig, error) {
 	var cfg AgentConfig
-	data, err := os.ReadFile(path)
+	data, err := readConfigFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			cfg = Default()

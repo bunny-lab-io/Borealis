@@ -1,0 +1,351 @@
+package main
+
+import (
+	"borealis/api-backend/internal/clusterbootstrap"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/iotest"
+	"time"
+)
+
+func TestSourceNetworkActionRejectsParametersBeforeHostRead(t *testing.T) {
+	result, err := (&manager{}).execute(context.Background(), actionRequest{Verb: "InspectSourceNetwork", Params: map[string]any{"path": "/private"}})
+	if err != clusterbootstrap.ErrPreparationConfig || result != nil || nodeManagerActionTimeout("InspectSourceNetwork") != 15*time.Second {
+		t.Fatal("source action boundary failed")
+	}
+}
+
+func TestSourceNetworkObserverRechecksRunningSupervisorAndHost(t *testing.T) {
+	config, err := os.ReadFile("../../internal/clusterbootstrap/testdata/source-supervisor.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := os.ReadFile("../../internal/clusterbootstrap/testdata/source-node.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"success", "boot drift", "machine drift", "network drift", "stale Node version", "upgrade during read", "not ready", "wrong Node", "transport", "cancel", "path injection", "link failure", "wrong link IP", "MAC drift", "interface drift", "index drift", "namespace drift", "prefix drift", "Node drift", "Node IP drift", "kubelet failure", "kubelet drift", "kubelet namespace"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			identities, configs, versions, reads, nodes, links := 0, 0, 0, 0, 0, 0
+			identity := func() (string, string, error) {
+				identities++
+				machine, boot := strings.Repeat("b", 32), "22222222-2222-4222-8222-222222222222"
+				if identities > 1 {
+					if mode == "boot drift" {
+						boot = "22222222-2222-4222-8222-222222222223"
+					}
+					if mode == "machine drift" {
+						machine = strings.Repeat("c", 32)
+					}
+				}
+				return machine, boot, nil
+			}
+			get := func(ctx context.Context, path string) ([]byte, error) {
+				reads++
+				if mode == "transport" {
+					return nil, errors.New("synthetic-private-response")
+				}
+				if mode == "cancel" {
+					cancel()
+				}
+				switch path {
+				case "/v1-k3s/config":
+					configs++
+					if mode == "network drift" && configs > 1 {
+						return []byte(strings.ReplaceAll(string(config), "10.42.0.0", "10.44.0.0")), nil
+					}
+					return config, nil
+				case "/api/v1/nodes/engine-01":
+					nodes++
+					if nodes > 1 && mode == "Node drift" {
+						return []byte(strings.ReplaceAll(string(node), `"True"`, `"False"`)), nil
+					}
+					if nodes > 1 && mode == "Node IP drift" {
+						return []byte(strings.ReplaceAll(string(node), "192.168.90.20", "192.168.90.21")), nil
+					}
+					if mode == "not ready" {
+						return []byte(strings.ReplaceAll(string(node), `"True"`, `"False"`)), nil
+					}
+					if mode == "wrong Node" {
+						return []byte(strings.ReplaceAll(string(node), "engine-01", "engine-02")), nil
+					}
+					return node, nil
+				case "/version":
+					versions++
+					if mode == "stale Node version" || (mode == "upgrade during read" && versions > 1) {
+						return []byte(`{"gitVersion":"v1.36.4+k3s1"}`), nil
+					}
+					return []byte(`{"gitVersion":"v1.36.3+k3s1"}`), nil
+				default:
+					t.Fatal("unexpected source path")
+					return nil, errors.New("unexpected path")
+				}
+			}
+			name := "engine-01"
+			if mode == "path injection" {
+				name = "../secrets"
+			}
+			linkRead := func(ctx context.Context, address string) (clusterbootstrap.ManagementLink, error) {
+				links++
+				if address != "192.168.90.20" {
+					t.Fatal("unexpected link target")
+				}
+				value := clusterbootstrap.ManagementLink{Interface: "ens18", Index: 2, Address: address + "/24", MAC: "02:00:00:00:00:01", NetworkNamespace: 1234}
+				if mode == "link failure" {
+					return value, errors.New("private link diagnostic")
+				}
+				if mode == "wrong link IP" {
+					value.Address = "192.168.90.21/24"
+				}
+				if links > 1 {
+					switch mode {
+					case "MAC drift":
+						value.MAC = "02:00:00:00:00:02"
+					case "interface drift":
+						value.Interface = "ens19"
+					case "index drift":
+						value.Index++
+					case "namespace drift":
+						value.NetworkNamespace++
+					case "prefix drift":
+						value.Address = address + "/25"
+					}
+				}
+				return value, nil
+			}
+			kubeletReads := 0
+			kubeletRead := func(context.Context) (clusterbootstrap.SourceKubelet, error) {
+				kubeletReads++
+				v := clusterbootstrap.SourceKubelet{CSISocket: clusterbootstrap.SourceCSISocket{Listener: clusterbootstrap.SourceCSIListener{PodUID: "11111111-1111-4111-8111-111111111111", ContainerID: strings.Repeat("d", 64), IdentitySHA256: strings.Repeat("e", 64)}, DirectoryDevice: 8, DirectoryInode: 12, DirectoryMount: 1, SocketDevice: 8, SocketInode: 13, SocketMount: 1, PathSHA256: strings.Repeat("c", 64)}, ExecutableSHA256: clusterbootstrap.K3sPins().ServerExecutable.SHA256, Root: "/var/lib/kubelet", PID: 42, StartTicks: 100, Invocation: strings.Repeat("a", 32), ListenerInode: 5678, NetworkNamespace: 1234, MountNamespace: 1235, ExecutableDevice: 8, ExecutableInode: 9012, HostRootDevice: 8, HostRootInode: 2}
+				if mode == "kubelet failure" {
+					return v, errors.New("private native failure")
+				}
+				if mode == "kubelet namespace" {
+					v.NetworkNamespace++
+				}
+				if mode == "kubelet drift" && kubeletReads > 1 {
+					v.StartTicks++
+				}
+				return v, nil
+			}
+			observed, err := observeSourceNetwork(ctx, name, identity, get, linkRead, kubeletRead)
+			if mode == "success" {
+				if err != nil || observed.Validate() != nil || observed.PodCIDR != "10.42.0.0/16" || identities != 2 || configs != 2 || versions != 2 || links != 2 || nodes != 2 || kubeletReads != 2 {
+					t.Fatalf("incomplete observation: %v", err)
+				}
+			} else {
+				if !errors.Is(err, clusterbootstrap.ErrPreparationConfig) || observed != (clusterbootstrap.SourceNetwork{}) {
+					t.Fatal("unsafe observation accepted")
+				}
+				if mode == "path injection" && reads != 0 {
+					t.Fatal("invalid name reached network")
+				}
+			}
+		})
+	}
+}
+
+func TestSourceNetworkHTTPSRejectsRedirectsUntrustedTLSAndOversize(t *testing.T) {
+	var redirected atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case "/redirect":
+			http.Redirect(w, r, "/private", http.StatusFound)
+		case "/private":
+			redirected.Add(1)
+		case "/large":
+			_, _ = io.WriteString(w, strings.Repeat("s", (128<<10)+1))
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, "synthetic-private-response")
+		}
+	}))
+	defer server.Close()
+	// Build trust explicitly; default transport must not accept this test CA.
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	if raw, err := sourceNetworkHTTPGet(context.Background(), client, server.URL, "/ok"); err != nil || string(raw) != `{"ok":true}` {
+		t.Fatal("trusted HTTPS read failed")
+	}
+	for _, path := range []string{"/redirect", "/large", "/forbidden"} {
+		if raw, err := sourceNetworkHTTPGet(context.Background(), client, server.URL, path); err != clusterbootstrap.ErrPreparationConfig || raw != nil {
+			t.Fatal("private HTTP boundary failed")
+		}
+	}
+	if redirected.Load() != 0 {
+		t.Fatal("redirect followed")
+	}
+	if _, err := sourceNetworkHTTPGet(context.Background(), &http.Client{}, server.URL, "/ok"); err == nil {
+		t.Fatal("untrusted TLS accepted")
+	}
+	if _, err := sourceNetworkHTTPGet(context.Background(), client, "http://127.0.0.1", "/ok"); err == nil {
+		t.Fatal("plaintext accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sourceNetworkHTTPGet(ctx, client, server.URL, "/ok"); err == nil {
+		t.Fatal("cancelled request accepted")
+	}
+}
+
+type sourceNetworkCleanupTransport struct {
+	roundTrip func(*http.Request) (*http.Response, error)
+	idle      atomic.Int32
+}
+
+func (t *sourceNetworkCleanupTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.roundTrip(r)
+}
+func (t *sourceNetworkCleanupTransport) CloseIdleConnections() { t.idle.Add(1) }
+
+type sourceNetworkCleanupBody struct {
+	io.ReadCloser
+	close func() error
+}
+
+func (b *sourceNetworkCleanupBody) Close() error {
+	err := b.ReadCloser.Close()
+	if closeErr := b.close(); closeErr != nil {
+		return closeErr
+	}
+	return err
+}
+
+func TestSourceNetworkHTTPJoinedCleanup(t *testing.T) {
+	for _, mode := range []string{"healthy timeout", "close error", "client expiry", "outer cancel", "blocked healthy", "blocked cancel", "status failure", "read failure"} {
+		t.Run(mode, func(t *testing.T) {
+			outer, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var unblock sync.Once
+			defer unblock.Do(func() { close(release) })
+			var calls, closes, active atomic.Int32
+			transport := &sourceNetworkCleanupTransport{}
+			transport.roundTrip = func(r *http.Request) (*http.Response, error) {
+				call := calls.Add(1)
+				active.Add(1)
+				var reader io.Reader = strings.NewReader(`{"public":"source"}`)
+				if call == 1 && mode == "read failure" {
+					reader = iotest.ErrReader(errors.New("private read failure"))
+				}
+				status := http.StatusOK
+				if call == 1 && mode == "status failure" {
+					status = http.StatusForbidden
+				}
+				body := &sourceNetworkCleanupBody{ReadCloser: io.NopCloser(reader), close: func() error {
+					defer active.Add(-1)
+					closes.Add(1)
+					if call != 1 {
+						return nil
+					}
+					if mode == "client expiry" {
+						deadline, ok := r.Context().Deadline()
+						outerDeadline, _ := outer.Deadline()
+						if !ok || !deadline.Before(outerDeadline) || r.Context().Err() != nil {
+							t.Error("fixture missed live shorter client request")
+						}
+						<-r.Context().Done()
+						if outer.Err() != nil {
+							t.Error("client expiry consumed outer15s scope")
+						}
+					}
+					if mode == "outer cancel" {
+						cancel()
+					}
+					if strings.HasPrefix(mode, "blocked ") {
+						close(entered)
+						<-release
+					}
+					if mode == "close error" {
+						return errors.New("private close failure")
+					}
+					return nil
+				}}
+				return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
+			}
+			redirectErr := errors.New("original redirect policy")
+			client := &http.Client{Transport: transport, Timeout: 250 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return redirectErr }}
+			type result struct {
+				raw []byte
+				err error
+			}
+			done := make(chan result, 1)
+			joined := false
+			defer func() {
+				cancel()
+				unblock.Do(func() { close(release) })
+				if !joined {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("fixture failed joining source read")
+					}
+				}
+			}()
+			go func() {
+				raw, err := sourceNetworkHTTPGet(outer, client, "https://127.0.0.1:6443", "/v1-k3s/config")
+				done <- result{raw, err}
+			}()
+			if strings.HasPrefix(mode, "blocked ") {
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Close never entered")
+				}
+				if mode == "blocked cancel" {
+					cancel()
+				}
+				select {
+				case <-done:
+					joined = true
+					t.Fatal("source read escaped owned Close")
+				case <-time.After(20 * time.Millisecond):
+				}
+				unblock.Do(func() { close(release) })
+			}
+			var got result
+			select {
+			case got = <-done:
+				joined = true
+			case <-time.After(5 * time.Second):
+				t.Fatal("source cleanup failed to join")
+			}
+			success := mode == "healthy timeout" || mode == "blocked healthy"
+			if success {
+				if got.err != nil || string(got.raw) != `{"public":"source"}` {
+					t.Fatal("healthy timeout client rejected", got.err)
+				}
+			} else if got.err != clusterbootstrap.ErrPreparationConfig || got.raw != nil {
+				t.Fatal("failed source cleanup returned evidence", got.err, len(got.raw))
+			}
+			if closes.Load() != 1 || active.Load() != 0 {
+				t.Fatal("response cleanup not joined")
+			}
+			// A failed request owns no client/transport lifetime. Fresh same-client
+			// request retains healthy deadlines and exact redirect policy.
+			sibling, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			defer stop()
+			raw, err := sourceNetworkHTTPGet(sibling, client, "https://127.0.0.1:6443", "/v1-k3s/config")
+			if err != nil || string(raw) != `{"public":"source"}` || calls.Load() != 2 || closes.Load() != 2 || active.Load() != 0 || transport.idle.Load() != 0 || client.Transport != transport || client.Timeout != 250*time.Millisecond || client.CheckRedirect(nil, nil) != redirectErr {
+				t.Fatal("source cleanup changed borrowed client or sibling", err)
+			}
+		})
+	}
+}

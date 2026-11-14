@@ -44,6 +44,8 @@ type Manager struct {
 	httpClient        *http.Client
 	wakeup            chan struct{}
 	mu                sync.Mutex
+	refreshMu         sync.Mutex
+	refreshCallbacks  []func(error)
 	started           bool
 	loopRunning       bool
 	supported         bool
@@ -218,6 +220,11 @@ func (m *Manager) Health() RoleHealth {
 }
 
 func (m *Manager) HandleRefreshRequest(ctx context.Context, payload any) (any, error) {
+	return m.HandleRefreshRequestWithCompletion(ctx, payload, nil)
+}
+
+// Completion follows this request's actual scan and publish, never acceptance.
+func (m *Manager) HandleRefreshRequestWithCompletion(ctx context.Context, payload any, complete func(error)) (any, error) {
 	body, ok := payload.(map[string]any)
 	if !ok {
 		return errorResponse("invalid_request", "Software refresh payload must be an object."), nil
@@ -232,7 +239,7 @@ func (m *Manager) HandleRefreshRequest(ctx context.Context, payload any) (any, e
 	if reason == "" {
 		reason = "operator:" + fallbackText(cleanText(body["requested_by"]), "unknown")
 	}
-	m.RequestRefresh(reason)
+	m.requestRefresh(reason, complete)
 	return map[string]any{
 		"ok":     true,
 		"status": "accepted",
@@ -241,10 +248,17 @@ func (m *Manager) HandleRefreshRequest(ctx context.Context, payload any) (any, e
 }
 
 func (m *Manager) RequestRefresh(reason string) {
+	m.requestRefresh(reason, nil)
+}
+
+func (m *Manager) requestRefresh(reason string, complete func(error)) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
+	if complete != nil {
+		m.refreshCallbacks = append(m.refreshCallbacks, complete)
+	}
 	m.fastPollUntil = time.Now().Add(softwareBoostWindow)
 	loopRunning := m.loopRunning
 	m.mu.Unlock()
@@ -260,6 +274,29 @@ func (m *Manager) RequestRefresh(reason string) {
 }
 
 func (m *Manager) Refresh(ctx context.Context) error {
+	return m.refreshBatch(func() error { return m.refresh(ctx) })
+}
+
+func (m *Manager) refreshBatch(scan func() error) error {
+	if m == nil {
+		return nil
+	}
+	m.refreshMu.Lock()
+	m.mu.Lock()
+	callbacks := m.refreshCallbacks
+	m.refreshCallbacks = nil
+	m.mu.Unlock()
+	err := scan()
+	m.refreshMu.Unlock()
+	// Requests received during this scan remain queued for the next scan.
+	// Completion may reenter the manager; never invoke it under either lock.
+	for _, complete := range callbacks {
+		complete(err)
+	}
+	return err
+}
+
+func (m *Manager) refresh(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}

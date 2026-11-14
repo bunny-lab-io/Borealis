@@ -198,6 +198,38 @@ func (r *kubernetesClusterStepRunner) prepareRemovalFence(ctx context.Context, o
 	return nil
 }
 
+// Finalization cannot infer whole-pair completion from a retained checkpoint:
+// older controllers sorted the pair using changing live role ownership. Require
+// existing durable acknowledgements and independent absence proof for each target.
+// This check never recovers acknowledgements or dispatches another fence action.
+func (r *kubernetesClusterStepRunner) requireRemovalCohortAbsent(ctx context.Context, operation clusterControllerOperation, nodes []clusterControllerNode) error {
+	targets, err := clusterRemovalNodes(operation, nodes)
+	if err != nil {
+		return err
+	}
+	for _, node := range targets {
+		fence, exists, err := removalFenceRecord(operation, node)
+		if err != nil {
+			return err
+		}
+		if !exists || fence.AcknowledgedAt == 0 {
+			return removalFenceRequired(node.Name)
+		}
+		var observed map[string]any
+		if err := r.kube.getJSON(ctx, "/api/v1/nodes/"+node.Name, &observed); err != nil {
+			if kubernetesAPIErrorHasStatus(err, http.StatusNotFound) {
+				continue
+			}
+			return err
+		}
+		if err := validateRemovalNodeIdentity(observed, fence); err != nil {
+			return err
+		}
+		return fmt.Errorf("removal target %s still exists; complete its recorded removal steps before finalizing the pair", node.Name)
+	}
+	return nil
+}
+
 func (c *clusterController) persistRemovalFence(ctx context.Context, operation clusterControllerOperation, fence clusterRemovalFence) error {
 	// Validate/encode the narrow payload before acquiring a database connection.
 	candidate := operation

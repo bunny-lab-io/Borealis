@@ -207,7 +207,7 @@ func emitServiceControlEventWithSocketGrace(ctx context.Context, auth *authServi
 			lastStatus = http.StatusServiceUnavailable
 			lastErr = map[string]any{"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}
 		}
-		if !serviceControlDispatchRetryable(result, lastStatus, lastErr) {
+		if !workerHostServiceDispatchRetryable(result, status, workerErr) {
 			return lastResult, lastStatus, lastErr
 		}
 		if serviceActionSocketGrace <= 0 || time.Now().After(deadline) {
@@ -231,20 +231,15 @@ func emitServiceControlEventWithSocketGrace(ctx context.Context, auth *authServi
 	}
 }
 
-func serviceControlDispatchRetryable(result map[string]any, status int, payload map[string]any) bool {
-	if result != nil && boolFromAny(result["emitted"]) {
+func workerHostServiceDispatchRetryable(result map[string]any, status int, workerErr map[string]any) bool {
+	// A failed HTTP exchange may follow admission and an accepted Agent emit.
+	// Only the worker's explicit pre-admission no-dispatch receipt permits retry.
+	if workerErr != nil || status != http.StatusOK || len(result) != 2 {
 		return false
 	}
-	errorCode := strings.ToLower(strings.TrimSpace(cleanText(payload["error"])))
-	switch errorCode {
-	case "", "agent_unavailable", "socket_unavailable", "site_worker_unavailable", "timeout", "worker_error":
-		return status == 0 ||
-			status == http.StatusConflict ||
-			status == http.StatusServiceUnavailable ||
-			status == http.StatusGatewayTimeout
-	default:
-		return false
-	}
+	emitted, emittedOK := result["emitted"].(bool)
+	queued, queuedOK := result["queued"].(bool)
+	return emittedOK && queuedOK && !emitted && !queued
 }
 
 func (s *postgresOperatorStore) loadDeviceServices(ctx context.Context, profile operatorProfile, hostname string) (deviceServicesSnapshot, int, error) {

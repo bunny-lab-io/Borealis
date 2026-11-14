@@ -1,0 +1,46 @@
+package clusterbootstrap
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+
+	"borealis/api-backend/internal/engineidentity"
+)
+
+type prejoinHostContinuation uint8
+
+const (
+	hostContinuationNone prejoinHostContinuation = iota
+	hostContinuationConfigured
+	hostContinuationFirewall
+	hostContinuationFresh
+	hostContinuationRepository
+)
+
+func prejoinHostFreshDigest(input string) string {
+	sum := sha256.Sum256([]byte("prejoin-host-clean-docker-v1\x00" + input))
+	return hex.EncodeToString(sum[:])
+}
+
+// Current fresh proof must show a configured package inventory and absent
+// Docker/repository/generated host state. Base packages may already exist; this
+// is a proven forward continuation, never a claim that prior effects are absent.
+func (p *PreparationInputs) ResumeFreshPrejoinHost(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions) (string, error) {
+	if os.Geteuid() != 0 || install.UID != PreparationRuntimeID || install.GID != PreparationRuntimeID {
+		return "", ErrMutationJournal
+	}
+	return p.resumeFreshPrejoinHost(ctx, j, install, material, actions, "/opt")
+}
+
+func (p *PreparationInputs) resumeFreshPrejoinHost(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, actions PrejoinHostActions, parent string) (string, error) {
+	if actions.CheckFresh == nil || actions.Prepare == nil || actions.Prove == nil {
+		return "", ErrMutationJournal
+	}
+	return p.prejoinHostTransaction(ctx, j, install, material, actions, parent, false, actions.CheckFresh, hostContinuationFresh)
+}
+
+func (j *MutationJournal) continueFreshPrejoinHostLocked(ctx context.Context, input string, fresh func(context.Context) error, prepare func(context.Context, *os.File) (string, error)) (string, error) {
+	return j.continuePrejoinHostClassLocked(ctx, input, prejoinHostFreshDigest(input), fresh, prepare)
+}

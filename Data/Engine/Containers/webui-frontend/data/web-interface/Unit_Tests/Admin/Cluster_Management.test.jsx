@@ -36,6 +36,8 @@ const state = vi.hoisted(() => ({
   nodes: null,
   admissions: null,
   snapshotReceivedAt: null,
+  activeOperationID: "",
+  pageChrome: null,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -48,6 +50,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
         enabled: state.enabled,
         status: state.clusterStatus,
         active_size: state.activeSize,
+        active_operation_id: state.activeOperationID,
         desired_size: state.desiredSize,
         baseline_release: "2026.08.1",
         release_channel: state.releaseChannel,
@@ -91,6 +94,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
       releases: { releases: state.releases },
       releaseError: state.releaseError,
       events: state.events,
+      eventsReceivedAt: Date.now(),
       eventError: "",
       initialError: "",
     }),
@@ -102,7 +106,7 @@ vi.mock("@/app/hooks/useAppNotifications.js", () => ({
 }));
 
 vi.mock("@/app/hooks/useRoutePageChrome.js", () => ({
-  useRoutePageChrome: vi.fn(),
+  useRoutePageChrome: (value) => { state.pageChrome = value; },
 }));
 
 function renderClusterManagement(initialEntry = "/cluster-management") {
@@ -136,8 +140,66 @@ describe("Cluster Management", () => {
     state.nodes = null;
     state.admissions = null;
     state.snapshotReceivedAt = null;
+    state.activeOperationID = "";
+    state.pageChrome = null;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each(["pair", "replacement"])("opens complete %s inspection from current cluster topology", async (mode) => {
+    state.activeSize = mode === "pair" ? 1 : 2;
+    state.clusterStatus = mode === "pair" ? "Healthy" : "Degraded Quorum";
+    state.hmrState = "inactive"; state.admissions = [];
+    state.nodes = Array.from({ length: state.activeSize }, (_, i) => ({ id: `source-${i}`, membership_state: "Active", application_state: "active" }));
+    renderClusterManagement();
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.disabled).toBe(false);
+    act(() => action.onClick());
+    expect(await screen.findByText(`Inspect Engine host 1 of ${mode === "pair" ? 2 : 1}`)).toBeInTheDocument();
+  });
+
+  it.each(["stale", "future timestamp", "isolation", "active operation", "drain", "admission", "database", "three members"])("blocks new inspection with %s", (mode) => {
+    state.activeSize = 1; state.desiredSize = 1; state.hmrState = "inactive"; state.admissions = [];
+    state.nodes = [{ id: "source", membership_state: "Active", application_state: "active" }];
+    if (mode === "stale") state.snapshotReceivedAt = Date.now() - 16000;
+    if (mode === "future timestamp") state.snapshotReceivedAt = Date.now() + 16000;
+    if (mode === "isolation") state.hmrState = "active";
+    if (mode === "active operation") state.activeOperationID = "11111111-1111-4111-8111-111111111111";
+    if (mode === "drain") state.nodes[0].application_state = "drained";
+    if (mode === "admission") state.admissions = [{ state: "Recovery Required" }];
+    if (mode === "database") state.database.fully_ready = false;
+    if (mode === "three members") { state.activeSize = 3; state.desiredSize = 3; }
+    renderClusterManagement();
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.disabled).toBe(true);
+    act(() => action.onClick());
+    expect(screen.queryByText(/Inspect Engine host 1 of/)).toBeNull();
+  });
+
+  it("resumes public inspection UUID from URL without credential submission", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const fetch = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: "ssh_onboarding_not_found" }) });
+    vi.stubGlobal("fetch", fetch);
+    renderClusterManagement(`/cluster-management?tab=overview&inspection=${id}`);
+    await screen.findByText(/Submission is not recorded yet/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe(`/api/server/cluster/onboarding/operations/${id}`);
+    expect(fetch.mock.calls[0][1].method).toBeUndefined();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
+  });
+
+  it("opens active inspection from header while keeping admission and generic cancellation separate", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    state.activeOperationID = id;
+    state.operations = [{ id, kind: "ssh_onboarding", state: "waiting", current_step: "qualify_ssh_targets" }];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    renderClusterManagement("/cluster-management?tab=events");
+    const action = state.pageChrome.actions.find((action) => action.id === "cluster-inspect-cohort");
+    expect(action.label).toBe("View Host Inspection");
+    expect(friendlyClusterOperationName(state.operations[0])).toBe("SSH Host Inspection");
+    act(() => action.onClick());
+    expect(await screen.findByText("Engine host inspection")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End inspection" })).toBeDisabled();
   });
 
   it("keeps recorded release identity separate from report freshness and runtime verification", () => {
@@ -197,6 +259,84 @@ describe("Cluster Management", () => {
     fireEvent.mouseOver(within(firstRow).getByText("2026.09.1"));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(`Recorded commit SHA: ${"a".repeat(40)}`);
     expect(screen.getByRole("tooltip")).toHaveTextContent("not freshly measured");
+  });
+
+  it("refreshes per-node task status and clears finished or failed work back to actual node state", async () => {
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+    const now = Date.now() / 1000;
+    state.hmrState = "inactive";
+    state.nodes = ids.map((id, index) => ({ id, node_name: `engine-${index + 1}`, membership_state: "Active", application_state: "active", roles: {} }));
+    state.operations = [{ id: "update", kind: "engine_update", state: "running", attempt: 1, updated_at: now,
+      current_step: `node:${ids[1]}:inspect_health`, payload: { scope: "all", update_node_ids: ids } }];
+    state.events = [{ id: 1, operation_id: "update", event_type: "operation_step_passed", created_at: now - 1,
+      message: "Native candidate passed its health checks.", details: { step: `node:${ids[1]}:promote_candidate`, next_step: `node:${ids[1]}:inspect_health` } }];
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    vi.stubGlobal("fetch", vi.fn(async (path) => ({ ok: true, json: async () => path === "/api/server/cluster"
+      ? { enabled: true, nodes: state.nodes, operations: state.operations, active_size: 3, status: "Healthy", hmr: { state: "inactive" } }
+      : path === "/api/server/time" ? { utc: new Date().toISOString(), epoch: Math.floor(Date.now() / 1000) } : { events: state.events, releases: [] } })));
+    renderClusterManagement("/cluster-management?tab=nodes");
+    const row = (name) => screen.getByText(name).closest('[role="row"]');
+    expect(await screen.findByText("engine-2")).toBeInTheDocument();
+    expect(within(row("engine-1")).getByText("Active / Active")).toBeInTheDocument();
+    expect(within(row("engine-2")).getByText("Promote Candidate — passed")).toBeInTheDocument();
+    expect(within(row("engine-2")).getByText("In progress · Verify workload health")).toBeInTheDocument();
+    expect(within(row("engine-3")).getByText("Pending · Waiting for node turn")).toBeInTheDocument();
+    expect(screen.queryByText("Native candidate passed its health checks.")).not.toBeInTheDocument();
+    fireEvent.mouseOver(within(row("engine-2")).getByText("Promote Candidate — passed").closest("li"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Native candidate passed its health checks.");
+    state.operations = [{ ...state.operations[0], current_step: `node:${ids[2]}:enter_drain`, updated_at: now + 2 }];
+    await act(async () => { poll(); });
+    await waitFor(() => expect(within(row("engine-2")).queryByRole("list", { name: "Node task timeline" })).not.toBeInTheDocument());
+    expect(within(row("engine-2")).getByText("Active / Active")).toBeInTheDocument();
+    expect(within(row("engine-3")).getByText("In progress · Enter maintenance")).toBeInTheDocument();
+    state.operations = [{ ...state.operations[0], state: "failed", updated_at: now + 3 }];
+    state.nodes = state.nodes.map((node, index) => index === 2 ? { ...node, application_state: "drained" } : node);
+    await act(async () => { poll(); });
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Node task timeline" })).not.toBeInTheDocument());
+    expect(within(row("engine-2")).getByText("Active / Active")).toBeInTheDocument();
+    expect(within(row("engine-3")).getByText("Active / Drained")).toBeInTheDocument();
+  });
+
+  it("anchors soak countdown to server clock, ticks once per second and stops after clock failure", async () => {
+    const serverMS = Date.parse("2026-10-28T12:00:00Z");
+    let browserMS = serverMS + 6 * 60 * 60 * 1000;
+    let monotonic = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => browserMS);
+    vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+    let poll, tick;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      if (delay === 1000) { tick = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.operations = [{ id: "op-soak", kind: "node_maintenance", state: "running", current_step: "minimum_ready_soak", attempt: 1, updated_at: serverMS / 1000 }];
+    state.events = [{ id: 1, operation_id: "op-soak", event_type: "operation_soak_started", created_at: serverMS / 1000,
+      details: { operation_id: "op-soak", attempt: 1, step: "minimum_ready_soak", run_id: "11111111-1111-4111-8111-111111111111", holder: "controller", phase: "ready",
+        started_at_ms: serverMS, deadline_at_ms: serverMS + 30_000, observed_at_ms: serverMS, valid_until_ms: serverMS + 15_000 } }];
+    let clockFailure = false;
+    vi.stubGlobal("fetch", vi.fn(async (path) => {
+      if (path === "/api/server/time" && clockFailure) throw new Error("clock unavailable");
+      return { ok: true, json: async () => path === "/api/server/cluster" ? { enabled: true, operations: state.operations, nodes: [] }
+        : path === "/api/server/time" ? { utc: new Date(serverMS).toISOString(), epoch: serverMS / 1000 } : { events: [], releases: [] } };
+    }));
+    renderClusterManagement("/cluster-management?tab=operations");
+    const timeline = await screen.findByRole("list", { name: "Operation timeline" });
+    fireEvent.mouseOver(within(timeline).getAllByRole("listitem").at(-1));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/Soak timing unavailable/);
+    await act(async () => { poll(); });
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("Configured soak wait: 30s remaining"));
+    act(() => { browserMS += 1000; monotonic += 1000; tick(); });
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("Configured soak wait: 29s remaining"));
+    clockFailure = true;
+    await act(async () => { poll(); });
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/Soak timing unavailable/));
+    expect(screen.queryByText(/\ds remaining/)).not.toBeInTheDocument();
   });
 
   it.each(["failed", "hanging"])("ages retained version records during %s polling", async (failure) => {
@@ -367,7 +507,8 @@ describe("Cluster Management", () => {
     await act(async () => { poll(); });
     // Generation 2 snapshot failed; generation 1 history still completes independently.
     await act(async () => { histories[0]({ ok: true, json: async () => ({ events: [{ id: 42, operation_id: operationID, event_type: "operation_step_passed", message: "History arrived while snapshots were offline", state: "running", created_at: 1_787_770_010 }] }) }); });
-    expect(await screen.findByText("History arrived while snapshots were offline")).toBeInTheDocument();
+    fireEvent.mouseOver((await screen.findByText("Operation step passed")).closest("li"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("History arrived while snapshots were offline");
     await act(async () => { catalogs[0]({ ok: true, json: async () => ({ releases: [{ tag: "2026.09.2", channel: "stable", selectable: true }] }) }); });
     fireEvent.click(screen.getByRole("tab", { name: "Maintenance" }));
     fireEvent.mouseDown(screen.getByRole("combobox", { name: "Target Engine Version" }));
@@ -399,10 +540,10 @@ describe("Cluster Management", () => {
     ));
   });
 
-  it("offers retry for retained cancelled admission operations without unsafe cancellation", async () => {
+  it.each(["failed", "cancelled"])("offers retry for retained %s admission operations without unsafe cancellation", async (operationState) => {
     state.operations = [
       { id: "44444444-4444-4444-8444-444444444444", kind: "membership_admit", state: "queued", current_step: "preflight", created_at: 1787770000 },
-      { id: "55555555-5555-4555-8555-555555555555", kind: "membership_admit", state: "cancelled", current_step: "cancelled", created_at: 1787770001 },
+      { id: "55555555-5555-4555-8555-555555555555", kind: "membership_admit", state: operationState, current_step: "apply_membership", created_at: 1787770001 },
     ];
     renderClusterManagement("/cluster-management?tab=operations");
     expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
@@ -787,7 +928,7 @@ describe("Cluster Management", () => {
     expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
   });
 
-  it("renders failed operations with friendly timestamp and no inline retry affordance", async () => {
+  it("renders failed node removal with friendly timestamp and retries through existing operation contract", async () => {
     state.operations = [{
       id: "11111111-1111-4111-8111-111111111199",
       kind: "node_remove",
@@ -799,6 +940,11 @@ describe("Cluster Management", () => {
       target_node_id: "11111111-1111-4111-8111-111111111111",
       payload: { emergency: false },
     }];
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") return { ok: true, status: 202, json: async () => ({ operation_id: state.operations[0].id }) };
+      return { ok: true, json: async () => ({ releases: [], events: [], nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
     renderClusterManagement("/cluster-management?tab=operations");
 
     for (const column of ["Node", "Status", "Operation", "Details", "Timestamp"]) {
@@ -816,7 +962,32 @@ describe("Cluster Management", () => {
     expect(screen.getByText("Node Pair Removed")).toBeInTheDocument();
     expect(screen.getByText(/^\d{2}\/\d{2}\/\d{4} @ \d{2}:\d{2}:\d{2}$/)).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/server/cluster/operations/11111111-1111-4111-8111-111111111199/retry",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ confirmation: "RETRY OPERATION" }) })
+    ));
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
+  });
+
+  it.each([
+    ["running", { state: "running" }],
+    ["queued", { state: "queued" }],
+    ["waiting", { state: "waiting" }],
+    ["cancelled", { state: "cancelled" }],
+    ["succeeded", { state: "succeeded" }],
+    ["superseded", { superseded_by: "22222222-2222-4222-8222-222222222299" }],
+    ["invalid operation ID", { id: "invalid/operation" }],
+    ["unsupported operation kind", { kind: "engine_update" }],
+  ])("omits removal Retry for %s records", async (_, patch) => {
+    state.operations = [{
+      id: "11111111-1111-4111-8111-111111111199", kind: "node_remove", state: "failed",
+      current_step: "delete_member_node", target_node_id: "11111111-1111-4111-8111-111111111111",
+      created_at: 1_787_770_000, ...patch,
+    }];
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("engine-1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 
   it("shows linked lifecycle details and copies redacted diagnostics", async () => {
@@ -846,7 +1017,9 @@ describe("Cluster Management", () => {
     renderClusterManagement("/cluster-management?tab=operations");
 
     expect(await screen.findByText("engine-2, engine-3")).toBeInTheDocument();
-    expect(screen.getByText("Kubernetes membership applied; node conformance started.")).toBeInTheDocument();
+    expect(screen.queryByText("Kubernetes membership applied; node conformance started.")).not.toBeInTheDocument();
+    fireEvent.mouseOver(screen.getByText("Apply Membership — passed").closest("li"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Kubernetes membership applied; node conformance started.");
     fireEvent.click(screen.getByRole("button", { name: "Copy details for Cluster Node Added" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
     const copied = writeText.mock.calls[0][0];
@@ -855,6 +1028,51 @@ describe("Cluster Management", () => {
     expect(copied).toContain("wait_node_conformance");
     expect(copied).toContain("[redacted]");
     expect(copied).not.toContain("temporary-secret");
+  });
+
+  it.each(["failed", "hanging"])("retains timeline on %s event polling and recovers without duplicate milestones", async (failure) => {
+    let now = 1_787_770_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let poll;
+    const originalInterval = window.setInterval.bind(window);
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if (delay === 5000) { poll = callback; return 0; }
+      return originalInterval(callback, delay, ...args);
+    });
+    state.operations = [{ id: "timeline-op", kind: "node_maintenance", state: "running", current_step: "inspect_health", updated_at: now / 1000 }];
+    state.events = [{ id: 40, operation_id: "timeline-op", event_type: "operation_started", created_at: now / 1000 - 1 }];
+    let recover = false;
+    let passed = { id: 41, operation_id: "timeline-op", event_type: "operation_step_passed", message: "Cluster operation step passed.", details: { step: "inspect_health", next_step: "minimum_ready_soak" }, created_at: now / 1000 + 20 };
+    const fetchMock = vi.fn((path) => {
+      if (String(path).includes("/events")) {
+        if (!recover) return failure === "failed" ? Promise.reject(new Error("history offline")) : new Promise(() => {});
+        return Promise.resolve({ ok: true, json: async () => ({ events: [state.events[0], passed, passed] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => path === "/api/server/cluster" ? { nodes: [], operations: state.operations } : { releases: [] } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("Current: In progress · Verify workload health")).toBeInTheDocument();
+    await act(async () => { now += 20_000; poll(); });
+    expect(await screen.findByText(/Updates delayed/)).toBeInTheDocument();
+    expect(screen.getByText("Operation started")).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Operation timeline" })).queryByTestId("SyncRoundedIcon")).not.toBeInTheDocument();
+    recover = true;
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Current: In progress · Workload soak wait")).toBeInTheDocument();
+    expect(screen.queryByText(/Updates delayed/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Verify workload health — passed")).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=40", expect.anything());
+    // Same generic event message; renderer still updates the nested timeline.
+    passed = { ...passed, id: 42, details: { step: "minimum_ready_soak", next_step: "restore_roles" } };
+    await act(async () => { poll(); });
+    expect(await screen.findByText("Current: In progress · Restore cluster roles")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/events?after_id=41", expect.anything());
+    view.unmount();
+    // Browser refresh rebuilds progress from durable loader history.
+    state.events = [state.events[0], passed];
+    renderClusterManagement("/cluster-management?tab=operations");
+    expect(await screen.findByText("Current: In progress · Restore cluster roles")).toBeInTheDocument();
   });
 
   it("requires paired safe removal and explicit external fencing for emergency removal", async () => {
@@ -874,6 +1092,63 @@ describe("Cluster Management", () => {
     expect(screen.getByText(/Target must be powered off and unable to rejoin/)).toBeInTheDocument();
     expect(screen.getByLabelText("External fencing confirmation")).toBeInTheDocument();
     expect(screen.getByText("Type EMERGENCY REMOVE NODE")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Remove Pair", "REMOVE NODE PAIR", false],
+    ["Emergency Remove", "EMERGENCY REMOVE NODE", true],
+  ])("preserves sequential spaces for %s drafts and normalizes only submitted text", async (action, expectedConfirmation, emergency) => {
+    state.hmrState = "inactive";
+    const fetchMock = vi.fn(async (path, options = {}) => {
+      if (options.method === "POST") {
+        const accepted = JSON.parse(options.body).confirmation === expectedConfirmation;
+        return { ok: accepted, status: accepted ? 202 : 400, json: async () => accepted
+          ? { operation_id: "removal-operation" } : { message: "Exact removal confirmation required." } };
+      }
+      return { ok: true, json: async () => ({ releases: [], events: [], nodes: [], operations: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=nodes");
+    await openNodeActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(action) }));
+    const typeAcrossSpace = (input, prefix, suffix, space = " ") => {
+      // Isolate the space keystroke and read back its controlled value before continuing.
+      fireEvent.change(input, { target: { value: prefix } });
+      fireEvent.change(input, { target: { value: input.value + space } });
+      expect(input).toHaveValue(prefix + space);
+      fireEvent.change(input, { target: { value: input.value + suffix } });
+    };
+    const confirmationInput = screen.getByLabelText("Typed confirmation");
+    const firstSpace = expectedConfirmation.indexOf(" ");
+    typeAcrossSpace(confirmationInput, expectedConfirmation.slice(0, firstSpace), expectedConfirmation.slice(firstSpace + 1, -1));
+    expect(confirmationInput).toHaveValue(expectedConfirmation.slice(0, -1));
+    const reasonInput = screen.getByLabelText("Reason");
+    typeAcrossSpace(reasonInput, "  Planned", "cluster maintenance  ", "  ");
+    expect(reasonInput).toHaveValue("  Planned  cluster maintenance  ");
+    if (emergency) {
+      const fencingInput = screen.getByLabelText("External fencing confirmation");
+      typeAcrossSpace(fencingInput, "TARGET", "IS POWERED OFF");
+      expect(fencingInput).toHaveValue("TARGET IS POWERED OFF");
+    }
+    const submit = screen.getByRole("button", { name: emergency ? "Remove Node" : "Submit" });
+    fireEvent.click(submit);
+    expect(await screen.findByText("Exact removal confirmation required.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.change(confirmationInput, { target: { value: confirmationInput.value + expectedConfirmation.at(-1) } });
+    expect(confirmationInput).toHaveValue(expectedConfirmation);
+    // Boundary whitespace still receives the existing submission normalization.
+    fireEvent.change(confirmationInput, { target: { value: ` ${confirmationInput.value} ` } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const submissions = fetchMock.mock.calls.filter(([, options]) => options?.method === "POST");
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1][0]).toBe("/api/server/cluster/nodes/11111111-1111-4111-8111-111111111111/remove");
+    expect(JSON.parse(submissions[1][1].body)).toEqual({
+      emergency,
+      ...(emergency ? { fencing_confirmation: "TARGET IS POWERED OFF" } : { paired_node_id: "22222222-2222-4222-8222-222222222222" }),
+      confirmation: expectedConfirmation,
+      reason: "Planned cluster maintenance",
+    });
   });
 
   it("fences expansion after supported three-node membership", async () => {

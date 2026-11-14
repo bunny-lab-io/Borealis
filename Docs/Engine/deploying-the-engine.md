@@ -23,75 +23,124 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
 ## Engine Deployment Profiles
-The Engine container deployment system auto-detects host CPU and RAM specs on every engine deployment or redeployment. Borealis scores CPU and RAM separately, selects the lower sizing profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker scheduled task-slot settings through K3s workload manifests. This sizing profile is separate from the network mode selected during install.
+Standalone deployments detect host CPU and RAM, score them separately, and select the lower sizing profile. Cluster preparation retains the source Engine's profile and memory tuning so stronger joining hosts do not silently choose another profile. Each host still reports its own CPU and RAM. Preparation fails when a target falls below the inherited profile or cannot fit either its calculated PostgreSQL memory cap or its effective override. A smaller override does not bypass the calculated cap. Storage and aggregate workload capacity need separate qualification.
+
+Borealis writes profile tuning into `Engine/Deploy/compose.env` and applies database plus site-worker scheduled task-slot settings through K3s workload manifests. This sizing profile is separate from the network mode selected during install.
+
+Homelab and Small Business can use one non-clustered Engine or three clustered Engines. MSP / Production and Enterprise are clustered deployment profiles: plan three Engines. Install the first Engine before adding its two peers through the cluster workflow. Profile selection alone does not create a cluster; existing single-Engine installations retain their tuning until an approved topology change.
+
+The CPU and RAM bands below describe current automatic profile selection **per Engine**. They are not validated minimum or recommended hardware for SSH cluster onboarding. Homelab's open lower band does not establish a safe minimum. Endpoint figures are planning estimates: Homelab about 30-40 devices, Small Business about 100-200 devices, and MSP/Enterprise hundreds of devices per managed site. They are not enforced device limits or measured capacity. Operator counts describe the whole environment; do not multiply them by node count. Storage figures are per-Engine planning ranges; actual data, replicas, installation, scratch, free-space and inode requirements still need measurement.
 
 === "Homelab"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
+    | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Non-clustered (1 Engine) or clustered (3 Engines) | Personal labs, testing, feature development, very small sites | About 30-40 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
 
 === "Small Business"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
+    | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Non-clustered (1 Engine) or clustered (3 Engines) | Smaller production environments | About 100-200 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
 
-=== "MSP / Production"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
+=== "MSP / Production (Clustered)"
+    | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Clustered (3 Engines) | SMB and managed-service production environments | Hundreds per managed site | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
 
-=== "Enterprise"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 16 | 500 GiB-1 TiB |
-
-=== "Enterprise Clustered"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 16 per node | 500 GiB-1 TiB per node |
+=== "Enterprise (Clustered)"
+    | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Clustered (3 Engines) | Larger production environments | Hundreds per managed site | 10-20 | 24+ | 64 GiB+ | 16 | 500 GiB-1 TiB |
 
 !!! info "Scheduled task slots"
 
     Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
 
+### Resident workers and active work
+
+Keep one resident worker per site. An idle worker keeps its site sessions available; it must not be removed merely to free an active-work slot. New primary worker launches reserve one Pod and Service per immutable site identity, including concurrent requests during a site rename. Existing workers keep their names. Temporary old/replacement overlap is reserved for recovery or rebuild while Agents transition. Passive workers still need memory, connections and other resources. Mixed old/new operator versions and live replacement behavior remain unqualified.
+
+The active-work policy targets **4, 8, 12 and 16 concurrently busy site workers per Engine** for Homelab, Small Business, MSP / Production and Enterprise respectively. These counts double the original 2/4/6/8 proposal and are separate from scheduled task slots within each worker. Additional sites wait for an active-work slot; finishing actual work returns the slot without tearing down the resident worker. Repository admission now charges supported scheduled and direct work to its original Engine and worker incarnation. Missing placement, incompatible Agents or uncertain completion blocks new work or retains its charge. This implementation still needs integrated runtime qualification; these counts do not establish measured capacity.
+
+!!! warning "Active-work rollout limits"
+
+    Tracked SYSTEM/root scripts, Engine-side Ansible, service controls, software/patch inventory refresh, synchronous file/process/registry operations and bound remote shells have completion tracking. Asynchronous uploads and downloads also track completion when both Engine and Agent support the transfer contract; older Agents remain blocked before transfer work. Upload staging and browser download streaming keep their own active-work references until request closure. Transfer progress or a cancellation acknowledgement cannot free capacity or make a download ready before its exact terminal receipt commits.
+
+    Shell restart tracks the original listener and every accepted session until their owned work closes, then verifies a replacement listener. Each old shell keeps its own completion receipt and capacity charge. A blocked or uncertain child exit prevents restart completion; an Agent process crash cannot authorize replay. Older Agents reject unsupported tracked restart before effects.
+
+    Windows current-user PowerShell and Batch jobs also retain their active-work reference until the original SYSTEM-launched process exits and owned cleanup finishes. A termination request alone cannot release it. Older Agents reject unsupported tracked current-user work before effects; Linux current-user execution remains unsupported.
+
+    Patch installation/reboot, Agent maintenance/update, new remote desktop sessions and VNC service or credential controls remain blocked before dispatch until their lifetime adapters are complete. Patch policy registry commands have tracked completion, but automatic policy-enforcement dispatch remains incomplete. RDP readiness commands now retain capacity through original command and probe cleanup; they do not authorize a browser desktop session. Existing passive connections and health reporting remain available. Preserve unresolved activity and Agent journal files; restart, disconnection or elapsed time does not prove work stopped. Repository completion tests do not qualify live transfer or shell recovery behavior, current-user cross-session execution, registry policy application, Windows power-loss durability or resident-worker RAM placement.
+
+Before counting worker capacity, reserve **7.5 GB per Engine** for the host: Ubuntu Server's 1.5-GB ISO minimum, K3s server's 2-GB minimum, and the operator-selected 4-GB allowance. GB here means decimal bytes. Borealis application and infrastructure envelopes, every resident worker, and replacement overlap are charged separately. The SSH workload-fit check now subtracts this reserve from measured host RAM. Published installation minima plus this policy allowance are not measured runtime demand or proof of readiness. [Ubuntu Server requirements](https://ubuntu.com/server/docs/reference/installation/system-requirements/) and [K3s requirements](https://docs.k3s.io/installation/requirements) provide the baseline figures.
+
+### Cluster onboarding profile checks
+
+The four sizing profiles remain Homelab, Small Business, MSP / Production and Enterprise. “Clustered” describes topology, not a fifth tuning rank. Joining hosts inherit the source profile and reference memory; larger hosts keep that tuning. Clustered and non-clustered variants use the same per-service tuning at a given rank/reference; cluster infrastructure and replicas require additional capacity.
+
+Scheduled task slots must match the inherited profile: **5, 8, 12 or 16**, respectively. Explicit database pool, overflow and PostgreSQL profile settings must also match the values deployment derives from that profile and its inherited reference memory. Use the renderer's canonical spellings, including PostgreSQL `15min` checkpoint timeout. Conflicting values block the inherited hardware check because deployment would replace them. Reconcile source configuration through an approved maintenance procedure, then inspect the targets again. Omitted optional settings continue to derive from the inherited profile. Existing service-limit checks and explicitly preserved timeout and Ansible concurrency overrides remain in force; this compatibility check does not bound the total number of workers.
+
+The SSH preview's application-budget check covers **all four profiles with their inherited source reference memory, default scheduled slots and explicit default application CPU/memory caps**. Source configuration and observed workloads must agree. PostgreSQL keeps its calculated source-profile cap; larger joining hosts do not change it. Missing limits, unsupported overrides or changed workloads block this check. Review source deployment settings and reconcile unsupported tuning through approved maintenance before inspecting again.
+
+Validated onboarding hardware minimums, workload recommendations, complete allowed tuning and full release/profile capacity budgets remain pending for every profile. Meeting a selection band or passing the application check does not authorize preparation or admission. See [Managing Engine Clusters](managing-engine-clusters.md) for current readiness gates.
+
+Agent redeployment keeps old workers running until all replacement workers are ready. The SSH preview includes this overlap for observed and currently demanded workers. It does not cap future worker creation or establish complete host capacity.
+
 ## Profile-Managed Container Limits
 `Engine.sh` writes least-privilege runtime settings during every deploy. Normal Engine services and K3s pods run as the `borealis-engine` system user/group where supported, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, profile-scaled CPU/memory caps, and fixed read-only host timezone data. PostgreSQL runs in K3s as the official non-root PostgreSQL UID on a Longhorn-backed PVC so imported database state keeps compatible ownership. Limits are caps, not reservations. K3s `remote-desktop-guacd` stays ClusterIP-only and does not mount the Docker socket.
 
-Site-worker memory is per active worker. If 500 workers are active at once, aggregate memory pressure is roughly `500 x site-worker cap` plus Engine service overhead. Tune active worker concurrency and per-worker caps together before scaling large environments.
+Site-worker memory is per resident Pod, including idle workers and temporary replacements. Do not count idle workers as zero memory or subtract their caps merely because an active-work slot was released. New workers created by the updated operator use the effective deployment CPU and memory limits below. Existing Pods retain their observed limits until approved replacement. These caps do not reserve node memory or prove that workers fit.
 
 Scheduled task slots control claimed work items. Ansible controller concurrency has separate `BOREALIS_SITE_WORKER_ANSIBLE_CONCURRENCY` limit and defaults to `2` per site worker so individual playbooks cannot consume worker memory for every claimed slot at once.
+
+The profile values below supply CPU and memory caps to new worker main and startup containers. The separate `small`, `standard` and `large` worker choices retain their existing requests; the scheduler defaults to `standard`. Missing, malformed or below-request limits block launch. SSH preparation checks require explicit supported overrides to agree with inherited source configuration. The PID setting is retained for configuration checks; it is not enforced as a Kubernetes Pod PID cap.
+
+During a mixed-version rollout, source settings alone do not prove which limits the running operator uses. Prospective sizing therefore keeps the larger of the declared limits and the existing legacy worker envelope. For example, a Small Business declaration of 384 MiB still carries at least the legacy standard-worker 512-MiB prospective allowance. Existing workers and replacement copies retain their actual bounds. Complete producer, node-memory and placement qualification remains required.
 
 === "Homelab"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `256m` |
     | Site-worker CPU cap | `1.00` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
 === "Small Business"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `384m` |
     | Site-worker CPU cap | `1.00` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
-=== "MSP / Production"
+    These application caps illustrate **16 GiB source reference memory**. They apply per Engine in either topology. Other inherited reference memory changes the calculated PostgreSQL cap; the SSH preview checks that calculated value against source configuration and observed workloads.
+
+    | Application | Memory cap | CPU cap (cores) |
+    | --- | ---: | ---: |
+    | API backend | 1 GiB | 2 |
+    | Job scheduler | 512 MiB | 1.5 |
+    | Production WebUI | 512 MiB | 1 |
+    | Traefik edge | 512 MiB | 1.5 |
+    | PostgreSQL instance | 6 GiB | 2 |
+    | Remote desktop guacd | 512 MiB | 1 |
+    | WireGuard tunnel | 256 MiB | 1 |
+
+    These application caps exclude infrastructure, workers and host reserves. They are not minimum RAM or CPU requirements for the host.
+
+=== "MSP / Production (Clustered)"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `512m` |
     | Site-worker CPU cap | `1.50` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
-=== "Enterprise"
+=== "Enterprise (Clustered)"
     | Setting | Default |
     | --- | ---: |
     | Site-worker memory cap | `512m` |
     | Site-worker CPU cap | `2.00` |
-    | Site-worker PID cap | `128` |
+    | Site-worker PID setting | `128` |
 
 PostgreSQL memory caps derive from the selected PostgreSQL profile so `shared_buffers`, cache sizing, and container caps move together. WebUI gets separate production and dev-mode defaults so Vite dev mode has more headroom than static production serving.
 
-Override any limit before redeploy by exporting the matching env var, for example:
+Existing deployments accept explicit service-limit overrides before redeploy, for example below. An override does not establish a supported cluster-onboarding budget; the application check requires the selected profile's default application CPU/memory caps. Site-worker limits and total worker capacity need separate qualification.
 ```sh
 BOREALIS_SITE_WORKER_MEMORY_LIMIT=768m \
 BOREALIS_API_BACKEND_MEMORY_LIMIT=2g \
@@ -209,7 +258,7 @@ Every full Engine deploy now creates or repairs a single-node K3s cluster baseli
 
 Multi-node mode is separate, gated conversion. Current release supports one or three homogeneous AMD64 Ubuntu nodes, per-node application workloads, one Cluster Virtual IP, CloudNativePG, paired quorum admission, existing HMR isolation recovery, and one-node-at-time release updates. API and WebUI fence odd-numbered expansion or shrinking beyond three nodes; that work remains future roadmap scope. Read [Managing Engine Clusters](managing-engine-clusters.md) before attempting conversion. If Engine FQDN uses outer or nested reverse proxy, include [Cluster Virtual IP upstream cutover](managing-engine-clusters.md#cut-over-the-outer-reverse-proxy) in conversion plan. Production conversion requires explicit operator checkpoint after stable-K3s conformance and disposable three-node qualification.
 
-`Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down cluster. Multi-node firewall rules permit only explicitly configured private peer CIDRs for K3s API, etcd, kubelet, Spegel, flannel, and WireGuard ports.
+`Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down cluster. Multi-node firewall rules permit only explicitly configured private peer CIDRs for K3s API, etcd, kubelet, Spegel, flannel, and WireGuard ports. Borealis replaces its firewall chain in one transaction, preserving unrelated rules and keeping the previous allowlist active until replacement succeeds.
 
 K3s keeps bundled Traefik and ServiceLB disabled so Borealis-owned Traefik remains the only public ingress. Borealis also installs `borealis-k3s-api-firewall.service`, which applies a host iptables chain for TCP `6443`. The rule allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
 
@@ -345,6 +394,18 @@ After deployment finishes:
     - Production (`Engine.sh --network-mode public|local deploy prod`) runs the Engine API behind the K3s `api-backend` Service, serves the static WebUI from the K3s `webui-frontend` workload, and publishes the app through K3s Traefik.
     - Engine and Agent dependency checks live in their domain launchers.
     - `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose/env hashes, service image hashes, changed services, and whether Compose ran or was skipped.
+
+    ### Cluster sizing inheritance
+
+    - Deployment profile tables label ranks2/3 as clustered and ranks0/1 as either topology. This is the operator-approved support direction, not automatic topology enforcement in `load_profile_tuning`. Preserve first-Engine installation and existing standalone tuning; only the original controller changes membership. Keep topology labels, per-Engine selection bands and per-worker slots synchronized when supported configurations change. The former separate Enterprise Clustered roadmap row is consolidated into rank3; no additional profile or capacity claim is introduced.
+
+    - `load_deployment_profile_tuning` reads controller-hydrated or retained private environment fields `BOREALIS_CLUSTER_SIZING_RANK` and `BOREALIS_CLUSTER_SIZING_MEMORY_MIB`. Ambient process variables cannot override these fields. Rank is exactly0through3; reference memory is a canonical positive integer with at most9digits. Missing halves or invalid values fail before environment rendering.
+    - An enabled legacy cluster without explicit sizing fields derives them once from its hydrated `BOREALIS_DEPLOYMENT_PROFILE_RANK` and `BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB`; missing source fields fail closed. Fresh standalone deployment with no inherited contract keeps automatic sizing. A fresh joining workflow must deliver the verified source contract before calling preparation, even before K3s exists locally; no target-local profile selection is permitted.
+    - `load_profile_tuning` keeps actual host observations separate from the reference memory used for PostgreSQL buffers/cache and profile defaults. Target CPU/memory ranks must support inherited rank, reference memory must support that rank, and inherited PostgreSQL memory cap must fit actual target RAM. A CPU-limited source can have more RAM than necessary; a smaller target may retain exact capped tuning when these checks pass.
+    - Both sizing fields persist through generated runtime/compose environments and existing runtime Secret mirroring. Local host telemetry cannot replace the retained memory reference during subsequent redeploys. Existing explicit service-limit settings keep their documented precedence; full aggregate capacity/storage checks remain separate prerequisites. This runtime consumer does not publish a release, deliver SSH configuration, authorize preparation or qualify enrollment by itself.
+    - The central SSH capacity gate uses fresh CPU/RAM from every original target and requires the source's explicit effective PostgreSQL cap, preserving service-limit precedence without inventing release defaults. It rechecks the entire source configuration around observation and consumption. It mirrors `load_profile_tuning`'s pre-override computed-profile guard and checks the explicit effective cap; both must fit. Aggregate workload/storage qualification and preparation authorization remain separate. [Cluster guidance](managing-engine-clusters.md) owns this gate's lifecycle and supported quantity contract.
+    - `PreparationConfiguration.Sizing` validates all 23 unconditional profile-derived settings against `Engine.sh`: database pool/overflow, scheduled slots and 20 PostgreSQL tuning fields. `preparation_sizing_tuning.go` mirrors inherited rank/reference calculations, including shared-buffer and cache clamps and canonical memory spelling. Explicit mismatches reject; omitted optional fields retain derivation. Generic configuration import accepts bounded PostgreSQL integer-minute durations, including the actual `15min` default, while retaining existing duration forms. This compatibility check supplies no worker allowance or new hardware minimum. Isolated production Bash parity covers all ranks, integer truncation, clamps and every field; native scope tests reject drift before and after consumption.
+    - `Tests/Unit_Tests/test_engine_cluster_recovery.py` exercises actual Bash library functions for all profiles, larger targets, capped memory, unchanged standalone detection, missing/malformed/insufficient contracts, inherited prejoin configuration and subsequent host telemetry changes. Go sizing tests independently compare profile boundaries, inherited shared-buffer clamps plus extra memory, pre-override rejection and effective quantity conversion with isolated pure functions extracted from `Engine.sh`; they do not execute its startup or deployment path. No lab runtime is modified.
 
     ### Configuration precedence
 

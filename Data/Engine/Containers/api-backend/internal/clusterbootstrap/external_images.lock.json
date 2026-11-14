@@ -1,0 +1,312 @@
+{
+  "components": [
+    {
+      "component": "cert-manager",
+      "images": [
+        {
+          "config_bytes": 3625,
+          "config_digest": "sha256:d962182a4de3c90e091667c2657ee0eb7077d370a9b62a36fc1f06ba8c5e37fd",
+          "index_bytes": 1728,
+          "index_digest": "sha256:dbc7cc1354f603918e7c5af7f55a0a620537394452c93a565bde75c6f48e8837",
+          "layer_blob_bytes": 6600614,
+          "layer_count": 16,
+          "manifest_bytes": 3646,
+          "manifest_digest": "sha256:e5a8da10354cdd0225eb039c84ad3696d47282de18c21905a25bb3a392542b34",
+          "reference": "quay.io/jetstack/cert-manager-acmesolver:v1.21.1"
+        },
+        {
+          "config_bytes": 3625,
+          "config_digest": "sha256:3133bbd4dd2783fe7197585d9198c738508b9784c8746bf62e9fac6aad41535a",
+          "index_bytes": 1728,
+          "index_digest": "sha256:ccf6b919ec0500745a47a910118f834f9636d0aac1ff221245cd2557ed8c7c98",
+          "layer_blob_bytes": 12381173,
+          "layer_count": 16,
+          "manifest_bytes": 3647,
+          "manifest_digest": "sha256:1910ad7e134880e27d229e07affb43da1b07841a77f70c364f17467cb4e49bd9",
+          "reference": "quay.io/jetstack/cert-manager-cainjector:v1.21.1"
+        },
+        {
+          "config_bytes": 3619,
+          "config_digest": "sha256:8359cecc5aa6ffd4940996999c15c543821a9949d2b8a3881295c38ef86e0757",
+          "index_bytes": 1728,
+          "index_digest": "sha256:416a2d76870d996460e62bd7f521bf14fa017be9e3e904aab92163a331fcb61a",
+          "layer_blob_bytes": 24864258,
+          "layer_count": 16,
+          "manifest_bytes": 3647,
+          "manifest_digest": "sha256:4c2b5201fd66085b777dc6b256d96d7d346b6445404cec34db5f8aea86182cc5",
+          "reference": "quay.io/jetstack/cert-manager-controller:v1.21.1"
+        },
+        {
+          "config_bytes": 3604,
+          "config_digest": "sha256:6f7f1ce59de1febbc7e423da382eedd0350ba6c8600368e6f42d7fdefa1bb6b9",
+          "index_bytes": 1728,
+          "index_digest": "sha256:d8b3961b51c8c7320633f8208dc46bf88aa13804d0f7cbe48a096b2c523cee42",
+          "layer_blob_bytes": 19774300,
+          "layer_count": 16,
+          "manifest_bytes": 3647,
+          "manifest_digest": "sha256:741084291faf115a2909bfe3515458b54926c67f039ac20effd821bac69817a4",
+          "reference": "quay.io/jetstack/cert-manager-webhook:v1.21.1"
+        }
+      ],
+      "manifest_sha256": "5f6a499b8c1857d57f560f536e0dcc830914b45c420899fe7ad0692c8624e408",
+      "version": "v1.21.1"
+    },
+    {
+      "component": "cloudnative-pg",
+      "images": [
+        {
+          "config_bytes": 4814,
+          "config_digest": "sha256:534de67cf62da3fb91c3a686520e233b031b8ef31c12ff18c60737d7e371e234",
+          "index_bytes": 2704,
+          "index_digest": "sha256:a2701eb97cdd2a34b1fdb2cb51987f544b706e40bec72ae7146cd8580efefebb",
+          "layer_blob_bytes": 37148277,
+          "layer_count": 16,
+          "manifest_bytes": 4408,
+          "manifest_digest": "sha256:091d306935cfdf646debfe78010d59ebfb572150eb6eb922b0203873c0c68841",
+          "reference": "ghcr.io/cloudnative-pg/cloudnative-pg:1.30.0"
+        }
+      ],
+      "manifest_sha256": "f8bede43fe4ee0d478c2355b204a36876b2ae4faac60f2a9452280b293da3b88",
+      "version": "v1.30.0"
+    },
+    {
+      "component": "kube-vip",
+      "images": [
+        {
+          "config_bytes": 1471,
+          "config_digest": "sha256:f7b60fb580e8febbabb3b5801e42ecffbf2603a43b5d3988d3863fac86f04957",
+          "index_bytes": 3888,
+          "index_digest": "sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410",
+          "layer_blob_bytes": 18533096,
+          "layer_count": 2,
+          "manifest_bytes": 673,
+          "manifest_digest": "sha256:a941e291e9593a56ea38887f7b452e117c1563b7694a0ecc0b36329705af42f1",
+          "reference": "ghcr.io/kube-vip/kube-vip@sha256:c12498086c5ef3cb121c5b7f9aa755c14bd938ed4f6303da739eb0a0e9ca3410"
+        }
+      ],
+      "manifest_sha256": "472fe596f9f0c11123149ba1884420887b0341981dec21e951f3753dd5f66757"
+    },
+    {
+      "component": "longhorn",
+      "images": [
+        {
+          "config_bytes": 7316,
+          "config_digest": "sha256:735a6699a82d0b34334b71c801fefef9bbeef7db43381851354d64e73f7043e5",
+          "index_bytes": 1609,
+          "index_digest": "sha256:c480c397045e6a02bb1470cef759e2c3e2ff7fff4400bc3730dfd64446507d7e",
+          "layer_blob_bytes": 153958829,
+          "layer_count": 10,
+          "manifest_bytes": 2196,
+          "manifest_digest": "sha256:715e034ecc7bade2f19f4d5bcc8b85ccca8ad4f37b6e5696575b99a90443b478",
+          "reference": "docker.io/longhornio/backing-image-manager:v1.12.0"
+        },
+        {
+          "config_bytes": 3653,
+          "config_digest": "sha256:7272884ab4c3e4b672210d2839d599f38af7977c46b1c30594e81ce568b1967f",
+          "index_bytes": 1577,
+          "index_digest": "sha256:a814aa4784197116983ea13e376fc691e000a390de9d0b9fca2bc4a2fb7c4a1f",
+          "layer_blob_bytes": 38599251,
+          "layer_count": 14,
+          "manifest_bytes": 3233,
+          "manifest_digest": "sha256:41dc0a91e103ee2e499df459526eb76ae57db0e8789385757df34fdac11e92d8",
+          "reference": "docker.io/longhornio/csi-attacher:v4.12.0"
+        },
+        {
+          "config_bytes": 3726,
+          "config_digest": "sha256:905ecc40d0b09c1ccfe82596e1996bf8285346ef31be259080e7277429116337",
+          "index_bytes": 2225,
+          "index_digest": "sha256:29f7cfd519008fe8f8dff5e79db43f70d65c43a89c08f1bafbb199ca90df79f0",
+          "layer_blob_bytes": 14631015,
+          "layer_count": 14,
+          "manifest_bytes": 3233,
+          "manifest_digest": "sha256:0fc05c749072bea889beffc97499f6836f74aebe351c78ff8d90d671c35f04da",
+          "reference": "docker.io/longhornio/csi-node-driver-registrar:v2.17.0"
+        },
+        {
+          "config_bytes": 3668,
+          "config_digest": "sha256:dfa8c879cefcc7aee9fb432ecc215906155009fefa42d25933bca49c0235797f",
+          "index_bytes": 2035,
+          "index_digest": "sha256:05c4017e4df7f8f690d6578f975f1eba94624d1b6a675d88c5f508ab6a27152b",
+          "layer_blob_bytes": 34170423,
+          "layer_count": 14,
+          "manifest_bytes": 3233,
+          "manifest_digest": "sha256:390883884504d670c2c39deedd4a61484b872882d6eca7aa0bf2424888e8c47b",
+          "reference": "docker.io/longhornio/csi-provisioner:v5.3.0-20260514"
+        },
+        {
+          "config_bytes": 3640,
+          "config_digest": "sha256:c5791699c636114161c41b66a36e08eecc44394545cdbb6ccd3bd3e1a2f5216a",
+          "index_bytes": 2035,
+          "index_digest": "sha256:7f203c1f195445e8ca8be258cd6179c284885a6c1b5287e6c0e33870e9083f8a",
+          "layer_blob_bytes": 37591113,
+          "layer_count": 14,
+          "manifest_bytes": 3233,
+          "manifest_digest": "sha256:5205a96533c4637afb58673d9823fa0f4f408cc4ea008fafa3b0f79f2178221b",
+          "reference": "docker.io/longhornio/csi-resizer:v2.1.0-20260514"
+        },
+        {
+          "config_bytes": 3684,
+          "config_digest": "sha256:8dd49a0661ace36b3c621f6356a68a0a06038293dee80717976e3e3ab1f37940",
+          "index_bytes": 2035,
+          "index_digest": "sha256:df4ba2075c00c5193821d43caf11c6f6556310247723365e9916e409799ce029",
+          "layer_blob_bytes": 37624421,
+          "layer_count": 14,
+          "manifest_bytes": 3233,
+          "manifest_digest": "sha256:ed6425fce1bb6deb94b86ceaa0ce6ed5011a5ef96dbff4d0840da842bed66975",
+          "reference": "docker.io/longhornio/csi-snapshotter:v8.5.0-20260514"
+        },
+        {
+          "config_bytes": 3667,
+          "config_digest": "sha256:b6d35c6d5906de641322e3e440847ce219111a7ad5df72f0b2c6e15562c2ca9b",
+          "index_bytes": 2225,
+          "index_digest": "sha256:d0cb76b565ba9d36da0dc2b38e2b6a49a0ae4fe067b03086110682f32c600318",
+          "layer_blob_bytes": 14761154,
+          "layer_count": 14,
+          "manifest_bytes": 3233,
+          "manifest_digest": "sha256:c966d36f5353f71033c1a7b0321a9a670f8929af8740f714e455902b312a82a6",
+          "reference": "docker.io/longhornio/livenessprobe:v2.19.0"
+        },
+        {
+          "config_bytes": 6274,
+          "config_digest": "sha256:ee6049245e50313b729c124c427896b529818d57961a0758b52f5e280bd4fe36",
+          "index_bytes": 1609,
+          "index_digest": "sha256:bc4a49e8f2b6b4bcdde0f6e465c0b0ac94acf6198840f9db039bedbbae67e905",
+          "layer_blob_bytes": 163953354,
+          "layer_count": 10,
+          "manifest_bytes": 2201,
+          "manifest_digest": "sha256:bce19fcb86142fbc37d4405d137100c7cf2cf5ebfaedfb287cc2cf707a0ba917",
+          "reference": "docker.io/longhornio/longhorn-engine:v1.12.0"
+        },
+        {
+          "config_bytes": 9846,
+          "config_digest": "sha256:708921813dab06a330afcc2a6f3669852615f7893372ca2a2127fcf70a21e088",
+          "index_bytes": 1609,
+          "index_digest": "sha256:7dc270841c8a8855b9c7b192b53db05b6268318648108cea4b00c2e88eb85cbb",
+          "layer_blob_bytes": 483327786,
+          "layer_count": 26,
+          "manifest_bytes": 5255,
+          "manifest_digest": "sha256:a07c51c6ec06e395fc77aca8c2e31f0671cf66aad610b60f342e6c48463e91e0",
+          "reference": "docker.io/longhornio/longhorn-instance-manager:v1.12.0"
+        },
+        {
+          "config_bytes": 5143,
+          "config_digest": "sha256:dff47e616e7cd2953254d78d40f1c72fc6a83a8a765e3d3ca2e7b52cbf8f6b26",
+          "index_bytes": 1609,
+          "index_digest": "sha256:fd245bae2e8254ed475073410f8462e95fab8783dd12d1c084777b5ab53bfb86",
+          "layer_blob_bytes": 120154565,
+          "layer_count": 6,
+          "manifest_bytes": 1435,
+          "manifest_digest": "sha256:955f1e0a636fe582cd190f5241737f0c2bfff72508d0608a747a9c37e74f9889",
+          "reference": "docker.io/longhornio/longhorn-manager:v1.12.0"
+        },
+        {
+          "config_bytes": 8434,
+          "config_digest": "sha256:4e711499a4f56ddf23606d4dfa011c9e521cc57741f5f33404808084c10248ac",
+          "index_bytes": 1609,
+          "index_digest": "sha256:cb9d6863e4c694d82ab35f91184d9555c536ed292dad0c7dec94cb655e05787e",
+          "layer_blob_bytes": 111779968,
+          "layer_count": 16,
+          "manifest_bytes": 3336,
+          "manifest_digest": "sha256:165728e8009bcb12f2baee8053cf852e22665a39606825ce37ee0eb8fd213c09",
+          "reference": "docker.io/longhornio/longhorn-share-manager:v1.12.0"
+        },
+        {
+          "config_bytes": 5754,
+          "config_digest": "sha256:81c63a0bbf71b5200dfdd388e942c436fc5c2bb412a08a6cca6dda27cc2f2878",
+          "index_bytes": 1609,
+          "index_digest": "sha256:3870d52a2b0aa44e7f8a30d744cfe38a1a0bd130226d3f5d08795e76361ff0b7",
+          "layer_blob_bytes": 75271474,
+          "layer_count": 9,
+          "manifest_bytes": 1998,
+          "manifest_digest": "sha256:4789791c4c46be3e7779187405a3a40de4a20c759d32a62c9776d0a8398a52e8",
+          "reference": "docker.io/longhornio/longhorn-ui:v1.12.0"
+        },
+        {
+          "config_bytes": 7603,
+          "config_digest": "sha256:3d32c77522f77077b2927187e04a21abafdc882b5ed297b365fdce7a695fc092",
+          "index_bytes": 685,
+          "index_digest": "sha256:1342641f02ee00203998bb7afc00066e821197a7cf22fc43b7e02b6ab148f86d",
+          "layer_blob_bytes": 88901601,
+          "layer_count": 13,
+          "manifest_bytes": 2844,
+          "manifest_digest": "sha256:a55c85837de86bf5987c8c6959f8a8dad8de4ab62103ebdfb4d733f193d72792",
+          "reference": "docker.io/longhornio/support-bundle-kit:v0.0.86"
+        }
+      ],
+      "manifest_sha256": "7923a570a6b59f8f4e3933ddac2352969d4ddb32fe180192cd2a49b02c81fa86",
+      "version": "v1.12.0"
+    },
+    {
+      "component": "probe-conformance",
+      "images": [
+        {
+          "config_bytes": 802,
+          "config_digest": "sha256:3e0d9138669908f438c06993e9a6815bbd8c05411b8e9acfc297b3c8b017c28c",
+          "index_bytes": 2406,
+          "index_digest": "sha256:a9155b13325b2abef48e71de77bb8ac015412a566829f621d06bfae5c699b1b9",
+          "layer_blob_bytes": 2219949,
+          "layer_count": 1,
+          "manifest_bytes": 502,
+          "manifest_digest": "sha256:caec39cad3b12c26600baf6e67ba811ac15d28a9288d0ccdfffb4b318992c3bb",
+          "reference": "registry.k8s.io/e2e-test-images/busybox@sha256:a9155b13325b2abef48e71de77bb8ac015412a566829f621d06bfae5c699b1b9"
+        }
+      ],
+      "manifest_sha256": "92d0ce4a60207685a09311fe2814fc7851ce2eca85fdd5bc1750c9ca6aa54715"
+    },
+    {
+      "component": "snapshot-controller",
+      "images": [
+        {
+          "config_bytes": 2878,
+          "config_digest": "sha256:1725e17bd63917a5bb81f3ca6cd552f77bef007188dad9faaeccd73f4062b450",
+          "index_bytes": 2035,
+          "index_digest": "sha256:74ca61ab13e978f03cf0f336a607281d15f04cda0a38a881306365473b28a3d8",
+          "layer_blob_bytes": 37108147,
+          "layer_count": 13,
+          "manifest_bytes": 3024,
+          "manifest_digest": "sha256:c6ed5c488dc72a01e7d69caf4d6efe44cb5fecd08fac1a037626171bf90482d1",
+          "reference": "registry.k8s.io/sig-storage/snapshot-controller@sha256:74ca61ab13e978f03cf0f336a607281d15f04cda0a38a881306365473b28a3d8"
+        }
+      ],
+      "manifest_sha256": "8741d5ea21fac9bbf8dc22199449e20446c141354210f3dbe8d2cdd1b14b5936"
+    },
+    {
+      "component": "system-upgrade-controller",
+      "images": [
+        {
+          "config_bytes": 1827,
+          "config_digest": "sha256:ec3217f60bc334ee6ac652442c55143eda928d8e18367dff0b5d7ae49012766d",
+          "index_bytes": 1607,
+          "index_digest": "sha256:86264eefaba5ffc7df2ab290f02dc4c79befd29ff9dfc6d0de630e71d6bfd375",
+          "layer_blob_bytes": 16367689,
+          "layer_count": 3,
+          "manifest_bytes": 858,
+          "manifest_digest": "sha256:f8936393496f3ef7b5d82779afdca1d513974436428f6db0e29bcc84774f4dbf",
+          "reference": "docker.io/rancher/kubectl:v1.30.3"
+        },
+        {
+          "config_bytes": 1376,
+          "config_digest": "sha256:e8cf38aaf596e2ebe8fa3df87ad4abc354991eb7e27a75418c82e4e83e4436d7",
+          "index_bytes": 939,
+          "index_digest": "sha256:aaf4dbf640579a6abfa6390aab927ee664f06814e33c371e69df9dd451ca153a",
+          "layer_blob_bytes": 14885931,
+          "layer_count": 2,
+          "manifest_bytes": 673,
+          "manifest_digest": "sha256:b34cd55bb2e2f885ed0d3fafc579599a10bfb167632e1371442bef2a10665593",
+          "reference": "docker.io/rancher/system-upgrade-controller:v0.20.1"
+        }
+      ],
+      "manifest_sha256": "11ba712de8b887b937e521a7278bcd37ba06975c581646903fd8ae8e296f3bfc",
+      "version": "v0.20.1"
+    }
+  ],
+  "dynamic_images": [
+    "source-postgresql-runtime"
+  ],
+  "excluded_operations": [
+    "k3s-version-upgrade"
+  ],
+  "kind": "external-image-pins",
+  "platform": "linux-amd64",
+  "version": 1
+}

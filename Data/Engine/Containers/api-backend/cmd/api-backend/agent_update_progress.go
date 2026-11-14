@@ -446,11 +446,9 @@ func findAgentUpdateProgressRef(ctx context.Context, tx *sql.Tx, guid string, re
 	if err != nil {
 		return agentUpdateProgressRef{}, err
 	}
-	if strings.TrimSpace(metadataJSON) != "" {
-		_ = json.Unmarshal([]byte(metadataJSON), &ref.Metadata)
-	}
-	if ref.Metadata == nil {
-		ref.Metadata = map[string]any{}
+	ref.Metadata, err = schedulerActivityMetadata(metadataJSON)
+	if err != nil {
+		return agentUpdateProgressRef{}, err
 	}
 	ref.GUID = guid
 	return ref, nil

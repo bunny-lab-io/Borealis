@@ -28,6 +28,22 @@ unshare --user --map-root-user --net sh -c \
 
 Setting is host-wide security relaxation and resets after reboot unless separately persisted. Do not run VS Code or Codex as root. Apply only on operator-approved development host; never change production host or unrelated infrastructure for Codex sandbox access.
 
+## Dedicated Development Workstation Boundary
+Codex and future agents use dedicated Linux workstation outside Borealis cluster as source-development and control host.
+
+Allowed on workstation:
+* Edit, review, test, build, commit, and push repository code.
+* Run non-deployment validation, CI-equivalent checks, and disposable test fixtures documented for development hosts.
+
+Never deploy or run Borealis Engine on workstation. Do not install or start Engine runtime, K3s, cluster workloads, or persistent Borealis services there. Do not use workstation as Engine member, onboarding target, disposable qualification node, or source of live capacity evidence.
+
+Disposable Engine lab nodes are remote targets:
+* `borealis-engine-01` / `192.168.3.252`
+* `borealis-engine-02` / `192.168.3.251`
+* `borealis-engine-03` / `192.168.3.250`
+
+Access all three through SSH from workstation for separately authorized inspection, deployment, runtime repair, and qualification. Never edit deployed checkout as development source. Before any command that can install, deploy, start, stop, restart, reconfigure, or qualify Engine runtime, verify local hostname is not an Engine node, identify exact remote target, and confirm applicable authorization and documented procedure. Repository implementation authorization does not authorize remote runtime action.
+
 ## Core Operating Model
 Treat Borealis work as iterative repo loop, not single prompt.
 
@@ -51,6 +67,7 @@ Do not call work complete because files changed. Work complete only when request
 * Follow domain docs found through index.
 * Where docs overlap, domain page wins.
 * `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
+* Domain guidance preserves implementation and safety context; agent-authored design detail does not create new operator acceptance requirements. Current operator direction governs scope and cadence. For a new prerequisite, identify blocked acceptance/invariant, concrete missing behavior, why existing mechanisms or safe rejection cannot cover it, and smallest remedy.
 * Do not duplicate domain guidance across multiple docs. Link to canonical page instead.
 
 ## Strong Goal Rule
@@ -227,6 +244,8 @@ When asked to work on Gitea or GitHub issue:
 
 Every issue has corresponding pull request. No exceptions, no matter how small request is.
 
+For Borealis clustering work, [#530](https://github.com/bunny-lab-io/Borealis/issues/530) is the current-state tracker. Read its short resume section, acceptance checklist and new or edited relevant comments/reviews; inspect current checkout and remote state before editing. Update its body in place at meaningful handoffs with active PR/full SHA, actual validation, unresolved approvals, exact next action, unpushed work and runtime/cleanup obligations. This replaces the append-only reporting protocol in #493 for clustering only; historical evidence and approvals remain valid, and all security, runtime, review and release gates remain unchanged. One-time tracker compaction is recorded through `CLUSTERING_MVP_PROGRESS.md`; do not repeat it. Keep Resume at most 200 words and active tracker approximately 1,500-2,500 words. Keep PR scope/review context separate from tracker progress. Report newly connected executable behavior, actual validation and first remaining production gap; do not use percentages or code/test volume as progress. Reuse existing implementation branches/PRs; #530 is an umbrella, not a new implementation workstream. Keep canonical procedures in `Docs/`.
+
 Before implementation, post or retain working understanding:
 
 ```md
@@ -377,7 +396,7 @@ Before running either command:
   * `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh`
   * `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1`
 * Use documented domain flags while iterating.
-* Run full affected Engine or Agent lane before handoff when practical.
+* Run full affected Engine or Agent lane at product integration/review checkpoints when practical. A worker returning a patch is not a separate product handoff; reuse unchanged-source evidence and repeat checks for changed assumptions or concrete failures.
 * Use narrow tests first for fast iteration, then broader tests for PR readiness.
 * If test cannot run in current environment, state reason and exact command operator should run.
 

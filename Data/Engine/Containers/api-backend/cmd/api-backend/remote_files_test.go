@@ -176,6 +176,15 @@ func TestRemoteFileUploadStartsWorkerTransfer(t *testing.T) {
 			})
 		case "/remote-files/transfers/upload":
 			sawUpload = true
+			for header, value := range map[string]string{
+				"X-Borealis-Upload-Hostname-B64": "TEFCLU9QRVJBVE9SLTAx",
+				"X-Borealis-Upload-Device-Guid":  "00000000-0000-4000-8000-000000000123",
+				"X-Borealis-Upload-Agent-Id-B64": "TEFCLU9QRVJBVE9SLTAxXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEyM19TWVNURU0",
+			} {
+				if got := r.Header.Values(header); len(got) != 1 || got[0] != value {
+					t.Errorf("private upload context %s = %q, want authorized snapshot %q", header, got, value)
+				}
+			}
 			if r.ContentLength <= 0 {
 				t.Fatalf("expected upload transfer request to set content length, got %d", r.ContentLength)
 			}
@@ -234,6 +243,9 @@ func TestRemoteFileUploadStartsWorkerTransfer(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/device/files/LAB-OPERATOR-01/upload", &body)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("X-Borealis-Upload-Hostname-B64", "Zm9yZ2Vk")
+	request.Header.Set("X-Borealis-Upload-Device-Guid", "FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF")
+	request.Header.Set("X-Borealis-Upload-Agent-Id-B64", "Zm9yZ2Vk")
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusAccepted {

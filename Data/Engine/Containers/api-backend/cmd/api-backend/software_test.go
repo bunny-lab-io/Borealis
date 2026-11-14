@@ -366,7 +366,7 @@ func TestDeviceServiceActionRetriesTransientSocketGap(t *testing.T) {
 		}
 		eventAttempts++
 		if eventAttempts == 1 {
-			_ = json.NewEncoder(w).Encode(map[string]any{"emitted": false})
+			_ = json.NewEncoder(w).Encode(map[string]any{"emitted": false, "queued": false})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"emitted": true})

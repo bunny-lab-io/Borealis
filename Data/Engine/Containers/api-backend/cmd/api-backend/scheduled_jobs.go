@@ -700,6 +700,9 @@ func deleteScheduledActivityHistoryRows(ctx context.Context, tx *sql.Tx, activit
 	if len(activityIDs) == 0 {
 		return 0, nil
 	}
+	if err := guardWorkerOperationActivityDeletion(ctx, tx, activityIDs); err != nil {
+		return 0, err
+	}
 	result, err := tx.ExecContext(ctx, "DELETE FROM engine.activity_history WHERE id = ANY($1)", pq.Array(activityIDs))
 	if err != nil {
 		return 0, err

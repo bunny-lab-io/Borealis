@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -39,7 +40,7 @@ const (
 	memberFencePath     = "/etc/borealis/k3s-member-removal-fence.json"
 	memberFenceDropIn   = "/etc/systemd/system/k3s.service.d/90-borealis-member-removal-fence.conf"
 	k3sRegistriesPath   = "/etc/rancher/k3s/registries.yaml"
-	k3sJoinConfigPath   = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
+	k3sJoinConfigPath   = clusterbootstrap.PrejoinK3sJoinConfigPath
 	k3sImageImportPath  = "/var/lib/rancher/k3s/agent/images"
 	shutdownHandoffWait = 25 * time.Second
 	shutdownHandoffPoll = 250 * time.Millisecond
@@ -68,9 +69,21 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
 	switch os.Args[1] {
+	case "external-image-proof":
+		if externalImageArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable external image evidence invalid or changed")
+		}
+	case "k3s-archive-proof":
+		if k3sArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable K3s evidence invalid or changed")
+		}
+	case "image-archive-proof":
+		if imageArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable image evidence invalid or changed")
+		}
 	case "serve":
 		serve()
 	case "status":
@@ -81,10 +94,38 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "source-membership-client":
+		if sourceMembershipClient(os.Args[2:]) != nil {
+			fatalf("source membership observation unavailable")
+		}
+	case "source-network-client":
+		if sourceNetworkClient(os.Args[2:]) != nil {
+			fatalf("source network observation unavailable")
+		}
+	case "source-join-client":
+		if sourceJoinClient(os.Args[2:]) != nil {
+			fatalf("source join material unavailable")
+		}
+	case "source-vip-client":
+		if sourceObservationClient(os.Args[2:], true) != nil {
+			fatalf("source VIP observation unavailable")
+		}
 	case "activate-update":
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":
 		shutdownHandoff()
+	case "bootstrap-session":
+		bootstrapSession(os.Args[2:])
+	case "bootstrap-session-contained":
+		bootstrapSessionContained(os.Args[2:])
+	case "bootstrap-source-session":
+		bootstrapExecutor(os.Args[2:], true)
+	case "bootstrap-source-session-contained":
+		bootstrapSourceSessionContained(os.Args[2:])
+	case "bootstrap-artifact-session":
+		bootstrapExecutorFor(os.Args[2:], true, true)
+	case "bootstrap-artifact-session-contained":
+		bootstrapSourceSessionContainedFor(os.Args[2:], true)
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}
@@ -236,22 +277,25 @@ func client(args []string) {
 	clusterVIP := flags.String("cluster-vip", "", "Borealis Cluster Virtual IP")
 	operationID := flags.String("operation-id", "", "Removal operation UUID")
 	nodeID := flags.String("node-id", "", "Durable removal target UUID")
-	removalNodeName := flags.String("node-name", "", "Expected removal target node name")
+	removalNodeName := flags.String("node-name", "", "Expected target node name")
 	nodeUID := flags.String("node-uid", "", "Expected Kubernetes Node UID")
 	etcdMemberName := flags.String("etcd-member-name", "", "Expected K3s etcd member name")
+	preparedAdmission := flags.String("prepared-admission", "", "Exact private prepared admission request")
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
 		"PrepareApplicationRestore": true,
+		"InspectIdentityConsumers":  true,
 		"ReconcileVIPPlacement":     true,
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"StageRevisionImages": true,
-		"InspectHealth":       true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
-		"RunSchemaPhase":         true,
-		"PrepareMemberRemoval":   true,
-		"RunK3sProbeConformance": true,
-		"CreateEtcdSnapshot":     true,
+		"InspectHealth":       true, "InspectSourceNetwork": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"RunSchemaPhase":                       true,
+		"PrepareMemberRemoval":                 true,
+		"RunK3sProbeConformance":               true,
+		"CreateEtcdSnapshot":                   true,
+		clusterbootstrap.PreparedAdmissionVerb: true,
 	}
 	if !allowed[strings.TrimSpace(*verb)] {
 		fatalf("unsupported fixed verb %q", *verb)
@@ -280,7 +324,24 @@ func client(args []string) {
 			params[key] = value
 		}
 	}
+	if *preparedAdmission != "" || strings.TrimSpace(*verb) == clusterbootstrap.PreparedAdmissionVerb {
+		if strings.TrimSpace(*verb) != clusterbootstrap.PreparedAdmissionVerb || len(params) != 0 || flags.NArg() != 0 {
+			fatalf("invalid prepared admission request")
+		}
+		if _, err := clusterbootstrap.DecodePreparedAdmissionRequest(*preparedAdmission); err != nil {
+			fatalf("invalid prepared admission request")
+		}
+		params["payload"] = *preparedAdmission
+	}
 	var removalTarget memberRemovalIdentity
+	var identityTarget identityConsumerTarget
+	if strings.TrimSpace(*verb) == "InspectIdentityConsumers" {
+		var err error
+		identityTarget, err = parseIdentityConsumerTarget(params, *removalNodeName)
+		if err != nil {
+			fatalf("invalid identity consumer target")
+		}
+	}
 	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
 		var err error
 		removalTarget, err = removalIdentity(params, *removalNodeName)
@@ -300,6 +361,17 @@ func client(args []string) {
 		return dialer.DialContext(ctx, "unix", socketPath)
 	}}
 	httpClient := &http.Client{Transport: transport, Timeout: nodeManagerActionTimeout(strings.TrimSpace(*verb)) + time.Minute}
+	if strings.TrimSpace(*verb) == clusterbootstrap.PreparedAdmissionVerb {
+		ctx, cancel := context.WithTimeout(context.Background(), nodeManagerActionTimeout(clusterbootstrap.PreparedAdmissionVerb)+time.Minute)
+		defer cancel()
+		defer transport.CloseIdleConnections()
+		responseRaw, err := readPreparedAdmissionAcknowledgement(ctx, httpClient, strings.TrimSpace(string(secret)), *preparedAdmission)
+		if err != nil {
+			fatalf("prepared admission action failed; retain operation for reconciliation")
+		}
+		fmt.Println(string(responseRaw))
+		return
+	}
 	request, err := http.NewRequest(http.MethodPost, "http://node-manager/v1/action", bytes.NewReader(raw))
 	if err != nil {
 		fatalf("create node-manager request: %v", err)
@@ -318,6 +390,11 @@ func client(args []string) {
 	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
 		if err := validateRemovalAcknowledgement(responseRaw, removalTarget); err != nil {
 			fatalf("node-manager removal acknowledgement rejected: %v", err)
+		}
+	}
+	if strings.TrimSpace(*verb) == "InspectIdentityConsumers" {
+		if err := validateIdentityConsumerAcknowledgement(responseRaw, identityTarget); err != nil {
+			fatalf("node-manager identity consumer acknowledgement rejected")
 		}
 	}
 	fmt.Println(string(responseRaw))
@@ -358,6 +435,7 @@ func serve() {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node_name": m.nodeName})
 	})
 	mux.HandleFunc("POST /v1/action", m.authorized(m.handleAction))
+	mux.HandleFunc("POST "+clusterbootstrap.K3sJoinSourceSocketPath, m.authorized(m.handleSourceJoinMaterial))
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -468,6 +546,24 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": err.Error()})
 		return
 	}
+	if strings.TrimSpace(request.Verb) == "InspectVIPNetwork" {
+		if _, err := clusterbootstrap.ParseVIPActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
+	if strings.TrimSpace(request.Verb) == "InspectSourceMembership" {
+		if _, err := clusterbootstrap.ParseMembershipActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
+	if strings.TrimSpace(request.Verb) == clusterbootstrap.PreparedAdmissionVerb {
+		if _, err := clusterbootstrap.ParsePreparedAdmissionActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
@@ -480,9 +576,11 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
+	case "InspectSourceNetwork", "InspectVIPNetwork", "InspectIdentityConsumers", "InspectSourceMembership":
+		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
-	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
+	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate", clusterbootstrap.PreparedAdmissionVerb:
 		return 60 * time.Minute
 	case "RunSchemaPhase":
 		return 20 * time.Minute
@@ -496,6 +594,8 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		request.Params = map[string]any{}
 	}
 	switch strings.TrimSpace(request.Verb) {
+	case clusterbootstrap.PreparedAdmissionVerb:
+		return m.preparedAdmission(ctx, request.Params)
 	case "Status":
 		return m.status(ctx)
 	case "EnterApplicationDrain":
@@ -524,6 +624,21 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
 		return m.inspectHealth(ctx)
+	case "InspectIdentityConsumers":
+		return m.inspectIdentityConsumers(ctx, request.Params)
+	case "InspectSourceMembership":
+		return m.inspectSourceMembership(ctx, request.Params)
+	case "InspectSourceNetwork":
+		if len(request.Params) != 0 {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceNetwork(ctx)
+	case "InspectVIPNetwork":
+		address, ok := request.Params["vip"].(string)
+		if len(request.Params) != 1 || !ok || !clusterbootstrap.ValidVIPRequest(address) {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceVIPNetwork(ctx, address)
 	case "InspectCandidateHealth":
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":
@@ -1239,8 +1354,33 @@ func (m *manager) preflightRelease(ctx context.Context, release, targetSHA strin
 	if strings.TrimSpace(dirty) != "" {
 		return nil, errors.New("worktree is not clean; refusing stash, reset, or checkout")
 	}
-	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", "HEAD", targetSHA); err != nil {
-		return nil, errors.New("target is not a fast-forward descendant")
+	head, err := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	head = strings.TrimSpace(head)
+	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+		shallow, shallowErr := runGit(ctx, m.repoRoot, "rev-parse", "--is-shallow-repository")
+		if shallowErr != nil || strings.TrimSpace(shallow) != "true" {
+			return nil, errors.New("target is not a fast-forward descendant")
+		}
+		origin, originErr := runGit(ctx, m.repoRoot, "remote", "get-url", "origin")
+		if originErr != nil || normalizeRemote(origin) != normalizeRemote(envDefault("BOREALIS_ENGINE_REPOSITORY_URL", "https://github.com/bunny-lab-io/Borealis.git")) {
+			return nil, errors.New("origin does not match configured Borealis repository")
+		}
+		// A prior shallow boundary can hide even a fetched target's ancestry.
+		// Fetch only that pinned history once, within the existing action bound.
+		if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "--unshallow", "origin", targetSHA); err != nil {
+			return nil, err
+		}
+		if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+			return nil, errors.New("target is not a fast-forward descendant")
+		}
+		current, headErr := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+		dirty, statusErr := runGit(ctx, m.repoRoot, "status", "--porcelain", "--untracked-files=normal")
+		if headErr != nil || statusErr != nil || strings.TrimSpace(current) != head || strings.TrimSpace(dirty) != "" {
+			return nil, errors.New("worktree changed while fetching pinned ancestry; refusing checkout or mutation")
+		}
 	}
 	return map[string]any{"release_tag": release, "revision": targetSHA, "worktree_clean": true, "fast_forward": true}, nil
 }
@@ -2024,6 +2164,9 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if err := os.Chown(defaultSecretPath, 0, actionRuntimeID); err != nil {
 		return err
 	}
+	if err := ensureBootstrapMutationRoot("/var/lib"); err != nil {
+		return err
+	}
 	// systemd requires every ReadWritePaths target to exist before ExecStart.
 	// K3s creates this leaf lazily, so joining nodes must create it explicitly.
 	if err := os.MkdirAll(k3sImageImportPath, 0o755); err != nil {
@@ -2057,6 +2200,57 @@ func installLocalNodeManagerService(repoRoot string) error {
 		return errors.New("joined node-manager revision is unavailable")
 	}
 	return replaceSecureConfig(defaultRevisionPath, []byte(strings.ToLower(strings.TrimSpace(revision))+"\n"))
+}
+
+func ensureBootstrapMutationRoot(base string) error {
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Mkdir("borealis", 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	parent, err := root.Lstat("borealis")
+	if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 || parent.Mode().Perm()&0o022 != 0 {
+		return errors.New("bootstrap journal parent must be a private root-owned directory")
+	}
+	owner, ok := parent.Sys().(*syscall.Stat_t)
+	if !ok || int(owner.Uid) != os.Geteuid() {
+		return errors.New("bootstrap journal parent must be a private root-owned directory")
+	}
+	borealis, err := root.OpenRoot("borealis")
+	if err != nil {
+		return err
+	}
+	defer borealis.Close()
+	if err := borealis.Mkdir("cluster-bootstrap", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	journal, err := borealis.Lstat("cluster-bootstrap")
+	if err != nil || !journal.IsDir() || journal.Mode()&os.ModeSymlink != 0 || journal.Mode().Perm() != 0o700 {
+		return errors.New("bootstrap journal must be a root-owned mode0700 directory")
+	}
+	owner, ok = journal.Sys().(*syscall.Stat_t)
+	if !ok || int(owner.Uid) != os.Geteuid() {
+		return errors.New("bootstrap journal must be a root-owned mode0700 directory")
+	}
+	parentDirectory, err := root.Open("borealis")
+	if err != nil {
+		return err
+	}
+	defer parentDirectory.Close()
+	journalDirectory, err := borealis.Open("cluster-bootstrap")
+	if err != nil {
+		return err
+	}
+	defer journalDirectory.Close()
+	baseDirectory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer baseDirectory.Close()
+	return errors.Join(baseDirectory.Sync(), parentDirectory.Sync(), journalDirectory.Sync())
 }
 
 func replaceExecutable(destination string, content []byte) error {
@@ -2171,11 +2365,23 @@ func normalizeRemote(value string) string {
 }
 
 func run(ctx context.Context, workdir, binary string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, binary, args...)
-	if workdir != "" {
-		command.Dir = workdir
+	if err := checkPreparedAdmissionCommand(ctx); err != nil {
+		return "", err
 	}
-	output, err := command.CombinedOutput()
+	var output []byte
+	var err error
+	if _, guarded := ctx.Value(preparedAdmissionCheckKey{}).(func(context.Context) error); guarded {
+		output, err = runPreparedAdmissionCommand(ctx, workdir, binary, args...)
+	} else {
+		command := exec.CommandContext(ctx, binary, args...)
+		if workdir != "" {
+			command.Dir = workdir
+		}
+		output, err = command.CombinedOutput()
+	}
+	if guardErr := checkPreparedAdmissionCommand(ctx); guardErr != nil {
+		return "", guardErr
+	}
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w: %s", filepath.Base(binary), err, truncateDiagnostic(strings.TrimSpace(string(output)), 2048))
 	}

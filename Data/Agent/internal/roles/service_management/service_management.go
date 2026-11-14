@@ -3,6 +3,7 @@ package servicemanagement
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -184,6 +185,10 @@ func (m *Manager) Health() RoleHealth {
 }
 
 func (m *Manager) HandleControlAction(ctx context.Context, payload any) (any, error) {
+	return m.HandleControlActionWithCompletion(ctx, payload, nil)
+}
+
+func (m *Manager) HandleControlActionWithCompletion(ctx context.Context, payload any, complete func(error)) (any, error) {
 	body, ok := payload.(map[string]any)
 	if !ok {
 		return errorResponse("invalid_request", "Service control payload must be an object."), nil
@@ -203,7 +208,12 @@ func (m *Manager) HandleControlAction(ctx context.Context, payload any) (any, er
 		return errorResponse("invalid_action", "Service action must be start, stop, or restart."), nil
 	}
 	requestedBy := cleanText(body["requested_by"])
-	go m.runAction(context.Background(), serviceName, action, requestedBy)
+	go func() {
+		err := m.runAction(context.Background(), serviceName, action, requestedBy)
+		if complete != nil {
+			complete(err)
+		}
+	}()
 	return map[string]any{
 		"ok":           true,
 		"status":       "accepted",
@@ -264,18 +274,21 @@ func (m *Manager) pollLoop(ctx context.Context) {
 	}
 }
 
-func (m *Manager) runAction(ctx context.Context, serviceName string, action string, requestedBy string) {
-	if err := m.runServiceAction(ctx, serviceName, action); err != nil {
+func (m *Manager) runAction(ctx context.Context, serviceName string, action string, requestedBy string) error {
+	actionErr := m.runServiceAction(ctx, serviceName, action)
+	if err := actionErr; err != nil {
 		m.recordError(fmt.Sprintf("Service control failed action=%s service_name=%s requested_by=%s error=%s", action, serviceName, fallbackText(requestedBy, "-"), err.Error()))
 	} else {
 		m.mu.Lock()
 		m.lastError = ""
 		m.mu.Unlock()
 	}
-	if err := m.Refresh(ctx); err != nil {
-		m.recordError("Post-action service refresh failed: " + err.Error())
+	refreshErr := m.Refresh(ctx)
+	if refreshErr != nil {
+		m.recordError("Post-action service refresh failed: " + refreshErr.Error())
 	}
 	m.requestBoost()
+	return errors.Join(actionErr, refreshErr)
 }
 
 func (m *Manager) collectServices(ctx context.Context) ([]Service, error) {
