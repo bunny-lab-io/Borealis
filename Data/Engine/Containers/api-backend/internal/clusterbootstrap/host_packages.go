@@ -54,6 +54,16 @@ type HostPackagePlan struct {
 	DataDirectories []string         `json:"data_directories"`
 }
 
+type hostPackagePlanAuthority struct {
+	plan   HostPackagePlan
+	digest string
+	err    error
+}
+
+// Compile embedded release authority once. Source changes create a new binary
+// and therefore a new compilation; callers receive deep copies only.
+var compiledHostPackagePlan = compileHostPackagePlan(hostPackageLock)
+
 var hostPackageName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,199}$`)
 var hostPackageVersion = regexp.MustCompile(`^[0-9][A-Za-z0-9.+:~\-]{0,199}$`)
 var hostPackageFile = regexp.MustCompile(`^[a-z0-9][A-Za-z0-9.+:%_~\-]{0,95}\.deb$`)
@@ -67,7 +77,31 @@ var hostPackageRoots = map[string]string{
 // HostPackagePins returns independent records, never mutable process trust.
 // Only this suite is currently pinned; other platform plans remain unqualified.
 func HostPackagePins() (HostPackagePlan, string, error) {
-	return parseHostPackagePlan(hostPackageLock)
+	return compiledHostPackagePlan.pins()
+}
+
+func compileHostPackagePlan(raw []byte) hostPackagePlanAuthority {
+	plan, digest, err := parseHostPackagePlan(raw)
+	if err != nil {
+		return hostPackagePlanAuthority{err: err}
+	}
+	return hostPackagePlanAuthority{plan: cloneHostPackagePlan(plan), digest: digest}
+}
+
+func (a hostPackagePlanAuthority) pins() (HostPackagePlan, string, error) {
+	if a.err != nil {
+		return HostPackagePlan{}, "", a.err
+	}
+	return cloneHostPackagePlan(a.plan), a.digest, nil
+}
+
+func cloneHostPackagePlan(plan HostPackagePlan) HostPackagePlan {
+	plan.Packages = slices.Clone(plan.Packages)
+	for i := range plan.Packages {
+		plan.Packages[i].DataPaths = slices.Clone(plan.Packages[i].DataPaths)
+	}
+	plan.DataDirectories = slices.Clone(plan.DataDirectories)
+	return plan
 }
 
 // HostPackageDirectories returns reviewed canonical directory ancestors of all

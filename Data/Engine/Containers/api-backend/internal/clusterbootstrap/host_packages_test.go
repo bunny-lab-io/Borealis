@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -113,10 +114,61 @@ func TestHostPackagePinsAndLockBoundaries(t *testing.T) {
 		t.Fatal("reviewed suite pins unavailable", err)
 	}
 	plan.Packages[0].SHA256 = "changed"
+	plan.Packages[0].DataPaths[0].Path = "/changed"
+	plan.DataDirectories[0] = "/changed"
 	again, sameDigest, err := HostPackagePins()
-	if err != nil || again.Packages[0].SHA256 == "changed" || sameDigest != digest {
+	if err != nil || again.Packages[0].SHA256 == "changed" || again.Packages[0].DataPaths[0].Path == "/changed" ||
+		again.DataDirectories[0] == "/changed" || sameDigest != digest {
 		t.Fatal("caller changed compiled trust")
 	}
+	t.Run("changed compiled input", func(t *testing.T) {
+		changed := again
+		changed.Packages[0].Size++
+		raw, err := json.Marshal(changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		authority := compileHostPackagePlan(append(raw, '\n'))
+		compiled, changedDigest, err := authority.pins()
+		if err != nil || changedDigest == digest || compiled.Packages[0].Size != changed.Packages[0].Size {
+			t.Fatal("changed lock reused stale compiled authority", err)
+		}
+	})
+	t.Run("invalid compiled input", func(t *testing.T) {
+		authority := compileHostPackagePlan([]byte("{}\n"))
+		for range 2 {
+			if _, _, err := authority.pins(); err == nil {
+				t.Fatal("invalid lock produced compiled authority")
+			}
+		}
+	})
+	t.Run("concurrent caller isolation", func(t *testing.T) {
+		var callers sync.WaitGroup
+		errs := make(chan error, 16)
+		for range 16 {
+			callers.Add(1)
+			go func() {
+				defer callers.Done()
+				copy, _, err := HostPackagePins()
+				if err != nil {
+					errs <- err
+					return
+				}
+				copy.Packages[0].SHA256 = "changed"
+				copy.Packages[0].DataPaths[0].Path = "/changed"
+				copy.DataDirectories[0] = "/changed"
+			}()
+		}
+		callers.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatal("compiled trust unavailable to concurrent caller", err)
+		}
+		copy, _, err := HostPackagePins()
+		if err != nil || copy.Packages[0].SHA256 == "changed" || copy.Packages[0].DataPaths[0].Path == "/changed" || copy.DataDirectories[0] == "/changed" {
+			t.Fatal("concurrent caller changed compiled trust", err)
+		}
+	})
 	for _, mode := range []string{"no newline", "two newlines", "suite", "arch", "root phase", "missing root", "order", "duplicate file", "path", "version", "zero digest", "oversized", "unknown", "alias", "duplicate", "null", "URL origin", "URL HTTP", "URL credentials", "URL query", "URL fragment", "URL encoding", "URL traversal", "URL package"} {
 		t.Run(mode, func(t *testing.T) {
 			p, _ := hostPackageTestPlan(t)
