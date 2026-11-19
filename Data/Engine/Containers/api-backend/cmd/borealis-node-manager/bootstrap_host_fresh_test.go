@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"errors"
 	"reflect"
@@ -9,10 +10,16 @@ import (
 )
 
 func TestBootstrapFreshHostPreflight(t *testing.T) {
-	for _, mode := range []string{"valid", "base configured", "base unpacked", "existing runtime", "generated file", "pending file", "repository scratch", "unit exists", "late authority", "cancel"} {
+	for _, mode := range []string{"valid", "base configured", "base unpacked", "missing approval", "inventory drift", "selection drift", "existing runtime", "generated file", "pending file", "repository scratch", "unit exists", "late authority", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			root, read := bootstrapDockerFixture(t)
 			expected := bootstrapHostFilesFixture()
+			raw, err := read(context.Background(), "packages")
+			selection, selectionErr := clusterbootstrap.SelectHostPackages(raw)
+			if err != nil || selectionErr != nil {
+				t.Fatal("fixture", err, selectionErr)
+			}
+			expected.TargetPackages = &selection
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			lost := false
@@ -24,12 +31,18 @@ func TestBootstrapFreshHostPreflight(t *testing.T) {
 				return nil
 			}
 			if strings.HasPrefix(mode, "base ") {
+				pins, _, err := clusterbootstrap.HostPackagePins()
+				if err != nil {
+					t.Fatal(err)
+				}
 				original := read
 				read = func(ctx context.Context, probe string) ([]byte, error) {
 					raw, err := original(ctx, probe)
 					if probe == "packages" {
-						for _, name := range bootstrapHostPackages[:7] {
-							raw = append(raw, []byte(name+"\tamd64\tinstall ok installed\t1.0\n")...)
+						for _, pin := range pins.Packages {
+							if pin.Phase == "base" {
+								raw = append(raw, []byte(pin.Name+"\t"+pin.Architecture+"\tinstall ok installed\t1.0\n")...)
+							}
 						}
 						if mode == "base unpacked" {
 							raw = []byte(strings.Replace(string(raw), "python3\tamd64\tinstall ok installed", "python3\tamd64\tinstall ok unpacked", 1))
@@ -38,7 +51,20 @@ func TestBootstrapFreshHostPreflight(t *testing.T) {
 					return raw, err
 				}
 			}
+			if mode == "base configured" {
+				raw, _ := read(ctx, "packages")
+				selection, err = clusterbootstrap.SelectHostPackages(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			switch mode {
+			case "missing approval":
+				expected.TargetPackages = nil
+			case "inventory drift":
+				selection.InventorySHA256 = strings.Repeat("b", 64)
+			case "selection drift":
+				selection.Missing = selection.Missing[1:]
 			case "existing runtime":
 				bootstrapDockerWrite(t, root, "usr/bin/docker", "foreign")
 			case "generated file":

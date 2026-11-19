@@ -44,12 +44,16 @@ type PreparationExpected struct {
 	// Absent only for retained legacy recovery. Fresh publication must carry
 	// the approved native observation and recheck it before its first effect.
 	TargetCPU *PreparationTargetCPU `json:"target_cpu,omitempty"`
+	// Absent only for retained legacy recovery. Fresh source/host preparation
+	// must recheck this approved selection before package effects.
+	TargetPackages *HostPackageSelection `json:"target_packages,omitempty"`
 }
 
 func (e PreparationExpected) Validate() error {
 	if e.Source.Validate() != nil || e.Target.Validate() != nil || !digestPattern.MatchString(e.CohortSHA256) || !nonzeroPreparationUUID(e.TargetBootID) ||
 		!nonzeroPreparationUUID(e.KubeSystemUID) || len(e.K3sVersion) > 32 || !preparationK3s.MatchString(e.K3sVersion) || len(e.PeerAddresses) != 3 ||
-		e.TargetCPU != nil && e.TargetCPU.Validate(e.K3sVersion) != nil {
+		e.TargetCPU != nil && e.TargetCPU.Validate(e.K3sVersion) != nil ||
+		e.TargetPackages != nil && e.TargetPackages.Validate() != nil {
 		return ErrPreparationConfig
 	}
 	return validatePreparationNetwork(e.ManagementCIDR, e.PodCIDR, e.ServiceCIDR, e.ControlPlaneVIP, e.EdgeVIP, e.Target.Address, e.PeerAddresses)
@@ -141,6 +145,10 @@ func NewPreparationConfiguration(expected PreparationExpected, runtime map[strin
 		return nil, ErrPreparationConfig
 	}
 	expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
+	if expected.TargetPackages != nil {
+		selection := expected.TargetPackages.Clone()
+		expected.TargetPackages = &selection
+	}
 	copyRuntime := make(map[string]string, len(runtime))
 	for key, value := range runtime {
 		copyRuntime[key] = value

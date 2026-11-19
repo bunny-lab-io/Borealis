@@ -67,6 +67,10 @@ func NewK3sJoinMaterial(expected PreparationExpected, source engineidentity.Bind
 		return nil, ErrK3sJoinMaterial
 	}
 	expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
+	if expected.TargetPackages != nil {
+		selection := expected.TargetPackages.Clone()
+		expected.TargetPackages = &selection
+	}
 	// Transfer/export remains bound to the exact live claim. Content identity
 	// must survive a stopped-producer takeover so a later executor can prove
 	// the original effect without pretending it was a new installation.

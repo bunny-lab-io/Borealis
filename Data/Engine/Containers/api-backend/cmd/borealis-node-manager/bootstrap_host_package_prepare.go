@@ -70,8 +70,9 @@ func withBootstrapAPTCacheMetadata(ctx context.Context, directory string, check 
 }
 
 func prepareBootstrapHostPackages(ctx context.Context, directory string, phase bootstrapHostCommand, preflight bool,
-	hostLock, identityLock *os.File, guard *clusterbootstrap.ExecutorGuard, identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error) error {
-	return prepareBootstrapHostPackagesWith(ctx, directory, phase, preflight, check,
+	hostLock, identityLock *os.File, guard *clusterbootstrap.ExecutorGuard, identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error,
+	approvedInventory func([]byte) error) error {
+	return prepareBootstrapHostPackagesWith(ctx, directory, phase, preflight, check, approvedInventory,
 		func(ctx context.Context) ([]byte, error) { return readBootstrapDockerProbe(ctx, "packages") },
 		func(ctx context.Context, spec bootstrapHostCommandSpec, simulate bool) ([]byte, error) {
 			output := &bootstrapDockerOutput{}
@@ -88,7 +89,7 @@ func prepareBootstrapHostPackages(ctx context.Context, directory string, phase b
 }
 
 func prepareBootstrapHostPackagesWith(ctx context.Context, directory string, phase bootstrapHostCommand, preflight bool,
-	check func(context.Context) error, read func(context.Context) ([]byte, error), run func(context.Context, bootstrapHostCommandSpec, bool) ([]byte, error)) error {
+	check func(context.Context) error, approvedInventory func([]byte) error, read func(context.Context) ([]byte, error), run func(context.Context, bootstrapHostCommandSpec, bool) ([]byte, error)) error {
 	boundary := func() error {
 		if check == nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
 			return errBootstrapSource
@@ -99,7 +100,7 @@ func prepareBootstrapHostPackagesWith(ctx context.Context, directory string, pha
 		return errBootstrapSource
 	}
 	before, err := read(ctx)
-	if err != nil || boundary() != nil {
+	if err != nil || approvedInventory != nil && approvedInventory(before) != nil || boundary() != nil {
 		return errBootstrapSource
 	}
 	var plan *bootstrapHostPackagePlan
@@ -120,7 +121,7 @@ func prepareBootstrapHostPackagesWith(ctx context.Context, directory string, pha
 		return errBootstrapSource
 	}
 	current, err := read(ctx)
-	if err != nil || plan.validateBefore(current) != nil || boundary() != nil {
+	if err != nil || plan.validateBefore(current) != nil || approvedInventory != nil && approvedInventory(current) != nil || boundary() != nil {
 		return errBootstrapSource
 	}
 	if preflight || !plan.needsInstall() {

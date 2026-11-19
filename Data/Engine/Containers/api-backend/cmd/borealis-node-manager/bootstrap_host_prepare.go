@@ -26,6 +26,12 @@ func bootstrapNativeRepositoryHostActions(expected clusterbootstrap.PreparationE
 
 func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected, guard *clusterbootstrap.ExecutorGuard,
 	identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error, repositoryContinuation bool, packageDirectory string) clusterbootstrap.PrejoinHostActions {
+	approvedInventory := func(phase bootstrapHostCommand) func([]byte) error {
+		if repositoryContinuation {
+			return nil
+		}
+		return bootstrapTargetPackageInventoryCheck(expected.TargetPackages, phase)
+	}
 	callerCheck := check
 	check = func(ctx context.Context) error {
 		if guard == nil || callerCheck == nil || ctx.Err() != nil || guard.CheckAuthority(ctx) != nil ||
@@ -77,7 +83,7 @@ func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected
 			}
 			command := func(ctx context.Context, step bootstrapHostCommand, host, identityFile *os.File) error {
 				if step == bootstrapHostInstallBase || step == bootstrapHostInstallDocker {
-					return prepareBootstrapHostPackages(ctx, packageDirectory, step, false, host, identityFile, guard, identity, boundary)
+					return prepareBootstrapHostPackages(ctx, packageDirectory, step, false, host, identityFile, guard, identity, boundary, approvedInventory(step))
 				}
 				return runBootstrapHostCommand(ctx, step, host, identityFile, guard, identity, boundary)
 			}
@@ -90,7 +96,7 @@ func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected
 					}
 					// The combined solver proves both fixed phases before the first
 					// effect. It runs under durable intent and both inherited fences.
-					return prepareBootstrapHostPackages(ctx, packageDirectory, 0, true, hostLock, identityLock, guard, identity, boundary)
+					return prepareBootstrapHostPackages(ctx, packageDirectory, 0, true, hostLock, identityLock, guard, identity, boundary, approvedInventory(0))
 				},
 				base: func(ctx context.Context) error {
 					after, err := observeBootstrapDockerHost(ctx, root, nil, check, readBootstrapDockerProbe)
@@ -173,6 +179,9 @@ func observeBootstrapEarlyHost(ctx context.Context, root *os.Root, expected clus
 		clean = prefix.host
 	} else {
 		clean, err = observeBootstrapDockerHost(ctx, root, nil, check, read)
+		if err == nil {
+			err = validateBootstrapTargetPackages(expected.TargetPackages, []byte(clean.probes["packages"]))
+		}
 		if err == nil {
 			err = proveBootstrapDockerScratchAbsent(ctx, root, check)
 		}

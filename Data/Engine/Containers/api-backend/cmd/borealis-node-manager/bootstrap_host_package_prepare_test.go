@@ -1,15 +1,133 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
+
+func TestBootstrapHostPackageApprovedInventoryBeforeEffects(t *testing.T) {
+	for _, preflight := range []bool{false, true} {
+		for _, mode := range []string{"approved", "missing", "inventory drift", "selection drift", "reordered during simulation"} {
+			t.Run(fmt.Sprintf("preflight=%t/%s", preflight, mode), func(t *testing.T) {
+				plan, before := bootstrapHostPackagePlanFixture(t, bootstrapHostInstallBase, true)
+				if preflight {
+					plan, _ = newBootstrapHostPackagePreflightPlan(plan.directory, before)
+				}
+				selection, err := clusterbootstrap.SelectHostPackages(before)
+				if err != nil {
+					t.Fatal(err)
+				}
+				approved := &selection
+				switch mode {
+				case "missing":
+					approved = nil
+				case "inventory drift":
+					selection.InventorySHA256 = strings.Repeat("b", 64)
+				case "selection drift":
+					selection.Missing = selection.Missing[1:]
+				}
+				reads, simulations, installs := 0, 0, 0
+				read := func(context.Context) ([]byte, error) {
+					reads++
+					if reads == 2 && mode == "reordered during simulation" {
+						lines := strings.Split(strings.TrimSuffix(string(before), "\n"), "\n")
+						slices.Reverse(lines)
+						return []byte(strings.Join(lines, "\n") + "\n"), nil
+					}
+					if reads == 3 {
+						return bootstrapHostPackageResultFixture(plan, before), nil
+					}
+					return before, nil
+				}
+				run := func(_ context.Context, _ bootstrapHostCommandSpec, simulate bool) ([]byte, error) {
+					if simulate {
+						simulations++
+						return bootstrapHostPackageSimulationFixture(plan), nil
+					}
+					installs++
+					return nil, nil
+				}
+				err = prepareBootstrapHostPackagesWith(context.Background(), plan.directory, bootstrapHostInstallBase, preflight,
+					func(ctx context.Context) error { return ctx.Err() },
+					func(raw []byte) error { return validateBootstrapTargetPackages(approved, raw) }, read, run)
+				if (err == nil) != (mode == "approved") || (installs == 1) != (mode == "approved" && !preflight) {
+					t.Fatal("unapproved inventory reached installation", err, installs)
+				}
+				if (simulations == 1) != (mode == "approved" || mode == "reordered during simulation") {
+					t.Fatal("initial approval was not checked before simulation")
+				}
+			})
+		}
+	}
+}
+
+func TestBootstrapHostPackageApprovedFirstEffectAndContinuation(t *testing.T) {
+	for _, mode := range []string{"base then Docker", "Docker first", "drift before Docker first"} {
+		t.Run(mode, func(t *testing.T) {
+			base, current := bootstrapHostPackagePlanFixture(t, bootstrapHostInstallBase, false)
+			baseMissing := mode == "base then Docker"
+			if !baseMissing {
+				current = bootstrapHostPackageResultFixture(base, current)
+			}
+			approved, err := clusterbootstrap.SelectHostPackages(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			installs := 0
+			for _, phase := range []bootstrapHostCommand{0, bootstrapHostInstallBase, bootstrapHostInstallDocker} {
+				if phase == bootstrapHostInstallDocker && mode == "drift before Docker first" {
+					current = bytes.ReplaceAll(current, []byte("2.8.3"), []byte("2.8.4"))
+				}
+				var plan *bootstrapHostPackagePlan
+				if phase == 0 {
+					plan, err = newBootstrapHostPackagePreflightPlan(base.directory, current)
+				} else {
+					plan, err = newBootstrapHostPackagePlan(base.directory, phase, current)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := bytes.Clone(current)
+				approval := bootstrapTargetPackageInventoryCheck(&approved, phase)
+				if (approval == nil) != (phase == bootstrapHostInstallDocker && baseMissing) {
+					t.Fatal("original inventory checked after owned effects, or first effect unchecked")
+				}
+				err = prepareBootstrapHostPackagesWith(context.Background(), base.directory, phase, phase == 0,
+					func(ctx context.Context) error { return ctx.Err() }, approval,
+					func(context.Context) ([]byte, error) { return current, nil },
+					func(_ context.Context, _ bootstrapHostCommandSpec, simulate bool) ([]byte, error) {
+						if simulate {
+							return bootstrapHostPackageSimulationFixture(plan), nil
+						}
+						installs++
+						current = bootstrapHostPackageResultFixture(plan, before)
+						return nil, nil
+					})
+				if (err != nil) != (phase == bootstrapHostInstallDocker && mode == "drift before Docker first") {
+					t.Fatal("wrong first-effect/continuation result", phase, err)
+				}
+			}
+			wantInstalls := 1
+			if baseMissing {
+				wantInstalls = 2
+			} else if mode == "drift before Docker first" {
+				wantInstalls = 0
+			}
+			if installs != wantInstalls {
+				t.Fatal("wrong package effect count", installs)
+			}
+		})
+	}
+}
 
 func TestBootstrapHostPackageExecutionBoundaries(t *testing.T) {
 	for _, mode := range []string{"valid", "preflight", "already installed", "simulation failure", "unlocked solver", "drift before install", "install failure", "wrong result", "cancel after simulation", "authority after install"} {
@@ -75,7 +193,7 @@ func TestBootstrapHostPackageExecutionBoundaries(t *testing.T) {
 				lost = mode == "authority after install"
 				return nil, nil
 			}
-			err := prepareBootstrapHostPackagesWith(ctx, plan.directory, bootstrapHostInstallBase, preflight, check, read, run)
+			err := prepareBootstrapHostPackagesWith(ctx, plan.directory, bootstrapHostInstallBase, preflight, check, nil, read, run)
 			valid := mode == "valid" || preflight || mode == "already installed"
 			if (err == nil) != valid || installs > 1 {
 				t.Fatal("wrong result or replay", calls, err)
