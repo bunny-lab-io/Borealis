@@ -673,7 +673,7 @@ func TestClusterSSHPreparationArtifactsPostgresTerminal(t *testing.T) {
 					v.closeErr = errClusterConflict
 				}
 				readiness := clusterSSHPreparationReadiness(plan, receipts)
-				readiness.Version, readiness.Targets, readiness.Capacity = 3, proof.targetCPU, proof.capacity
+				readiness.Version, readiness.Targets, readiness.Capacity, readiness.Packages = 4, proof.targetCPU, proof.capacity, proof.packages
 				return readiness, nil
 			})
 			if (err == nil) != (mode == "waiting" || mode == "exact commit") || v.closes.Load() != 1 {

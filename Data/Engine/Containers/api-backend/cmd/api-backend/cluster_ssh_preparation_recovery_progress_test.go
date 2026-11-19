@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,13 +27,20 @@ func (c *recoveryProgressClient) Close() error { return c.close() }
 func TestClusterSSHPreparationRecoveryProgressTargetCustody(t *testing.T) {
 	baseline, manifest, members := recoveryProgressArchiveFixture(t)
 	archive := recoveryProgressPack(t, members)
-	for _, mode := range []string{"success", "password", "download error", "owned download error", "nil download", "helper drift", "archive drift", "changed runtime", "substituted target", "connect error", "owned connect error", "inspect error", "invalid cursor", "authority after cursor", "SSH close", "input close", "bad envelope", "late source drift"} {
+	for _, mode := range []string{"success", "password", "typed approval", "missing packages", "substituted packages", "download error", "owned download error", "nil download", "helper drift", "archive drift", "changed runtime", "substituted target", "connect error", "owned connect error", "inspect error", "invalid cursor", "authority after cursor", "SSH close", "input close", "bad envelope", "late source drift"} {
 		t.Run(mode, func(t *testing.T) {
-			value, _, _, _, _ := recoverySourceFixture(t, false)
+			version := 1
+			if mode == "typed approval" || mode == "missing packages" || mode == "substituted packages" {
+				version = 4
+			}
+			value, payload, _, _, _ := recoverySourceFixture(t, false, version)
 			value.Baseline = baseline
-			expected, err := buildClusterSSHPreparationRecoveryExpected(value, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
+			expected, err := buildClusterSSHPreparationRecoveryExpected(value, payload, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
 			if err != nil {
 				t.Fatal(err)
+			}
+			if version == 4 && (expected.TargetCPU == nil || expected.TargetPackages == nil) {
+				t.Fatal("typed recovery inputs lost original approval")
 			}
 			settings := sshPreparationRuntimeFixture()
 			item := value.Cohort.Targets[0]
@@ -48,6 +56,14 @@ func TestClusterSSHPreparationRecoveryProgressTargetCustody(t *testing.T) {
 				values := []clusterbootstrap.PreparationExpected{expected, expected}
 				if mode == "substituted target" {
 					values[0].Target.TargetID = newClusterUUID()
+				}
+				if mode == "missing packages" {
+					values[0].TargetPackages = nil
+				}
+				if mode == "substituted packages" {
+					selection := expected.TargetPackages.Clone()
+					selection.InventorySHA256 = strings.Repeat("f", 64)
+					values[0].TargetPackages = &selection
 				}
 				copied := map[string]string{}
 				for k, v := range settings {
@@ -143,8 +159,8 @@ func TestClusterSSHPreparationRecoveryProgressTargetCustody(t *testing.T) {
 				}
 				return client, nil
 			}
-			result, err := inspectClusterSSHPreparationRecoveryTarget(context.Background(), value, 0, sealed, aegis, parent, source, check, deps)
-			valid := mode == "success" || mode == "password"
+			result, err := inspectClusterSSHPreparationRecoveryTarget(context.Background(), value, payload, 0, sealed, aegis, parent, source, check, deps)
+			valid := mode == "success" || mode == "password" || mode == "typed approval"
 			if (err == nil) != valid || (!valid && result.Step != "") {
 				t.Fatal("uncertain progress escaped", mode, result, err)
 			}
@@ -167,9 +183,9 @@ func TestClusterSSHPreparationRecoveryProgressTargetCustody(t *testing.T) {
 func TestClusterSSHPreparationRecoveryProgressJoinsCanceledClient(t *testing.T) {
 	baseline, manifest, members := recoveryProgressArchiveFixture(t)
 	archive := recoveryProgressPack(t, members)
-	value, _, _, _, _ := recoverySourceFixture(t, false)
+	value, payload, _, _, _ := recoverySourceFixture(t, false)
 	value.Baseline = baseline
-	expected, _ := buildClusterSSHPreparationRecoveryExpected(value, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
+	expected, _ := buildClusterSSHPreparationRecoveryExpected(value, payload, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
 	item := value.Cohort.Targets[0]
 	sealed := sealedClusterSSHCredentials{binding: item.Binding, generation: "synthetic", ciphertext: aegisEnvelopePrefix + "synthetic"}
 	aegis := sshPreparationProposalTestAegis{verify: func(ctx context.Context, _ string) error { return ctx.Err() }, open: func(ctx context.Context, _ sealedClusterSSHCredentials, b clusterSSHCredentialBinding) (clusterSSHCredentialEnvelope, error) {
@@ -197,7 +213,7 @@ func TestClusterSSHPreparationRecoveryProgressJoinsCanceledClient(t *testing.T) 
 	go func() {
 		result := errors.New("progress callback exited before returning")
 		defer func() { done <- result }()
-		_, err := inspectClusterSSHPreparationRecoveryTarget(ctx, value, 0, sealed, aegis, parent, source, func(ctx context.Context) error { return ctx.Err() }, deps)
+		_, err := inspectClusterSSHPreparationRecoveryTarget(ctx, value, payload, 0, sealed, aegis, parent, source, func(ctx context.Context) error { return ctx.Err() }, deps)
 		result = err
 	}()
 	joined := false

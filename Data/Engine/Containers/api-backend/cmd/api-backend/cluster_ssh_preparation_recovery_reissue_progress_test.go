@@ -41,13 +41,9 @@ func reissuedProgressFixture(t *testing.T, replacement bool, rounds int, baselin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var receipts [6]string
-	for i := range receipts {
-		receipts[i] = strings.Repeat("a", 64)
-	}
-	receipts[4] = approved
 	payload := marshalClusterJSON(map[string]any{"source_k3s_version": clusterbootstrap.K3sPins().Version,
-		"ssh_preparation_readiness": clusterSSHPreparationReadiness(plan, receipts)})
+		"ssh_preparation_authorization": value.Authorization,
+		"ssh_preparation_readiness":     recoveryReadinessFixture(t, work, approved, 4)})
 	base, _, err := clusterSSHPreparationRecoveryPayload(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +79,7 @@ func reissuedProgressAegis() sshPreparationProposalTestAegis {
 
 func TestClusterSSHPreparationRecoveryReissuedProgressRejectsForeignInputs(t *testing.T) {
 	baseline, _ := recoveryProgressManifestFixture()
-	for _, mode := range []string{"negative index", "past index", "Q2 lineage", "old generation", "future generation", "holder", "missing lease", "inspection", "raw payload", "credential binding", "credential generation", "credential ciphertext", "substituted Expected", "missing Expected"} {
+	for _, mode := range []string{"negative index", "past index", "Q2 lineage", "old generation", "future generation", "holder", "missing lease", "inspection", "raw payload", "credential binding", "credential generation", "credential ciphertext", "substituted Expected", "missing Expected", "missing packages", "substituted packages"} {
 		t.Run(mode, func(t *testing.T) {
 			value, payload, sealed, _, get, network := reissuedProgressFixture(t, false, 2, baseline)
 			index := 0
@@ -123,6 +119,14 @@ func TestClusterSSHPreparationRecoveryReissuedProgressRejectsForeignInputs(t *te
 				}
 				if err == nil && mode == "missing Expected" {
 					current.Expected = current.Expected[:1]
+				}
+				if err == nil && mode == "missing packages" {
+					current.Expected[0].TargetPackages = nil
+				}
+				if err == nil && mode == "substituted packages" {
+					selection := current.Expected[0].TargetPackages.Clone()
+					selection.InventorySHA256 = strings.Repeat("f", 64)
+					current.Expected[0].TargetPackages = &selection
 				}
 				return current, err
 			}

@@ -93,5 +93,5 @@ func buildClusterSSHPreparationRecoveryReissuedExpected(value clusterSSHPreparat
 	if index < 0 || index >= len(value.Leases) || !validClusterSSHPreparationRecoveryReissuedSource(value, payload) {
 		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
 	}
-	return assembleClusterSSHPreparationExpected(value.Cohort, value.Source, value.Leases[index], value.Baseline, version, pods, services)
+	return assembleClusterSSHPreparationExpected(value.Cohort, value.Source, value.Leases[index], value.Baseline, version, pods, services, payload)
 }

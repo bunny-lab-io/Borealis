@@ -17,6 +17,9 @@ func sshPreparationTargetCPUFixture(snapshot clusterSSHPreparationApprovalSnapsh
 		targets = append(targets, clusterSSHPreparationTargetCPU{TargetID: target.Binding.TargetID, ObservationSHA256: strings.Repeat("d", 64),
 			CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: plan, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}})
 	}
+	for i, packages := range sshPreparationTargetPackagesFixture(targets) {
+		targets[i].PackagesSHA256, _ = clusterSSHPreparationPackageDigest(packages.Selection)
+	}
 	return targets
 }
 
@@ -29,7 +32,7 @@ func sshPreparationCPUReadFixture(t *testing.T, snapshot clusterSSHPreparationAp
 			return clusterSSHPreparationCleanObservation{}, errClusterConflict
 		}
 		owned := capacity.clone()
-		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: targets, Capacity: &owned}, nil
+		return clusterSSHPreparationCleanObservation{Digest: digest, Targets: targets, Packages: sshPreparationTargetPackagesFixture(targets), Capacity: &owned}, nil
 	}
 }
 
@@ -81,6 +84,7 @@ func sshPreparationApprovalCapacityFixture(t *testing.T, snapshot clusterSSHPrep
 func sshPreparationApprovalCapacityProof(t *testing.T, snapshot clusterSSHPreparationApprovalSnapshot, proof *clusterSSHPreparationApprovalProof) {
 	t.Helper()
 	proof.targetCPU = sshPreparationTargetCPUFixture(snapshot)
+	proof.packages = sshPreparationTargetPackagesFixture(proof.targetCPU)
 	proof.receipts[1], _ = clusterSSHPreparationTargetCPUDigest(snapshot, proof.targetCPU)
 	capacity := sshPreparationApprovalCapacityFixture(t, snapshot)
 	proof.capacity = &capacity
@@ -129,6 +133,9 @@ func TestClusterSSHPreparationTargetCPUProjectionSharesFreshRead(t *testing.T) {
 func TestClusterSSHPreparationTargetCPUReadinessBinding(t *testing.T) {
 	snapshot, _ := sshPreparationCleanTargetsFixture(t, false)
 	targets := sshPreparationTargetCPUFixture(snapshot)
+	for i := range targets {
+		targets[i].PackagesSHA256 = "" // Retained v2 CPU-only receipt.
+	}
 	digest, err := clusterSSHPreparationTargetCPUDigest(snapshot, targets)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +191,7 @@ func TestClusterSSHPreparationTargetCPUReadinessBinding(t *testing.T) {
 }
 
 func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
-	for _, mode := range []string{"fresh", "changed CPU", "changed clean digest", "consumer mutation", "read failure", "missing capacity", "changed capacity"} {
+	for _, mode := range []string{"fresh", "changed CPU", "changed clean digest", "consumer mutation", "read failure", "missing capacity", "changed capacity", "missing packages", "changed packages", "package consumer mutation"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot, _ := sshPreparationCleanTargetsFixture(t, false)
 			targets := sshPreparationTargetCPUFixture(snapshot)
@@ -195,7 +202,10 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 			read := func(ctx context.Context, _ string) (clusterSSHPreparationCleanObservation, error) {
 				calls++
 				copy := capacity.clone()
-				out := clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(targets), Capacity: &copy}
+				out := clusterSSHPreparationCleanObservation{Digest: digest, Targets: slices.Clone(targets), Packages: sshPreparationTargetPackagesFixture(targets), Capacity: &copy}
+				if mode == "missing packages" {
+					out.Packages = nil
+				}
 				if mode == "missing capacity" {
 					out.Capacity = nil
 				}
@@ -210,6 +220,8 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 						return clusterSSHPreparationCleanObservation{}, errClusterConflict
 					case "changed capacity":
 						out.Capacity.Targets[0].Capacity.LonghornCPU.OverrideMilli++
+					case "changed packages":
+						out.Packages[0].Selection.InventorySHA256 = strings.Repeat("f", 64)
 					}
 				}
 				return out, ctx.Err()
@@ -221,8 +233,11 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 				if mode == "consumer mutation" {
 					p.targetCPU[0].CPU.OnlineCPUs = "0"
 				}
+				if mode == "package consumer mutation" {
+					p.packages[0].Selection.Missing[0] = "foreign"
+				}
 				r := clusterSSHPreparationReadiness(p.plan, p.receipts)
-				r.Version, r.Targets, r.Capacity = 3, p.targetCPU, p.capacity
+				r.Version, r.Targets, r.Capacity, r.Packages = 4, p.targetCPU, p.capacity, p.packages
 				if validateClusterSSHPreparationReadinessCPU(r, snapshot.work.Authorization) != nil {
 					return errClusterConflict
 				}

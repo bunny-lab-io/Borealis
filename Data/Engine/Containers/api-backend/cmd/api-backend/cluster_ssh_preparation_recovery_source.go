@@ -82,7 +82,7 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 		PlanSHA256: record.PlanSHA256, Version: version, Approved: readiness.Checks[4].SHA256, TargetCount: len(owned.Leases)}
 	return newClusterSSHPreparationRecoverySourceProjectionRead(projection, check, getJSON, network,
 		func(index int, version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
-			return buildClusterSSHPreparationRecoveryExpected(owned, index, version, pods, services)
+			return buildClusterSSHPreparationRecoveryExpected(owned, payload, index, version, pods, services)
 		})
 }
 
@@ -204,9 +204,13 @@ func newClusterSSHPreparationRecoverySourceProjectionRead(projection clusterSSHP
 	}
 }
 
-func buildClusterSSHPreparationRecoveryExpected(value clusterSSHPreparationRecoveryAuthority, index int, version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
+func buildClusterSSHPreparationRecoveryExpected(value clusterSSHPreparationRecoveryAuthority, payload string, index int, version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
 	fail := func() (clusterbootstrap.PreparationExpected, error) {
 		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
+	}
+	record, err := parseClusterSSHPreparationRecovery(payload, clusterSSHPreparationWork{Authorization: value.Authorization})
+	if err != nil || !reflect.DeepEqual(record, value.Reservation) {
+		return fail()
 	}
 	if index < 0 || index >= len(value.Leases) || len(value.Leases) != len(value.Reservation.Targets) || len(value.Leases) != len(value.Cohort.Targets) ||
 		len(value.Leases) != len(value.Authorization.Targets) || value.Baseline.Validate() != nil || validateClusterSSHInspectionCohort(value.Cohort, value.Source) != nil {
@@ -223,5 +227,5 @@ func buildClusterSSHPreparationRecoveryExpected(value clusterSSHPreparationRecov
 			return fail()
 		}
 	}
-	return assembleClusterSSHPreparationExpected(value.Cohort, value.Source, value.Leases[index], value.Baseline, version, pods, services)
+	return assembleClusterSSHPreparationExpected(value.Cohort, value.Source, value.Leases[index], value.Baseline, version, pods, services, payload)
 }

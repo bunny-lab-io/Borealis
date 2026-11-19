@@ -178,7 +178,7 @@ func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing
 					t.Fatal("SQL held across native scope")
 				}
 				receipt, err := consume(ctx, sshPreparationCPUGatesFixture(t, snapshot))
-				if err != nil || receipt.Version != 3 {
+				if err != nil || receipt.Version != 4 {
 					t.Fatal("approval did not consume gates", err)
 				}
 				// A competing API claimant sees the commit before cleanup joins.

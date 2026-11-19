@@ -71,14 +71,14 @@ func (c *clusterController) recoverClusterSSHPreparationSourceStageWith(parent c
 				},
 			}
 			for i, target := range claim.Claims {
-				progress, err := inspectClusterSSHPreparationRecoveryTarget(ctx, authority, i, target.Sealed, aegis, scratchParent, read, check, progressDependencies)
+				progress, err := inspectClusterSSHPreparationRecoveryTarget(ctx, authority, claim.payload, i, target.Sealed, aegis, scratchParent, read, check, progressDependencies)
 				if err != nil || !clusterSSHSourceStageCursor(progress) {
 					return clusterbootstrap.ErrPreparationConfig
 				}
 			}
 			for i, target := range claim.Claims {
 				var resolution string
-				err := withClusterSSHPreparationRecoveryTargetInputs(ctx, authority, i, target.Sealed, aegis, scratchParent, read, check,
+				err := withClusterSSHPreparationRecoveryTargetInputs(ctx, authority, claim.payload, i, target.Sealed, aegis, scratchParent, read, check,
 					dependencies.download, dependencies.closeInputs, func(inputs clusterSSHPreparationRecoveryTargetInputs) error {
 						var err error
 						resolution, err = reconcileClusterSSHPreparationSourceStage(ctx, inputs, dependencies.connect)

@@ -66,7 +66,7 @@ func (c *clusterController) observeClusterSSHPreparationRecoveryProgressWith(par
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		for i, target := range claim.Claims {
-			progress, err := inspectClusterSSHPreparationRecoveryTarget(ctx, authority, i, target.Sealed, aegis, scratchParent, read, check, dependencies)
+			progress, err := inspectClusterSSHPreparationRecoveryTarget(ctx, authority, claim.payload, i, target.Sealed, aegis, scratchParent, read, check, dependencies)
 			if err != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
@@ -97,11 +97,11 @@ type clusterSSHPreparationRecoveryTargetInputs struct {
 	current, inputCheck func(context.Context) error
 }
 
-func inspectClusterSSHPreparationRecoveryTarget(ctx context.Context, authority clusterSSHPreparationRecoveryAuthority, index int,
+func inspectClusterSSHPreparationRecoveryTarget(ctx context.Context, authority clusterSSHPreparationRecoveryAuthority, payload string, index int,
 	sealed sealedClusterSSHCredentials, aegis clusterSSHWorkerAegis, scratchParent string, source clusterSSHPreparationRecoverySourceRead,
 	check func(context.Context) error, dependencies clusterSSHPreparationRecoveryProgressDependencies) (clusterbootstrap.PreparationProgress, error) {
 	var progress clusterbootstrap.PreparationProgress
-	err := withClusterSSHPreparationRecoveryTargetInputs(ctx, authority, index, sealed, aegis, scratchParent, source, check,
+	err := withClusterSSHPreparationRecoveryTargetInputs(ctx, authority, payload, index, sealed, aegis, scratchParent, source, check,
 		dependencies.download, dependencies.closeInputs, func(target clusterSSHPreparationRecoveryTargetInputs) error {
 			if dependencies.connect == nil {
 				return clusterbootstrap.ErrPreparationConfig
@@ -156,7 +156,7 @@ func runClusterSSHPreparationRecoverySession(ctx context.Context, target cluster
 	return action(), nil
 }
 
-func withClusterSSHPreparationRecoveryTargetInputs(ctx context.Context, authority clusterSSHPreparationRecoveryAuthority, index int,
+func withClusterSSHPreparationRecoveryTargetInputs(ctx context.Context, authority clusterSSHPreparationRecoveryAuthority, payload string, index int,
 	sealed sealedClusterSSHCredentials, aegis clusterSSHWorkerAegis, scratchParent string, source clusterSSHPreparationRecoverySourceRead,
 	check func(context.Context) error, download func(context.Context, clusterbootstrap.Expected, string) (*clusterbootstrap.Bundle, error),
 	closeInputs func(*clusterbootstrap.PreparationInputs) error, consume func(clusterSSHPreparationRecoveryTargetInputs) error) (result error) {
@@ -166,7 +166,7 @@ func withClusterSSHPreparationRecoveryTargetInputs(ctx context.Context, authorit
 	return withClusterSSHPreparationRecoveryProjectedInputs(ctx,
 		clusterSSHPreparationRecoveryInputProjection{authority.Cohort.Targets[index], len(authority.Leases)},
 		func(version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
-			return buildClusterSSHPreparationRecoveryExpected(authority, index, version, pods, services)
+			return buildClusterSSHPreparationRecoveryExpected(authority, payload, index, version, pods, services)
 		}, index, sealed, aegis, scratchParent, source, check, download, closeInputs, consume)
 }
 

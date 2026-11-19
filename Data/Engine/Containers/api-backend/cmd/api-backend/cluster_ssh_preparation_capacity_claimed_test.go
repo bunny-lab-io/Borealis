@@ -27,7 +27,7 @@ func sshClaimedCapacityFixture(t *testing.T, replacement bool, nodeMode string) 
 		t.Fatal(err)
 	}
 	r := clusterSSHPreparationReadiness(f.plan, [6]string{strings.Repeat("a", 64), clean.Digest, digest, strings.Repeat("b", 64), clean.Capacity.ConfigurationSHA256, strings.Repeat("c", 64)})
-	r.Version, r.Targets, r.Capacity = 3, clean.Targets, clean.Capacity
+	r.Version, r.Targets, r.Capacity, r.Packages = 4, clean.Targets, clean.Capacity, clean.Packages
 	a := f.storage.a
 	target := a.Cohort.Targets[0]
 	a.Lease = clusterSSHTargetLease{TargetID: target.Binding.TargetID, OperationID: a.Cohort.OperationID, Holder: newClusterUUID(), Generation: target.Generation + 1,
@@ -86,7 +86,11 @@ func TestClusterSSHPreparationCapacityClaimedRechecks(t *testing.T) {
 					return f.get(ctx, path, out)
 				}
 			case "legacy CPU receipt":
-				receipt.Version, receipt.Capacity = 2, nil
+				receipt.Version, receipt.Capacity, receipt.Packages = 2, nil, nil
+				for i := range receipt.Targets {
+					receipt.Targets[i].PackagesSHA256 = ""
+				}
+				receipt.Checks[1].SHA256, _ = clusterSSHPreparationTargetCPUDigest(f.snapshot, receipt.Targets)
 				a.payload = marshalClusterJSON(map[string]any{"ssh_preparation_readiness": receipt, "ssh_preparation_authorization": f.snapshot.work.Authorization})
 			}
 			digest, targets, err := recheckClusterSSHPreparationCapacity(context.Background(), a, value, false, get)

@@ -15,6 +15,7 @@ import (
 type clusterSSHPreparationTargetCPU struct {
 	TargetID          string                                `json:"target_id"`
 	ObservationSHA256 string                                `json:"observation_sha256"`
+	PackagesSHA256    string                                `json:"packages_sha256,omitempty"`
 	CPU               clusterbootstrap.PreparationTargetCPU `json:"cpu"`
 }
 
@@ -49,11 +50,22 @@ func validClusterSSHPreparationPackages(targets []clusterSSHPreparationTargetCPU
 		return false
 	}
 	for i, target := range targets {
-		if packages[i].TargetID != target.TargetID || packages[i].ObservationSHA256 != target.ObservationSHA256 || packages[i].Selection.Validate() != nil {
+		digest, err := clusterSSHPreparationPackageDigest(packages[i].Selection)
+		if err != nil || digest != target.PackagesSHA256 || packages[i].TargetID != target.TargetID || packages[i].ObservationSHA256 != target.ObservationSHA256 {
 			return false
 		}
 	}
 	return true
+}
+
+func clusterSSHPreparationPackageDigest(selection clusterbootstrap.HostPackageSelection) (string, error) {
+	if selection.Validate() != nil {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	return clusterSSHPreparationDigest(struct {
+		Domain    string
+		Selection clusterbootstrap.HostPackageSelection
+	}{"preparation-target-packages-v1", selection})
 }
 
 type clusterSSHPreparationTargetsRead func(context.Context, string) (clusterSSHPreparationCleanObservation, error)
@@ -113,14 +125,14 @@ func clusterSSHPreparationTargetCPUDigest(snapshot clusterSSHPreparationApproval
 
 func (o clusterSSHPreparationCleanObservation) validate(snapshot clusterSSHPreparationApprovalSnapshot) error {
 	digest, err := clusterSSHPreparationTargetCPUDigest(snapshot, o.Targets)
-	if err != nil || digest != o.Digest {
+	if err != nil || digest != o.Digest || !validClusterSSHPreparationPackages(o.Targets, o.Packages) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	return nil
 }
 
 func validateClusterSSHPreparationReadinessCPU(r clusterSSHPreparationReadinessReceipt, a clusterSSHPreparationAuthorization) error {
-	if (r.Version != 2 && r.Version != 3) || len(r.Targets) != len(a.Targets) || len(r.Targets) < 1 || len(r.Targets) > 2 || len(r.Checks) != 6 {
+	if (r.Version != 2 && r.Version != 3 && r.Version != 4) || len(r.Targets) != len(a.Targets) || len(r.Targets) < 1 || len(r.Targets) > 2 || len(r.Checks) != 6 {
 		return errClusterConflict
 	}
 	for i, target := range r.Targets {
@@ -138,13 +150,26 @@ func validateClusterSSHPreparationReadinessCPU(r clusterSSHPreparationReadinessR
 	if r.Version == 2 && r.Capacity != nil {
 		return errClusterConflict
 	}
-	if r.Version == 3 {
+	if r.Version >= 3 {
 		if r.Capacity == nil || r.Capacity.CleanSHA256 != r.Checks[1].SHA256 || r.Capacity.ConfigurationSHA256 != r.Checks[4].SHA256 {
 			return errClusterConflict
 		}
 		capacity, err := r.Capacity.digest(r.PlanSHA256, r.Targets)
 		if err != nil || capacity != r.Checks[2].SHA256 {
 			return errClusterConflict
+		}
+	}
+	if r.Version == 4 && !validClusterSSHPreparationPackages(r.Targets, r.Packages) {
+		return errClusterConflict
+	}
+	if r.Version < 4 {
+		if len(r.Packages) != 0 {
+			return errClusterConflict
+		}
+		for _, target := range r.Targets {
+			if target.PackagesSHA256 != "" {
+				return errClusterConflict
+			}
 		}
 	}
 	return nil
@@ -171,7 +196,9 @@ func withClusterSSHPreparationCPUApprovalProof(ctx context.Context, snapshot clu
 			return errClusterConflict
 		}
 		retained := slices.Clone(observed.Targets)
+		packages := cloneClusterSSHPreparationPackages(observed.Packages)
 		proof.targetCPU = slices.Clone(retained)
+		proof.packages = cloneClusterSSHPreparationPackages(packages)
 		proof.capacity = &capacity
 		original := proof.recheck
 		var failed atomic.Bool
@@ -182,7 +209,7 @@ func withClusterSSHPreparationCPUApprovalProof(ctx context.Context, snapshot clu
 			}
 			fresh, err := read(ctx, plan)
 			if err != nil || fresh.validate(snapshot) != nil || fresh.Digest != proof.receipts[1] || !slices.Equal(fresh.Targets, retained) ||
-				fresh.Capacity == nil || !reflect.DeepEqual(*fresh.Capacity, capacity) {
+				!reflect.DeepEqual(fresh.Packages, packages) || fresh.Capacity == nil || !reflect.DeepEqual(*fresh.Capacity, capacity) {
 				failed.Store(true)
 				return errClusterConflict
 			}
@@ -219,6 +246,36 @@ func clusterSSHPreparationExpectedCPU(payload, targetID string) (*clusterbootstr
 	for _, target := range receipt.Targets {
 		if target.TargetID == targetID {
 			value := target.CPU
+			return &value, nil
+		}
+	}
+	return nil, errClusterConflict
+}
+
+// Older receipts retain their reconciliation meaning but cannot supply an
+// approved package inventory for a new native first effect.
+func clusterSSHPreparationExpectedPackages(payload, targetID string) (*clusterbootstrap.HostPackageSelection, error) {
+	if payload == "" {
+		return nil, nil
+	}
+	var raw, authorization json.RawMessage
+	if clusterBootstrapObject([]byte(payload), map[string]any{"ssh_preparation_readiness": &raw, "ssh_preparation_authorization": &authorization}) != nil {
+		return nil, errClusterConflict
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var receipt clusterSSHPreparationReadinessReceipt
+	var a clusterSSHPreparationAuthorization
+	if json.Unmarshal(raw, &receipt) != nil || json.Unmarshal(authorization, &a) != nil || parseClusterSSHPreparationReadiness(raw, a) != nil {
+		return nil, errClusterConflict
+	}
+	if receipt.Version < 4 {
+		return nil, nil
+	}
+	for _, target := range receipt.Packages {
+		if target.TargetID == targetID {
+			value := target.Selection.Clone()
 			return &value, nil
 		}
 	}

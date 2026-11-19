@@ -158,7 +158,7 @@ func (c *clusterSSHPreparationCleanBrokerClient) preparationTargetsFilesystemRea
 		// storage gate independently recalculates every fit before approval.
 		if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || response.Header.Get("Content-Encoding") != "" ||
 			openClusterSSHVIP(c.responseCipher, clusterSSHPreparationCleanBrokerPath, raw, &result, clusterSSHPreparationCleanBrokerResponseLimit) != nil ||
-			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets}).validate(snapshot) != nil || !validClusterSSHPreparationPackages(result.Targets, result.Packages) ||
+			result.Version != clusterSSHPreparationCleanBrokerVersion || result.ID != request.ID || digestErr != nil || result.RequestSHA256 != requestDigest || (clusterSSHPreparationCleanObservation{Digest: result.Digest, Targets: result.Targets, Packages: result.Packages}).validate(snapshot) != nil || !validClusterSSHPreparationPackages(result.Targets, result.Packages) ||
 			retainedPackages != nil && !reflect.DeepEqual(retainedPackages, result.Packages) ||
 			!validClusterSSHPreparationFilesystems(snapshot, paths, result.Filesystems) ||
 			!cleanup.clean() || requestCtx.Err() != nil || check(requestCtx) != nil || requestCtx.Err() != nil ||

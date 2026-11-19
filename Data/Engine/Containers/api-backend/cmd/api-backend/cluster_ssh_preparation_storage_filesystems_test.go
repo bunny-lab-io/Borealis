@@ -359,6 +359,7 @@ func TestClusterSSHPreparationStorageFilesystemsProjectionCopies(t *testing.T) {
 	snapshot := sshPreparationCleanBrokerSnapshot(t)
 	plan, _, _ := clusterSSHPreparationCleanBrokerBinding(snapshot)
 	value := clusterSSHPreparationCleanObservation{Targets: sshPreparationTargetCPUFixture(snapshot)}
+	value.Packages = sshPreparationTargetPackagesFixture(value.Targets)
 	value.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, value.Targets)
 	for _, target := range snapshot.work.Proof.Cohort.Targets {
 		var parsed struct {

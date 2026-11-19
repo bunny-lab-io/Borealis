@@ -224,7 +224,11 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 				filesystems = append(filesystems, clusterSSHTargetFilesystemEvidence{TargetID: item.Binding.TargetID, Storage: storage})
 			}
 			packages = append(packages, clusterSSHPreparationTargetPackages{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, Selection: selectionPackages})
-			return clusterSSHPreparationTargetCPU{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, CPU: proof.CPU}, nil
+			packageDigest, err := clusterSSHPreparationPackageDigest(selectionPackages)
+			if err != nil {
+				return clusterSSHPreparationTargetCPU{}, err
+			}
+			return clusterSSHPreparationTargetCPU{TargetID: item.Binding.TargetID, ObservationSHA256: proof.ObservationSHA256, PackagesSHA256: packageDigest, CPU: proof.CPU}, nil
 		}
 		var first []clusterSSHPreparationTargetCPU
 		var firstFilesystems []clusterSSHTargetFilesystemEvidence

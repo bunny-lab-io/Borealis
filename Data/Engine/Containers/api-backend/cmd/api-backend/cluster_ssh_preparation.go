@@ -78,6 +78,10 @@ func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, so
 			if err != nil || expected.TargetCPU != nil && (expected.TargetCPU.AllocatableMilli != uint64(target.Report.CPUCount)*1000 || expected.TargetCPU.MemoryKiB != target.Report.MemoryKiB) {
 				return fail()
 			}
+			expected.TargetPackages, err = clusterSSHPreparationExpectedPackages(payload[0], target.Binding.TargetID)
+			if err != nil {
+				return fail()
+			}
 		}
 		if expected.Validate() != nil {
 			return fail()

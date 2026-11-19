@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
-	for _, mode := range []string{"fresh", "missing projection", "changed CPU", "changed clean digest", "changed target", "missing capacity", "changed capacity", "changed demand receipt"} {
+	for _, mode := range []string{"fresh", "missing projection", "changed CPU", "changed clean digest", "changed target", "missing capacity", "changed capacity", "changed demand receipt", "missing packages", "changed packages", "swapped packages"} {
 		t.Run(mode, func(t *testing.T) {
 			f, snapshot, confirmation, proof := newSSHPreparationApprovalFixture(t, false)
 			switch mode {
@@ -25,6 +26,12 @@ func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
 				proof.capacity.Targets[0].Capacity.LonghornCPU.OverrideMilli++
 			case "changed demand receipt":
 				proof.capacity.CensusSHA256 = strings.Repeat("f", 64)
+			case "missing packages":
+				proof.packages = nil
+			case "changed packages":
+				proof.packages[0].Selection.InventorySHA256 = strings.Repeat("f", 64)
+			case "swapped packages":
+				proof.packages[0], proof.packages[1] = proof.packages[1], proof.packages[0]
 			}
 			err := f.c.commitClusterSSHPreparationApproval(f.ctx, snapshot, confirmation, proof)
 			if (err == nil) != (mode == "fresh") {
@@ -48,7 +55,7 @@ func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
 				t.Fatal("readiness missing")
 			}
 			var readiness clusterSSHPreparationReadinessReceipt
-			if json.Unmarshal(raw, &readiness) != nil || readiness.Version != 3 || len(readiness.Targets) != 2 {
+			if json.Unmarshal(raw, &readiness) != nil || readiness.Version != 4 || len(readiness.Targets) != 2 {
 				t.Fatal("typed CPU not committed atomically")
 			}
 			f.op.State, f.op.CurrentStep = "running", clusterSSHPreparationOperationStep
@@ -64,6 +71,9 @@ func TestClusterSSHPreparationTargetCPUPostgresApproval(t *testing.T) {
 				expected, err := buildClusterSSHPreparationExpected(authority.Cohort, authority.Source, authority.Lease, authority.Baseline, authority.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", authority.payload)
 				if err != nil || expected.TargetCPU == nil || *expected.TargetCPU != readiness.Targets[i].CPU {
 					t.Fatal("first-mutation CPU binding lost", err)
+				}
+				if expected.TargetPackages == nil || !reflect.DeepEqual(*expected.TargetPackages, readiness.Packages[i].Selection) {
+					t.Fatal("first-mutation package selection lost")
 				}
 			}
 		})

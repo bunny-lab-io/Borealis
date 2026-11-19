@@ -212,9 +212,9 @@ func TestClusterSSHPreparationRecoverySourceStageJoinsCancellation(t *testing.T)
 func TestClusterSSHPreparationRecoverySourceStageIgnoredAuthorityLoss(t *testing.T) {
 	baseline, manifest, members := recoveryProgressArchiveFixture(t)
 	archive := recoveryProgressPack(t, members)
-	value, _, _, _, _ := recoverySourceFixture(t, false)
+	value, payload, _, _, _ := recoverySourceFixture(t, false)
 	value.Baseline = baseline
-	expected, err := buildClusterSSHPreparationRecoveryExpected(value, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
+	expected, err := buildClusterSSHPreparationRecoveryExpected(value, payload, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestClusterSSHPreparationRecoverySourceStageIgnoredAuthorityLoss(t *testing
 	source := func(ctx context.Context) (clusterSSHPreparationRecoverySource, error) {
 		return clusterSSHPreparationRecoverySource{Expected: []clusterbootstrap.PreparationExpected{expected, expected}, Settings: sshPreparationRuntimeFixture()}, ctx.Err()
 	}
-	err = withClusterSSHPreparationRecoveryTargetInputs(context.Background(), value, 0, sealed, aegis, t.TempDir(), source,
+	err = withClusterSSHPreparationRecoveryTargetInputs(context.Background(), value, payload, 0, sealed, aegis, t.TempDir(), source,
 		func(ctx context.Context) error { return ctx.Err() }, func(ctx context.Context, e clusterbootstrap.Expected, parent string) (*clusterbootstrap.Bundle, error) {
 			return recoveryProgressStageFixture(t, ctx, e, manifest, archive, parent)
 		}, nil, func(target clusterSSHPreparationRecoveryTargetInputs) error {

@@ -177,7 +177,7 @@ func TestClusterSSHPreparationCapacityWaitingCompleteRounds(t *testing.T) {
 					}
 				}
 				r := clusterSSHPreparationReadiness(f.plan, [6]string{strings.Repeat("a", 64), value.Digest, digest, strings.Repeat("b", 64), value.Capacity.ConfigurationSHA256, strings.Repeat("c", 64)})
-				r.Version, r.Targets, r.Capacity = 3, value.Targets, value.Capacity
+				r.Version, r.Targets, r.Capacity, r.Packages = 4, value.Targets, value.Capacity, value.Packages
 				wire, _ := json.Marshal(r)
 				if err := parseClusterSSHPreparationReadiness(wire, f.snapshot.work.Authorization); err != nil {
 					t.Fatalf("real capacity readiness round trip: %v (%d bytes)", err, len(wire))

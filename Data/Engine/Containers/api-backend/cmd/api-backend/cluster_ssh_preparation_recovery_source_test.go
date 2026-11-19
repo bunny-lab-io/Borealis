@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,7 +12,7 @@ import (
 	"testing"
 )
 
-func recoverySourceFixture(t *testing.T, replacement bool) (clusterSSHPreparationRecoveryAuthority, string, map[string]any, func(context.Context, string, any) error, clusterSSHSourceNetworkRead) {
+func recoverySourceFixture(t *testing.T, replacement bool, readinessVersion ...int) (clusterSSHPreparationRecoveryAuthority, string, map[string]any, func(context.Context, string, any) error, clusterSSHSourceNetworkRead) {
 	t.Helper()
 	work := sshPreparationConfigurationFixture(t, replacement)
 	secret := sshPreparationConfigurationSecret()
@@ -43,12 +44,8 @@ func recoverySourceFixture(t *testing.T, replacement bool) (clusterSSHPreparatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	var receipts [6]string
-	for i := range receipts {
-		receipts[i] = strings.Repeat("a", 64)
-	}
-	receipts[4] = approved
-	base := marshalClusterJSON(map[string]any{"source_k3s_version": clusterbootstrap.K3sPins().Version, "ssh_preparation_readiness": clusterSSHPreparationReadiness(plan, receipts)})
+	base := marshalClusterJSON(map[string]any{"source_k3s_version": clusterbootstrap.K3sPins().Version,
+		"ssh_preparation_authorization": work.Authorization, "ssh_preparation_readiness": recoveryReadinessFixture(t, work, approved, readinessVersion...)})
 	canonical, _, err := clusterSSHPreparationRecoveryPayload(base)
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +64,95 @@ func recoverySourceFixture(t *testing.T, replacement bool) (clusterSSHPreparatio
 	_ = json.Unmarshal([]byte(base), &payload)
 	payload[clusterSSHPreparationRecoveryField] = record
 	return value, marshalClusterJSON(payload), secret, get, network
+}
+
+func recoveryReadinessFixture(t *testing.T, work clusterSSHPreparationWork, configuration string, version ...int) clusterSSHPreparationReadinessReceipt {
+	t.Helper()
+	plan, err := clusterSSHPreparationPlanDigest(work.Authorization)
+	if err != nil || len(version) > 1 {
+		t.Fatal("readiness fixture", err)
+	}
+	var receipts [6]string
+	for i := range receipts {
+		receipts[i] = strings.Repeat("a", 64)
+	}
+	receipts[4] = configuration
+	r := clusterSSHPreparationReadiness(plan, receipts)
+	if len(version) == 0 || version[0] == 1 {
+		return r
+	}
+	r.Version = version[0]
+	snapshot := clusterSSHPreparationApprovalSnapshot{work: work}
+	r.Targets = sshPreparationTargetCPUFixture(snapshot)
+	if r.Version < 4 {
+		for i := range r.Targets {
+			r.Targets[i].PackagesSHA256 = ""
+		}
+	} else {
+		r.Packages = sshPreparationTargetPackagesFixture(r.Targets)
+	}
+	r.Checks[1].SHA256, err = clusterSSHPreparationTargetCPUDigest(snapshot, r.Targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Version >= 3 {
+		capacity := sshPreparationApprovalCapacityFixture(t, snapshot)
+		capacity.CleanSHA256, capacity.ConfigurationSHA256 = r.Checks[1].SHA256, configuration
+		r.Checks[2].SHA256, err = capacity.digest(plan, r.Targets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Capacity = &capacity
+	}
+	raw, _ := json.Marshal(r)
+	if parseClusterSSHPreparationReadiness(raw, work.Authorization) != nil {
+		t.Fatal("invalid retained readiness fixture")
+	}
+	return r
+}
+
+func assertRecoveryOriginalConfiguration(t *testing.T, original, recovered clusterbootstrap.PreparationExpected, runtime map[string]string) {
+	t.Helper()
+	// Source publication normalizes executor ownership only. Compare complete
+	// configuration after restoring that ownership, including optional evidence.
+	recovered.Target = original.Target
+	originalConfig, err := clusterbootstrap.NewPreparationConfiguration(original, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredConfig, err := clusterbootstrap.NewPreparationConfiguration(recovered, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := originalConfig.Export()
+	after, _ := recoveredConfig.Export()
+	if !bytes.Equal(before, after) {
+		t.Fatal("recovery changed source publication configuration bytes")
+	}
+}
+
+func TestClusterSSHPreparationRecoverySourcePreservesOriginalConfiguration(t *testing.T) {
+	for _, version := range []int{1, 2, 3, 4} {
+		value, payload, _, get, network := recoverySourceFixture(t, false, version)
+		read := newClusterSSHPreparationRecoverySourceRead(value, payload, func(ctx context.Context) error { return ctx.Err() }, get, network)
+		result, err := read(context.Background())
+		if err != nil || len(result.Expected) != len(value.Leases) {
+			t.Fatal("retained source unavailable", version, err)
+		}
+		for i, expected := range result.Expected {
+			if (expected.TargetCPU == nil) != (version == 1) || (expected.TargetPackages == nil) != (version < 4) {
+				t.Fatal("recovery dropped or invented original target evidence", version)
+			}
+			original := value.Leases[i]
+			original.Holder, original.Generation = value.Reservation.Targets[i].PreviousHolder, value.Reservation.Targets[i].PreviousGeneration
+			before, err := assembleClusterSSHPreparationExpected(value.Cohort, value.Source, original, value.Baseline,
+				expected.K3sVersion, expected.PodCIDR, expected.ServiceCIDR, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertRecoveryOriginalConfiguration(t, before, expected, result.Settings)
+		}
+	}
 }
 
 func TestClusterSSHPreparationRecoverySourceOriginalReceipt(t *testing.T) {
@@ -194,7 +280,7 @@ func TestClusterSSHPreparationRecoverySourceSerialReads(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	wanted, _ := buildClusterSSHPreparationRecoveryExpected(value, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
+	wanted, _ := buildClusterSSHPreparationRecoveryExpected(value, payload, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16")
 	result, err := read(context.Background())
 	if err != nil || !reflect.DeepEqual(wanted, result.Expected[0]) {
 		t.Fatal("serialized read drift", err)

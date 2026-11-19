@@ -51,7 +51,7 @@ func sshPrejoinWorkerStorageFixture(t *testing.T) (*sshNetworkTargetsFixture, cl
 	receipts[2], _ = projection.digest(plan, targets)
 	receipts[4] = projection.ConfigurationSHA256
 	readiness := clusterSSHPreparationReadiness(plan, receipts)
-	readiness.Version, readiness.Targets, readiness.Capacity = 3, targets, &projection
+	readiness.Version, readiness.Targets, readiness.Capacity, readiness.Packages = 4, targets, &projection, sshPreparationTargetPackagesFixture(targets)
 	digest, _ := clusterSSHPreparationDigest(proof)
 	f.a.payload = marshalClusterJSON(map[string]any{"baseline_release": f.a.Baseline.Release, "baseline_sha": f.a.Baseline.SourceSHA, "source_k3s_version": f.a.K3sVersion, "target_count": len(f.a.Cohort.Targets),
 		"ssh_inspection": map[string]any{"proof": proof, "sha256": digest, "qualification_required": true}, "ssh_preparation_authorization": authorization, "ssh_qualification": report, "ssh_preparation_confirmation": confirmation, "ssh_preparation_readiness": readiness})

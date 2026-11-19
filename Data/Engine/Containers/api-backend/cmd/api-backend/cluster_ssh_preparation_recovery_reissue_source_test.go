@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func reissuedSourceFixture(t *testing.T, replacement bool, rounds int) (clusterSSHPreparationRecoveryReissuedProofAuthority, string, map[string]any, func(context.Context, string, any) error, clusterSSHSourceNetworkRead) {
+func reissuedSourceFixture(t *testing.T, replacement bool, rounds int, readinessVersion ...int) (clusterSSHPreparationRecoveryReissuedProofAuthority, string, map[string]any, func(context.Context, string, any) error, clusterSSHSourceNetworkRead) {
 	t.Helper()
 	original, payload, secret, get, network := recoverySourceFixture(t, replacement)
 	// Older configuration-only fixtures use a placeholder inspection digest.
@@ -35,12 +35,8 @@ func reissuedSourceFixture(t *testing.T, replacement bool, rounds int) (clusterS
 	if err != nil {
 		t.Fatal(err)
 	}
-	var receipts [6]string
-	for i := range receipts {
-		receipts[i] = strings.Repeat("a", 64)
-	}
-	receipts[4] = approved
-	payload = marshalClusterJSON(map[string]any{"source_k3s_version": clusterbootstrap.K3sPins().Version, "ssh_preparation_readiness": clusterSSHPreparationReadiness(plan, receipts)})
+	payload = marshalClusterJSON(map[string]any{"source_k3s_version": clusterbootstrap.K3sPins().Version,
+		"ssh_preparation_authorization": original.Authorization, "ssh_preparation_readiness": recoveryReadinessFixture(t, work, approved, readinessVersion...)})
 	base, _, err := clusterSSHPreparationRecoveryPayload(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +57,30 @@ func reissuedSourceFixture(t *testing.T, replacement bool, rounds int) (clusterS
 		payload = reissueProofPayload(t, payload, value.Lineage)
 	}
 	return value, payload, secret, get, network
+}
+
+func TestClusterSSHPreparationRecoveryReissuedSourcePreservesOriginalConfiguration(t *testing.T) {
+	for _, version := range []int{1, 2, 3, 4} {
+		value, payload, _, get, network := reissuedSourceFixture(t, false, 2, version)
+		read := newClusterSSHPreparationRecoveryReissuedSourceRead(value, payload, func(ctx context.Context) error { return ctx.Err() }, get, network)
+		result, err := read(context.Background())
+		if err != nil || len(result.Expected) != len(value.Leases) {
+			t.Fatal("retained reissued source unavailable", version, err)
+		}
+		for i, expected := range result.Expected {
+			if (expected.TargetCPU == nil) != (version == 1) || (expected.TargetPackages == nil) != (version < 4) {
+				t.Fatal("reissue dropped or invented original target evidence", version)
+			}
+			original := value.Leases[i]
+			original.Holder, original.Generation = value.Lineage.Original.Targets[i].PreviousHolder, value.Lineage.Original.Targets[i].PreviousGeneration
+			before, err := assembleClusterSSHPreparationExpected(value.Cohort, value.Source, original, value.Baseline,
+				expected.K3sVersion, expected.PodCIDR, expected.ServiceCIDR, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertRecoveryOriginalConfiguration(t, before, expected, result.Settings)
+		}
+	}
 }
 
 func TestClusterSSHPreparationRecoveryReissuedSourceExactTip(t *testing.T) {
@@ -168,7 +188,7 @@ func TestClusterSSHPreparationRecoveryReissuedSourceRejectsForeignTip(t *testing
 	if _, err := newClusterSSHPreparationRecoverySourceRead(old, payload, func(ctx context.Context) error { return ctx.Err() }, get, network)(context.Background()); err == nil {
 		t.Fatal("old constructor accepted new lineage")
 	}
-	if _, err := buildClusterSSHPreparationRecoveryExpected(old, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16"); err == nil {
+	if _, err := buildClusterSSHPreparationRecoveryExpected(old, payload, 0, clusterbootstrap.K3sPins().Version, "10.42.0.0/16", "10.43.0.0/16"); err == nil {
 		t.Fatal("old Q+2 builder accepted reissued generation")
 	}
 }

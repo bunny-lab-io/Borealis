@@ -27,7 +27,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 				if ctx.Err() != nil || plan != f.plan {
 					err = errClusterConflict
 				}
-				return clusterSSHPreparationCleanObservation{Digest: digest, Targets: f.targets}, err
+				return clusterSSHPreparationCleanObservation{Digest: digest, Targets: f.targets, Packages: sshPreparationTargetPackagesFixture(f.targets)}, err
 			}
 			// Exact production pairing: clean gate does fresh native observation;
 			// capacity receives its adjacent typed projection, not another SSH read.
@@ -115,7 +115,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 							}
 							approved = true
 							receipt = clusterSSHPreparationReadiness(f.plan, proof.receipts)
-							receipt.Version, receipt.Targets, receipt.Capacity = 3, proof.targetCPU, proof.capacity
+							receipt.Version, receipt.Targets, receipt.Capacity, receipt.Packages = 4, proof.targetCPU, proof.capacity, proof.packages
 							return nil
 						})
 					return receipt, err

@@ -158,7 +158,7 @@ type sshPreparationCleanBrokerBody struct {
 func (b *sshPreparationCleanBrokerBody) Close() error { return b.close() }
 
 func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
-	for _, mode := range []string{"success", "wrong plan", "missing intent", "wrong request", "wrong ID", "wrong digest", "wrong version", "old v1 response", "redirect", "encoding", "close error", "changed repeat", "changed package repeat", "missing packages", "null missing", "unknown package", "duplicate package", "wrong package target", "wrong package observation", "response overflow", "cancel during close", "request expiry during close", "child expiry during close"} {
+	for _, mode := range []string{"success", "wrong plan", "missing intent", "wrong request", "wrong ID", "wrong digest", "wrong version", "old v1 response", "redirect", "encoding", "close error", "changed repeat", "changed package repeat", "old package projection", "missing packages", "null missing", "unknown package", "duplicate package", "wrong package target", "wrong package observation", "response overflow", "cancel during close", "request expiry during close", "child expiry during close"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot := sshPreparationCleanBrokerSnapshot(t)
 			plan, _, _ := clusterSSHPreparationCleanBrokerBinding(snapshot)
@@ -201,6 +201,11 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 					value.Version++
 				case "old v1 response":
 					value.Version = 1
+				case "old package projection":
+					for i := range value.Targets {
+						value.Targets[i].PackagesSHA256 = ""
+					}
+					value.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, value.Targets)
 				case "missing packages":
 					value.Packages = nil
 				case "null missing":
