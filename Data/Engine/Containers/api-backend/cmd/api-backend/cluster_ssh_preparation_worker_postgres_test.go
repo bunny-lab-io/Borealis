@@ -117,28 +117,55 @@ func TestClusterSSHPreparationWorkerPostgres(t *testing.T) {
 
 func TestClusterSSHPreparationWorkerPostgresRenewsCohort(t *testing.T) {
 	f, work := newSSHPreparationWorkerFixture(t, false)
+	const heartbeatInterval = 5 * time.Millisecond
+	type renewalState struct {
+		target, state, step, holder string
+		generation, expiry, now     int64
+	}
+	waitForRenewal := func(ctx context.Context) error {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			states := make([]renewalState, 0, len(work.Claims))
+			renewed := 0
+			for _, claim := range work.Claims {
+				row := renewalState{target: claim.Lease.TargetID}
+				err := f.c.store.db.QueryRowContext(ctx, `SELECT state,current_step,lease_holder,lease_generation,lease_expires_at,
+ floor(extract(epoch FROM clock_timestamp()))::bigint FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2`,
+					claim.Lease.TargetID, claim.Lease.OperationID).Scan(&row.state, &row.step, &row.holder, &row.generation, &row.expiry, &row.now)
+				states = append(states, row)
+				if err != nil {
+					t.Errorf("read exact cohort renewal target=%s: %v", claim.Lease.TargetID, err)
+					return err
+				}
+				if row.state == "running" && row.step == "stage_source" && row.holder == claim.Lease.Holder &&
+					row.generation == claim.Lease.Generation && row.expiry > row.now+10 {
+					renewed++
+				}
+			}
+			if renewed == len(work.Claims) {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				t.Errorf("whole cohort renewal incomplete: renewed=%d/%d states=%+v: %v", renewed, len(work.Claims), states, ctx.Err())
+				return ctx.Err()
+			case <-ticker.C:
+			}
+		}
+	}
 	dispatch := func(ctx context.Context, claim clusterSSHNetworkTargetClaim, _ clusterbootstrap.Expected, confirmation string, source engineidentity.Binding,
 		_ func(context.Context) error) (clusterSSHPreparationResult, error) {
 		// Force both claims near expiry while dispatcher is busy. The sibling
 		// not yet dispatched must receive heartbeats too, with a one-slot pool.
 		f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=floor(extract(epoch FROM clock_timestamp()))+2 WHERE operation_id=$1`, f.op.ID)
-		timer := time.NewTimer(100 * time.Millisecond)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return clusterSSHPreparationResult{}, ctx.Err()
-		case <-timer.C:
-		}
-		var renewed int
-		if err := f.c.store.db.QueryRowContext(ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets
- WHERE operation_id=$1 AND lease_expires_at>extract(epoch FROM clock_timestamp())+10`, f.op.ID).Scan(&renewed); err != nil || renewed != len(work.Claims) {
-			t.Error("whole cohort not renewed", err)
+		if err := waitForRenewal(ctx); err != nil {
 			return clusterSSHPreparationResult{}, errClusterConflict
 		}
 		return clusterSSHPreparationResultFixture(claim.Lease, confirmation), nil
 	}
 	worker := newClusterSSHPreparationWorker(f.c.store, f.aegis, dispatch)
-	worker.interval = 5 * time.Millisecond
+	worker.interval = heartbeatInterval
 	if err := worker.prepare(f.ctx, work); err != nil {
 		t.Fatal("renewed worker failed", err)
 	}
