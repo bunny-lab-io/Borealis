@@ -189,10 +189,10 @@ func (p *bootstrapHostPackagePlan) validateSimulation(raw []byte) error {
 				continue
 			}
 			switch line {
-			case "Suggested packages:", "Recommended packages:", "The following NEW packages will be installed:", "The following additional packages will be installed:", "The following packages were automatically installed and are no longer required:":
+			case "Suggested packages:", "Recommended packages:", "The following NEW packages will be installed:", "The following additional packages will be installed:", "The following packages were automatically installed and are no longer required:", "The following package was automatically installed and is no longer required:":
 				list = true
 				continue
-			case "Use 'apt autoremove' to remove them.":
+			case "Use 'apt autoremove' to remove them.", "Use 'apt autoremove' to remove it.":
 				list = false
 				continue
 			}

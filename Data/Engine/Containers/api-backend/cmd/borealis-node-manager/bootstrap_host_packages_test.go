@@ -210,6 +210,29 @@ func TestBootstrapHostPackageSnapshotsPreserveUnchangedPackages(t *testing.T) {
 	}
 }
 
+func TestBootstrapHostPackageSimulationAutoremoveAdvisory(t *testing.T) {
+	for _, phase := range []bootstrapHostCommand{bootstrapHostInstallBase, bootstrapHostInstallDocker} {
+		p, _ := bootstrapHostPackagePlanFixture(t, phase, false)
+		for _, count := range []string{"singular", "plural"} {
+			t.Run(fmt.Sprintf("%d/%s", phase, count), func(t *testing.T) {
+				advisory := "The following package was automatically installed and is no longer required:\n  pigz\nUse 'apt autoremove' to remove it.\n"
+				if count == "plural" {
+					advisory = "The following packages were automatically installed and are no longer required:\n  pigz xz-utils\nUse 'apt autoremove' to remove them.\n"
+				}
+				raw := strings.Replace(string(bootstrapHostPackageSimulationFixture(p)), "Suggested packages:\n", advisory+"Suggested packages:\n", 1)
+				if err := p.validateSimulation([]byte(raw)); err != nil {
+					t.Fatal("informational advisory blocked exact install plan", err)
+				}
+				for _, unsafe := range []string{raw + "Remv pigz [2.8-1]\n", strings.Replace(raw, "0 to remove", "1 to remove", 1)} {
+					if err := p.validateSimulation([]byte(unsafe)); err == nil {
+						t.Fatal("advisory authorized package removal")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestBootstrapHostPackageSimulationBindsExactLocalPlan(t *testing.T) {
 	for _, phase := range []bootstrapHostCommand{bootstrapHostInstallBase, bootstrapHostInstallDocker} {
 		p, _ := bootstrapHostPackagePlanFixture(t, phase, false)
