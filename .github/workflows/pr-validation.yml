@@ -135,7 +135,7 @@ jobs:
     name: Engine / go-runtimes
     needs: changes
     if: needs.changes.outputs.engine_go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Allow setup, the bounded race suite, and runtime builds.
     timeout-minutes: 40
     steps:
