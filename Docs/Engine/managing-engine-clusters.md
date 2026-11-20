@@ -1449,16 +1449,16 @@ Before upgrading from a release without this ownership protocol, let active work
     | Workload | CPU request (mCPU) | CPU cap (mCPU) | Memory request (MiB) | Memory cap (MiB) |
     | --- | ---: | ---: | ---: | ---: |
     | api-backend | 75 | 2000 | 192 | 1024 |
-    | borealis-cluster-controller | 50 | 500 | 64 | 256 |
+    | borealis-cluster-controller | 50 | 1500 | 64 | 256 |
     | borealis-operator | 25 | 250 | 48 | 160 |
     | job-scheduler | 50 | 1500 | 128 | 512 |
     | remote-desktop-guacd | 25 | 1000 | 64 | 512 |
     | traefik-edge | 25 | 1500 | 96 | 512 |
     | webui-frontend | 50 | 1000 | 128 | 512 |
     | wireguard-tunnel | 25 | 1000 | 48 | 256 |
-    | Eight deployments, one copy each | **325** | **8750** | **768** | **3744** |
+    | Eight deployments, one copy each | **325** | **9750** | **768** | **3744** |
     | One PostgreSQL instance | 100 | 2000 | 256 | 6144 |
-    | Combined application subtotal | **425** | **10750** | **1024** | **9888** |
+    | Combined application subtotal | **425** | **11750** | **1024** | **9888** |
 
     The test feeds rendered deployments through the existing application observer and budget calculator, checks every request/cap against this contract, and verifies PostgreSQL resources survive actual CNPG rendering for one and three instances. Synthetic Kubernetes UIDs/resource versions supply API-assigned identity only. Existing placement-parity coverage checks one active copy per target; this subtotal is not the generic controller Deployment's replica total. A 32-CPU/128-GiB joining fixture retains the same rank/reference and subtotal; 7-CPU and 16383-MiB fixtures fail the inherited profile check. Fixture hardware establishes test inputs, not qualified minimums.
 

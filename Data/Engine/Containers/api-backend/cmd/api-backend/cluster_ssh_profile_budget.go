@@ -12,7 +12,7 @@ import (
 func clusterSSHSmallBusinessApplications() []clusterSSHApplicationResource {
 	return []clusterSSHApplicationResource{
 		{"api-backend", 75, 2000, 192 << 20, 1024 << 20},
-		{"borealis-cluster-controller", 50, 500, 64 << 20, 256 << 20},
+		{"borealis-cluster-controller", 50, 1500, 64 << 20, 256 << 20},
 		{"borealis-operator", 25, 250, 48 << 20, 160 << 20},
 		{"job-scheduler", 50, 1500, 128 << 20, 512 << 20},
 		{"remote-desktop-guacd", 25, 1000, 64 << 20, 512 << 20},
