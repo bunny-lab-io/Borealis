@@ -42,6 +42,7 @@ func (c *clusterController) readClusterSSHPreparationRecoveryWork(ctx context.Co
 	// Only the recovery field is stripped. The complete original authorization
 	// parser still rejects preparation completion and legacy identity recovery.
 	work.Payload = string(base)
+	snapshot.recovery = recovery
 	anchor := clusterSSHTargetLease{OperationID: operation.ID, OperationAttempt: operation.Attempt, ControllerHolder: c.holder,
 		OperationKind: "ssh_onboarding", OperationStep: clusterSSHPreparationOperationStep, Step: "stage_source"}
 	var version string
@@ -108,12 +109,9 @@ func (c *clusterController) readClusterSSHPreparationRecovery(ctx context.Contex
 		return fail()
 	}
 	work := &snapshot.work
-	base, recovery, err := clusterSSHPreparationRecoveryPayload(snapshot.payload)
-	if err != nil {
-		return fail()
-	}
-	if len(recovery) != 0 {
-		snapshot.record, err = parseClusterSSHPreparationRecovery(snapshot.payload, *work)
+	base := []byte(work.Payload)
+	if len(snapshot.recovery) != 0 {
+		snapshot.record, err = parseClusterSSHPreparationRecoveryRecord(base, snapshot.recovery, *work)
 		if err != nil {
 			return fail()
 		}

@@ -145,15 +145,22 @@ func (l clusterSSHPreparationRecoveryLineage) valid(work clusterSSHPreparationWo
 }
 
 func parseClusterSSHPreparationRecoveryLineage(payload string, work clusterSSHPreparationWork) (clusterSSHPreparationRecoveryLineage, error) {
+	base, raw, err := clusterSSHPreparationRecoveryPayload(payload)
+	if err != nil {
+		return clusterSSHPreparationRecoveryLineage{}, errClusterConflict
+	}
+	return parseClusterSSHPreparationRecoveryLineageParts(base, raw, work)
+}
+
+func parseClusterSSHPreparationRecoveryLineageParts(base, raw []byte, work clusterSSHPreparationWork) (clusterSSHPreparationRecoveryLineage, error) {
 	fail := func() (clusterSSHPreparationRecoveryLineage, error) {
 		return clusterSSHPreparationRecoveryLineage{}, errClusterConflict
 	}
-	base, raw, err := clusterSSHPreparationRecoveryPayload(payload)
-	if err != nil || len(raw) == 0 || len(raw) > 8<<10 {
+	if len(raw) == 0 || len(raw) > 8<<10 {
 		return fail()
 	}
 	// Retained v1 is a genesis observation, never a new v1 issuance.
-	if original, err := parseClusterSSHPreparationRecovery(payload, work); err == nil {
+	if original, err := parseClusterSSHPreparationRecoveryRecord(base, raw, work); err == nil {
 		return clusterSSHPreparationRecoveryLineage{Version: 2, Original: original}, nil
 	}
 	var lineage clusterSSHPreparationRecoveryLineage
@@ -203,7 +210,7 @@ func (c *clusterController) reissueClusterSSHPreparationRecoveryProof(ctx contex
 	if err != nil || snapshot.step != clusterSSHPreparationRecoveryOperationStep || request.PayloadSHA256 != clusterSSHPreparationRecoveryPayloadDigest([]byte(snapshot.payload)) {
 		return fail()
 	}
-	lineage, err := parseClusterSSHPreparationRecoveryLineage(snapshot.payload, snapshot.work)
+	lineage, err := parseClusterSSHPreparationRecoveryLineageParts([]byte(snapshot.work.Payload), snapshot.recovery, snapshot.work)
 	priorID, priorHolder, priorTargets := lineage.tip()
 	if err != nil || request.PreviousID != priorID {
 		return fail()
@@ -212,9 +219,9 @@ func (c *clusterController) reissueClusterSSHPreparationRecoveryProof(ctx contex
 	if err != nil {
 		return fail()
 	}
-	base, _, err := clusterSSHPreparationRecoveryPayload(snapshot.payload)
-	priorPayload, payloadErr := clusterSSHPreparationRecoveryLineagePayload(base, lineage)
-	if err != nil || payloadErr != nil {
+	base := []byte(snapshot.work.Payload)
+	priorPayload, err := clusterSSHPreparationRecoveryLineagePayload(base, lineage)
+	if err != nil {
 		return fail()
 	}
 	entry := clusterSSHPreparationRecoveryProofRecord{ID: request.ID, PreviousID: request.PreviousID,
@@ -350,7 +357,7 @@ func (c *clusterController) observeClusterSSHPreparationRecoveryReissuedProof(ct
 	if err != nil || snapshot.payload != claim.payload || snapshot.work.Baseline != claim.Baseline {
 		return fail()
 	}
-	lineage, err := parseClusterSSHPreparationRecoveryLineage(snapshot.payload, snapshot.work)
+	lineage, err := parseClusterSSHPreparationRecoveryLineageParts([]byte(snapshot.work.Payload), snapshot.recovery, snapshot.work)
 	if err != nil || !reflect.DeepEqual(lineage, claim.Lineage) || len(snapshot.credentials) != len(claim.Claims) {
 		return fail()
 	}

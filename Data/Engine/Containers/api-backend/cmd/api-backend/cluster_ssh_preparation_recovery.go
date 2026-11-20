@@ -42,6 +42,7 @@ type clusterSSHPreparationRecoveryTarget struct {
 }
 
 type clusterSSHPreparationRecoverySnapshot struct {
+	recovery    json.RawMessage // From the same payload read as work.Payload.
 	work        clusterSSHPreparationWork
 	record      clusterSSHPreparationRecoveryRecord
 	credentials []sealedClusterSSHCredentials
@@ -134,8 +135,15 @@ func (r clusterSSHPreparationRecoveryRecord) valid(work clusterSSHPreparationWor
 
 func parseClusterSSHPreparationRecovery(payload string, work clusterSSHPreparationWork) (clusterSSHPreparationRecoveryRecord, error) {
 	base, raw, err := clusterSSHPreparationRecoveryPayload(payload)
+	if err != nil {
+		return clusterSSHPreparationRecoveryRecord{}, errClusterConflict
+	}
+	return parseClusterSSHPreparationRecoveryRecord(base, raw, work)
+}
+
+func parseClusterSSHPreparationRecoveryRecord(base, raw []byte, work clusterSSHPreparationWork) (clusterSSHPreparationRecoveryRecord, error) {
 	var record clusterSSHPreparationRecoveryRecord
-	if err != nil || len(raw) == 0 || len(raw) > 8<<10 || json.Unmarshal(raw, &record) != nil {
+	if len(raw) == 0 || len(raw) > 8<<10 || json.Unmarshal(raw, &record) != nil {
 		return record, errClusterConflict
 	}
 	canonical, err := json.Marshal(record)
