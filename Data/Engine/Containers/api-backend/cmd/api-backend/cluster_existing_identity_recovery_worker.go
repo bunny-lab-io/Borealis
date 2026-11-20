@@ -5,7 +5,6 @@ import (
 	"borealis/api-backend/internal/clusterremote"
 	"borealis/api-backend/internal/engineidentity"
 	"context"
-	"os"
 	"time"
 )
 
@@ -105,7 +104,7 @@ func (w *clusterExistingIdentityRecoveryWorker) recover(parent context.Context, 
 		}
 	}
 	defer join()
-	bundle, err := w.download(ctx, claim.Inspection.Plan.Baseline, os.TempDir())
+	bundle, err := w.download(ctx, claim.Inspection.Plan.Baseline, clusterSSHScratchParent())
 	closed := false
 	cleanup := func() error {
 		if closed || bundle == nil {

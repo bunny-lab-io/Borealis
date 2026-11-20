@@ -275,3 +275,15 @@ func TestClusterSSHBootstrapDownloadPinsRedirectAndWithholdsCredentials(t *testi
 		})
 	}
 }
+
+func TestClusterSSHScratchParent(t *testing.T) {
+	t.Setenv("BOREALIS_CLUSTER_SCRATCH_DIR", "")
+	if got := clusterSSHScratchParent(); got != os.TempDir() {
+		t.Fatalf("default scratch parent = %q", got)
+	}
+	volume := t.TempDir()
+	t.Setenv("BOREALIS_CLUSTER_SCRATCH_DIR", volume)
+	if got := clusterSSHScratchParent(); got != volume {
+		t.Fatalf("configured scratch parent = %q, want %q", got, volume)
+	}
+}

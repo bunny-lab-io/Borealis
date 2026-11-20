@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -90,6 +91,15 @@ func clusterBootstrapObject(raw []byte, fields map[string]any) error {
 		return invalid
 	}
 	return nil
+}
+
+// Deployed workers stage source artifacts on a Pod-local disk volume. Standalone
+// callers retain the process temporary directory when no volume is configured.
+func clusterSSHScratchParent() string {
+	if path := os.Getenv("BOREALIS_CLUSTER_SCRATCH_DIR"); path != "" {
+		return path
+	}
+	return os.TempDir()
 }
 
 // prepareClusterSSHBootstrap refreshes publication/tag proofs independently of

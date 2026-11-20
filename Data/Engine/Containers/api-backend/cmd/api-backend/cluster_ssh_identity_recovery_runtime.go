@@ -3,7 +3,6 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
-	"os"
 	"time"
 )
 
@@ -162,7 +161,7 @@ func startClusterSSHIdentityRecoveryRuntime(parent context.Context, auth *authSe
 		execute: func(ctx context.Context, claim clusterSSHIdentityRecoveryClaim) error {
 			authority := newClusterSSHIdentityRecoveryAuthorityRead(store, aegis, claim)
 			node := client.recoveryNodeRead(authority, claim)
-			bundle, err := acquireClusterSSHIdentityRecoveryBundle(ctx, store, aegis, claim, authority, os.TempDir(), prepareClusterSSHBootstrap)
+			bundle, err := acquireClusterSSHIdentityRecoveryBundle(ctx, store, aegis, claim, authority, clusterSSHScratchParent(), prepareClusterSSHBootstrap)
 			if err != nil {
 				settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 				defer cancel()

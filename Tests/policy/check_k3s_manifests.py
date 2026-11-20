@@ -127,6 +127,19 @@ def validate_probe_conformance_contract() -> None:
             fail(f"conformance record consumer {relative} does not require guarded multi-trial contract")
 
 
+def validate_cluster_scratch(pod: dict, container: dict) -> None:
+    path = "/var/tmp/borealis-cluster"
+    volumes = [v for v in pod.get("volumes", []) if v.get("name") == "cluster-scratch"]
+    mounts = [m for m in container.get("volumeMounts", []) if m.get("name") == "cluster-scratch" or m.get("mountPath") == path]
+    settings = [e for e in container.get("env", []) if e.get("name") == "BOREALIS_CLUSTER_SCRATCH_DIR"]
+    if volumes != [{"name": "cluster-scratch", "emptyDir": {}}]:
+        fail("cluster artifacts require a Pod-local disk emptyDir")
+    if mounts != [{"name": "cluster-scratch", "mountPath": path}]:
+        fail("cluster artifacts require a writable dedicated scratch mount")
+    if settings != [{"name": "BOREALIS_CLUSTER_SCRATCH_DIR", "value": path}]:
+        fail("cluster scratch setting must point to the disk volume")
+
+
 def validate_cluster_controller_contract() -> None:
     path = ROOT / "Data/Engine/K3s/cluster/controller.yaml"
     try:
@@ -149,6 +162,7 @@ def validate_cluster_controller_contract() -> None:
     containers = pod.get("containers") or []
     if len(containers) != 1:
         fail("cluster controller must contain one controller container")
+    validate_cluster_scratch(pod, containers[0])
     security = containers[0].get("securityContext") or {}
     expected_security = {
         "allowPrivilegeEscalation": False,
@@ -1022,6 +1036,8 @@ def validate_workload(obj: dict, source: Path) -> None:
     spec = pod_spec(obj)
     if spec is None:
         return
+    if name == "api-backend":
+        validate_cluster_scratch(spec, spec["containers"][0])
     operator = name == "borealis-operator"
     expected_automount = True if operator else False
     if spec.get("automountServiceAccountToken") is not expected_automount:

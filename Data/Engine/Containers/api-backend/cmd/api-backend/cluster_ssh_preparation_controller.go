@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"time"
 )
@@ -33,7 +32,7 @@ func (c *clusterController) runSSHPreparationParent(ctx context.Context, operati
 			}
 			capacity, configuration, approvedTargets, storageSource := c.preparationCapacityStorageRead(snapshot, projection)
 			projection = approvedTargets
-			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), clean, capacity, configuration, storageSource, filesystems, consume)
+			return c.withPreparationNativeGates(ctx, snapshot, clusterSSHScratchParent(), clean, capacity, configuration, storageSource, filesystems, consume)
 		}, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
 			if projection == nil {
 				return clusterSSHPreparationCleanObservation{}, errClusterConflict

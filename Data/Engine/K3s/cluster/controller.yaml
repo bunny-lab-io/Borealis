@@ -222,6 +222,7 @@ spec:
           command: ["/usr/local/bin/borealis-cluster-controller"]
           env:
             - {name: BOREALIS_PROCESS_ROLE, value: borealis-cluster-controller}
+            - {name: BOREALIS_CLUSTER_SCRATCH_DIR, value: /var/tmp/borealis-cluster}
             - {name: BOREALIS_CLUSTER_CONTROLLER_PORT, value: "8090"}
             - name: BOREALIS_CLUSTER_CONTROLLER_ID
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -256,6 +257,11 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: cluster-scratch, mountPath: /var/tmp/borealis-cluster}
+      volumes:
+        - name: cluster-scratch
+          emptyDir: {}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

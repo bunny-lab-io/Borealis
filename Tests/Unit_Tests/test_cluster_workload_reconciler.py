@@ -33,6 +33,25 @@ def patched_generic_deployment(container_name: str, image: str, revision: str) -
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_cluster_scratch_preserves_existing_mounts_and_rejects_conflicts(self) -> None:
+        path = "/var/tmp/borealis-cluster"
+        memory = {"name": "tmp", "emptyDir": {"medium": "Memory", "sizeLimit": "128Mi"}}
+        mount = {"name": "tmp", "mountPath": "/tmp"}
+        pod = {"volumes": [memory]}
+        container = {"volumeMounts": [mount]}
+        for _ in range(2):
+            MODULE.mount_cluster_scratch(pod, container)
+        self.assertEqual(pod["volumes"], [memory, {"name": "cluster-scratch", "emptyDir": {}}])
+        self.assertEqual(container["volumeMounts"], [mount, {"name": "cluster-scratch", "mountPath": path}])
+        self.assertEqual(container["env"], [{"name": "BOREALIS_CLUSTER_SCRATCH_DIR", "value": path}])
+        for volume, extra_mount in [
+            ({"name": "cluster-scratch", "emptyDir": {"medium": "Memory"}}, []),
+            ({"name": "cluster-scratch", "hostPath": {"path": "/tmp"}}, []),
+            (memory, [{"name": "tmp", "mountPath": path}]),
+        ]:
+            with self.subTest(volume=volume, mounts=extra_mount), self.assertRaises(RuntimeError):
+                MODULE.mount_cluster_scratch({"volumes": [volume]}, {"volumeMounts": extra_mount})
+
     def test_api_identity_custody_uses_actual_pod_and_node(self) -> None:
         fields = {"BOREALIS_ENGINE_NODE_NAME": "spec.nodeName", "BOREALIS_ENGINE_POD_NAME": "metadata.name", "BOREALIS_ENGINE_POD_UID": "metadata.uid"}
         for candidate in (False, True):
@@ -41,6 +60,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
                 MODULE.reconcile_one("api-backend", "api-backend", "engine-2", "a" * 40, {"api-backend": "borealis/api-backend@sha256:" + "b" * 64}, candidate)
             manifest = json.loads(next(call.kwargs["stdin"] for call in kubectl.call_args_list if "apply" in call.args))
             env = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            self.assertIn({"name": "BOREALIS_CLUSTER_SCRATCH_DIR", "value": "/var/tmp/borealis-cluster"}, env)
             for name, field in fields.items():
                 self.assertEqual([entry for entry in env if entry["name"] == name], [{"name": name, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": field}}}])
             self.assertEqual(next(entry["value"] for entry in env if entry["name"] == "BOREALIS_API_BACKGROUND_LOOPS"), "0" if candidate else "1")
@@ -194,6 +214,7 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             item["name"]: item.get("value")
             for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
         }
+        self.assertEqual(environment["BOREALIS_CLUSTER_SCRATCH_DIR"], "/var/tmp/borealis-cluster")
         self.assertEqual(environment["BOREALIS_CLUSTER_ACTION_IMAGE"], image)
         self.assertEqual(environment["BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE"], "false")
 

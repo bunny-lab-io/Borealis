@@ -4455,6 +4455,8 @@ spec:
                 name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
           env:
 $(k3s_timezone_env_entries)
+            - name: BOREALIS_CLUSTER_SCRATCH_DIR
+              value: /var/tmp/borealis-cluster
             - name: BOREALIS_GO_API_HOST
               value: "0.0.0.0"
             - name: BOREALIS_GO_API_PORT
@@ -4536,6 +4538,8 @@ $(k3s_timezone_env_entries)
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            - name: cluster-scratch
+              mountPath: /var/tmp/borealis-cluster
             - name: tmp
               mountPath: /tmp
 $(k3s_timezone_volume_mount_entries)
@@ -4566,6 +4570,8 @@ $(k3s_timezone_volume_mount_entries)
             - name: wireguard-secrets
               mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
       volumes:
+        - name: cluster-scratch
+          emptyDir: {}
         - name: tmp
           emptyDir:
             medium: Memory

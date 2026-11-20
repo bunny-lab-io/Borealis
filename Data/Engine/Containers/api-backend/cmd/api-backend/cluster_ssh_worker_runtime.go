@@ -183,7 +183,7 @@ func newClusterSSHPreparationRuntime(store *postgresOperatorStore, aegis *goAegi
 	}
 	process := clusterExistingIdentitySourceProcess{PodName: os.Getenv("BOREALIS_ENGINE_POD_NAME"),
 		PodUID: os.Getenv("BOREALIS_ENGINE_POD_UID"), NodeName: os.Getenv("BOREALIS_ENGINE_NODE_NAME")}
-	worker := newClusterSSHNativePrejoinPreparationWorkerRead(store, aegis, os.TempDir(), process, client.joinedTargetsRead)
+	worker := newClusterSSHNativePrejoinPreparationWorkerRead(store, aegis, clusterSSHScratchParent(), process, client.joinedTargetsRead)
 	if worker == nil {
 		return nil
 	}

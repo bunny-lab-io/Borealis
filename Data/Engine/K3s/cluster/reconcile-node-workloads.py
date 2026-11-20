@@ -180,6 +180,25 @@ def enforce_startup_liveness_guard(
     template_annotations["borealis.io/liveness-startup-guard"] = str(delay)
 
 
+def mount_cluster_scratch(pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
+    # Upgrades can clone a generic template created by an earlier release.
+    name = "cluster-scratch"
+    path = "/var/tmp/borealis-cluster"
+    volumes = pod_spec.setdefault("volumes", [])
+    mounts = container.setdefault("volumeMounts", [])
+    volume = {"name": name, "emptyDir": {}}
+    mount = {"name": name, "mountPath": path}
+    existing_volumes = [item for item in volumes if item.get("name") == name]
+    existing_mounts = [item for item in mounts if item.get("name") == name or item.get("mountPath") == path]
+    if (existing_volumes and existing_volumes != [volume]) or (existing_mounts and existing_mounts != [mount]):
+        raise RuntimeError("cluster scratch conflicts with an existing volume or mount")
+    if not existing_volumes:
+        volumes.append(volume)
+    if not existing_mounts:
+        mounts.append(mount)
+    set_container_environment(container, "BOREALIS_CLUSTER_SCRATCH_DIR", path)
+
+
 def mount_shared_wireguard_keys(base: str, pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
     volumes = pod_spec.setdefault("volumes", [])
     mounts = container.setdefault("volumeMounts", [])
@@ -311,6 +330,8 @@ def reconcile_one(
     for container in containers:
         container["image"] = image
         container["imagePullPolicy"] = "IfNotPresent"
+    if base in {"api-backend", "borealis-cluster-controller"}:
+        mount_cluster_scratch(pod_spec, containers[0])
     if base == "webui-frontend" and candidate:
         enforce_webui_production_candidate(pod_spec, containers[0])
     if base == "job-scheduler":
