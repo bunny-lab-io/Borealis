@@ -146,6 +146,15 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// A newly created Job can finish between the initial GET and the first
+	// one-second tick. One early observation leaves later ticks on schedule.
+	var earlyPoll <-chan time.Time
+	if interval == time.Second {
+		timer := time.NewTimer(250 * time.Millisecond)
+		defer timer.Stop()
+		earlyPoll = timer.C
+	}
+
 	nextCheck := time.Now().Add(5 * time.Second)
 	observedPodUID := ""
 	for {
@@ -202,7 +211,10 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 		select {
 		case <-ctx.Done():
 			return fail()
+		case <-earlyPoll:
+			earlyPoll = nil
 		case <-ticker.C:
+			earlyPoll = nil
 		}
 	}
 }

@@ -2,14 +2,18 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -340,6 +344,76 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 			if (mode == "wrong controller" || mode == "foreign member" || mode == "mutable image") && posts.Load() != 0 {
 				t.Fatal("invalid authority created Job")
 			}
+		})
+	}
+}
+
+func TestClusterSSHSourceObservationPollSchedule(t *testing.T) {
+	for _, readyAfter := range []time.Duration{0, 200 * time.Millisecond, 1500 * time.Millisecond} {
+		t.Run(readyAfter.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				_, source, lease, _ := sshPreparationFixture(t)
+				member := source.Members[0]
+				network := sshSourceNetworkFixture(member, clusterbootstrap.K3sPins().Version)
+				start := time.Now()
+				var job map[string]any
+				podUID := newClusterUUID()
+				var reads, lists []time.Duration
+				transport := bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
+					elapsed := time.Since(start)
+					var reply any
+					status := http.StatusOK
+					switch {
+					case req.Method == http.MethodPost:
+						if job != nil {
+							t.Fatal("recreated the Job")
+						}
+						if err := json.NewDecoder(req.Body).Decode(&job); err != nil {
+							t.Fatal(err)
+						}
+						sourceActionMap(job, "metadata")["uid"] = newClusterUUID()
+						reply, status = job, http.StatusCreated
+					case strings.HasPrefix(req.URL.Path, "/apis/batch/"):
+						reads = append(reads, elapsed)
+						if elapsed >= readyAfter {
+							job["status"] = map[string]any{"succeeded": 1, "conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
+						}
+						reply = job
+					case req.URL.Path == "/api/v1/namespaces/borealis/pods":
+						lists = append(lists, elapsed)
+						items := []any{}
+						if elapsed >= readyAfter {
+							items = append(items, sourceActionPod(t, job, network, podUID))
+						}
+						reply = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": items}
+					default:
+						t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+					}
+					raw, err := json.Marshal(reply)
+					if err != nil {
+						return nil, err
+					}
+					return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(raw)), Header: make(http.Header), Request: req}, nil
+				})
+				kube := &kubernetesAPIClient{baseURL: "https://fixture.invalid", httpClient: &http.Client{Transport: transport}}
+				runner := &kubernetesClusterStepRunner{kube: kube, namespace: "borealis", controllerHolder: lease.ControllerHolder, actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64)}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				got, err := runner.readSSHSourceObservation(ctx, member, lease.OperationID, clusterbootstrap.K3sPins().Version, "", false, func() bool { return true })
+				if err != nil || got.Network != network {
+					t.Fatalf("source observation failed: %v", err)
+				}
+				expected := []time.Duration{0}
+				if readyAfter > 0 {
+					expected = append(expected, 250*time.Millisecond)
+				}
+				if readyAfter > time.Second {
+					expected = append(expected, time.Second, 2*time.Second)
+				}
+				if !slices.Equal(reads, expected) || !slices.Equal(lists, expected) {
+					t.Fatalf("Job reads %v, Pod lists %v, want %v", reads, lists, expected)
+				}
+			})
 		})
 	}
 }
