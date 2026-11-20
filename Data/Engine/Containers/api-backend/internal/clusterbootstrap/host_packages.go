@@ -115,6 +115,8 @@ func HostPackageDirectories() ([]string, error) {
 	return slices.Clone(plan.DataDirectories), nil
 }
 
+const hostPackageMaxComponentBytes = 255
+
 func validHostPackageDirectories(directories []string) bool {
 	if len(directories) < 3 || int64(len(directories)) > MaxImageEntries {
 		return false
@@ -129,7 +131,7 @@ func validHostPackageDirectories(directories []string) bool {
 			return false
 		}
 		for _, part := range parts {
-			if len(part) > 255 {
+			if len(part) > hostPackageMaxComponentBytes {
 				return false
 			}
 		}

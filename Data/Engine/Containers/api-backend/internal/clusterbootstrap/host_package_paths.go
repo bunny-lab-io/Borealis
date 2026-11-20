@@ -118,3 +118,28 @@ func (s *HostPackageSet) InstalledContentDemand(ctx context.Context, expected Ex
 	}
 	return demand, nil
 }
+
+// DpkgMetadataDemand covers control archive extraction and the generated file
+// list for each newly installed package on the supported root-backed layout.
+// The control files renamed into the info directory keep their original inodes.
+func (s HostPackageSelection) DpkgMetadataDemand() (PreparationScratchDemand, error) {
+	pins, err := s.Pins()
+	if err != nil || len(pins) == 0 {
+		return PreparationScratchDemand{}, err
+	}
+	// Each archive member supplies at most one line. The verified parent
+	// directory inventory includes the longer, normalized usrmerge spelling.
+	// Add the separator, one ext4/XFS filename component and the final newline.
+	longestDirectory := 0
+	for _, directory := range compiledHostPackagePlan.plan.DataDirectories {
+		longestDirectory = max(longestDirectory, len(directory))
+	}
+	lineBytes := uint64(longestDirectory + 1 + hostPackageMaxComponentBytes + 1)
+	// One temporary control directory is reused by serial dpkg extractions.
+	demand := PreparationScratchDemand{Entries: 1}
+	for _, pin := range pins {
+		demand.Bytes += uint64(pin.Control.FileBytes+pin.Control.LinkBytes) + uint64(pin.Entries)*lineBytes
+		demand.Entries += uint64(pin.Control.Entries) + 1 // control members and the generated .list
+	}
+	return demand, nil
+}

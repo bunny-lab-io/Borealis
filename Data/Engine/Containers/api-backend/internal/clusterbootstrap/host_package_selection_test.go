@@ -101,3 +101,27 @@ func TestHostPackageSelectionRejectsMalformedInventoryAndProjection(t *testing.T
 		}
 	}
 }
+
+func TestHostPackageDpkgMetadataDemand(t *testing.T) {
+	selected, err := SelectHostPackages([]byte(hostPackageSelectionBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two real locked packages: 1,583 + 6,482 bytes of control content.
+	// The longest normalized directory in this lock is 75 bytes.
+	selected.Missing = []string{"keyutils", "rpcbind"}
+	const maxLine = 75 + 1 + 255 + 1
+	got, err := selected.DpkgMetadataDemand()
+	want := PreparationScratchDemand{Bytes: 1583 + 6482 + (30+34)*maxLine, Entries: 1 + 3 + 7 + 2}
+	if err != nil || got != want {
+		t.Fatalf("selected metadata = %+v, want %+v, error %v", got, want, err)
+	}
+	selected.Missing = []string{}
+	if got, err := selected.DpkgMetadataDemand(); err != nil || got != (PreparationScratchDemand{}) {
+		t.Fatalf("empty selection: %+v, %v", got, err)
+	}
+	selected.Missing = []string{"foreign"}
+	if _, err := selected.DpkgMetadataDemand(); err == nil {
+		t.Fatal("unlocked selection accepted")
+	}
+}

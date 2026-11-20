@@ -30,7 +30,8 @@ type FilesystemRequest struct {
 	Paths     []string
 	// RequirePersistent selects the stricter root-backed configuration proof.
 	// Current mount statistics alone cannot satisfy this request.
-	RequirePersistent bool
+	RequirePersistent    bool
+	RequirePackageCopies bool
 }
 
 func validFilesystemPath(value string) bool {
@@ -56,7 +57,8 @@ func validFilesystemPath(value string) bool {
 
 func (r FilesystemRequest) Validate() error {
 	if !machineIDPattern.MatchString(r.MachineID) || r.MachineID == strings.Repeat("0", 32) || !validPublicUUID(r.BootID) ||
-		len(r.Paths) < 1 || len(r.Paths) > MaxFilesystemPaths || !slices.IsSorted(r.Paths) {
+		len(r.Paths) < 1 || len(r.Paths) > MaxFilesystemPaths || !slices.IsSorted(r.Paths) ||
+		r.RequirePackageCopies && (!r.RequirePersistent || !slices.Contains(r.Paths, "/var")) {
 		return ErrFilesystem
 	}
 	for i, value := range r.Paths {
@@ -90,14 +92,30 @@ type FilesystemCapacity struct {
 	AvailableInodes uint64 `json:"available_inodes"`
 }
 
+// PackageCopyDemand charges one additional working copy of each present fixed
+// database/cache. Newly generated content and service startup are separate.
+type PackageCopyDemand struct {
+	Bytes   uint64 `json:"bytes"`
+	Entries uint64 `json:"entries"`
+}
+
+func (c *PackageCopyDemand) Valid() bool {
+	return c != nil && c.Bytes > 0 && c.Bytes <= filesystemIntegerLimit && c.Entries > 0 && c.Entries <= uint64(len(packageCopyPaths))
+}
+
 type FilesystemEvidence struct {
 	MountNamespace uint64               `json:"mount_namespace"`
 	Receipt        string               `json:"receipt"`
 	Paths          []FilesystemPath     `json:"paths"`
 	Filesystems    []FilesystemCapacity `json:"filesystems"`
+	PackageCopies  *PackageCopyDemand   `json:"package_copies,omitempty"`
 }
 
 func (v FilesystemEvidence) Clone() FilesystemEvidence {
+	if v.PackageCopies != nil {
+		copies := *v.PackageCopies
+		v.PackageCopies = &copies
+	}
 	v.Paths = slices.Clone(v.Paths)
 	v.Filesystems = slices.Clone(v.Filesystems)
 	return v
@@ -174,6 +192,15 @@ func (v TargetFilesystem) Evidence(notBefore time.Time, target Target, key HostK
 	if request.RequirePersistent {
 		version = 4
 	}
+	copies := v.wire.Evidence.PackageCopies
+	if request.RequirePackageCopies {
+		version = 5
+		if !copies.Valid() {
+			return FilesystemEvidence{}, ErrFilesystem
+		}
+	} else if copies != nil {
+		return FilesystemEvidence{}, ErrFilesystem
+	}
 	if notBefore.IsZero() || v.started.Before(notBefore) || v.finished.Before(v.started) || v.finished.After(time.Now()) ||
 		v.finished.Sub(v.started) > 25*time.Second || request.Validate() != nil || target.Validate() != nil || key.Validate() != nil ||
 		v.target != target || v.key.Algorithm != key.Algorithm || v.key.Fingerprint != key.Fingerprint || !bytes.Equal(v.key.PublicKey, key.PublicKey) ||
@@ -195,7 +222,7 @@ func filesystemCommand(request FilesystemRequest) (string, error) {
 	}
 	script := filesystemScript
 	if request.RequirePersistent {
-		script, err = buildPersistentFilesystemScript()
+		script, err = buildPersistentFilesystemScript(request.RequirePackageCopies)
 		if err != nil {
 			return "", ErrFilesystem
 		}

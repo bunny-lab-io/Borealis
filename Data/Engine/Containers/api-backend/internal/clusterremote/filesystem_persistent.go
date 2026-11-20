@@ -123,6 +123,8 @@ def pfs_files(root, paths):
     result = {"fstab": proof, "lib": lib}
     if any(p in ("/etc", "/usr", "/var") for p in paths):
         result["package_ancestors"] = pfs_package_directories(root, paths)
+    if PFS_OBSERVE_COPIES:
+        result["package_copies"] = pfs_package_copies(root)
     # Fixed Noble package contents use /sbin as well as /lib. A complete /usr
     # projection may fold that archive path only under observed merged-/usr,
     # never from distribution assumptions. Final pfs_files reproof binds drift.
@@ -313,6 +315,10 @@ def pfs_snapshot(paths):
         proof = json.dumps((files, device_proof, manager), sort_keys=True, separators=(",", ":")).encode("ascii")
         evidence["receipt"] = hashlib.sha256(evidence["receipt"].encode("ascii")+b"\x00"+proof).hexdigest()
         observation["version"] = 4
+        if PFS_OBSERVE_COPIES:
+            copies = [state for state in files["package_copies"].values() if state is not None]
+            evidence["package_copies"] = {"bytes": fs_integer(sum(state[0] for state in copies), 1), "entries": len(copies)}
+            observation["version"] = 5
         return observation
     finally:
         os.close(root)

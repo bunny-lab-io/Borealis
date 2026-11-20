@@ -10,7 +10,7 @@ import (
 )
 
 func TestFilesystemPersistentNative(t *testing.T) {
-	for _, mode := range []string{"root", "package paths", "package ancestor inserted", "package ancestor deleted", "package ancestor replaced", "package ancestor symlink", "sbin redirect", "sbin final drift", "package descendant mount", "uuid syntax", "xfs", "unrelated mount", "escaped path", "missing fstab", "unsafe fstab", "symlink fstab", "duplicate root", "unstable source", "future ancestor", "future descendant", "noexec", "nofail", "automount option", "mount override", "automount", "mount dropin", "prefix dropin", "future unit", "unsafe unit", "generator override", "missing mask", "runtime mask", "bad device link", "wrong device", "regular device", "quota", "bind root", "current child mount", "stale mount", "loaded automount", "manager reload", "nonrunning manager", "degraded manager", "boolean generation", "negative generation", "wrong PID", "wrong bus", "pending root job", "loaded override", "loaded dropin", "loaded noexec", "fstab drift", "final file removal", "device drift", "manager drift", "mount drift", "lower availability"} {
+	for _, mode := range []string{"root", "package paths", "package copy absent", "package copy linked", "package copy hardlink", "package copy writable", "package copy replaced", "package copy appeared", "package ancestor inserted", "package ancestor deleted", "package ancestor replaced", "package ancestor symlink", "sbin redirect", "sbin final drift", "package descendant mount", "uuid syntax", "xfs", "unrelated mount", "escaped path", "missing fstab", "unsafe fstab", "symlink fstab", "duplicate root", "unstable source", "future ancestor", "future descendant", "noexec", "nofail", "automount option", "mount override", "automount", "mount dropin", "prefix dropin", "future unit", "unsafe unit", "generator override", "missing mask", "runtime mask", "bad device link", "wrong device", "regular device", "quota", "bind root", "current child mount", "stale mount", "loaded automount", "manager reload", "nonrunning manager", "degraded manager", "boolean generation", "negative generation", "wrong PID", "wrong bus", "pending root job", "loaded override", "loaded dropin", "loaded noexec", "fstab drift", "final file removal", "device drift", "manager drift", "mount drift", "lower availability"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -26,12 +26,17 @@ func TestFilesystemPersistentNative(t *testing.T) {
 			}
 			if good {
 				var value filesystemObservation
+				version := 4
 				paths := []string{"/opt/Borealis", "/var/lib/longhorn"}
 				if mode == "package paths" {
+					version = 5
 					paths = []string{"/etc", "/usr", "/var"}
 				}
-				if json.Unmarshal(out, &value) != nil || value.Version != 4 || value.Evidence.validate(paths) != nil {
+				if json.Unmarshal(out, &value) != nil || value.Version != version || value.Evidence.validate(paths) != nil {
 					t.Fatal("invalid native persistent evidence")
+				}
+				if mode == "package paths" && (value.Evidence.PackageCopies == nil || *value.Evidence.PackageCopies != (PackageCopyDemand{Bytes: 12, Entries: 2})) {
+					t.Fatal("wrong fresh package copy demand", value.Evidence.PackageCopies)
 				}
 				if mode == "lower availability" && value.Evidence.Filesystems[0].AvailableBytes != 30<<30 {
 					t.Fatal("availability minimum lost")
@@ -61,8 +66,22 @@ r = pathlib.Path(ROOT)
 r.chmod(0o700)
 os.umask(0o077)
 paths = ["/opt/Borealis", "/var/lib/longhorn"]
-if mode.startswith("package ancestor") or mode in ("package paths", "sbin redirect", "sbin final drift", "package descendant mount"):
+PFS_OBSERVE_COPIES = mode == "package paths" or mode.startswith("package copy")
+if mode.startswith("package ") or mode in ("sbin redirect", "sbin final drift", "package descendant mount"):
     paths = ["/etc", "/usr", "/var"]
+if "/var" in paths:
+    (r/"var/lib/dpkg").mkdir(parents=True)
+    (r/"var/lib/dpkg/status").write_bytes(b"fixture")
+    (r/"var/cache/debconf").mkdir(parents=True)
+    templates = r/"var/cache/debconf/templates.dat"
+    templates.write_bytes(b"cache")
+    status = r/"var/lib/dpkg/status"
+    if mode == "package copy absent": status.unlink()
+    if mode == "package copy linked":
+        templates.unlink()
+        templates.symlink_to(status)
+    if mode == "package copy hardlink": os.link(templates, r/"second")
+    if mode == "package copy writable": templates.chmod(0o666)
 uuid = "12345678-1234-1234-1234-123456789abc"
 kind = "xfs" if mode == "xfs" else "ext4"
 for area in BOOT_PATHS:
@@ -161,6 +180,14 @@ def fixture_reply(dest,path,interface,method,*params):
     if method=='GetAll':
         if params[-1]=='org.freedesktop.systemd1.Unit': return wire('a{sv}',unit_props)
         if params[-1]=='org.freedesktop.systemd1.Mount':
+            if mode in ("package copy replaced", "package copy appeared") and snapshots>=3 and not package_changed:
+                package_changed = True
+                if mode == "package copy replaced":
+                    templates.rename(r/"old")
+                    templates.write_bytes(b"cache")
+                else:
+                    (r/"var/lib/ucf").mkdir(exist_ok=True)
+                    (r/"var/lib/ucf/hashfile").touch()
             if mode.startswith("package ancestor") and snapshots>=3 and not package_changed:
                 package_changed = True
                 if mode == "package ancestor inserted": package_directory.mkdir()

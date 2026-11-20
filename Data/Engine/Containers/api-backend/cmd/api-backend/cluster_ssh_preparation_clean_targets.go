@@ -200,7 +200,8 @@ func newClusterSSHPreparationTargetsFilesystemRead(snapshot clusterSSHPreparatio
 				if !ok {
 					return clusterSSHPreparationTargetCPU{}, clusterbootstrap.ErrPreparationConfig
 				}
-				selection := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: slices.Clone(paths), RequirePersistent: true}
+				selection := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: slices.Clone(paths), RequirePersistent: true,
+					RequirePackageCopies: slices.Contains(paths, "/var") && len(selectionPackages.Missing) > 0}
 				target := clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}
 				filesystemKey := item.Key
 				filesystemKey.PublicKey = bytes.Clone(filesystemKey.PublicKey)

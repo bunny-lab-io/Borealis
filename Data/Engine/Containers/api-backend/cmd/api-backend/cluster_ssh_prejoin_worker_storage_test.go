@@ -16,7 +16,7 @@ import (
 func sshPrejoinWorkerCapacityFixture() clusterSSHPreparedImageCapacity {
 	return clusterSSHPreparedImageCapacity{WorkerScratchBytes: 1024, WorkerScratchEntries: 4,
 		PostgresWorkerPeakBytes: 512, PostgresWorkerPeakEntries: 2,
-		Target: []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30, Entries: 10}}}
+		Target: []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30, Entries: 10}, {Path: "/var", Bytes: 4096, Entries: 1}}}
 }
 
 func sshPrejoinWorkerStorageFixture(t *testing.T) (*sshNetworkTargetsFixture, clusterSSHPrejoinSource, string) {
@@ -59,7 +59,7 @@ func sshPrejoinWorkerStorageFixture(t *testing.T) (*sshNetworkTargetsFixture, cl
 	return f, source, authorization.ConfirmationSHA256
 }
 
-func sshPrejoinWorkerStorageWire(t *testing.T, raw []byte, available uint64) []byte {
+func sshPrejoinWorkerStorageWire(t *testing.T, raw []byte, available uint64, packageCopies bool) []byte {
 	t.Helper()
 	var wire struct {
 		Version   int                              `json:"version"`
@@ -70,7 +70,12 @@ func sshPrejoinWorkerStorageWire(t *testing.T, raw []byte, available uint64) []b
 	if json.Unmarshal(raw, &wire) != nil {
 		t.Fatal("invalid filesystem fixture")
 	}
-	wire.Version = 4
+	wire.Version = 5
+	wire.Evidence = sshPackageStorageEvidence(wire.Evidence)
+	if !packageCopies {
+		wire.Version = 4
+		wire.Evidence.PackageCopies = nil
+	}
 	wire.Evidence.Filesystems[0].TotalBytes = 120 << 30
 	wire.Evidence.Filesystems[0].AvailableBytes = available
 	out, _ := json.Marshal(wire)
@@ -105,7 +110,7 @@ func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
 				if mode == "shortage" && i == selected || mode == "native writes" && nativeCalled {
 					available = 1
 				}
-				return sshPrejoinWorkerStorageWire(t, raw, available)
+				return sshPrejoinWorkerStorageWire(t, raw, available, i == selected)
 			}
 			storage := newClusterSSHPrejoinWorkerStorageCheck(f.a.Baseline, f.claims,
 				func(ctx context.Context, consume func(context.Context, clusterSSHNetworkTargetReaders) error) error {
@@ -204,12 +209,13 @@ func TestClusterSSHPrejoinWorkerStorageReopenedScopes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f, _, _ := sshPrejoinWorkerStorageFixture(t)
 			written := [2]bool{}
+			selected := 0
 			f.filesystemWire = func(i int, raw []byte) []byte {
 				available := uint64(90 << 30)
 				if written[i] {
 					available = 1
 				}
-				return sshPrejoinWorkerStorageWire(t, raw, available)
+				return sshPrejoinWorkerStorageWire(t, raw, available, i == selected)
 			}
 			within := func(ctx context.Context, consume func(context.Context, clusterSSHNetworkTargetReaders) error) error {
 				return runClusterSSHNetworkTargets(ctx, f.a.Baseline, f.claims, f.deps, consume)
@@ -220,6 +226,7 @@ func TestClusterSSHPrejoinWorkerStorageReopenedScopes(t *testing.T) {
 				Storage: newClusterSSHPrejoinWorkerStorageRead(context.Background(), storage, func(context.Context) error { return nil })}
 			var expected []clusterbootstrap.PreparationExpected
 			for i, claim := range f.claims {
+				selected = i
 				e, err := buildClusterSSHPreparationExpected(f.a.Cohort, f.a.Source, claim.Lease, f.a.Baseline, f.a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16", f.a.payload)
 				if err != nil || check(context.Background(), f.a.payload, e, sshPrejoinWorkerCapacityFixture(), checks) != nil {
 					t.Fatalf("first selected target proof failed: index=%d error=%v", i, err)
@@ -238,6 +245,7 @@ func TestClusterSSHPrejoinWorkerStorageReopenedScopes(t *testing.T) {
 			case "new invocation":
 				check = newClusterSSHPrejoinWorkerStorageCheck(f.a.Baseline, f.claims, within)
 			}
+			selected = 0
 			err := check(context.Background(), f.a.payload, expected[0], capacity, checks)
 			if (err == nil) != (mode == "same invocation") {
 				t.Fatalf("reopened scope changed retained demand/authority: %v", err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"borealis/api-backend/internal/clusterremote"
 	"context"
 	"slices"
@@ -53,4 +54,31 @@ func validClusterSSHPreparationFilesystems(snapshot clusterSSHPreparationApprova
 		}
 	}
 	return true
+}
+
+// Only the selected target borrows its own current database/cache sizes.
+// Existing archive and installed-content rows exclude these working copies.
+func calculateClusterSSHPreparationStorageCapacity(requirements clusterSSHStorageRequirements, evidence clusterremote.FilesystemEvidence,
+	demands []clusterSSHFilesystemDemand, selection *clusterbootstrap.HostPackageSelection) ([]clusterSSHStorageBudget, error) {
+	if selection == nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	metadata, err := selection.DpkgMetadataDemand()
+	if err != nil {
+		return nil, err
+	}
+	if len(selection.Missing) > 0 {
+		copies := evidence.PackageCopies
+		if !copies.Valid() {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		demands, err = mergeClusterSSHFilesystemDemands(demands, []clusterSSHFilesystemDemand{
+			{Path: "/var", Bytes: copies.Bytes, Entries: copies.Entries},
+			{Path: "/var", Bytes: metadata.Bytes, Entries: metadata.Entries},
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return calculateClusterSSHStorageCapacity(requirements, evidence, demands)
 }

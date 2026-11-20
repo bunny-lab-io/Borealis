@@ -107,7 +107,8 @@ func newClusterSSHPrejoinWorkerStorageCheck(baseline clusterbootstrap.Expected, 
 			}
 			selection := make([]clusterSSHTargetFilesystemSelection, len(claims))
 			for i, claim := range claims {
-				selection[i] = clusterSSHTargetFilesystemSelection{TargetID: claim.Lease.TargetID, Paths: slices.Clone(paths), RequirePersistent: true}
+				selection[i] = clusterSSHTargetFilesystemSelection{TargetID: claim.Lease.TargetID, Paths: slices.Clone(paths), RequirePersistent: true,
+					RequirePackageCopies: i == index && expected.TargetPackages != nil && len(expected.TargetPackages.Missing) > 0}
 			}
 			proved := false
 			if withClusterSSHTargetFilesystemEvidence(ctx, readers, selection, func(ctx context.Context, targets []clusterSSHTargetFilesystemEvidence) error {
@@ -122,7 +123,7 @@ func newClusterSSHPrejoinWorkerStorageCheck(baseline clusterbootstrap.Expected, 
 				// The other target may already contain our prepared prefix. Its
 				// identity remains observed, but its original demand is not charged
 				// a second time while preparing this selected target.
-				budgets, err := calculateClusterSSHStorageCapacity(storage.Requirements, targets[index].Storage, capacity.Target)
+				budgets, err := calculateClusterSSHPreparationStorageCapacity(storage.Requirements, targets[index].Storage, capacity.Target, expected.TargetPackages)
 				if err != nil || len(budgets) == 0 {
 					return fail
 				}

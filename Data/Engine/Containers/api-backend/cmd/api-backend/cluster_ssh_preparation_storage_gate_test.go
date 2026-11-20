@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterremote"
 	"bytes"
 	"context"
 	"errors"
@@ -13,6 +14,53 @@ import (
 	"testing"
 	"time"
 )
+
+func sshPackageStorageEvidence(e clusterremote.FilesystemEvidence) clusterremote.FilesystemEvidence {
+	varPath := e.Paths[1]
+	varPath.Path, varPath.Ancestor = "/var", "/var"
+	e.Paths = slices.Insert(e.Paths, 1, varPath)
+	e.PackageCopies = &clusterremote.PackageCopyDemand{Bytes: 2000000, Entries: 2}
+	return e
+}
+
+func TestClusterSSHSelectedPackageCopyDemand(t *testing.T) {
+	f := newSSHStorageFixture(t, false)
+	requirements := sshStorageSnapshotFixture(t, f.a).Requirements
+	selected := sshPreparationTargetPackagesFixture([]clusterSSHPreparationTargetCPU{{}})[0].Selection
+	demands := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 100}, {Path: "/var", Bytes: 200, Entries: 1}}
+	for _, mode := range []string{"install", "already installed", "missing evidence", "inode shortage", "overflow"} {
+		t.Run(mode, func(t *testing.T) {
+			evidence := sshPackageStorageEvidence(sshCapacityEvidence())
+			selection := selected.Clone()
+			expected := uint64(300 + 4096)
+			switch mode {
+			case "install":
+				meta, err := selection.DpkgMetadataDemand()
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected += evidence.PackageCopies.Bytes + meta.Bytes + (2+meta.Entries)*4096
+			case "already installed":
+				selection.Missing = []string{}
+				evidence.PackageCopies = nil
+			case "missing evidence":
+				evidence.PackageCopies = nil
+			case "inode shortage":
+				evidence.Filesystems[0].AvailableInodes = 3
+			case "overflow":
+				evidence.PackageCopies.Bytes = clusterSSHCapacityLimit
+			}
+			budgets, err := calculateClusterSSHPreparationStorageCapacity(requirements, evidence, demands, &selection)
+			if mode == "install" || mode == "already installed" {
+				if err != nil || len(budgets) != 1 || !budgets[0].Fits || budgets[0].OtherBytes != expected {
+					t.Fatalf("expected %d bytes, got %+v, error %v", expected, budgets, err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid package budget accepted")
+			}
+		})
+	}
+}
 
 func sshPreparationStorageGateFixture(t *testing.T, setup ...func(*sshWaitingCapacityFixture)) (*sshWaitingCapacityFixture, func(context.Context, string) (string, error), clusterSSHPreparationStorageGateSourceRead) {
 	t.Helper()
@@ -62,7 +110,7 @@ func TestClusterSSHPreparationStorageGateProposalReaderMinima(t *testing.T) {
 					return nil, errClusterConflict
 				}
 				var input clusterSSHPreparationCleanBrokerRequest
-				if openClusterSSHVIP(client.requestCipher, clusterSSHPreparationCleanBrokerPath, raw, &input, clusterSSHPreparationCleanBrokerLimit) != nil || !slices.Equal(input.FilesystemPaths, []string{"/opt/Borealis", "/var/lib/longhorn"}) {
+				if openClusterSSHVIP(client.requestCipher, clusterSSHPreparationCleanBrokerPath, raw, &input, clusterSSHPreparationCleanBrokerLimit) != nil || !slices.Equal(input.FilesystemPaths, []string{"/opt/Borealis", "/var", "/var/lib/longhorn"}) {
 					return nil, errClusterConflict
 				}
 				binding, _ := clusterSSHPreparationDigest(input)
@@ -70,7 +118,7 @@ func TestClusterSSHPreparationStorageGateProposalReaderMinima(t *testing.T) {
 				response.Packages = sshPreparationTargetPackagesFixture(response.Targets)
 				response.Digest, _ = clusterSSHPreparationTargetCPUDigest(f.snapshot, response.Targets)
 				for _, target := range f.targets {
-					e := sshCapacityEvidence()
+					e := sshPackageStorageEvidence(sshCapacityEvidence())
 					e.MountNamespace, e.Receipt = 1234, strings.Repeat("c", 64)
 					if calls > 1 {
 						e.Filesystems[0].AvailableBytes -= 1 << 20
@@ -117,7 +165,7 @@ func TestClusterSSHPreparationStorageGateProposalReaderMinima(t *testing.T) {
 				if mode == "demand drift" && calls > 0 {
 					bytes++
 				}
-				return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: bytes, Entries: 10}}, nil
+				return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: bytes, Entries: 10}, {Path: "/var", Bytes: 4096, Entries: 1}}, nil
 			}
 			gate := newClusterSSHPreparationStorageRead(f.snapshot, f.check, source, complete, factory)
 			first, err := gate(ctx, f.plan)
@@ -247,14 +295,14 @@ func TestClusterSSHPreparationStorageGate(t *testing.T) {
 				if mode == "empty demand" {
 					return nil, nil
 				}
-				return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30, Entries: 10}}, ctx.Err()
+				return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30, Entries: 10}, {Path: "/var", Bytes: 4096, Entries: 1}}, ctx.Err()
 			})
 			if mode == "missing demand" {
 				complete = nil
 			}
 			factory := func(paths []string) clusterSSHPreparationTargetsRead {
 				factories++
-				if !slices.Equal(paths, []string{"/opt/Borealis", "/var/lib/longhorn"}) {
+				if !slices.Equal(paths, []string{"/opt/Borealis", "/var", "/var/lib/longhorn"}) {
 					t.Fatal("wrong source-policy/demand destinations", paths)
 				}
 				if mode == "missing reader" {
@@ -268,14 +316,14 @@ func TestClusterSSHPreparationStorageGate(t *testing.T) {
 					}
 					v := value.Targets
 					for _, target := range f.targets {
-						e := sshCapacityEvidence()
+						e := sshPackageStorageEvidence(sshCapacityEvidence())
 						e.MountNamespace = 1234
 						e.Receipt = strings.Repeat("c", 64)
 						switch mode {
 						case "temporary filesystem":
 							e.Filesystems[0].Type = "tmpfs"
 						case "existing storage":
-							e.Paths[1].Ancestor = e.Paths[1].Path
+							e.Paths[2].Ancestor = e.Paths[2].Path
 						case "byte shortage":
 							e.Filesystems[0].AvailableBytes = 1
 						case "inode shortage":
@@ -345,7 +393,7 @@ func TestClusterSSHPreparationStorageGateAvailabilityRereads(t *testing.T) {
 					}
 					value := input.Targets
 					for _, target := range f.targets {
-						e := sshCapacityEvidence()
+						e := sshPackageStorageEvidence(sshCapacityEvidence())
 						e.MountNamespace, e.Receipt = 1234, strings.Repeat("c", 64)
 						if reads > 1 {
 							switch mode {
@@ -391,7 +439,7 @@ func TestClusterSSHPreparationStorageGateAvailabilityRereads(t *testing.T) {
 				if mode == "demand" && reads > 0 {
 					bytes++
 				}
-				return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: bytes, Entries: 10}}, nil
+				return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: bytes, Entries: 10}, {Path: "/var", Bytes: 4096, Entries: 1}}, nil
 			}
 			gate := newClusterSSHPreparationStorageRead(f.snapshot, f.check, source, complete, factory)
 			first, err := gate(ctx, f.plan)

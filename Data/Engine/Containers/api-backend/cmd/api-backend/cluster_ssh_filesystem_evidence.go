@@ -14,9 +14,10 @@ import (
 // Explicit path choices for every original target in cohort order. Neither
 // historical /opt figures nor an assumed Longhorn default choose these paths.
 type clusterSSHTargetFilesystemSelection struct {
-	TargetID          string
-	Paths             []string
-	RequirePersistent bool
+	TargetID             string
+	Paths                []string
+	RequirePersistent    bool
+	RequirePackageCopies bool
 }
 
 type clusterSSHTargetFilesystemEvidence struct {
@@ -51,7 +52,7 @@ func withClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 		frozen = owned
 		frozen.Cohort.ObservedAt = 0
 		for i, item := range frozen.Cohort.Targets {
-			request := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: selection[i].Paths, RequirePersistent: selection[i].RequirePersistent}
+			request := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: selection[i].Paths, RequirePersistent: selection[i].RequirePersistent, RequirePackageCopies: selection[i].RequirePackageCopies}
 			if selection[i].TargetID != item.Binding.TargetID || request.Validate() != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
@@ -73,7 +74,7 @@ func withClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 				if current() != nil {
 					return nil, clusterbootstrap.ErrPreparationConfig
 				}
-				request := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: slices.Clone(selection[i].Paths), RequirePersistent: selection[i].RequirePersistent}
+				request := clusterremote.FilesystemRequest{MachineID: item.Report.MachineID, BootID: item.Report.BootID, Paths: slices.Clone(selection[i].Paths), RequirePersistent: selection[i].RequirePersistent, RequirePackageCopies: selection[i].RequirePackageCopies}
 				input := item
 				input.Key.PublicKey = bytes.Clone(item.Key.PublicKey)
 				input.Report.Nodes = slices.Clone(item.Report.Nodes)

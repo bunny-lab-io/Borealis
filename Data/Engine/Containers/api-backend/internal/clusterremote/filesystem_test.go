@@ -33,13 +33,30 @@ func filesystemFixture() (FilesystemRequest, filesystemObservation) {
 }
 
 func TestFilesystemPinnedObservation(t *testing.T) {
-	for _, mode := range []string{"success", "persistent", "persistent downgrade", "wrong port", "wrong key", "machine", "boot", "namespace", "receipt", "path", "ancestor", "mount point", "mount ID", "unknown FS", "duplicate FS", "FS type", "FS device", "overflow", "free overflow", "unknown field", "duplicate field", "alias field", "null", "trailing", "private error", "oversized", "authority lost", "cancel", "joined heartbeat", "late heartbeat failure"} {
+	for _, mode := range []string{"success", "persistent", "persistent downgrade", "package copies", "package downgrade", "package missing", "package count", "package unsolicited", "wrong port", "wrong key", "machine", "boot", "namespace", "receipt", "path", "ancestor", "mount point", "mount ID", "unknown FS", "duplicate FS", "FS type", "FS device", "overflow", "free overflow", "unknown field", "duplicate field", "alias field", "null", "trailing", "private error", "oversized", "authority lost", "cancel", "joined heartbeat", "late heartbeat failure"} {
 		t.Run(mode, func(t *testing.T) {
 			request, wire := filesystemFixture()
 			if strings.HasPrefix(mode, "persistent") {
 				request.RequirePersistent = true
 				if mode == "persistent" {
 					wire.Version = 4
+				}
+			}
+			if strings.HasPrefix(mode, "package ") {
+				request.RequirePersistent = true
+				request.RequirePackageCopies = mode != "package unsolicited"
+				request.Paths[1] = "/var"
+				wire.Evidence.Paths[1].Path = "/var"
+				wire.Evidence.Paths[1].Ancestor = "/var"
+				wire.Version = 5
+				wire.Evidence.PackageCopies = &PackageCopyDemand{Bytes: 70, Entries: 1}
+				switch mode {
+				case "package downgrade", "package unsolicited":
+					wire.Version = 4
+				case "package missing":
+					wire.Evidence.PackageCopies = nil
+				case "package count":
+					wire.Evidence.PackageCopies.Entries = uint64(len(packageCopyPaths) + 1)
 				}
 			}
 			switch mode {
@@ -152,7 +169,7 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 			}
 			started := time.Now()
 			value, err := client.InspectFilesystem(ctx, []byte("private-sudo"), target, key, request, check)
-			if mode != "success" && mode != "persistent" && mode != "joined heartbeat" {
+			if mode != "success" && mode != "persistent" && mode != "package copies" && mode != "joined heartbeat" {
 				if err != ErrFilesystem || !reflect.DeepEqual(value, TargetFilesystem{}) {
 					t.Fatal("unsafe observation", err)
 				}
@@ -174,6 +191,9 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 			got, err := value.Evidence(started, target, key, request)
 			if err != nil || !reflect.DeepEqual(got, wire.Evidence) {
 				t.Fatal("valid observation rejected", err)
+			}
+			if got.PackageCopies != nil {
+				got.PackageCopies.Bytes = 0
 			}
 			got.Paths[0].Path = "/mutated"
 			got.Filesystems[0].AvailableBytes = 0

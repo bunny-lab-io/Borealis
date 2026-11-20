@@ -137,13 +137,14 @@ func newClusterSSHPreparationStorageRead(snapshot clusterSSHPreparationApprovalS
 		}
 		observed, err := read(ctx, plan)
 		if err != nil || observed.validate(owned) != nil || observed.Digest != input.Targets.Digest || !slices.Equal(observed.Targets, input.Targets.Targets) ||
+			!validClusterSSHPreparationPackages(observed.Targets, observed.Packages) || !reflect.DeepEqual(observed.Packages, input.Targets.Packages) ||
 			!validClusterSSHPreparationFilesystems(owned, paths, observed.Filesystems) || check(ctx) != nil || ctx.Err() != nil {
 			return fail("Fresh persistent mounts, bytes or inodes are unavailable or changed on an original target; inspect targets again.")
 		}
 		evidence := cloneClusterSSHPreparationFilesystems(observed.Filesystems)
 		budgets := make([]clusterSSHTargetStorageCapacity, len(evidence))
 		for i, target := range evidence {
-			values, err := calculateClusterSSHStorageCapacity(input.Storage.Requirements, target.Storage, demands)
+			values, err := calculateClusterSSHPreparationStorageCapacity(input.Storage.Requirements, target.Storage, demands, &observed.Packages[i].Selection)
 			if err != nil || len(values) == 0 {
 				return fail("Persistent storage ownership, mount topology or complete demand could not be validated on an original target.")
 			}
