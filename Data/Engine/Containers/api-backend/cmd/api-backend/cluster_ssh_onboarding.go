@@ -224,8 +224,12 @@ func (service *clusterSSHOnboarding) progress(w http.ResponseWriter, r *http.Req
 		writeClusterSSHOnboardingError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"operation_id": result.OperationID, "state": result.State,
-		"current_step": result.Step, "attempt": result.Attempt, "targets": result.Targets})
+	payload := map[string]any{"operation_id": result.OperationID, "state": result.State,
+		"current_step": result.Step, "attempt": result.Attempt, "targets": result.Targets}
+	if result.Qualification != nil {
+		payload["qualification"] = result.Qualification
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func writeClusterSSHOnboardingError(w http.ResponseWriter, err error) {

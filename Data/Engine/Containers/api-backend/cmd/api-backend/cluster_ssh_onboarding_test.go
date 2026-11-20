@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,13 +18,14 @@ import (
 )
 
 type sshOnboardingTestBackend struct {
-	source      clusterSSHQueueSource
-	calls       []string
-	sealed      []clusterSSHCredentialEnvelope
-	queued      []clusterSSHPlannedTarget
-	err         error
-	failAt      string
-	operationID string
+	source        clusterSSHQueueSource
+	calls         []string
+	sealed        []clusterSSHCredentialEnvelope
+	queued        []clusterSSHPlannedTarget
+	err           error
+	failAt        string
+	operationID   string
+	qualification *clusterSSHQualificationReport
 }
 
 func (b *sshOnboardingTestBackend) check(ctx context.Context, name string) error {
@@ -70,7 +72,11 @@ func (b *sshOnboardingTestBackend) clusterSSHInspectionProgress(ctx context.Cont
 	if id != b.operationID {
 		return clusterSSHInspectionProgress{}, errClusterNotFound
 	}
-	return clusterSSHInspectionProgress{OperationID: id, State: "queued", Step: "preflight", Attempt: 1}, nil
+	progress := clusterSSHInspectionProgress{OperationID: id, State: "queued", Step: "preflight", Attempt: 1}
+	if b.qualification != nil {
+		progress.State, progress.Step, progress.Qualification = "waiting", clusterSSHQualificationStep, b.qualification
+	}
+	return progress, nil
 }
 
 func sshOnboardingTestService(t *testing.T) (*clusterSSHOnboarding, *sshOnboardingTestBackend, string, map[string]any) {
@@ -261,6 +267,31 @@ func TestClusterSSHOnboardingEncryptedKeyKeepsExactSyntax(t *testing.T) {
 	envelope := backend.sealed[1]
 	if envelope.Method != "private_key" || envelope.PrivateKey != encodedKey || envelope.Passphrase != passphrase || envelope.Password != "" {
 		t.Fatal("private-key credential changed before encryption")
+	}
+}
+
+func TestClusterSSHOnboardingProgressReturnsRecordedQualification(t *testing.T) {
+	for _, state := range []string{"unobserved", "blocked", "passed"} {
+		t.Run(state, func(t *testing.T) {
+			service, backend, token, _ := sshOnboardingTestService(t)
+			backend.operationID = newClusterUUID()
+			if state != "unobserved" {
+				report := newClusterSSHQualificationReport(1)
+				report.Checks[0].State = state
+				if state == "passed" {
+					for i := 1; i < len(report.Checks)-1; i++ {
+						report.Checks[i].State = state
+					}
+				}
+				backend.qualification = &report
+			}
+			response := sshOnboardingTestRequest(t, service, token, http.MethodGet, "/api/server/cluster/onboarding/operations/"+backend.operationID, "")
+			var progress clusterSSHInspectionProgress
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &progress) != nil ||
+				progress.OperationID != backend.operationID || !reflect.DeepEqual(progress.Qualification, backend.qualification) {
+				t.Fatalf("incorrect public inspection progress: %s", response.Body)
+			}
+		})
 	}
 }
 
