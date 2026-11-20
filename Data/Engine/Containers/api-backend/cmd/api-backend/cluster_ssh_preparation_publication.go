@@ -13,7 +13,22 @@ import (
 // immutable identities and authenticated inventories, not staged bytes, dynamic
 // PostgreSQL image identity, capacity, target ownership or mutation permission.
 func readClusterSSHPreparationPublication(ctx context.Context, expected clusterbootstrap.Expected, version string) (string, error) {
-	fail := func() (string, error) { return "", clusterbootstrap.ErrPreparationConfig }
+	bound, err := bindClusterSSHPreparationPublication(ctx, expected, version)
+	return bound.digest, err
+}
+
+type clusterSSHPreparationBoundPublication struct {
+	digest  string
+	recheck func(context.Context) error
+}
+
+// Authenticate the static inventory bytes at acquisition. Later observations
+// resolve the immutable release and tag again and match every selected asset,
+// including its content digest, against this private copy.
+func bindClusterSSHPreparationPublication(ctx context.Context, expected clusterbootstrap.Expected, version string) (clusterSSHPreparationBoundPublication, error) {
+	fail := func() (clusterSSHPreparationBoundPublication, error) {
+		return clusterSSHPreparationBoundPublication{}, clusterbootstrap.ErrPreparationConfig
+	}
 	if ctx.Err() != nil || expected.Validate() != nil || version != clusterbootstrap.K3sPins().Version {
 		return fail()
 	}
@@ -33,12 +48,29 @@ func readClusterSSHPreparationPublication(ctx context.Context, expected clusterb
 	if err != nil {
 		return fail()
 	}
-	// One final complete release/tag observation rejects drift between domain
-	// reads, including removal/replacement of an earlier authenticated manifest.
+	bound, err := clusterSSHPreparationGroupPublication(expected, version, bootstrap, application.assets, external.assets, k3s.assets)
+	if err != nil || bound.recheck(ctx) != nil {
+		return fail()
+	}
+	return bound, nil
+}
+
+// Bind the static inventories or the complete set including host packages.
+// Each recheck compares fresh release and tag data against the same private asset map.
+func clusterSSHPreparationGroupPublication(expected clusterbootstrap.Expected, version string, groups ...map[string]clusterBootstrapAsset) (clusterSSHPreparationBoundPublication, error) {
+	fail := func() (clusterSSHPreparationBoundPublication, error) {
+		return clusterSSHPreparationBoundPublication{}, clusterbootstrap.ErrPreparationConfig
+	}
+	if expected.Validate() != nil || version != clusterbootstrap.K3sPins().Version || (len(groups) != 4 && len(groups) != 5) {
+		return fail()
+	}
 	assets := map[string]clusterBootstrapAsset{}
 	limits := map[string]int64{}
 	ids := map[int64]bool{}
-	for _, group := range []map[string]clusterBootstrapAsset{bootstrap, application.assets, external.assets, k3s.assets} {
+	for _, group := range groups {
+		if len(group) == 0 {
+			return fail()
+		}
 		for name, asset := range group {
 			if _, exists := assets[name]; exists || ids[asset.ID] {
 				return fail()
@@ -46,16 +78,23 @@ func readClusterSSHPreparationPublication(ctx context.Context, expected clusterb
 			assets[name], limits[name], ids[asset.ID] = asset, asset.Size, true
 		}
 	}
-	fresh, err := resolveClusterPackagedAssets(ctx, expected, limits)
-	if err != nil || ctx.Err() != nil || !reflect.DeepEqual(fresh, assets) {
-		return fail()
+	recheck := func(ctx context.Context) error {
+		fresh, err := resolveClusterPackagedAssets(ctx, expected, limits)
+		if err != nil || ctx.Err() != nil || !reflect.DeepEqual(fresh, assets) {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
 	}
-	return clusterSSHPreparationDigest(struct {
+	digest, err := clusterSSHPreparationDigest(struct {
 		Version    int
 		Source     clusterbootstrap.Expected
 		K3sVersion string
 		Assets     map[string]clusterBootstrapAsset
 	}{1, expected, version, assets})
+	if err != nil {
+		return fail()
+	}
+	return clusterSSHPreparationBoundPublication{digest, recheck}, nil
 }
 
 // Bind native publication proof to a waiting proposal owned by this controller.

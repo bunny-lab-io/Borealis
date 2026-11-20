@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"hash"
 	"io"
+	"os"
 )
 
 const artifactTransferMagic = "BOREALIS-NODE-ARTIFACTS-1\n"
@@ -70,6 +73,63 @@ func (a *PreparationArtifacts) WriteArtifacts(ctx context.Context, output io.Wri
 	}
 	digest := sha256.Sum256(raw)
 	if _, err := io.Copy(output, bytes.NewReader(digest[:])); err != nil {
+		return ErrImageArchive
+	}
+	return imageBoundary(ctx, check)
+}
+
+// Only ApprovalDigest constructs this destination. No caller can receive a
+// partial stream while archive bytes are being authenticated.
+type preparationApprovalHash struct{ hash.Hash }
+
+// ApprovalDigest authenticates exactly the same framed bytes as WriteArtifacts.
+// It returns the digest only after every archive, binding and authority check passes.
+func (a *PreparationArtifacts) ApprovalDigest(ctx context.Context, check func(context.Context) error) (string, error) {
+	output := &preparationApprovalHash{sha256.New()}
+	if err := a.WriteArtifacts(ctx, output, check); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(output.Sum(nil)), nil
+}
+
+// Transfers authenticate the private file before exposing bytes to a receiver.
+// In a private approval hash the single authenticated read also feeds the overall digest.
+func writeVerifiedPreparationFile(ctx context.Context, root *os.Root, name string, size int64, digest string, output io.Writer, check func(context.Context) error) error {
+	before, err := root.Lstat(name)
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 || before.Size() != size {
+		return ErrImageArchive
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return ErrImageArchive
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) || opened.Mode() != before.Mode() || opened.Size() != size {
+		return ErrImageArchive
+	}
+	h := sha256.New()
+	authenticatedCopy := func(dst io.Writer) bool {
+		n, err := io.Copy(dst, io.LimitReader(contextReader{ctx, file}, size+1))
+		return err == nil && n == size && hex.EncodeToString(h.Sum(nil)) == digest
+	}
+	if _, private := output.(*preparationApprovalHash); !private {
+		if !authenticatedCopy(h) {
+			return ErrImageArchive
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return ErrImageArchive
+		}
+		h.Reset()
+	}
+	if imageBoundary(ctx, check) != nil {
+		return ErrSessionAuthority
+	}
+	if !authenticatedCopy(io.MultiWriter(output, h)) {
+		return ErrImageArchive
+	}
+	after, err := root.Lstat(name)
+	if err != nil || !os.SameFile(opened, after) || after.Mode() != opened.Mode() || after.Size() != opened.Size() || after.ModTime() != opened.ModTime() {
 		return ErrImageArchive
 	}
 	return imageBoundary(ctx, check)

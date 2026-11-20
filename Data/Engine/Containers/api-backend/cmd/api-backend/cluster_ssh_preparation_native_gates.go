@@ -54,9 +54,9 @@ func (c *clusterController) withPreparationNativeGates(ctx context.Context, snap
 	if err := clusterSSHPreparationNativeBlockedError(cleanTargets != nil, capacity != nil, source != nil && filesystems != nil); err != nil {
 		return err
 	}
-	return c.withPreparationArtifacts(ctx, snapshot, scratch, func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+	return c.withPreparationArtifacts(ctx, snapshot, scratch, func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 		storage := newClusterSSHPreparationStorageRead(snapshot, c.preparationCleanTargetsProposalCheck(snapshot), source, preparationWaitingStorageDemand(storageDemand), filesystems)
-		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, cleanTargets, capacity, storage, configuration)
+		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, helper, cleanTargets, capacity, storage, configuration)
 		return consumeClusterSSHPreparationNativeGates(ctx, gates, consume)
 	})
 }
@@ -126,11 +126,11 @@ func consumeClusterSSHPreparationNativeGates(parent context.Context, gates clust
 // Keep the exact six existing gate positions. Missing producers always return
 // an error with no digest; qualification/profile minima and source-only storage
 // observations are never promoted into complete readiness evidence.
-func clusterSSHPreparationNativeGates(snapshot clusterSSHPreparationApprovalSnapshot, artifacts clusterSSHPreparationArtifactGate,
+func clusterSSHPreparationNativeGates(snapshot clusterSSHPreparationApprovalSnapshot, artifacts, helper clusterSSHPreparationArtifactGate,
 	cleanTargets, capacity, storage, configuration func(context.Context, string) (string, error)) clusterSSHPreparationGates {
 	var gates clusterSSHPreparationGates
 	gates[0], gates[1], gates[2], gates[3], gates[4] = artifacts, cleanTargets, capacity, storage, configuration
-	gates[5] = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, artifacts, cleanTargets)
+	gates[5] = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, helper, cleanTargets)
 	for _, blocked := range clusterSSHPreparationNativeBlockers(cleanTargets != nil, capacity != nil, storage != nil) {
 		for i, code := range clusterSSHPreparationGateCodes {
 			if code == blocked.Gate {

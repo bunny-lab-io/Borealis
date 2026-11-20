@@ -101,11 +101,17 @@ func TestClusterSSHPreparationSupervisedRecoveryOwnsArtifactLifetime(t *testing.
 	snapshot, _ := sshPreparationCleanTargetsFixture(t, false)
 	plan, _ := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
 	bytes := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
+	bytes.onDemand = func(ctx context.Context, check func(context.Context) error) ([]clusterSSHFilesystemDemand, error) {
+		return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 1}}, check(ctx)
+	}
 	var escaped func(context.Context, string) (string, error)
 	reads := 0
 	err := runClusterSSHPreparationArtifacts(context.Background(), plan, sshApprovalArtifactDependencies(bytes),
-		func(ctx context.Context, artifact clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
-			escaped = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, artifact, func(context.Context, string) (string, error) {
+		func(ctx context.Context, artifact clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
+			if _, err := artifact(ctx, plan); err != nil {
+				t.Fatal(err)
+			}
+			escaped = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, helper, func(context.Context, string) (string, error) {
 				reads++
 				return strings.Repeat("a", 64), nil
 			})

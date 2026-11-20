@@ -124,7 +124,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 			if mode == "missing filesystem reader" {
 				storage = nil
 			}
-			gates := clusterSSHPreparationNativeGates(f.snapshot, artifact, clean, capacityGate, storage, configurationGate)
+			gates := clusterSSHPreparationNativeGates(f.snapshot, artifact, artifact, clean, capacityGate, storage, configurationGate)
 			source := func(ctx context.Context) error {
 				observed, err := observeClusterSSHSourceCohort(ctx, f.get, f.snapshot.work.Proof.Source)
 				if err != nil || !reflect.DeepEqual(observed, f.snapshot.work.Proof.Source) {

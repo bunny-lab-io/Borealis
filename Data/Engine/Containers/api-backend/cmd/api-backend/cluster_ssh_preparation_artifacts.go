@@ -16,9 +16,10 @@ import (
 
 type clusterSSHPreparationArtifactGate func(context.Context, string) (string, error)
 type clusterSSHPreparationArtifactDemandRead func(context.Context, string) ([]clusterSSHFilesystemDemand, error)
-type clusterSSHPreparationArtifactConsumer func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error)
+type clusterSSHPreparationArtifactConsumer func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error)
 
 type clusterSSHPreparationArtifactBytes interface {
+	verifyPublication(context.Context, string) error
 	prove(context.Context, func(context.Context) error) (string, error)
 	storageDemand(context.Context, func(context.Context) error) ([]clusterSSHFilesystemDemand, error)
 	Close() error
@@ -76,7 +77,12 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		if err != nil || !validClusterSSHPreparationDigest(source.Observation) || !clusterbootstrap.ValidPostgresImageReference(source.Postgres) || check(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		publication, err := d.publication(ctx, check)
+		publication := retainedPublication
+		if owned == nil {
+			publication, err = d.publication(ctx, check)
+		} else {
+			err = owned.verifyPublication(ctx, retainedPublication)
+		}
 		if err != nil || !validClusterSSHPreparationDigest(publication) || check(ctx) != nil || ctx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -136,9 +142,11 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		}
 	}()
 	serial := make(chan struct{}, 1)
-	gate := func(parent context.Context, requested string) (string, error) {
-		var digest string
-		err := lifetime.run(parent, func(ctx context.Context) error {
+	// The fixed-order round starts with a full byte proof. Only that round may
+	// borrow its immutable demand and helper identity, once per consumer.
+	var demandPending, helperPending bool
+	withOwner := func(parent context.Context, requested string, read func(context.Context) error) error {
+		return lifetime.run(parent, func(ctx context.Context) error {
 			if requested != plan {
 				return clusterbootstrap.ErrPreparationConfig
 			}
@@ -148,8 +156,15 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 			case <-ctx.Done():
 				return clusterbootstrap.ErrPreparationConfig
 			}
+			return read(ctx)
+		})
+	}
+	gate := func(parent context.Context, requested string) (string, error) {
+		var digest string
+		err := withOwner(parent, requested, func(ctx context.Context) error {
 			var err error
 			digest, err = prove(ctx, d.proposal)
+			demandPending, helperPending = err == nil, err == nil
 			return err
 		})
 		if err != nil {
@@ -157,21 +172,13 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		}
 		return digest, nil
 	}
-	demand := func(parent context.Context, requested string) ([]clusterSSHFilesystemDemand, error) {
+	project := func(parent context.Context, requested string, pending *bool) ([]clusterSSHFilesystemDemand, error) {
 		var value []clusterSSHFilesystemDemand
-		err := lifetime.run(parent, func(ctx context.Context) error {
-			if requested != plan {
+		err := withOwner(parent, requested, func(ctx context.Context) error {
+			if !*pending || observe(ctx, d.proposal) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
-			select {
-			case serial <- struct{}{}:
-				defer func() { <-serial }()
-			case <-ctx.Done():
-				return clusterbootstrap.ErrPreparationConfig
-			}
-			if observe(ctx, d.proposal) != nil {
-				return clusterbootstrap.ErrPreparationConfig
-			}
+			*pending = false
 			var err error
 			value, err = owned.storageDemand(ctx, d.proposal)
 			if err != nil || len(value) == 0 || observe(ctx, d.proposal) != nil {
@@ -185,7 +192,16 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		}
 		return value, nil
 	}
-	readiness, err := consume(readerCtx, gate, demand)
+	demand := func(parent context.Context, requested string) ([]clusterSSHFilesystemDemand, error) {
+		return project(parent, requested, &demandPending)
+	}
+	helper := func(parent context.Context, requested string) (string, error) {
+		if _, err := project(parent, requested, &helperPending); err != nil {
+			return "", err
+		}
+		return retainedProof, nil
+	}
+	readiness, err := consume(readerCtx, gate, demand, helper)
 	if err != nil {
 		cancel()
 	}
@@ -309,16 +325,33 @@ func readClusterSSHPreparationArtifactSource(ctx context.Context, expected clust
 }
 
 type clusterSSHOwnedPreparationArtifacts struct {
-	mu          sync.Mutex
-	failed      bool
-	bundle      *clusterbootstrap.Bundle
-	artifacts   *clusterbootstrap.PreparationArtifacts
-	packages    *clusterbootstrap.HostPackageSet
-	expected    clusterbootstrap.Expected
-	version     string
-	manifest    *clusterbootstrap.Manifest
-	publication func(context.Context) error
-	demand      []clusterSSHFilesystemDemand
+	mu                sync.Mutex
+	failed            bool
+	bundle            *clusterbootstrap.Bundle
+	artifacts         *clusterbootstrap.PreparationArtifacts
+	packages          *clusterbootstrap.HostPackageSet
+	expected          clusterbootstrap.Expected
+	version           string
+	manifest          *clusterbootstrap.Manifest
+	publication       func(context.Context) error
+	demand            []clusterSSHFilesystemDemand
+	verifiedBundle    string
+	staticPublication string
+}
+
+// Source and proposal checks bracket this call. Match the original static
+// inventory identity and freshly verify the full release, including packages.
+func (v *clusterSSHOwnedPreparationArtifacts) verifyPublication(ctx context.Context, expected string) (result error) {
+	if v == nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	defer func() { v.failed = v.failed || result != nil }()
+	if v.failed || !validClusterSSHPreparationDigest(expected) || expected != v.staticPublication || v.publication == nil || ctx.Err() != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	return v.publication(ctx)
 }
 
 func (v *clusterSSHOwnedPreparationArtifacts) prove(ctx context.Context, check func(context.Context) error) (proof string, result error) {
@@ -332,15 +365,15 @@ func (v *clusterSSHOwnedPreparationArtifacts) prove(ctx context.Context, check f
 }
 
 func (v *clusterSSHOwnedPreparationArtifacts) proveOwned(ctx context.Context, check func(context.Context) error) (string, error) {
-	if v.failed || v.bundle == nil || v.artifacts == nil || v.packages == nil || v.publication == nil || check == nil || ctx.Err() != nil || check(ctx) != nil || v.publication(ctx) != nil || check(ctx) != nil {
+	if v.failed || v.bundle == nil || v.artifacts == nil || v.packages == nil || check == nil || ctx.Err() != nil || check(ctx) != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
 	bundle, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
 	if err != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
-	h := sha256.New()
-	if v.artifacts.WriteArtifacts(ctx, h, check) != nil {
+	artifacts, err := v.artifacts.ApprovalDigest(ctx, check)
+	if err != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
 	packages := sha256.New()
@@ -348,21 +381,37 @@ func (v *clusterSSHOwnedPreparationArtifacts) proveOwned(ctx context.Context, ch
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
 	again, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
-	if err != nil || again != bundle || v.publication(ctx) != nil || check(ctx) != nil || ctx.Err() != nil {
+	if err != nil || again != bundle || check(ctx) != nil || ctx.Err() != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
-	return clusterSSHPreparationDigest([]string{bundle, hex.EncodeToString(h.Sum(nil)), hex.EncodeToString(packages.Sum(nil))})
+	proof, err := clusterSSHPreparationDigest([]string{bundle, artifacts, hex.EncodeToString(packages.Sum(nil))})
+	if err == nil {
+		v.verifiedBundle = bundle
+	}
+	return proof, err
 }
 
 // Artifact materialization only: installed package content, generated host/join
 // configuration and Longhorn replicas remain separate inputs. Not storage ready.
-// Reproof lends already-acquired bytes; it never reacquires another archive.
+// After the full proof, reauthenticate the bundle and its helper and compare
+// the whole release publication before lending the fixed demand measured at acquisition.
 func (v *clusterSSHOwnedPreparationArtifacts) storageDemand(ctx context.Context, check func(context.Context) error) ([]clusterSSHFilesystemDemand, error) {
-	return v.storageDemandWith(ctx, check, v.proveOwned)
+	return v.storageDemandWith(ctx, check, v.proveOwnedHelper)
 }
 
-// Private seam exercises the owned lifetime without downloading pinned runtime
-// artifacts. Production always supplies the same owner's complete byte proof.
+// Caller holds the owner lock. The surrounding round and terminal check each
+// verify every archive. No image bytes leave the owner through either projection.
+func (v *clusterSSHOwnedPreparationArtifacts) proveOwnedHelper(ctx context.Context, check func(context.Context) error) (string, error) {
+	if v.bundle == nil || !validClusterSSHPreparationDigest(v.verifiedBundle) || check(ctx) != nil {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	bundle, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
+	if err != nil || bundle != v.verifiedBundle {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	return bundle, nil
+}
+
 func (v *clusterSSHOwnedPreparationArtifacts) storageDemandWith(ctx context.Context, check func(context.Context) error,
 	prove func(context.Context, func(context.Context) error) (string, error)) (demand []clusterSSHFilesystemDemand, result error) {
 	if v == nil {
@@ -540,39 +589,26 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 		return nil, err
 	}
 	closes = []func() error{bundle.Close, artifacts.Close, packageBytes.Close}
+	static, err := clusterSSHPreparationGroupPublication(expected, version, bootstrap, application.assets, external.assets, k3s.assets)
+	if err != nil {
+		return nil, err
+	}
 	publication, err := clusterSSHPreparationArtifactPublication(expected, bootstrap, application.assets, external.assets, k3s.assets, packages.assets)
 	if err != nil || publication(ctx) != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	return &clusterSSHOwnedPreparationArtifacts{bundle: bundle, artifacts: artifacts, packages: packageBytes, expected: expected, version: version, manifest: manifest, publication: publication, demand: demand}, nil
+	return &clusterSSHOwnedPreparationArtifacts{bundle: bundle, artifacts: artifacts, packages: packageBytes, expected: expected, version: version, manifest: manifest, publication: publication, staticPublication: static.digest, demand: demand}, nil
 }
 
 // Retain the exact asset generation used by each native staging resolver.
 // Fresh metadata must still publish those same bytes, including after other
 // families were acquired. A reverted publication cannot relabel owned bytes.
 func clusterSSHPreparationArtifactPublication(expected clusterbootstrap.Expected, groups ...map[string]clusterBootstrapAsset) (func(context.Context) error, error) {
-	if expected.Validate() != nil || len(groups) != 5 {
+	if len(groups) != 5 {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	assets, limits, ids := map[string]clusterBootstrapAsset{}, map[string]int64{}, map[int64]bool{}
-	for _, group := range groups {
-		if len(group) == 0 {
-			return nil, clusterbootstrap.ErrPreparationConfig
-		}
-		for name, asset := range group {
-			if _, exists := assets[name]; exists || ids[asset.ID] {
-				return nil, clusterbootstrap.ErrPreparationConfig
-			}
-			assets[name], limits[name], ids[asset.ID] = asset, asset.Size, true
-		}
-	}
-	return func(ctx context.Context) error {
-		fresh, err := resolveClusterPackagedAssets(ctx, expected, limits)
-		if err != nil || !reflect.DeepEqual(fresh, assets) || ctx.Err() != nil {
-			return clusterbootstrap.ErrPreparationConfig
-		}
-		return nil
-	}, nil
+	bound, err := clusterSSHPreparationGroupPublication(expected, clusterbootstrap.K3sPins().Version, groups...)
+	return bound.recheck, err
 }
 
 // This final read can recognize one exact already committed approval. It never

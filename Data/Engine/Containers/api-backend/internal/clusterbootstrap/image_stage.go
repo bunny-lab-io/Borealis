@@ -146,42 +146,7 @@ func (s *ImageSet) writeArchive(ctx context.Context, role string, output io.Writ
 		return ErrImageArchive
 	}
 	name := ImageAssetName(role)
-	before, err := s.root.Lstat(name)
-	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 || before.Size() != proof.ArchiveBytes {
-		return ErrImageArchive
-	}
-	f, err := s.root.Open(name)
-	if err != nil {
-		return ErrImageArchive
-	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(before, opened) {
-		return ErrImageArchive
-	}
-	// The initial scan established layer structure/counts. Rehash the complete
-	// immutable archive before emitting bytes, then authenticate the stream too.
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(contextReader{ctx, f}, proof.ArchiveBytes+1))
-	if err != nil || n != proof.ArchiveBytes || hex.EncodeToString(h.Sum(nil)) != proof.ArchiveSHA256 {
-		return ErrImageArchive
-	}
-	if imageBoundary(ctx, check) != nil {
-		return ErrSessionAuthority
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return ErrImageArchive
-	}
-	h.Reset()
-	n, err = io.Copy(io.MultiWriter(output, h), io.LimitReader(contextReader{ctx, f}, proof.ArchiveBytes+1))
-	if err != nil || n != proof.ArchiveBytes || hex.EncodeToString(h.Sum(nil)) != proof.ArchiveSHA256 {
-		return ErrImageArchive
-	}
-	after, err := s.root.Lstat(name)
-	if err != nil || !os.SameFile(opened, after) || after.Size() != opened.Size() || after.ModTime() != opened.ModTime() {
-		return ErrImageArchive
-	}
-	return imageBoundary(ctx, check)
+	return writeVerifiedPreparationFile(ctx, s.root, name, proof.ArchiveBytes, proof.ArchiveSHA256, output, check)
 }
 
 func (s *ImageSet) Close() error {

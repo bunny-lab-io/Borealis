@@ -123,7 +123,7 @@ func TestClusterSSHHostPackageOwnedDemand(t *testing.T) {
 					return owner, errors.New("fixture acquisition failed after owning packages")
 				}
 				consumed := false
-				err := runClusterSSHPreparationArtifacts(ctx, strings.Repeat("a", 64), d, func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+				err := runClusterSSHPreparationArtifacts(ctx, strings.Repeat("a", 64), d, func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 					consumed = true
 					return clusterSSHPreparationReadinessReceipt{}, nil
 				})

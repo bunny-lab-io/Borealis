@@ -15,10 +15,21 @@ import (
 type sshApprovalArtifactBytes struct {
 	proves, closes atomic.Int64
 	digest         string
+	onPublication  func(context.Context, string) error
 	onProve        func(context.Context) error
 	closeErr       error
 	onClose        func() error
 	onDemand       func(context.Context, func(context.Context) error) ([]clusterSSHFilesystemDemand, error)
+}
+
+func (v *sshApprovalArtifactBytes) verifyPublication(ctx context.Context, expected string) error {
+	if v.onPublication != nil {
+		return v.onPublication(ctx, expected)
+	}
+	if expected != strings.Repeat("d", 64) {
+		return errClusterConflict
+	}
+	return ctx.Err()
 }
 
 func (v *sshApprovalArtifactBytes) prove(ctx context.Context, check func(context.Context) error) (string, error) {
@@ -52,7 +63,7 @@ func (v *sshApprovalArtifactBytes) storageDemand(ctx context.Context, check func
 }
 
 func TestClusterSSHPreparationArtifactsDemandConsumer(t *testing.T) {
-	for _, mode := range []string{"valid", "wrong plan", "failed bytes", "source drift"} {
+	for _, mode := range []string{"valid", "wrong plan", "failed bytes", "source drift", "absent round", "reused demand", "reused helper"} {
 		t.Run(mode, func(t *testing.T) {
 			v := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
 			d := sshApprovalArtifactDependencies(v)
@@ -77,8 +88,16 @@ func TestClusterSSHPreparationArtifactsDemandConsumer(t *testing.T) {
 			}
 			var escaped clusterSSHPreparationArtifactDemandRead
 			err := runClusterSSHPreparationArtifacts(context.Background(), plan, d,
-				func(ctx context.Context, gate clusterSSHPreparationArtifactGate, read clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+				func(ctx context.Context, gate clusterSSHPreparationArtifactGate, read clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 					escaped = read
+					var artifact string
+					if mode != "absent round" {
+						var err error
+						artifact, err = gate(ctx, plan)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
 					requested := plan
 					if mode == "wrong plan" {
 						requested = strings.Repeat("f", 64)
@@ -87,12 +106,32 @@ func TestClusterSSHPreparationArtifactsDemandConsumer(t *testing.T) {
 						drift.Store(true)
 					}
 					value, readErr := read(ctx, requested)
-					if mode == "valid" {
+					if mode == "valid" || mode == "reused demand" || mode == "reused helper" {
 						if readErr != nil || !reflect.DeepEqual(value, measured) {
 							t.Fatal("owned demand unavailable", value, readErr)
 						}
 						value[0].Bytes++
+						if got, err := helper(ctx, plan); err != nil || got != artifact {
+							t.Fatal("helper projection", err)
+						}
+						if mode == "reused helper" {
+							if _, err := helper(ctx, plan); err == nil {
+								t.Fatal("reused helper proof")
+							}
+							return clusterSSHPreparationReadinessReceipt{}, nil
+						}
+						if mode != "reused demand" {
+							if _, err := gate(ctx, plan); err != nil {
+								t.Fatal(err)
+							}
+						}
 						again, againErr := read(ctx, requested)
+						if mode == "reused demand" {
+							if againErr == nil || again != nil {
+								t.Fatal("reused demand proof")
+							}
+							return clusterSSHPreparationReadinessReceipt{}, nil
+						}
 						if againErr != nil || !reflect.DeepEqual(again, measured) {
 							t.Fatal("consumer rewrote retained demand", again, againErr)
 						}
@@ -104,6 +143,9 @@ func TestClusterSSHPreparationArtifactsDemandConsumer(t *testing.T) {
 				})
 			if (err == nil) != (mode == "valid") || v.closes.Load() != 1 {
 				t.Fatal("demand lifetime", mode, err, v.closes.Load())
+			}
+			if mode == "valid" && v.proves.Load() != 4 {
+				t.Fatal("initial, two rounds and terminal must each authenticate all archives exactly once", v.proves.Load())
 			}
 			before := calls
 			if value, err := escaped(context.Background(), plan); err == nil || value != nil || calls != before {
@@ -168,7 +210,7 @@ func TestClusterSSHPreparationArtifactsScope(t *testing.T) {
 			plan := strings.Repeat("a", 64)
 			var escaped clusterSSHPreparationArtifactGate
 			consumed := false
-			err := runClusterSSHPreparationArtifacts(ctx, plan, d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+			err := runClusterSSHPreparationArtifacts(ctx, plan, d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead, _ clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 				consumed = true
 				escaped = gate
 				proof, err := gate(ctx, plan)
@@ -227,7 +269,7 @@ func TestClusterSSHPreparationArtifactsSeparateAcquisitionLifetime(t *testing.T)
 		}
 		return v, check(ctx)
 	}
-	err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+	err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead, _ clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 30*time.Second {
 			t.Fatal("approval proof lifetime changed")
@@ -251,7 +293,7 @@ func TestClusterSSHPreparationArtifactsCleanupKeepsProofDeadline(t *testing.T) {
 		}
 		return nil
 	}
-	err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), sshApprovalArtifactDependencies(v), func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+	err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), sshApprovalArtifactDependencies(v), func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 		return clusterSSHPreparationReadinessReceipt{}, nil
 	})
 	if err != nil || v.closes.Load() != 1 || proof == nil || proof.Err() == nil {
@@ -522,7 +564,7 @@ func TestClusterSSHPreparationArtifactsDriftAndJoinedCancellation(t *testing.T) 
 			v := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
 			d := sshApprovalArtifactDependencies(v)
 			var drift atomic.Bool
-			source, publication := d.source, d.publication
+			source := d.source
 			d.source = func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
 				value, err := source(ctx, check)
 				if mode == "source" && drift.Load() {
@@ -530,16 +572,15 @@ func TestClusterSSHPreparationArtifactsDriftAndJoinedCancellation(t *testing.T) 
 				}
 				return value, err
 			}
-			d.publication = func(ctx context.Context, check func(context.Context) error) (string, error) {
-				value, err := publication(ctx, check)
-				if mode == "publication" && drift.Load() {
-					value = strings.Repeat("f", 64)
+			v.onPublication = func(ctx context.Context, expected string) error {
+				if expected != strings.Repeat("d", 64) || mode == "publication" && drift.Load() {
+					return errClusterConflict
 				}
-				return value, err
+				return ctx.Err()
 			}
 			started, done := make(chan struct{}), make(chan struct{})
 			plan := strings.Repeat("a", 64)
-			err := runClusterSSHPreparationArtifacts(context.Background(), plan, d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+			err := runClusterSSHPreparationArtifacts(context.Background(), plan, d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead, _ clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 				if mode != "pending reader" {
 					drift.Store(true)
 					return clusterSSHPreparationReadinessReceipt{}, nil
@@ -616,7 +657,7 @@ func TestClusterSSHPreparationArtifactsPostgresTerminal(t *testing.T) {
 				return f.c.clusterSSHPreparationArtifactTerminal(snapshot, receipt, artifact)
 			}
 			var approvedPayload string
-			err = runClusterSSHPreparationArtifacts(f.ctx, plan, d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead) (clusterSSHPreparationReadinessReceipt, error) {
+			err = runClusterSSHPreparationArtifacts(f.ctx, plan, d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead, _ clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 				artifact, err := gate(ctx, plan)
 				if err != nil {
 					t.Fatal("gate", err)
@@ -694,5 +735,26 @@ func TestClusterSSHPreparationArtifactsPostgresTerminal(t *testing.T) {
 				t.Fatal("scope changed durable approved payload")
 			}
 		})
+	}
+}
+
+func TestClusterSSHPreparationOwnerPublicationBinding(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	calls := 0
+	v := &clusterSSHOwnedPreparationArtifacts{staticPublication: digest, publication: func(ctx context.Context) error { calls++; return ctx.Err() }}
+	ctx := context.Background()
+	if err := v.verifyPublication(ctx, digest); err != nil || calls != 1 {
+		t.Fatal("missing fresh complete publication check", err)
+	}
+	if v.verifyPublication(ctx, strings.Repeat("b", 64)) == nil || calls != 1 {
+		t.Fatal("different acquired static assets accepted")
+	}
+	if v.verifyPublication(ctx, digest) == nil || calls != 1 {
+		t.Fatal("invalidated owner accepted another check")
+	}
+	v = &clusterSSHOwnedPreparationArtifacts{staticPublication: digest}
+	v.publication = func(context.Context) error { return errClusterConflict }
+	if v.verifyPublication(ctx, digest) == nil {
+		t.Fatal("changed release accepted")
 	}
 }

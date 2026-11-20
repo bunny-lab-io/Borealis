@@ -85,6 +85,55 @@ func preparationArtifactsForSourceFixture(t *testing.T, expected Expected) (*Pre
 	return a, kp, pins
 }
 
+func TestPreparationApprovalDigest(t *testing.T) {
+	a, pins, _ := preparationArtifactsFixture(t)
+	ctx := context.Background()
+	check := func(ctx context.Context) error { return ctx.Err() }
+	stream := sha256.New()
+	if err := a.WriteArtifacts(ctx, stream, check); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("%x", stream.Sum(nil))
+	verify := func() {
+		t.Helper()
+		if got, err := a.ApprovalDigest(ctx, check); err != nil || got != want {
+			t.Fatalf("approval and transport digests differ: %q, %v", got, err)
+		}
+	}
+	verify()
+	app := a.application.inventory.Images()[0]
+	ext := a.external.inventory.Images()[0]
+	for _, file := range []struct{ dir, name string }{
+		{a.application.path, ImageAssetName(app.Role)},
+		{a.k3s.path, pins.Binary.Name},
+		{a.external.path, a.external.names[ext.Reference]},
+		{a.postgres.set.path, a.postgres.set.names[a.postgresReference]},
+	} {
+		t.Run(file.name, func(t *testing.T) {
+			path := filepath.Join(file.dir, file.name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data[len(data)/2] ^= 1
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := a.ApprovalDigest(ctx, check); err == nil || got != "" {
+				t.Fatal("corrupt archive yielded an approval digest")
+			}
+			data[len(data)/2] ^= 1
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			verify()
+		})
+	}
+	if got, err := a.ApprovalDigest(ctx, func(context.Context) error { return ErrSessionAuthority }); err == nil || got != "" {
+		t.Fatal("lost authority yielded an approval digest")
+	}
+}
+
 func TestPreparationArtifactSetOwnership(t *testing.T) {
 	for _, mode := range []string{"complete", "missing application", "missing K3s", "missing external", "missing postgres", "closed K3s", "mixed application", "mixed external", "mixed K3s", "wrong postgres", "aliased postgres", "lost authority", "writer failure"} {
 		t.Run(mode, func(t *testing.T) {

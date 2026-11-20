@@ -140,40 +140,7 @@ func (s *K3sSet) writeAsset(ctx context.Context, name string, output io.Writer, 
 	if !exists {
 		return ErrImageArchive
 	}
-	before, err := s.root.Lstat(name)
-	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0600 || before.Size() != pin.Size {
-		return ErrImageArchive
-	}
-	f, err := s.root.Open(name)
-	if err != nil {
-		return ErrImageArchive
-	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(before, opened) {
-		return ErrImageArchive
-	}
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(contextReader{ctx, f}, pin.Size+1))
-	if err != nil || n != pin.Size || hex.EncodeToString(h.Sum(nil)) != pin.SHA256 {
-		return ErrImageArchive
-	}
-	if imageBoundary(ctx, check) != nil {
-		return ErrSessionAuthority
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return ErrImageArchive
-	}
-	h.Reset()
-	n, err = io.Copy(io.MultiWriter(output, h), io.LimitReader(contextReader{ctx, f}, pin.Size+1))
-	if err != nil || n != pin.Size || hex.EncodeToString(h.Sum(nil)) != pin.SHA256 {
-		return ErrImageArchive
-	}
-	after, err := s.root.Lstat(name)
-	if err != nil || !os.SameFile(opened, after) || after.Size() != opened.Size() || after.ModTime() != opened.ModTime() || after.Mode() != opened.Mode() {
-		return ErrImageArchive
-	}
-	return imageBoundary(ctx, check)
+	return writeVerifiedPreparationFile(ctx, s.root, name, pin.Size, pin.SHA256, output, check)
 }
 
 func (s *K3sSet) Close() error {

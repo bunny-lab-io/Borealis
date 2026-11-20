@@ -88,3 +88,42 @@ func TestClusterSSHPreparationPublicationNativeInventories(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterSSHPreparationPublicationRecheck(t *testing.T) {
+	for _, mode := range []string{"unchanged", "changed asset", "moved tag", "mutable release", "missing asset"} {
+		t.Run(mode, func(t *testing.T) {
+			f := preparationPublicationFixture(t)
+			ctx := bootstrapContext()
+			bound, err := bindClusterSSHPreparationPublication(ctx, f.expected, clusterbootstrap.K3sPins().Version)
+			if err != nil || !validClusterSSHPreparationDigest(bound.digest) {
+				t.Fatal("initial publication", err)
+			}
+			switch mode {
+			case "changed asset":
+				f.release.Assets[0].Digest = "sha256:" + strings.Repeat("f", 64)
+			case "moved tag":
+				f.sha = strings.Repeat("b", 40)
+			case "mutable release":
+				no := false
+				f.release.Immutable = &no
+			case "missing asset":
+				f.release.Assets = f.release.Assets[1:]
+			}
+			before := http.DefaultClient
+			t.Cleanup(func() { http.DefaultClient = before })
+			metadataReads := 0
+			http.DefaultClient = &http.Client{Transport: bootstrapRoundTripper(func(r *http.Request) (*http.Response, error) {
+				if strings.Contains(r.URL.Path, "/releases/assets/") {
+					t.Errorf("recheck downloaded an asset")
+				}
+				if strings.Contains(r.URL.Path, "/releases/tags/") {
+					metadataReads++
+				}
+				return http.DefaultTransport.RoundTrip(r)
+			})}
+			if err := bound.recheck(ctx); (err == nil) != (mode == "unchanged") || metadataReads != 1 {
+				t.Fatal("fresh release check", mode, metadataReads, err)
+			}
+		})
+	}
+}

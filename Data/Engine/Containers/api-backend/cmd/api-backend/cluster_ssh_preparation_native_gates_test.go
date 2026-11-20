@@ -64,7 +64,7 @@ func TestClusterSSHPreparationNativeGatesAvailableCapacityStillBlocksStorage(t *
 		capacityCalls++
 		return read(ctx, requested)
 	}
-	gates := clusterSSHPreparationNativeGates(snapshot, read, read, capacity, nil, read)
+	gates := clusterSSHPreparationNativeGates(snapshot, read, read, read, capacity, nil, read)
 	consumed := false
 	err := withClusterSSHPreparationApprovalProof(context.Background(), plan, gates, func(context.Context) error { return nil },
 		func(context.Context, clusterSSHPreparationApprovalProof) error { consumed = true; return nil })
@@ -168,7 +168,7 @@ func TestClusterSSHPreparationNativeGatesPreserveNativeReaders(t *testing.T) {
 			return strings.Repeat(string("abcdef"[index]), 64), nil
 		}
 	}
-	gates := clusterSSHPreparationNativeGates(snapshot, reader(0), reader(1), nil, nil, reader(4))
+	gates := clusterSSHPreparationNativeGates(snapshot, reader(0), reader(0), reader(1), nil, nil, reader(4))
 	for i, gate := range gates {
 		if gate == nil {
 			t.Fatal("gate omitted instead of explicit blocker", i)
@@ -198,7 +198,7 @@ func TestClusterSSHPreparationNativeGatesPreserveNativeReaders(t *testing.T) {
 	if consumed || !errors.As(err, &blocked) || blocked.Gate != "complete_capacity" {
 		t.Fatal("partial native set reached approval", err)
 	}
-	missing := clusterSSHPreparationNativeGates(snapshot, reader(0), nil, nil, nil, reader(4))
+	missing := clusterSSHPreparationNativeGates(snapshot, reader(0), reader(0), nil, nil, nil, reader(4))
 	if digest, err := missing[1](context.Background(), plan); digest != "" || !errors.As(err, &blocked) || blocked.Gate != "clean_targets" {
 		t.Fatal("missing executor gained clean-target proof", err)
 	}
