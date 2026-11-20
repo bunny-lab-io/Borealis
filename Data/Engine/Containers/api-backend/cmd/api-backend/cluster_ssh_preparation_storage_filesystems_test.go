@@ -210,12 +210,12 @@ func TestClusterSSHPreparationStorageFilesystemsNative(t *testing.T) {
 }
 
 func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
-	for _, mode := range []string{"success", "full preparation paths", "v4 package paths", "old v3 package paths", "missing", "wrong target", "wrong paths", "wrong request", "mount drift", "lower free", "lower inodes", "close failure"} {
+	for _, mode := range []string{"success", "full preparation paths", "v5 package paths", "old v3 package paths", "missing", "wrong target", "wrong paths", "wrong request", "mount drift", "lower free", "lower inodes", "close failure"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot := sshPreparationCleanBrokerSnapshot(t)
 			plan, _, _ := clusterSSHPreparationCleanBrokerBinding(snapshot)
 			paths := []string{"/opt/Borealis", "/var/lib/longhorn"}
-			if mode == "v4 package paths" || mode == "old v3 package paths" {
+			if mode == "v5 package paths" || mode == "old v3 package paths" {
 				paths = []string{"/etc", "/usr", "/var"}
 			}
 			if mode == "full preparation paths" {
@@ -258,7 +258,7 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 						Evidence clusterremote.FilesystemEvidence `json:"evidence"`
 					}
 					_ = json.Unmarshal(sshFilesystemFixtureWire(target), &parsed)
-					if mode == "full preparation paths" || mode == "v4 package paths" || mode == "old v3 package paths" {
+					if mode == "full preparation paths" || mode == "v5 package paths" || mode == "old v3 package paths" {
 						// The old persistent observer could return this valid shape
 						// without proving package ancestors. Only broker version
 						// distinguishes that meaning on this authenticated wire.
@@ -272,11 +272,11 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 					response.Filesystems = append(response.Filesystems, clusterSSHTargetFilesystemEvidence{TargetID: target.Binding.TargetID, Storage: parsed.Evidence})
 				}
 				switch mode {
-				case "v4 package paths":
-					if input.Version != 4 {
-						t.Error("current filesystem request did not require broker v4")
+				case "v5 package paths":
+					if input.Version != 5 {
+						t.Error("current filesystem request did not require broker v5")
 					}
-					response.Version = 4
+					response.Version = 5
 				case "old v3 package paths":
 					response.Version = 3
 				case "missing":
@@ -318,7 +318,7 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 			}))
 			read := client.preparationTargetsFilesystemRead(snapshot, func(ctx context.Context) error { return ctx.Err() }, paths)
 			value, err := read(context.Background(), plan)
-			positive := mode == "success" || mode == "full preparation paths" || mode == "v4 package paths" || mode == "mount drift" || mode == "lower free" || mode == "lower inodes"
+			positive := mode == "success" || mode == "full preparation paths" || mode == "v5 package paths" || mode == "mount drift" || mode == "lower free" || mode == "lower inodes"
 			if (err == nil) != positive {
 				t.Fatal("wrong first bound result", err)
 			}
@@ -328,7 +328,7 @@ func TestClusterSSHPreparationStorageFilesystemsBrokerBinding(t *testing.T) {
 			}
 			before := calls
 			again, err := read(context.Background(), plan)
-			if mode == "success" || mode == "full preparation paths" || mode == "v4 package paths" || mode == "lower free" || mode == "lower inodes" {
+			if mode == "success" || mode == "full preparation paths" || mode == "v5 package paths" || mode == "lower free" || mode == "lower inodes" {
 				available := uint64(700000)
 				if mode == "lower free" {
 					available--

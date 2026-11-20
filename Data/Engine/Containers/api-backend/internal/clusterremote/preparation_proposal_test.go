@@ -36,6 +36,7 @@ func preparationProofFixture(p PreparationProposal) PreparationProposalProof {
 	if err != nil {
 		panic(err)
 	}
+	selection.ProfileSHA256 = strings.Repeat("d", 64)
 	return PreparationProposalProof{Packages: &selection, Version: PreparationProposalVersion, RequestSHA256: digest, Nonce: p.Nonce, ObservationSHA256: strings.Repeat("d", 64), CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: p.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
 }
 
@@ -120,12 +121,12 @@ func TestPreparationProposalContract(t *testing.T) {
 	}
 	raw, _ := json.Marshal(proof)
 	for _, bad := range []string{
-		strings.Replace(string(raw), `"version":4`, `"version":4,"version":2`, 1),
-		strings.Replace(string(raw), `"version":4`, `"Version":4`, 1),
-		strings.Replace(string(raw), `"version":4`, `"version":1`, 1),
-		strings.Replace(string(raw), `"version":4`, `"version":3`, 1),
-		strings.Replace(string(raw), `"version":4`, `"version":4,"inventory":"private-account-fixture"`, 1),
-		strings.Replace(string(raw), `"version":4,`, "", 1),
+		strings.Replace(string(raw), `"version":5`, `"version":5,"version":2`, 1),
+		strings.Replace(string(raw), `"version":5`, `"Version":5`, 1),
+		strings.Replace(string(raw), `"version":5`, `"version":1`, 1),
+		strings.Replace(string(raw), `"version":5`, `"version":3`, 1),
+		strings.Replace(string(raw), `"version":5`, `"version":5,"inventory":"private-account-fixture"`, 1),
+		strings.Replace(string(raw), `"version":5,`, "", 1),
 		strings.Replace(string(raw), proof.ObservationSHA256, strings.Repeat("0", 64), 1),
 		strings.Replace(string(raw), `"nonce":"`+p.Nonce+`"`, `"nonce":null`, 1),
 		string(raw) + string(raw), strings.Repeat("x", MaxOutputBytes+1),
@@ -297,6 +298,14 @@ fixture_groups = b"root:x:0:\n"
 fixture_unit = b"LoadState=not-found\nActiveState=inactive\nSubState=dead\nNeedDaemonReload=no\nJob=\n"
 fixture_pids = b"MainPID=0\nControlPID=0\n"
 fixture_addresses = b'[{"ifindex":2,"ifname":"ens18","flags":["UP"],"addr_info":[{"local":"192.168.3.251","family":"inet","prefixlen":24}]}]'
+def bounded_command(args):
+    if args == ["/usr/bin/apt-config", "dump"]:
+        return b'APT::Architecture "amd64";\n'
+    raise ValueError()
+def bus_reply(destination, path, interface, method, *args):
+    if method == "ListUnitsByPatterns" and args[3:] == PROFILE_UNITS:
+        return {"type":"a(ssssssouso)","data":[[]]}
+    raise ValueError()
 fixture_manager = b"Version=255.4-1ubuntu8.11\nFeatures=+PAM +AUDIT\n"
 fixture_runner = b"systemd 255 (255.4-1ubuntu8.11)\n+PAM +AUDIT\n"
 fixture_bootstrap_units = b""

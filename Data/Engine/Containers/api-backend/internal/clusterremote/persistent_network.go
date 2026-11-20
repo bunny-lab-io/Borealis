@@ -112,11 +112,16 @@ if __name__ == "__main__":
     main()
 `
 
-const persistentNetworkLibraryScript = `import io, json, os, re, resource, stat, sys
+const persistentNetworkLibraryScript = persistentNetworkPrelude + observationFileLibraryScript + persistentNetworkSnapshotScript
+
+const persistentNetworkPrelude = `import io, json, os, re, resource, stat, sys
 
 ROOT = "/"
 EXPECTED_UID = 0
 
+`
+
+const observationFileLibraryScript = `
 def checked(info, directory=False):
     if info.st_uid != EXPECTED_UID or info.st_mode & 0o022:
         raise ValueError()
@@ -150,6 +155,9 @@ def read_file(parent, name):
         if len(data) > 65536 or identity(before) != identity(after):
             raise ValueError()
         return (identity(after), data)
+`
+
+const persistentNetworkSnapshotScript = `
 
 def snapshot(root):
     result = {}

@@ -19,7 +19,7 @@ func sshPackageStorageEvidence(e clusterremote.FilesystemEvidence) clusterremote
 	varPath := e.Paths[1]
 	varPath.Path, varPath.Ancestor = "/var", "/var"
 	e.Paths = slices.Insert(e.Paths, 1, varPath)
-	e.PackageCopies = &clusterremote.PackageCopyDemand{Bytes: 2000000, Entries: 2}
+	e.PackageCopies = &clusterremote.PackageCopyDemand{Bytes: 2000000, Entries: 2, ProfileSHA256: strings.Repeat("d", 64)}
 	return e
 }
 
@@ -28,7 +28,7 @@ func TestClusterSSHSelectedPackageCopyDemand(t *testing.T) {
 	requirements := sshStorageSnapshotFixture(t, f.a).Requirements
 	selected := sshPreparationTargetPackagesFixture([]clusterSSHPreparationTargetCPU{{}})[0].Selection
 	demands := []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 100}, {Path: "/var", Bytes: 200, Entries: 1}}
-	for _, mode := range []string{"install", "already installed", "missing evidence", "inode shortage", "overflow"} {
+	for _, mode := range []string{"install", "already installed", "changed profile", "legacy profile", "missing evidence", "inode shortage", "overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			evidence := sshPackageStorageEvidence(sshCapacityEvidence())
 			selection := selected.Clone()
@@ -43,6 +43,10 @@ func TestClusterSSHSelectedPackageCopyDemand(t *testing.T) {
 			case "already installed":
 				selection.Missing = []string{}
 				evidence.PackageCopies = nil
+			case "changed profile":
+				evidence.PackageCopies.ProfileSHA256 = strings.Repeat("e", 64)
+			case "legacy profile":
+				selection.ProfileSHA256 = ""
 			case "missing evidence":
 				evidence.PackageCopies = nil
 			case "inode shortage":

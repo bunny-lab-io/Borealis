@@ -53,7 +53,7 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"unauthenticated", "wrong key", "wrong path AAD", "extra field", "duplicate", "alias", "expired", "future expiry", "wrong version", "old v1 request", "old v3 filesystem request", "zero operation", "zero request", "attempt", "holder control", "holder oversize", "zero plan", "filesystem relative", "filesystem duplicate", "filesystem unsorted", "query", "content encoding", "oversize", "authenticated unavailable", "v4 filesystem unavailable"} {
+	for _, mode := range []string{"unauthenticated", "wrong key", "wrong path AAD", "extra field", "duplicate", "alias", "expired", "future expiry", "wrong version", "old v1 request", "old v3 filesystem request", "old v4 filesystem request", "zero operation", "zero request", "attempt", "holder control", "holder oversize", "zero plan", "filesystem relative", "filesystem duplicate", "filesystem unsorted", "query", "content encoding", "oversize", "authenticated unavailable", "current filesystem unavailable"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("BOREALIS_OPERATOR_SECRET", sshPreparationCleanBrokerTestSecret)
 			mux := http.NewServeMux()
@@ -71,13 +71,14 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 				request.Version++
 			case "old v1 request":
 				request.Version = 1
-			case "old v3 filesystem request", "v4 filesystem unavailable":
+			case "old v3 filesystem request", "old v4 filesystem request", "current filesystem unavailable":
 				// Both contracts can carry these three paths. Compatibility must
 				// fail at the version boundary, never an increased path-count limit.
-				request.Version = 4
 				request.FilesystemPaths = []string{"/etc", "/usr", "/var"}
 				if mode == "old v3 filesystem request" {
 					request.Version = 3
+				} else if mode == "old v4 filesystem request" {
+					request.Version = 4
 				}
 			case "zero operation":
 				request.OperationID = "00000000-0000-0000-0000-000000000000"
@@ -137,7 +138,7 @@ func TestClusterSSHPreparationCleanBrokerRequestBoundary(t *testing.T) {
 			if mode == "query" || mode == "content encoding" {
 				want = http.StatusBadRequest
 			}
-			if mode == "authenticated unavailable" || mode == "v4 filesystem unavailable" {
+			if mode == "authenticated unavailable" || mode == "current filesystem unavailable" {
 				want = http.StatusServiceUnavailable
 			}
 			if w.Code != want {
@@ -158,7 +159,7 @@ type sshPreparationCleanBrokerBody struct {
 func (b *sshPreparationCleanBrokerBody) Close() error { return b.close() }
 
 func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
-	for _, mode := range []string{"success", "wrong plan", "missing intent", "wrong request", "wrong ID", "wrong digest", "wrong version", "old v1 response", "redirect", "encoding", "close error", "changed repeat", "changed package repeat", "old package projection", "missing packages", "null missing", "unknown package", "duplicate package", "wrong package target", "wrong package observation", "response overflow", "cancel during close", "request expiry during close", "child expiry during close"} {
+	for _, mode := range []string{"success", "wrong plan", "missing intent", "wrong request", "wrong ID", "wrong digest", "wrong version", "old v1 response", "redirect", "encoding", "close error", "changed repeat", "changed package repeat", "old package projection", "missing packages", "missing profile", "null missing", "unknown package", "duplicate package", "wrong package target", "wrong package observation", "response overflow", "cancel during close", "request expiry during close", "child expiry during close"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot := sshPreparationCleanBrokerSnapshot(t)
 			plan, _, _ := clusterSSHPreparationCleanBrokerBinding(snapshot)
@@ -205,6 +206,10 @@ func TestClusterSSHPreparationCleanBrokerClientBinding(t *testing.T) {
 					for i := range value.Targets {
 						value.Targets[i].PackagesSHA256 = ""
 					}
+					value.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, value.Targets)
+				case "missing profile":
+					value.Packages[0].Selection.ProfileSHA256 = ""
+					value.Targets[0].PackagesSHA256, _ = clusterSSHPreparationPackageDigest(value.Packages[0].Selection)
 					value.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, value.Targets)
 				case "missing packages":
 					value.Packages = nil

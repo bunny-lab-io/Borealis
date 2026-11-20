@@ -29,13 +29,13 @@ func TestFilesystemPersistentNative(t *testing.T) {
 				version := 4
 				paths := []string{"/opt/Borealis", "/var/lib/longhorn"}
 				if mode == "package paths" {
-					version = 5
+					version = 6
 					paths = []string{"/etc", "/usr", "/var"}
 				}
 				if json.Unmarshal(out, &value) != nil || value.Version != version || value.Evidence.validate(paths) != nil {
 					t.Fatal("invalid native persistent evidence")
 				}
-				if mode == "package paths" && (value.Evidence.PackageCopies == nil || *value.Evidence.PackageCopies != (PackageCopyDemand{Bytes: 12, Entries: 2})) {
+				if mode == "package paths" && (!value.Evidence.PackageCopies.Valid() || value.Evidence.PackageCopies.Bytes != 12 || value.Evidence.PackageCopies.Entries != 2) {
 					t.Fatal("wrong fresh package copy demand", value.Evidence.PackageCopies)
 				}
 				if mode == "lower availability" && value.Evidence.Filesystems[0].AvailableBytes != 30<<30 {
@@ -166,6 +166,10 @@ if mode == 'loaded dropin': unit_props['DropInPaths']=value('as',['/etc/systemd/
 if mode == 'loaded noexec': mount_props['Options']=value('s','rw,noexec')
 if mode == 'pending root job': unit_props['Job']=value('(uo)',[1,'/job/1'])
 bus_calls=0
+def bounded_command(args):
+    if args == ["/usr/bin/apt-config", "dump"]:
+        return b'APT::Architecture "amd64";\n'
+    raise ValueError()
 def fixture_reply(dest,path,interface,method,*params):
     global bus_calls, package_changed
     bus_calls += 1
@@ -202,6 +206,8 @@ def fixture_reply(dest,path,interface,method,*params):
             if mode=='final file removal' and snapshots>=3: unit.unlink()
             return wire('a{sv}',mount_props)
     if method=='ListUnitsByPatterns':
+        if params[3:] == PROFILE_UNITS:
+            return wire('a(ssssssouso)',[])
         rows=[['-.mount','Root','loaded','active','mounted','','/org/freedesktop/systemd1/unit/_2d_2emount',0,'','/']]
         if mode in ('stale mount','loaded automount'):
             rows.append(['var.'+('automount' if mode=='loaded automount' else 'mount'),'Old','loaded','inactive','dead','','/old',0,'','/'])

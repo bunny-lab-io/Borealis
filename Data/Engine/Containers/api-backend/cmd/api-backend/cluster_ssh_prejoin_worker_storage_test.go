@@ -70,7 +70,7 @@ func sshPrejoinWorkerStorageWire(t *testing.T, raw []byte, available uint64, pac
 	if json.Unmarshal(raw, &wire) != nil {
 		t.Fatal("invalid filesystem fixture")
 	}
-	wire.Version = 5
+	wire.Version = 6
 	wire.Evidence = sshPackageStorageEvidence(wire.Evidence)
 	if !packageCopies {
 		wire.Version = 4
@@ -85,7 +85,7 @@ func sshPrejoinWorkerStorageWire(t *testing.T, raw []byte, available uint64, pac
 // Runs the production worker input composition and claimed SSH filesystem
 // reader. Only acquisition/native mutation and external SSH are test doubles.
 func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
-	for _, mode := range []string{"first target", "second target", "missing capacity", "missing storage", "missing check", "shortage", "stale native", "wrong cohort", "wrong selected", "CPU drift", "scope cleanup", "expiry", "source drift", "native writes", "source cleanup"} {
+	for _, mode := range []string{"first target", "second target", "missing capacity", "missing storage", "missing check", "shortage", "profile drift", "stale native", "wrong cohort", "wrong selected", "CPU drift", "scope cleanup", "expiry", "source drift", "native writes", "source cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			f, source, confirmation := sshPrejoinWorkerStorageFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -110,7 +110,11 @@ func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
 				if mode == "shortage" && i == selected || mode == "native writes" && nativeCalled {
 					available = 1
 				}
-				return sshPrejoinWorkerStorageWire(t, raw, available, i == selected)
+				wire := sshPrejoinWorkerStorageWire(t, raw, available, i == selected)
+				if mode == "profile drift" && i == selected {
+					return []byte(strings.Replace(string(wire), `"profile_sha256":"`+strings.Repeat("d", 64), `"profile_sha256":"`+strings.Repeat("e", 64), 1))
+				}
+				return wire
 			}
 			storage := newClusterSSHPrejoinWorkerStorageCheck(f.a.Baseline, f.claims,
 				func(ctx context.Context, consume func(context.Context, clusterSSHNetworkTargetReaders) error) error {

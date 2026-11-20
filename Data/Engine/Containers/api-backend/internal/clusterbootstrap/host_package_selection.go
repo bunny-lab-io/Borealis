@@ -20,6 +20,8 @@ type HostPackageSelection struct {
 	PlanSHA256      string   `json:"plan_sha256"`
 	InventorySHA256 string   `json:"inventory_sha256"`
 	Missing         []string `json:"missing"`
+	// Empty in inventory-only projections and historical approvals.
+	ProfileSHA256 string `json:"profile_sha256,omitempty"`
 }
 
 func (s HostPackageSelection) Clone() HostPackageSelection {
@@ -29,6 +31,9 @@ func (s HostPackageSelection) Clone() HostPackageSelection {
 
 func (s HostPackageSelection) Pins() ([]HostPackagePin, error) {
 	plan, digest, err := HostPackagePins()
+	if s.ProfileSHA256 != "" && (!digestPattern.MatchString(s.ProfileSHA256) || s.ProfileSHA256 == strings.Repeat("0", 64)) {
+		return nil, ErrPreparationConfig
+	}
 	if err != nil || s.PlanSHA256 != digest || !digestPattern.MatchString(s.InventorySHA256) || s.InventorySHA256 == strings.Repeat("0", 64) || s.Missing == nil || len(s.Missing) > len(plan.Packages) {
 		return nil, ErrPreparationConfig
 	}

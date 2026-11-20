@@ -23,7 +23,7 @@ const (
 	// bounded cohort/CPU/package projection and AEAD envelope. Request inputs
 	// retain their smaller bound; no native observer limit changes.
 	clusterSSHPreparationCleanBrokerResponseLimit = 2*clusterremote.MaxOutputBytes + clusterSSHPreparationCleanBrokerLimit
-	clusterSSHPreparationCleanBrokerVersion       = 4
+	clusterSSHPreparationCleanBrokerVersion       = 5
 )
 
 // Private read-only contract. The source broker runs in the keyless controller
@@ -33,8 +33,8 @@ const (
 // Authenticated callers supply no target, command, URL, key or credential. SQL
 // must still prove the exact original owner, waiting plan and explicit intent.
 // Replay starts fresh native reads within the same expiry; it grants no claim.
-// Version 4 requires fixed filesystem aliases/package directories and exact
-// missing-package selections, retaining version 3's effective-CPU evidence.
+// Version 5 binds the native installation profile for every nonempty package
+// selection while retaining the CPU and persistent filesystem evidence.
 type clusterSSHPreparationCleanBrokerRequest struct {
 	Version          int      `json:"version"`
 	ID               string   `json:"id"`

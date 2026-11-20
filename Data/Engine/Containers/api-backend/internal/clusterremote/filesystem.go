@@ -95,12 +95,13 @@ type FilesystemCapacity struct {
 // PackageCopyDemand charges one additional working copy of each present fixed
 // database/cache. Newly generated content and service startup are separate.
 type PackageCopyDemand struct {
-	Bytes   uint64 `json:"bytes"`
-	Entries uint64 `json:"entries"`
+	Bytes         uint64 `json:"bytes"`
+	Entries       uint64 `json:"entries"`
+	ProfileSHA256 string `json:"profile_sha256"`
 }
 
 func (c *PackageCopyDemand) Valid() bool {
-	return c != nil && c.Bytes > 0 && c.Bytes <= filesystemIntegerLimit && c.Entries > 0 && c.Entries <= uint64(len(packageCopyPaths))
+	return c != nil && proposalDigest(c.ProfileSHA256) && c.Bytes > 0 && c.Bytes <= filesystemIntegerLimit && c.Entries > 0 && c.Entries <= uint64(len(packageCopyPaths))
 }
 
 type FilesystemEvidence struct {
@@ -194,7 +195,7 @@ func (v TargetFilesystem) Evidence(notBefore time.Time, target Target, key HostK
 	}
 	copies := v.wire.Evidence.PackageCopies
 	if request.RequirePackageCopies {
-		version = 5
+		version = 6
 		if !copies.Valid() {
 			return FilesystemEvidence{}, ErrFilesystem
 		}

@@ -128,6 +128,11 @@ func (o clusterSSHPreparationCleanObservation) validate(snapshot clusterSSHPrepa
 	if err != nil || digest != o.Digest || !validClusterSSHPreparationPackages(o.Targets, o.Packages) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
+	for _, item := range o.Packages {
+		if (len(item.Selection.Missing) != 0) != (item.Selection.ProfileSHA256 != "") {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+	}
 	return nil
 }
 

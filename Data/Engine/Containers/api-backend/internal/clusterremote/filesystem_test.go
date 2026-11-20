@@ -48,8 +48,8 @@ func TestFilesystemPinnedObservation(t *testing.T) {
 				request.Paths[1] = "/var"
 				wire.Evidence.Paths[1].Path = "/var"
 				wire.Evidence.Paths[1].Ancestor = "/var"
-				wire.Version = 5
-				wire.Evidence.PackageCopies = &PackageCopyDemand{Bytes: 70, Entries: 1}
+				wire.Version = 6
+				wire.Evidence.PackageCopies = &PackageCopyDemand{Bytes: 70, Entries: 1, ProfileSHA256: strings.Repeat("d", 64)}
 				switch mode {
 				case "package downgrade", "package unsolicited":
 					wire.Version = 4

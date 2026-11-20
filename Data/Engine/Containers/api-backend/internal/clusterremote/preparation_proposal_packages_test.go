@@ -4,6 +4,9 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,6 +50,9 @@ func TestPreparationProposalPackageSelectionParity(t *testing.T) {
 			positive := mode == "all missing" || mode == "base installed" || mode == "subset installed"
 			if positive {
 				proof, parseErr := parsePreparationProposalProof(wire, proposal)
+				if proof.Packages != nil {
+					wanted.ProfileSHA256 = proof.Packages.ProfileSHA256
+				}
 				if nativeErr != nil || selectErr != nil || parseErr != nil || proof.Packages == nil || !reflect.DeepEqual(*proof.Packages, wanted) {
 					t.Fatalf("native/shared selection mismatch: native=%v select=%v parse=%v", nativeErr, selectErr, parseErr)
 				}
@@ -73,5 +79,68 @@ func TestPreparationProposalRejectsAbsentOrMalformedPackageSelection(t *testing.
 		if _, err := parsePreparationProposalProof([]byte(bad), p); err == nil {
 			t.Fatal("missing or malformed selection accepted")
 		}
+	}
+}
+
+func TestPreparationPackageProfileMatchesFilesystem(t *testing.T) {
+	root, write, fixture := preparationNativeFixture(t)
+	write("etc/apt/apt.conf.d/70test", "private-fixture-A")
+	proposal := preparationProposalFixture()
+	wire, err := runPreparationNativeFixture(t, root, fixture, proposal)
+	if err != nil || strings.Contains(string(wire), "private-fixture") {
+		t.Fatalf("proposal failed or disclosed raw settings: %v", err)
+	}
+	proof, err := parsePreparationProposalProof(wire, proposal)
+	if err != nil || proof.Packages == nil || !proposalDigest(proof.Packages.ProfileSHA256) {
+		t.Fatal("missing approved package profile", err)
+	}
+	library, err := persistentFilesystemLibraries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(override string) (string, error) {
+		t.Helper()
+		script := library + "\nLIMIT = 2 << 20\nEXPECTED_UID = os.getuid()\n" + fixture + "\n" + override +
+			"\nfd = os.open(sys.argv[1], FS_OPEN)\nprint(package_install_profile(fd))\n"
+		out, err := exec.Command("/usr/bin/python3", "-I", "-B", "-c", script, root).Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	match := proof.Packages.ProfileSHA256
+	if observed, err := read(""); err != nil || observed != match {
+		t.Fatalf("approval and filesystem disagree: %v", err)
+	}
+	changed := func(override string) string {
+		t.Helper()
+		observed, err := read(override)
+		if err != nil || !proposalDigest(observed) || observed == match {
+			t.Fatalf("profile drift missed: %v", err)
+		}
+		return observed
+	}
+	changed("def bounded_command(args): return b'APT::Fixture 1;\\n'")
+	row := `["rpcbind.service","RPC","loaded","active","running","","/unit",0,"","/"]`
+	unit := func(row string) string {
+		return `def bus_reply(*args): return {"type":"a(ssssssouso)","data":[[` + row + `]]}`
+	}
+	changed(unit(row))
+	if _, err := read(unit(strings.Replace(row, ",0,", ",12,", 1))); err == nil {
+		t.Fatal("accepted pending service job")
+	}
+	write("etc/apt/apt.conf.d/70test", "private-fixture-B")
+	changed("")
+	write("etc/apt/apt.conf.d/70test", "private-fixture-A")
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/nfs"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	empty := changed("")
+	write("var/lib/nfs/state", "private")
+	if changed("") == empty {
+		t.Fatal("empty and populated NFS state produced same profile")
+	}
+	if err := os.Symlink("70test", filepath.Join(root, "etc/apt/apt.conf.d/71test")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read(""); err == nil {
+		t.Fatal("accepted symlinked configuration")
 	}
 }

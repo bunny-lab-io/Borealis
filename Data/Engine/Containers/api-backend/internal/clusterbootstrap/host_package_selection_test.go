@@ -93,6 +93,8 @@ func TestHostPackageSelectionRejectsMalformedInventoryAndProjection(t *testing.T
 		func(s *HostPackageSelection) { s.Missing = []string{good.Missing[1], good.Missing[0]} },
 		func(s *HostPackageSelection) { s.PlanSHA256 = strings.Repeat("a", 64) },
 		func(s *HostPackageSelection) { s.InventorySHA256 = strings.Repeat("0", 64) },
+		func(s *HostPackageSelection) { s.ProfileSHA256 = strings.Repeat("F", 64) },
+		func(s *HostPackageSelection) { s.ProfileSHA256 = strings.Repeat("0", 64) },
 	} {
 		bad := good.Clone()
 		mutate(&bad)
@@ -123,5 +125,29 @@ func TestHostPackageDpkgMetadataDemand(t *testing.T) {
 	selected.Missing = []string{"foreign"}
 	if _, err := selected.DpkgMetadataDemand(); err == nil {
 		t.Fatal("unlocked selection accepted")
+	}
+}
+
+func TestHostPackageSelectionHistoricalEncoding(t *testing.T) {
+	current, err := SelectHostPackages([]byte(hostPackageSelectionBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical := struct {
+		PlanSHA256      string   `json:"plan_sha256"`
+		InventorySHA256 string   `json:"inventory_sha256"`
+		Missing         []string `json:"missing"`
+	}{current.PlanSHA256, current.InventorySHA256, current.Missing}
+	before, err := json.Marshal(historical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved HostPackageSelection
+	if err := json.Unmarshal(before, &saved); err != nil || saved.Validate() != nil {
+		t.Fatal("historical selection no longer readable", err)
+	}
+	after, err := json.Marshal(saved)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("historical selection changed on recovery", err)
 	}
 }

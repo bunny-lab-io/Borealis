@@ -116,11 +116,11 @@ if __name__ == "__main__":
     main(observe_active)
 `
 
-const activeNetworkLibraryScript = `
+const observationBusLibraryScript = `
 import ipaddress, selectors, subprocess, time
 
 def bounded_command(arguments, timeout=2.5):
-    # Only the fixed busctl/ip calls below reach this function. No inherited
+    # Only fixed read-only observation commands reach this function. No inherited
     # bus address, pager, proxy, Python path, caller environment or stdin.
     if not 0 < timeout <= 2.5:
         raise ValueError()
@@ -186,6 +186,9 @@ def bus_string(*arguments):
         raise ValueError()
     return wire["data"][0]
 
+`
+
+const activeNetworkLibraryScript = observationBusLibraryScript + `
 def bus_identity():
     common = ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
     bus = bus_string(*common, "GetId")

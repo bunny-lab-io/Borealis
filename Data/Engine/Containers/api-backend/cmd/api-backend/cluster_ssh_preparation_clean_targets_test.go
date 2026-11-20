@@ -65,6 +65,7 @@ func sshPreparationProposalTestProof(request clusterremote.PreparationProposal, 
 	if err != nil {
 		panic(err)
 	}
+	selection.ProfileSHA256 = strings.Repeat("d", 64)
 	return clusterremote.PreparationProposalProof{Packages: &selection, Version: clusterremote.PreparationProposalVersion, RequestSHA256: hash, Nonce: request.Nonce, ObservationSHA256: digest, CPU: clusterbootstrap.PreparationTargetCPU{Version: 1, PlanSHA256: request.CPUPlanSHA256, OnlineCPUs: "0-15", AllocatableMilli: 16000, MemoryKiB: 33554432, ObservationSHA256: strings.Repeat("e", 64)}}
 }
 
@@ -73,6 +74,7 @@ func sshPreparationTargetPackagesFixture(targets []clusterSSHPreparationTargetCP
 	if err != nil {
 		panic(err)
 	}
+	selection.ProfileSHA256 = strings.Repeat("d", 64)
 	values := make([]clusterSSHPreparationTargetPackages, len(targets))
 	for i, target := range targets {
 		values[i] = clusterSSHPreparationTargetPackages{TargetID: target.TargetID, ObservationSHA256: target.ObservationSHA256, Selection: selection.Clone()}

@@ -301,6 +301,7 @@ def pfs_snapshot(paths):
             raise ValueError()
         if any(n != number and any(pfs_overlap(m[2], p) for p in paths) for n,m in mounts.items()):
             raise ValueError()
+        profile = package_install_profile(root) if PFS_OBSERVE_COPIES else None
         manager = pfs_bus(paths, declaration, device)
         # File/device proof brackets manager reads; a final marker/unit removal
         # must invalidate this acquisition rather than wait for another call.
@@ -317,8 +318,8 @@ def pfs_snapshot(paths):
         observation["version"] = 4
         if PFS_OBSERVE_COPIES:
             copies = [state for state in files["package_copies"].values() if state is not None]
-            evidence["package_copies"] = {"bytes": fs_integer(sum(state[0] for state in copies), 1), "entries": len(copies)}
-            observation["version"] = 5
+            evidence["package_copies"] = {"bytes": fs_integer(sum(state[0] for state in copies), 1), "entries": len(copies), "profile_sha256": profile}
+            observation["version"] = 6
         return observation
     finally:
         os.close(root)

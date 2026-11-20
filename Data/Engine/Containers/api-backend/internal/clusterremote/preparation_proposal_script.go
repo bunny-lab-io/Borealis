@@ -34,7 +34,7 @@ func preparationProposalPackageConstants() string {
 }
 
 var preparationProposalLibraryScript = `import base64, hashlib, json, os, re, resource, selectors, stat, subprocess, sys, time
-` + preparationProposalPackageConstants() + `
+` + observationFileLibraryScript + observationBusLibraryScript + packageProfileLibraryScript + preparationProposalPackageConstants() + `
 
 ROOT = "/"
 EXPECTED_UID = 0
@@ -451,6 +451,8 @@ def observe(proposal):
             require(snapshot.absent_path(path))
         sources(snapshot)
         package_selection = packages(suite)
+        if package_selection["missing"]:
+            package_selection["profile_sha256"] = package_install_profile(snapshot.root)
         unit_state = units()
         supervision_state = supervision(snapshot)
         def cpu_read(path, limit, projection=None):
@@ -487,13 +489,13 @@ def main():
     encoded = sys.argv[1]
     raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
     proposal = json.loads(raw)
-    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 4)
+    require(type(proposal) is dict and type(proposal.get("version")) is int and proposal["version"] == 5)
     before = observe(proposal)
     after = observe(proposal)
     require(before == after)
-    observation = digest(b"borealis-preparation-native-observation-v4\n" + canonical(before))
-    request = digest(b"borealis-preparation-proposal-v4\n" + raw)
+    observation = digest(b"borealis-preparation-native-observation-v5\n" + canonical(before))
+    request = digest(b"borealis-preparation-proposal-v5\n" + raw)
     cpu = {"version": 1, "plan_sha256": proposal["cpu_plan_sha256"], "online_cpus": before["cpu"]["online_cpus"],
         "allocatable_milli": before["cpu"]["allocatable_milli"], "memory_kib": before["cpu"]["memory_kib"], "observation_sha256": digest(b"borealis-preparation-target-cpu-v1\n" + canonical(before["cpu"]))}
-    print(json.dumps({"version": 4, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation, "cpu": cpu, "packages": before["packages"]}, separators=(",", ":")))
+    print(json.dumps({"version": 5, "request_sha256": request, "nonce": proposal["nonce"], "observation_sha256": observation, "cpu": cpu, "packages": before["packages"]}, separators=(",", ":")))
 `

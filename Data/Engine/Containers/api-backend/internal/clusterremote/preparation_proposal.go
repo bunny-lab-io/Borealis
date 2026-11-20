@@ -20,9 +20,8 @@ var ErrPreparationProposal = errors.New("SSH preparation proposal observation un
 var proposalDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var proposalHostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Version 4 adds exact missing-package selection from the fixed release plan.
-// Older clean-host/CPU receipts contain no transaction selection.
-const PreparationProposalVersion = 4
+// Version 5 binds the package installation profile for a nonempty selection.
+const PreparationProposalVersion = 5
 
 // PreparationProposal binds an observation to the original waiting proposal.
 // QualificationGeneration is its reserved generation, never a worker claim.
@@ -86,7 +85,7 @@ func (p PreparationProposal) RequestSHA256() (string, error) {
 	if err != nil {
 		return "", ErrPreparationProposal
 	}
-	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v4\n"), raw...))
+	digest := sha256.Sum256(append([]byte("borealis-preparation-proposal-v5\n"), raw...))
 	return hex.EncodeToString(digest[:]), nil
 }
 
@@ -106,7 +105,8 @@ type PreparationProposalProof struct {
 func (proof PreparationProposalProof) Validate(p PreparationProposal) error {
 	digest, err := p.RequestSHA256()
 	if err != nil || proof.Version != PreparationProposalVersion || proof.RequestSHA256 != digest || proof.Nonce != p.Nonce || !proposalDigest(proof.ObservationSHA256) ||
-		proof.CPU.Validate(clusterbootstrap.K3sPins().Version) != nil || proof.CPU.PlanSHA256 != p.CPUPlanSHA256 || proof.Packages == nil || proof.Packages.Validate() != nil {
+		proof.CPU.Validate(clusterbootstrap.K3sPins().Version) != nil || proof.CPU.PlanSHA256 != p.CPUPlanSHA256 || proof.Packages == nil || proof.Packages.Validate() != nil ||
+		(len(proof.Packages.Missing) > 0) != (proof.Packages.ProfileSHA256 != "") {
 		return ErrPreparationProposal
 	}
 	return nil

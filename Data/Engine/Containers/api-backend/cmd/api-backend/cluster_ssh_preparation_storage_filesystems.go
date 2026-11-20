@@ -69,7 +69,7 @@ func calculateClusterSSHPreparationStorageCapacity(requirements clusterSSHStorag
 	}
 	if len(selection.Missing) > 0 {
 		copies := evidence.PackageCopies
-		if !copies.Valid() {
+		if !copies.Valid() || copies.ProfileSHA256 != selection.ProfileSHA256 {
 			return nil, clusterbootstrap.ErrPreparationConfig
 		}
 		demands, err = mergeClusterSSHFilesystemDemands(demands, []clusterSSHFilesystemDemand{

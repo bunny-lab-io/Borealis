@@ -22,7 +22,7 @@ func persistentFilesystemLibraries() (string, error) {
 		return "", err
 	}
 	return persistentNetworkLibraryScript + activeNetworkLibraryScript + systemdObservationLibraryScript + filesystemLibraryScript +
-		"\nPFS_PACKAGE_DIRECTORIES = " + string(raw) + "\nPFS_COPY_PATHS = " + string(copyPaths) + "\n" + filesystemHostPackageLibraryScript + persistentFilesystemLibraryScript, nil
+		"\nPFS_PACKAGE_DIRECTORIES = " + string(raw) + "\nPFS_COPY_PATHS = " + string(copyPaths) + "\n" + filesystemHostPackageLibraryScript + packageProfileLibraryScript + persistentFilesystemLibraryScript, nil
 }
 
 func buildPersistentFilesystemScript(packageCopies bool) (string, error) {
