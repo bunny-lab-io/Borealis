@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"time"
 )
 
@@ -91,49 +92,77 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 			return clusterSSHPreparationGateBlocked{clusterSSHPreparationGateCodes[i], "Native readiness adapter is unavailable; preparation cannot be approved."}
 		}
 	}
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
-	defer cancel()
-	started := time.Now()
-	gate := make(chan struct{}, 1)
-	var retained [6]string
-	initialized := false
-	recheck := func(caller context.Context) error {
-		fail := func() error { cancel(); return errClusterConflict }
-		if caller.Err() != nil || ctx.Err() != nil {
-			return fail()
+	// Each round still authenticates the complete release under live ownership.
+	// Start its short freshness window only after the release bytes are verified.
+	bulk, stopBulk := context.WithTimeout(parent, clusterSSHPreparationArchiveBudget)
+	defer stopBulk()
+	archive := func() (string, error) {
+		if source(bulk) != nil || bulk.Err() != nil {
+			return "", errClusterConflict
 		}
-		bound, stop := context.WithCancel(caller)
-		defer stop()
-		detach := context.AfterFunc(ctx, stop)
-		defer detach()
-		select {
-		case gate <- struct{}{}:
-			defer func() { <-gate }()
-		case <-bound.Done():
-			return fail()
+		digest, err := gates[0](bulk, plan)
+		if err != nil || !validClusterSSHPreparationDigest(digest) || bulk.Err() != nil {
+			return "", clusterSSHPreparationGateError(0, err)
 		}
-		if source(bound) != nil || bound.Err() != nil || ctx.Err() != nil {
-			return fail()
+		return digest, nil
+	}
+	native := func(ctx context.Context, artifact string) ([6]string, error) {
+		observed := [6]string{artifact}
+		if ctx.Err() != nil || source(ctx) != nil {
+			return observed, errClusterConflict
 		}
-		var observed [6]string
-		for i, observe := range gates {
-			value, err := observe(bound, plan)
-			if err != nil || !validClusterSSHPreparationDigest(value) || bound.Err() != nil || ctx.Err() != nil {
-				cancel()
-				return clusterSSHPreparationGateError(i, err)
+		for i := 1; i < len(gates); i++ {
+			value, err := gates[i](ctx, plan)
+			if err != nil || !validClusterSSHPreparationDigest(value) || ctx.Err() != nil {
+				return observed, clusterSSHPreparationGateError(i, err)
 			}
 			observed[i] = value
 		}
-		if source(bound) != nil || bound.Err() != nil || ctx.Err() != nil || (initialized && observed != retained) {
-			return fail()
+		if source(ctx) != nil || ctx.Err() != nil {
+			return observed, errClusterConflict
 		}
-		if !initialized {
-			retained, initialized = observed, true
-		}
-		return nil
+		return observed, nil
 	}
-	if err := recheck(ctx); err != nil {
+	first, err := archive()
+	if err != nil {
 		return err
+	}
+	observation, stopObservation := context.WithTimeout(bulk, clusterSSHPreparationFreshness)
+	retained, err := native(observation, first)
+	stopObservation()
+	if err != nil {
+		return err
+	}
+	second, err := archive()
+	if err != nil {
+		return err
+	}
+	if first != second {
+		return clusterSSHPreparationGateError(0, errClusterConflict)
+	}
+	started := time.Now()
+	ctx, cancel := context.WithDeadline(bulk, started.Add(clusterSSHPreparationFreshness))
+	defer cancel()
+	var used, verified atomic.Bool
+	recheck := func(caller context.Context) error {
+		if ctx.Err() != nil || caller.Err() != nil || !used.CompareAndSwap(false, true) {
+			cancel()
+			return errClusterConflict
+		}
+		bound, stop := context.WithCancel(ctx)
+		defer stop()
+		detach := context.AfterFunc(caller, stop)
+		defer detach()
+		observed, err := native(bound, second)
+		if err != nil || observed != retained || caller.Err() != nil || bound.Err() != nil {
+			cancel()
+			if err != nil {
+				return err
+			}
+			return errClusterConflict
+		}
+		verified.Store(true)
+		return nil
 	}
 	proof := clusterSSHPreparationApprovalProof{plan: plan, started: started, lifetime: ctx, recheck: recheck, receipts: retained}
 	if err := consume(ctx, proof); err != nil {
@@ -143,7 +172,7 @@ func withClusterSSHPreparationApprovalProof(parent context.Context, plan string,
 		}
 		return errClusterConflict
 	}
-	if !proof.valid(plan) || ctx.Err() != nil {
+	if !verified.Load() || !proof.valid(plan) || ctx.Err() != nil {
 		return errClusterConflict
 	}
 	return nil

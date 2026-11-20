@@ -40,7 +40,7 @@ func (p clusterSSHPreparationApprovalProof) valid(plan string) bool {
 		}
 	}
 	return p.plan == plan && validClusterSSHPreparationDigest(plan) && !p.started.IsZero() &&
-		time.Since(p.started) >= 0 && time.Since(p.started) < 30*time.Second && p.lifetime != nil &&
+		time.Since(p.started) >= 0 && time.Since(p.started) < clusterSSHPreparationFreshness && p.lifetime != nil &&
 		p.lifetime.Err() == nil && p.recheck != nil
 }
 

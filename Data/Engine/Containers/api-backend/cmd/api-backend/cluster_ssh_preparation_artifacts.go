@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	clusterSSHPreparationArchiveBudget = 10 * time.Minute
+	clusterSSHPreparationFreshness     = 30 * time.Second
+)
+
 type clusterSSHPreparationArtifactGate func(context.Context, string) (string, error)
 type clusterSSHPreparationArtifactDemandRead func(context.Context, string) ([]clusterSSHFilesystemDemand, error)
 type clusterSSHPreparationArtifactConsumer func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error)
@@ -42,8 +47,8 @@ type clusterSSHPreparationArtifactDependencies struct {
 // Only the immutable_artifacts gate is exposed. No target lease, SSH connection,
 // native journal receipt, capacity grant or production polling is created.
 // Acquisition uses existing artifact bounds and the live waiting proposal expiry.
-// Once bytes are owned, complete reproof/consumption keeps the existing 30-second
-// approval bound; a release which cannot fit that bound remains unqualified.
+// Owned release verification has one bounded budget across all four passes.
+// Live readiness, commit and the final dispatch check retain short lifetimes.
 func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d clusterSSHPreparationArtifactDependencies, consume clusterSSHPreparationArtifactConsumer) (result error) {
 	if parent.Err() != nil || !validClusterSSHPreparationDigest(plan) || d.proposal == nil || d.source == nil || d.publication == nil || d.acquire == nil || d.terminal == nil || consume == nil {
 		return clusterbootstrap.ErrPreparationConfig
@@ -103,7 +108,20 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		if observe(ctx, check, nil) != nil || owned == nil {
 			return "", clusterbootstrap.ErrPreparationConfig
 		}
-		proof, err := owned.prove(ctx, check)
+		// An individual file read can outlast an authority check. Join its
+		// heartbeat before a waiting proposal may transition to committed.
+		var checks sync.Mutex
+		current := func(ctx context.Context) error {
+			checks.Lock()
+			defer checks.Unlock()
+			return check(ctx)
+		}
+		var proof string
+		err := runClusterSSHPreparationScope(ctx, 5*time.Second, current, func(ctx context.Context) error {
+			var err error
+			proof, err = owned.prove(ctx, current)
+			return err
+		})
 		if err != nil || !validClusterSSHPreparationDigest(proof) || observe(ctx, check, nil) != nil {
 			return "", clusterbootstrap.ErrPreparationConfig
 		}
@@ -128,7 +146,7 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	}) != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	proofCtx, stopProof := context.WithTimeout(ctx, 30*time.Second)
+	proofCtx, stopProof := context.WithTimeout(ctx, clusterSSHPreparationArchiveBudget)
 	defer stopProof()
 	defer func() {
 		cleanup()
@@ -220,7 +238,13 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	if err != nil || terminal == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	if _, err := prove(proofCtx, terminal); err != nil || terminal(proofCtx) != nil || proofCtx.Err() != nil {
+	if _, err := prove(proofCtx, terminal); err != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	fresh, finish := context.WithTimeout(proofCtx, clusterSSHPreparationFreshness)
+	defer finish()
+	cleanup()
+	if result != nil || terminal(fresh) != nil || fresh.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	return nil

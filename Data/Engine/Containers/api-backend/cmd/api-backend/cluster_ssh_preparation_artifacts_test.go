@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -271,8 +272,8 @@ func TestClusterSSHPreparationArtifactsSeparateAcquisitionLifetime(t *testing.T)
 	}
 	err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), d, func(ctx context.Context, gate clusterSSHPreparationArtifactGate, _ clusterSSHPreparationArtifactDemandRead, _ clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 30*time.Second {
-			t.Fatal("approval proof lifetime changed")
+		if !ok || time.Until(deadline) <= clusterSSHPreparationFreshness || time.Until(deadline) > clusterSSHPreparationArchiveBudget {
+			t.Fatal("archive verification did not receive its bounded I/O budget")
 		}
 		_, err := gate(ctx, strings.Repeat("a", 64))
 		return clusterSSHPreparationReadinessReceipt{}, err
@@ -285,7 +286,7 @@ func TestClusterSSHPreparationArtifactsSeparateAcquisitionLifetime(t *testing.T)
 func TestClusterSSHPreparationArtifactsCleanupKeepsProofDeadline(t *testing.T) {
 	v := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
 	var proof context.Context
-	v.onProve = func(ctx context.Context) error { proof = ctx; return ctx.Err() }
+	v.onPublication = func(ctx context.Context, _ string) error { proof = ctx; return ctx.Err() }
 	v.onClose = func() error {
 		if proof == nil || proof.Err() != nil {
 			t.Error("proof context ended before cleanup")
@@ -299,6 +300,78 @@ func TestClusterSSHPreparationArtifactsCleanupKeepsProofDeadline(t *testing.T) {
 	if err != nil || v.closes.Load() != 1 || proof == nil || proof.Err() == nil {
 		t.Fatal("cleanup proof lifetime", err)
 	}
+}
+
+func TestClusterSSHPreparationArtifactsDispatchAfterCleanup(t *testing.T) {
+	for _, mode := range []string{"ready", "authority lost during cleanup", "cleanup expired"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bytes := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
+				deps := sshApprovalArtifactDependencies(bytes)
+				var closed, checked bool
+				bytes.onClose = func() error {
+					closed = true
+					if mode == "cleanup expired" {
+						time.Sleep(31 * time.Second)
+					}
+					return nil
+				}
+				deps.terminal = func(clusterSSHPreparationReadinessReceipt, string) (func(context.Context) error, error) {
+					return func(ctx context.Context) error {
+						if closed {
+							checked = true
+							if mode == "authority lost during cleanup" {
+								return errClusterConflict
+							}
+							deadline, ok := ctx.Deadline()
+							if !ok || time.Until(deadline) > 30*time.Second {
+								t.Fatal("unbounded dispatch authority after cleanup")
+							}
+						}
+						return ctx.Err()
+					}, nil
+				}
+				err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), deps,
+					func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
+						return clusterSSHPreparationReadinessReceipt{}, nil
+					})
+				if !checked || (err == nil) != (mode == "ready") {
+					t.Fatalf("terminal checked=%v error=%v", checked, err)
+				}
+			})
+		})
+	}
+}
+
+func TestClusterSSHPreparationArtifactsLoseAuthorityDuringBulkRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bytes := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
+		deps := sshApprovalArtifactDependencies(bytes)
+		var lost atomic.Bool
+		deps.proposal = func(ctx context.Context) error {
+			if lost.Load() {
+				return errClusterConflict
+			}
+			return ctx.Err()
+		}
+		bytes.onProve = func(ctx context.Context) error {
+			lost.Store(true)
+			start := time.Now()
+			<-ctx.Done()
+			if time.Since(start) > 6*time.Second {
+				t.Fatal("bulk read continued after the authority heartbeat")
+			}
+			return ctx.Err()
+		}
+		err := runClusterSSHPreparationArtifacts(context.Background(), strings.Repeat("a", 64), deps,
+			func(context.Context, clusterSSHPreparationArtifactGate, clusterSSHPreparationArtifactDemandRead, clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
+				t.Fatal("admitted expired authority")
+				return clusterSSHPreparationReadinessReceipt{}, nil
+			})
+		if err == nil || bytes.closes.Load() != 1 {
+			t.Fatal("lost authority did not cancel and clean up")
+		}
+	})
 }
 
 func TestClusterSSHPreparationArtifactsAcquiredPublication(t *testing.T) {

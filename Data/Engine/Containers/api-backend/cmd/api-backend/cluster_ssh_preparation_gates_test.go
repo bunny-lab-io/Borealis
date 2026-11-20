@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 )
 
 func sshPreparationGatesFixture() clusterSSHPreparationGates {
@@ -70,7 +72,7 @@ func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
 			if (err == nil) != (mode == "success") {
 				t.Fatal("wrong gate outcome", err)
 			}
-			if mode == "success" && (!consumed || reads != 2 || sourceReads != 4) {
+			if mode == "success" && (!consumed || reads != 2 || sourceReads != 6) {
 				t.Fatal("incomplete proof rounds")
 			}
 			if escaped.recheck != nil {
@@ -79,6 +81,64 @@ func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
 					t.Fatal("proof escaped closed scope")
 				}
 			}
+		})
+	}
+}
+
+// Virtual time exercises release-sized I/O without slowing the regression suite.
+func TestClusterSSHPreparationApprovalBudgets(t *testing.T) {
+	for _, mode := range []string{"slow archives", "archive drift", "native expiry", "commit expiry", "parent expiry", "ignored recheck"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				parent, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if mode == "parent expiry" {
+					var stop context.CancelFunc
+					parent, stop = context.WithTimeout(parent, time.Minute)
+					defer stop()
+				}
+				plan := strings.Repeat("a", 64)
+				gates := sshPreparationGatesFixture()
+				archives, nativeReads := 0, 0
+				gates[0] = func(ctx context.Context, _ string) (string, error) {
+					archives++
+					time.Sleep(40 * time.Second)
+					if mode == "archive drift" && archives == 2 {
+						return strings.Repeat("b", 64), nil
+					}
+					return plan, ctx.Err()
+				}
+				gates[1] = func(ctx context.Context, _ string) (string, error) {
+					nativeReads++
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) > 30*time.Second {
+						t.Fatal("native observation escaped freshness window")
+					}
+					if mode == "native expiry" && nativeReads == 2 {
+						<-ctx.Done()
+					}
+					return plan, ctx.Err()
+				}
+				err := withClusterSSHPreparationApprovalProof(parent, plan, gates, func(ctx context.Context) error { return ctx.Err() },
+					func(ctx context.Context, proof clusterSSHPreparationApprovalProof) error {
+						if mode == "ignored recheck" {
+							return nil
+						}
+						if err := proof.recheck(ctx); err != nil {
+							return err
+						}
+						if mode == "commit expiry" {
+							time.Sleep(31 * time.Second)
+							if proof.valid(plan) {
+								t.Fatal("expired approval still valid")
+							}
+						}
+						return nil
+					})
+				if (err == nil) != (mode == "slow archives") || archives != 2 {
+					t.Fatalf("archives=%d error=%v", archives, err)
+				}
+			})
 		})
 	}
 }
