@@ -177,9 +177,25 @@ func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing
 				if f.c.store.db.Stats().InUse != 0 {
 					t.Fatal("SQL held across native scope")
 				}
-				receipt, err := consume(ctx, sshPreparationCPUGatesFixture(t, snapshot))
+				gates := sshPreparationCPUGatesFixture(t, snapshot)
+				artifact := gates[0]
+				waiting := f.c.preparationCleanTargetsProposalCheck(snapshot)
+				gates[0] = func(ctx context.Context, plan string) (string, error) {
+					if err := waiting(ctx); err != nil {
+						return "", err
+					}
+					return artifact(ctx, plan)
+				}
+				receipt, err := consume(ctx, gates)
 				if err != nil || receipt.Version != 4 {
 					t.Fatal("approval did not consume gates", err)
+				}
+				if waiting(ctx) == nil {
+					t.Fatal("waiting proposal still readable after approval commit")
+				}
+				terminal, err := f.c.clusterSSHPreparationArtifactTerminal(snapshot, receipt, receipt.Checks[0].SHA256)
+				if err != nil || terminal(ctx) != nil {
+					t.Fatal("terminal reader did not recognize the exact committed payload")
 				}
 				// A competing API claimant sees the commit before cleanup joins.
 				claimed := make(chan error, 1)

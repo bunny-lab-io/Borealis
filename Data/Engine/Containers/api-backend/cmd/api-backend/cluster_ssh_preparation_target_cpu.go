@@ -206,7 +206,7 @@ func withClusterSSHPreparationCPUApprovalProof(ctx context.Context, snapshot clu
 		proof.packages = cloneClusterSSHPreparationPackages(packages)
 		proof.capacity = &capacity
 		original := proof.recheck
-		var failed atomic.Bool
+		var rechecked, failed atomic.Bool
 		proof.recheck = func(ctx context.Context) error {
 			if failed.Load() || original(ctx) != nil {
 				failed.Store(true)
@@ -218,12 +218,18 @@ func withClusterSSHPreparationCPUApprovalProof(ctx context.Context, snapshot clu
 				failed.Store(true)
 				return errClusterConflict
 			}
+			rechecked.Store(true)
 			return nil
 		}
 		if err := consume(ctx, proof); err != nil {
 			return err
 		}
-		return proof.recheck(ctx)
+		// Commit rechecks this waiting capability before taking SQL locks.
+		// After the transition, only the committed-payload terminal reader is valid.
+		if !rechecked.Load() || failed.Load() {
+			return errClusterConflict
+		}
+		return ctx.Err()
 	})
 }
 

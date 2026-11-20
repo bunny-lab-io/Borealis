@@ -144,11 +144,9 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 							if nativeCalls != 2 || capacityCalls != 1 || configurationCalls != 1 || networkCalls != 4*len(f.snapshot.work.Proof.Source.Members) || proof.capacity == nil {
 								t.Fatalf("wrong initial production ordering: native=%d capacity=%d configuration=%d source=%d", nativeCalls, capacityCalls, configurationCalls, networkCalls)
 							}
-							if mode == "later clean drift" {
-								// Existing commit performs this recheck before SQL mutation.
-								if err := proof.recheck(ctx); err != nil {
-									return err
-								}
+							// Production commit performs this last waiting recheck before SQL mutation.
+							if err := proof.recheck(ctx); err != nil {
+								return err
 							}
 							approved = true
 							receipt = clusterSSHPreparationReadiness(f.plan, proof.receipts)

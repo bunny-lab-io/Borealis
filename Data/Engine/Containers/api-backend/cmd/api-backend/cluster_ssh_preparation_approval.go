@@ -163,7 +163,7 @@ func (s *postgresOperatorStore) readClusterSSHPreparationProposal(ctx context.Co
 
 // Commit only while the local live proof capability remains valid. The caller
 // owns fresh source/target/artifact/readiness observation outside transactions.
-// This function has no production caller until that complete proof adapter exists.
+// After the SQL transition the artifact scope verifies the exact committed payload.
 func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot,
 	confirmation clusterSSHPreparationConfirmation, proof clusterSSHPreparationApprovalProof) error {
 	w := snapshot.work

@@ -191,7 +191,7 @@ func TestClusterSSHPreparationTargetCPUReadinessBinding(t *testing.T) {
 }
 
 func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
-	for _, mode := range []string{"fresh", "changed CPU", "changed clean digest", "consumer mutation", "read failure", "missing capacity", "changed capacity", "missing packages", "changed packages", "package consumer mutation"} {
+	for _, mode := range []string{"fresh", "changed CPU", "changed clean digest", "consumer mutation", "read failure", "missing capacity", "changed capacity", "missing packages", "changed packages", "package consumer mutation", "skipped recheck", "ignored failed recheck"} {
 		t.Run(mode, func(t *testing.T) {
 			snapshot, _ := sshPreparationCleanTargetsFixture(t, false)
 			targets := sshPreparationTargetCPUFixture(snapshot)
@@ -216,7 +216,7 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 						out.Digest, _ = clusterSSHPreparationTargetCPUDigest(snapshot, out.Targets)
 					case "changed clean digest":
 						out.Digest = strings.Repeat("f", 64)
-					case "read failure":
+					case "read failure", "ignored failed recheck":
 						return clusterSSHPreparationCleanObservation{}, errClusterConflict
 					case "changed capacity":
 						out.Capacity.Targets[0].Capacity.LonghornCPU.OverrideMilli++
@@ -240,6 +240,13 @@ func TestClusterSSHPreparationTargetCPUApprovalRechecks(t *testing.T) {
 				r.Version, r.Targets, r.Capacity, r.Packages = 4, p.targetCPU, p.capacity, p.packages
 				if validateClusterSSHPreparationReadinessCPU(r, snapshot.work.Authorization) != nil {
 					return errClusterConflict
+				}
+				switch mode {
+				case "skipped recheck":
+					return nil
+				case "ignored failed recheck":
+					_ = p.recheck(ctx)
+					return nil
 				}
 				return p.recheck(ctx)
 			})
