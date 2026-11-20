@@ -12,7 +12,15 @@ TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-3600}"
 RESULT_DIR="$(result_dir_for database-postgres)"
 GO_BIN="$(resolve_go 1.25.12)"
 require_command python3
-TEST_PATTERN="$(BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" --run-pattern)"
+SHARD_ARGS=()
+RECEIPT_ARGS=()
+if [[ -n "${BOREALIS_POSTGRES_SHARD:-}" ]]; then
+  SHARD_ARGS=(--shard "${BOREALIS_POSTGRES_SHARD}")
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    RECEIPT_ARGS=(--ci-receipt)
+  fi
+fi
+TEST_PATTERN="$(BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" "${SHARD_ARGS[@]}" --run-pattern)"
 CONTAINER_NAME="borealis-ci-postgres-${$}"
 POSTGRES_PASSWORD="borealis-ci-password"
 DOCKER=(docker)
@@ -102,10 +110,7 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   exit 1
 fi
 
-# The 135-test race suite exhausted 30 minutes with 19 required families and
-# 19 broker cases unfinished. Completed-case timings project roughly 34 minutes
-# before additional recovery coverage. Bound the expanded suite independently
-# of operation deadlines; leave five command minutes for build/diagnostics.
+# Keep whole test families serial within each isolated database.
 if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
@@ -118,6 +123,6 @@ fi
 
 "${DOCKER[@]}" logs "${CONTAINER_NAME}" >"${RESULT_DIR}/postgres-container.log" 2>&1 || true
 BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" \
-  --results "${RESULT_DIR}/postgres-go-results.jsonl"
+  "${SHARD_ARGS[@]}" "${RECEIPT_ARGS[@]}" --results "${RESULT_DIR}/postgres-go-results.jsonl"
 
 printf 'PostgreSQL 17 integration passed. Results: %s\n' "${RESULT_DIR}"

@@ -202,12 +202,21 @@ jobs:
           if-no-files-found: ignore
 
   database:
-    name: Database / postgres-17
+    name: Database / postgres-17 / shard ${{ matrix.shard }}
     needs: changes
     if: needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
     # Include setup, bounded expanded race coverage, and diagnostic upload.
     timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    outputs:
+      shard_1: ${{ steps.database.outputs.shard_1 }}
+      shard_2: ${{ steps.database.outputs.shard_2 }}
+      shard_3: ${{ steps.database.outputs.shard_3 }}
+      shard_4: ${{ steps.database.outputs.shard_4 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -219,14 +228,16 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
-      - run: ./Tests/run-database-postgres.sh
+      - id: database
+        run: ./Tests/run-database-postgres.sh
         env:
+          BOREALIS_POSTGRES_SHARD: ${{ matrix.shard }}
           CGO_ENABLED: "1"
           GOFLAGS: -race
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: database-results
+          name: database-results-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             Unit_Test_Results/database-postgres-*/*.log
             Unit_Test_Results/database-postgres-*/postgres-go-results.jsonl
@@ -350,16 +361,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
       - name: Require successful applicable checks
         env:
           BOREALIS_NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json, os, sys
-          needs = json.loads(os.environ["BOREALIS_NEEDS_JSON"])
-          bad = {name: value["result"] for name, value in needs.items() if value["result"] not in {"success", "skipped"}}
-          if bad:
-              print("Required validation failed:", bad, file=sys.stderr)
-              raise SystemExit(1)
-          print("All applicable PR validation jobs passed.")
-          PY
+        run: python3 -m Tests.policy.check_required_jobs

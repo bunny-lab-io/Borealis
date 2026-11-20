@@ -111,7 +111,9 @@ The PostgreSQL lane also executes `Data/Engine/Unit_Tests/test_worker_admission.
 
 Every required database test must run and pass. Missing tests, skipped tests or subtests, and incomplete results fail the lane. Keep the reported result directory when investigating a failure; CI retains database logs for successful and failed runs.
 
-The required Go database package has an explicit 55-minute suite limit. Each runner command has a default 60-minute limit, and CI allows 70 minutes for setup, validation and diagnostic upload. CI enables the race detector through `GOFLAGS=-race`; a normal local invocation without that setting is not race evidence. `BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS` overrides the command limit; setting it below the package limit can stop Go before timeout diagnostics finish. Individual operation deadlines and all required assertions remain unchanged.
+Hosted CI runs four PostgreSQL shards. Each starts its own PostgreSQL 17 container, initializes the canonical schema, runs all Python admission cases, then runs whole Go test families serially. To reproduce one shard locally, run `CGO_ENABLED=1 GOFLAGS=-race BOREALIS_POSTGRES_SHARD=2 ./Tests/run-database-postgres.sh`. Omit the shard setting to run the full inventory against one container.
+
+Each Go invocation has a 55-minute suite limit. Each runner command has a default 60-minute limit, and CI allows 70 minutes for setup, validation and diagnostic upload. CI enables the race detector through `GOFLAGS=-race`; a normal local invocation without that setting is not race evidence. `BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS` overrides the command limit; setting it below the package limit can stop Go before timeout diagnostics finish. Individual operation deadlines and all required assertions remain unchanged.
 
 ??? note "Focused PostgreSQL tests without Docker access"
     A dedicated development workstation may use a disposable, user-owned PostgreSQL 17 process for focused SQL tests when Docker access is unavailable. This is a test fixture, not an Engine deployment. The required container lane still runs unchanged in CI; native results do not qualify its packaging, collation or runtime environment.
@@ -308,7 +310,8 @@ Legacy admission preparation recovery is covered by `PYTHONDONTWRITEBYTECODE=1 p
     - WebUI Vitest tests: `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/`.
     - WebUI runtime contracts: `Tests/webui/runtime-scripts.test.js`.
     - PostgreSQL integration: `Tests/integration/database/`.
-    - Required PostgreSQL Go test inventory: `Tests/manifests/postgres-tests.json`.
+    - `Tests/manifests/postgres-tests.json` assigns each source-discovered PostgreSQL family to exactly one shard. Assignment uses completed family times from hosted runs 44579064287 and 43457995139. Add each new family once. Keep the longest families on separate runners.
+    - `Tests/policy/check_required_jobs.py` verifies path-selected jobs and one audited family list per database shard against the current workflow run ID, PR head and checked-out merge SHA. Failed shard attempts retain separate diagnostic artifacts.
     - PostgreSQL inventory and result audit: `Tests/policy/check_postgres_inventory.py`; Go syntax discovery: `Tests/tools/postgresinventory/main.go`.
     - Migration helper tests: `Tests/integration/migration_helpers/`.
 

@@ -59,6 +59,8 @@
     "Data/Engine/Containers/api-backend/go.sum",
     "Tests/manifests/postgres-tests.json",
     "Tests/policy/check_postgres_inventory.py",
+    "Tests/policy/check_required_jobs.py",
+    "Data/Engine/Unit_Tests/test_worker_admission.py",
     "Tests/tools/postgresinventory/**",
     "Tests/Unit_Tests/test_postgres_inventory.py",
     "Tests/helpers/changed_paths.py"

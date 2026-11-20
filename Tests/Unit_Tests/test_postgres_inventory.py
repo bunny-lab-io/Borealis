@@ -7,8 +7,10 @@ import unittest
 
 from Tests.helpers.changed_paths import MANIFEST as CI_MANIFEST, matches
 from Tests.policy.check_postgres_inventory import (
-    PACKAGE, audit_results, required_tests, source_tests, validate_inventory,
+    PACKAGE, audit_python_results, audit_results, required_shards, required_tests,
+    shard_receipt, source_tests, validate_inventory,
 )
+from Tests.policy.check_required_jobs import SCOPE, audit_jobs
 
 
 class PostgresInventoryTests(unittest.TestCase):
@@ -65,9 +67,14 @@ func TestExternal(t *testing.T) { _ = databaseURL() }
     def test_invalid_manifests_fail(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
-            for tests in [[], ["TestOne", "TestOne"], ["Test.*"], [12], "TestOne"]:
-                path.write_text(json.dumps({"tests": tests}))
-                with self.subTest(tests=tests), self.assertRaises(ValueError):
+            for shards in [
+                [], [["TestOne"]] * 4,
+                [["TestOne"], ["TestTwo"], ["TestThree"], []],
+                [["TestOne"], ["TestTwo"], ["TestThree"], ["Test.*"]],
+                [["TestOne"], ["TestTwo"], ["TestThree"], [12]],
+            ]:
+                path.write_text(json.dumps({"shards": shards}))
+                with self.subTest(shards=shards), self.assertRaises(ValueError):
                     required_tests(path)
 
     def test_database_paths_select_runtime_and_inventory_changes(self):
@@ -84,6 +91,8 @@ func TestExternal(t *testing.T) { _ = databaseURL() }
             prefix + "go.mod", prefix + "go.sum",
             "Tests/manifests/postgres-tests.json",
             "Tests/policy/check_postgres_inventory.py",
+            "Tests/policy/check_required_jobs.py",
+            "Data/Engine/Unit_Tests/test_worker_admission.py",
             "Tests/tools/postgresinventory/main.go",
             "Tests/helpers/changed_paths.py",
         ]:
@@ -106,6 +115,16 @@ class PostgresResultTests(unittest.TestCase):
             {"Action": "pass", "Test": "TestOne"}, {"Action": "pass"},
         ])
 
+    def test_duplicate_or_unfinished_subtests_fail(self):
+        events = [{"Action": "start"}, {"Action": "run", "Test": "TestOne"}]
+        for subevents in [
+            [{"Action": "run", "Test": "TestOne"}],
+            [{"Action": "run", "Test": "TestOne/incomplete"}],
+            [{"Action": "pass", "Test": "TestOne/unstarted"}],
+        ]:
+            with self.subTest(subevents=subevents), self.assertRaises(ValueError):
+                self.audit(events + subevents + [{"Action": "pass", "Test": "TestOne"}, {"Action": "pass"}])
+
     def test_skip_failure_empty_truncated_and_wrong_package_fail(self):
         for events in [
             [], [{"Action": "pass"}],
@@ -119,7 +138,42 @@ class PostgresResultTests(unittest.TestCase):
             [{"Action": "pass", "Package": "wrong/package"}],
         ]:
             with self.subTest(events=events), self.assertRaises(ValueError):
-                self.audit(events)
+                self.audit([{"Action": "start"}, *events])
+
+
+class RequiredJobsTests(unittest.TestCase):
+    def test_merge_gate_requires_exact_run_and_all_selected_jobs_and_shards(self):
+        shards = required_shards()
+        identity = ["17", "head", "checkout"]
+        needs = {"changes": {"result": "success", "outputs": {key: "true" for key in SCOPE}},
+                 "repository-policy": {"result": "success"}}
+        for jobs in SCOPE.values():
+            needs.update({job: {"result": "success"} for job in jobs})
+        receipts = {f"shard_{i}": shard_receipt(identity, i, tests) for i, tests in enumerate(shards, 1)}
+        needs["database"]["outputs"] = receipts
+        audit_jobs(needs, shards, identity)
+        for key in ("shard_1", "shard_4"):
+            for wrong in ("", receipts["shard_2"], shard_receipt(["16", "head", "other"], 1, shards[0])):
+                with self.subTest(key=key, wrong=wrong), self.assertRaises(ValueError):
+                    audit_jobs({**needs, "database": {"result": "success", "outputs": {**receipts, key: wrong}}},
+                               shards, identity)
+        for job in ("database", "engine-go", "engine-python", "repository-policy"):
+            with self.subTest(job=job), self.assertRaises(ValueError):
+                audit_jobs({**needs, job: {"result": "skipped"}}, shards, identity)
+        needs["changes"]["outputs"]["database"] = "false"
+        needs["database"] = {"result": "skipped"}
+        audit_jobs(needs, shards, identity)
+
+    def test_missing_python_integration_evidence_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "postgres-integration.log").write_text("incomplete")
+            with self.assertRaises(ValueError):
+                audit_python_results(root)
+            (root / "postgres-integration.log").write_text("POSTGRES INTEGRATION PASS: initialized")
+            (root / "worker-admission-postgres.log").write_text("")
+            with self.assertRaises(ValueError):
+                audit_python_results(root)
 
 
 if __name__ == "__main__":
