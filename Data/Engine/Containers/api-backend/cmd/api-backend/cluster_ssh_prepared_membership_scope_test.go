@@ -172,7 +172,7 @@ func newPreparedMembershipNativeForProof(t *testing.T, a clusterSSHPreparationAu
 
 		}
 		w.Header().Set("X-Scope-Post", fmt.Sprint(post))
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{pod}, "metadata": map[string]any{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "items": []any{pod}, "metadata": map[string]any{}})
 	}))
 	t.Cleanup(server.Close)
 	client := server.Client()

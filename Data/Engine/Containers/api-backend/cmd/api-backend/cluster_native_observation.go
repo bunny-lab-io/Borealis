@@ -112,6 +112,14 @@ func (c *kubernetesAPIClient) getClusterSSHNodeCohortJSON(ctx context.Context, p
 				}
 			}
 		}
+		// Downstream admission and fencing parsers consume individual Node
+		// documents and require the same type as a direct Kubernetes GET.
+		exact["items"] = items
+		normalized, err := json.Marshal(exact)
+		if err != nil {
+			return errClusterConflict
+		}
+		return json.Unmarshal(normalized, out)
 	}
 	return json.Unmarshal(raw, out)
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"io"
+	"maps"
 	"math"
 	"regexp"
 	"strconv"
@@ -181,9 +182,29 @@ func clusterSSHStorageList(object map[string]any, kind, namespace string, limit 
 	if kind == "Replica" {
 		version = "longhorn.io/v1beta2"
 	}
+	items, ok := clusterSSHTypedListItems(object, version, kind, limit)
+	if !ok {
+		return nil, false
+	}
+	names, uids := map[string]bool{}, map[string]bool{}
+	for _, x := range items {
+		id, valid := clusterSSHStorageMetadata(x, version, kind, namespace)
+		if !valid || names[id.Name] || uids[id.UID] {
+			return nil, false
+		}
+		names[id.Name], uids[id.UID] = true, true
+	}
+	return items, true
+}
+
+// Core Kubernetes lists can carry type information only on the envelope. Fill
+// omitted item fields on a private copy after validating the complete list.
+// A supplied field must agree, and custom resource items retain explicit types.
+func clusterSSHTypedListItems(object map[string]any, version, kind string, limit int) ([]map[string]any, bool) {
 	items, ok := object["items"].([]any)
 	meta := clusterSSHStorageMap(object, "metadata")
-	if !ok || len(items) > limit || clusterSSHStorageText(object, "apiVersion") != version || clusterSSHStorageText(object, "kind") != kind+"List" || meta == nil {
+	if !ok || len(items) > limit || clusterSSHStorageText(object, "apiVersion") != version || clusterSSHStorageText(object, "kind") != kind+"List" || meta == nil ||
+		!clusterNativeObservationFieldNames(object, "apiVersion", "kind", "items", "metadata") || !clusterNativeObservationFieldNames(meta, "continue", "remainingItemCount") {
 		return nil, false
 	}
 	if value, exists := meta["continue"]; exists && value != "" {
@@ -196,17 +217,38 @@ func clusterSSHStorageList(object map[string]any, kind, namespace string, limit 
 		}
 	}
 	result := make([]map[string]any, 0, len(items))
-	names, uids := map[string]bool{}, map[string]bool{}
 	for _, item := range items {
 		x, ok := item.(map[string]any)
-		id, valid := clusterSSHStorageMetadata(x, version, kind, namespace)
-		if !ok || !valid || names[id.Name] || uids[id.UID] {
+		if !ok {
 			return nil, false
 		}
-		names[id.Name], uids[id.UID] = true, true
+		x, ok = clusterSSHListItemType(x, version, kind)
+		if !ok {
+			return nil, false
+		}
 		result = append(result, x)
 	}
 	return result, true
+}
+
+// Call only after checking the containing list's group, version and kind.
+func clusterSSHListItemType(x map[string]any, version, kind string) (map[string]any, bool) {
+	if x == nil || !clusterNativeObservationFieldNames(x, "apiVersion", "kind") {
+		return nil, false
+	}
+	itemVersion, hasVersion := x["apiVersion"]
+	itemKind, hasKind := x["kind"]
+	if (hasVersion && itemVersion != version) || (hasKind && itemKind != kind) {
+		return nil, false
+	}
+	if !hasVersion || !hasKind {
+		if version != "v1" {
+			return nil, false
+		}
+		x = maps.Clone(x)
+		x["apiVersion"], x["kind"] = version, kind
+	}
+	return x, true
 }
 
 func clusterSSHStorageStrings(value any, wanted ...string) bool {

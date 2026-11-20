@@ -249,16 +249,16 @@ func TestClusterSSHPreparedMembershipFreshJob(t *testing.T) {
 					metadataList["continue"] = "next"
 				}
 				if mode == "pod duplicate status" {
-					raw, _ := json.Marshal(map[string]any{"items": items, "metadata": metadataList})
+					raw, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "PodList", "items": items, "metadata": metadataList})
 					raw = []byte(strings.Replace(string(raw), `"status":`, `"status":{},"status":`, 1))
 					_, _ = w.Write(raw)
 					return
 				}
 				if mode == "pod list alias" {
-					_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "Metadata": map[string]any{"continue": "next"}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "items": items, "Metadata": map[string]any{"continue": "next"}})
 					return
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "metadata": metadataList})
+				_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "items": items, "metadata": metadataList})
 			}))
 			defer server.Close()
 			runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, httpClient: server.Client()}, namespace: "borealis", controllerHolder: "controller", actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}

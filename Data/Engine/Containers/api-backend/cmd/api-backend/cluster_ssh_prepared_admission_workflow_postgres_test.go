@@ -195,7 +195,7 @@ func TestClusterSSHPreparedAdmissionWorkflowPostgres(t *testing.T) {
 							if !deleted[name] {
 								items = append(items, pods[uid])
 							}
-							return respond(request, http.StatusOK, map[string]any{"items": items})
+							return respond(request, http.StatusOK, map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": items})
 						}
 					}
 					return base.RoundTrip(request)

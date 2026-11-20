@@ -292,7 +292,7 @@ func TestClusterSSHStorageBrokerControllerComposition(t *testing.T) {
 								network := sshSourceNetworkFixture(member, f.a.K3sVersion)
 								// The source action requires the same Pod identity across rereads.
 								podUID := "77777777-7777-4777-8777-777777777777"
-								_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sourceActionPod(t, job, network, podUID)}})
+								_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{sourceActionPod(t, job, network, podUID)}})
 								return
 							}
 						}

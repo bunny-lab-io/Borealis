@@ -226,14 +226,31 @@ func TestClusterSSHStorageInventory(t *testing.T) {
 			before := got
 			for _, path := range []string{clusterSSHStorageClaimsPath, clusterSSHStoragePodsPath} {
 				items := f.objects[path]["items"].([]any)
+				for _, raw := range items {
+					item := raw.(map[string]any)
+					delete(item, "apiVersion")
+					delete(item, "kind")
+				}
 				slices.Reverse(items)
 				clusterSSHStorageMap(f.objects[path], "metadata")["resourceVersion"] = "101"
 			}
 			after, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
 			if err != nil || !reflect.DeepEqual(before, after) {
-				t.Fatal("collection order/clock changed object evidence")
+				t.Fatal("collection order, clock or omitted core item types changed object evidence")
 			}
 		})
+	}
+}
+
+func TestClusterSSHReplicaListRequiresExplicitItemType(t *testing.T) {
+	fixture := newSSHStorageFixture(t, false)
+	list := sshStorageReplicaList(fixture, 0)
+	if _, ok := clusterSSHStorageList(list, "Replica", "longhorn-system", 256); !ok {
+		t.Fatal("valid Longhorn Replica fixture rejected")
+	}
+	delete(sshStorageReplica(fixture, 0, 0), "kind")
+	if _, ok := clusterSSHStorageList(list, "Replica", "longhorn-system", 256); ok {
+		t.Fatal("Longhorn Replica without explicit type accepted")
 	}
 }
 

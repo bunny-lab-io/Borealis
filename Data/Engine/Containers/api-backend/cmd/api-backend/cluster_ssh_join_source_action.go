@@ -127,20 +127,17 @@ func (r *kubernetesClusterStepRunner) readSSHSourceK3sJoin(parent context.Contex
 		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
 			return nil, fail
 		}
-		var pods struct {
-			Metadata struct{ Continue string }
-			Items    []map[string]any
-		}
-		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil || pods.Metadata.Continue != "" || len(pods.Items) > 1 {
+		var pods clusterSSHJobPods
+		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil {
 			return nil, fail
 		}
-		if len(pods.Items) == 1 {
-			podUID, _ := nestedMap(pods.Items[0], "metadata")["uid"].(string)
+		if len(pods) == 1 {
+			podUID, _ := nestedMap(pods[0], "metadata")["uid"].(string)
 			if observedPod != "" && observedPod != podUID {
 				return nil, fail
 			}
 			observedPod = podUID
-			message, complete, err := clusterSSHSourcePodMessage(pods.Items[0], manifest, request.ID, uid)
+			message, complete, err := clusterSSHSourcePodMessage(pods[0], manifest, request.ID, uid)
 			if err != nil {
 				return nil, fail
 			}

@@ -95,16 +95,8 @@ func projectClusterSSHJoiningNodes(ctx context.Context, frozen clusterSSHPrepara
 	current := map[string]string{}
 	names, uids := map[string]bool{}, map[string]bool{}
 	for _, raw := range *list.Items {
-		var node struct {
-			APIVersion string `json:"apiVersion"`
-			Kind       string `json:"kind"`
-			Metadata   struct {
-				Name   string            `json:"name"`
-				UID    string            `json:"uid"`
-				Labels map[string]string `json:"labels"`
-			} `json:"metadata"`
-		}
-		if len(raw) > 128<<10 || json.Unmarshal(raw, &node) != nil || node.APIVersion != "v1" || node.Kind != "Node" || names[node.Metadata.Name] || uids[node.Metadata.UID] {
+		raw, node, err := clusterSSHListedNode(raw)
+		if err != nil || names[node.Metadata.Name] || uids[node.Metadata.UID] {
 			return nil, nil, clusterbootstrap.ErrSessionAuthority
 		}
 		names[node.Metadata.Name], uids[node.Metadata.UID] = true, true

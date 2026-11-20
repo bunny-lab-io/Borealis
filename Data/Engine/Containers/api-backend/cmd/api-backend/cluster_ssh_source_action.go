@@ -165,20 +165,17 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
 			return fail()
 		}
-		var pods struct {
-			Metadata struct{ Continue string }
-			Items    []map[string]any
-		}
-		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil || pods.Metadata.Continue != "" || len(pods.Items) > 1 {
+		var pods clusterSSHJobPods
+		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil {
 			return fail()
 		}
-		if len(pods.Items) == 1 {
-			podUID, _ := nestedMap(pods.Items[0], "metadata")["uid"].(string)
+		if len(pods) == 1 {
+			podUID, _ := nestedMap(pods[0], "metadata")["uid"].(string)
 			if observedPodUID != "" && podUID != observedPodUID {
 				return fail()
 			}
 			observedPodUID = podUID
-			message, complete, err := clusterSSHSourcePodMessage(pods.Items[0], manifest, nonce, uid)
+			message, complete, err := clusterSSHSourcePodMessage(pods[0], manifest, nonce, uid)
 			if err != nil {
 				return fail()
 			}
@@ -208,6 +205,23 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 		case <-ticker.C:
 		}
 	}
+}
+
+// A controller-UID selector on these single-Pod Jobs must yield a complete
+// core PodList before its receipt or absence can be used as evidence.
+type clusterSSHJobPods []map[string]any
+
+func (pods *clusterSSHJobPods) UnmarshalJSON(raw []byte) error {
+	var list clusterNativeObservationObject
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return err
+	}
+	items, ok := clusterSSHTypedListItems(list, "v1", "Pod", 1)
+	if !ok {
+		return errClusterConflict
+	}
+	*pods = items
+	return nil
 }
 
 func clusterSSHSourceJobManifest(name, nonce, image, node, operationID string) map[string]any {

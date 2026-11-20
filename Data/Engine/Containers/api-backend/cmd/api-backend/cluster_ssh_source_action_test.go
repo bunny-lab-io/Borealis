@@ -260,6 +260,9 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 					terminated["exitCode"] = 1
 					status["phase"] = "Failed"
 				}
+				// Raw Kubernetes PodList responses supply the item type on the collection.
+				delete(p, "apiVersion")
+				delete(p, "kind")
 				items := []any{p}
 				if mode == "two pods" {
 					items = append(items, sourceActionPod(t, job, network, newClusterUUID()))
@@ -268,7 +271,7 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 				if mode == "paginated pods" {
 					metadata["continue"] = "more"
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"metadata": metadata, "items": items})
+				_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": metadata, "items": items})
 			}))
 			defer server.Close()
 			runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "synthetic-private", httpClient: server.Client()}, namespace: "borealis", controllerHolder: lease.ControllerHolder, actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}
@@ -336,6 +339,30 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 			}
 			if (mode == "wrong controller" || mode == "foreign member" || mode == "mutable image") && posts.Load() != 0 {
 				t.Fatal("invalid authority created Job")
+			}
+		})
+	}
+}
+
+func TestClusterSSHJobPodListTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		ok        bool
+	}{
+		{"empty", `{"apiVersion":"v1","kind":"PodList","metadata":{},"items":[]}`, true},
+		{"explicit item", `{"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{"apiVersion":"v1","kind":"Pod"}]}`, true},
+		{"missing envelope", `{"metadata":{},"items":[{}]}`, false},
+		{"wrong collection", `{"apiVersion":"v1","kind":"ServiceList","metadata":{},"items":[{}]}`, false},
+		{"wrong item type", `{"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{"kind":"Node"}]}`, false},
+		{"wrong item version", `{"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{"apiVersion":"apps/v1"}]}`, false},
+		{"null item type", `{"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{"kind":null}]}`, false},
+		{"missing items", `{"apiVersion":"v1","kind":"PodList","metadata":{}}`, false},
+		{"incomplete empty list", `{"apiVersion":"v1","kind":"PodList","metadata":{"remainingItemCount":1},"items":[]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var pods clusterSSHJobPods
+			if err := json.Unmarshal([]byte(tc.raw), &pods); (err == nil) != tc.ok {
+				t.Fatalf("decode error %v, want success %t", err, tc.ok)
 			}
 		})
 	}

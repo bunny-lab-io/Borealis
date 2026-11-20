@@ -141,6 +141,13 @@ func TestClusterSSHJoinedTargetObservation(t *testing.T) {
 						}
 						nodes = append(nodes, node)
 					}
+					if mode == "pair" || mode == "replacement" {
+						for _, value := range nodes {
+							item := value.(map[string]any)
+							delete(item, "apiVersion")
+							delete(item, "kind")
+						}
+					}
 					list := map[string]any{"apiVersion": "v1", "kind": "NodeList", "items": nodes}
 					if mode == "pagination" {
 						list["metadata"] = map[string]any{"continue": "next"}

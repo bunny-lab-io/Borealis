@@ -117,7 +117,7 @@ func TestClusterSSHPreparationConfigurationPostgresNative(t *testing.T) {
 					value = jobs[strings.TrimPrefix(r.URL.Path, "/apis/batch/v1/namespaces/borealis/jobs/")]
 				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
 					uid := strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "batch.kubernetes.io/controller-uid=")
-					value = map[string]any{"items": []any{pods[uid]}}
+					value = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{pods[uid]}}
 				default:
 					t.Error("unexpected source request", r.Method, r.URL.Path)
 					w.WriteHeader(400)

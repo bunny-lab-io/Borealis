@@ -72,6 +72,11 @@ func TestClusterSSHPreparedNativeObservation(t *testing.T) {
 						}
 					}
 				} else {
+					for _, entry := range anySlice(object["items"]) {
+						node := entry.(map[string]any)
+						delete(node, "apiVersion")
+						delete(node, "kind")
+					}
 					item := anySlice(object["items"])[0].(map[string]any)
 					metadata, status := clusterSSHStorageMap(item, "metadata"), clusterSSHStorageMap(item, "status")
 					rename := func(object map[string]any, old, new string) { object[new] = object[old]; delete(object, old) }

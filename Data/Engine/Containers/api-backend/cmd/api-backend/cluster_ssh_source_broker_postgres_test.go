@@ -403,7 +403,7 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 									network.Kubelet.CSISocket.PathSHA256 = strings.Repeat("d", 64)
 								}
 							}
-							payload, _ := json.Marshal(map[string]any{"items": []any{sourceActionPod(t, job, network, podUID)}})
+							payload, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{sourceActionPod(t, job, network, podUID)}})
 							if mode == "native executable digest changed during Job" && jobs.Load() > 1 {
 								changed := strings.Replace(string(payload), clusterbootstrap.K3sPins().ServerExecutable.SHA256, strings.Repeat("a", 64), 1)
 								if changed == string(payload) {

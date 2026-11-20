@@ -101,6 +101,12 @@ func TestOperatorSiteWorkerInventoryProducerViews(t *testing.T) {
 					default:
 						t.Errorf("unexpected inventory read: %s", r.URL.Path)
 					}
+					for i, value := range items {
+						item := operatorInventoryClone(t, value.(map[string]any))
+						delete(item, "apiVersion")
+						delete(item, "kind")
+						items[i] = item
+					}
 					writeJSON(w, http.StatusOK, operatorInventoryResponse(r, items))
 				}))
 				defer server.Close()

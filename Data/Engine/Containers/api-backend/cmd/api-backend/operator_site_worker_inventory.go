@@ -78,10 +78,17 @@ func (o *borealisOperator) siteWorkerObjectsWithInventory(ctx context.Context, r
 	// Invalid stronger evidence is null, never a complete empty list. Existing
 	// incomplete/malformed legacy reads still fail the entire command above.
 	exact, _ := operatorSiteWorkerObjects(payload.exact)
-	wantKind := map[string]string{"pods": "PodList", "services": "ServiceList"}[resource]
+	kind := map[string]string{"pods": "Pod", "services": "Service"}[resource]
 	metadata, metadataOK := payload.exact["metadata"].(map[string]any)
-	if ctx.Err() != nil || !cleanup.clean() || observed.failed.Load() || wantKind == "" || payload.exact["apiVersion"] != "v1" || payload.exact["kind"] != wantKind || !metadataOK || metadata == nil {
+	if ctx.Err() != nil || !cleanup.clean() || observed.failed.Load() || kind == "" || payload.exact["apiVersion"] != "v1" || payload.exact["kind"] != kind+"List" || !metadataOK || metadata == nil {
 		exact = nil
+	}
+	for i, object := range exact {
+		typed, ok := clusterSSHListItemType(object, "v1", kind)
+		if !ok {
+			return legacy, nil, nil
+		}
+		exact[i] = typed
 	}
 	return legacy, exact, nil
 }

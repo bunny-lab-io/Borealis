@@ -244,7 +244,7 @@ func exercisePreparedCohortSQL(t *testing.T, mode string) {
 		if posts == 6 {
 			w.Header().Set("X-Test-Final-Pod", "true")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{pod}, "metadata": map[string]any{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "items": []any{pod}, "metadata": map[string]any{}})
 	}))
 	defer server.Close()
 	closed, release := make(chan struct{}), make(chan struct{})

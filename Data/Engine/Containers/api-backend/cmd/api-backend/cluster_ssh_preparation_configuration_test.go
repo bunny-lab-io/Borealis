@@ -225,7 +225,7 @@ func sshPreparationConfigurationNativeFixture(t *testing.T, work clusterSSHPrepa
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/apis/batch/v1/namespaces/borealis/jobs/"):
 			value = jobs[strings.TrimPrefix(r.URL.Path, "/apis/batch/v1/namespaces/borealis/jobs/")]
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
-			value = map[string]any{"items": []any{pods[strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "batch.kubernetes.io/controller-uid=")]}}
+			value = map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{pods[strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "batch.kubernetes.io/controller-uid=")]}}
 		default:
 			t.Error("unexpected native path", r.Method, r.URL.Path)
 			w.WriteHeader(400)

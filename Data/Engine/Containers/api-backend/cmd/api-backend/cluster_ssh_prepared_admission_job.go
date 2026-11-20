@@ -90,20 +90,17 @@ func (r *kubernetesClusterStepRunner) waitClusterSSHPreparedAdmissionJob(ctx con
 		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
 			return errClusterConflict
 		}
-		var pods struct {
-			Metadata struct{ Continue string }
-			Items    []map[string]any
-		}
-		if kube.getJSON(ctx, podsPath, &pods) != nil || pods.Metadata.Continue != "" || len(pods.Items) > 1 {
+		var pods clusterSSHJobPods
+		if kube.getJSON(ctx, podsPath, &pods) != nil {
 			return errClusterConflict
 		}
-		if len(pods.Items) == 1 {
-			podUID := cleanText(nestedMap(pods.Items[0], "metadata")["uid"])
+		if len(pods) == 1 {
+			podUID := cleanText(nestedMap(pods[0], "metadata")["uid"])
 			if observedPodUID != "" && podUID != observedPodUID {
 				return errClusterConflict
 			}
 			observedPodUID = podUID
-			complete, err := validClusterSSHPreparedAdmissionPod(pods.Items[0], manifest, uid)
+			complete, err := validClusterSSHPreparedAdmissionPod(pods[0], manifest, uid)
 			if err != nil {
 				return err
 			}
@@ -175,15 +172,12 @@ func (r *kubernetesClusterStepRunner) containClusterSSHPreparedAdmissionJob(ctx 
 	for {
 		var job map[string]any
 		jobErr := kube.getJSON(ctx, path, &job)
-		var pods struct {
-			Metadata struct{ Continue string }
-			Items    []map[string]any
-		}
+		var pods clusterSSHJobPods
 		podsErr := kube.getJSON(ctx, podsPath, &pods)
-		if kubernetesAPIErrorHasStatus(jobErr, http.StatusNotFound) && podsErr == nil && pods.Metadata.Continue == "" && len(pods.Items) == 0 {
+		if kubernetesAPIErrorHasStatus(jobErr, http.StatusNotFound) && podsErr == nil && len(pods) == 0 {
 			break
 		}
-		if jobErr != nil && !kubernetesAPIErrorHasStatus(jobErr, http.StatusNotFound) || podsErr != nil || pods.Metadata.Continue != "" {
+		if jobErr != nil && !kubernetesAPIErrorHasStatus(jobErr, http.StatusNotFound) || podsErr != nil {
 			return errClusterConflict
 		}
 		select {

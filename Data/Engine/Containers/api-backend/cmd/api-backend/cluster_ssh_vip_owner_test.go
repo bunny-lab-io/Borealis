@@ -406,7 +406,7 @@ func sshVIPKubernetesFixture(t *testing.T, a clusterSSHPreparationAuthority, net
 				}
 				status := anySlice(sourceActionMap(pod, "status")["containerStatuses"])[0].(map[string]any)
 				sourceActionMap(sourceActionMap(status, "state"), "terminated")["message"] = string(receipt)
-				_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{pod}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{pod}})
 				return
 			}
 		}

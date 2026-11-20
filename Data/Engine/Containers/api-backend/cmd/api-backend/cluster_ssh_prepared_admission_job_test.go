@@ -99,7 +99,7 @@ func TestClusterSSHPreparedAdmissionJobCustody(t *testing.T) {
 						switch selector {
 						case "batch.kubernetes.io/controller-uid=" + originalUID:
 							if deleted {
-								_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+								_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{}})
 								return
 							}
 							if mode == "cancel contains" {
@@ -107,10 +107,10 @@ func TestClusterSSHPreparedAdmissionJobCustody(t *testing.T) {
 								w.WriteHeader(http.StatusServiceUnavailable)
 								return
 							}
-							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sshJoinSourcePod(t, original, originalPodUID, "")}})
+							_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{sshJoinSourcePod(t, original, originalPodUID, "")}})
 							return
 						case "batch.kubernetes.io/controller-uid=" + reconcileUID:
-							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sshJoinSourcePod(t, reconcile, reconcilePodUID, "")}})
+							_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{sshJoinSourcePod(t, reconcile, reconcilePodUID, "")}})
 							return
 						}
 					}
@@ -233,7 +233,7 @@ func TestClusterSSHPreparedAdmissionPairContainmentAfterCancellation(t *testing.
 					uid := strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "batch.kubernetes.io/controller-uid=")
 					for _, job := range jobs {
 						if cleanText(nestedMap(job, "metadata")["uid"]) == uid {
-							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{sshJoinSourcePod(t, job, newClusterUUID(), "")}})
+							_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{sshJoinSourcePod(t, job, newClusterUUID(), "")}})
 							return
 						}
 					}

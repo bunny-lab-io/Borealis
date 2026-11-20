@@ -102,6 +102,42 @@ func readClusterSSHJoinedTargets(parent context.Context, authority clusterSSHPre
 	return clusterSSHJoinedTargets{digest, second}, nil
 }
 
+// Both registration and settled-node readers have checked the v1 NodeList
+// envelope. Their strict per-Node parsers also serve direct GET callers.
+func clusterSSHListedNode(raw json.RawMessage) (json.RawMessage, clusterSSHListedNodeIdentity, error) {
+	var node clusterSSHListedNodeIdentity
+	if len(raw) > 128<<10 {
+		return nil, node, errClusterConflict
+	}
+	var object clusterNativeObservationObject
+	if json.Unmarshal(raw, &object) != nil {
+		return nil, node, errClusterConflict
+	}
+	typed, ok := clusterSSHListItemType(object, "v1", "Node")
+	if !ok {
+		return nil, node, errClusterConflict
+	}
+	if object["apiVersion"] == nil || object["kind"] == nil {
+		normalized, err := json.Marshal(typed)
+		if err != nil || len(normalized) > 128<<10 {
+			return nil, node, errClusterConflict
+		}
+		raw = normalized
+	}
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return nil, node, err
+	}
+	return raw, node, nil
+}
+
+type clusterSSHListedNodeIdentity struct {
+	Metadata struct {
+		Name   string            `json:"name"`
+		UID    string            `json:"uid"`
+		Labels map[string]string `json:"labels"`
+	} `json:"metadata"`
+}
+
 // Native observation only; caller must independently fence its own phase.
 // Sharing this projection never manufactures a preparation worker lease.
 func observeClusterSSHJoinedNodes(ctx context.Context, getJSON func(context.Context, string, any) error,
@@ -133,16 +169,8 @@ func observeClusterSSHJoinedNodesWithParser(ctx context.Context, getJSON func(co
 		originals := make([]json.RawMessage, 0, len(source.Members))
 		names, uids := map[string]bool{}, map[string]bool{}
 		for _, raw := range *list.Items {
-			var node struct {
-				APIVersion string `json:"apiVersion"`
-				Kind       string `json:"kind"`
-				Metadata   struct {
-					Name   string            `json:"name"`
-					UID    string            `json:"uid"`
-					Labels map[string]string `json:"labels"`
-				} `json:"metadata"`
-			}
-			if len(raw) > 128<<10 || json.Unmarshal(raw, &node) != nil || node.APIVersion != "v1" || node.Kind != "Node" || names[node.Metadata.Name] || uids[node.Metadata.UID] {
+			raw, node, err := clusterSSHListedNode(raw)
+			if err != nil || names[node.Metadata.Name] || uids[node.Metadata.UID] {
 				return clusterbootstrap.ErrSessionAuthority
 			}
 			names[node.Metadata.Name], uids[node.Metadata.UID] = true, true

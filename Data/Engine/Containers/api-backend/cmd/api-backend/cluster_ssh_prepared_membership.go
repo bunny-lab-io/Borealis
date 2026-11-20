@@ -266,20 +266,17 @@ func (r *kubernetesClusterStepRunner) readSSHPreparedMembership(ctx context.Cont
 		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
 			return fail()
 		}
-		var pods struct {
-			Metadata struct{ Continue string }
-			Items    []map[string]any
-		}
-		if r.kube.preparedMembershipJobJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil || pods.Metadata.Continue != "" || len(pods.Items) > 1 {
+		var pods clusterSSHJobPods
+		if r.kube.preparedMembershipJobJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil {
 			return fail()
 		}
-		if len(pods.Items) == 1 {
-			podUID, _ := nestedMap(pods.Items[0], "metadata")["uid"].(string)
+		if len(pods) == 1 {
+			podUID, _ := nestedMap(pods[0], "metadata")["uid"].(string)
 			if observedPodUID != "" && observedPodUID != podUID {
 				return fail()
 			}
 			observedPodUID = podUID
-			message, complete, err := clusterSSHSourcePodMessage(pods.Items[0], manifest, nonce, uid)
+			message, complete, err := clusterSSHSourcePodMessage(pods[0], manifest, nonce, uid)
 			if err != nil {
 				return fail()
 			}

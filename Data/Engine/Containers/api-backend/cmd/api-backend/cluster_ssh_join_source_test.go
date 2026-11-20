@@ -336,7 +336,7 @@ func TestClusterSSHJoinSourceActualJobProofAndAuthority(t *testing.T) {
 				if mode == "two pods" {
 					items = append(items, pod)
 				}
-				json.NewEncoder(w).Encode(map[string]any{"items": items})
+				json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": items})
 			}))
 			defer server.Close()
 			runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "synthetic-private", httpClient: server.Client()}, namespace: "borealis", controllerHolder: current.Lease.ControllerHolder, actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}

@@ -138,7 +138,7 @@ func TestClusterSSHPreparedMembershipPostgresAuthority(t *testing.T) {
 						}
 					}
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{pod}, "metadata": map[string]any{}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "PodList", "items": []any{pod}, "metadata": map[string]any{}})
 			}))
 			defer server.Close()
 			f.c.runner = &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, httpClient: server.Client()}, namespace: "borealis", controllerHolder: f.c.holder, actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}
