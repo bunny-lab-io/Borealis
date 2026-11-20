@@ -1,19 +1,26 @@
 ## Rules of Engagement with Developer
-Respond like smart caveman. Cut all filler, keep technical substance.
+Respond with concise, precise technical prose. Lead with the result or recommendation, supporting evidence, limitations, and next action. Avoid filler and unnecessary pleasantries; do not omit context needed for an operational decision.
 
-* Drop articles (`a`, `an`, `the`) and filler (`just`, `really`, `basically`, `actually`).
-* Drop pleasantries (`sure`, `certainly`, `happy to`).
-* No hedging. Fragments fine. Short synonyms.
-* Technical terms stay exact.
-* Code blocks unchanged.
-* Pattern: `[thing] [action] [reason]. [next step].`
+* Answer the operator's actual question before starting or resuming implementation.
+* State verified facts, hypotheses, uncertainty, and recommendations distinctly. Never manufacture certainty or hide relevant risks to sound decisive.
+* Preserve exact technical terminology, commands, code blocks, identifiers, and evidence references.
+* Prefer clear ordinary sentences to artificial telegraphic phrasing; operator-facing documentation follows its own authoring rules.
+* Disclose unavailable tools, authentication failures, uncommitted/unpublished work, failed/skipped/incomplete validation, pending CI, and live-qualification gaps.
+* When operator requests a recommendation, offer a preferred course with material tradeoffs, not an unexplained list of options.
 
-Use this file as entrypoint for Codex instructions. Full knowledgebase lives under `Docs/`, with navigation and documentation rules in `Docs/index.md`.
+Read this file at session start for repo-wide Codex instructions. Canonical project knowledge lives under `Docs/`, with navigation and documentation rules in `Docs/index.md`. Issue #530 is the current clustering tracker, not a substitute for repo-wide safety and operational instructions.
 
-## Linux VS Code / Codex Sandbox Prerequisite
+## Authority, Currency, and Conflicting Evidence
+* Explicit operator direction sets authorized objective and cadence, subject to repo-wide safety, security, and review boundaries. New direction does not silently waive an existing safeguard.
+* `AGENTS.md` defines repo-wide agent conduct and safety; applicable `Docs/` pages define domain implementation and operational procedures; active issue/PR records define current work and acceptance evidence. Read all applicable instructions, including nested `AGENTS.md` files when present.
+* For clustering, #530 governs accepted scope and current NEXT. Reconcile it with live branch/PR, commit ancestry, local worktree, and exact-head CI. A stale tracker section, prior handoff, or unverified summary does not override newer observed evidence.
+* When sources conflict, identify the discrepancy, investigate the actual state, preserve established safety gates, and explain the resolution. Ask operator when authorized scope or material risk is genuinely unclear.
+* Repository evidence can prove implementation and tests; only approved live evidence and acceptance decisions can establish live qualification and release readiness.
+
+## Linux VS Code / Codex Sandbox Troubleshooting
 When running Codex from VS Code on Linux, Ubuntu AppArmor may block Codex sandbox startup before shell commands run. Typical evidence includes `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` or AppArmor denials for `unprivileged_userns` capabilities.
 
-On dedicated Borealis development hosts, developer should disable AppArmor unprivileged-user-namespace restriction for Codex session:
+This is a host-wide security control. Diagnose the actual sandbox/AppArmor failure and prefer a supported, narrowly scoped sandbox configuration or operator-managed development environment. Only if those are insufficient and the operator explicitly authorizes a temporary host-wide relaxation on the dedicated development host, the developer may run:
 
 ```bash
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -26,7 +33,7 @@ unshare --user --map-root-user --net sh -c \
   'ip link set lo up && ip link show lo'
 ```
 
-Setting is host-wide security relaxation and resets after reboot unless separately persisted. Do not run VS Code or Codex as root. Apply only on operator-approved development host; never change production host or unrelated infrastructure for Codex sandbox access.
+Setting is a host-wide security relaxation and resets after reboot unless separately persisted. Do not apply automatically, persist it without separate approval, or run VS Code/Codex as root. Never change production hosts or unrelated infrastructure for Codex sandbox access. If unapproved or unavailable, report the exact blocker rather than bypassing the sandbox.
 
 ## Dedicated Development Workstation Boundary
 Codex and future agents use dedicated Linux workstation outside Borealis cluster as source-development and control host.
@@ -43,6 +50,8 @@ Disposable Engine lab nodes are remote targets:
 * `borealis-engine-03` / `192.168.3.250`
 
 Access all three through SSH from workstation for separately authorized inspection, deployment, runtime repair, and qualification. Never edit deployed checkout as development source. Before any command that can install, deploy, start, stop, restart, reconfigure, or qualify Engine runtime, verify local hostname is not an Engine node, identify exact remote target, and confirm applicable authorization and documented procedure. Repository implementation authorization does not authorize remote runtime action.
+
+For clustering work, preserve original-controller authority, inherited shared identity, and existing fencing, lease, and quorum guarantees. Follow `Docs/Engine/managing-engine-clusters.md` for phase-specific requirements.
 
 ## Core Operating Model
 Treat Borealis work as iterative repo loop, not single prompt.
@@ -61,12 +70,16 @@ Default loop:
 
 Do not call work complete because files changed. Work complete only when requested behavior is implemented, relevant validation has run or been explicitly deferred, and handoff includes remaining risk.
 
+Own one coherent engineering objective, including necessary diagnosis and correction of direct blockers; do not rigidly stop at the first related failed test. Conversely, do not begin an unrelated slice solely because more time or model capacity remains.
+
+For substantive work, use **Observe → Diagnose → Adapt → Verify → Discuss**. Apply this cycle when tests, source, runtime, or CI contradict the plan. See [Direct Operator Collaboration and Self-Correction](#direct-operator-collaboration-and-self-correction).
+
 ## Where to Read
 * Start at `Docs/index.md`.
 * Use index table of contents to find domain documentation, testing guidance, runtime docs, API docs, and operation runbooks.
 * Follow domain docs found through index.
-* Where docs overlap, domain page wins.
-* `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
+* Where domain docs overlap, prefer the most specific current canonical domain page after checking applicable repo-wide instructions and actual source behavior.
+* `Detailed Codex Breakdown` admonitions inside each page are authoritative domain implementation guidance, not permission to override safety boundaries or add new operator acceptance requirements.
 * Domain guidance preserves implementation and safety context; agent-authored design detail does not create new operator acceptance requirements. Current operator direction governs scope and cadence. For a new prerequisite, identify blocked acceptance/invariant, concrete missing behavior, why existing mechanisms or safe rejection cannot cover it, and smallest remedy.
 * Do not duplicate domain guidance across multiple docs. Link to canonical page instead.
 
@@ -199,6 +212,32 @@ Examples of steering:
 
 Do not continue silently down obsolete path after operator changes direction.
 
+## Direct Operator Collaboration and Self-Correction
+* A new agent starts by reconciling local work, current issue/PR, latest comments, branch head, exact-head CI, and current acceptance blocker; assess the recorded NEXT independently before changing source.
+* Answer operator questions with a grounded assessment, relevant uncertainty, preferred recommendation, and tradeoffs. Do not respond with a tracker link alone or automatically resume coding when asked for analysis.
+* Treat failures as evidence: separate symptoms, confirmed cause, hypotheses, and unknowns. Preserve contrary evidence and identify what would falsify the working hypothesis.
+* Correct directly related blockers autonomously within current authorized objective; do not let self-correction become unbounded scope expansion. Seek operator decision for materially different architecture, acceptance requirements, live action, or risk.
+* Check whether the change actually advanced an acceptance boundary, and distinguish implementation, focused tests, integration, required CI, live qualification, and formal acceptance.
+* Proactively identify repeated waste (redundant parsing, overlong serial suites, fixed sleeps, environmental drift, duplicate work), then recommend bounded fixes backed by measurements.
+* At meaningful checkpoints discuss findings and revise NEXT if new evidence warrants it. When session ends, disclose all unresolved obstacles without implying unattended future work.
+
+## GitHub Access, Publication, and Tracker Integrity
+* Prefer authenticated local Git/`gh` where available. Shell login and authenticated GitHub connector access are independent: `gh auth` failure is not proof that publication or issue reads are impossible.
+* If connector-enabled tools exist (e.g., through `functions.exec`), discover actual GitHub operation names and schemas from the tool registry; do not assume a fixed prefix, invent tool calls, extract credentials, or print raw secrets/base64 into chat. Useful reads include `fetch_issue`, `get_pr_info`, `fetch_file`, `fetch_commit_workflow_runs`, `fetch_workflow_run_jobs`, and focused job logs/artifacts.
+* Reconcile remote branch/PR head and local commits/tree before publishing. Preserve dirty work, file types/modes, and original commits; never blindly reset or replay an already integrated change.
+* Connector Git Objects fallback, when supported: upload changed blobs with `create_blob`; build complete equivalent trees with `create_tree` and correct `base_tree_sha` (including deletions, modes, symlinks, binary data); verify each tree matches the intended local tree; create commits with `create_commit` using correct parent/message; advance branch only through `update_ref` with verified current `expected_sha` and `force: false`.
+* If the expected head changes, re-fetch and reconcile. Never force-push a shared branch. Routine publication, scope, or merge approval does not authorize rewriting its history. Connector commit SHAs may differ from local commits; compare exact tree identity and ancestry. Preserve originals under handoff refs before local reconciliation.
+* Verify published remote branch, PR head, commit tree, and exact-head CI. Never claim publication or CI success before confirmation. Do not merge or release without specific authorization.
+* For #530, fetch latest issue body immediately before any `update_issue`; preserve concurrent edits, historical evidence, existing acceptance gates, and authorization. Update materially changed handoff/NEXT in place rather than creating duplicate progress documents.
+* If no authenticated method is available, retain local work and report exact blocker; do not invent success, bypass permissions, or use Engine credentials.
+
+## Model and Reasoning Selection
+* Model selection is guidance, not authorization, and depends on the operator's available Codex options. The active agent cannot silently change its own selected model; recommend the next one in handoff.
+* When available, **GPT-6.2 Astra / High** is the preferred initial engagement model for complex Borealis clustering orientation, priority assessment, and cross-system safety review.
+* Prefer **GPT-6.2 Sol / Medium** for established-pattern implementation and known-cause fixes, and **GPT-6.2 Sol / High** for complex integration, CI sharding, and uncertain debugging.
+* Prefer **GPT-6.2 Astra / High** for difficult admission, storage-readiness composition, security, and distributed authority; **GPT-6.2 Astra / Extra High** only for exceptional multi-system fencing, stale ownership, partial failure, and recovery correctness.
+* Do not use expensive reasoning merely because credits are available, but do not sacrifice correctness to minimize usage. When versions/options change, operator-selected current models supersede these examples.
+
 ## Review Checkpoints
 Stop and ask operator before:
 * Broad refactor.
@@ -207,8 +246,6 @@ Stop and ask operator before:
 * Production deploy.
 * Destructive filesystem or database operation.
 * Credential, secret, TLS, auth, or permission change.
-* Force push.
-* Merge with failing or unverified validation.
 * Resolving merge conflict when intent is unclear.
 * Deleting local or remote branch when branch identity is unclear.
 * Any action likely hard to reverse.
@@ -234,17 +271,17 @@ For long-running work, report checkpoint state instead of continuing silently.
 ---
 
 ## Working on Repository Issues
-When asked to work on Gitea or GitHub issue:
-1. Read issue to understand context.
-2. Identify expected behavior, affected subsystem, relevant domain docs, validation command, and docs/SBOM/technical-debt impact.
-3. Create repo branch named `issue/<appropriate-dashed-name>`.
-4. Open pull request named `issue/<appropriate-dashed-name>`.
-5. Perform all issue-related work on that branch.
-6. Keep same branch and PR for ongoing issue until issue resolved, regardless of commit count.
+When asked to work on a Gitea or GitHub issue:
+1. Read the issue and relevant current comments/reviews.
+2. Identify expected behavior, affected subsystem, relevant domain docs, validation, and docs/SBOM/technical-debt impact.
+3. Reconcile existing branch/PR and local work before creating anything.
+4. For a new source-changing implementation issue without an existing implementation PR, create branch `issue/<appropriate-dashed-name>` and open the corresponding PR.
+5. Keep ongoing implementation on its established branch and PR across checkpoints. The operator may explicitly define a smaller, independently complete PR deliverable within a larger issue.
+6. Tracking-only, discussion, diagnosis, and technical-debt inventory issues do not independently require code PRs until an actual source change is authorized.
 
-Every issue has corresponding pull request. No exceptions, no matter how small request is.
+For clustering, #530 is the umbrella tracker and #522 is its active implementation PR on `issue/cluster-central-ssh-onboarding`.
 
-For Borealis clustering work, [#530](https://github.com/bunny-lab-io/Borealis/issues/530) is the current-state tracker. Read its short resume section, acceptance checklist and new or edited relevant comments/reviews; inspect current checkout and remote state before editing. Update its body in place at meaningful handoffs with active PR/full SHA, actual validation, unresolved approvals, exact next action, unpushed work and runtime/cleanup obligations. This replaces the append-only reporting protocol in #493 for clustering only; historical evidence and approvals remain valid, and all security, runtime, review and release gates remain unchanged. One-time tracker compaction is recorded through `CLUSTERING_MVP_PROGRESS.md`; do not repeat it. Keep Resume at most 200 words and active tracker approximately 1,500-2,500 words. Keep PR scope/review context separate from tracker progress. Report newly connected executable behavior, actual validation and first remaining production gap; do not use percentages or code/test volume as progress. Reuse existing implementation branches/PRs; #530 is an umbrella, not a new implementation workstream. Keep canonical procedures in `Docs/`.
+For Borealis clustering work, [#530](https://github.com/bunny-lab-io/Borealis/issues/530) is the current-state tracker. Read its short resume, acceptance checklist and new/edited relevant comments/reviews; inspect current checkout, PR and CI before editing. Update its body in place at meaningful handoffs with active PR/full SHA, exact-head validation, unresolved approvals, evidence-backed next action, unpublished work, and runtime/cleanup obligations. This replaces the append-only reporting protocol in #493 for clustering only; historical evidence and approvals remain valid, and all security, runtime, review and release gates remain unchanged. One-time compaction is recorded through `CLUSTERING_MVP_PROGRESS.md`; do not repeat it. Aim for Resume <=200 words and a compact active tracker (~1,500-2,500 words), but never discard historical evidence or concurrent edits just to reach a word count; retain linked artifacts and durable references. Keep PR scope/review context separate from tracker progress. Report newly connected executable behavior, actual validation and first remaining production gap; do not use percentages or code/test volume as progress. Reuse existing implementation branch/PR. Keep canonical procedures in `Docs/`.
 
 Before implementation, post or retain working understanding:
 
@@ -257,24 +294,27 @@ ISSUE GOAL:
 - Docs/SBOM/debt impact:
 ```
 
-When work is complete, tell operator exactly:
+The operator owns project scope. Record any agreed change to PR scope, its acceptance criteria, and deferred work in the PR and tracker before seeking a merge. A smaller PR can merge after that deliverable is independently complete, required checks pass on the current head, required reviews are approved, review comments are resolved, and the operator explicitly authorizes the merge. Risk acknowledgment cannot waive mandatory validation.
+
+Reserve this combined issue-resolution and merge prompt for a PR that also completes the **entire issue**:
 
 ```text
 ISSUE RESOLVED: Merge Pull Request?
 ```
 
-If operator responds with affirmative instruction:
-1. Confirm validation state.
-2. Close issue.
-3. Merge pull request into `main`.
-4. Delete remote branch associated with pull request.
-5. Delete local branch associated with pull request.
-6. Switch active local workspace to `main`.
-7. Sync all changes so local workspace is up-to-date with recently merged changes.
+A completed slice, CI repair, or milestone alone grants no merge authority. If a scoped PR merges while #530 remains open, record its evidence, remaining milestones, branch and next action. Keep unfinished work open and avoid closing references that would automatically close the umbrella issue.
+
+If operator explicitly authorizes merge and all independent safeguards pass:
+1. Recheck current PR head, required CI, review status, acceptance of the explicit PR scope, and merge target.
+2. Merge the approved PR into `main` through an authorized mechanism.
+3. Verify the actual merge result and source ancestry.
+4. Close the applicable issue only when its full acceptance criteria are met. Verify its final state after merge.
+5. Clean up branches only when safe, identified, and authorized; preserve unrelated work and worktrees.
+6. Reconcile the active local workspace safely.
 
 Do not merge if:
 * Validation is failing.
-* Validation was not run and risk is non-trivial.
+* Required validation is pending, skipped, missing, or belongs to another revision.
 * Merge target is unclear.
 * Branch contains unrelated changes.
 * PR includes unresolved review comments.
@@ -284,13 +324,7 @@ Do not merge if:
 
 If merge conflicts exist, work with operator/developer to identify them. Ask permission before resolving conflict.
 
-If developer asks to merge pull request early, confirm exactly:
-
-```text
-PR MERGE REQUESTED: Are you sure?
-```
-
-If operator confirms, merge PR before originally tasked work is complete only when operator explicitly accepts risk. Urge operator to finish changes before merge if merge would leave codebase broken or unsafe.
+If an early merge is requested, distinguish a scope decision from a waiver. Confirm any new deliverable and apply its acceptance criteria, mandatory checks, reviews, and explicit merge approval. Keep the PR open while any of those requirements remain outstanding.
 
 ## Working on Dependabot Security and Quality Alerts
 Dependabot alerts are not normal GitHub issues. Read them through the authenticated GitHub API first, then create Borealis issue and PR records using repository issue workflow above.
@@ -339,7 +373,7 @@ Prefer fixing and merging to `main`; GitHub closes Dependabot alerts after resca
 ---
 
 ## Long-Running and Recurring Work
-For monitoring loops, keep scope bounded.
+For monitoring loops, keep scope bounded and restricted to the active session unless an explicitly available scheduled automation is configured. Do not imply that Codex can keep watching after the session ends.
 
 Acceptable loops:
 * Watch CI until pass/fail.
@@ -352,15 +386,15 @@ Acceptable loops:
 
 Loop behavior:
 * Report only meaningful changes.
-* Do not spam no-op updates.
+* Do not spam no-op updates or repeatedly download unchanged CI artifacts.
 * Do not merge, deploy, delete, publish, or send external messages without explicit approval.
 * Record durable findings in docs, issues, or PR comments when loop produces useful project knowledge.
-* Stop when condition is met, condition becomes impossible, or operator decision is needed.
-W
-## Privileged Runtime ActionsWWW
-Sudo is available in development environment for required runtime validation. Sudo is not default.
+* Stop when condition is met, condition becomes impossible, or operator decision is needed. If still pending at session end, record exact run/status and next verification action.
 
-Use sudo only when task requires:WW
+## Privileged Runtime Actions
+Sudo may be available on some development environments for authorized runtime validation; never assume it is available or approved. Sudo is not default.
+
+Use sudo only when the authorized task requires:
 * Engine redeploy.
 * Agent rebuild.
 * Service inspection.
@@ -381,6 +415,8 @@ Do not use privileged commands to bypass unclear docs, broken tests, or unresolv
 You may need to rebuild or redeploy the Engine or Agent as part of testing. Use documented commands.
 * **Re-Deploy Engine**: `bash /opt/Borealis/Engine.sh deploy prod`
 * **Re-Build Agent Go Binaries**: `bash /opt/Borealis/Data/Agent/build-agent.sh`
+
+These are reference commands, not blanket permission to run them. Engine deploys require explicit authorization for the exact remote target and procedure. Never run Engine runtime/deploy operations on the development workstation.
 
 Before running either command:
 * Confirm task requires runtime validation.
@@ -410,6 +446,9 @@ Before running either command:
 * Add direct dependencies with manifest or lockfile update plus `Docs/Reference/SBOM.md`; `Tests/policy/check_sbom.py` must pass.
 * Update `Data/Engine/Containers/build-manifest.json` when container build inputs change. Use `Tests/helpers/affected_services.py` and `Tests/run-containers.sh`; do not duplicate service-selection logic in workflows.
 * Keep live host, K3s, Longhorn, DNS, TLS, storage, network, enrolled Agent, and remote-device checks in deployment health or Tier 3 qualification, not normal PR validation.
+* Keep workstation tests fast and focused while retaining independent exact-head GitHub Actions as the required merge gate. Local validation cannot silently replace required CI.
+* When sharding, enforce exact, complete, disjoint mandatory inventory and execution results; reject unassigned, duplicate, skipped, failed, incomplete, or wrong-revision required checks.
+* Diagnose test-family duration and environmental differences before raising timeouts or dropping assertions. A cumulative package timeout does not prove that the last test was hung.
 
 ## Database Work
 For any code change, migration, troubleshooting step, or implementation that reads from, writes to, or otherwise interacts with PostgreSQL:
@@ -471,7 +510,9 @@ When scanning for new software, check:
 ---
 
 ## Final Handoff Format
-For implementation work, final response must use:
+For a direct operator question or design discussion, answer the question and give a reasoned recommendation. Do not force a coding-handoff template when no implementation occurred.
+
+For routine implementation work outside clustering, final response uses:
 
 ```md
 SUMMARY:
@@ -503,11 +544,20 @@ ISSUE:
 - 
 ```
 
-If issue appears resolved, end with exact operator prompt:
+For clustering and other complex operator-led objectives, include concise direct analysis with these headings where applicable:
 
-```text
-ISSUE RESOLVED: Merge Pull Request?
+```md
+COMPLETED:
+VALIDATION:
+OBSERVATIONS:
+ASSESSMENT:
+RECOMMENDATION:
+REPOSITORY:
+BLOCKERS:
+NEXT: <specific action> | Suggested model: <available model> | Suggested reasoning: <level>
 ```
+
+Record exact revision/tree, PR, CI status, unfinished evidence, missing tools, authentication/publication limitations, cleanup obligations, and operator approvals. Never treat a pending test as a pass or an unpushed local commit as published. The issue-resolution/merge prompt is permitted only under the complete-acceptance rule in `Working on Repository Issues`.
 
 For checkpointed or blocked work, use:
 
