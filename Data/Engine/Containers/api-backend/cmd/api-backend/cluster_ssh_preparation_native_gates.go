@@ -54,11 +54,18 @@ func (c *clusterController) withPreparationNativeGates(ctx context.Context, snap
 	if err := clusterSSHPreparationNativeBlockedError(cleanTargets != nil, capacity != nil, source != nil && filesystems != nil); err != nil {
 		return err
 	}
-	return c.withPreparationArtifacts(ctx, snapshot, scratch, func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
-		storage := newClusterSSHPreparationStorageRead(snapshot, c.preparationCleanTargetsProposalCheck(snapshot), source, preparationWaitingStorageDemand(storageDemand), filesystems)
+	return c.withPreparationArtifacts(ctx, snapshot, scratch, clusterSSHPreparationArtifactConsumerForGates(snapshot,
+		c.preparationCleanTargetsProposalCheck(snapshot), cleanTargets, capacity, configuration, source, filesystems, consume))
+}
+
+func clusterSSHPreparationArtifactConsumerForGates(snapshot clusterSSHPreparationApprovalSnapshot, check func(context.Context) error,
+	cleanTargets, capacity, configuration func(context.Context, string) (string, error), source clusterSSHPreparationStorageGateSourceRead,
+	filesystems clusterSSHPreparationFilesystemReader, consume clusterSSHPreparationNativeGateConsumer) clusterSSHPreparationArtifactConsumer {
+	return func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
+		storage := newClusterSSHPreparationStorageRead(snapshot, check, source, preparationWaitingStorageDemand(storageDemand), filesystems)
 		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, helper, cleanTargets, capacity, storage, configuration)
 		return consumeClusterSSHPreparationNativeGates(ctx, gates, consume)
-	})
+	}
 }
 
 // Build demand while the immutable artifact owner and the waiting proposal

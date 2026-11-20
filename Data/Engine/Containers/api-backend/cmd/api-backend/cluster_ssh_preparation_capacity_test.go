@@ -30,17 +30,23 @@ type sshWaitingCapacityFixture struct {
 
 func newSSHWaitingCapacityFixture(t *testing.T, replacement bool, nodeMode string) *sshWaitingCapacityFixture {
 	t.Helper()
-	f := &sshWaitingCapacityFixture{snapshot: clusterSSHPreparationApprovalSnapshot{work: sshPreparationConfigurationFixture(t, replacement)}, sites: []int64{}}
-	for i := range f.snapshot.work.Proof.Cohort.Targets {
-		f.snapshot.work.Proof.Cohort.Targets[i].Report.CPUCount = 8
+	snapshot := clusterSSHPreparationApprovalSnapshot{work: sshPreparationConfigurationFixture(t, replacement)}
+	for i := range snapshot.work.Proof.Cohort.Targets {
+		snapshot.work.Proof.Cohort.Targets[i].Report.CPUCount = 8
 		if nodeMode == "override" {
-			f.snapshot.work.Proof.Cohort.Targets[i].Report.CPUCount = 16
+			snapshot.work.Proof.Cohort.Targets[i].Report.CPUCount = 16
 		}
 	}
+	return newSSHWaitingCapacityFixtureForSnapshot(t, snapshot, nodeMode)
+}
+
+func newSSHWaitingCapacityFixtureForSnapshot(t *testing.T, snapshot clusterSSHPreparationApprovalSnapshot, nodeMode string) *sshWaitingCapacityFixture {
+	t.Helper()
+	f := &sshWaitingCapacityFixture{snapshot: snapshot, sites: []int64{}}
 	f.plan, _ = clusterSSHPreparationPlanDigest(f.snapshot.work.Authorization)
 	f.targets = sshPreparationTargetCPUFixture(f.snapshot)
 	for i := range f.targets {
-		if nodeMode != "override" {
+		if snapshot.work.Proof.Cohort.Targets[i].Report.CPUCount == 8 {
 			f.targets[i].CPU.OnlineCPUs, f.targets[i].CPU.AllocatableMilli = "0-7", 8000
 		}
 	}

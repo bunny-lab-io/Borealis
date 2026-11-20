@@ -49,6 +49,14 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	if parent.Err() != nil || !validClusterSSHPreparationDigest(plan) || d.proposal == nil || d.source == nil || d.publication == nil || d.acquire == nil || d.terminal == nil || consume == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
+	// Reader cancellation and cleanup can replace the low-level error. Retain
+	// only recognized gate codes with fixed public guidance for the controller.
+	var blocked []error
+	defer func() {
+		if result != nil && len(blocked) != 0 {
+			result = errors.Join(append(blocked, result)...)
+		}
+	}()
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	var owned clusterSSHPreparationArtifactBytes
@@ -203,6 +211,7 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	}
 	readiness, err := consume(readerCtx, gate, demand, helper)
 	if err != nil {
+		blocked = clusterSSHPreparationPublicGateErrors(err)
 		cancel()
 	}
 	if closeErr := lifetime.close(); err != nil || closeErr != nil || proofCtx.Err() != nil {

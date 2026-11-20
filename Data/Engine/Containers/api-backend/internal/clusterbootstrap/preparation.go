@@ -2,6 +2,7 @@ package clusterbootstrap
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -133,9 +135,8 @@ func (b *Bundle) verifyPreparationSource(ctx context.Context, k3sVersion string)
 	if err != nil || n != b.asset.Size || hex.EncodeToString(h.Sum(nil)) != b.asset.SHA256 {
 		return ErrPreparationConfig
 	}
-	m := &Manifest{identity: b.identity, asset: b.asset}
-	files, _, err := scanArchive(ctx, f, m)
-	if err != nil || verifyPreparationFiles(ctx, f, filepath.Join(b.root, "unpacked")) != nil || verifySource(ctx, b.SourcePath(), b.identity, files, "") != nil || verifyBinary(b.ManagerPath(), b.identity) != nil {
+	if b.index == nil || b.index.verify(ctx, filepath.Join(b.root, "unpacked")) != nil ||
+		verifySource(ctx, b.SourcePath(), b.identity, maps.Clone(b.index.sourceFiles), "") != nil || verifyBinary(b.ManagerPath(), b.identity) != nil {
 		return ErrPreparationConfig
 	}
 	// Compatibility must come from the verified source archive as well. The
@@ -164,9 +165,61 @@ func (b *Bundle) verifyPreparationSource(ctx context.Context, k3sVersion string)
 	return nil
 }
 
-// Compare every extracted file, including Git configuration, before invoking
-// trusted host Git again. An added hook/alternate or replaced source/binary must
-// fail even when the archive and cached identity still have the original hash.
+// Rehash the whole extracted tree against the authenticated archive index before
+// invoking Git. Every expected path must appear exactly once, including .git.
+func (index *bootstrapArchiveIndex) verify(ctx context.Context, directory string) error {
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		return ErrPreparationConfig
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return ErrPreparationConfig
+	}
+	defer root.Close()
+	count := 0
+	buffer := make([]byte, 32<<10)
+	err = fs.WalkDir(root.FS(), ".", func(name string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || ctx.Err() != nil {
+			return ErrPreparationConfig
+		}
+		if name == "." {
+			return nil
+		}
+		want, ok := index.entries[name]
+		info, err := d.Info()
+		if !ok || err != nil || info.Mode() != want.mode {
+			return ErrPreparationConfig
+		}
+		count++
+		if want.mode.IsDir() {
+			return nil
+		}
+		if info.Size() != want.size {
+			return ErrPreparationConfig
+		}
+		file, err := root.Open(name)
+		if err != nil {
+			return ErrPreparationConfig
+		}
+		defer file.Close()
+		opened, err := file.Stat()
+		if err != nil || !os.SameFile(opened, info) || opened.Mode() != want.mode {
+			return ErrPreparationConfig
+		}
+		hash := sha256.New()
+		n, err := io.CopyBuffer(hash, io.LimitReader(contextReader{ctx, file}, want.size+1), buffer)
+		if err != nil || n != want.size || !bytes.Equal(hash.Sum(nil), want.sha256[:]) {
+			return ErrPreparationConfig
+		}
+		return nil
+	})
+	if err != nil || count != len(index.entries) {
+		return ErrPreparationConfig
+	}
+	return ctx.Err()
+}
+
 func verifyPreparationFiles(ctx context.Context, archive *os.File, directory string) error {
 	return verifyArchiveFiles(ctx, archive, directory, func(name string) (string, bool) { return name, true }, nil)
 }

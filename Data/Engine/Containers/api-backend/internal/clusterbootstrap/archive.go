@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,6 +30,7 @@ type Bundle struct {
 	root     string
 	identity identity
 	asset    assetIdentity
+	index    *bootstrapArchiveIndex
 }
 
 func (b *Bundle) ArchivePath() string { return filepath.Join(b.root, BundleName) }
@@ -100,7 +102,7 @@ func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, inp
 	if err != nil || n != m.asset.Size || hex.EncodeToString(hash.Sum(nil)) != m.asset.SHA256 {
 		return nil, errors.New("node bootstrap archive size or digest mismatch")
 	}
-	files, expanded, err := scanArchive(ctx, archive, m)
+	index, expanded, err := scanArchive(ctx, archive, m)
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +114,16 @@ func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, inp
 	if err := extractArchive(ctx, archive, filepath.Join(root, "unpacked"), allocate); err != nil {
 		return nil, err
 	}
-	if err := verifySource(ctx, b.SourcePath(), m.identity, files, gitBin); err != nil {
+	if err := index.verify(ctx, filepath.Join(root, "unpacked")); err != nil {
+		return nil, err
+	}
+	if err := verifySource(ctx, b.SourcePath(), m.identity, maps.Clone(index.sourceFiles), gitBin); err != nil {
 		return nil, err
 	}
 	if err := verifyBinary(b.ManagerPath(), m.identity); err != nil {
 		return nil, err
 	}
+	b.index = index
 	return b, ctx.Err()
 }
 
@@ -139,7 +145,11 @@ func walkArchive(ctx context.Context, file *os.File, visit func(*tar.Header, io.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return errors.New("node bootstrap archive rewind failed")
 	}
-	compressed := bufio.NewReader(contextReader{ctx, file})
+	return walkArchiveStream(ctx, file, visit)
+}
+
+func walkArchiveStream(ctx context.Context, input io.Reader, visit func(*tar.Header, io.Reader) error) error {
+	compressed := bufio.NewReader(contextReader{ctx, input})
 	z, err := gzip.NewReader(compressed)
 	if err != nil {
 		return errors.New("node bootstrap gzip invalid")
@@ -171,28 +181,47 @@ func walkArchive(ctx context.Context, file *os.File, visit func(*tar.Header, io.
 	return nil
 }
 
-func scanArchive(ctx context.Context, file *os.File, m *Manifest) (map[string]sourceFile, PreparationScratchDemand, error) {
-	seen := map[string]bool{}
+// The scan authenticates the compressed stream from which every expected entry
+// is derived. The private index is immutable after staging.
+type bootstrapArchiveIndex struct {
+	entries     map[string]bootstrapArchiveEntry
+	sourceFiles map[string]sourceFile
+}
+
+type bootstrapArchiveEntry struct {
+	mode   os.FileMode
+	size   int64
+	sha256 [sha256.Size]byte
+}
+
+func scanArchive(ctx context.Context, file *os.File, m *Manifest) (*bootstrapArchiveIndex, PreparationScratchDemand, error) {
+	entries := map[string]bootstrapArchiveEntry{}
 	files := map[string]sourceFile{}
 	var total int64
 	var inner []byte
 	var managerSHA string
-	err := walkArchive(ctx, file, func(h *tar.Header, r io.Reader) error {
+	compressed := sha256.New()
+	stream := io.NewSectionReader(file, 0, m.asset.Size+1)
+	err := walkArchiveStream(ctx, io.TeeReader(stream, compressed), func(h *tar.Header, r io.Reader) error {
 		name, err := archiveName(h)
 		if err != nil {
 			return err
 		}
-		if _, exists := seen[name]; exists || (path.Dir(name) != "." && !seen[path.Dir(name)]) {
+		if _, exists := entries[name]; exists || (path.Dir(name) != "." && !entries[path.Dir(name)].mode.IsDir()) {
 			return errors.New("node bootstrap duplicate member or missing parent")
 		}
-		seen[name] = h.Typeflag == tar.TypeDir
+		entry := bootstrapArchiveEntry{mode: os.FileMode(h.Mode), size: h.Size}
 		total += h.Size
 		if total > MaxExpandedBytes {
 			return errors.New("node bootstrap expanded size limit exceeded")
 		}
 		if h.Typeflag == tar.TypeDir {
+			entry.mode |= os.ModeDir
+			entries[name] = entry
 			return nil
 		}
+		content := sha256.New()
+		r = io.TeeReader(r, content)
 		switch name {
 		case "identity.json":
 			if h.Size > MaxManifestBytes || h.Mode != 0o644 {
@@ -203,9 +232,8 @@ func scanArchive(ctx context.Context, file *os.File, m *Manifest) (map[string]so
 			if h.Size != m.identity.NodeManager.Size || h.Mode != 0o755 {
 				return errors.New("node bootstrap binary size or mode mismatch")
 			}
-			hash := sha256.New()
-			_, err = io.Copy(hash, r)
-			managerSHA = hex.EncodeToString(hash.Sum(nil))
+			_, err = io.Copy(io.Discard, r)
+			managerSHA = hex.EncodeToString(content.Sum(nil))
 		default:
 			if !strings.HasPrefix(name, "source/.git/") {
 				// Compute Git's blob ID directly: no content filters, hooks or
@@ -214,21 +242,28 @@ func scanArchive(ctx context.Context, file *os.File, m *Manifest) (map[string]so
 				_, _ = fmt.Fprintf(hash, "blob %d\x00", h.Size)
 				_, err = io.Copy(hash, r)
 				files[strings.TrimPrefix(name, "source/")] = sourceFile{h.Mode, hex.EncodeToString(hash.Sum(nil))}
+			} else {
+				_, err = io.Copy(io.Discard, r)
 			}
 		}
 		if err != nil {
 			return errors.New("node bootstrap archive member truncated")
 		}
+		copy(entry.sha256[:], content.Sum(nil))
+		entries[name] = entry
 		return nil
 	})
 	if err != nil {
 		return nil, PreparationScratchDemand{}, err
 	}
+	if hex.EncodeToString(compressed.Sum(nil)) != m.asset.SHA256 {
+		return nil, PreparationScratchDemand{}, ErrPreparationConfig
+	}
 	i, err := parseIdentity(inner, Expected{Repository: m.identity.Repository, Release: m.identity.Release, SourceSHA: m.identity.SourceSHA, AllowQualification: true})
 	if err != nil || i != m.identity || managerSHA != m.identity.NodeManager.SHA256 || len(files) == 0 {
 		return nil, PreparationScratchDemand{}, errors.New("node bootstrap inner identity or binary digest mismatch")
 	}
-	return files, PreparationScratchDemand{Bytes: uint64(total), Entries: uint64(len(seen)) + 1}, nil
+	return &bootstrapArchiveIndex{entries: entries, sourceFiles: files}, PreparationScratchDemand{Bytes: uint64(total), Entries: uint64(len(entries)) + 1}, nil
 }
 
 var packFilePattern = regexp.MustCompile(`^objects/pack/pack-[0-9a-f]{40}\.(?:pack|idx|rev)$`)

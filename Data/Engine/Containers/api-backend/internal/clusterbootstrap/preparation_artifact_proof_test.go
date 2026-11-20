@@ -13,7 +13,7 @@ import (
 func TestPreparationArtifactProofWithoutTargetClaim(t *testing.T) {
 	e, manifest, members := archiveFixture(t)
 	archive := pack(t, members)
-	for _, mode := range []string{"valid", "source bytes", "archive bytes", "helper bytes", "extra source", "wrong release", "wrong K3s", "different manifest", "authority", "cancelled", "closed"} {
+	for _, mode := range []string{"valid", "source bytes", "same-size edit after proof", "missing file after proof", "archive bytes", "helper bytes", "extra source", "wrong release", "wrong K3s", "different manifest", "authority", "cancelled", "closed"} {
 		t.Run(mode, func(t *testing.T) {
 			b, err := stageFixture(t, context.Background(), e, manifest, archive, t.TempDir())
 			if err != nil {
@@ -42,6 +42,32 @@ func TestPreparationArtifactProofWithoutTargetClaim(t *testing.T) {
 				}
 			}
 			switch mode {
+			case "same-size edit after proof", "missing file after proof":
+				if _, err := b.PreparationArtifactProof(ctx, expected, version, publication, check); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(b.SourcePath(), "Engine.sh")
+				if mode == "missing file after proof" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil || len(raw) == 0 {
+					t.Fatalf("fixture script: %v", err)
+				}
+				raw[0] ^= 1
+				if err := os.WriteFile(path, raw, info.Mode().Perm()); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+					t.Fatal(err)
+				}
 			case "wrong release":
 				expected.SourceSHA = strings.Repeat("f", 40)
 			case "wrong K3s":

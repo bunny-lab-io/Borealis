@@ -177,7 +177,7 @@ func (c *clusterController) recordSSHPreparationBlocked(parent context.Context, 
 
 // Retain only fixed canonical gate diagnostics from nested errors.Join values.
 // No native/SQL/SSH error text is copied to operator-visible state.
-func clusterSSHPreparationBlockedReasons(err error) []string {
+func clusterSSHPreparationPublicGateErrors(err error) []error {
 	seen := map[string]bool{}
 	var visit func(error)
 	visit = func(err error) {
@@ -193,11 +193,19 @@ func clusterSSHPreparationBlockedReasons(err error) []string {
 		}
 	}
 	visit(err)
-	var reasons []string
+	var reasons []error
 	for _, known := range clusterSSHPreparationNativeBlockers(false, false, false) {
 		if seen[known.Gate] {
-			reasons = append(reasons, known.Gate+": "+known.Reason)
+			reasons = append(reasons, known)
 		}
+	}
+	return reasons
+}
+
+func clusterSSHPreparationBlockedReasons(err error) []string {
+	var reasons []string
+	for _, gate := range clusterSSHPreparationPublicGateErrors(err) {
+		reasons = append(reasons, gate.Error())
 	}
 	return reasons
 }

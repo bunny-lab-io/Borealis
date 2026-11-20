@@ -2,6 +2,7 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterremote"
 	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"encoding/json"
@@ -160,6 +161,8 @@ func TestClusterSSHPreparationControllerPostgresWaiting(t *testing.T) {
 }
 
 func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing.T) {
+	t.Run("composed expansion", func(t *testing.T) { testSSHPreparationComposedDispatch(t, false) })
+	t.Run("composed storage shortage", func(t *testing.T) { testSSHPreparationComposedDispatch(t, true) })
 	for _, mode := range []string{"pair", "replacement", "cleanup failure", "owner changed", "cancelled cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			f, snapshot, confirmation, _ := newSSHPreparationApprovalFixture(t, mode == "replacement")
@@ -302,5 +305,117 @@ func TestClusterSSHPreparationControllerPostgresNormalLoop(t *testing.T) {
 	}
 	if state != "waiting" || step != clusterSSHQualificationStep || !strings.Contains(reason, "source observation is unavailable") {
 		t.Fatal("normal controller did not preserve and diagnose waiting proposal", state, step, reason)
+	}
+}
+
+// Exercise both approval rounds, terminal artifact ownership and worker dispatch
+// against the same confirmed SQL proposal. SSH uses pinned fixture servers.
+// Kubernetes objects, source-network Job output and artifact bytes are fixtures.
+func testSSHPreparationComposedDispatch(t *testing.T, shortage bool) {
+	f, snapshot, confirmation, _ := newSSHPreparationApprovalFixture(t, false)
+	// The shared SQL seed has its own 15-second setup deadline. Run the parent
+	// under the test lifetime so its production proof deadline governs admission.
+	f.ctx = t.Context()
+	inputs := newSSHWaitingCapacityFixtureForSnapshot(t, snapshot, "override")
+	var envelopes []clusterSSHCredentialEnvelope
+	for _, sealed := range snapshot.credentials {
+		e, err := f.aegis.openClusterSSHCredentials(f.ctx, sealed, sealed.binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		envelopes = append(envelopes, e)
+	}
+	connect := func(paths []string) clusterSSHPreparationProposalConnect {
+		return sshPreparationFilesystemConnect(t, snapshot, f.signers, envelopes, func(index int, raw []byte) []byte {
+			if len(paths) == 0 {
+				return raw
+			}
+			var wire struct {
+				Version   int                              `json:"version"`
+				MachineID string                           `json:"machine_id"`
+				BootID    string                           `json:"boot_id"`
+				Evidence  clusterremote.FilesystemEvidence `json:"evidence"`
+			}
+			if err := json.Unmarshal(raw, &wire); err != nil {
+				t.Fatal(err)
+			}
+			wire.Version = 6
+			e := &wire.Evidence
+			e.Filesystems[0].TotalBytes, e.Filesystems[0].AvailableBytes = 120<<30, 90<<30
+			if shortage && index == 1 {
+				e.Filesystems[0].AvailableBytes = 1 << 20
+			}
+			e.PackageCopies = &clusterremote.PackageCopyDemand{Bytes: 2000000, Entries: 2, ProfileSHA256: strings.Repeat("d", 64)}
+			root := e.Paths[0]
+			root.Ancestor = "/"
+			e.Paths = nil
+			for _, path := range paths {
+				root.Path = path
+				e.Paths = append(e.Paths, root)
+			}
+			encoded, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return encoded
+		}, nil)
+	}
+	bytes := &sshApprovalArtifactBytes{digest: strings.Repeat("e", 64)}
+	bytes.onDemand = func(ctx context.Context, check func(context.Context) error) ([]clusterSSHFilesystemDemand, error) {
+		return []clusterSSHFilesystemDemand{{Path: "/opt/Borealis", Bytes: 8 << 30}, {Path: "/var", Bytes: 600 << 20}}, check(ctx)
+	}
+	deps := sshApprovalArtifactDependencies(bytes)
+	check := f.c.preparationCleanTargetsProposalCheck(snapshot)
+	deps.proposal = check
+	deps.source = func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
+		return readClusterSSHPreparationArtifactSource(ctx, snapshot.work.Proof.Source, inputs.get, check)
+	}
+	deps.terminal = func(r clusterSSHPreparationReadinessReceipt, artifact string) (func(context.Context) error, error) {
+		return f.c.clusterSSHPreparationArtifactTerminal(snapshot, r, artifact)
+	}
+	var projection clusterSSHPreparationTargetsRead
+	scope := func(ctx context.Context, current clusterSSHPreparationApprovalSnapshot, consume func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error)) error {
+		native := newClusterSSHPreparationTargetsRead(current, check, f.aegis, connect(nil))
+		clean, targets := clusterSSHPreparationTargetCPUReaderPair(current, native)
+		filesystems := func(paths []string) clusterSSHPreparationTargetsRead {
+			return newClusterSSHPreparationTargetsFilesystemRead(current, check, f.aegis, connect(paths), paths)
+		}
+		config, profile := clusterSSHPreparationConfigurationProjectionReader(current.work, check, inputs.get, func(ctx context.Context, m clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
+			return sshSourceNetworkFixture(m, clusterbootstrap.K3sPins().Version), ctx.Err()
+		})
+		capacity, approved, source := newClusterSSHPreparationCapacityStorageRead(current, check, inputs.get, profile, targets, func(ctx context.Context, window int64) ([]int64, error) {
+			return readClusterSSHWorkerCensus(ctx, f.c.store.db, window)
+		})
+		projection = approved
+		return runClusterSSHPreparationArtifacts(ctx, inputs.plan, deps,
+			clusterSSHPreparationArtifactConsumerForGates(current, check, clean, capacity, config, source, filesystems, consume))
+	}
+	err := f.c.runSSHPreparationParentWithGates(f.ctx, f.op, inputs.get, scope, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
+		return projection(ctx, plan)
+	})
+	if shortage {
+		var state, reason string
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.store.db.QueryRowContext(f.ctx, `SELECT state,error_text FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&state, &reason); err != nil {
+			t.Fatal(err)
+		}
+		pending, err := f.c.store.pendingClusterSSHPreparation(f.ctx, snapshot.work.Proof.Source.Members[0].Name)
+		if state != "waiting" || !strings.Contains(reason, "persistent_storage:") || err != nil || pending.Operation.ID != "" || bytes.closes.Load() != 1 {
+			t.Fatalf("unsafe or undiagnosed shortage: state=%s reason=%s pending=%s err=%v", state, reason, pending.Operation.ID, err)
+		}
+		return
+	}
+	if err != nil || bytes.closes.Load() != 1 || bytes.proves.Load() != 4 {
+		t.Fatalf("approval scope: err=%v closes=%d proofs=%d", err, bytes.closes.Load(), bytes.proves.Load())
+	}
+	pending, err := f.c.store.pendingClusterSSHPreparation(f.ctx, snapshot.work.Proof.Source.Members[0].Name)
+	if err != nil || pending.Operation.ID != f.op.ID {
+		t.Fatalf("missing dispatch: %v", err)
+	}
+	work, err := f.c.store.claimClusterSSHPreparation(f.ctx, pending.Operation, pending.Controller, newClusterUUID())
+	if err != nil || len(work.Claims) != 2 || work.IdentitySource != confirmation.IdentitySource {
+		t.Fatalf("paired claim: %v", err)
 	}
 }

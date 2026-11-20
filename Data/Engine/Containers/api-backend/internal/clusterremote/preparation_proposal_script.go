@@ -2,6 +2,7 @@ package clusterremote
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"encoding/base64"
 	"encoding/json"
 )
 
@@ -25,12 +26,12 @@ func preparationProposalPackageConstants() string {
 	for _, pin := range plan.Packages {
 		pins = append(pins, [2]string{pin.Name, pin.Architecture})
 	}
-	raw, err := json.Marshal(pins)
+	raw, err := json.Marshal([]any{digest, plan.Suite, pins})
 	if err != nil {
 		return "raise ValueError()\n"
 	}
-	suite, _ := json.Marshal(plan.Suite)
-	return "HOST_PACKAGE_PLAN_SHA256 = \"" + digest + "\"\nHOST_PACKAGE_SUITE = " + string(suite) + "\nHOST_PACKAGE_PINS = " + string(raw) + "\n"
+	// Keep pin data separate from the fixed Python program.
+	return "HOST_PACKAGE_PLAN_SHA256, HOST_PACKAGE_SUITE, HOST_PACKAGE_PINS = json.loads(base64.b64decode('" + base64.StdEncoding.EncodeToString(raw) + "', validate=True))\n"
 }
 
 var preparationProposalLibraryScript = `import base64, hashlib, json, os, re, resource, selectors, stat, subprocess, sys, time
