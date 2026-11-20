@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -101,6 +102,38 @@ func TestPreparationApprovalDigest(t *testing.T) {
 		}
 	}
 	verify()
+	// The tar files still match. Framing can change independently of the
+	// files, including valid whitespace in the published inventory JSON.
+	raw := a.application.inventory.raw
+	a.application.inventory.raw = append(slices.Clone(raw), '\n')
+	if got, err := a.ApprovalDigest(ctx, check); err == nil || got != "" {
+		t.Fatal("changed framing yielded a prior stream digest")
+	}
+	a.application.inventory.raw = raw
+	verify()
+	for _, change := range []string{"offset", "length", "digest", "order", "count"} {
+		t.Run(change, func(t *testing.T) {
+			original := a.approval.archives
+			spans := slices.Clone(original)
+			switch change {
+			case "offset":
+				spans[0].framingOffset++
+			case "length":
+				spans[0].size++
+			case "digest":
+				spans[0].digest = strings.Repeat("0", 64)
+			case "order":
+				spans[0], spans[1] = spans[1], spans[0]
+			case "count":
+				spans = spans[1:]
+			}
+			a.approval.archives = spans
+			defer func() { a.approval.archives = original }()
+			if got, err := a.ApprovalDigest(ctx, check); err == nil || got != "" {
+				t.Fatal("mismatched archive spans yielded a prior stream digest")
+			}
+		})
+	}
 	app := a.application.inventory.Images()[0]
 	ext := a.external.inventory.Images()[0]
 	for _, file := range []struct{ dir, name string }{

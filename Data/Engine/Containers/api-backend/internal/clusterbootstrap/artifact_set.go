@@ -17,6 +17,7 @@ type PreparationArtifacts struct {
 	k3s                           *K3sSet
 	external                      *ExternalImageSet
 	postgres                      *PostgresImage
+	approval                      *preparationStreamProof
 }
 
 func (*PreparationArtifacts) String() string               { return "complete preparation artifacts [private]" }
@@ -88,6 +89,6 @@ func (a *PreparationArtifacts) Close() error {
 	if a.postgres != nil {
 		errs = append(errs, a.postgres.Close())
 	}
-	a.application, a.k3s, a.external, a.postgres = nil, nil, nil, nil
+	a.application, a.k3s, a.external, a.postgres, a.approval = nil, nil, nil, nil, nil
 	return errors.Join(errs...)
 }

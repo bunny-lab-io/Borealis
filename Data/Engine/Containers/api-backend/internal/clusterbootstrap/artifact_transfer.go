@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"slices"
 )
 
 const artifactTransferMagic = "BOREALIS-NODE-ARTIFACTS-1\n"
@@ -40,6 +41,11 @@ func (a *PreparationArtifacts) WriteArtifacts(ctx context.Context, output io.Wri
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.writeArtifacts(ctx, output, check)
+}
+
+// Caller holds the artifact set lock through the complete write.
+func (a *PreparationArtifacts) writeArtifacts(ctx context.Context, output io.Writer, check func(context.Context) error) error {
 	if err := a.verifyBindings(ctx, check); err != nil {
 		return err
 	}
@@ -78,22 +84,64 @@ func (a *PreparationArtifacts) WriteArtifacts(ctx context.Context, output io.Wri
 	return imageBoundary(ctx, check)
 }
 
-// Only ApprovalDigest constructs this destination. No caller can receive a
-// partial stream while archive bytes are being authenticated.
-type preparationApprovalHash struct{ hash.Hash }
-
-// ApprovalDigest authenticates exactly the same framed bytes as WriteArtifacts.
-// It returns the digest only after every archive, binding and authority check passes.
-func (a *PreparationArtifacts) ApprovalDigest(ctx context.Context, check func(context.Context) error) (string, error) {
-	output := &preparationApprovalHash{sha256.New()}
-	if err := a.WriteArtifacts(ctx, output, check); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(output.Sum(nil)), nil
+// The ordered archives and their positions among the framing bytes uniquely
+// describe the transport stream. Keep only digests and lengths on the owner.
+type preparationArchiveSpan struct {
+	framingOffset int64
+	size          int64
+	digest        string
 }
 
-// Transfers authenticate the private file before exposing bytes to a receiver.
-// In a private approval hash the single authenticated read also feeds the overall digest.
+type preparationStreamProof struct {
+	transportDigest string
+	framingDigest   string
+	archives        []preparationArchiveSpan
+}
+
+// Only ApprovalDigest constructs this destination. Write receives framing;
+// writeVerifiedPreparationFile authenticates each archive and records its span.
+type preparationApprovalHash struct {
+	transport, framing hash.Hash
+	framingBytes       int64
+	archives           []preparationArchiveSpan
+}
+
+func (p *preparationApprovalHash) Write(data []byte) (int, error) {
+	p.framingBytes += int64(len(data))
+	p.framing.Write(data)
+	if p.transport != nil {
+		p.transport.Write(data)
+	}
+	return len(data), nil
+}
+
+// ApprovalDigest returns the SHA-256 of WriteArtifacts. The first proof hashes
+// that full stream. Later proofs authenticate the same ordered bytes by checking
+// every file anew, every framing byte and every archive boundary.
+func (a *PreparationArtifacts) ApprovalDigest(ctx context.Context, check func(context.Context) error) (string, error) {
+	if a == nil {
+		return "", ErrImageArchive
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	output := &preparationApprovalHash{framing: sha256.New()}
+	if a.approval == nil {
+		output.transport = sha256.New()
+	}
+	if err := a.writeArtifacts(ctx, output, check); err != nil {
+		return "", err
+	}
+	framing := hex.EncodeToString(output.framing.Sum(nil))
+	if a.approval == nil {
+		a.approval = &preparationStreamProof{hex.EncodeToString(output.transport.Sum(nil)), framing, output.archives}
+	} else if a.approval.framingDigest != framing || !slices.Equal(a.approval.archives, output.archives) {
+		return "", ErrImageArchive
+	}
+	return a.approval.transportDigest, nil
+}
+
+// External writers receive bytes only after prior authentication. A private
+// proof receives no output outside the owner and authenticates each file once.
 func writeVerifiedPreparationFile(ctx context.Context, root *os.Root, name string, size int64, digest string, output io.Writer, check func(context.Context) error) error {
 	before, err := root.Lstat(name)
 	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 || before.Size() != size {
@@ -113,7 +161,8 @@ func writeVerifiedPreparationFile(ctx context.Context, root *os.Root, name strin
 		n, err := io.Copy(dst, io.LimitReader(contextReader{ctx, file}, size+1))
 		return err == nil && n == size && hex.EncodeToString(h.Sum(nil)) == digest
 	}
-	if _, private := output.(*preparationApprovalHash); !private {
+	approval, private := output.(*preparationApprovalHash)
+	if !private {
 		if !authenticatedCopy(h) {
 			return ErrImageArchive
 		}
@@ -125,7 +174,16 @@ func writeVerifiedPreparationFile(ctx context.Context, root *os.Root, name strin
 	if imageBoundary(ctx, check) != nil {
 		return ErrSessionAuthority
 	}
-	if !authenticatedCopy(io.MultiWriter(output, h)) {
+	var destination io.Writer = h
+	if private {
+		approval.archives = append(approval.archives, preparationArchiveSpan{approval.framingBytes, size, digest})
+		if approval.transport != nil {
+			destination = io.MultiWriter(h, approval.transport)
+		}
+	} else {
+		destination = io.MultiWriter(h, output)
+	}
+	if !authenticatedCopy(destination) {
 		return ErrImageArchive
 	}
 	after, err := root.Lstat(name)

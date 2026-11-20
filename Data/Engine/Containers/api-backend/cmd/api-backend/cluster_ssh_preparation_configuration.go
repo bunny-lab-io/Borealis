@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"reflect"
 	"slices"
@@ -89,10 +90,13 @@ func clusterSSHPreparationConfigurationNativeInputs(work clusterSSHPreparationWo
 	var version string
 	_ = clusterBootstrapObject([]byte(work.Payload), map[string]any{"source_k3s_version": &version})
 	network := func(ctx context.Context, member clusterSSHSourceMember) (clusterbootstrap.SourceNetwork, error) {
-		if current(ctx) != nil {
+		operationID := work.Authorization.OperationID
+		if !clusterUUIDRE.MatchString(operationID) || current(ctx) != nil {
 			return clusterbootstrap.SourceNetwork{}, clusterbootstrap.ErrPreparationConfig
 		}
-		value, err := jobs.readSSHSourceObservation(ctx, member, work.Authorization.OperationID, version, "", false, func() bool { return current(ctx) == nil })
+		started := time.Now()
+		value, err := jobs.readSSHSourceObservation(ctx, member, operationID, version, "", false, func() bool { return current(ctx) == nil })
+		log.Printf("cluster SSH preparation source observation operation=%s elapsed_ms=%d verified=%t", operationID, time.Since(started).Milliseconds(), err == nil)
 		return value.Network, err
 	}
 	// The existing serial reader checks current after every synchronous native
