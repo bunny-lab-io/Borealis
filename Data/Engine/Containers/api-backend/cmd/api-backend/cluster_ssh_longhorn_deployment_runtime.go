@@ -9,7 +9,7 @@ import (
 // Transport still permits only each explicitly listed namespace/name/selector.
 type clusterSSHLonghornDeploymentWorkload struct {
 	namespace, labelKey                                string
-	labelValue, containerName                          string
+	labelValue, containerName, runtimeImageAlias       string
 	imageValid                                         func(string, string) bool
 	specValid                                          func(map[string]any, bool) bool // CSI declared mount contract; bool distinguishes admitted Pods from templates.
 	containerValid                                     func(map[string]any) bool       // Optional fixed workload invocation contract; UI keeps existing behavior.
@@ -127,7 +127,8 @@ func observeClusterSSHLonghornDeploymentRuntime(read func(string) (map[string]an
 				return fail()
 			}
 			runtime, ok := statuses[0].(map[string]any)
-			if !ok || runtime["name"] != containerName || runtime["image"] != image || runtime["ready"] != true || runtime["started"] != true {
+			reported := clusterSSHStorageText(runtime, "image")
+			if !ok || runtime["name"] != containerName || reported == "" || (reported != image && reported != workload.runtimeImageAlias) || runtime["ready"] != true || runtime["started"] != true {
 				return fail()
 			}
 			state := clusterSSHStorageMap(runtime, "state")

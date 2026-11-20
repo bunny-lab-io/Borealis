@@ -28,7 +28,7 @@ func sshKubeVIPRuntime(f *sshStorageFixture, index int) map[string]any {
 }
 
 func TestClusterSSHKubeVIPRunningImages(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "runtime index", "platform configuration", "missing list", "empty list", "duplicate Pod", "list continuation", "list remainder", "wrong list kind", "wrong namespace", "missing UID", "missing revision", "deleting", "wrong label", "foreign node", "wrong host network", "wrong service account", "missing owner", "duplicate owner", "foreign owner UID", "foreign owner kind", "foreign owner name", "foreign owner API", "noncontroller owner", "spec image mismatch", "spec container name", "sidecar", "init", "ephemeral", "init status", "ephemeral status", "not running", "missing Ready", "duplicate Ready", "not Ready", "missing runtime", "extra runtime", "wrong runtime name", "runtime image mismatch", "not ready", "not started", "waiting", "ambiguous state", "missing start", "zero start", "missing imageID", "tag imageID", "foreign imageID", "wrong pin", "platform to index", "replacement mixed images", "replacement cloned UID", "replacement missing Pod"} {
+	for _, mode := range []string{"expansion", "pinned config digest", "foreign config digest", "config digest without imageID", "replacement", "runtime index", "platform configuration", "missing list", "empty list", "duplicate Pod", "list continuation", "list remainder", "wrong list kind", "wrong namespace", "missing UID", "missing revision", "deleting", "wrong label", "foreign node", "wrong host network", "wrong service account", "missing owner", "duplicate owner", "foreign owner UID", "foreign owner kind", "foreign owner name", "foreign owner API", "noncontroller owner", "spec image mismatch", "spec container name", "sidecar", "init", "ephemeral", "init status", "ephemeral status", "not running", "missing Ready", "duplicate Ready", "not Ready", "missing runtime", "extra runtime", "wrong runtime name", "runtime image mismatch", "not ready", "not started", "waiting", "ambiguous state", "missing start", "zero start", "missing imageID", "tag imageID", "foreign imageID", "wrong pin", "platform to index", "replacement mixed images", "replacement cloned UID", "replacement missing Pod"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHStorageFixture(t, strings.HasPrefix(mode, "replacement"))
 			path := clusterSSHKubeVIPPodsPath(f.a.Source.Members[0].Name)
@@ -39,6 +39,13 @@ func TestClusterSSHKubeVIPRunningImages(t *testing.T) {
 			container := spec["containers"].([]any)[0].(map[string]any)
 			runtime := sshKubeVIPRuntime(f, 0)
 			switch mode {
+			case "pinned config digest":
+				runtime["image"] = sshKubeVIPPin().ConfigDigest
+			case "foreign config digest":
+				runtime["image"] = "sha256:" + strings.Repeat("0", 64)
+			case "config digest without imageID":
+				runtime["image"] = sshKubeVIPPin().ConfigDigest
+				delete(runtime, "imageID")
 			case "runtime index":
 				runtime["imageID"] = sshKubeVIPPin().Reference
 			case "platform configuration", "platform to index":
@@ -150,7 +157,7 @@ func TestClusterSSHKubeVIPRunningImages(t *testing.T) {
 			inactive := clusterSSHKubeVIPPodsPath("failed-member")
 			f.objects[inactive] = map[string]any{"unavailable": true}
 			value, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
-			good := textInSet(mode, "expansion", "replacement", "runtime index", "platform configuration")
+			good := textInSet(mode, "expansion", "pinned config digest", "replacement", "runtime index", "platform configuration")
 			if good {
 				if err != nil || value.Requirements.KubeVIP.Resolved != runtime["imageID"] || !value.Requirements.KubeVIP.valid(f.a.Source) {
 					t.Fatalf("valid running source rejected: %v", err)

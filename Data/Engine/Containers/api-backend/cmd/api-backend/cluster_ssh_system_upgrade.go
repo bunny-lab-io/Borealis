@@ -97,9 +97,13 @@ func observeClusterSSHSystemUpgradeImages(read func(string) (map[string]any, err
 	if !images.configuredValid() {
 		return fail()
 	}
+	var runtimeAlias string
+	if strings.HasPrefix(image, "rancher/") {
+		runtimeAlias = "docker.io/" + image
+	}
 	images.Resolved, err = observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, owner, image, clusterSSHLonghornDeploymentWorkload{
 		namespace: "system-upgrade", labelKey: "upgrade.cattle.io/controller", name: "system-upgrade-controller", serviceAccount: "system-upgrade",
-		repository: "docker.io/rancher/system-upgrade-controller", imageValid: clusterSSHSystemUpgradeRuntimeImageValid,
+		repository: "docker.io/rancher/system-upgrade-controller", runtimeImageAlias: runtimeAlias, imageValid: clusterSSHSystemUpgradeRuntimeImageValid,
 		podsPath: clusterSSHSystemUpgradePodsPath, replicaSetPrefix: clusterSSHSystemUpgradeReplicaSetPrefix, replicaSetPathValid: clusterSSHSystemUpgradeReplicaSetPathValid, templateImage: clusterSSHSystemUpgradeTemplateImage,
 		specValid: func(spec map[string]any, pod bool) bool {
 			_, err := clusterSSHSystemUpgradeSpecImage(spec, pod)

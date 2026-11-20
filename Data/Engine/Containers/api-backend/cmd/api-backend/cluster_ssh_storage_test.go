@@ -242,6 +242,49 @@ func TestClusterSSHStorageInventory(t *testing.T) {
 	}
 }
 
+func TestClusterSSHStrictLocalPostgresVolumeAffinity(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pv        int
+		values    []any
+		label     string
+		extraTerm bool
+		valid     bool
+	}{
+		{"active instance", 1, nil, "", false, true},
+		{"wrong node", 1, []any{"other-node"}, "", false, false},
+		{"alternative node", 1, []any{"other-node", "another-node"}, "", false, false},
+		{"label drift", 1, nil, "other-node", false, false},
+		{"extra term", 1, nil, "", true, false},
+		{"artifacts", 0, nil, "", false, false},
+		{"retained volume", 2, nil, "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSSHStorageFixture(t, false)
+			node := f.a.Source.Members[0].Name
+			values := tc.values
+			if values == nil {
+				values = []any{node}
+			}
+			expr := map[string]any{"key": "kubernetes.io/hostname", "operator": "In", "values": values}
+			terms := []any{map[string]any{"matchExpressions": []any{expr}}}
+			if tc.extraTerm {
+				terms = append(terms, map[string]any{})
+			}
+			clusterSSHStorageMap(f.pv(tc.pv), "spec")["nodeAffinity"] = map[string]any{"required": map[string]any{"nodeSelectorTerms": terms}}
+			label := node
+			if tc.label != "" {
+				label = tc.label
+			}
+			clusterSSHStorageMap(f.objects["/api/v1/nodes/"+node], "metadata")["labels"] = map[string]any{"kubernetes.io/hostname": label}
+			_, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid = %t, error = %v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestClusterSSHReplicaListRequiresExplicitItemType(t *testing.T) {
 	fixture := newSSHStorageFixture(t, false)
 	list := sshStorageReplicaList(fixture, 0)

@@ -360,6 +360,16 @@ type clusterSSHStorageRequirements struct {
 	observation                      string                                 // Private provenance from the complete source object set; never imported.
 }
 
+// Longhorn can bind a strict-local PV to its already observed primary or replica node.
+func clusterSSHPostgresVolumeAffinity(raw any, node string) bool {
+	if !clusterSSHStorageName(node) {
+		return false
+	}
+	wire, err := json.Marshal(raw)
+	want := `{"required":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"In","values":[` + strconv.Quote(node) + `]}]}]}}`
+	return err == nil && string(wire) == want
+}
+
 func clusterSSHStorageBoundVolume(claim, pv, volume map[string]any) (clusterSSHStorageVolume, error) {
 	fail := func() (clusterSSHStorageVolume, error) {
 		return clusterSSHStorageVolume{}, clusterbootstrap.ErrPreparationConfig
@@ -376,7 +386,7 @@ func clusterSSHStorageBoundVolume(claim, pv, volume map[string]any) (clusterSSHS
 		ref["apiVersion"] != "v1" || ref["kind"] != "PersistentVolumeClaim" || ref["namespace"] != "borealis" || ref["name"] != c.Name || ref["uid"] != c.UID ||
 		csi["driver"] != clusterLonghornCSIDriver || csi["volumeHandle"] != p.Name || csi["fsType"] != "ext4" ||
 		ks["namespace"] != "borealis" || ks["pvcName"] != c.Name || ks["pvName"] != p.Name || ks["pvStatus"] != "Bound" ||
-		!clusterSSHStorageEmptyList(ct["conditions"]) || !clusterSSHStorageEmptyText(cs["volumeAttributesClassName"]) || !clusterSSHStorageEmptyText(ps["volumeAttributesClassName"]) || !clusterSSHStorageEmptyMap(ps["nodeAffinity"]) ||
+		!clusterSSHStorageEmptyList(ct["conditions"]) || !clusterSSHStorageEmptyText(cs["volumeAttributesClassName"]) || !clusterSSHStorageEmptyText(ps["volumeAttributesClassName"]) ||
 		vs["frontend"] != "blockdev" || vs["dataEngine"] != "v1" || vs["encrypted"] != false || vs["migratable"] != false ||
 		!clusterSSHStorageEmptyList(vs["diskSelector"]) || !clusterSSHStorageEmptyList(vs["nodeSelector"]) {
 		return fail()

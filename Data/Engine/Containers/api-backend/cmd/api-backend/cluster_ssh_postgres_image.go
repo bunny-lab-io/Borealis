@@ -84,6 +84,19 @@ type clusterSSHSourceExternalImage struct {
 	Resolved   string `json:"resolved"`
 }
 
+// containerd can report the platform config digest as the status image for a
+// digest-addressed Pod. The separate imageID still has to prove the repository
+// and the allowed index-to-manifest resolution.
+func clusterSSHPinnedConfigDigest(repository, configured string) string {
+	for _, pin := range clusterbootstrap.ExternalImagePins() {
+		if strings.HasPrefix(pin.Reference, repository+"@") &&
+			(configured == repository+"@"+pin.IndexDigest || configured == repository+"@"+pin.ManifestDigest) {
+			return pin.ConfigDigest
+		}
+	}
+	return ""
+}
+
 func (image clusterSSHSourceExternalImage) valid(repository string) bool {
 	for _, pin := range clusterbootstrap.ExternalImagePins() {
 		repo := strings.Split(strings.Split(pin.Reference, "@")[0], ":")[0]

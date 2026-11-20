@@ -39,7 +39,7 @@ func clusterSSHInstanceNamedPathValid(path string) bool {
 
 var clusterSSHInstancePercentageRE = regexp.MustCompile(`^(0|[1-9][0-9]?)(\.[0-9]{1,6})?$`)
 
-func clusterSSHInstanceNativeCPU(read func(string) (map[string]any, error), member clusterSSHSourceMember, percentage float64) (uint64, bool) {
+func clusterSSHInstanceNativeCPU(read func(string) (map[string]any, error), member clusterSSHSourceMember, percentage float64, requireHostnameLabel bool) (uint64, bool) {
 	node, err := read(clusterSSHInstanceNodePrefix + member.Name)
 	id, ok := clusterSSHStorageMetadata(node, "longhorn.io/v1beta2", "Node", "longhorn-system")
 	if err != nil || !ok || id.Name != member.Name {
@@ -53,6 +53,10 @@ func clusterSSHInstanceNativeCPU(read func(string) (map[string]any, error), memb
 	id, ok = clusterSSHStorageMetadata(kube, "v1", "Node", "")
 	allocatable, valid := clusterSSHWorkloadMilliCPU(clusterSSHStorageMap(clusterSSHStorageMap(kube, "status"), "allocatable")["cpu"])
 	if err != nil || !ok || !valid || id.Name != member.Name || id.UID != member.NodeUID {
+		return 0, false
+	}
+	// Bind strict-local PostgreSQL placement to the same authenticated Node read.
+	if requireHostnameLabel && clusterSSHStorageMap(clusterSSHStorageMap(kube, "metadata"), "labels")["kubernetes.io/hostname"] != member.Name {
 		return 0, false
 	}
 	return clusterSSHInstanceCPURequest(allocatable, uint64(override), percentage)
@@ -76,7 +80,7 @@ func clusterSSHInstanceCPURequest(allocatable, override uint64, percentage float
 // Full policy, owner, node, setting and Pod receipts join authority-bound
 // rereads. Project only validated bounds/global CPU policy, never source CPU
 // requests or node overrides as target defaults.
-func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHLonghornManagerImages) (clusterSSHInstanceManagerResources, error) {
+func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error), readList func(string, string, string, int) ([]map[string]any, error), source clusterSSHSourceCohort, images clusterSSHLonghornManagerImages, pinnedPostgresNodes map[string]bool) (clusterSSHInstanceManagerResources, error) {
 	fail := func() (clusterSSHInstanceManagerResources, error) {
 		return clusterSSHInstanceManagerResources{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -116,7 +120,7 @@ func observeClusterSSHInstanceManagers(read func(string) (map[string]any, error)
 			return fail()
 		}
 		seenNodes[member.Name] = true
-		cpu, ok := clusterSSHInstanceNativeCPU(read, member, percentage)
+		cpu, ok := clusterSSHInstanceNativeCPU(read, member, percentage, pinnedPostgresNodes[member.Name])
 		if !ok || cpu > bounds.CPULimitMilli {
 			return fail()
 		}

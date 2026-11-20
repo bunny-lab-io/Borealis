@@ -48,7 +48,8 @@ func observeClusterSSHSnapshotControllerRuntime(read func(string) (map[string]an
 	}
 	resolved, err := observeClusterSSHLonghornDeploymentRuntime(read, checkedList, source, id, image, clusterSSHLonghornDeploymentWorkload{
 		namespace: "kube-system", labelKey: "app.kubernetes.io/name", name: "snapshot-controller", serviceAccount: "snapshot-controller", repository: clusterSSHSnapshotControllerRepository,
-		podsPath: clusterSSHSnapshotPodsPath, replicaSetPrefix: clusterSSHSnapshotReplicaSetPrefix, replicaSetPathValid: clusterSSHSnapshotReplicaSetPathValid,
+		runtimeImageAlias: clusterSSHPinnedConfigDigest(clusterSSHSnapshotControllerRepository, image),
+		podsPath:          clusterSSHSnapshotPodsPath, replicaSetPrefix: clusterSSHSnapshotReplicaSetPrefix, replicaSetPathValid: clusterSSHSnapshotReplicaSetPathValid,
 		templateImage: clusterSSHSnapshotControllerTemplateImage,
 		specValid: func(spec map[string]any, pod bool) bool {
 			_, err := clusterSSHSnapshotControllerSpecImage(spec, pod)

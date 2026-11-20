@@ -213,6 +213,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		return fail()
 	}
 	seenPV, seenPVUID, seenVolumeUID := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	pinnedPostgresNodes := map[string]bool{}
 	artifactFound := false
 	activeFound := 0
 	for _, claim := range claims {
@@ -251,6 +252,14 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 			}
 			value.Role, value.Node = "postgres", node
 			activeFound++
+		}
+		affinity := clusterSSHStorageMap(pv, "spec")["nodeAffinity"]
+		if !clusterSSHStorageEmptyMap(affinity) {
+			// Only a healthy, owned strict-local PostgreSQL volume has an observed Node.
+			if value.Role != "postgres" || !clusterSSHPostgresVolumeAffinity(affinity, value.Node) {
+				return fail()
+			}
+			pinnedPostgresNodes[value.Node] = true
 		}
 		result.Requirements.Volumes = append(result.Requirements.Volumes, value)
 	}
@@ -295,7 +304,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if err != nil {
 		return fail()
 	}
-	result.Requirements.LonghornInstanceManagerResources, err = observeClusterSSHInstanceManagers(read, readList, source, result.Requirements.LonghornManagerImages)
+	result.Requirements.LonghornInstanceManagerResources, err = observeClusterSSHInstanceManagers(read, readList, source, result.Requirements.LonghornManagerImages, pinnedPostgresNodes)
 	if err != nil {
 		return fail()
 	}

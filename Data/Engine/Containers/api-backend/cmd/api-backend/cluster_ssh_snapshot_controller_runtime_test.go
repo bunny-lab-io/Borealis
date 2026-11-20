@@ -47,7 +47,7 @@ func sshSnapshotRuntimePod(f *sshStorageFixture, index int) map[string]any {
 }
 
 func TestClusterSSHSnapshotControllerRunningIdentity(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "replacement one source", "runtime platform", "no evidence", "owner UID", "owner invocation", "Pod invocation", "credential subpath", "extra mount", "missing identity"} {
+	for _, mode := range []string{"expansion", "pinned config digest", "foreign config digest", "config digest without imageID", "replacement", "replacement one source", "runtime platform", "no evidence", "owner UID", "owner invocation", "Pod invocation", "credential subpath", "extra mount", "missing identity"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHStorageFixture(t, strings.HasPrefix(mode, "replacement"))
 			pod := sshSnapshotRuntimePod(f, 0)
@@ -56,6 +56,13 @@ func TestClusterSSHSnapshotControllerRunningIdentity(t *testing.T) {
 			rs := f.objects[clusterSSHSnapshotReplicaSetPrefix+"snapshot-controller-abcdef"]
 			runtime := clusterSSHStorageMap(pod, "status")["containerStatuses"].([]any)[0].(map[string]any)
 			switch mode {
+			case "pinned config digest":
+				runtime["image"] = sshSnapshotControllerPin().ConfigDigest
+			case "foreign config digest":
+				runtime["image"] = "sha256:" + strings.Repeat("0", 64)
+			case "config digest without imageID":
+				runtime["image"] = sshSnapshotControllerPin().ConfigDigest
+				delete(runtime, "imageID")
 			case "replacement one source", "no evidence":
 				f.objects[clusterSSHSnapshotPodsPath(f.a.Source.Members[0].Name)]["items"] = []any{}
 			case "runtime platform":
@@ -74,7 +81,7 @@ func TestClusterSSHSnapshotControllerRunningIdentity(t *testing.T) {
 				delete(runtime, "imageID")
 			}
 			v, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
-			good := mode == "expansion" || strings.HasPrefix(mode, "replacement") || mode == "runtime platform"
+			good := mode == "expansion" || mode == "pinned config digest" || strings.HasPrefix(mode, "replacement") || mode == "runtime platform"
 			if (err == nil) != good {
 				t.Fatalf("runtime observation: %v", err)
 			}

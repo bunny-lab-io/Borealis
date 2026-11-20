@@ -43,7 +43,7 @@ func sshSystemUpgradePod(f *sshStorageFixture, index int) map[string]any {
 	return f.objects[clusterSSHSystemUpgradePodsPath(f.a.Source.Members[index].Name)]["items"].([]any)[0].(map[string]any)
 }
 func TestClusterSSHSystemUpgradeRunningIdentity(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "replacement one source Pod", "runtime index", "missing list", "empty list", "duplicate Pod", "list continuation", "missing owner", "foreign owner UID", "foreign deployment UID", "owner template override", "Pod command override", "Pod env override", "credential subpath", "wrong node", "wrong label", "not ready", "not started", "ambiguous state", "unreviewed image", "wrong runtime image", "missing imageID", "extra status", "sidecar", "init", "ephemeral", "service account", "host network"} {
+	for _, mode := range []string{"expansion", "replacement", "replacement one source Pod", "runtime index", "qualified runtime name", "qualified wrong tag", "missing list", "empty list", "duplicate Pod", "list continuation", "missing owner", "foreign owner UID", "foreign deployment UID", "owner template override", "Pod command override", "Pod env override", "credential subpath", "wrong node", "wrong label", "not ready", "not started", "ambiguous state", "unreviewed image", "wrong runtime image", "missing imageID", "extra status", "sidecar", "init", "ephemeral", "service account", "host network"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHStorageFixture(t, strings.HasPrefix(mode, "replacement"))
 			path := clusterSSHSystemUpgradePodsPath(f.a.Source.Members[0].Name)
@@ -57,6 +57,10 @@ func TestClusterSSHSystemUpgradeRunningIdentity(t *testing.T) {
 			switch mode {
 			case "replacement one source Pod":
 				list["items"] = []any{}
+			case "qualified runtime name":
+				runtime["image"] = "docker.io/" + c["image"].(string)
+			case "qualified wrong tag":
+				runtime["image"] = "docker.io/rancher/system-upgrade-controller:latest"
 			case "runtime index":
 				runtime["imageID"] = "docker.io/rancher/system-upgrade-controller@" + sshSystemUpgradePin("system-upgrade-controller").IndexDigest
 			case "missing list":
@@ -111,7 +115,7 @@ func TestClusterSSHSystemUpgradeRunningIdentity(t *testing.T) {
 				spec["hostNetwork"] = true
 			}
 			v, err := observeClusterSSHStorage(context.Background(), f.a.Source, f.get)
-			valid := mode == "expansion" || strings.HasPrefix(mode, "replacement") || mode == "runtime index"
+			valid := mode == "expansion" || strings.HasPrefix(mode, "replacement") || mode == "runtime index" || mode == "qualified runtime name"
 			if (err == nil) != valid {
 				t.Fatalf("runtime observation: %v", err)
 			}

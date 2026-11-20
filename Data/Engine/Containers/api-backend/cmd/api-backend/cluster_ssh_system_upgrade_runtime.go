@@ -30,7 +30,7 @@ func clusterSSHSystemUpgradeRuntimeImageValid(configured, resolved string) bool 
 	if strings.HasPrefix(configured, "rancher/") {
 		configured = "docker.io/" + configured
 	}
-	// Kubelet status preserves the configured spelling; imageID is canonical.
+	// Independently verify the resolved digest against the published image pins.
 	return (clusterSSHSourceExternalImage{Configured: configured, Resolved: resolved}).valid("docker.io/rancher/system-upgrade-controller")
 }
 func clusterSSHSystemUpgradeTemplateImage(object map[string]any) (string, error) {

@@ -98,7 +98,8 @@ func observeClusterSSHKubeVIPRuntime(readList func(string, string, string, int) 
 			return fail()
 		}
 		runtime, ok := statuses[0].(map[string]any)
-		if !ok || runtime["name"] != "kube-vip" || runtime["image"] != image || runtime["ready"] != true || runtime["started"] != true {
+		reported := clusterSSHStorageText(runtime, "image")
+		if !ok || runtime["name"] != "kube-vip" || reported == "" || (reported != image && reported != clusterSSHPinnedConfigDigest(clusterSSHKubeVIPRepository, image)) || runtime["ready"] != true || runtime["started"] != true {
 			return fail()
 		}
 		state := clusterSSHStorageMap(runtime, "state")
