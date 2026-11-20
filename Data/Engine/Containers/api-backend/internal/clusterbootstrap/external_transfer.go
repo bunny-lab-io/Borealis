@@ -36,10 +36,11 @@ func (s *ExternalImageSet) WriteImages(ctx context.Context, output io.Writer, ch
 	if _, err := io.Copy(output, &header); err != nil {
 		return ErrImageArchive
 	}
-	for _, proof := range s.inventory.Images() {
-		if err := s.writeArchive(ctx, proof.Reference, output, check); err != nil {
-			return err
-		}
+	images := s.inventory.Images()
+	if err := verifyPreparationArchives(ctx, output, check, len(images), func(ctx context.Context, index int, dst io.Writer, current func(context.Context) error) error {
+		return s.writeArchive(ctx, images[index].Reference, dst, current)
+	}); err != nil {
+		return err
 	}
 	if imageBoundary(ctx, check) != nil {
 		return ErrSessionAuthority

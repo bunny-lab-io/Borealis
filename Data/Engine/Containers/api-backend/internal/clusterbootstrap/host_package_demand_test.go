@@ -125,3 +125,55 @@ func TestHostPackageStorageDemandJoinsClose(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHostPackageApprovalDigest(t *testing.T) {
+	for _, mode := range []string{"valid", "wrong source", "lost authority", "changed after verification", "closed"} {
+		t.Run(mode, func(t *testing.T) {
+			want, inventory, raw := hostPackageStageFixture(t)
+			ctx := t.Context()
+			ok := func(ctx context.Context) error { return ctx.Err() }
+			set, err := StageHostPackages(ctx, t.TempDir(), want, inventory, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(raw)), nil
+			}, ok)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Close()
+			expected := want
+			if mode == "wrong source" {
+				expected.SourceSHA = strings.Repeat("b", 40)
+			}
+			if mode == "closed" {
+				if err := set.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			checks := 0
+			digest, err := set.ApprovalDigest(ctx, expected, func(ctx context.Context) error {
+				checks++
+				if checks == 2 {
+					switch mode {
+					case "changed after verification":
+						raw[1024] ^= 1
+						return os.WriteFile(filepath.Join(set.path, HostPackageArchiveName), raw, 0600)
+					case "lost authority":
+						return ErrSessionAuthority
+					}
+				}
+				return ctx.Err()
+			})
+			if mode == "valid" {
+				if err != nil || digest != inventory.Archive().SHA256 {
+					t.Fatal("wrong approval digest", digest, err)
+				}
+				return
+			}
+			if err == nil || digest != "" {
+				t.Fatal("invalid package proof accepted", digest, err)
+			}
+			if _, err := set.ApprovalDigest(ctx, want, ok); err == nil {
+				t.Fatal("failed owner reused")
+			}
+		})
+	}
+}

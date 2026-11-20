@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func preparationArtifactsFixture(t *testing.T) (*PreparationArtifacts, K3sInputPins, []ExternalImagePin) {
@@ -318,6 +319,58 @@ func TestPreparationArtifactTransfer(t *testing.T) {
 			entries, _ := os.ReadDir(parent)
 			if len(entries) != 1 {
 				t.Fatal("completed scratch retained")
+			}
+		})
+	}
+}
+
+// Hold the first reader until its peer enters. Both must join before the owner
+// can close, and a partial proof must never publish any spans.
+func TestPrivateArchiveReproofJoinsReaders(t *testing.T) {
+	for _, mode := range []string{"ordered", "failed"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+			defer stop()
+			second := make(chan struct{})
+			exited := make(chan struct{})
+			output := &preparationApprovalHash{framing: sha256.New(), framingBytes: 17}
+			check := func(ctx context.Context) error { return ctx.Err() }
+			err := verifyPreparationArchives(ctx, output, check, 2, func(ctx context.Context, index int, dst io.Writer, current func(context.Context) error) error {
+				if index == 0 {
+					select {
+					case <-second:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					if mode == "failed" {
+						return ErrImageArchive
+					}
+				} else {
+					defer close(exited)
+					close(second)
+					if mode == "failed" {
+						<-ctx.Done()
+						return ctx.Err()
+					}
+				}
+				proof := dst.(*preparationApprovalHash)
+				proof.archives = append(proof.archives, preparationArchiveSpan{size: int64(index + 1)})
+				return current(ctx)
+			})
+			select {
+			case <-exited:
+			default:
+				t.Fatal("archive reader escaped")
+			}
+			if mode == "failed" {
+				if err != ErrImageArchive || len(output.archives) != 0 {
+					t.Fatalf("partial result %v, %v", output.archives, err)
+				}
+				return
+			}
+			want := []preparationArchiveSpan{{framingOffset: 17, size: 1}, {framingOffset: 17, size: 2}}
+			if err != nil || !slices.Equal(output.archives, want) {
+				t.Fatalf("archive spans %v, %v", output.archives, err)
 			}
 		})
 	}

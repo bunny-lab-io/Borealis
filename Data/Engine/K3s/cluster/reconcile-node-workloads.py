@@ -337,6 +337,10 @@ def reconcile_one(
     if base == "job-scheduler":
         set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")
     if base == "borealis-cluster-controller":
+        # Older generic templates retain the previous stock CPU ceiling.
+        limits = (containers[0].get("resources") or {}).get("limits") or {}
+        if limits.get("cpu") == "500m":
+            limits["cpu"] = "1500m"
         set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")
         set_container_environment(containers[0], "BOREALIS_CLUSTER_ACTION_IMAGE", image)
     if base == "api-backend":

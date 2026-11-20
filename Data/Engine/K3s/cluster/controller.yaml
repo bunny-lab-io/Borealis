@@ -256,7 +256,7 @@ spec:
             capabilities: {drop: ["ALL"]}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 256Mi}
+            limits: {cpu: 1500m, memory: 256Mi}
           volumeMounts:
             - {name: cluster-scratch, mountPath: /var/tmp/borealis-cluster}
       volumes:

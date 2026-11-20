@@ -110,6 +110,17 @@ func (p *PreparationInputs) Close() error {
 }
 
 func (b *Bundle) verifyPreparationSource(ctx context.Context, k3sVersion string) error {
+	if b.verifyStagedPreparationBytes(ctx, k3sVersion) != nil ||
+		verifySource(ctx, b.SourcePath(), b.identity, maps.Clone(b.index.sourceFiles), "") != nil || verifyBinary(b.ManagerPath(), b.identity) != nil {
+		return ErrPreparationConfig
+	}
+	return nil
+}
+
+// Stage sets index only after validating Git history, tracked content and the
+// helper build. Checking every extracted path, mode and byte against that
+// private index reestablishes the same content identity for approval.
+func (b *Bundle) verifyStagedPreparationBytes(ctx context.Context, k3sVersion string) error {
 	if _, _, _, err := b.ManagerProof(); err != nil || b.asset.Size < 1 || b.asset.Size > MaxBundleBytes || !digestPattern.MatchString(b.asset.SHA256) {
 		return ErrPreparationConfig
 	}
@@ -135,8 +146,7 @@ func (b *Bundle) verifyPreparationSource(ctx context.Context, k3sVersion string)
 	if err != nil || n != b.asset.Size || hex.EncodeToString(h.Sum(nil)) != b.asset.SHA256 {
 		return ErrPreparationConfig
 	}
-	if b.index == nil || b.index.verify(ctx, filepath.Join(b.root, "unpacked")) != nil ||
-		verifySource(ctx, b.SourcePath(), b.identity, maps.Clone(b.index.sourceFiles), "") != nil || verifyBinary(b.ManagerPath(), b.identity) != nil {
+	if b.index == nil || b.index.verify(ctx, filepath.Join(b.root, "unpacked")) != nil {
 		return ErrPreparationConfig
 	}
 	// Compatibility must come from the verified source archive as well. The

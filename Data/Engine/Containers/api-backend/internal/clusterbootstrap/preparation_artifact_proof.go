@@ -15,7 +15,7 @@ func (b *Bundle) PreparationArtifactProof(ctx context.Context, expected Expected
 		return "", ErrPreparationConfig
 	}
 	actual, _, _, err := b.ManagerProof()
-	if err != nil || actual != expected || manifest == nil || b.identity != manifest.identity || b.asset != manifest.asset || b.verifyPreparationSource(ctx, version) != nil || imageBoundary(ctx, check) != nil {
+	if err != nil || actual != expected || manifest == nil || b.identity != manifest.identity || b.asset != manifest.asset || b.verifyStagedPreparationBytes(ctx, version) != nil || imageBoundary(ctx, check) != nil {
 		return "", ErrPreparationConfig
 	}
 	raw, err := json.Marshal(struct {

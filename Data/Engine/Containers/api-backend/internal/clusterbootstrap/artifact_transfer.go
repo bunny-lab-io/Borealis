@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"sync"
 )
 
 const artifactTransferMagic = "BOREALIS-NODE-ARTIFACTS-1\n"
@@ -138,6 +139,67 @@ func (a *PreparationArtifacts) ApprovalDigest(ctx context.Context, check func(co
 		return "", ErrImageArchive
 	}
 	return a.approval.transportDigest, nil
+}
+
+// The family owner holds its lock until all private reads have joined. The
+// first proof and real transfers still emit their complete stream in order.
+func verifyPreparationArchives(ctx context.Context, output io.Writer, check func(context.Context) error, count int,
+	read func(context.Context, int, io.Writer, func(context.Context) error) error) error {
+	parent, private := output.(*preparationApprovalHash)
+	if !private || parent.transport != nil || count < 2 {
+		for i := range count {
+			if err := read(ctx, i, output, check); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	work, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var checks sync.Mutex
+	current := func(ctx context.Context) error {
+		checks.Lock()
+		defer checks.Unlock()
+		return imageBoundary(ctx, check)
+	}
+	spans := make([]preparationArchiveSpan, count)
+	queue := make(chan int, count)
+	for i := range count {
+		queue <- i
+	}
+	close(queue)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Go(func() {
+			for i := range queue {
+				if work.Err() != nil {
+					return
+				}
+				part := &preparationApprovalHash{framing: sha256.New()}
+				err := read(work, i, part, current)
+				if err == nil && (len(part.archives) != 1 || part.framingBytes != 0) {
+					err = ErrImageArchive
+				}
+				if err != nil {
+					cancel(err)
+					return
+				}
+				spans[i] = part.archives[0]
+			}
+		})
+	}
+	group.Wait()
+	if ctx.Err() != nil {
+		return ErrSessionAuthority
+	}
+	if err := context.Cause(work); err != nil {
+		return err
+	}
+	for i := range spans {
+		spans[i].framingOffset = parent.framingBytes
+	}
+	parent.archives = append(parent.archives, spans...)
+	return nil
 }
 
 // External writers receive bytes only after prior authentication. A private

@@ -94,7 +94,7 @@ func (s *HostPackageSet) InstalledContentDemand(ctx context.Context, expected Ex
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.failed = s.failed || result != nil }()
-	if err := s.proveDemandOwner(ctx, expected, check); err != nil {
+	if err := s.verifyOwnedArchive(ctx, expected, check); err != nil {
 		return nil, err
 	}
 	rows := map[string]HostPackageDestinationDemand{}

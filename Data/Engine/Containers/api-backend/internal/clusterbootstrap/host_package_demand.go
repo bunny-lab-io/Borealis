@@ -1,6 +1,11 @@
 package clusterbootstrap
 
-import "context"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+)
 
 // StorageDemand lends the verified package materialization charge, not installed
 // package content, generated files or service/runtime growth. The native host
@@ -14,7 +19,7 @@ func (s *HostPackageSet) StorageDemand(ctx context.Context, expected Expected, c
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.failed = s.failed || result != nil }()
-	if err := s.proveDemandOwner(ctx, expected, check); err != nil {
+	if err := s.verifyOwnedArchive(ctx, expected, check); err != nil {
 		return PreparationScratchDemand{}, err
 	}
 	wire := s.inventory.wire
@@ -30,8 +35,31 @@ func (s *HostPackageSet) StorageDemand(ctx context.Context, expected Expected, c
 	return demand, nil
 }
 
-// Caller holds the owner's mutex across this proof and demand consumption.
-func (s *HostPackageSet) proveDemandOwner(ctx context.Context, expected Expected, check func(context.Context) error) error {
+// ApprovalDigest verifies the ordered package contents, then hashes the retained
+// archive again after the authority callback. Nothing is written outside the
+// owner. Actual package transfers keep their before/after transport checks.
+func (s *HostPackageSet) ApprovalDigest(ctx context.Context, expected Expected, check func(context.Context) error) (digest string, result error) {
+	if s == nil {
+		return "", ErrImageArchive
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { s.failed = s.failed || result != nil }()
+	if err := s.verifyOwnedArchive(ctx, expected, check); err != nil {
+		return "", err
+	}
+	asset := s.inventory.Archive()
+	h := sha256.New()
+	n, err := io.Copy(h, contextReader{ctx, io.NewSectionReader(s.file, 0, asset.Size)})
+	if err != nil || n != asset.Size || hex.EncodeToString(h.Sum(nil)) != asset.SHA256 ||
+		!stagedImageFileMatches(s.root, asset.Name, s.file, asset.Size) || imageBoundary(ctx, check) != nil {
+		return "", ErrImageArchive
+	}
+	return asset.SHA256, nil
+}
+
+// Caller holds the owner's mutex across verification and consumption.
+func (s *HostPackageSet) verifyOwnedArchive(ctx context.Context, expected Expected, check func(context.Context) error) error {
 	if s.failed || s.root == nil || s.file == nil || s.inventory == nil || expected.Validate() != nil || imageBoundary(ctx, check) != nil {
 		return ErrSessionAuthority
 	}

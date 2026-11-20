@@ -197,26 +197,25 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             return ""
 
         image = "borealis-engine/api-backend:sha-" + "b" * 12
-        with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(
-            MODULE, "kubectl", side_effect=fake_kubectl
-        ):
-            MODULE.reconcile_one(
-                "borealis-cluster-controller",
-                "api-backend",
-                "engine-02",
-                "a" * 40,
-                {"api-backend": image},
-                True,
-            )
-
-        manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
-        environment = {
-            item["name"]: item.get("value")
-            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
-        }
-        self.assertEqual(environment["BOREALIS_CLUSTER_SCRATCH_DIR"], "/var/tmp/borealis-cluster")
-        self.assertEqual(environment["BOREALIS_CLUSTER_ACTION_IMAGE"], image)
-        self.assertEqual(environment["BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE"], "false")
+        for previous, expected in (("500m", "1500m"), ("2", "2")):
+            with self.subTest(cpu=previous):
+                calls.clear()
+                source["spec"]["template"]["spec"]["containers"][0]["resources"] = {
+                    "requests": {"cpu": "50m"}, "limits": {"cpu": previous, "memory": "256Mi"},
+                }
+                with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(
+                    MODULE, "kubectl", side_effect=fake_kubectl
+                ):
+                    MODULE.reconcile_one(
+                        "borealis-cluster-controller", "api-backend", "engine-02", "a" * 40, {"api-backend": image}, True
+                    )
+                manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+                controller = manifest["spec"]["template"]["spec"]["containers"][0]
+                self.assertEqual(controller["resources"], {"requests": {"cpu": "50m"}, "limits": {"cpu": expected, "memory": "256Mi"}})
+                environment = {item["name"]: item.get("value") for item in controller["env"]}
+                self.assertEqual(environment["BOREALIS_CLUSTER_SCRATCH_DIR"], "/var/tmp/borealis-cluster")
+                self.assertEqual(environment["BOREALIS_CLUSTER_ACTION_IMAGE"], image)
+                self.assertEqual(environment["BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE"], "false")
 
     def test_reconcile_refreshes_node_clone_from_generic_template(self) -> None:
         stale_image = "borealis-engine/site-worker:sha-" + "a" * 12

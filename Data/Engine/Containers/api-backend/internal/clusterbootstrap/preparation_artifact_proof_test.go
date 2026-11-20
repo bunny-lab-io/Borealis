@@ -13,7 +13,7 @@ import (
 func TestPreparationArtifactProofWithoutTargetClaim(t *testing.T) {
 	e, manifest, members := archiveFixture(t)
 	archive := pack(t, members)
-	for _, mode := range []string{"valid", "source bytes", "same-size edit after proof", "missing file after proof", "archive bytes", "helper bytes", "extra source", "wrong release", "wrong K3s", "different manifest", "authority", "cancelled", "closed"} {
+	for _, mode := range []string{"valid", "source bytes", "same-size edit after proof", "same-size Git ref edit after proof", "missing file after proof", "archive bytes", "helper bytes", "extra source", "wrong release", "wrong K3s", "different manifest", "authority", "cancelled", "closed"} {
 		t.Run(mode, func(t *testing.T) {
 			b, err := stageFixture(t, context.Background(), e, manifest, archive, t.TempDir())
 			if err != nil {
@@ -42,11 +42,14 @@ func TestPreparationArtifactProofWithoutTargetClaim(t *testing.T) {
 				}
 			}
 			switch mode {
-			case "same-size edit after proof", "missing file after proof":
+			case "same-size edit after proof", "same-size Git ref edit after proof", "missing file after proof":
 				if _, err := b.PreparationArtifactProof(ctx, expected, version, publication, check); err != nil {
 					t.Fatal(err)
 				}
 				path := filepath.Join(b.SourcePath(), "Engine.sh")
+				if mode == "same-size Git ref edit after proof" {
+					path = filepath.Join(b.SourcePath(), ".git", "HEAD")
+				}
 				if mode == "missing file after proof" {
 					if err := os.Remove(path); err != nil {
 						t.Fatal(err)

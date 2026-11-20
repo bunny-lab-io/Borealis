@@ -4,8 +4,6 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -414,15 +412,15 @@ func (v *clusterSSHOwnedPreparationArtifacts) proveOwned(ctx context.Context, ch
 	if err != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
-	packages := sha256.New()
-	if v.packages.WriteArchive(ctx, packages, check) != nil {
+	packages, err := v.packages.ApprovalDigest(ctx, v.expected, check)
+	if err != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
 	again, err := v.bundle.PreparationArtifactProof(ctx, v.expected, v.version, v.manifest, check)
 	if err != nil || again != bundle || check(ctx) != nil || ctx.Err() != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
-	proof, err := clusterSSHPreparationDigest([]string{bundle, artifacts, hex.EncodeToString(packages.Sum(nil))})
+	proof, err := clusterSSHPreparationDigest([]string{bundle, artifacts, packages})
 	if err == nil {
 		v.verifiedBundle = bundle
 	}
@@ -627,6 +625,12 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 		return nil, err
 	}
 	closes = []func() error{bundle.Close, artifacts.Close, packageBytes.Close}
+	// Compute the ordered transport digest while the proposal still owns
+	// acquisition. All four timed proofs re-read every file and compare its
+	// digest, framing and position with this private reference.
+	if _, err := artifacts.ApprovalDigest(ctx, check); err != nil {
+		return nil, err
+	}
 	static, err := clusterSSHPreparationGroupPublication(expected, version, bootstrap, application.assets, external.assets, k3s.assets)
 	if err != nil {
 		return nil, err
