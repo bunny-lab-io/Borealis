@@ -148,7 +148,7 @@ func TestClusterSSHK3sConfigurationCapacity(t *testing.T) {
 	clear(frame)
 	demands, err := clusterSSHK3sConfigurationDemands(request.Expected)
 	config, configErr := clusterbootstrap.PrejoinK3sJoinConfiguration(request.Expected)
-	if err != nil || configErr != nil || len(demands) != 1 || demands[0].Path != "/etc/rancher/k3s" || demands[0].Bytes != uint64(len(config)+clusterbootstrap.MaxK3sJoinTokenBytes+clusterbootstrap.MaxK3sGeneratedKubeconfigBytes) || demands[0].Entries != 3 {
+	if err != nil || configErr != nil || len(demands) != 1 || demands[0].Path != "/etc/rancher/k3s" || len(config) > clusterSSHK3sJoinYAMLAllowance || demands[0].Bytes != (64<<10)+clusterbootstrap.MaxK3sJoinTokenBytes+clusterbootstrap.MaxK3sGeneratedKubeconfigBytes || demands[0].Entries != 3 {
 		t.Fatal("configuration not fully reserved", err)
 	}
 	merged, err := mergeClusterSSHFilesystemDemands(demands, []clusterSSHFilesystemDemand{{Path: "/etc/rancher/k3s", Bytes: 23, Entries: 1}})

@@ -111,7 +111,7 @@ func newClusterSSHPrejoinWorkerStorageCheck(baseline clusterbootstrap.Expected, 
 					RequirePackageCopies: i == index && expected.TargetPackages != nil && len(expected.TargetPackages.Missing) > 0}
 			}
 			proved := false
-			if withClusterSSHTargetFilesystemEvidence(ctx, readers, selection, func(ctx context.Context, targets []clusterSSHTargetFilesystemEvidence) error {
+			if readClusterSSHTargetFilesystemEvidence(ctx, readers, selection, false, func(ctx context.Context, targets []clusterSSHTargetFilesystemEvidence) error {
 				if proved || len(targets) != len(claims) || checks.Authority(ctx) != nil {
 					return fail
 				}

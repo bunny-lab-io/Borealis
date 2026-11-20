@@ -30,6 +30,15 @@ type clusterSSHTargetFilesystemEvidence struct {
 func withClusterSSHTargetFilesystemEvidence(parent context.Context, readers clusterSSHNetworkTargetReaders,
 	selection []clusterSSHTargetFilesystemSelection,
 	consume func(context.Context, []clusterSSHTargetFilesystemEvidence) error) error {
+	return readClusterSSHTargetFilesystemEvidence(parent, readers, selection, true, consume)
+}
+
+// Consumers borrowing free-space counters for other work require a final
+// post-consumption check. A pre-write fit decision instead consumes the lowest
+// counters across all three reads immediately before returning to the worker.
+func readClusterSSHTargetFilesystemEvidence(parent context.Context, readers clusterSSHNetworkTargetReaders,
+	selection []clusterSSHTargetFilesystemSelection, recheckAfterConsume bool,
+	consume func(context.Context, []clusterSSHTargetFilesystemEvidence) error) error {
 	if readers.within == nil || readers.Authority == nil || readers.Refresh == nil || readers.Filesystem == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -102,6 +111,16 @@ func withClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 		if err != nil || !mergeClusterSSHFilesystemAvailability(first, second, false) {
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		checkFinal := func() error {
+			final, err := read()
+			if err != nil || !mergeClusterSSHFilesystemAvailability(first, final, recheckAfterConsume) {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			return nil
+		}
+		if !recheckAfterConsume && checkFinal() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
 		out := slices.Clone(first)
 		for i := range out {
 			out[i].Storage = out[i].Storage.Clone()
@@ -109,8 +128,7 @@ func withClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 		if current() != nil || consume(ctx, out) != nil || current() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		final, err := read()
-		if err != nil || !mergeClusterSSHFilesystemAvailability(first, final, true) {
+		if recheckAfterConsume && checkFinal() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		return current()

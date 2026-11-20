@@ -56,6 +56,15 @@ func validClusterSSHPreparationFilesystems(snapshot clusterSSHPreparationApprova
 	return true
 }
 
+// The supported persistent observer verifies a common root filesystem for the
+// installation paths. Reserve once per selected target, including service
+// startup when no packages are missing. The normal allocation-unit charge
+// also applies to these extra entries.
+const (
+	clusterSSHPreparationTransientBytes   = 1 << 30
+	clusterSSHPreparationTransientEntries = 4096
+)
+
 // Only the selected target borrows its own current database/cache sizes.
 // Existing archive and installed-content rows exclude these working copies.
 func calculateClusterSSHPreparationStorageCapacity(requirements clusterSSHStorageRequirements, evidence clusterremote.FilesystemEvidence,
@@ -67,18 +76,19 @@ func calculateClusterSSHPreparationStorageCapacity(requirements clusterSSHStorag
 	if err != nil {
 		return nil, err
 	}
+	extra := []clusterSSHFilesystemDemand{{Path: "/var", Bytes: clusterSSHPreparationTransientBytes, Entries: clusterSSHPreparationTransientEntries}}
 	if len(selection.Missing) > 0 {
 		copies := evidence.PackageCopies
 		if !copies.Valid() || copies.ProfileSHA256 != selection.ProfileSHA256 {
 			return nil, clusterbootstrap.ErrPreparationConfig
 		}
-		demands, err = mergeClusterSSHFilesystemDemands(demands, []clusterSSHFilesystemDemand{
-			{Path: "/var", Bytes: copies.Bytes, Entries: copies.Entries},
-			{Path: "/var", Bytes: metadata.Bytes, Entries: metadata.Entries},
-		})
-		if err != nil {
-			return nil, err
-		}
+		extra = append(extra,
+			clusterSSHFilesystemDemand{Path: "/var", Bytes: copies.Bytes, Entries: copies.Entries},
+			clusterSSHFilesystemDemand{Path: "/var", Bytes: metadata.Bytes, Entries: metadata.Entries})
+	}
+	demands, err = mergeClusterSSHFilesystemDemands(demands, extra)
+	if err != nil {
+		return nil, err
 	}
 	return calculateClusterSSHStorageCapacity(requirements, evidence, demands)
 }

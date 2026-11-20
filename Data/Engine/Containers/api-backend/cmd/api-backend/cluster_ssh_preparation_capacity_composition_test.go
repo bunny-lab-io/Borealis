@@ -2,19 +2,21 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterremote"
 	"context"
 	"encoding/base64"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
 
 // Component composition only: source objects use the real existing readers,
 // while artifact bytes and persistent target filesystem proof are synthetic.
-// The production constructor's persistent_storage blocker is tested unchanged.
+// Exercise the production gate order and rounded demand with independent target observations.
 func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
-	for _, mode := range []string{"component success", "production storage blocked", "supervised target drift", "configuration drift after capacity", "later clean drift"} {
+	for _, mode := range []string{"component success", "missing filesystem reader", "second target shortage", "supervised target drift", "configuration drift after capacity", "later clean drift"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHWaitingCapacityFixture(t, false, "absent")
 			nativeCalls, networkCalls, capacityCalls, configurationCalls := 0, 0, 0, 0
@@ -37,7 +39,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 					networkCalls++
 					return sshSourceNetworkFixture(member, clusterbootstrap.K3sPins().Version), ctx.Err()
 				})
-			capacity, approvalProjection := newClusterSSHPreparationCapacityRead(f.snapshot, f.check, f.get, profile, targetProjection,
+			capacity, approvalProjection, storageSource := newClusterSSHPreparationCapacityStorageRead(f.snapshot, f.check, f.get, profile, targetProjection,
 				func(ctx context.Context, window int64) ([]int64, error) {
 					if window <= 0 {
 						return nil, errClusterConflict
@@ -79,15 +81,50 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 				}
 				return strings.Repeat("a", 64), nil
 			}
-			gates := clusterSSHPreparationNativeGates(f.snapshot, artifact, clean, capacityGate, configurationGate)
-			if digest, err := gates[3](context.Background(), f.plan); digest != "" || err == nil {
-				t.Fatal("production constructor lost persistent storage blocker")
+			ownedDemand := func(ctx context.Context, requested string) ([]clusterSSHFilesystemDemand, error) {
+				if requested != f.plan {
+					return nil, errClusterConflict
+				}
+				return []clusterSSHFilesystemDemand{
+					{Path: "/opt/Borealis", Bytes: 8 << 30},
+					{Path: "/var", Bytes: 600 << 20},
+					{Path: "/var/tmp", Bytes: 1000},
+					{Path: "/etc", Bytes: 10},
+					{Path: "/usr", Bytes: 10},
+					{Path: "/usr/local/bin", Bytes: 10},
+					{Path: "/var/lib/rancher/k3s", Bytes: 10},
+					{Path: "/etc/systemd/system", Entries: 2},
+				}, ctx.Err()
 			}
-			if mode != "production storage blocked" {
-				// This substitution tests component ordering, never production
-				// readiness or a claimed successful filesystem observation.
-				gates[3] = func(context.Context, string) (string, error) { return strings.Repeat("b", 64), nil }
+			filesystems := func(paths []string) clusterSSHPreparationTargetsRead {
+				if !slices.Contains(paths, "/etc/rancher/k3s") || !slices.Contains(paths, "/var/lib/longhorn") || !slices.Contains(paths, "/var/tmp") {
+					t.Fatal("incomplete approval path projection", paths)
+				}
+				return func(ctx context.Context, requested string) (clusterSSHPreparationCleanObservation, error) {
+					observation, err := targetProjection(ctx, requested)
+					if err != nil {
+						return observation, err
+					}
+					for i, target := range observation.Targets {
+						e := sshPackageStorageEvidence(sshCapacityEvidence())
+						e.MountNamespace, e.Receipt = 1234, strings.Repeat("a", 64)
+						e.Paths = nil
+						for _, path := range paths {
+							e.Paths = append(e.Paths, clusterremote.FilesystemPath{Path: path, Ancestor: "/", Filesystem: "root"})
+						}
+						if i == 1 && mode == "second target shortage" {
+							e.Filesystems[0].AvailableInodes = clusterSSHPreparationTransientEntries
+						}
+						observation.Filesystems = append(observation.Filesystems, clusterSSHTargetFilesystemEvidence{TargetID: target.TargetID, Storage: e})
+					}
+					return observation, nil
+				}
 			}
+			storage := newClusterSSHPreparationStorageRead(f.snapshot, f.check, storageSource, preparationWaitingStorageDemand(ownedDemand), filesystems)
+			if mode == "missing filesystem reader" {
+				storage = nil
+			}
+			gates := clusterSSHPreparationNativeGates(f.snapshot, artifact, clean, capacityGate, storage, configurationGate)
 			source := func(ctx context.Context) error {
 				observed, err := observeClusterSSHSourceCohort(ctx, f.get, f.snapshot.work.Proof.Source)
 				if err != nil || !reflect.DeepEqual(observed, f.snapshot.work.Proof.Source) {
@@ -128,7 +165,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 				if err == nil || !errors.Is(err, errClusterConflict) || approved || entered != (mode == "later clean drift") {
 					t.Fatalf("changed/incomplete proof reached approval: entered=%v approved=%v err=%v", entered, approved, err)
 				}
-				if mode == "production storage blocked" {
+				if mode == "missing filesystem reader" || mode == "second target shortage" {
 					var blocked clusterSSHPreparationGateBlocked
 					if !errors.As(err, &blocked) || blocked.Gate != "persistent_storage" {
 						t.Fatal("lost exact production blocker", err)

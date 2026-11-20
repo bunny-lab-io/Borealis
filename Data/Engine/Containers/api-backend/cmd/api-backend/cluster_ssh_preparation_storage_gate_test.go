@@ -32,7 +32,7 @@ func TestClusterSSHSelectedPackageCopyDemand(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			evidence := sshPackageStorageEvidence(sshCapacityEvidence())
 			selection := selected.Clone()
-			expected := uint64(300 + 4096)
+			expected := uint64(300 + 4096 + clusterSSHPreparationTransientBytes + clusterSSHPreparationTransientEntries*4096)
 			switch mode {
 			case "install":
 				meta, err := selection.DpkgMetadataDemand()
@@ -253,9 +253,8 @@ func TestClusterSSHPreparationStorageSourceBorrowsVerifiedCapacity(t *testing.T)
 	}
 }
 
-// Source objects use existing complete capacity readers. Filesystem and demand
-// producers are explicit component doubles; no fixture claims complete native
-// installation evidence or removes the production storage blocker.
+// Source objects use the complete capacity readers. Filesystem and demand
+// doubles exercise the approval decision independently of live installation.
 func TestClusterSSHPreparationStorageGate(t *testing.T) {
 	for _, mode := range []string{"valid", "missing demand", "unavailable family", "empty demand", "missing reader", "reader failure", "source unavailable", "configuration drift", "storage drift", "collector provenance", "CPU drift", "namespace drift", "foreign target", "missing filesystem", "temporary filesystem", "existing storage", "byte shortage", "inode shortage", "late authority", "cancel", "source changed after filesystem", "wrong plan"} {
 		t.Run(mode, func(t *testing.T) {

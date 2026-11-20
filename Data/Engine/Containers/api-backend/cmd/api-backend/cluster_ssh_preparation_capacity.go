@@ -136,14 +136,6 @@ func clusterSSHPreparationConfigurationProjectionReader(work clusterSSHPreparati
 // Native waiting adapter. The controller keeps its original proposal checker;
 // clean target values come from its existing authenticated API executor reader.
 // Returned approval projection is valid only after this capacity gate ran.
-func (c *clusterController) preparationCapacityRead(snapshot clusterSSHPreparationApprovalSnapshot, targets clusterSSHPreparationTargetsRead) (
-	capacity, configuration func(context.Context, string) (string, error), approval clusterSSHPreparationTargetsRead) {
-	capacity, configuration, approval, _ = c.preparationCapacityStorageRead(snapshot, targets)
-	return capacity, configuration, approval
-}
-
-// The storage projection borrows the same verified capacity rounds; it adds no
-// source inventory or native network observation.
 func (c *clusterController) preparationCapacityStorageRead(snapshot clusterSSHPreparationApprovalSnapshot, targets clusterSSHPreparationTargetsRead) (
 	capacity, configuration func(context.Context, string) (string, error), approval clusterSSHPreparationTargetsRead, storage clusterSSHPreparationStorageGateSourceRead) {
 	var runner *kubernetesClusterStepRunner

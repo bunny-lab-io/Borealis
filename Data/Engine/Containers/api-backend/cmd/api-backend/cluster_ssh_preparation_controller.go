@@ -23,12 +23,17 @@ func (c *clusterController) runSSHPreparationParent(ctx context.Context, operati
 		func(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot, consume func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error)) error {
 			client, err := newClusterSSHPreparationCleanBrokerClientFromEnv()
 			var clean func(context.Context, string) (string, error)
+			var filesystems clusterSSHPreparationFilesystemReader
+			check := c.preparationCleanTargetsProposalCheck(snapshot)
 			if err == nil {
-				clean, projection = clusterSSHPreparationTargetCPUReaderPair(snapshot, client.preparationTargetsRead(snapshot, c.preparationCleanTargetsProposalCheck(snapshot)))
+				clean, projection = clusterSSHPreparationTargetCPUReaderPair(snapshot, client.preparationTargetsRead(snapshot, check))
+				filesystems = func(paths []string) clusterSSHPreparationTargetsRead {
+					return client.preparationTargetsFilesystemRead(snapshot, check, paths)
+				}
 			}
-			capacity, configuration, approvedTargets := c.preparationCapacityRead(snapshot, projection)
+			capacity, configuration, approvedTargets, storageSource := c.preparationCapacityStorageRead(snapshot, projection)
 			projection = approvedTargets
-			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), clean, capacity, configuration, consume)
+			return c.withPreparationNativeGates(ctx, snapshot, os.TempDir(), clean, capacity, configuration, storageSource, filesystems, consume)
 		}, func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
 			if projection == nil {
 				return clusterSSHPreparationCleanObservation{}, errClusterConflict
@@ -189,7 +194,7 @@ func clusterSSHPreparationBlockedReasons(err error) []string {
 	}
 	visit(err)
 	var reasons []string
-	for _, known := range clusterSSHPreparationNativeBlockers(false, false) {
+	for _, known := range clusterSSHPreparationNativeBlockers(false, false, false) {
 		if seen[known.Gate] {
 			reasons = append(reasons, known.Gate+": "+known.Reason)
 		}

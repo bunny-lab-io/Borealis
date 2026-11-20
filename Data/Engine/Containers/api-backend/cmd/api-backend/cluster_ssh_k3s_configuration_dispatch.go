@@ -23,14 +23,21 @@ func withClusterSSHPreparedK3sDispatch(ctx context.Context, store *postgresOpera
 	return withClusterSSHPrejoinConfigurationDispatch(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected, checks.Authority, checks.K3sJoin)
 }
 
+// The waiting proposal has no claimed hostname or CPU rendering yet. Both
+// phases budget the same bounded YAML, private token and generated kubeconfig.
+const clusterSSHK3sJoinYAMLAllowance = 64 << 10
+
+func clusterSSHK3sConfigurationBudget() []clusterSSHFilesystemDemand {
+	return []clusterSSHFilesystemDemand{{Path: "/etc/rancher/k3s", Bytes: clusterSSHK3sJoinYAMLAllowance + clusterbootstrap.MaxK3sJoinTokenBytes + clusterbootstrap.MaxK3sGeneratedKubeconfigBytes, Entries: 3}}
+}
+
 func clusterSSHK3sConfigurationDemands(expected clusterbootstrap.PreparationExpected) ([]clusterSSHFilesystemDemand, error) {
 	config, err := clusterbootstrap.PrejoinK3sJoinConfiguration(expected)
 	if err != nil {
 		return nil, err
 	}
-	// Exact generated YAML plus protocol's maximum secure token. Reserve before
-	// private acquisition; do not read source credentials early to measure them.
-	// K3s generates its admin kubeconfig here during startup; reserve the same
-	// private-file bound enforced by native completion, on this filesystem.
-	return []clusterSSHFilesystemDemand{{Path: "/etc/rancher/k3s", Bytes: uint64(len(config) + clusterbootstrap.MaxK3sJoinTokenBytes + clusterbootstrap.MaxK3sGeneratedKubeconfigBytes), Entries: 3}}, nil
+	if len(config) > clusterSSHK3sJoinYAMLAllowance {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	return clusterSSHK3sConfigurationBudget(), nil
 }

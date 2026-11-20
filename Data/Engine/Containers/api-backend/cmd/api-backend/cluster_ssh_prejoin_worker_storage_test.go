@@ -85,7 +85,7 @@ func sshPrejoinWorkerStorageWire(t *testing.T, raw []byte, available uint64, pac
 // Runs the production worker input composition and claimed SSH filesystem
 // reader. Only acquisition/native mutation and external SSH are test doubles.
 func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
-	for _, mode := range []string{"first target", "second target", "missing capacity", "missing storage", "missing check", "shortage", "profile drift", "stale native", "wrong cohort", "wrong selected", "CPU drift", "scope cleanup", "expiry", "source drift", "native writes", "source cleanup"} {
+	for _, mode := range []string{"first target", "second target", "missing capacity", "missing storage", "missing check", "shortage", "final fitting decrease", "final shortage", "profile drift", "stale native", "wrong cohort", "wrong selected", "CPU drift", "scope cleanup", "expiry", "source drift", "native writes", "source cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			f, source, confirmation := sshPrejoinWorkerStorageFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -105,8 +105,18 @@ func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
 			snapshot := sshStorageSnapshotFixture(t, f.a)
 			capacity := sshPrejoinWorkerCapacityFixture()
 			nativeCalled, acquisitionClosed, storageClosed := false, false, false
+			var reads [2]int
 			f.filesystemWire = func(i int, raw []byte) []byte {
+				reads[i]++
 				available := uint64(90 << 30)
+				if i == selected && reads[i] == 3 {
+					switch mode {
+					case "final fitting decrease":
+						available -= 1 << 30
+					case "final shortage":
+						available = 1
+					}
+				}
 				if mode == "shortage" && i == selected || mode == "native writes" && nativeCalled {
 					available = 1
 				}
@@ -191,7 +201,7 @@ func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
 			}
 			result, err := dispatchClusterSSHPrejoinWorker(ctx, claim, f.a.Baseline, confirmation, source,
 				f.deps.authority(claim), acquire, storage, native, func(ctx context.Context) error { return ctx.Err() })
-			success := mode == "first target" || mode == "second target" || mode == "native writes"
+			success := mode == "final fitting decrease" || mode == "first target" || mode == "second target" || mode == "native writes"
 			if (err == nil) != success || nativeCalled != (success || mode == "source cleanup") {
 				t.Fatalf("incorrect native/storage boundary: error=%v native=%v", err, nativeCalled)
 			}
