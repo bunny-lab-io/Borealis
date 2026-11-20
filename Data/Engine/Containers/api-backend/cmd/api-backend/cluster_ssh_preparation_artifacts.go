@@ -26,15 +26,16 @@ type clusterSSHPreparationArtifactBytes interface {
 }
 
 type clusterSSHPreparationArtifactSource struct {
-	Observation string
-	Postgres    string
+	Observation                 string
+	Postgres                    string
+	clusterReceipt, podsReceipt [32]byte
 }
 
 // Private seams exercise scope ownership independently of bulk fixture bytes.
 // Production constructs every reader/acquirer below from native implementations.
 type clusterSSHPreparationArtifactDependencies struct {
 	proposal    func(context.Context) error
-	source      func(context.Context, func(context.Context) error) (clusterSSHPreparationArtifactSource, error)
+	source      func(context.Context, func(context.Context) error, *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error)
 	publication func(context.Context, func(context.Context) error) (string, error)
 	acquire     func(context.Context, string, func(context.Context) error) (clusterSSHPreparationArtifactBytes, error)
 	terminal    func(clusterSSHPreparationReadinessReceipt, string) (func(context.Context) error, error)
@@ -77,11 +78,11 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	var retainedSource clusterSSHPreparationArtifactSource
 	var retainedPublication, retainedProof string
 	initialized := false
-	observe := func(ctx context.Context, check func(context.Context) error) error {
+	observe := func(ctx context.Context, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) error {
 		if ctx.Err() != nil || check(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		source, err := d.source(ctx, check)
+		source, err := d.source(ctx, check, projection)
 		if err != nil || !validClusterSSHPreparationDigest(source.Observation) || !clusterbootstrap.ValidPostgresImageReference(source.Postgres) || check(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -101,11 +102,11 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		return nil
 	}
 	prove := func(ctx context.Context, check func(context.Context) error) (string, error) {
-		if observe(ctx, check) != nil || owned == nil {
+		if observe(ctx, check, nil) != nil || owned == nil {
 			return "", clusterbootstrap.ErrPreparationConfig
 		}
 		proof, err := owned.prove(ctx, check)
-		if err != nil || !validClusterSSHPreparationDigest(proof) || observe(ctx, check) != nil {
+		if err != nil || !validClusterSSHPreparationDigest(proof) || observe(ctx, check, nil) != nil {
 			return "", clusterbootstrap.ErrPreparationConfig
 		}
 		digest, err := clusterSSHPreparationDigest([]string{"preparation-immutable-artifacts-v1", plan, retainedSource.Observation, retainedSource.Postgres, retainedPublication, proof})
@@ -117,7 +118,7 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	// Stop and join the waiting-only acquisition heartbeat before consumption:
 	// an exact approval commit must not race a background waiting-phase read.
 	if runClusterSSHArtifactPreparationScope(ctx, 5*time.Second, d.proposal, func(ctx context.Context) error {
-		if observe(ctx, d.proposal) != nil {
+		if observe(ctx, d.proposal, nil) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		var err error
@@ -125,7 +126,7 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 		if err != nil || owned == nil || ctx.Err() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		return observe(ctx, d.proposal)
+		return observe(ctx, d.proposal, nil)
 	}) != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -183,13 +184,13 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	project := func(parent context.Context, requested string, pending *bool) ([]clusterSSHFilesystemDemand, error) {
 		var value []clusterSSHFilesystemDemand
 		err := withOwner(parent, requested, func(ctx context.Context) error {
-			if !*pending || observe(ctx, d.proposal) != nil {
+			if !*pending || observe(ctx, d.proposal, &retainedSource) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			*pending = false
 			var err error
 			value, err = owned.storageDemand(ctx, d.proposal)
-			if err != nil || len(value) == 0 || observe(ctx, d.proposal) != nil {
+			if err != nil || len(value) == 0 || observe(ctx, d.proposal, &retainedSource) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			value = slices.Clone(value)
@@ -269,8 +270,8 @@ func (c *clusterController) withPreparationArtifacts(parent context.Context, sna
 		return nil
 	}
 	d := clusterSSHPreparationArtifactDependencies{proposal: proposal}
-	d.source = func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
-		return readClusterSSHPreparationArtifactSource(ctx, work.Proof.Source, runner.kube.getClusterSSHStorageJSON, check)
+	d.source = func(ctx context.Context, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error) {
+		return readClusterSSHPreparationArtifactSource(ctx, work.Proof.Source, runner.kube.getClusterSSHStorageJSON, check, projection)
 	}
 	d.publication = func(ctx context.Context, check func(context.Context) error) (string, error) {
 		if check(ctx) != nil {
@@ -294,7 +295,7 @@ func (c *clusterController) withPreparationArtifacts(parent context.Context, sna
 	return runClusterSSHPreparationArtifacts(parent, plan, d, consume)
 }
 
-func readClusterSSHPreparationArtifactSource(ctx context.Context, expected clusterSSHSourceCohort, getJSON func(context.Context, string, any) error, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
+func readClusterSSHPreparationArtifactSource(ctx context.Context, expected clusterSSHSourceCohort, getJSON func(context.Context, string, any) error, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error) {
 	fail := func() (clusterSSHPreparationArtifactSource, error) {
 		return clusterSSHPreparationArtifactSource{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -315,22 +316,50 @@ func readClusterSSHPreparationArtifactSource(ctx context.Context, expected clust
 	if err != nil || !reflect.DeepEqual(before, expected) {
 		return fail()
 	}
-	storage, err := observeClusterSSHStorage(ctx, expected, get)
-	if err != nil || !storage.Requirements.PostgresImage.valid() {
-		return fail()
+	var source clusterSSHPreparationArtifactSource
+	if projection == nil {
+		storage, err := observeClusterSSHStorage(ctx, expected, get)
+		if err != nil || !storage.Requirements.PostgresImage.valid() || !validClusterSSHPreparationDigest(storage.Requirements.observation) {
+			return fail()
+		}
+		digest, err := clusterSSHPreparationDigest(struct {
+			Source  clusterSSHSourceCohort
+			Storage string
+		}{expected, storage.Requirements.observation})
+		if err != nil {
+			return fail()
+		}
+		source = clusterSSHPreparationArtifactSource{
+			Observation: digest, Postgres: storage.Requirements.PostgresImage.Resolved,
+			clusterReceipt: storage.receipts[clusterSSHStoragePostgresPath],
+			podsReceipt:    storage.receipts[clusterSSHStoragePodsPath],
+		}
+	} else {
+		// A single-use byte projection borrows the full proof from this round.
+		// Re-read the exact objects that selected its PostgreSQL archive.
+		var cluster, pods json.RawMessage
+		if get(ctx, clusterSSHStoragePostgresPath, &cluster) != nil || get(ctx, clusterSSHStoragePodsPath, &pods) != nil {
+			return fail()
+		}
+		_, clusterDigest, err := clusterSSHStorageObject(cluster)
+		if err != nil || clusterDigest != projection.clusterReceipt {
+			return fail()
+		}
+		list, _, err := clusterSSHStorageObject(pods)
+		if err != nil {
+			return fail()
+		}
+		_, podsDigest, err := clusterSSHStorageListReceipt(list, "Pod", "borealis", 3)
+		if err != nil || podsDigest != projection.podsReceipt {
+			return fail()
+		}
+		source = *projection
 	}
 	after, err := observeClusterSSHSourceCohort(ctx, get, expected)
 	if err != nil || !reflect.DeepEqual(after, expected) || check(ctx) != nil || ctx.Err() != nil {
 		return fail()
 	}
-	digest, err := clusterSSHPreparationDigest(struct {
-		Source  clusterSSHSourceCohort
-		Storage string
-	}{expected, storage.Requirements.observation})
-	if err != nil || !validClusterSSHPreparationDigest(storage.Requirements.observation) {
-		return fail()
-	}
-	return clusterSSHPreparationArtifactSource{digest, storage.Requirements.PostgresImage.Resolved}, nil
+	return source, nil
 }
 
 type clusterSSHOwnedPreparationArtifacts struct {

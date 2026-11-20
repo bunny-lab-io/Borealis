@@ -367,8 +367,8 @@ func testSSHPreparationComposedDispatch(t *testing.T, shortage bool) {
 	deps := sshApprovalArtifactDependencies(bytes)
 	check := f.c.preparationCleanTargetsProposalCheck(snapshot)
 	deps.proposal = check
-	deps.source = func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
-		return readClusterSSHPreparationArtifactSource(ctx, snapshot.work.Proof.Source, inputs.get, check)
+	deps.source = func(ctx context.Context, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error) {
+		return readClusterSSHPreparationArtifactSource(ctx, snapshot.work.Proof.Source, inputs.get, check, projection)
 	}
 	deps.terminal = func(r clusterSSHPreparationReadinessReceipt, artifact string) (func(context.Context) error, error) {
 		return f.c.clusterSSHPreparationArtifactTerminal(snapshot, r, artifact)

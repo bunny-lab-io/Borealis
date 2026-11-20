@@ -16,6 +16,21 @@ type clusterSSHStorageObservation struct {
 	receipts     map[string][32]byte
 }
 
+func clusterSSHStorageListReceipt(object map[string]any, kind, namespace string, limit int) ([]map[string]any, [32]byte, error) {
+	items, ok := clusterSSHStorageList(object, kind, namespace, limit)
+	if !ok {
+		return nil, [32]byte{}, clusterbootstrap.ErrPreparationConfig
+	}
+	slices.SortFunc(items, func(a, b map[string]any) int {
+		return strings.Compare(clusterSSHStorageText(clusterSSHStorageMap(a, "metadata"), "name"), clusterSSHStorageText(clusterSSHStorageMap(b, "metadata"), "name"))
+	})
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return nil, [32]byte{}, clusterbootstrap.ErrPreparationConfig
+	}
+	return items, sha256.Sum256(raw), nil
+}
+
 // No raw Kubernetes object or diagnostic survives the collection. Receipts
 // bind exact objects (including revision/spec/status); list ordering and the
 // collection's global resourceVersion are not individual object changes.
@@ -57,19 +72,11 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		if err != nil {
 			return nil, err
 		}
-		items, ok := clusterSSHStorageList(object, kind, namespace, limit)
-		if !ok {
-			return nil, clusterbootstrap.ErrPreparationConfig
+		items, digest, err := clusterSSHStorageListReceipt(object, kind, namespace, limit)
+		if err == nil {
+			result.receipts[path] = digest
 		}
-		slices.SortFunc(items, func(a, b map[string]any) int {
-			return strings.Compare(clusterSSHStorageText(clusterSSHStorageMap(a, "metadata"), "name"), clusterSSHStorageText(clusterSSHStorageMap(b, "metadata"), "name"))
-		})
-		raw, err := json.Marshal(items)
-		if err != nil {
-			return nil, clusterbootstrap.ErrPreparationConfig
-		}
-		result.receipts[path] = sha256.Sum256(raw)
-		return items, nil
+		return items, err
 	}
 	applications, err := observeClusterSSHApplicationResources(read)
 	if err != nil {

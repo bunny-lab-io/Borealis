@@ -69,8 +69,8 @@ func TestClusterSSHPreparationArtifactsDemandConsumer(t *testing.T) {
 			d := sshApprovalArtifactDependencies(v)
 			var drift atomic.Bool
 			originalSource := d.source
-			d.source = func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
-				value, err := originalSource(ctx, check)
+			d.source = func(ctx context.Context, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error) {
+				value, err := originalSource(ctx, check, projection)
 				if drift.Load() {
 					value.Observation = strings.Repeat("f", 64)
 				}
@@ -159,8 +159,8 @@ func sshApprovalArtifactDependencies(v *sshApprovalArtifactBytes) clusterSSHPrep
 	check := func(ctx context.Context) error { return ctx.Err() }
 	return clusterSSHPreparationArtifactDependencies{
 		proposal: check,
-		source: func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
-			return clusterSSHPreparationArtifactSource{strings.Repeat("b", 64), clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("c", 64)}, check(ctx)
+		source: func(ctx context.Context, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error) {
+			return clusterSSHPreparationArtifactSource{Observation: strings.Repeat("b", 64), Postgres: clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("c", 64)}, check(ctx)
 		},
 		publication: func(ctx context.Context, check func(context.Context) error) (string, error) {
 			return strings.Repeat("d", 64), check(ctx)
@@ -565,8 +565,8 @@ func TestClusterSSHPreparationArtifactsDriftAndJoinedCancellation(t *testing.T) 
 			d := sshApprovalArtifactDependencies(v)
 			var drift atomic.Bool
 			source := d.source
-			d.source = func(ctx context.Context, check func(context.Context) error) (clusterSSHPreparationArtifactSource, error) {
-				value, err := source(ctx, check)
+			d.source = func(ctx context.Context, check func(context.Context) error, projection *clusterSSHPreparationArtifactSource) (clusterSSHPreparationArtifactSource, error) {
+				value, err := source(ctx, check, projection)
 				if mode == "source" && drift.Load() {
 					value.Observation = strings.Repeat("f", 64)
 				}
@@ -609,21 +609,74 @@ func TestClusterSSHPreparationArtifactsNativeSource(t *testing.T) {
 		t.Run(map[bool]string{false: "pair", true: "replacement"}[replacement], func(t *testing.T) {
 			f := newSSHStorageFixture(t, replacement)
 			check := func(ctx context.Context) error { return ctx.Err() }
-			first, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, check)
+			first, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, check, nil)
 			if err != nil || !validClusterSSHPreparationDigest(first.Observation) || !clusterbootstrap.ValidPostgresImageReference(first.Postgres) {
 				t.Fatal("native source", err)
 			}
-			second, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, check)
+			second, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, check, nil)
 			if err != nil || first != second {
 				t.Fatal("stable source changed", err)
 			}
 			f.objects[clusterSSHStoragePostgresPath]["metadata"].(map[string]any)["resourceVersion"] = "changed"
-			changed, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, check)
+			changed, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, check, nil)
 			if err != nil || changed == first {
 				t.Fatal("source revision not bound", err)
 			}
-			if _, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, func(context.Context) error { return errClusterConflict }); err == nil {
+			if _, err := readClusterSSHPreparationArtifactSource(context.Background(), f.a.Source, f.get, func(context.Context) error { return errClusterConflict }, nil); err == nil {
 				t.Fatal("lost authority accepted")
+			}
+		})
+	}
+}
+
+func TestClusterSSHPreparationArtifactProjectionSource(t *testing.T) {
+	ctx := context.Background()
+	for _, row := range []string{"stable reordered pods", "partial list", "pod revision", "cluster revision", "source namespace", "late authority loss", "other workload revision"} {
+		t.Run(row, func(t *testing.T) {
+			f := newSSHStorageFixture(t, true)
+			check := func(ctx context.Context) error { return ctx.Err() }
+			baseline, err := readClusterSSHPreparationArtifactSource(ctx, f.a.Source, f.get, check, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clear(f.calls)
+			pods := f.objects[clusterSSHStoragePodsPath]
+			switch row {
+			case "stable reordered pods":
+				slices.Reverse(pods["items"].([]any))
+				pods["metadata"].(map[string]any)["resourceVersion"] = "later"
+			case "partial list":
+				pods["metadata"].(map[string]any)["continue"] = "next"
+			case "pod revision":
+				f.pod(1)["metadata"].(map[string]any)["resourceVersion"] = "later"
+			case "cluster revision":
+				f.objects[clusterSSHStoragePostgresPath]["metadata"].(map[string]any)["resourceVersion"] = "later"
+			case "source namespace":
+				f.objects["/api/v1/namespaces/kube-system"]["metadata"].(map[string]any)["uid"] = newClusterUUID()
+			case "late authority loss":
+				check = func(context.Context) error {
+					if f.calls["/api/v1/nodes"] == 2 {
+						return errClusterConflict
+					}
+					return nil
+				}
+			case "other workload revision":
+				f.objects[clusterSSHCNPGOperatorPath]["metadata"].(map[string]any)["resourceVersion"] = "later"
+			}
+			projection, err := readClusterSSHPreparationArtifactSource(ctx, f.a.Source, f.get, check, &baseline)
+			if row != "stable reordered pods" && row != "other workload revision" {
+				if err == nil {
+					t.Fatal("invalid projection accepted")
+				}
+				return
+			}
+			want := map[string]int{"/api/v1/namespaces/kube-system": 2, "/api/v1/nodes": 2, clusterSSHStoragePostgresPath: 1, clusterSSHStoragePodsPath: 1}
+			if err != nil || projection != baseline || !reflect.DeepEqual(f.calls, want) {
+				t.Fatalf("projection mismatch: reads=%v err=%v", f.calls, err)
+			}
+			full, err := readClusterSSHPreparationArtifactSource(ctx, f.a.Source, f.get, check, nil)
+			if err != nil || (full == baseline) != (row == "stable reordered pods") {
+				t.Fatal("full proof did not bind complete inventory", err)
 			}
 		})
 	}
