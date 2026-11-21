@@ -4,6 +4,9 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +37,33 @@ func (f *qualificationPostgresFixture) Close() error {
 		return errors.New("cleanup failed")
 	}
 	return nil
+}
+
+// Stop before the registry read. The native archive owner must already have
+// opened its private directory on the configured volume and must release it.
+func TestClusterSSHQualificationArchiveUsesWorkerScratch(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("BOREALIS_CLUSTER_SCRATCH_DIR", parent)
+	t.Setenv("TMPDIR", filepath.Join(parent, "unavailable"))
+	observed := false
+	check := func(ctx context.Context) error {
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			return ctx.Err()
+		}
+		observed = len(entries) == 1 && entries[0].IsDir() && strings.HasPrefix(entries[0].Name(), "borealis-node-postgresql-")
+		return errors.New("stop before registry I/O")
+	}
+	image, err := acquireClusterSSHQualificationPostgres(context.Background(), sshPostgresResolvedFixture, check)
+	if image != nil || err == nil || !observed {
+		t.Fatal("native acquisition did not use the configured worker scratch directory")
+	}
+	if entries, err := os.ReadDir(parent); err != nil || len(entries) != 0 {
+		t.Fatal("aborted archive acquisition retained scratch")
+	}
 }
 
 func TestClusterSSHQualificationPostgresAcquisitionLifetime(t *testing.T) {
