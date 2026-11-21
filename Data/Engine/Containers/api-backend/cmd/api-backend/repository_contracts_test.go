@@ -120,6 +120,99 @@ func TestWebUILeavesAuthCookieManagementToGoBackend(t *testing.T) {
 	}
 }
 
+func TestSiteWorkerEntrypointResetsOnlyPriorContainerDrain(t *testing.T) {
+	entrypoint := filepath.Join(repositoryRootForContractTest(t), "Data", "Engine", "Containers", "site-worker", "entrypoint.sh")
+	for _, mode := range []string{"absent", "stale", "new drain", "cleanup failure"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			marker := filepath.Join(root, "borealis-draining")
+			if mode == "cleanup failure" {
+				if err := os.Mkdir(marker, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if mode != "absent" {
+				if err := os.WriteFile(marker, []byte("previous container"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			maintenance := filepath.Join(root, "maintenance-state")
+			if err := os.WriteFile(maintenance, []byte("drained"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bin := filepath.Join(root, "bin")
+			if err := os.Mkdir(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// Replace Python with a bounded observer; never launch an Engine worker.
+			python := `#!/bin/bash
+set -euo pipefail
+[[ "$#" == 2 && "$1" == -m ]]
+case "$2" in
+  Data.Engine.services.ansible.collections)
+    [[ ! -e "$FIXTURE_ROOT/borealis-draining" ]]
+    printf 'collections\n' >> "$FIXTURE_ROOT/started"
+    if [[ "$FIXTURE_MODE" == 'new drain' ]]; then
+      printf 'current container' > "$FIXTURE_ROOT/borealis-draining"
+    fi
+    ;;
+  Data.Engine.services.job_scheduler.worker)
+    if [[ "$FIXTURE_MODE" == 'new drain' ]]; then
+      [[ "$(cat "$FIXTURE_ROOT/borealis-draining")" == 'current container' ]]
+    else
+      [[ ! -e "$FIXTURE_ROOT/borealis-draining" ]]
+    fi
+    printf 'worker\n' >> "$FIXTURE_ROOT/started"
+    ;;
+  *) exit 91 ;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(bin, "python"), []byte(python), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// Source the unchanged entrypoint while mapping its fixed container path
+			// into this fixture. No command touches the workstation's /tmp marker.
+			command := exec.Command("bash", "-c", `
+cd() { builtin cd "$FIXTURE_ROOT"; }
+rm() {
+  [[ "$#" == 3 && "$1" == -f && "$2" == -- && "$3" == /tmp/borealis-draining ]] || exit 92
+  command rm -f -- "$FIXTURE_ROOT/borealis-draining"
+}
+source "$1"
+`, "site-worker-entrypoint-test", entrypoint)
+			for _, value := range os.Environ() {
+				if !strings.HasPrefix(value, "BOREALIS_") && !strings.HasPrefix(value, "PATH=") && !strings.HasPrefix(value, "BASH_ENV=") {
+					command.Env = append(command.Env, value)
+				}
+			}
+			command.Env = append(command.Env,
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"BOREALIS_PROJECT_ROOT="+root,
+				"FIXTURE_ROOT="+root,
+				"FIXTURE_MODE="+mode,
+			)
+			output, err := command.CombinedOutput()
+			started, startedErr := os.ReadFile(filepath.Join(root, "started"))
+			if mode == "cleanup failure" {
+				if err == nil || !os.IsNotExist(startedErr) {
+					t.Fatalf("worker must not initialize after failed drain cleanup: err=%v started=%q readErr=%v output=%s", err, started, startedErr, output)
+				}
+			} else if err != nil || startedErr != nil || string(started) != "collections\nworker\n" {
+				t.Fatalf("worker startup failed: err=%v started=%q readErr=%v output=%s", err, started, startedErr, output)
+			}
+			if mode == "new drain" {
+				content, err := os.ReadFile(marker)
+				if err != nil || string(content) != "current container" {
+					t.Fatalf("current drain changed after startup: content=%q err=%v", content, err)
+				}
+			}
+			content, err := os.ReadFile(maintenance)
+			if err != nil || string(content) != "drained" {
+				t.Fatalf("startup changed unrelated maintenance state: content=%q err=%v", content, err)
+			}
+		})
+	}
+}
+
 func TestEngineAgentBinaryRedeployCommandRemainsExposed(t *testing.T) {
 	source := readRepositoryContractFile(t, "Engine.sh")
 	for _, expected := range []string{"Engine.sh --redeploy-agent-binaries", "--redeploy-agent-binaries)", "redeploy_agent_binaries"} {

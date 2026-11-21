@@ -7,6 +7,10 @@ Remote Desktop opens Windows endpoint in browser through Borealis-managed WireGu
   <figcaption>Remote Desktop uses Guacamole over managed WireGuard tunnel.</figcaption>
 </figure>
 
+!!! info
+
+    The durable active-work path currently blocks new browser desktop sessions while complete session cleanup ownership remains unfinished. An RDP readiness command can complete independently; its success does not open a viewer or prove an existing desktop session ended.
+
 ## Launch Session
 
 1. Open a Windows device.
@@ -87,6 +91,8 @@ UltraVNC keeps shared collaboration behavior. Windows RDP creates separate nativ
 
     ### Runtime behavior
 
+    Guacamole bridge cleanup owns both forwarding tasks and each current guacd writer, including interrupted handshakes and retry attempts. Outer cancellation cancels and joins owned forwarding work, then joins writer closure through one shielded cleanup task; repeated cancellation cannot abandon that task. An independently canceled forwarding task fails bridge completion after cleanup. Expected WebSocket closure retains the existing caller classification, while other forwarding or stream-cleanup failures use fixed internal errors and cannot log successful bridge completion. This is local transport cleanup only: it does not prove endpoint desktop termination, emit a capacity-settlement receipt or open the browser-session admission gate.
+
     - Engine asks the Agent for the current runtime VNC credential only when establishing a live session.
     - Browser receives a Borealis one-time token, not the UltraVNC password.
     - Guacamole connects through local `guacd`, then to the agent VNC listener over WireGuard.
@@ -116,6 +122,7 @@ UltraVNC keeps shared collaboration behavior. Windows RDP creates separate nativ
     - Windows Agent display topology prefers active monitor geometry from `EnumDisplayMonitors` when that data is at least as complete as `EnumDisplaySettingsEx`. This preserves physical positions such as secondary monitors to the left of the primary monitor instead of trusting a stale or flattened display-settings layout.
     - When live Agent topology only reports one display but the Guacamole framebuffer is clearly wider, WebUI uses `display_virtual_bounds` first to project the reported monitor into framebuffer coordinates, then uses reported framebuffer gaps when one monitor size is known. If Windows collapses the whole desktop into one very-wide display, WebUI uses aspect-ratio priors to expose best-effort display rows without hardcoding pixel resolutions.
     - Agent VNC and RDP start handlers return immediately when cached ready configuration still matches and local listener remains reachable. Heavy PowerShell, service, and firewall reconciliation runs at most every five minutes during steady state or immediately after desired scope/configuration changes.
+    - Tracked `rdp_start` settles only its original readiness-command reference after native commands, output and local probe cleanup join. Unknown wait retains custody. Existing host-event admission and exact Agent receipt remain authoritative; `ready=true`, acknowledgement and TCP reachability cannot substitute. Browser VNC/RDP registration still returns `worker_desktop_terminal_unavailable` before session creation; no Guacamole/session lifetime or credential capability is enabled by this adapter.
     - RDP establishment probes Agent TCP 3389 across WireGuard after Agent reports local readiness. Failed first probe sends one `rdp_transport_recovery` request that bypasses cached readiness, forces service/firewall reconciliation, and performs one final bounded TCP probe before returning `rdp_backend_not_ready`.
     - Agent readiness serializes local lifecycle mutation, coalesces overlapping background recovery checks, stops foreground lock waits when request budget expires, and rechecks ready state after another request completes. VNC still gives pending services time to settle, force-kills stuck `STOP_PENDING` UltraVNC processes after grace time, and waits for listener before reporting ready.
     - VNC and RDP firewall commands inspect Borealis-owned rule description, protocol, port, and address filters. Matching rules remain untouched; drifted rules are replaced. Agent creates Windows NetSecurity single-host filters with documented bare IPv4 syntax and accepts only that address or its exact `/32` equivalent during read-back verification, avoiding representation mismatches without broadening access. Readiness logs include lock, enablement, firewall, config, service, and listener phase durations. PowerShell postcondition failures include observed rule/filter values.

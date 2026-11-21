@@ -122,6 +122,8 @@ class ShellSession:
     _last_activity_at: float = field(default_factory=time.monotonic)
     _state_lock: threading.Lock = field(default_factory=threading.Lock)
     _close_reason: str = ""
+    _operation_binding: Optional[Dict[str, Any]] = None
+    _operation_bound: threading.Event = field(default_factory=threading.Event)
 
     def start_reader(self) -> None:
         starter = getattr(self.socketio, "start_background_task", None)
@@ -253,7 +255,9 @@ class ShellSession:
                         msg = json.loads(line.decode("utf-8"))
                     except Exception:
                         continue
-                    if msg.get("type") == "stdout":
+                    if msg.get("type") == "worker_operation_bound":
+                        self._accept_operation_bound(msg)
+                    elif msg.get("type") == "stdout":
                         payload = msg.get("data") or ""
                         try:
                             decoded = _b64decode(str(payload)).decode("utf-8", errors="replace")
@@ -423,6 +427,8 @@ class ShellSession:
             self._notify_closed()
 
     def send(self, payload: str) -> Dict[str, Any]:
+        if not self._operation_bound.is_set():
+            raise RuntimeError("worker_shell_operation_unbound")
         payload_bytes = payload.encode("utf-8")
         self._message_sequence += 1
         message_id = f"{self.session_id}-{self._message_sequence}"
@@ -452,6 +458,41 @@ class ShellSession:
             )
             return {"message_id": message_id, "sent_at_ms": sent_at_ms, "send_failed": True}
         return {"message_id": message_id, "sent_at_ms": sent_at_ms, "send_failed": False}
+
+    def _accept_operation_bound(self, message: Any) -> bool:
+        from Data.Engine.services.job_scheduler.worker_admission import AdmissionError, wire_operation
+        if not isinstance(message, dict) or self._operation_binding is None:
+            return False
+        try:
+            wire_operation(message.get("worker_operation"))
+        except AdmissionError:
+            return False
+        expected = {"type":"worker_operation_bound", "session_id":self.session_id, **self._operation_binding, "status":"accepted"}
+        if message != expected or type(message.get("job_id")) is not int:
+            return False
+        self._operation_bound.set()
+        return True
+
+    def bind_operation(self, *, job_id: int, operation: Dict[str, Any], timeout: float = 1.5) -> bool:
+        from Data.Engine.services.job_scheduler.worker_admission import wire_operation
+        if type(job_id) is not int or not 0 < job_id <= (1 << 53)-1 or self._operation_binding is not None:
+            return False
+        operation = wire_operation(operation)
+        self._operation_binding = {"job_id":job_id, "worker_operation":operation}
+        frame = {"type":"worker_operation_bind", "session_id":self.session_id, "job_id":job_id, "context":{"worker_operation":operation}}
+        try:
+            self.tcp.sendall(json.dumps(frame).encode("utf-8") + b"\n")
+        except Exception:
+            return False
+        deadline = time.monotonic() + max(0.05, float(timeout))
+        while self.is_active():
+            if self._operation_bound.is_set():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _cooperative_sleep(min(0.05, remaining))
+        return False
 
     def wait_for_ready(self, timeout: float = 1.5) -> bool:
         ping_id = uuid.uuid4().hex

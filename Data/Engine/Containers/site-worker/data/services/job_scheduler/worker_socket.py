@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import copy
+import base64
 import json
 import logging
 import os
+import re
 import socket
 import tempfile
 import threading
@@ -17,12 +20,14 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 import jwt
 import requests
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_socketio import SocketIO
+from werkzeug.wsgi import ClosingIterator
 
 from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
 from Data.Engine.auth.guid_utils import normalize_guid
 from Data.Engine.db import dbapi as sqlite3
+from .worker_admission import AdmissionError, WorkerAdmission, wire_operation, _object
 from Data.Engine.services.remote_files.transfers import (
     FILE_TRANSFER_SESSION_TTL_SECONDS,
     FileTransferStore,
@@ -75,6 +80,53 @@ from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
 _EVENTLET_PREPATCH_ENV = "BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED"
+
+
+def _worker_error_code(error: Exception) -> str:
+    # Return our literal, never exception text, args, or chained diagnostics.
+    # Unknown failures retain the same response shape without exposing internals.
+    for code in (
+        "upload_files_required",
+        "upload_manifest_mismatch",
+        "worker_activity_missing",
+        "worker_admission_invalid",
+        "worker_admission_storage_bound",
+        "worker_admission_unaccounted",
+        "worker_capacity_exhausted",
+        "worker_currentuser_terminal_unavailable",
+        "worker_desktop_terminal_unavailable",
+        "worker_dispatch_uncertain",
+        "worker_file_content_active",
+        "worker_file_transfer_capability_required",
+        "worker_file_transfer_custody_missing",
+        "worker_file_transfer_identity_mismatch",
+        "worker_file_transfer_managed_request_required",
+        "worker_file_transfer_sealed",
+        "worker_file_transfer_streams_active",
+        "worker_file_transfer_terminal_pending",
+        "worker_file_upload_identity_invalid",
+        "worker_file_upload_identity_required",
+        "worker_identity_missing",
+        "worker_operation_already_admitted",
+        "worker_operation_capability_required",
+        "worker_operation_invalid",
+        "worker_operation_terminal_unavailable",
+        "worker_operation_unsupported",
+        "worker_placement_changed",
+        "worker_placement_unavailable",
+        "worker_preflight_invalid",
+        "worker_profile_unavailable",
+        "worker_receipt_agent_unregistered",
+        "worker_receipt_changed",
+        "worker_receipt_conflict",
+        "worker_receipt_invalid",
+        "worker_receipt_unbound",
+        "worker_receipt_ungranted",
+        "worker_shell_operation_unbound",
+    ):
+        if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] == code:
+            return code
+    return "worker_operation_unavailable"
 
 
 def _now_ts() -> int:
@@ -278,6 +330,21 @@ def _authenticate_socket_agent(
     }
 
 
+_TRACKED_HOST_EVENTS = {
+    "quick_job_run", "service_control_action", "software_inventory_refresh_request",
+    "patch_inventory_refresh_request", "process_management_request", "registry_management_request",
+    "file_management_request", "remote_shell_restart",
+    "patch_policy_enforcement_request",
+    "rdp_start",
+}
+_PASSIVE_HOST_EVENTS = {
+    "vpn_tunnel_start", "vpn_tunnel_stop", "vpn_tunnel_activity",
+}
+_UNSUPPORTED_TERMINAL_EVENTS = {
+    "vnc_start", "vnc_stop", "vnc_refresh", "vnc_credential_request",
+}
+
+
 class SiteWorkerSocketRuntime:
     def __init__(
         self,
@@ -293,6 +360,8 @@ class SiteWorkerSocketRuntime:
         db_conn_factory: Callable[[], sqlite3.Connection],
         logger: logging.Logger,
         service_log: Callable[[str, str, Optional[str]], None],
+        pod_uid: Optional[str] = None,
+        node_name: Optional[str] = None,
     ) -> None:
         self.worker_guid = str(worker_guid or "")
         self.site_id = int(site_id or 0)
@@ -305,6 +374,16 @@ class SiteWorkerSocketRuntime:
             internal_api_base_url or os.environ.get("BOREALIS_INTERNAL_API_BASE_URL") or "http://127.0.0.1:5000"
         ).rstrip("/")
         self.db_conn_factory = db_conn_factory
+        self.admission = WorkerAdmission(
+            db_conn_factory, worker_guid=self.worker_guid, site_id=self.site_id,
+            pod_uid=pod_uid if pod_uid is not None else str(os.environ.get("BOREALIS_SITE_WORKER_POD_UID") or ""),
+            node_name=node_name if node_name is not None else str(os.environ.get("BOREALIS_SITE_WORKER_NODE_NAME") or ""),
+        )
+        self._operation_versions: Dict[str, int] = {}
+        self._file_operation_versions: Dict[str, int] = {}
+        self._file_custody: Dict[str, Dict[str, Any]] = {}
+        self._file_custody_ids: Dict[str, str] = {}
+        self._file_custody_lock = threading.RLock()
         self.logger = logger
         self.service_log = service_log
         self.app = Flask(f"borealis_site_worker_{self.worker_guid}")
@@ -416,7 +495,10 @@ class SiteWorkerSocketRuntime:
             allow_pending = bool(data.get("allow_pending"))
             if not hostname or not event_name:
                 return jsonify({"error": "hostname_and_event_name_required"}), 400
-            emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
+            try:
+                emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             queued = False
             if not emitted and allow_pending:
                 queued = self.queue_host_service_event(
@@ -456,13 +538,12 @@ class SiteWorkerSocketRuntime:
                 timeout = 30.0
             if not hostname or not event_name:
                 return jsonify({"error": "hostname_and_event_name_required"}), 400
-            response = self.call_host_service_event(
-                hostname,
-                service_mode,
-                event_name,
-                payload,
-                timeout=max(0.5, timeout),
-            )
+            try:
+                response = self.call_host_service_event(
+                    hostname, service_mode, event_name, payload, timeout=max(0.5, timeout),
+                )
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             self._log(
                 "host_service_event_call hostname={0} service_mode={1} event={2} called={3} timeout={4:.1f}".format(
                     normalize_host_key(hostname) or hostname,
@@ -508,7 +589,12 @@ class SiteWorkerSocketRuntime:
             }
             queue_payload = {key: payload.get(key) for key in allowed_keys if key in payload}
             try:
+                ticket = self.admission.admit(kind="ansible", hostname=str(queue_payload.get("hostname") or ""), job_id=queue_payload.get("activity_id"))
+                queue_payload["activity_id"] = ticket.job_id
+                queue_payload["worker_admission"] = (self.admission, ticket)
                 run_id = self._ansible_runner.queue_run(**queue_payload)
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             except Exception as exc:
                 self._log(f"ansible queue failed err={exc}", level="ERROR")
                 return jsonify({"error": "ansible_queue_failed", "message": "Unable to queue Ansible run."}), 500
@@ -594,6 +680,195 @@ class SiteWorkerSocketRuntime:
             return None, ({"error": "transfer_not_found"}, 404)
         return session, None
 
+    def _require_file_agent(self, hostname: str, device_guid: str, agent_id: str):
+        registered_id = self.registry.get_agent_id_for_host_mode(hostname, "system")
+        agent = self.registry.snapshot().get(registered_id)
+        if not agent or self._file_operation_versions.get(str(agent.get("sid") or "")) != 1:
+            raise AdmissionError("worker_file_transfer_capability_required")
+        if (agent_id and agent_id != registered_id) or normalize_guid(device_guid) != normalize_guid(agent.get("guid")):
+            raise AdmissionError("worker_file_transfer_identity_mismatch")
+        return registered_id, agent
+
+    def _begin_upload_stage(self):
+        def decode(name: str, maximum: int) -> str:
+            encoded = request.headers.get(name, "")
+            if not encoded or len(encoded) > (maximum*8+5)//6 or re.fullmatch(r"[A-Za-z0-9_-]+",encoded) is None:
+                raise AdmissionError("worker_file_upload_identity_required")
+            try:
+                raw = base64.b64decode(encoded+"="*((-len(encoded))%4),altchars=b"-_",validate=True)
+                value = raw.decode("utf-8",errors="strict")
+            except (ValueError,UnicodeError) as exc:
+                raise AdmissionError("worker_file_upload_identity_invalid") from exc
+            if not raw or len(raw)>maximum or base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")!=encoded or value.strip()!=value or any(ord(char)<32 or ord(char)==127 for char in value):
+                raise AdmissionError("worker_file_upload_identity_invalid")
+            return value
+        hostname = decode("X-Borealis-Upload-Hostname-B64",255)
+        agent_id = decode("X-Borealis-Upload-Agent-Id-B64",512)
+        device_guid = request.headers.get("X-Borealis-Upload-Device-Guid", "")
+        if re.fullmatch(r"[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}",device_guid) is None:
+            raise AdmissionError("worker_file_upload_identity_invalid")
+        self._require_file_agent(hostname,device_guid,agent_id)
+        ticket = self.admission.admit(kind="file_stage",hostname=hostname)
+        closed = False
+        @after_this_request
+        def retain_stage_until_response_close(response):
+            status = "Failed" if response.status_code>=400 else "Completed"
+            def finish():
+                nonlocal closed
+                with self._file_custody_lock:
+                    if closed:
+                        return
+                    closed = True
+                try:
+                    self.admission.complete_local(ticket,status=status)
+                except Exception:
+                    self.logger.warning("upload staging ended; local terminal custody remains pending",exc_info=True)
+            response.response = ClosingIterator(response.response,[finish])
+            return response
+        return hostname,device_guid,agent_id
+
+    def _admit_file_transfer(self, hostname: str, device_guid: str, agent_id: str, direction: str):
+        registered_id, agent = self._require_file_agent(hostname,device_guid,agent_id)
+        ticket = self.admission.admit(kind="file_transfer_"+direction, hostname=hostname, agent_guid=normalize_guid(agent.get("guid")))
+        state = {"ticket":ticket,"direction":direction,"agent_id":registered_id,"agent_guid":normalize_guid(agent.get("guid")),"sid":agent["sid"],"record":None,"transfer_id":None,"active":1,"sealed":False,"committed":False}
+        with self._file_custody_lock:
+            # Committed records can leave memory after existing store cleanup.
+            # Expiry never discards unresolved SQL/local ownership.
+            for token, previous in list(self._file_custody.items()):
+                if previous["committed"] and not previous["active"] and not self._file_record_matches(previous):
+                    self._file_custody.pop(token)
+                    self._file_custody_ids.pop(previous["transfer_id"], None)
+            self._file_custody[ticket.token] = state
+        self._retain_file_response(state)
+        return state
+
+    def _file_record_matches(self, state: Mapping[str, Any]) -> bool:
+        # Compare actual server-owned record identity, not caller fields or a
+        # replacement dictionary with copied transfer metadata.
+        with self._file_transfer_store._lock:
+            return state["record"] is not None and self._file_transfer_store._sessions.get(state["transfer_id"]) is state["record"]
+
+    def _bind_file_transfer(self, state: Dict[str, Any], transfer_id: str) -> None:
+        with self._file_custody_lock, self._file_transfer_store._lock:
+            record = self._file_transfer_store._sessions.get(transfer_id)
+            if not record or record["direction"] != state["direction"] or normalize_guid(record["device_guid"]) != state["agent_guid"]:
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            state["record"], state["transfer_id"] = record, transfer_id
+            self._file_custody_ids[transfer_id] = state["ticket"].token
+
+    def _emit_file_transfer(self, state: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+        agent = self.registry.snapshot().get(state["agent_id"])
+        if not agent or agent.get("sid") != state["sid"] or self._file_operation_versions.get(state["sid"]) != 1:
+            raise AdmissionError("worker_dispatch_uncertain")
+        packet = {**payload,"job_id":state["ticket"].job_id,"context":{"worker_operation":state["ticket"].wire()}}
+        try:
+            self.socketio.emit("file_management_request", packet, to=state["sid"])
+        except Exception as exc:
+            raise AdmissionError("worker_dispatch_uncertain") from exc
+
+    def _file_transfer_terminal_guard(self, binding: Mapping[str, Any]) -> None:
+        if binding["kind"] not in {"file_transfer_upload", "file_transfer_download"}:
+            return
+        with self._file_custody_lock:
+            state = self._file_custody.get(binding["token"])
+            if not state or state["ticket"].job_id != binding["job_id"] or state["agent_guid"] != binding["agent_guid"] or binding["kind"] != "file_transfer_"+state["direction"] or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            state["sealed"] = True
+            if state["active"]:
+                raise AdmissionError("worker_file_transfer_streams_active")
+
+    def _mark_file_transfer_committed(self, receipt: Mapping[str, Any]) -> None:
+        token = receipt["context"]["worker_operation"]["token"]
+        with self._file_custody_lock:
+            state = self._file_custody.get(token)
+            if state and state["ticket"].job_id == receipt["job_id"]:
+                state["committed"] = True
+
+    def _public_file_transfer_snapshot(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+        projected = dict(snapshot)
+        transfer_id = projected.get("transfer_id")
+        with self._file_custody_lock:
+            token = self._file_custody_ids.get(transfer_id)
+            state = self._file_custody.get(token)
+            committed = (
+                state is not None
+                and state["ticket"].token == token
+                and state["transfer_id"] == transfer_id
+                and state["direction"] == projected.get("direction")
+                and state["committed"] is True
+                and self._file_record_matches(state)
+            )
+        if not committed:
+            # Browser completion triggers a one-shot artifact GET/removal. Keep
+            # polling until original terminal custody commits; progress alone
+            # does not make content available or finish an upload.
+            if projected.get("status") == "completed":
+                projected["status"] = "running"
+            projected["download_ready"] = False
+        return projected
+
+    def _begin_file_request(self, transfer_id: str) -> None:
+        with self._file_custody_lock:
+            state = self._file_custody.get(self._file_custody_ids.get(transfer_id, ""))
+            if not state or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            if state["sealed"]:
+                raise AdmissionError("worker_file_transfer_sealed")
+            state["active"] += 1
+        self._retain_file_response(state)
+
+    def _retain_file_response(self, state: Dict[str, Any]) -> None:
+        closed = False
+        def finish():
+            nonlocal closed
+            with self._file_custody_lock:
+                if not closed:
+                    closed = True
+                    state["active"] -= 1
+        @after_this_request
+        def retain_until_response_close(response):
+            # send_file uses direct_passthrough: wrap its actual iterable so
+            # WSGI closure, including abort, releases request custody.
+            response.response = ClosingIterator(response.response, [finish])
+            return response
+
+    def _begin_file_content(self, transfer_id: str, hostname: str):
+        with self._file_custody_lock:
+            state = self._file_custody.get(self._file_custody_ids.get(transfer_id, ""))
+            if not state or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+            if not state["committed"]:
+                raise AdmissionError("worker_file_transfer_terminal_pending")
+            if state.get("content_active"):
+                raise AdmissionError("worker_file_content_active")
+            state["content_active"] = True
+        try:
+            ticket = self.admission.admit(kind="file_content", hostname=hostname)
+        except Exception:
+            with self._file_custody_lock:
+                state["content_active"] = False
+            raise
+        with self._file_custody_lock:
+            if self._file_custody.get(state["ticket"].token) is not state or not self._file_record_matches(state):
+                raise AdmissionError("worker_file_transfer_custody_missing")
+        closed = False
+        def finish():
+            nonlocal closed
+            with self._file_custody_lock, self._file_transfer_store._lock:
+                if closed:
+                    return
+                closed = True
+                if not self._file_record_matches(state):
+                    self.logger.warning("file content ended with missing original transfer custody")
+                    return
+                self._file_transfer_store.delete_session(transfer_id)
+                state["content_active"] = False
+            try:
+                self.admission.complete_local(ticket)
+            except Exception:
+                self.logger.warning("file content ended; terminal custody remains pending", exc_info=True)
+        return finish
+
     def _register_file_management_routes(self) -> None:
         @self.app.route("/remote-files/transfers/upload", methods=["POST"])
         def _remote_files_upload():
@@ -601,11 +876,17 @@ class SiteWorkerSocketRuntime:
             if requirement:
                 payload, status = requirement
                 return jsonify(payload), status
+            try:
+                header_identity = self._begin_upload_stage()
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             hostname = _normalize_file_text(request.form.get("hostname"))
             device_guid = _normalize_file_text(request.form.get("device_guid"))
             agent_id = _normalize_file_text(request.form.get("agent_id"))
             if not device_guid:
                 device_guid = normalize_guid(infer_guid_from_agent_id(agent_id))
+            if (request.form.get("hostname"),request.form.get("device_guid"),request.form.get("agent_id")) != header_identity:
+                return jsonify({"error":"worker_file_upload_identity_mismatch"}), 400
             operator_id = _normalize_file_text(request.form.get("operator_id")) or "unknown"
             target_path = _normalize_file_text(request.form.get("target_path"))
             transfer_base_url = _normalize_file_text(request.form.get("transfer_base_url"))
@@ -633,6 +914,12 @@ class SiteWorkerSocketRuntime:
                     "message": "Upload transfer request is missing: {0}.".format(", ".join(missing_fields)),
                     "missing": missing_fields,
                 }), 400
+            if manifest_items and len(manifest_items) != len(files) and not manifest_only_empty_upload:
+                return jsonify({"error": "upload_manifest_mismatch"}), 400
+            try:
+                state = self._admit_file_transfer(hostname, device_guid, agent_id, "upload")
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             try:
                 snapshot = self._file_transfer_store.create_upload_session(
                     hostname=hostname,
@@ -645,7 +932,8 @@ class SiteWorkerSocketRuntime:
                     overwrite_keys=overwrite_keys if isinstance(overwrite_keys, list) else [],
                 )
             except ValueError as exc:
-                return jsonify({"error": _normalize_file_text(exc) or "upload_files_required"}), 400
+                return jsonify({"error": _worker_error_code(exc)}), 400
+            self._bind_file_transfer(state, snapshot["transfer_id"])
             session = self._file_transfer_store.get_session(snapshot["transfer_id"]) or {}
             items = [
                 {
@@ -658,24 +946,22 @@ class SiteWorkerSocketRuntime:
                 }
                 for row in session.get("upload_items") or []
             ]
-            emitted = self.emit_host_service_event(
-                hostname,
-                "system",
-                "file_management_request",
-                {
-                    "action": "upload_start",
-                    "hostname": hostname,
-                    "agent_id": agent_id,
-                    "requested_by": operator_id,
-                    "transfer_id": snapshot["transfer_id"],
-                    "target_path": target_path,
-                    "transfer_base_url": transfer_base_url,
-                    "items": items,
-                },
-            )
-            if not emitted:
-                self._file_transfer_store.mark_failed(snapshot["transfer_id"], "agent_unavailable")
-                return jsonify({"error": "agent_unavailable"}), 503
+            try:
+                self._emit_file_transfer(
+                    state,
+                    {
+                        "action": "upload_start",
+                        "hostname": hostname,
+                        "agent_id": agent_id,
+                        "requested_by": operator_id,
+                        "transfer_id": snapshot["transfer_id"],
+                        "target_path": target_path,
+                        "transfer_base_url": transfer_base_url,
+                        "items": items,
+                    },
+                )
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             return jsonify(snapshot), 202
 
         @self.app.route("/remote-files/transfers/download", methods=["POST"])
@@ -699,6 +985,10 @@ class SiteWorkerSocketRuntime:
             archive_required = bool(data.get("archive_required"))
             if not hostname or not device_guid or not selections:
                 return jsonify({"error": "invalid_request"}), 400
+            try:
+                state = self._admit_file_transfer(hostname, device_guid, agent_id, "download")
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             snapshot = self._file_transfer_store.create_download_session(
                 hostname=hostname,
                 device_guid=device_guid,
@@ -707,25 +997,24 @@ class SiteWorkerSocketRuntime:
                 selections=selections,
                 archive_name=archive_name,
             )
-            emitted = self.emit_host_service_event(
-                hostname,
-                "system",
-                "file_management_request",
-                {
-                    "action": "download_start",
-                    "hostname": hostname,
-                    "agent_id": agent_id,
-                    "requested_by": operator_id,
-                    "transfer_id": snapshot["transfer_id"],
-                    "archive_name": archive_name,
-                    "archive_required": archive_required,
-                    "transfer_base_url": transfer_base_url,
-                    "items": selections,
-                },
-            )
-            if not emitted:
-                self._file_transfer_store.mark_failed(snapshot["transfer_id"], "agent_unavailable")
-                return jsonify({"error": "agent_unavailable"}), 503
+            self._bind_file_transfer(state, snapshot["transfer_id"])
+            try:
+                self._emit_file_transfer(
+                    state,
+                    {
+                        "action": "download_start",
+                        "hostname": hostname,
+                        "agent_id": agent_id,
+                        "requested_by": operator_id,
+                        "transfer_id": snapshot["transfer_id"],
+                        "archive_name": archive_name,
+                        "archive_required": archive_required,
+                        "transfer_base_url": transfer_base_url,
+                        "items": selections,
+                    },
+                )
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             return jsonify(snapshot), 202
 
         @self.app.route("/remote-files/transfers/<transfer_id>/status", methods=["GET"])
@@ -737,7 +1026,7 @@ class SiteWorkerSocketRuntime:
             session = self._file_transfer_store.get_session(transfer_id)
             if session is None:
                 return jsonify({"error": "transfer_not_found"}), 404
-            return jsonify(_transfer_status_snapshot(session)), 200
+            return jsonify(self._public_file_transfer_snapshot(_transfer_status_snapshot(session))), 200
 
         @self.app.route("/remote-files/transfers/<transfer_id>/cancel", methods=["POST"])
         def _remote_files_cancel(transfer_id: str):
@@ -748,7 +1037,7 @@ class SiteWorkerSocketRuntime:
             snapshot = self._file_transfer_store.request_cancel(transfer_id)
             if snapshot is None:
                 return jsonify({"error": "transfer_not_found"}), 404
-            return jsonify(snapshot), 200
+            return jsonify(self._public_file_transfer_snapshot(snapshot)), 200
 
         @self.app.route("/remote-files/transfers/<transfer_id>/content", methods=["GET"])
         def _remote_files_content(transfer_id: str):
@@ -766,6 +1055,10 @@ class SiteWorkerSocketRuntime:
             result_path = _normalize_file_text(session.get("result_path"))
             if not result_path or not Path(result_path).is_file():
                 return jsonify({"error": "content_not_available"}), 404
+            try:
+                finish = self._begin_file_content(transfer_id, str(session.get("hostname") or ""))
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             response = send_file(
                 result_path,
                 as_attachment=True,
@@ -773,7 +1066,7 @@ class SiteWorkerSocketRuntime:
                 mimetype=_normalize_file_text(session.get("result_mime")) or "application/octet-stream",
                 max_age=0,
             )
-            response.call_on_close(lambda: self._file_transfer_store.delete_session(transfer_id))
+            response.response = ClosingIterator(response.response, [finish])
             return response
 
         @self.app.route("/api/agent/files/transfers/<transfer_id>/upload-item/<item_id>", methods=["GET"])
@@ -783,6 +1076,10 @@ class SiteWorkerSocketRuntime:
                 payload, status = error
                 return jsonify(payload), status
             assert session is not None
+            try:
+                self._begin_file_request(transfer_id)
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             if bool(session.get("cancel_requested")) or _normalize_file_text(session.get("status")).lower() in {"canceling", "canceled"}:
                 return jsonify({"error": "transfer_canceled"}), 409
             item = self._file_transfer_store.get_upload_item(transfer_id, item_id)
@@ -844,6 +1141,10 @@ class SiteWorkerSocketRuntime:
                 payload, status = error
                 return jsonify(payload), status
             assert session is not None
+            try:
+                self._begin_file_request(transfer_id)
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
             if bool(session.get("cancel_requested")) or _normalize_file_text(session.get("status")).lower() in {"canceling", "canceled"}:
                 self._file_transfer_store.mark_canceled(transfer_id, "Transfer canceled by operator.")
                 return jsonify({"error": "transfer_canceled"}), 409
@@ -933,9 +1234,6 @@ class SiteWorkerSocketRuntime:
             if requirement:
                 payload, status = requirement
                 return jsonify(payload), status
-            if not self._ensure_guacamole_proxy():
-                return jsonify({"error": "guacamole_proxy_unavailable"}), 503
-
             data = request.get_json(silent=True) or {}
             if not isinstance(data, Mapping):
                 data = {}
@@ -963,6 +1261,13 @@ class SiteWorkerSocketRuntime:
                 return jsonify({"error": "agent_id_required"}), 400
             if agent_id != str(claims.get("agent_id") or "").strip():
                 return jsonify({"error": "device_mismatch"}), 403
+
+            try:
+                self._require_desktop_terminal_adapter()
+            except AdmissionError as exc:
+                return jsonify({"error": _worker_error_code(exc)}), 503
+            if not self._ensure_guacamole_proxy():
+                return jsonify({"error": "guacamole_proxy_unavailable"}), 503
 
             protocol = str(data.get("protocol") or "vnc").strip().lower()
             if protocol not in {"vnc", "rdp"}:
@@ -1285,6 +1590,10 @@ class SiteWorkerSocketRuntime:
                 helper_contexts=helper_contexts,
                 guid=str(auth_context.get("guid") or ""),
             )
+            version = data.get("worker_operation_version") if isinstance(data, dict) else None
+            self._operation_versions[request.sid] = 1 if type(version) is int and version == 1 else 0
+            file_version = data.get("worker_operation_file_transfer_version") if isinstance(data, dict) else None
+            self._file_operation_versions[request.sid] = 1 if type(file_version) is int and file_version == 1 and self._operation_versions[request.sid] == 1 else 0
             self.logger.info(
                 "Site-worker Agent socket registered worker_guid=%s site_id=%s service_mode=%s helper_contexts=%s",
                 self.worker_guid,
@@ -1304,6 +1613,8 @@ class SiteWorkerSocketRuntime:
 
         @self.socketio.on("disconnect")
         def _disconnect() -> None:
+            self._operation_versions.pop(request.sid, None)
+            self._file_operation_versions.pop(request.sid, None)
             agent_id = self.registry.unregister(request.sid)
             shell_closed = self._close_shell_session(request.sid, reason="operator_socket_disconnect")
             if agent_id:
@@ -1449,9 +1760,16 @@ class SiteWorkerSocketRuntime:
                 return {"error": "tunnel_down"}
             port = self._shell_port(data)
             tunnel_payload = self._tunnel_payload(data, agent_id=agent_id, virtual_ip=virtual_ip)
+            agent = self.registry.snapshot().get(agent_id)
+            if not agent or self._operation_versions.get(str(agent.get("sid") or "")) != 1:
+                return {"error":"worker_operation_capability_required"}
+            try:
+                ticket = self.admission.admit(kind="shell", hostname=str(agent.get("hostname") or ""), agent_guid=str(agent.get("guid") or "").upper())
+            except AdmissionError as exc:
+                return {"error":_worker_error_code(exc)}
             self._close_shell_session(request.sid, reason="superseded_open")
             self._close_agent_shell_session(agent_id, reason="superseded_agent_session")
-            session = self._open_shell_session(request.sid, agent_id, virtual_ip, port, tunnel_payload)
+            session = self._open_shell_session(request.sid, agent_id, virtual_ip, port, tunnel_payload, ticket=ticket)
             if session is None:
                 return {"error": "shell_connect_failed"}
             return {"status": "ok", "session_id": getattr(session, "session_id", "")}
@@ -1466,13 +1784,22 @@ class SiteWorkerSocketRuntime:
             if session is None or not session.is_active():
                 self._close_shell_session(request.sid, reason="inactive_send")
                 return {"error": "shell_session_missing"}
-            session.send(str(payload))
+            try:
+                session.send(str(payload))
+            except RuntimeError as exc:
+                return {"error":_worker_error_code(exc)}
             return {"status": "ok"}
 
         @self.socketio.on("vpn_shell_close")
         def _vpn_shell_close(_data: Any = None) -> Dict[str, Any]:
             self._close_shell_session(request.sid, reason="close_request")
             return {"status": "ok"}
+
+    @staticmethod
+    def _require_desktop_terminal_adapter() -> None:
+        # A relay close or endpoint setup ACK does not prove all desktop work
+        # ended. New sessions remain unavailable until that custody exists.
+        raise AdmissionError("worker_desktop_terminal_unavailable")
 
     def _emit_shell_agent_start(self, agent_id: str, tunnel_payload: Mapping[str, Any], *, trigger_after: float) -> None:
         if not tunnel_payload:
@@ -1495,7 +1822,11 @@ class SiteWorkerSocketRuntime:
         virtual_ip: str,
         port: int,
         tunnel_payload: Mapping[str, Any],
+        *,
+        ticket: Any = None,
     ) -> Optional[ShellSession]:
+        if ticket is None:
+            raise AdmissionError("worker_shell_operation_unbound")
         deadline = time.monotonic() + _CONNECT_WAIT_WINDOW_SECONDS
         reemit_index = 0
         attempts = 0
@@ -1548,7 +1879,12 @@ class SiteWorkerSocketRuntime:
             )
             session.start_reader()
             if session.wait_for_ready(timeout=min(2.0, max(0.5, deadline - time.monotonic()))):
-                return session
+                if session.bind_operation(job_id=ticket.job_id, operation=ticket.wire(), timeout=min(2.0, max(0.5, deadline-time.monotonic()))):
+                    return session
+                # Bind may have reached Agent. Do not retry uncertain effects;
+                # only its durable SocketIO terminal receipt releases charge.
+                session.close_with_reason("worker_operation_bind_unconfirmed")
+                return None
             self._remove_shell_session(sid, session)
             session.close_with_reason("ready_probe_failed")
             last_error = RuntimeError("shell_ready_probe_failed")
@@ -1664,9 +2000,14 @@ class SiteWorkerSocketRuntime:
 
     def _register_task_event_handlers(self) -> None:
         @self.socketio.on("quick_job_progress")
-        def _handle_quick_job_progress(data: Any) -> None:
+        def _handle_quick_job_progress(data: Any) -> Any:
             if not isinstance(data, dict):
                 return
+            if "worker_operation_preflight" in data:
+                try:
+                    return self.admission.preflight(data, agent_guid=self._receipt_agent_guid())
+                except Exception:
+                    return {"error": "worker_preflight_unavailable"}
             try:
                 activity_id = int(data.get("job_id"))
             except (TypeError, ValueError):
@@ -1682,6 +2023,14 @@ class SiteWorkerSocketRuntime:
                 cursor = conn.cursor()
                 existing_row = get_activity_history_row(conn, activity_id)
                 existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+                reserved = existing_metadata.get("worker_operation") if isinstance(existing_metadata, dict) else None
+                if reserved is not None:
+                    operation = wire_operation((context_info or {}).get("worker_operation"))
+                    if reserved.get("token") != operation["token"] or reserved.get("agent_guid") != self._receipt_agent_guid():
+                        return {"error": "worker_receipt_unbound"}
+                    # Terminal custody cannot be overwritten by late progress.
+                    if "receipt_sha256" in reserved:
+                        return {"status": "committed"}
                 merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
                 if metadata:
                     merged_metadata.update(metadata)
@@ -1712,7 +2061,6 @@ class SiteWorkerSocketRuntime:
                     update_kwargs["started_at"] = ts_now
                 if status_is_terminal(normalized_status):
                     update_kwargs["finished_at"] = ts_now
-                update_activity_history_row(conn, activity_id, **update_kwargs)
                 run_id, scheduled_ts_ctx = self._resolve_scheduled_run_context(
                     cursor,
                     activity_id=activity_id,
@@ -1726,6 +2074,10 @@ class SiteWorkerSocketRuntime:
                     activity_id=activity_id,
                     context_info=context_info,
                 )
+                if not self._ordinary_activity_custody(conn, activity_id, context_info, tracked=True):
+                    conn.rollback()
+                    return {"error": "worker_receipt_required"}
+                update_activity_history_row(conn, activity_id, **update_kwargs)
                 conn.commit()
             except Exception:
                 self.logger.warning("site-worker quick_job_progress handler failed activity_id=%s", activity_id, exc_info=True)
@@ -1742,9 +2094,21 @@ class SiteWorkerSocketRuntime:
                         pass
 
         @self.socketio.on("quick_job_result")
-        def _handle_quick_job_result(data: Any) -> None:
+        def _handle_quick_job_result(data: Any) -> Any:
             if not isinstance(data, dict):
                 return
+            context = data.get("context")
+            if isinstance(context, dict) and "worker_operation" in context:
+                try:
+                    ack = self.admission.complete(data, agent_guid=self._receipt_agent_guid(), _terminal_guard=self._file_transfer_terminal_guard)
+                    self._mark_file_transfer_committed(data)
+                except Exception:
+                    self.logger.warning("tracked worker receipt rejected", exc_info=True)
+                    return {"error": "worker_receipt_uncommitted"}
+                # Admission commits first. Scheduled-run projection uses its
+                # own transaction so it cannot invert run->activity locking.
+                self._project_tracked_result(data)
+                return ack
             try:
                 activity_id = int(data.get("job_id"))
             except (TypeError, ValueError):
@@ -1761,6 +2125,8 @@ class SiteWorkerSocketRuntime:
                 cursor = conn.cursor()
                 existing_row = get_activity_history_row(conn, activity_id)
                 existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+                if isinstance(existing_metadata, dict) and "worker_operation" in existing_metadata:
+                    return {"error": "worker_receipt_required"}
                 merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
                 if isinstance(context_info, dict):
                     for key in ("assembly_source", "assembly_guid", "scheduled_job_id", "scheduled_job_run_id", "scheduled_ts"):
@@ -1776,7 +2142,6 @@ class SiteWorkerSocketRuntime:
                 }
                 if merged_metadata:
                     update_kwargs["metadata"] = merged_metadata
-                update_activity_history_row(conn, activity_id, **update_kwargs)
                 run_id, scheduled_ts_ctx = self._resolve_scheduled_run_context(
                     cursor,
                     activity_id=activity_id,
@@ -1790,6 +2155,10 @@ class SiteWorkerSocketRuntime:
                     activity_id=activity_id,
                     context_info=context_info,
                 )
+                if not self._ordinary_activity_custody(conn, activity_id, context_info, tracked=False):
+                    conn.rollback()
+                    return {"error": "worker_receipt_required"}
+                update_activity_history_row(conn, activity_id, **update_kwargs)
                 conn.commit()
                 self._log(f"quick_job_result_processed activity_id={activity_id} status={status}")
             except Exception:
@@ -1835,7 +2204,13 @@ class SiteWorkerSocketRuntime:
             raise
 
     def emit_host_service_event(self, hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
-        return self.registry.emit_to_host(hostname, service_mode, event_name, payload)
+        prepared = self._prepare_host_operation(hostname, service_mode, event_name, payload)
+        if prepared is None:
+            return False
+        emitted = self.registry.emit_to_host(hostname, service_mode, event_name, prepared)
+        if not emitted and event_name not in _PASSIVE_HOST_EVENTS:
+            raise AdmissionError("worker_dispatch_uncertain")
+        return emitted
 
     def queue_host_service_event(
         self,
@@ -1851,6 +2226,8 @@ class SiteWorkerSocketRuntime:
         normalized_event = str(event_name or "").strip()
         if not host_key or not mode_key or not normalized_event:
             return False
+        if normalized_event not in _TRACKED_HOST_EVENTS | _PASSIVE_HOST_EVENTS:
+            raise AdmissionError("worker_operation_unsupported")
         try:
             requested_ttl = int(ttl_seconds or self._pending_host_event_ttl_seconds)
         except Exception:
@@ -1900,7 +2277,16 @@ class SiteWorkerSocketRuntime:
             if int(entry.get("expires_at") or 0) < now:
                 expired += 1
                 continue
-            if self.emit_host_service_event(host_key, mode_key, str(entry.get("event_name") or ""), entry.get("payload")):
+            try:
+                emitted = self.emit_host_service_event(host_key, mode_key, str(entry.get("event_name") or ""), entry.get("payload"))
+            except AdmissionError as exc:
+                # Never resend an uncertain dispatch. Capacity/capability
+                # rejection happened before admission and can remain queued.
+                if str(exc) in {"worker_capacity_exhausted", "worker_operation_capability_required", "worker_placement_unavailable", "worker_placement_changed"}:
+                    remaining.append(entry)
+                self._log("pending operation blocked reason=" + str(exc), level="WARNING")
+                continue
+            if emitted:
                 delivered += 1
             else:
                 remaining.append(entry)
@@ -1928,7 +2314,85 @@ class SiteWorkerSocketRuntime:
         *,
         timeout: float = 30.0,
     ) -> Any:
-        return self.registry.call_to_host(hostname, service_mode, event_name, payload, timeout=timeout)
+        prepared = self._prepare_host_operation(hostname, service_mode, event_name, payload)
+        if prepared is None:
+            return None
+        # A response may only acknowledge accepted background work. The
+        # independently committed terminal receipt owns capacity release.
+        return self.registry.call_to_host(hostname, service_mode, event_name, prepared, timeout=timeout)
+
+    @staticmethod
+    def _validate_host_operation(event: str, payload: Any) -> None:
+        if event in _UNSUPPORTED_TERMINAL_EVENTS:
+            raise AdmissionError("worker_operation_terminal_unavailable")
+        if event not in _TRACKED_HOST_EVENTS:
+            raise AdmissionError("worker_operation_unsupported")
+        if not isinstance(payload, Mapping):
+            raise AdmissionError("worker_operation_invalid")
+        if event == "file_management_request" and str(payload.get("action") or "").lower() in {"upload_start", "download_start"}:
+            raise AdmissionError("worker_file_transfer_managed_request_required")
+        if event == "quick_job_run" and str(payload.get("run_mode") or "system").lower() not in {"system", "currentuser"}:
+            raise AdmissionError("worker_currentuser_terminal_unavailable")
+
+    def _prepare_host_operation(self, hostname: str, service_mode: str, event: str, payload: Any) -> Optional[dict]:
+        if event in _PASSIVE_HOST_EVENTS:
+            return payload
+        self._validate_host_operation(event, payload)
+        agent_id = self.registry.get_agent_id_for_host_mode(hostname, service_mode)
+        agent = self.registry.snapshot().get(agent_id)
+        if not agent:
+            return None
+        if self._operation_versions.get(str(agent.get("sid") or "")) != 1:
+            raise AdmissionError("worker_operation_capability_required")
+        prepared = copy.deepcopy(dict(payload))
+        context = prepared.get("context") or {}
+        if not isinstance(context, dict) or "worker_operation" in context:
+            raise AdmissionError("worker_operation_invalid")
+        ticket = self.admission.admit(kind=event, hostname=hostname, agent_guid=str(agent.get("guid") or "").upper(), job_id=prepared.get("job_id"))
+        prepared["job_id"] = ticket.job_id
+        prepared["context"] = {**context, "worker_operation": ticket.wire()}
+        return prepared
+
+    def _receipt_agent_guid(self) -> str:
+        for agent in self.registry.snapshot().values():
+            if agent.get("sid") == request.sid and self._operation_versions.get(request.sid) == 1:
+                return str(agent.get("guid") or "").upper()
+        raise AdmissionError("worker_receipt_agent_unregistered")
+
+    def _ordinary_activity_custody(self, conn, job_id: int, context: Optional[dict], *, tracked: bool) -> bool:
+        lock = "" if getattr(conn, "_dialect", "") == "sqlite" else " FOR UPDATE"
+        cursor = conn.execute("SELECT metadata_json FROM activity_history WHERE id=?" + lock, (job_id,))
+        try:
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        metadata = _object(row[0] or "{}") if row else {}
+        reserved = metadata.get("worker_operation")
+        if reserved is None:
+            return not (context and "worker_operation" in context)
+        if not tracked or not isinstance(reserved, dict) or "receipt_sha256" in reserved:
+            return False
+        operation = wire_operation((context or {}).get("worker_operation"))
+        return reserved.get("token") == operation["token"] and reserved.get("agent_guid") == self._receipt_agent_guid()
+
+    def _project_tracked_result(self, data: dict) -> None:
+        conn = None
+        cursor = None
+        try:
+            conn = self.db_conn_factory()
+            cursor = conn.cursor()
+            existing = get_activity_history_row(conn, data["job_id"])
+            metadata = existing.get("metadata") if isinstance(existing, dict) else {}
+            run_id, scheduled_ts = self._resolve_scheduled_run_context(cursor, activity_id=data["job_id"], context_info=metadata)
+            self._update_scheduled_run_state(cursor, run_id=run_id, scheduled_ts_ctx=scheduled_ts, status=data["status"], activity_id=data["job_id"], context_info=metadata)
+            conn.commit()
+        except Exception:
+            self.logger.warning("tracked activity committed; scheduled projection pending", exc_info=True)
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
 
     def has_host_service_socket(self, hostname: str, service_mode: str) -> bool:
         return self.registry.is_host_mode_registered(hostname, service_mode)

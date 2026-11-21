@@ -50,6 +50,10 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - Software, patch, service, or process data stale: use the tab refresh action or wait for the next agent poll.
 - Current-user automation unavailable: hover `Execution Context: Current User` under Agent Health and check session inventory.
 
+!!! info "Activity needed by running work"
+
+    Clearing activity history, deleting related scheduled history, or purging a device stops if a tracked site-worker operation still lacks its committed completion receipt. The whole deletion rolls back. Wait for completion and retry; a timeout or a displayed success status alone does not release this protection. Do not remove database rows to clear an uncertain operation.
+
 ## Update Agent
 
 1. Open `Backend Tools > Agent Updates` from Device Summary.
@@ -104,6 +108,8 @@ Operator-requested updates perform install-equivalent repair even when installed
     - Agent patch role: `Data/Agent/internal/roles/patch_management/`
 
     ### Runtime behavior
+
+    - `worker_operation_activity_deletion.go` locks the exact targeted activity IDs before validating private execution custody. Device history clearing, scheduled activity deletion and device purge share this guard; unresolved or malformed bindings roll back the caller transaction. Valid committed receipt tombstones may be deleted. A lost Agent commit acknowledgement followed by explicit terminal-history deletion can leave its local receipt pending because missing history cannot prove the original digest; it never authorizes re-execution. `parseActivityMetadata` excludes private worker correlation from public activity payloads.
 
     - Device List status is derived from `devices.last_seen` plus the site-worker Agent socket registry exposed through `/api/devices` as `agent_socket`.
     - Bulk `Update Agent` posts selected Agent GUIDs to `/api/devices/agent-maintenance` with `action=update_now`, which creates `agent_maintenance` scheduled-job history and site-worker work items.

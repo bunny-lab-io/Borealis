@@ -57,7 +57,7 @@ func (a *Agent) responseWithUpdateAfterAck(response map[string]any, operation ag
 		return response
 	}
 	return agenttransport.NewAfterAckResponse(response, func() {
-		a.startLocalUpdaterAsync(operation, reason)
+		a.startLocalUpdaterAfterAck(operation, reason)
 	})
 }
 
@@ -76,25 +76,25 @@ func (a *Agent) previewUpdateOperation(operationID string, kind string) agentcon
 	}
 }
 
-func (a *Agent) startLocalUpdaterAsync(operation agentconfig.AgentUpdateSection, reason string) {
+// The transport already runs AfterAck asynchronously. Keep updater execution
+// and its persisted result inside that callback's lifetime.
+func (a *Agent) startLocalUpdaterAfterAck(operation agentconfig.AgentUpdateSection, reason string) {
 	if a == nil {
 		return
 	}
 	configPath := a.configPath
 	logger := a.logger
-	go func() {
+	if logger != nil {
+		logger.Printf("update operation starting after %s ack operation_id=%s", reason, operation.OperationID)
+	}
+	if err := startLocalUpdaterForRequest(configPath); err != nil {
+		markUpdateOperationStatus(configPath, "failed", err.Error())
 		if logger != nil {
-			logger.Printf("update operation starting after %s ack operation_id=%s", reason, operation.OperationID)
+			logger.Printf("local updater start failed after %s: %v", reason, err)
 		}
-		if err := startLocalUpdaterForRequest(configPath); err != nil {
-			markUpdateOperationStatus(configPath, "failed", err.Error())
-			if logger != nil {
-				logger.Printf("local updater start failed after %s: %v", reason, err)
-			}
-			return
-		}
-		markUpdateOperationStatus(configPath, "updater_started", "")
-	}()
+		return
+	}
+	markUpdateOperationStatus(configPath, "updater_started", "")
 }
 
 func int64FromPayload(payload map[string]any, keys ...string) int64 {

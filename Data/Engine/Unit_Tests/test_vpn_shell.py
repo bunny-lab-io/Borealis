@@ -53,6 +53,17 @@ class _ClosingSocket(_DummySocket):
         return b""
 
 
+def _bind_session(session: ShellSession) -> None:
+    sendall = session.tcp.sendall
+    def respond(data):
+        sendall(data)
+        frame = json.loads(data)
+        if frame.get("type") == "worker_operation_bind":
+            assert session._accept_operation_bound({"type":"worker_operation_bound", "session_id":frame["session_id"], "job_id":frame["job_id"], "worker_operation":frame["context"]["worker_operation"], "status":"accepted"})
+    session.tcp.sendall = respond
+    assert session.bind_operation(job_id=1, operation={"version":1,"token":"a"*32})
+
+
 class _StdoutSocket(_DummySocket):
     def __init__(self, payloads: list[dict]) -> None:
         super().__init__()
@@ -201,15 +212,37 @@ def test_shell_session_send_includes_message_metadata() -> None:
         tcp=tcp,
     )
 
+    _bind_session(session)
     meta = session.send("hostname\r\n")
 
     assert meta["send_failed"] is False
-    payload = json.loads(tcp.sent[0].decode("utf-8").strip())
+    payload = json.loads(tcp.sent[-1].decode("utf-8").strip())
     assert payload["type"] == "stdin"
     assert payload["session_id"] == session.session_id
     assert payload["message_id"] == meta["message_id"]
     assert payload["sent_at_ms"] == meta["sent_at_ms"]
     assert isinstance(payload["sent_at_ms"], int)
+
+
+@pytest.mark.parametrize("change", ({"job_id":True},{"session_id":"other"},{"worker_operation":{"version":True,"token":"a"*32}},{"worker_operation":{"version":1,"token":"b"*32}},{"status":"committed"}))
+def test_shell_session_requires_exact_bound_ack_before_stdin(change):
+    tcp = _DummySocket()
+    session = ShellSession(sid="sid",agent_id="agent",socketio=_DummySocketIO(),tcp=tcp)
+    with pytest.raises(RuntimeError, match="unbound"):
+        session.send("effects")
+    sendall = tcp.sendall
+    def respond(data):
+        sendall(data)
+        frame = json.loads(data)
+        if frame.get("type") == "worker_operation_bind":
+            ack = {"type":"worker_operation_bound","session_id":session.session_id,"job_id":1,"worker_operation":{"version":1,"token":"a"*32},"status":"accepted"}
+            ack.update(change)
+            assert not session._accept_operation_bound(ack)
+            session.close()
+    tcp.sendall = respond
+    assert not session.bind_operation(job_id=1,operation={"version":1,"token":"a"*32})
+    assert not session.bind_operation(job_id=1,operation={"version":1,"token":"a"*32})
+    assert [json.loads(raw)["type"] for raw in tcp.sent] == ["worker_operation_bind", "close"]
 
 
 def test_shell_session_wait_for_ready_sends_ping_and_accepts_pong() -> None:
@@ -543,6 +576,7 @@ def test_shell_session_logs_warning_when_inputs_close_without_output() -> None:
         service_log=lambda _path, message, level=None: logs.append((message, level)),
     )
 
+    _bind_session(session)
     session.send("whoami\r\n")
     session.start_reader()
     time.sleep(0.05)

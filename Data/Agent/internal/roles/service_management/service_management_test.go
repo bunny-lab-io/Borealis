@@ -2,11 +2,68 @@ package servicemanagement
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestTrackedControlCompletesAfterCommandAndPublish(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		m := New(nil, "test-host", "system")
+		m.supported = true
+		commandStarted, commandRelease := make(chan struct{}), make(chan struct{})
+		publishStarted, publishRelease := make(chan struct{}), make(chan struct{})
+		first := true
+		m.runner = func(context.Context, time.Duration, string, ...string) (commandResult, error) {
+			if first {
+				first = false
+				close(commandStarted)
+				<-commandRelease
+				if fail {
+					return commandResult{ExitCode: 1}, errors.New("command failed")
+				}
+			}
+			return commandResult{Stdout: "[]"}, nil
+		}
+		m.publisher = func(context.Context, []Service) error {
+			close(publishStarted)
+			<-publishRelease
+			return nil
+		}
+		complete := make(chan error, 1)
+		ack, err := m.HandleControlActionWithCompletion(context.Background(), map[string]any{"hostname": "test-host", "service_name": "test-service", "action": "start"}, func(err error) {
+			_ = m.Health() // Completion must run outside manager mutex.
+			complete <- err
+		})
+		if err != nil || ack.(map[string]any)["status"] != "accepted" {
+			t.Fatal("command not accepted", ack, err)
+		}
+		<-commandStarted
+		select {
+		case <-complete:
+			t.Fatal("acceptance became terminal")
+		default:
+		}
+		close(commandRelease)
+		<-publishStarted
+		select {
+		case <-complete:
+			t.Fatal("command completion preceded inventory publish")
+		default:
+		}
+		close(publishRelease)
+		select {
+		case err := <-complete:
+			if (err != nil) != fail {
+				t.Fatal("command result lost", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("completion callback blocked")
+		}
+	}
+}
 
 func TestNormalizeServiceStatus(t *testing.T) {
 	cases := map[string]string{

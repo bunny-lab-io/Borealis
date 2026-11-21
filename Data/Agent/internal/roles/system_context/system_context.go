@@ -3,6 +3,7 @@ package systemcontext
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -22,6 +23,12 @@ type SigningKeyStore interface {
 
 type CurrentUserDispatcher interface {
 	DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (scripts.Result, bool, string)
+}
+
+// Tracked current-user work requires explicit owned-process completion.
+// A launched but unconfirmed process returns accepted without calling complete.
+type CurrentUserCompletionDispatcher interface {
+	DispatchCurrentUserQuickJobWithCompletion(context.Context, map[string]any, func(scripts.Result)) (bool, string)
 }
 
 type SoftwareRefreshRequester interface {
@@ -82,6 +89,9 @@ func (r *Role) dispatchCurrentUser(ctx context.Context, payload map[string]any) 
 	if failure := r.validateSignedScriptPayload(payload); failure != "" {
 		return nil, r.emitResult(jobID, "Failed", "", failure, contextPayload)
 	}
+	if _, tracked := contextPayload["worker_operation"]; tracked {
+		return r.dispatchTrackedCurrentUser(ctx, payload, contextPayload)
+	}
 	if err := r.emitProgress(jobID, "Running", payload); err != nil {
 		return nil, err
 	}
@@ -99,6 +109,54 @@ func (r *Role) dispatchCurrentUser(ctx context.Context, payload map[string]any) 
 	err := r.emitResult(jobID, status, result.Stdout, result.Stderr, contextPayload)
 	r.requestSoftwareRefresh(payload, status)
 	return nil, err
+}
+
+func (r *Role) dispatchTrackedCurrentUser(ctx context.Context, payload map[string]any, operationContext map[string]any) (any, error) {
+	// Freeze nested correlation and the original emitter before handing mutable
+	// request data to the dispatcher. Callback cannot adopt a replacement role.
+	raw, err := json.Marshal(operationContext)
+	if err != nil {
+		return nil, err
+	}
+	var retained map[string]any
+	if err := json.Unmarshal(raw, &retained); err != nil {
+		return nil, err
+	}
+	jobID, emitter := payload["job_id"], r.Emitter
+	refresh, lane := r.SoftwareRefresh, queueLane(payload)
+	if emitter == nil {
+		return nil, fmt.Errorf("Current-user completion emitter is unavailable.")
+	}
+	var once sync.Once
+	emitTerminal := func(result scripts.Result, refreshAfterCompletion bool) {
+		once.Do(func() {
+			status := "Failed"
+			if result.ReturnCode == 0 {
+				status = "Success"
+			}
+			_ = emitter.Emit("quick_job_result", map[string]any{"job_id": jobID, "status": status, "stdout": result.Stdout, "stderr": result.Stderr, "context": retained})
+			if refreshAfterCompletion && refresh != nil && strings.EqualFold(lane, "software_management") {
+				refresh.RequestRefresh("quick_job:" + strings.ToLower(status))
+			}
+		})
+	}
+	complete := func(result scripts.Result) { emitTerminal(result, true) }
+	dispatcher, supported := r.CurrentUserDispatcher.(CurrentUserCompletionDispatcher)
+	if !supported {
+		emitTerminal(scripts.Result{ReturnCode: -1, Stderr: "Current-user terminal completion is unavailable."}, false)
+		return nil, nil
+	}
+	if err := emitter.Emit("quick_job_progress", map[string]any{"job_id": jobID, "status": "Running", "context": retained}); err != nil {
+		return nil, err
+	}
+	accepted, detail := dispatcher.DispatchCurrentUserQuickJobWithCompletion(ctx, payload, complete)
+	if !accepted {
+		if detail == "" {
+			detail = "Current-user dispatch failed before launch."
+		}
+		emitTerminal(scripts.Result{ReturnCode: -1, Stderr: detail}, false)
+	}
+	return nil, nil
 }
 
 func (r *Role) executeSystem(ctx context.Context, payload map[string]any, jobID any) error {

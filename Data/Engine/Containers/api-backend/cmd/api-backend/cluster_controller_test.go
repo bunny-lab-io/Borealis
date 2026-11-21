@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,65 +23,6 @@ type blockingClusterControllerRunner struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
-}
-
-type blockingClusterLeaseDriver struct{}
-
-type blockingClusterLeaseConnection struct{}
-
-type recoveringClusterLeaseDriver struct {
-	opens               atomic.Int64
-	closes              atomic.Int64
-	blockingConnections int64
-}
-
-type recoveringClusterLeaseConnection struct {
-	driver   *recoveringClusterLeaseDriver
-	blocking bool
-}
-
-func (blockingClusterLeaseDriver) Open(string) (driver.Conn, error) {
-	return blockingClusterLeaseConnection{}, nil
-}
-
-func (blockingClusterLeaseConnection) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("prepare is unsupported")
-}
-
-func (blockingClusterLeaseConnection) Close() error { return nil }
-
-func (blockingClusterLeaseConnection) Begin() (driver.Tx, error) {
-	return nil, errors.New("transaction is unsupported")
-}
-
-func (blockingClusterLeaseConnection) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func (d *recoveringClusterLeaseDriver) Open(string) (driver.Conn, error) {
-	return &recoveringClusterLeaseConnection{driver: d, blocking: d.opens.Add(1) <= d.blockingConnections}, nil
-}
-
-func (*recoveringClusterLeaseConnection) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("prepare is unsupported")
-}
-
-func (c *recoveringClusterLeaseConnection) Close() error {
-	c.driver.closes.Add(1)
-	return nil
-}
-
-func (*recoveringClusterLeaseConnection) Begin() (driver.Tx, error) {
-	return nil, errors.New("transaction is unsupported")
-}
-
-func (c *recoveringClusterLeaseConnection) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
-	if !c.blocking {
-		return driver.RowsAffected(1), nil
-	}
-	<-ctx.Done()
-	return nil, ctx.Err()
 }
 
 func (r *blockingClusterControllerRunner) Run(ctx context.Context, _ clusterControllerOperation, _ clusterControllerStep, _ []clusterControllerNode) error {
@@ -456,55 +396,39 @@ func TestClusterControllerLeaseGuardCancelsStepOnOwnershipLoss(t *testing.T) {
 	}
 }
 
-func TestClusterControllerLeaseAcquireTimesOutStalePrimaryConnection(t *testing.T) {
-	leaseDriver := &recoveringClusterLeaseDriver{blockingConnections: 4}
-	driverName := fmt.Sprintf("recovering-cluster-lease-%d", time.Now().UnixNano())
-	sql.Register(driverName, leaseDriver)
-	db, err := sql.Open(driverName, "")
-	if err != nil {
-		t.Fatal(err)
+func TestClusterControllerLeaseGuardBoundsBlockedRenewalAndClose(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	guard := startClusterControllerLeaseGuardWithGrace(context.Background(), time.Millisecond, 250*time.Millisecond, func(context.Context) (bool, error) {
+		close(entered)
+		<-release // Deliberately ignore cancellation like the recorded driver failure.
+		defer close(returned)
+		return true, nil
+	})
+	defer func() {
+		guard.Close()
+		close(release)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("renewal did not start before expiry")
 	}
-	defer db.Close()
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
-	staleConnections := make([]*sql.Conn, 0, 4)
-	for range 4 {
-		conn, connErr := db.Conn(context.Background())
-		if connErr != nil {
-			t.Fatal(connErr)
-		}
-		staleConnections = append(staleConnections, conn)
+	select {
+	case <-guard.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("blocked renewal disabled independent expiry watchdog")
 	}
-	for _, conn := range staleConnections {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Fatal(closeErr)
-		}
+	closed := make(chan struct{})
+	go func() { guard.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("guard shutdown waited for blocked renewal")
 	}
-	if leaseDriver.opens.Load() != 4 {
-		t.Fatalf("stale pool connections=%d want 4", leaseDriver.opens.Load())
-	}
-
-	controller := &clusterController{
-		store:               &postgresOperatorStore{db: db},
-		holder:              "standby-controller",
-		now:                 time.Now,
-		leaseAcquireTimeout: 20 * time.Millisecond,
-		maxIdleConnections:  4,
-	}
-	started := time.Now()
-	owned, err := controller.acquireLease(context.Background())
-	if owned || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("stale lease connection owned=%v err=%v", owned, err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("stale lease acquisition took %s", elapsed)
-	}
-	owned, err = controller.acquireLease(context.Background())
-	if err != nil || !owned {
-		t.Fatalf("replacement lease connection owned=%v err=%v", owned, err)
-	}
-	if leaseDriver.opens.Load() != 5 || leaseDriver.closes.Load() < 4 {
-		t.Fatalf("stale connection pool was not retired: opens=%d closes=%d", leaseDriver.opens.Load(), leaseDriver.closes.Load())
+	if !errors.Is(guard.Err(), errClusterControllerLeaseLost) {
+		t.Fatalf("expiry cause=%v", guard.Err())
 	}
 }
 
@@ -624,14 +548,12 @@ func TestSafeRemovalMovesPostgresPrimaryToSurvivorBeforeScaleDown(t *testing.T) 
 	}}
 	primary := "borealis-postgres-3"
 	scaleRequested := false
+	instances := int64(3)
+	targetPodReads := 0
 	actions := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
-			instances := int64(3)
-			if scaleRequested {
-				instances = 1
-			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"spec": map[string]any{"instances": instances},
 				"status": map[string]any{
@@ -660,12 +582,30 @@ func TestSafeRemovalMovesPostgresPrimaryToSurvivorBeforeScaleDown(t *testing.T) 
 			}
 			actions = append(actions, "scale")
 			scaleRequested = true
-			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"instances": int64(1)}})
+			var patch map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+				t.Error(err)
+			}
+			instances = coerceInt64(nestedMap(patch, "spec")["instances"])
+			_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"instances": instances}})
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+			targetPodReads++
+			pods := []any{map[string]any{
 				"metadata": map[string]any{"name": "borealis-postgres-1"},
 				"spec":     map[string]any{"nodeName": "borealis-engine-01"},
-			}}})
+			}}
+			if targetPodReads < 3 {
+				phase := "Running"
+				if targetPodReads == 2 {
+					phase = "Succeeded"
+				}
+				pods = append(pods, map[string]any{
+					"metadata": map[string]any{"name": "borealis-postgres-2", "deletionTimestamp": "2026-11-13T14:44:00Z"},
+					"spec":     map[string]any{"nodeName": "borealis-engine-02"},
+					"status":   map[string]any{"phase": phase},
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": pods})
 		default:
 			t.Fatalf("unexpected Kubernetes request %s %s", request.Method, request.URL.String())
 		}
@@ -684,6 +624,134 @@ func TestSafeRemovalMovesPostgresPrimaryToSurvivorBeforeScaleDown(t *testing.T) 
 	}
 	if strings.Join(actions, ",") != "switchover,scale" {
 		t.Fatalf("unsafe PostgreSQL removal order: %v", actions)
+	}
+	if targetPodReads != 3 {
+		t.Fatalf("PostgreSQL target Pod reads=%d want 3; every Pod must depart before removal", targetPodReads)
+	}
+}
+
+func TestSafeRemovalPostgresPodObservationRequiresUsableEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		payload      map[string]any
+		wantOccupied string
+	}{
+		{name: "missing_items", payload: map[string]any{}},
+		{name: "null_items", payload: map[string]any{"items": nil}},
+		{name: "non_list_items", payload: map[string]any{"items": map[string]any{}}},
+		{name: "invalid_pod", payload: map[string]any{"items": []any{"invalid"}}},
+		{name: "null_pod", payload: map[string]any{"items": []any{nil}}},
+		{name: "truncated_list", payload: map[string]any{"items": []any{}, "metadata": map[string]any{"continue": "next-page"}}},
+		{name: "invalid_node_name", payload: map[string]any{"items": []any{map[string]any{"spec": map[string]any{"nodeName": 3}}}}},
+		{name: "pending_unknown_placement", payload: map[string]any{"items": []any{map[string]any{"status": map[string]any{"phase": "Pending"}}}}, wantOccupied: "borealis-engine-02,borealis-engine-03"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				_ = json.NewEncoder(w).Encode(test.payload)
+			}))
+			defer server.Close()
+			runner := &kubernetesClusterStepRunner{
+				kube: &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()}, namespace: "borealis",
+			}
+			occupied, err := runner.cnpgPodsOnNodes(context.Background(), map[string]bool{"borealis-engine-02": true, "borealis-engine-03": true})
+			if test.wantOccupied != "" {
+				if err != nil || strings.Join(occupied, ",") != test.wantOccupied {
+					t.Fatalf("unknown placement must keep both targets blocked: occupied=%v err=%v", occupied, err)
+				}
+			} else if err == nil {
+				t.Fatal("incomplete Pod observation proved target absence")
+			}
+		})
+	}
+}
+
+func TestSafeRemovalPostgresDepartureFailureStopsBeforeFencing(t *testing.T) {
+	for _, failure := range []string{"occupied_deadline", "lease_cancelled", "observation_failed"} {
+		t.Run(failure, func(t *testing.T) {
+			nodes := []clusterControllerNode{
+				{ID: "11111111-1111-4111-8111-111111111111", Name: "borealis-engine-01", ApplicationState: "active"},
+				{ID: "22222222-2222-4222-8222-222222222222", Name: "borealis-engine-02", ApplicationState: "active"},
+				{ID: "33333333-3333-4333-8333-333333333333", Name: "borealis-engine-03", ApplicationState: "active"},
+			}
+			operation := clusterControllerOperation{Kind: "node_remove", TargetNodeID: nodes[1].ID, Payload: map[string]any{
+				"emergency": false, "removal_node_ids": []any{nodes[1].ID, nodes[2].ID}, "target_size": int64(1),
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ctx, loseLease := context.WithCancelCause(ctx)
+			defer loseLease(context.Canceled)
+			var patches, observations atomic.Int64
+			var instances atomic.Int64
+			instances.Store(3)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				switch {
+				case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"spec": map[string]any{"instances": instances.Load()},
+						"status": map[string]any{
+							"currentPrimary": "borealis-postgres-1", "targetPrimary": "borealis-postgres-1",
+							"instances": instances.Load(), "readyInstances": instances.Load(), "phase": "Cluster in healthy state",
+						},
+					})
+				case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods") && request.URL.Query().Get("fieldSelector") != "":
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+						"metadata": map[string]any{"name": "borealis-postgres-1"},
+						"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+					}}})
+				case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/clusters/borealis-postgres"):
+					patches.Add(1)
+					var patch map[string]any
+					if err := json.NewDecoder(request.Body).Decode(&patch); err != nil {
+						t.Error(err)
+					}
+					instances.Store(coerceInt64(nestedMap(patch, "spec")["instances"]))
+					_ = json.NewEncoder(w).Encode(map[string]any{})
+				case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/pods"):
+					reads := observations.Add(1)
+					if failure == "observation_failed" && reads == 2 {
+						http.Error(w, "cannot observe remaining PostgreSQL Pods", http.StatusServiceUnavailable)
+						return
+					}
+					if failure == "lease_cancelled" && reads == 2 {
+						loseLease(errClusterControllerLeaseLost)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+						"metadata": map[string]any{"name": "borealis-postgres-2"},
+						"spec":     map[string]any{"nodeName": "borealis-engine-02"},
+						"status":   map[string]any{"phase": "Running"},
+					}}})
+				default:
+					t.Errorf("unexpected Kubernetes mutation/request %s %s", request.Method, request.URL.String())
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			runner := &kubernetesClusterStepRunner{
+				kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+				namespace: "borealis", jobPollInterval: time.Millisecond,
+			}
+			err := runner.Run(ctx, operation, clusterControllerStep{Name: "prepare_postgres_removal"}, nodes)
+			if err == nil {
+				t.Fatal("unproven PostgreSQL departure allowed removal to advance")
+			}
+			switch failure {
+			case "occupied_deadline":
+				if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "borealis-engine-02") {
+					t.Fatalf("missing occupied-target deadline diagnostic: %v", err)
+				}
+			case "lease_cancelled":
+				if !errors.Is(err, context.Canceled) || !errors.Is(context.Cause(ctx), errClusterControllerLeaseLost) || !strings.Contains(err.Error(), "borealis-engine-02") {
+					t.Fatalf("missing occupied-target cancellation diagnostic: %v", err)
+				}
+			case "observation_failed":
+				if !strings.Contains(err.Error(), "503") || ctx.Err() != nil {
+					t.Fatalf("failed observation must stop while authority remains valid: %v", err)
+				}
+			}
+			if patches.Load() != 1 || instances.Load() != 1 || observations.Load() < 2 {
+				t.Fatalf("departure failure changed membership or failed to poll: patches=%d instances=%d observations=%d", patches.Load(), instances.Load(), observations.Load())
+			}
+		})
 	}
 }
 
@@ -2676,13 +2744,13 @@ func TestMemberRemovalVerificationRetiresResidentWorkloads(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/apis/apps/v1/namespaces/borealis/deployments":
 			selector := r.URL.Query().Get("labelSelector")
 			appName := ""
-			for _, candidate := range []string{"borealis-operator", "wireguard-tunnel"} {
-				if strings.Contains(selector, "app.kubernetes.io/name="+candidate) {
+			for _, candidate := range []string{"borealis-operator", "wireguard-tunnel", "borealis-cluster-controller"} {
+				if selector == "borealis.io/engine-node=engine-1,borealis.io/node-workload=true,app.kubernetes.io/name="+candidate {
 					appName = candidate
 					break
 				}
 			}
-			if appName == "" || !strings.Contains(selector, "borealis.io/engine-node=engine-1") {
+			if appName == "" {
 				t.Fatalf("unexpected removed-node workload selector %q", selector)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{
@@ -2715,10 +2783,18 @@ func TestMemberRemovalVerificationRetiresResidentWorkloads(t *testing.T) {
 	if err := runner.verifyMemberRemoved(context.Background(), operation, "engine-1", nodes); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"borealis-operator-engine-1", "wireguard-tunnel-engine-1"} {
+	for _, name := range []string{"borealis-operator-engine-1", "wireguard-tunnel-engine-1", "borealis-cluster-controller-engine-1"} {
 		if scaled[name] != 1 {
 			t.Fatalf("removed-node workload %s scaled %d times", name, scaled[name])
 		}
+	}
+	for _, survivor := range []string{"engine-2", "engine-3"} {
+		if name := "borealis-cluster-controller-" + survivor; scaled[name] != 0 {
+			t.Fatalf("survivor controller %s scaled %d times", name, scaled[name])
+		}
+	}
+	if len(scaled) != 3 {
+		t.Fatalf("unexpected workload retirement beyond exact removed-node residents: %v", scaled)
 	}
 }
 

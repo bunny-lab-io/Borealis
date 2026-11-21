@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -180,26 +181,42 @@ func (d *Dispatcher) RoleHealth() RoleHealth {
 }
 
 func (d *Dispatcher) DispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) (scripts.Result, bool, string) {
+	out := dispatchCurrentUserQuickJob(ctx, payload)
+	if !out.launched {
+		return out.result, false, out.detail
+	}
+	return out.result, true, ""
+}
+
+// accepted=false is reserved for proven pre-launch rejection. Once launched,
+// only the callback conveys completion; an unknown Wait never calls it.
+func (d *Dispatcher) DispatchCurrentUserQuickJobWithCompletion(ctx context.Context, payload map[string]any, complete func(scripts.Result)) (bool, string) {
+	if complete == nil {
+		return false, "Current-user completion owner is unavailable."
+	}
+	return deliverCurrentUserCompletion(dispatchCurrentUserQuickJob(ctx, payload), complete)
+}
+
+func dispatchCurrentUserQuickJob(ctx context.Context, payload map[string]any) currentUserProcessCompletion {
+	reject := func(err error) currentUserProcessCompletion {
+		return currentUserProcessCompletion{detail: err.Error()}
+	}
 	scriptBytes, ok := scripts.DecodeScriptBytes(payload["script_content"], asString(payload["script_encoding"]))
 	if !ok {
-		return scripts.Result{}, false, "Invalid script payload (unable to decode)"
+		return reject(fmt.Errorf("Invalid script payload (unable to decode)"))
 	}
 	scriptType := strings.ToLower(strings.TrimSpace(asString(payload["script_type"])))
 	envMap := scripts.BuildEnvMap(mapStringAny(payload["environment"]), listMapStringAny(payload["variables"]))
 	timeoutSeconds := asInt(payload["timeout_seconds"])
 	commandLine, appPath, err := commandForScript(scriptType, string(scriptBytes), envMap)
 	if err != nil {
-		return scripts.Result{}, false, err.Error()
+		return reject(err)
 	}
 	sessionID, err := selectSessionID(payload)
 	if err != nil {
-		return scripts.Result{}, false, err.Error()
+		return reject(err)
 	}
-	result, err := runInSession(ctx, sessionID, appPath, commandLine, timeoutSeconds)
-	if err != nil {
-		return result, false, err.Error()
-	}
-	return result, true, ""
+	return runInSessionCompletion(ctx, sessionID, appPath, commandLine, timeoutSeconds)
 }
 
 func commandForScript(scriptType string, content string, envMap map[string]string) (string, string, error) {
@@ -319,31 +336,47 @@ func activeSessionIDs(target uint32) ([]uint32, error) {
 	return out, nil
 }
 
-func runInSession(ctx context.Context, sessionID uint32, appPath string, commandLine string, timeoutSeconds int) (scripts.Result, error) {
+func runInSessionCompletion(ctx context.Context, sessionID uint32, appPath string, commandLine string, timeoutSeconds int) (out currentUserProcessCompletion) {
+	var owned []func() error
+	cleanup := func() error {
+		var err error
+		for len(owned) > 0 {
+			last := len(owned) - 1
+			closeOwned := owned[last]
+			owned = owned[:last]
+			err = errors.Join(err, closeOwned())
+		}
+		return err
+	}
+	defer func() { out.resultError(cleanup()) }()
+	reject := func(err error) currentUserProcessCompletion { return currentUserProcessCompletion{detail: err.Error()} }
+	if err := ctx.Err(); err != nil {
+		return reject(err)
+	}
 	var userToken windows.Token
 	if err := windows.WTSQueryUserToken(sessionID, &userToken); err != nil {
-		return scripts.Result{}, fmt.Errorf("query user token for session %d: %w", sessionID, err)
+		return reject(fmt.Errorf("query user token for session %d: %w", sessionID, err))
 	}
-	defer userToken.Close()
+	owned = append(owned, userToken.Close)
 
 	var primaryToken windows.Token
 	desiredAccess := uint32(windows.TOKEN_ASSIGN_PRIMARY | windows.TOKEN_DUPLICATE | windows.TOKEN_QUERY | windows.TOKEN_ADJUST_DEFAULT | windows.TOKEN_ADJUST_SESSIONID)
 	if err := windows.DuplicateTokenEx(userToken, desiredAccess, nil, windows.SecurityImpersonation, windows.TokenPrimary, &primaryToken); err != nil {
-		return scripts.Result{}, fmt.Errorf("duplicate user token: %w", err)
+		return reject(fmt.Errorf("duplicate user token: %w", err))
 	}
-	defer primaryToken.Close()
+	owned = append(owned, primaryToken.Close)
 
 	var env *uint16
 	if err := windows.CreateEnvironmentBlock(&env, primaryToken, false); err != nil {
-		return scripts.Result{}, fmt.Errorf("create user environment: %w", err)
+		return reject(fmt.Errorf("create user environment: %w", err))
 	}
-	defer windows.DestroyEnvironmentBlock(env)
+	owned = append(owned, func() error { return windows.DestroyEnvironmentBlock(env) })
 
-	stdoutFile, stderrFile, stdinHandle, cleanup, err := prepareProcessHandles()
+	stdoutFile, stderrFile, stdinHandle, closeFiles, err := prepareProcessHandles()
 	if err != nil {
-		return scripts.Result{}, err
+		return reject(err)
 	}
-	defer cleanup()
+	owned = append(owned, closeFiles)
 
 	desktop, _ := windows.UTF16PtrFromString(`winsta0\default`)
 	cwd := currentUserWorkingDirectory()
@@ -360,44 +393,55 @@ func runInSession(ctx context.Context, sessionID uint32, appPath string, command
 	}
 	var processInfo windows.ProcessInformation
 	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_NO_WINDOW)
+	if err := ctx.Err(); err != nil {
+		return reject(err)
+	}
 	if err := windows.CreateProcessAsUser(primaryToken, appPtr, cmdPtr, nil, nil, true, creationFlags, env, cwdPtr, startupInfo, &processInfo); err != nil {
-		return scripts.Result{}, fmt.Errorf("create current-user process: %w", err)
+		return reject(fmt.Errorf("create current-user process: %w", err))
 	}
-	defer windows.CloseHandle(processInfo.Thread)
-	defer windows.CloseHandle(processInfo.Process)
-
-	waitErr := waitForProcess(ctx, processInfo.Process, timeoutSeconds)
-	if waitErr != nil {
-		_ = windows.TerminateProcess(processInfo.Process, 1)
-	}
-	var exitCode uint32
-	if err := windows.GetExitCodeProcess(processInfo.Process, &exitCode); err != nil {
-		exitCode = 1
-	}
-	_ = stdoutFile.Close()
-	_ = stderrFile.Close()
-	stdoutText, stderrText := readCapturedOutput(stdoutFile.Name(), stderrFile.Name())
-	cleaned := scripts.CleanPowerShellResult(scripts.Result{ReturnCode: int(exitCode), Stdout: stdoutText, Stderr: stderrText})
-	if waitErr != nil {
-		return scripts.Result{ReturnCode: -1, Stdout: cleaned.Stdout, Stderr: joinStderr(cleaned.Stderr, waitErr.Error())}, nil
-	}
-	return cleaned, nil
+	owned = append(owned,
+		func() error { return windows.CloseHandle(processInfo.Thread) },
+		func() error { return windows.CloseHandle(processInfo.Process) },
+	)
+	return completeCurrentUserProcess(ctx, timeoutSeconds, currentUserProcess{
+		wait:      func(ctx context.Context, timeout int) error { return waitForProcess(ctx, processInfo.Process, timeout) },
+		terminate: func() error { return windows.TerminateProcess(processInfo.Process, 1) },
+		exitCode: func() (uint32, error) {
+			var code uint32
+			err := windows.GetExitCodeProcess(processInfo.Process, &code)
+			return code, err
+		},
+		capture: func() (string, string, error) {
+			closeErr := errors.Join(closeCurrentUserOutput(stdoutFile), closeCurrentUserOutput(stderrFile))
+			stdout, stderr, readErr := readCapturedOutput(stdoutFile.Name(), stderrFile.Name())
+			return stdout, stderr, errors.Join(closeErr, readErr)
+		},
+		cleanup: cleanup,
+	})
 }
 
-func prepareProcessHandles() (*os.File, *os.File, windows.Handle, func(), error) {
+func closeCurrentUserOutput(file *os.File) error {
+	err := file.Close()
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func prepareProcessHandles() (*os.File, *os.File, windows.Handle, func() error, error) {
 	dir := filepath.Join(os.TempDir(), "Borealis", "currentuser")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, nil, 0, func() {}, err
+		return nil, nil, 0, func() error { return nil }, err
 	}
 	stdoutFile, err := os.CreateTemp(dir, "stdout-*.log")
 	if err != nil {
-		return nil, nil, 0, func() {}, err
+		return nil, nil, 0, func() error { return nil }, err
 	}
 	stderrFile, err := os.CreateTemp(dir, "stderr-*.log")
 	if err != nil {
 		_ = stdoutFile.Close()
 		_ = os.Remove(stdoutFile.Name())
-		return nil, nil, 0, func() {}, err
+		return nil, nil, 0, func() error { return nil }, err
 	}
 	stdinHandle, err := openInheritableNUL()
 	if err != nil {
@@ -405,17 +449,13 @@ func prepareProcessHandles() (*os.File, *os.File, windows.Handle, func(), error)
 		_ = stderrFile.Close()
 		_ = os.Remove(stdoutFile.Name())
 		_ = os.Remove(stderrFile.Name())
-		return nil, nil, 0, func() {}, err
+		return nil, nil, 0, func() error { return nil }, err
 	}
 	for _, handle := range []windows.Handle{windows.Handle(stdoutFile.Fd()), windows.Handle(stderrFile.Fd()), stdinHandle} {
 		_ = windows.SetHandleInformation(handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT)
 	}
-	cleanup := func() {
-		_ = windows.CloseHandle(stdinHandle)
-		_ = stdoutFile.Close()
-		_ = stderrFile.Close()
-		_ = os.Remove(stdoutFile.Name())
-		_ = os.Remove(stderrFile.Name())
+	cleanup := func() error {
+		return errors.Join(windows.CloseHandle(stdinHandle), closeCurrentUserOutput(stdoutFile), closeCurrentUserOutput(stderrFile), os.Remove(stdoutFile.Name()), os.Remove(stderrFile.Name()))
 	}
 	return stdoutFile, stderrFile, stdinHandle, cleanup, nil
 }
@@ -470,10 +510,10 @@ func waitForProcess(ctx context.Context, handle windows.Handle, timeoutSeconds i
 	}
 }
 
-func readCapturedOutput(stdoutPath string, stderrPath string) (string, string) {
-	stdoutBytes, _ := os.ReadFile(stdoutPath)
-	stderrBytes, _ := os.ReadFile(stderrPath)
-	return string(stdoutBytes), string(stderrBytes)
+func readCapturedOutput(stdoutPath string, stderrPath string) (string, string, error) {
+	stdoutBytes, stdoutErr := os.ReadFile(stdoutPath)
+	stderrBytes, stderrErr := os.ReadFile(stderrPath)
+	return string(stdoutBytes), string(stderrBytes), errors.Join(stdoutErr, stderrErr)
 }
 
 func currentUserWorkingDirectory() string {
@@ -590,18 +630,6 @@ func listMapStringAny(value any) []map[string]any {
 		}
 	}
 	return out
-}
-
-func joinStderr(existing string, extra string) string {
-	existing = strings.TrimRight(existing, "\r\n")
-	extra = strings.TrimSpace(extra)
-	if existing == "" {
-		return extra
-	}
-	if extra == "" {
-		return existing
-	}
-	return existing + "\n" + extra
 }
 
 func (d *Dispatcher) helperBrokerLoop(ctx context.Context) {

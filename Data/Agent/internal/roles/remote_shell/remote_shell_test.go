@@ -2,12 +2,17 @@ package remoteshell
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -78,7 +83,10 @@ func TestShellSessionPingPongAndBashStdout(t *testing.T) {
 	_ = engineConn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	var logs []string
+	var logsMu sync.Mutex
 	session := newShellSession(agentConn, "10.255.0.1:12345", "bash", "/bin/sh", func(format string, args ...any) {
+		logsMu.Lock()
+		defer logsMu.Unlock()
 		logs = append(logs, strings.TrimSpace(format))
 	}, nil, nil)
 	go session.start()
@@ -117,6 +125,8 @@ func TestShellSessionPingPongAndBashStdout(t *testing.T) {
 			return
 		}
 	}
+	logsMu.Lock()
+	defer logsMu.Unlock()
 	t.Fatalf("did not receive expected stdout; logs=%#v", logs)
 }
 
@@ -254,4 +264,179 @@ func readJSON(t *testing.T, reader *bufio.Reader) map[string]any {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func TestTrackedShellPassiveReadinessAndBindBeforeStdin(t *testing.T) {
+	agentConn, engineConn := net.Pipe()
+	defer engineConn.Close()
+	_ = engineConn.SetDeadline(time.Now().Add(5 * time.Second))
+	var ready atomic.Int32
+	complete := make(chan error, 1)
+	session := newShellSession(agentConn, "10.255.0.1:12345", "bash", "/missing-shell", nil, nil, func(*shellSession) { ready.Add(1) })
+	session.requireOperation = true
+	session.bindOperation = func(_ context.Context, msg map[string]any) (func(error), error) {
+		if msg["type"] != "worker_operation_bind" || msg["session_id"] != "session-1" {
+			return nil, errors.New("bad bind")
+		}
+		return func(err error) { complete <- err }, nil
+	}
+	go session.start()
+	defer session.close()
+	reader := bufio.NewReader(engineConn)
+	writeJSON(t, engineConn, map[string]any{"type": "ping", "session_id": "session-1", "ping_id": "ready"})
+	if pong := readJSON(t, reader); pong["type"] != "pong" {
+		t.Fatal(pong)
+	}
+	if ready.Load() != 0 {
+		t.Fatal("passive ping replaced active session")
+	}
+	writeJSON(t, engineConn, map[string]any{"type": "worker_operation_bind", "session_id": "session-1", "job_id": 17, "context": map[string]any{"worker_operation": map[string]any{"version": 1, "token": strings.Repeat("a", 32)}}})
+	bound := readJSON(t, reader)
+	if bound["type"] != "worker_operation_bound" || bound["status"] != "accepted" || ready.Load() != 1 {
+		t.Fatal(bound)
+	}
+	session.procMu.Lock()
+	proc := session.proc
+	session.procMu.Unlock()
+	if proc != nil {
+		t.Fatal("bind started process before stdin")
+	}
+	select {
+	case <-complete:
+		t.Fatal("accepted became terminal")
+	default:
+	}
+	_ = engineConn.Close()
+	select {
+	case err := <-complete:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closed-before-start terminal missing")
+	}
+}
+
+func TestTrackedShellRequiresBindingAndPreservesBinderGeneration(t *testing.T) {
+	agentConn, engineConn := net.Pipe()
+	defer agentConn.Close()
+	defer engineConn.Close()
+	session := newShellSession(agentConn, "fixture", "bash", "/bin/sh", nil, nil, nil)
+	session.requireOperation = true
+	if err := session.ensureProcessStarted(); err == nil {
+		t.Fatal("unbound stdin started process")
+	}
+	session.bound = true
+	session.close()
+	if err := session.ensureProcessStarted(); err == nil {
+		t.Fatal("closed session restarted process")
+	}
+	manager := New("host", "system", filepath.Join(t.TempDir(), "agent.json"))
+	old := manager.SetOperationBinder(func(context.Context, map[string]any) (func(error), error) { return nil, errors.New("old") })
+	current := manager.SetOperationBinder(func(context.Context, map[string]any) (func(error), error) { return nil, errors.New("current") })
+	old()
+	if _, err := manager.operationBinder(context.Background(), nil); err.Error() != "current" {
+		t.Fatal("old cleanup erased current binder")
+	}
+	current()
+	if manager.operationBinder != nil || !manager.requireOperation {
+		t.Fatal("disconnected shell lost active fence")
+	}
+}
+
+func TestTrackedShellEOFWaitsForSubprocessJoin(t *testing.T) {
+	agentConn, engineConn := net.Pipe()
+	defer engineConn.Close()
+	session := newShellSession(agentConn, "fixture", "bash", "", nil, nil, nil)
+	complete := make(chan error, 2)
+	session.bound = true
+	session.complete = func(err error) { complete <- err }
+	// Non-nil process represents process custody. Wait completion is explicitly
+	// blocked, so EOF/close cannot substitute for the actual join.
+	session.proc = &exec.Cmd{}
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		session.waitForTerminal(func() (error, bool) { close(entered); <-release; return errors.New("terminated and joined"), true })
+	}()
+	<-entered
+	session.close()
+	select {
+	case <-complete:
+		t.Fatal("EOF released slot before Wait")
+	default:
+	}
+	close(release)
+	<-done
+	select {
+	case err := <-complete:
+		if err == nil || err.Error() != "terminated and joined" {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("joined terminal missing")
+	}
+	session.completeTerminal(nil)
+	select {
+	case <-complete:
+		t.Fatal("duplicate completion")
+	default:
+	}
+}
+
+func TestTrackedShellActualProcessExitPrecedesReceipt(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh unavailable")
+	}
+	agentConn, engineConn := net.Pipe()
+	defer engineConn.Close()
+	session := newShellSession(agentConn, "fixture", "bash", "/bin/sh", nil, nil, nil)
+	session.requireOperation = true
+	session.bound = true
+	done := make(chan error, 1)
+	session.complete = func(err error) {
+		session.procMu.Lock()
+		proc := session.proc
+		session.procMu.Unlock()
+		if proc == nil || proc.ProcessState == nil || !proc.ProcessState.Exited() {
+			done <- errors.New("receipt before process exit")
+			return
+		}
+		done <- err
+	}
+	if err := session.ensureProcessStarted(); err != nil {
+		t.Fatal(err)
+	}
+	session.procMu.Lock()
+	stdin := session.stdin
+	session.procMu.Unlock()
+	if _, err := stdin.Write([]byte("exit 0\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		session.close()
+		t.Fatal("process receipt timeout")
+	}
+}
+
+func TestTrackedShellUnknownWaitRetainsCharge(t *testing.T) {
+	agentConn, engineConn := net.Pipe()
+	defer engineConn.Close()
+	session := newShellSession(agentConn, "fixture", "bash", "", nil, nil, nil)
+	var completed atomic.Int32
+	session.bound = true
+	session.complete = func(error) { completed.Add(1) }
+	session.proc = &exec.Cmd{}
+	session.waitForTerminal(func() (error, bool) { return errors.New("native wait failed without process state"), false })
+	if completed.Load() != 0 {
+		t.Fatal("unconfirmed exit emitted terminal")
+	}
+	if !session.isClosed() {
+		t.Fatal("failed transport not closed")
+	}
 }

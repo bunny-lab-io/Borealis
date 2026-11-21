@@ -79,6 +79,12 @@ func New(authClient *auth.Client, hostname string) *Manager {
 }
 
 func (m *Manager) HandleRequest(ctx context.Context, payload any) (any, error) {
+	return m.HandleRequestWithCompletion(ctx, payload, nil)
+}
+
+// Accepted transfers remain active until their complete transfer loop returns,
+// including all owned file/body cleanup and final status reporting.
+func (m *Manager) HandleRequestWithCompletion(ctx context.Context, payload any, complete func(error)) (any, error) {
 	body, ok := payload.(map[string]any)
 	if !ok {
 		return errorResponse("invalid_request", "Expected an object payload."), nil
@@ -87,13 +93,19 @@ func (m *Manager) HandleRequest(ctx context.Context, payload any) (any, error) {
 		return errorResponse("not_found", "The file-management request targeted another device."), nil
 	}
 	action := strings.ToLower(cleanText(body["action"]))
-	response, err := m.handleAction(ctx, action, body)
+	response, err := m.handleAction(ctx, action, body, complete)
 	if err != nil {
 		ferr := normalizeError(err)
 		m.setLastError(ferr.Message)
+		if complete != nil && action != "upload_start" && action != "download_start" {
+			complete(err)
+		}
 		return errorResponse(ferr.Code, ferr.Message), nil
 	}
 	m.setLastError("")
+	if complete != nil && action != "upload_start" && action != "download_start" {
+		complete(nil)
+	}
 	return response, nil
 }
 
@@ -135,7 +147,7 @@ func (m *Manager) Health() RoleHealth {
 	}
 }
 
-func (m *Manager) handleAction(ctx context.Context, action string, payload map[string]any) (any, error) {
+func (m *Manager) handleAction(ctx context.Context, action string, payload map[string]any, complete func(error)) (any, error) {
 	switch action {
 	case "roots":
 		return rootsPayload()
@@ -199,14 +211,20 @@ func (m *Manager) handleAction(ctx context.Context, action string, payload map[s
 		if transferID == "" {
 			return nil, newError("invalid_request", "Transfer metadata is missing transfer_id.")
 		}
-		go m.runTransfer(context.Background(), cloneMap(payload))
+		owned := cloneMap(payload)
+		go func() {
+			err := m.runTransfer(context.Background(), owned)
+			if complete != nil {
+				complete(err)
+			}
+		}()
 		return map[string]any{"ok": true, "status": "accepted", "transfer_id": transferID}, nil
 	default:
 		return nil, newError("invalid_request", fmt.Sprintf("Unsupported file-management action '%s'.", action))
 	}
 }
 
-func (m *Manager) runTransfer(ctx context.Context, payload map[string]any) {
+func (m *Manager) runTransfer(ctx context.Context, payload map[string]any) error {
 	transferID := cleanText(payload["transfer_id"])
 	if transferID == "" {
 		transferID = "unknown"
@@ -228,7 +246,7 @@ func (m *Manager) runTransfer(ctx context.Context, payload map[string]any) {
 	}
 	if err == nil {
 		m.setLastError("")
-		return
+		return nil
 	}
 	ferr := normalizeError(err)
 	m.setLastError(ferr.Message)
@@ -237,6 +255,7 @@ func (m *Manager) runTransfer(ctx context.Context, payload map[string]any) {
 		status = "canceled"
 	}
 	_, _ = m.reportProgress(ctx, transferID, m.transferBaseURL(payload), map[string]any{"status": status, "error": ferr.Message})
+	return err
 }
 
 func (m *Manager) matchesTarget(payload map[string]any) bool {
@@ -920,6 +939,46 @@ func (m *Manager) getJSON(ctx context.Context, path string, baseURLOverride ...s
 	return out, nil
 }
 
+type transferRequestBody struct {
+	io.ReadCloser
+	once sync.Once
+	done func()
+	err  error
+}
+
+func (b *transferRequestBody) Close() error {
+	b.once.Do(func() {
+		b.err = b.ReadCloser.Close()
+		b.done()
+	})
+	return b.err
+}
+
+// RoundTripper may close request bodies after Do returns. Join those closes
+// before caller cleanup or terminal completion, including redirect/retry bodies.
+// Response bodies must be closed first so an early response can stop its writer.
+func waitTransferRequestBodies(req *http.Request) func() {
+	var bodies sync.WaitGroup
+	wrap := func(body io.ReadCloser) io.ReadCloser {
+		if body == nil || body == http.NoBody {
+			return body
+		}
+		bodies.Add(1)
+		return &transferRequestBody{ReadCloser: body, done: bodies.Done}
+	}
+	req.Body = wrap(req.Body)
+	if getBody := req.GetBody; getBody != nil {
+		req.GetBody = func() (io.ReadCloser, error) {
+			body, err := getBody()
+			if err != nil {
+				return nil, err
+			}
+			return wrap(body), nil
+		}
+	}
+	return bodies.Wait
+}
+
 func (m *Manager) postJSON(ctx context.Context, path string, payload map[string]any, baseURLOverride ...string) (map[string]any, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -931,6 +990,7 @@ func (m *Manager) postJSON(ctx context.Context, path string, payload map[string]
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	defer waitTransferRequestBodies(req)()
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -978,6 +1038,7 @@ func (m *Manager) postDownloadArtifact(ctx context.Context, transferBaseURL stri
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	req.ContentLength = contentLength
+	defer waitTransferRequestBodies(req)()
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return err

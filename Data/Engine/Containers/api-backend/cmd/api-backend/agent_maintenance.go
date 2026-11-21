@@ -426,7 +426,7 @@ func updateAgentMaintenanceRun(ctx context.Context, tx *sql.Tx, run agentMainten
 	if operationID != "" {
 		metadata["operation_id"] = operationID
 	}
-	metadataJSON, err := json.Marshal(metadata)
+	metadataJSON, err := schedulerMergeActivityCustody(ctx, tx, run.ActivityID, metadata)
 	if err != nil {
 		return err
 	}

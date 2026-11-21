@@ -65,3 +65,5 @@ Use `Disconnect` when finished.
     - Remote shell uses agent TCP shell listener on port `47002` by default.
     - Engine and Agent log a shared shell `session_id` for cross-runtime correlation.
     - One active shell per browser/session owner is kept; superseded sessions close explicitly.
+    - Tracked shell restart owns a separate operation from each shell. It joins the old listener generation, pending binds, superseded sessions and confirmed child exits before acknowledging a replacement listener. Concurrent restart requests reject before effects; uncertain exits remain charged. Every new shell still needs its own bound operation. Startup and supervisor recovery cannot enable unbound stdin before the first Agent socket connection.
+    - Dispatch acknowledgement and TCP readiness are transport observations, not terminal receipts or proof that prior work stopped. Reconnect retries exact persisted completion; process-crash recovery cannot infer completion from listener absence or replay uncertain restart.

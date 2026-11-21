@@ -11,6 +11,7 @@ import time
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from Data.Engine.db import dbapi as sqlite3
+from .worker_admission import admission_allows_prune, preserve_admission_metadata
 
 WORK_STATUS_QUEUED = "queued"
 WORK_STATUS_RUNNING = "running"
@@ -1121,11 +1122,36 @@ def _fetch_worker_route(conn: sqlite3.Connection, *, worker_guid: str) -> Option
     return _route_row_to_dict(row) if row else None
 
 
+def _lock_worker_routes(conn: sqlite3.Connection, guids: Sequence[str]) -> None:
+    if not guids or getattr(conn, "_dialect", "") == "sqlite":
+        return
+    placeholders = ",".join("?" for _ in guids)
+    cur = conn.execute(
+        f"SELECT worker_guid FROM job_scheduler_worker_routes WHERE site_id IN (SELECT site_id FROM job_scheduler_worker_routes WHERE worker_guid IN ({placeholders})) ORDER BY worker_guid FOR UPDATE",
+        tuple(guids),
+    )
+    try:
+        cur.fetchall()
+    finally:
+        cur.close()
+
+
+def _route_file_effect(write: bool, routes: Sequence[Mapping[str, Any]], deferred: Optional[list] = None) -> None:
+    if deferred is not None:
+        deferred.append((write, list(routes)))
+    elif write:
+        for route in routes:
+            _write_worker_route_file(route)
+    else:
+        _remove_worker_route_files(routes)
+
+
 def _retire_other_active_worker_routes_for_site(
     conn: sqlite3.Connection,
     *,
     site_id: int,
     keep_worker_guid: str,
+    _deferred_route_files: Optional[list] = None,
 ) -> int:
     normalized_guid = str(keep_worker_guid or "").strip()
     try:
@@ -1169,7 +1195,7 @@ def _retire_other_active_worker_routes_for_site(
             normalized_guid,
         ),
     )
-    _remove_worker_route_files(stale_routes)
+    _route_file_effect(False, stale_routes, _deferred_route_files)
     return max(0, int(getattr(cur, "rowcount", 0) or 0))
 
 
@@ -1184,6 +1210,7 @@ def upsert_worker_route(
     upstream_host: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST,
     upstream_port: Optional[int] = None,
     metadata: Optional[Mapping[str, Any]] = None,
+    _deferred_route_files: Optional[list] = None,
 ) -> Optional[Dict[str, Any]]:
     ensure_job_scheduler_tables(conn)
     normalized_guid = str(worker_guid or "").strip()
@@ -1193,6 +1220,17 @@ def upsert_worker_route(
         normalized_site_id = 0
     if not normalized_guid or normalized_site_id <= 0:
         return None
+    # Match admission's route-before-worker order. Native reconciliation may
+    # replace placement, but worker registration must never supply that proof.
+    lock = "" if getattr(conn, "_dialect", "") == "sqlite" else " FOR UPDATE"
+    locked = conn.execute(
+        "SELECT worker_guid,metadata_json FROM job_scheduler_worker_routes WHERE site_id=? OR worker_guid=? ORDER BY worker_guid" + lock,
+        (normalized_site_id, normalized_guid),
+    )
+    try:
+        retained = {str(row[0]): row[1] for row in locked.fetchall()}
+    finally:
+        locked.close()
     route_fields = _site_worker_route_metadata(
         worker_guid=normalized_guid,
         upstream_scheme=upstream_scheme,
@@ -1200,7 +1238,7 @@ def upsert_worker_route(
         upstream_port=upstream_port,
     )
     route_status = _normalized_route_status(status)
-    route_metadata = dict(metadata or {})
+    route_metadata = preserve_admission_metadata(retained.get(normalized_guid, {}), dict(metadata or {}))
     route_metadata.update(
         {
             "lifecycle_owner": "job-scheduler",
@@ -1217,6 +1255,7 @@ def upsert_worker_route(
             conn,
             site_id=normalized_site_id,
             keep_worker_guid=normalized_guid,
+            _deferred_route_files=_deferred_route_files,
         )
     cur = conn.cursor()
     cur.execute(
@@ -1225,7 +1264,7 @@ def upsert_worker_route(
           FROM job_scheduler_worker_routes
          WHERE worker_guid=?
          LIMIT 1
-        """,
+        """ + lock,
         (normalized_guid,),
     )
     existing_row = cur.fetchone()
@@ -1237,6 +1276,7 @@ def upsert_worker_route(
                 route_file_path, upstream_scheme, upstream_host, upstream_port,
                 status, generation, metadata_json, created_at, updated_at, retired_at
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(worker_guid) DO NOTHING
             """,
             (
                 normalized_guid,
@@ -1256,12 +1296,21 @@ def upsert_worker_route(
                 retired_at,
             ),
         )
-        created_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
-        if created_route:
-            _write_worker_route_file(created_route)
-        return created_route
+        if cur.rowcount == 1:
+            created_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
+            if created_route:
+                _route_file_effect(True, [created_route], _deferred_route_files)
+            return created_route
+        # Native reconciliation may create this route after the initial
+        # cohort read. Lock its current row before merging reserved custody.
+        cur.execute(f"SELECT {WORKER_ROUTE_SELECT_COLUMNS} FROM job_scheduler_worker_routes WHERE worker_guid=?" + lock, (normalized_guid,))
+        existing_row = cur.fetchone()
+        if existing_row is None:
+            raise RuntimeError("worker route disappeared during registration")
 
     existing = _route_row_to_dict(existing_row)
+    route_metadata = preserve_admission_metadata(existing_row[11], route_metadata)
+    metadata_json = _json_dumps(route_metadata)
     desired = {
         "site_id": normalized_site_id,
         "container_name": normalized_container,
@@ -1287,6 +1336,10 @@ def upsert_worker_route(
         or _json_dumps(existing.get("metadata") or {}) != metadata_json
     )
     if changed:
+        # Python routing changes cannot renew native operator placement.
+        if "worker_placement" in route_metadata:
+            route_metadata["worker_placement"] = None
+            metadata_json = _json_dumps(route_metadata)
         cur.execute(
             """
             UPDATE job_scheduler_worker_routes
@@ -1325,9 +1378,9 @@ def upsert_worker_route(
     updated_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
     if updated_route:
         if route_status == WORKER_ROUTE_STATUS_ACTIVE:
-            _write_worker_route_file(updated_route)
+            _route_file_effect(True, [updated_route], _deferred_route_files)
         else:
-            _remove_worker_route_files([updated_route])
+            _route_file_effect(False, [updated_route], _deferred_route_files)
     return updated_route
 
 
@@ -1336,6 +1389,7 @@ def retire_worker_routes(
     *,
     worker_guids: Sequence[str],
     status: str = WORKER_ROUTE_STATUS_RETIRED,
+    _deferred_route_files: Optional[list] = None,
 ) -> int:
     ensure_job_scheduler_tables(conn)
     guids = [str(item or "").strip() for item in worker_guids or [] if str(item or "").strip()]
@@ -1367,7 +1421,7 @@ def retire_worker_routes(
         """,
         (route_status, now, now, *guids, route_status),
     )
-    _remove_worker_route_files(existing_routes)
+    _route_file_effect(False, existing_routes, _deferred_route_files)
     return max(0, int(getattr(cur, "rowcount", 0) or 0))
 
 
@@ -1449,6 +1503,23 @@ def register_worker(
         normalized_site_id = int(site_id)
     except Exception:
         normalized_site_id = 0
+    if normalized_site_id > 0:
+        worker_status = str(status or WORKER_STATUS_STARTING).strip().lower()
+        route_status = WORKER_ROUTE_STATUS_ACTIVE
+        if worker_status == WORKER_STATUS_LOST:
+            route_status = WORKER_ROUTE_STATUS_LOST
+        elif worker_status == WORKER_STATUS_STOPPED:
+            route_status = WORKER_ROUTE_STATUS_RETIRED
+        upsert_worker_route(
+            conn,
+            worker_guid=normalized_guid,
+            container_name=normalized_container,
+            site_id=normalized_site_id,
+            status=route_status,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+            metadata=route_metadata,
+        )
     cur = conn.cursor()
     cur.execute(
         """
@@ -1483,25 +1554,6 @@ def register_worker(
             now,
         ),
     )
-    if normalized_site_id > 0:
-        worker_status = str(status or WORKER_STATUS_STARTING).strip().lower()
-        route_status = WORKER_ROUTE_STATUS_ACTIVE
-        if worker_status == WORKER_STATUS_LOST:
-            route_status = WORKER_ROUTE_STATUS_LOST
-        elif worker_status == WORKER_STATUS_STOPPED:
-            route_status = WORKER_ROUTE_STATUS_RETIRED
-        upsert_worker_route(
-            conn,
-            worker_guid=normalized_guid,
-            container_name=normalized_container,
-            site_id=normalized_site_id,
-            status=route_status,
-            upstream_host=upstream_host,
-            upstream_port=upstream_port,
-            metadata=route_metadata,
-        )
-
-
 def heartbeat_worker(
     conn: sqlite3.Connection,
     *,
@@ -1517,35 +1569,13 @@ def heartbeat_worker(
     now = _now_ts()
     normalized_guid = str(worker_guid or "").strip()
     expected_container = str(container_name or "").strip()
+    _lock_worker_routes(conn, [normalized_guid])
     cur = conn.cursor()
-    sql = """
-        UPDATE job_scheduler_workers
-           SET status=?,
-               last_seen_at=?,
-               idle_since=?,
-               current_lanes_json=?,
-               task_links_json=?,
-               claimed_count=COALESCE(?, claimed_count),
-               updated_at=?
-         WHERE worker_guid=?
-    """
-    params: list[Any] = [
-        str(status or WORKER_STATUS_RUNNING),
-        now,
-        idle_since,
-        _json_dumps(list(lanes or [])),
-        _json_dumps(list(task_links or [])),
-        claimed_count,
-        now,
-        normalized_guid,
-    ]
+    deferred_route_files: list = []
     if expected_container:
-        sql += " AND container_name=?"
-        params.append(expected_container)
-    cur.execute(sql, tuple(params))
-    if expected_container and int(getattr(cur, "rowcount", 0) or 0) <= 0:
-        return False
-    if expected_container:
+        # Route recovery precedes the worker lock. Roll back this helper's
+        # changes if a native replacement wins the container comparison.
+        cur.execute("SAVEPOINT worker_heartbeat_route")
         route = _fetch_worker_route(conn, worker_guid=normalized_guid)
         if (
             route
@@ -1562,7 +1592,39 @@ def heartbeat_worker(
                 upstream_host=str(route.get("upstream_host") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST),
                 upstream_port=int(route.get("upstream_port") or 0),
                 metadata=route.get("metadata") if isinstance(route.get("metadata"), Mapping) else {},
+                _deferred_route_files=deferred_route_files,
             )
+    sql = """
+        UPDATE job_scheduler_workers
+           SET status=?,
+               last_seen_at=?,
+               idle_since=?,
+               current_lanes_json=?,
+               task_links_json=?,
+               updated_at=?
+         WHERE worker_guid=?
+    """
+    params: list[Any] = [
+        str(status or WORKER_STATUS_RUNNING),
+        now,
+        idle_since,
+        _json_dumps(list(lanes or [])),
+        _json_dumps(list(task_links or [])),
+        now,
+        normalized_guid,
+    ]
+    if expected_container:
+        sql += " AND container_name=?"
+        params.append(expected_container)
+    cur.execute(sql, tuple(params))
+    if expected_container:
+        if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+            cur.execute("ROLLBACK TO SAVEPOINT worker_heartbeat_route")
+            cur.execute("RELEASE SAVEPOINT worker_heartbeat_route")
+            return False
+        cur.execute("RELEASE SAVEPOINT worker_heartbeat_route")
+    for write, routes in deferred_route_files:
+        _route_file_effect(write, routes)
     return True
 
 
@@ -1577,7 +1639,13 @@ def stop_worker(
     now = _now_ts()
     normalized_guid = str(worker_guid or "").strip()
     expected_container = str(container_name or "").strip()
+    _lock_worker_routes(conn, [normalized_guid])
     cur = conn.cursor()
+    deferred_route_files: list = []
+    if expected_container:
+        cur.execute("SAVEPOINT worker_stop_route")
+    route_status = WORKER_ROUTE_STATUS_LOST if str(status or "").strip().lower() == WORKER_STATUS_LOST else WORKER_ROUTE_STATUS_RETIRED
+    retire_worker_routes(conn, worker_guids=[normalized_guid], status=route_status, _deferred_route_files=deferred_route_files)
     sql = """
         UPDATE job_scheduler_workers
            SET status=?,
@@ -1591,15 +1659,19 @@ def stop_worker(
         sql += " AND container_name=?"
         params.append(expected_container)
     cur.execute(sql, tuple(params))
-    if expected_container and int(getattr(cur, "rowcount", 0) or 0) <= 0:
-        return False
+    if expected_container:
+        if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+            cur.execute("ROLLBACK TO SAVEPOINT worker_stop_route")
+            cur.execute("RELEASE SAVEPOINT worker_stop_route")
+            return False
+        cur.execute("RELEASE SAVEPOINT worker_stop_route")
+    for write, routes in deferred_route_files:
+        _route_file_effect(write, routes)
     _release_worker_running_work_items(
         conn,
         worker_guids=[normalized_guid],
         reason="requeued after site worker stopped before work completed",
     )
-    route_status = WORKER_ROUTE_STATUS_LOST if str(status or "").strip().lower() == WORKER_STATUS_LOST else WORKER_ROUTE_STATUS_RETIRED
-    retire_worker_routes(conn, worker_guids=[normalized_guid], status=route_status)
     return True
 
 
@@ -1671,6 +1743,8 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
     lost_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
     if not lost_guids:
         return 0
+    _lock_worker_routes(conn, lost_guids)
+    retire_worker_routes(conn, worker_guids=lost_guids, status=WORKER_ROUTE_STATUS_LOST)
     _release_worker_running_work_items(
         conn,
         worker_guids=lost_guids,
@@ -1688,7 +1762,6 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
         (WORKER_STATUS_LOST, now, now, *lost_guids),
     )
     updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
-    retire_worker_routes(conn, worker_guids=lost_guids, status=WORKER_ROUTE_STATUS_LOST)
     return updated
 
 
@@ -1712,6 +1785,8 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     missing_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
     if not missing_guids:
         return 0
+    _lock_worker_routes(conn, missing_guids)
+    retire_worker_routes(conn, worker_guids=missing_guids, status=WORKER_ROUTE_STATUS_LOST)
     _release_worker_running_work_items(
         conn,
         worker_guids=missing_guids,
@@ -1731,63 +1806,51 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
         (WORKER_STATUS_LOST, "missing", now, now, *missing_guids),
     )
     updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
-    retire_worker_routes(conn, worker_guids=missing_guids, status=WORKER_ROUTE_STATUS_LOST)
     return updated
 
 
 def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 300) -> int:
     ensure_job_scheduler_tables(conn)
-    now = _now_ts()
-    cutoff = now - max(0, int(retention_seconds or 300))
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE job_scheduler_workers
-           SET stopped_at=COALESCE(stopped_at, last_seen_at, updated_at, ?),
-               updated_at=?
-         WHERE status IN (?, ?)
-           AND stopped_at IS NULL
-        """,
-        (now, now, *WORKER_TERMINAL_STATUSES),
-    )
-    cur.execute(
-        """
-        DELETE FROM job_scheduler_workers
-         WHERE COALESCE(site_id, 0)>0
-           AND status IN (?, ?)
-           AND COALESCE(stopped_at, last_seen_at, updated_at, started_at, created_at, 0) < ?
-        """,
-        (*WORKER_TERMINAL_STATUSES, cutoff),
-    )
-    deleted_workers = max(0, int(getattr(cur, "rowcount", 0) or 0))
-    cur.execute(
-        f"""
-        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
-          FROM job_scheduler_worker_routes
-         WHERE status IN (?, ?)
-           AND COALESCE(retired_at, updated_at, created_at, 0) < ?
-        """,
-        (*WORKER_ROUTE_TERMINAL_STATUSES, cutoff),
-    )
-    stale_routes = [_route_row_to_dict(row) for row in cur.fetchall() or []]
-    cur.execute(
-        """
-        UPDATE job_scheduler_worker_routes
-           SET retired_at=COALESCE(retired_at, updated_at, created_at, ?),
-               updated_at=?
-         WHERE status IN (?, ?)
-           AND retired_at IS NULL
-        """,
-        (now, now, *WORKER_ROUTE_TERMINAL_STATUSES),
-    )
-    cur.execute(
-        """
-        DELETE FROM job_scheduler_worker_routes
-         WHERE status IN (?, ?)
-           AND COALESCE(retired_at, updated_at, created_at, 0) < ?
-        """,
-        (*WORKER_ROUTE_TERMINAL_STATUSES, cutoff),
-    )
+    cutoff = _now_ts() - max(0, int(retention_seconds or 300))
+    lock = "" if getattr(conn, "_dialect", "") == "sqlite" else " FOR UPDATE"
+    cur = conn.execute("SELECT worker_guid FROM job_scheduler_workers WHERE status IN (?,?) UNION SELECT worker_guid FROM job_scheduler_worker_routes WHERE status IN (?,?) ORDER BY worker_guid", (*WORKER_TERMINAL_STATUSES, *WORKER_ROUTE_TERMINAL_STATUSES))
+    try:
+        guids = [str(row[0]) for row in cur.fetchall()]
+    finally:
+        cur.close()
+    _lock_worker_routes(conn, guids)
+    locked_routes = {}
+    if guids:
+        placeholders = ",".join("?" for _ in guids)
+        cur = conn.execute(f"SELECT {WORKER_ROUTE_SELECT_COLUMNS} FROM job_scheduler_worker_routes WHERE worker_guid IN ({placeholders}) ORDER BY worker_guid" + lock, tuple(guids))
+        try:
+            locked_routes = {str(row[0]): row for row in cur.fetchall()}
+        finally:
+            cur.close()
+    deleted_workers = 0
+    stale_routes = []
+    for guid in guids:
+        row = locked_routes.get(guid)
+        route = _route_row_to_dict(row) if row else None
+        cur = conn.execute("SELECT status,claimed_count,COALESCE(stopped_at,last_seen_at,updated_at,started_at,created_at,0) FROM job_scheduler_workers WHERE worker_guid=?" + lock, (guid,))
+        try:
+            worker = cur.fetchone()
+        finally:
+            cur.close()
+        # Read raw metadata: malformed JSON must retain evidence, not become {}.
+        raw_metadata = row[11] if row else {}
+        count = worker[1] if worker else 0
+        if not admission_allows_prune(raw_metadata, count):
+            continue
+        if route and route.get("status") not in WORKER_ROUTE_TERMINAL_STATUSES:
+            continue
+        if worker and worker[0] in WORKER_TERMINAL_STATUSES and int(worker[2] or 0) < cutoff:
+            changed = conn.execute("DELETE FROM job_scheduler_workers WHERE worker_guid=?", (guid,))
+            deleted_workers += max(0, int(changed.rowcount or 0))
+            changed.close()
+        if route and int(route.get("retired_at") or route.get("updated_at") or route.get("created_at") or 0) < cutoff:
+            conn.execute("DELETE FROM job_scheduler_worker_routes WHERE worker_guid=?", (guid,)).close()
+            stale_routes.append(route)
     _remove_worker_route_files(stale_routes)
     return deleted_workers
 

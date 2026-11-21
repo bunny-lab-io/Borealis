@@ -313,7 +313,7 @@ func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWorkerOperationRequest(req)
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "agent_unavailable", "message": err.Error()}
 	}

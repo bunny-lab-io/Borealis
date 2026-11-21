@@ -180,6 +180,25 @@ def enforce_startup_liveness_guard(
     template_annotations["borealis.io/liveness-startup-guard"] = str(delay)
 
 
+def mount_cluster_scratch(pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
+    # Upgrades can clone a generic template created by an earlier release.
+    name = "cluster-scratch"
+    path = "/var/tmp/borealis-cluster"
+    volumes = pod_spec.setdefault("volumes", [])
+    mounts = container.setdefault("volumeMounts", [])
+    volume = {"name": name, "emptyDir": {}}
+    mount = {"name": name, "mountPath": path}
+    existing_volumes = [item for item in volumes if item.get("name") == name]
+    existing_mounts = [item for item in mounts if item.get("name") == name or item.get("mountPath") == path]
+    if (existing_volumes and existing_volumes != [volume]) or (existing_mounts and existing_mounts != [mount]):
+        raise RuntimeError("cluster scratch conflicts with an existing volume or mount")
+    if not existing_volumes:
+        volumes.append(volume)
+    if not existing_mounts:
+        mounts.append(mount)
+    set_container_environment(container, "BOREALIS_CLUSTER_SCRATCH_DIR", path)
+
+
 def mount_shared_wireguard_keys(base: str, pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
     volumes = pod_spec.setdefault("volumes", [])
     mounts = container.setdefault("volumeMounts", [])
@@ -311,15 +330,32 @@ def reconcile_one(
     for container in containers:
         container["image"] = image
         container["imagePullPolicy"] = "IfNotPresent"
+    if base in {"api-backend", "borealis-cluster-controller"}:
+        mount_cluster_scratch(pod_spec, containers[0])
     if base == "webui-frontend" and candidate:
         enforce_webui_production_candidate(pod_spec, containers[0])
     if base == "job-scheduler":
         set_container_environment(containers[0], "BOREALIS_SCHEDULER_LEADERSHIP_ELIGIBLE", "false" if candidate else "true")
     if base == "borealis-cluster-controller":
+        # Older generic templates retain the previous stock CPU ceiling.
+        limits = (containers[0].get("resources") or {}).get("limits") or {}
+        if limits.get("cpu") == "500m":
+            limits["cpu"] = "1500m"
         set_container_environment(containers[0], "BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE", "false" if candidate else "true")
         set_container_environment(containers[0], "BOREALIS_CLUSTER_ACTION_IMAGE", image)
     if base == "api-backend":
         set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")
+        # Identity custody binds this actual Pod/Node, never copied literal
+        # values from another member's runtime template.
+        identity_fields = {
+            "BOREALIS_ENGINE_NODE_NAME": "spec.nodeName",
+            "BOREALIS_ENGINE_POD_NAME": "metadata.name",
+            "BOREALIS_ENGINE_POD_UID": "metadata.uid",
+        }
+        environment = containers[0].setdefault("env", [])
+        environment[:] = [entry for entry in environment if entry.get("name") not in identity_fields]
+        environment.extend({"name": name, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": field}}}
+                           for name, field in identity_fields.items())
     if base in {"api-backend", "wireguard-tunnel"}:
         cluster_vip = cluster_virtual_ip()
         set_container_environment(containers[0], "BOREALIS_CLUSTER_EDGE_VIP", cluster_vip)

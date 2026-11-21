@@ -23,6 +23,11 @@ func (d *Dispatcher) DispatchCurrentUserQuickJob(ctx context.Context, payload ma
 	return scripts.Result{}, false, "CURRENTUSER execution is not implemented on this platform."
 }
 
+func (d *Dispatcher) DispatchCurrentUserQuickJobWithCompletion(ctx context.Context, payload map[string]any, complete func(scripts.Result)) (bool, string) {
+	_, _, detail := d.DispatchCurrentUserQuickJob(ctx, payload)
+	return false, detail
+}
+
 func (d *Dispatcher) SupportsCurrentUserDispatch() bool {
 	return false
 }
