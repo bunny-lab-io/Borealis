@@ -79,16 +79,19 @@ func withClusterSSHNetworkPeers(parent context.Context, authority clusterSSHPrep
 func withClusterSSHNetworkInputs(parent context.Context, authority clusterSSHPreparationAuthorityRead,
 	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
 	consume func(context.Context, []clusterSSHManagementPeer, []clusterbootstrap.SourceNetwork, clusterSSHPreparationChecks) error) error {
-	return withClusterSSHNetworkInputsFor(parent, 3*time.Minute, authority, source, target, refresh, consume)
+	readers := clusterSSHNetworkTargetReaders{Authority: authority, Peer: target, Refresh: newClusterSSHPreparationLeaseCheck(authority, refresh)}
+	return withClusterSSHNetworkInputsFor(parent, 3*time.Minute, readers, source, consume)
 }
 
-func withClusterSSHNetworkInputsFor(parent context.Context, maximum time.Duration, authority clusterSSHPreparationAuthorityRead,
-	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
+func withClusterSSHNetworkInputsFor(parent context.Context, maximum time.Duration, readers clusterSSHNetworkTargetReaders,
+	source clusterSSHPreparationSnapshotRead,
 	consume func(context.Context, []clusterSSHManagementPeer, []clusterbootstrap.SourceNetwork, clusterSSHPreparationChecks) error) error {
-	if authority == nil || source == nil || target == nil || refresh == nil || consume == nil || parent.Err() != nil {
+	// The paired reader already compares the frozen authority before and after each
+	// original claim renewal. Wrapping it again triples that work at every boundary.
+	authority, target, check := readers.Authority, readers.Peer, readers.Refresh
+	if authority == nil || source == nil || target == nil || check == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	check := newClusterSSHPreparationLeaseCheck(authority, refresh)
 	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, check, func(ctx context.Context) error {
 		// Freeze an owned copy, including keys and ordered cohort, before reads.
 		value, err := authority(ctx)

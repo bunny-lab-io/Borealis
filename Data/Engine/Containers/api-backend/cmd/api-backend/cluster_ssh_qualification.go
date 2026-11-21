@@ -166,12 +166,12 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 			return err
 		}
 		stage = 3
-		if err := vipClient.observeNetworkBoot(ctx, readers.Authority, source, readers.Peer, readers.Boot, readers.Refresh, anchor.Lease, work.Baseline, anchor.Sealed); err != nil {
+		if err := vipClient.observeNetworkBoot(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed); err != nil {
 			return err
 		}
 		report.Checks[stage].State = "passed"
 		stage = 4
-		if err := vipClient.observeNetworkARP(ctx, readers.Authority, source, readers.Peer, readers.ARP, readers.Refresh, anchor.Lease, work.Baseline, anchor.Sealed); err != nil {
+		if err := vipClient.observeNetworkARP(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed); err != nil {
 			return err
 		}
 		report.Checks[stage].State = "passed"

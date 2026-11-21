@@ -16,15 +16,15 @@ type clusterSSHTargetNetworkBootRead func(context.Context, clusterSSHInspectedTa
 // observeNetworkBoot consumes bounded persistent startup wiring and native
 // render correspondence under complete current cohort/VIP authority. Future
 // naming, reboot survival, aggregate qualification and production claims remain gated.
-func (c *clusterSSHVIPBrokerClient) observeNetworkBoot(parent context.Context, authority clusterSSHPreparationAuthorityRead,
-	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, boot clusterSSHTargetNetworkBootRead, refresh func(context.Context) error,
+func (c *clusterSSHVIPBrokerClient) observeNetworkBoot(parent context.Context, readers clusterSSHNetworkTargetReaders,
+	source clusterSSHPreparationSnapshotRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) error {
-	if boot == nil {
+	if readers.Boot == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	return c.withNetworkOwner(parent, authority, source, target, refresh, lease, baseline, sealed,
+	return c.withNetworkOwner(parent, readers, source, lease, baseline, sealed,
 		func(ctx context.Context, peers []clusterSSHManagementPeer, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
-			a, err := authority(ctx)
+			a, err := readers.Authority(ctx)
 			if err != nil || checks.Authority(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
@@ -47,7 +47,7 @@ func (c *clusterSSHVIPBrokerClient) observeNetworkBoot(parent context.Context, a
 				input.Key.PublicKey = bytes.Clone(item.Key.PublicKey)
 				input.Report.Nodes = slices.Clone(item.Report.Nodes)
 				started := time.Now()
-				value, err := boot(ctx, input, request, checks.Authority)
+				value, err := readers.Boot(ctx, input, request, checks.Authority)
 				if err != nil || checks.Authority(ctx) != nil || value.Matches(started, clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}, item.Key, requests[i]) != nil {
 					return clusterbootstrap.ErrPreparationConfig
 				}

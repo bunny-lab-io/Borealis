@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,6 +24,8 @@ type clusterSSHNetworkTargetClaim struct {
 func (clusterSSHNetworkTargetClaim) String() string   { return "network target claim [redacted]" }
 func (clusterSSHNetworkTargetClaim) GoString() string { return "network target claim [redacted]" }
 
+// Refresh verifies the frozen cohort and checks each original authority on
+// both sides of renewing its lease, including the original credential.
 type clusterSSHNetworkTargetReaders struct {
 	within     func(context.Context, func(context.Context) error) error
 	Authority  clusterSSHPreparationAuthorityRead
@@ -294,10 +297,23 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 						}
 					}()
 				}
-				if err != nil || client == nil || current(ctx) != nil || observe(ctx, item, client, sudo, current) != nil || current(ctx) != nil {
-					return clusterbootstrap.ErrPreparationConfig
+				// Keep private transport and credential errors out of logs. The
+				// phase identifies which boundary closed an otherwise pinned read.
+				var phase string
+				switch {
+				case err != nil || client == nil:
+					phase = "connect"
+				case current(ctx) != nil:
+					phase = "authority_after_connect"
+				case observe(ctx, item, client, sudo, current) != nil:
+					phase = "native_observation"
+				case current(ctx) != nil:
+					phase = "authority_after_observation"
+				default:
+					return nil
 				}
-				return nil
+				log.Printf("cluster SSH network observation failed operation=%s target=%s phase=%s", claim.Lease.OperationID, claim.Lease.TargetID, phase)
+				return clusterbootstrap.ErrPreparationConfig
 			})
 		}
 		readers.Peer = func(caller context.Context, item clusterSSHInspectedTarget, peers []string) (clusterremote.TargetManagementPeer, error) {

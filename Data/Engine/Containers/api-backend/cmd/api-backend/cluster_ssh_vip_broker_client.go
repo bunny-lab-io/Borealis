@@ -244,16 +244,15 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 
 // Compose the actual peer collector with the live bridge. The callback receives
 // only copied public identities; full checks reobserve peers and source VIPs.
-// refresh must still own every target's original credential/claim independently.
-func (c *clusterSSHVIPBrokerClient) withNetworkOwner(parent context.Context, authority clusterSSHPreparationAuthorityRead,
-	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
+// Refresh verifies and renews every original target claim independently.
+func (c *clusterSSHVIPBrokerClient) withNetworkOwner(parent context.Context, readers clusterSSHNetworkTargetReaders, source clusterSSHPreparationSnapshotRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
 	consume func(context.Context, []clusterSSHManagementPeer, clusterSSHVIPOwner, clusterSSHPreparationChecks) error) error {
 	if consume == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	return withClusterSSHNetworkInputsFor(parent, lease.networkTargetBudget(), authority, source, target, refresh, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
-		return c.withOwner(ctx, authority, lease, baseline, sealed, sources, func(ctx context.Context, owner clusterSSHVIPOwner, vipChecks clusterSSHPreparationChecks) error {
+	return withClusterSSHNetworkInputsFor(parent, lease.networkTargetBudget(), readers, source, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
+		return c.withOwner(ctx, readers.Authority, lease, baseline, sealed, sources, func(ctx context.Context, owner clusterSSHVIPOwner, vipChecks clusterSSHPreparationChecks) error {
 			scope, cancel := context.WithCancel(ctx)
 			defer cancel()
 			combine := func(full bool) func(context.Context) error {

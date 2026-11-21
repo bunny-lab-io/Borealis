@@ -420,7 +420,8 @@ func TestClusterSSHVIPBrokerPinnedPeerComposition(t *testing.T) {
 				}
 				return err
 			}
-			err := client.withNetworkOwner(context.Background(), authority, source, target, refresh, a.Lease, a.Baseline, r.sealed(), consume)
+			readers := clusterSSHNetworkTargetReaders{Authority: authority, Peer: target, Refresh: newClusterSSHPreparationLeaseCheck(authority, refresh)}
+			err := client.withNetworkOwner(context.Background(), readers, source, a.Lease, a.Baseline, r.sealed(), consume)
 			if (err == nil) != (mode == "success") {
 				t.Fatal("peer/VIP composition", err)
 			}

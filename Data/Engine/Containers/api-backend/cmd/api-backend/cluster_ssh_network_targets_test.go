@@ -389,7 +389,8 @@ func TestClusterSSHNetworkTargetsVIPComposition(t *testing.T) {
 					}
 					return value, err
 				}
-				return client.observeNetworkBoot(ctx, readers.Authority, source, readers.Peer, probe, readers.Refresh, a.Lease, a.Baseline, f.claims[0].Sealed)
+				readers.Boot = probe
+				return client.observeNetworkBoot(ctx, readers, source, a.Lease, a.Baseline, f.claims[0].Sealed)
 			})
 			if (err == nil) != (mode == "expansion" || mode == "replacement") {
 				t.Fatal("original-claim VIP composition", err)
@@ -420,6 +421,39 @@ func TestClusterSSHNetworkTargetsOwnClaimsAndAuthority(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal("scope input ownership", err)
+	}
+	f.assertClosed(t)
+}
+
+func TestClusterSSHNetworkPeerBoundaryRenewsEachOriginalClaimOnce(t *testing.T) {
+	f := newSSHNetworkTargetsFixture(t, false, "peer")
+	// Count only this explicit boundary. Independent background heartbeats
+	// always run with their own context and continue verifying each claim.
+	type boundaryKey struct{}
+	var renewals [2]int
+	renew := f.deps.renew
+	f.deps.renew = func(ctx context.Context, claim clusterSSHNetworkTargetClaim) error {
+		if ctx.Value(boundaryKey{}) == true {
+			index := slices.Index(f.claims, claim)
+			if index < 0 {
+				return errors.New("unexpected target claim")
+			}
+			renewals[index]++
+		}
+		return renew(ctx, claim)
+	}
+	source := func(context.Context) (clusterSSHPreparationSnapshot, error) {
+		a := f.a
+		expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, f.sources[0].PodCIDR, f.sources[0].ServiceCIDR)
+		return clusterSSHPreparationSnapshot{Expected: expected, Observation: strings.Repeat("a", 64), Sources: slices.Clone(f.sources), started: time.Now()}, err
+	}
+	err := runClusterSSHNetworkTargets(context.Background(), f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+		return withClusterSSHNetworkInputsFor(ctx, time.Minute, readers, source, func(ctx context.Context, _ []clusterSSHManagementPeer, _ []clusterbootstrap.SourceNetwork, checks clusterSSHPreparationChecks) error {
+			return checks.Authority(context.WithValue(ctx, boundaryKey{}, true))
+		})
+	})
+	if err != nil || renewals != [2]int{1, 1} {
+		t.Fatalf("explicit peer boundary renewed the two claims %v times: %v", renewals, err)
 	}
 	f.assertClosed(t)
 }

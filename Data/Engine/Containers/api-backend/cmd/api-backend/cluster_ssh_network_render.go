@@ -38,15 +38,15 @@ func clusterSSHNetworkRenderRequests(a clusterSSHPreparationAuthority, peers []c
 // observeNetworkRender consumes fresh native render correspondence inside the
 // live complete peer/VIP scope, with full post-observation rechecks. Boot/service
 // activation, aggregate qualification and production claims remain separate.
-func (c *clusterSSHVIPBrokerClient) observeNetworkRender(parent context.Context, authority clusterSSHPreparationAuthorityRead,
-	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, render clusterSSHTargetNetworkRenderRead, refresh func(context.Context) error,
+func (c *clusterSSHVIPBrokerClient) observeNetworkRender(parent context.Context, readers clusterSSHNetworkTargetReaders,
+	source clusterSSHPreparationSnapshotRead, render clusterSSHTargetNetworkRenderRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) error {
 	if render == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	return c.withNetworkOwner(parent, authority, source, target, refresh, lease, baseline, sealed,
+	return c.withNetworkOwner(parent, readers, source, lease, baseline, sealed,
 		func(ctx context.Context, peers []clusterSSHManagementPeer, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
-			a, err := authority(ctx)
+			a, err := readers.Authority(ctx)
 			if err != nil || checks.Authority(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}

@@ -88,7 +88,8 @@ func TestClusterSSHNetworkRenderLivePeerVIPComposition(t *testing.T) {
 				cached = value
 				return value, err
 			}
-			err := client.observeNetworkRender(ctx, authority, source, target, probe, refresh, a.Lease, a.Baseline, r.sealed())
+			readers := clusterSSHNetworkTargetReaders{Authority: authority, Peer: target, Refresh: newClusterSSHPreparationLeaseCheck(authority, refresh)}
+			err := client.observeNetworkRender(ctx, readers, source, probe, a.Lease, a.Baseline, r.sealed())
 			if (err == nil) != (mode == "expansion" || mode == "replacement") {
 				t.Fatal("unsafe composition", err)
 			}

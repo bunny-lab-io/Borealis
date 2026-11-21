@@ -70,15 +70,15 @@ func clusterSSHARPRequests(a clusterSSHPreparationAuthority, peers []clusterSSHM
 // observeNetworkARP performs current target-to-cohort/VIP exchanges inside the
 // live peer/VIP scope. Success is an observation only: no durable qualification,
 // public confirmation or production preparation claim is enabled here.
-func (c *clusterSSHVIPBrokerClient) observeNetworkARP(parent context.Context, authority clusterSSHPreparationAuthorityRead,
-	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, probe clusterSSHTargetARPRead, refresh func(context.Context) error,
+func (c *clusterSSHVIPBrokerClient) observeNetworkARP(parent context.Context, readers clusterSSHNetworkTargetReaders,
+	source clusterSSHPreparationSnapshotRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials) error {
-	if probe == nil {
+	if readers.ARP == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	return c.withNetworkOwner(parent, authority, source, target, refresh, lease, baseline, sealed,
+	return c.withNetworkOwner(parent, readers, source, lease, baseline, sealed,
 		func(ctx context.Context, peers []clusterSSHManagementPeer, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
-			a, err := authority(ctx)
+			a, err := readers.Authority(ctx)
 			if err != nil || checks.Authority(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
@@ -102,7 +102,7 @@ func (c *clusterSSHVIPBrokerClient) observeNetworkARP(parent context.Context, au
 				input.Key.PublicKey = bytes.Clone(item.Key.PublicKey)
 				input.Report.Nodes = slices.Clone(item.Report.Nodes)
 				started := time.Now()
-				value, err := probe(ctx, input, request, checks.Authority)
+				value, err := readers.ARP(ctx, input, request, checks.Authority)
 				if err != nil || checks.Authority(ctx) != nil || value.Matches(started, clusterremote.Target{Address: item.Binding.Address, Port: item.Binding.Port}, item.Key, requests[i]) != nil {
 					return clusterbootstrap.ErrPreparationConfig
 				}
