@@ -247,42 +247,61 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 // Refresh verifies and renews every original target claim independently.
 func (c *clusterSSHVIPBrokerClient) withNetworkOwner(parent context.Context, readers clusterSSHNetworkTargetReaders, source clusterSSHPreparationSnapshotRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
-	consume func(context.Context, []clusterSSHManagementPeer, clusterSSHVIPOwner, clusterSSHPreparationChecks) error) error {
-	if consume == nil {
-		return clusterbootstrap.ErrPreparationConfig
+	consume clusterSSHNetworkProbe) error {
+	_, err := c.observeNetworks(parent, readers, source, lease, baseline, sealed, consume)
+	return err
+}
+
+type clusterSSHNetworkProbe func(context.Context, []clusterSSHManagementPeer, clusterSSHVIPOwner, clusterSSHPreparationChecks) error
+
+// Keep one continuous peer comparison across the ordered probes. Each probe
+// independently acquires, rechecks and closes its live controller VIP scope.
+func (c *clusterSSHVIPBrokerClient) observeNetworks(parent context.Context, readers clusterSSHNetworkTargetReaders, source clusterSSHPreparationSnapshotRead,
+	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, probes ...clusterSSHNetworkProbe) (int, error) {
+	completed := 0
+	if len(probes) == 0 || slices.ContainsFunc(probes, func(probe clusterSSHNetworkProbe) bool { return probe == nil }) {
+		return 0, clusterbootstrap.ErrPreparationConfig
 	}
-	return withClusterSSHNetworkInputsFor(parent, lease.networkTargetBudget(), readers, source, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
-		return c.withOwner(ctx, readers.Authority, lease, baseline, sealed, sources, func(ctx context.Context, owner clusterSSHVIPOwner, vipChecks clusterSSHPreparationChecks) error {
-			scope, cancel := context.WithCancel(ctx)
-			defer cancel()
-			combine := func(full bool) func(context.Context) error {
-				return func(caller context.Context) error {
-					bound, stop := context.WithCancel(caller)
-					defer stop()
-					end := context.AfterFunc(scope, stop)
-					defer end()
-					fail := func() error { cancel(); return clusterbootstrap.ErrPreparationConfig }
-					if scope.Err() != nil || bound.Err() != nil {
-						return fail()
-					}
-					if full {
-						if peerChecks.Inputs(bound) != nil || vipChecks.Inputs(bound) != nil {
+	err := withClusterSSHNetworkInputsFor(parent, lease.networkTargetBudget(), readers, source, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
+		for _, consume := range probes {
+			err := c.withOwner(ctx, readers.Authority, lease, baseline, sealed, sources, func(ctx context.Context, owner clusterSSHVIPOwner, vipChecks clusterSSHPreparationChecks) error {
+				scope, cancel := context.WithCancel(ctx)
+				defer cancel()
+				combine := func(full bool) func(context.Context) error {
+					return func(caller context.Context) error {
+						bound, stop := context.WithCancel(caller)
+						defer stop()
+						end := context.AfterFunc(scope, stop)
+						defer end()
+						fail := func() error { cancel(); return clusterbootstrap.ErrPreparationConfig }
+						if scope.Err() != nil || bound.Err() != nil {
 							return fail()
 						}
-					} else if peerChecks.Authority(bound) != nil || vipChecks.Authority(bound) != nil {
-						return fail()
+						if full {
+							if peerChecks.Inputs(bound) != nil || vipChecks.Inputs(bound) != nil {
+								return fail()
+							}
+						} else if peerChecks.Authority(bound) != nil || vipChecks.Authority(bound) != nil {
+							return fail()
+						}
+						if peerChecks.Authority(bound) != nil || scope.Err() != nil || bound.Err() != nil {
+							return fail()
+						}
+						return nil
 					}
-					if peerChecks.Authority(bound) != nil || scope.Err() != nil || bound.Err() != nil {
-						return fail()
-					}
-					return nil
 				}
+				checks := clusterSSHPreparationChecks{Inputs: combine(true), Authority: combine(false)}
+				if checks.Inputs(scope) != nil || consume(scope, slices.Clone(peers), owner, checks) != nil || scope.Err() != nil {
+					return clusterbootstrap.ErrPreparationConfig
+				}
+				return checks.Inputs(scope)
+			})
+			if err != nil {
+				return err
 			}
-			checks := clusterSSHPreparationChecks{Inputs: combine(true), Authority: combine(false)}
-			if checks.Inputs(scope) != nil || consume(scope, slices.Clone(peers), owner, checks) != nil || scope.Err() != nil {
-				return clusterbootstrap.ErrPreparationConfig
-			}
-			return checks.Inputs(scope)
-		})
+			completed++
+		}
+		return nil
 	})
+	return completed, err
 }

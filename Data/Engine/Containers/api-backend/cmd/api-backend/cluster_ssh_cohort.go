@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	clusterSSHQualificationBudget = 15 * time.Minute
+	clusterSSHQualificationBudget = 30 * time.Minute
 	// The original host observation bounds the entire read-only attempt, including retries.
 	clusterSSHInspectionLifetimeSeconds = int64(clusterSSHQualificationBudget / time.Second)
 	// New claims, completed qualification and operator confirmation need fresh evidence.

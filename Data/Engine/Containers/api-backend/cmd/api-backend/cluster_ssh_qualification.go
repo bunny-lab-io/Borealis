@@ -166,12 +166,12 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 			return err
 		}
 		stage = 3
-		if err := vipClient.observeNetworkBoot(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed); err != nil {
-			return err
+		completed, err := vipClient.observeNetworks(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed, readers.observeNetworkBoot, readers.observeNetworkARP)
+		if completed > 0 {
+			report.Checks[stage].State = "passed"
+			stage = 4
 		}
-		report.Checks[stage].State = "passed"
-		stage = 4
-		if err := vipClient.observeNetworkARP(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed); err != nil {
+		if err != nil {
 			return err
 		}
 		report.Checks[stage].State = "passed"
@@ -190,7 +190,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 }
 
 // The original inspection times also bound a reclaimed attempt. A sibling
-// target or a worker restart cannot start another fifteen-minute window.
+// target or a worker restart cannot restart the qualification clock.
 func (w clusterSSHQualificationWork) deadline() time.Time {
 	var oldest time.Time
 	for _, target := range w.Proof.Cohort.Targets {

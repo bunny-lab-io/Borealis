@@ -90,9 +90,9 @@ func TestClusterSSHQualificationTotalDeadline(t *testing.T) {
 	f := newSSHNetworkTargetsFixture(t, false, "peer")
 	now := time.Now().Unix()
 	work := clusterSSHQualificationWork{Proof: clusterSSHParentProof{Cohort: f.a.Cohort}}
-	work.Proof.Cohort.Targets[0].InspectedAt = now - 8*60
-	work.Proof.Cohort.Targets[1].InspectedAt = now - 9*60
-	if want := now + 6*60; work.deadline().Unix() != want {
+	work.Proof.Cohort.Targets[0].InspectedAt = now - 18*60
+	work.Proof.Cohort.Targets[1].InspectedAt = now - 19*60
+	if want := now + 11*60; work.deadline().Unix() != want {
 		t.Fatalf("expected original pair deadline %d, got %v", want, work.deadline())
 	}
 	f.a.Cohort.ObservedAt = now
@@ -115,11 +115,11 @@ func TestClusterSSHQualificationTotalDeadline(t *testing.T) {
 			t.Fatal("active qualification did not consume original claims", err)
 		}
 	}
-	check(context.Background(), time.Now().Add(15*time.Minute))
+	check(context.Background(), time.Now().Add(30*time.Minute))
 	parent, stop := context.WithDeadline(context.Background(), work.deadline())
 	defer stop()
 	check(parent, work.deadline())
-	f.a.Cohort.Targets[1].InspectedAt = now - 15*60
+	f.a.Cohort.Targets[1].InspectedAt = now - 30*60
 	if validateClusterSSHInspectionCohort(f.a.Cohort, f.a.Source) == nil {
 		t.Fatal("expired original inspection accepted")
 	}

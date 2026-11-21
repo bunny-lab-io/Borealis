@@ -89,7 +89,7 @@ func TestClusterSSHNetworkBootLivePeerVIPComposition(t *testing.T) {
 				return value, err
 			}
 			readers := clusterSSHNetworkTargetReaders{Authority: authority, Peer: target, Boot: probe, Refresh: newClusterSSHPreparationLeaseCheck(authority, refresh)}
-			err := client.observeNetworkBoot(ctx, readers, source, a.Lease, a.Baseline, r.sealed())
+			err := client.withNetworkOwner(ctx, readers, source, a.Lease, a.Baseline, r.sealed(), readers.observeNetworkBoot)
 			if (err == nil) != (mode == "expansion" || mode == "replacement") {
 				t.Fatal("unsafe composition", err)
 			}

@@ -16,6 +16,7 @@ import (
 )
 
 type sshNetworkTargetsFixture struct {
+	kind           string
 	hostWire       func(int, string) string
 	filesystemWire func(int, []byte) []byte
 	sources        []clusterbootstrap.SourceNetwork
@@ -36,7 +37,7 @@ func newSSHNetworkTargetsFixture(t *testing.T, replacement bool, kind string) *s
 	t.Helper()
 	a, sources, lease := sshVIPFixture(t, replacement)
 	keys := sshNetworkFixtureKeys(t, &a.Cohort)
-	f := &sshNetworkTargetsFixture{a: a, sources: sources, vipLease: lease}
+	f := &sshNetworkTargetsFixture{kind: kind, a: a, sources: sources, vipLease: lease}
 	for _, item := range a.Cohort.Targets {
 		claim := clusterSSHNetworkTargetClaim{Lease: a.Lease, Sealed: sealedClusterSSHCredentials{binding: item.Binding, generation: "fixture-generation", ciphertext: aegisEnvelopePrefix + item.Binding.TargetID}}
 		claim.Lease.TargetID, claim.Lease.Holder, claim.Lease.Generation = item.Binding.TargetID, newClusterUUID(), item.Generation+1
@@ -93,7 +94,7 @@ func newSSHNetworkTargetsFixture(t *testing.T, replacement bool, kind string) *s
 		}
 		item := f.a.Cohort.Targets[i]
 		var wire []byte
-		if kind == "arp" {
+		if f.kind == "arp" {
 			wire, _ = json.Marshal(struct {
 				Version int                      `json:"version"`
 				Request clusterremote.ARPRequest `json:"request"`
@@ -101,7 +102,7 @@ func newSSHNetworkTargetsFixture(t *testing.T, replacement bool, kind string) *s
 			}{1, f.arps[i], 2})
 		}
 		var edits []func(string) string
-		if kind == "filesystem" {
+		if f.kind == "filesystem" {
 			wire = sshFilesystemFixtureWire(item)
 			if f.filesystemWire != nil {
 				wire = f.filesystemWire(i, wire)
@@ -390,7 +391,7 @@ func TestClusterSSHNetworkTargetsVIPComposition(t *testing.T) {
 					return value, err
 				}
 				readers.Boot = probe
-				return client.observeNetworkBoot(ctx, readers, source, a.Lease, a.Baseline, f.claims[0].Sealed)
+				return client.withNetworkOwner(ctx, readers, source, a.Lease, a.Baseline, f.claims[0].Sealed, readers.observeNetworkBoot)
 			})
 			if (err == nil) != (mode == "expansion" || mode == "replacement") {
 				t.Fatal("original-claim VIP composition", err)
@@ -513,6 +514,62 @@ func TestClusterSSHNetworkQualificationReadsOriginalClaimsWithoutRenewing(t *tes
 			if !compared || (err != nil) != staleSibling {
 				t.Fatal("qualification scope lost the result of its paired authority comparison")
 			}
+		})
+	}
+}
+
+func TestClusterSSHQualificationNetworkProbesSharePeerScope(t *testing.T) {
+	for _, mode := range []string{"both pass", "boot failed", "source drift between probes", "final source drift"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSSHNetworkTargetsFixture(t, false, "boot")
+			for i := range f.claims {
+				f.claims[i].Lease.OperationStep = clusterSSHQualificationStep
+				f.claims[i].Lease.Step = "qualify"
+			}
+			f.a.Lease = f.claims[0].Lease
+			a := f.a
+			var vipChanged atomic.Bool
+			var vipReads atomic.Int64
+			broker := newClusterSSHVIPBroker(nil, nil, a.Lease.ControllerHolder, sshBrokerTestSecret)
+			broker.run = sshVIPBrokerRun(a, f.vipLease, &vipChanged, &vipReads)
+			server := sshVIPBrokerServer(t, broker)
+			client := sshVIPBrokerClient(t, server.URL)
+			snapshots := 0
+			source := func(context.Context) (clusterSSHPreparationSnapshot, error) {
+				snapshots++
+				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, f.sources[0].PodCIDR, f.sources[0].ServiceCIDR)
+				digest := strings.Repeat("a", 64)
+				if mode == "source drift between probes" && snapshots == 5 || mode == "final source drift" && snapshots == 7 {
+					digest = strings.Repeat("b", 64)
+				}
+				return clusterSSHPreparationSnapshot{Expected: expected, Observation: digest, Sources: slices.Clone(f.sources), started: time.Now()}, err
+			}
+			completed, arpCalls := 0, 0
+			err := runClusterSSHNetworkTargets(context.Background(), a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+				if mode == "boot failed" {
+					readers.Boot = nil
+				}
+				arp := func(ctx context.Context, peers []clusterSSHManagementPeer, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
+					arpCalls++
+					f.kind = "arp"
+					return readers.observeNetworkARP(ctx, peers, owner, checks)
+				}
+				var err error
+				completed, err = client.observeNetworks(ctx, readers, source, a.Lease, a.Baseline, f.claims[0].Sealed, readers.observeNetworkBoot, arp)
+				return err
+			})
+			wantCompleted := map[string]int{"both pass": 2, "boot failed": 0, "source drift between probes": 1, "final source drift": 2}[mode]
+			wantARP := 0
+			if wantCompleted == 2 {
+				wantARP = 1
+			}
+			if (err == nil) != (mode == "both pass") || completed != wantCompleted || arpCalls != wantARP {
+				t.Fatalf("completed %d probes, entered ARP %d times, error %v", completed, arpCalls, err)
+			}
+			if mode == "both pass" && (snapshots != 7 || vipReads.Load() != 10) {
+				t.Fatalf("got %d full peer rounds, %d VIP reads", snapshots, vipReads.Load())
+			}
+			f.assertClosed(t)
 		})
 	}
 }
