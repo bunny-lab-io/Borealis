@@ -85,3 +85,35 @@ func TestSourceNetworkRejectsAmbiguousOrUnsupportedSupervisor(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceNetworkDefaultK3sAPICiphers(t *testing.T) {
+	raw, identity := sourceNetworkFixture(t)
+	var baseline map[string]any
+	if err := json.Unmarshal(raw, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, version string
+		args          []string
+		ok            bool
+	}{
+		{"pinned default", identity.K3sVersion, []string{k3sDefaultAPICiphers}, true},
+		{"other version", "v1.36.4+k3s1", []string{k3sDefaultAPICiphers}, false},
+		{"custom policy", identity.K3sVersion, []string{k3sDefaultAPICiphers + ",TLS_OTHER"}, false},
+		{"additional override", identity.K3sVersion, []string{k3sDefaultAPICiphers, "service-cluster-ip-range=10.44.0.0/16"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseline["ExtraAPIArgs"] = tc.args
+			instance := identity
+			instance.K3sVersion = tc.version
+			data, err := json.Marshal(baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = ParseSourceNetwork(data, instance)
+			if (err == nil) != tc.ok {
+				t.Fatalf("unexpected result: %v", err)
+			}
+		})
+	}
+}

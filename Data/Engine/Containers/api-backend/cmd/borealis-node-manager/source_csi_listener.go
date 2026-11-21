@@ -108,6 +108,21 @@ func connectSourceCSIPeer(ctx context.Context, socket *sourceCSIPath) (*sourceCS
 	return p, nil
 }
 
+// Read the kernel peer address. net.Conn.RemoteAddr may be the dial path.
+func (p *sourceCSIPeer) matchesBinding(binding string) bool {
+	raw, err := p.conn.(*net.UnixConn).SyscallConn()
+	if err != nil {
+		return false
+	}
+	matches := false
+	err = raw.Control(func(fd uintptr) {
+		address, err := unix.Getpeername(int(fd))
+		name, ok := address.(*unix.SockaddrUnix)
+		matches = err == nil && ok && name.Name == binding
+	})
+	return err == nil && matches
+}
+
 type sourceCSIProcessState struct {
 	PID      int32
 	Start    uint64

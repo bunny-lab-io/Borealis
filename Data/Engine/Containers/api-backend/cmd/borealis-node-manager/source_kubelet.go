@@ -104,10 +104,34 @@ func sourceKubeletRootUID(raw []byte) bool {
 
 // Linux unix_seq_show writes seven whitespace-delimited fields followed by the
 // unescaped pathname. Preserve spaces inside path; never infer a default root.
-func parseSourceKubeletListener(raw []byte, owned map[uint64]string) (string, uint64, error) {
-	return parseSourceUnixListener(raw, owned, clusterbootstrap.KubeletPodResourcesSuffix)
+// CRI CreateListener binds a decimal temporary name and renames the socket
+// into place. Linux retains the original bind name in the Unix socket table.
+func sourceListenerRoot(socket, suffix string) (string, bool) {
+	// The pinned Longhorn plugin binds this Linux pathname with two leading slashes.
+	if suffix == "/csi.sock" && socket == "//csi/csi.sock" {
+		return "/csi", true
+	}
+	if root, ok := strings.CutSuffix(socket, suffix); ok {
+		return root, true
+	}
+	if suffix != clusterbootstrap.KubeletPodResourcesSuffix {
+		return "", false
+	}
+	dir, base := filepath.Split(socket)
+	number, err := strconv.ParseUint(base, 10, 32)
+	if err != nil || strconv.FormatUint(number, 10) != base {
+		return "", false
+	}
+	return strings.CutSuffix(dir, "/pod-resources/")
 }
+
 func parseSourceUnixListener(raw []byte, owned map[uint64]string, suffix string) (string, uint64, error) {
+	binding, inode, err := findSourceUnixBinding(raw, owned, suffix)
+	root, _ := sourceListenerRoot(binding, suffix)
+	return root, inode, err
+}
+
+func findSourceUnixBinding(raw []byte, owned map[uint64]string, suffix string) (string, uint64, error) {
 	fail := func() (string, uint64, error) { return "", 0, clusterbootstrap.ErrPreparationConfig }
 	if len(raw) == 0 || len(raw) > 1<<20 {
 		return fail()
@@ -116,7 +140,7 @@ func parseSourceUnixListener(raw []byte, owned map[uint64]string, suffix string)
 	if len(lines) > 16385 || strings.Join(strings.Fields(lines[0]), " ") != "Num RefCount Protocol Flags Type St Inode Path" {
 		return fail()
 	}
-	foundRoot := ""
+	foundBinding := ""
 	var foundInode uint64
 	for _, line := range lines[1:] {
 		fields := make([]string, 7)
@@ -143,23 +167,28 @@ func parseSourceUnixListener(raw []byte, owned map[uint64]string, suffix string)
 			continue
 		}
 		socket := strings.TrimLeft(rest, " \t")
-		root, ok := strings.CutSuffix(socket, suffix)
+		root, ok := sourceListenerRoot(socket, suffix)
 		if !ok {
 			continue
 		}
-		if foundRoot != "" || fields[2] != "00000000" || fields[3] != "00010000" || fields[4] != "0001" || fields[5] != "01" {
+		// Accepted stream connections inherit the server address. They cannot
+		// establish listener ownership or make the single listener ambiguous.
+		if fields[2] == "00000000" && fields[3] == "00000000" && fields[4] == "0001" && fields[5] == "03" {
+			continue
+		}
+		if foundBinding != "" || fields[2] != "00000000" || fields[3] != "00010000" || fields[4] != "0001" || fields[5] != "01" {
 			return fail()
 		}
 		// Validate all path rules through the same public contract as consumers.
 		if !clusterbootstrap.ValidSourceKubeletRoot(root) {
 			return fail()
 		}
-		foundRoot, foundInode = root, inode
+		foundBinding, foundInode = socket, inode
 	}
-	if foundRoot == "" {
+	if foundBinding == "" {
 		return fail()
 	}
-	return foundRoot, foundInode, nil
+	return foundBinding, foundInode, nil
 }
 
 func observeSourceKubelet(ctx context.Context, proc string, serviceRead func(context.Context) ([]byte, error), executableCheck func(context.Context, *os.File) error, listenerCapture sourceCSIListenerCapture) (clusterbootstrap.SourceKubelet, error) {
@@ -302,11 +331,34 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if err != nil {
 		return fail()
 	}
-	root, inode, err := parseSourceKubeletListener(table, owned)
+	binding, inode, err := findSourceUnixBinding(table, owned, clusterbootstrap.KubeletPodResourcesSuffix)
+	root, _ := sourceListenerRoot(binding, clusterbootstrap.KubeletPodResourcesSuffix)
 	if err != nil {
 		return fail()
 	}
-	csi, err := captureSourceCSIPath(ctx, filepath.Join(pidPath, "root"), root)
+	hostRoot := filepath.Join(pidPath, "root")
+	canonical := root + clusterbootstrap.KubeletPodResourcesSuffix
+	var recheckPodResources func() bool
+	if binding != canonical {
+		endpoint, err := captureSourceSocketPath(ctx, hostRoot, canonical)
+		if err != nil {
+			return fail()
+		}
+		defer endpoint.close()
+		peer, err := connectSourceCSIPeer(ctx, endpoint)
+		if err != nil {
+			return fail()
+		}
+		defer peer.close()
+		if uint64(peer.cred.Pid) != service.pid || peer.cred.Uid != 0 || !peer.matchesBinding(binding) {
+			return fail()
+		}
+		// Recheck the held endpoint after all other observations.
+		recheckPodResources = func() bool {
+			return peer.alive(ctx) && endpoint.recheckSocket(ctx, hostRoot, canonical) == nil
+		}
+	}
+	csi, err := captureSourceCSIPath(ctx, hostRoot, root)
 	if err != nil {
 		return fail()
 	}
@@ -329,8 +381,8 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if err != nil {
 		return fail()
 	}
-	afterRoot, afterInode, err := parseSourceKubeletListener(afterTable, owned)
-	if err != nil || afterRoot != root || afterInode != inode {
+	afterBinding, afterInode, err := findSourceUnixBinding(afterTable, owned, clusterbootstrap.KubeletPodResourcesSuffix)
+	if err != nil || afterBinding != binding || afterInode != inode {
 		return fail()
 	}
 	afterStat, err := sourceKubeletRead(process, "stat", 4096)
@@ -361,7 +413,7 @@ func sourceKubeletProcess(ctx context.Context, proc string, service sourceKubele
 	if csi.recheck(ctx, filepath.Join(pidPath, "root"), root) != nil {
 		return fail()
 	}
-	if listener.recheck(ctx) != nil {
+	if listener.recheck(ctx) != nil || (recheckPodResources != nil && !recheckPodResources()) {
 		return fail()
 	}
 	socket := csi.projection(root)

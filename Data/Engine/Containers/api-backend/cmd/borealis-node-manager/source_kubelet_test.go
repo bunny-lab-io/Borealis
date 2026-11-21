@@ -62,7 +62,7 @@ func TestSourceKubeletServiceAndListenerBoundaries(t *testing.T) {
 		})
 	}
 	for _, root := range []string{"/var/lib/kubelet", "/srv/custom kubelet", "/var/lib/rancher/k3s/agent/kubelet"} {
-		got, inode, err := parseSourceKubeletListener([]byte(sourceKubeletUnixFixture(root)), map[uint64]string{123: "5"})
+		got, inode, err := parseSourceUnixListener([]byte(sourceKubeletUnixFixture(root)), map[uint64]string{123: "5"}, clusterbootstrap.KubeletPodResourcesSuffix)
 		if err != nil || got != root || inode != 123 {
 			t.Fatalf("custom observed root: %q %v", root, err)
 		}
@@ -101,7 +101,7 @@ func TestSourceKubeletServiceAndListenerBoundaries(t *testing.T) {
 			case "oversize":
 				raw += strings.Repeat(" ", 1<<20)
 			}
-			root, inode, err := parseSourceKubeletListener([]byte(raw), owned)
+			root, inode, err := parseSourceUnixListener([]byte(raw), owned, clusterbootstrap.KubeletPodResourcesSuffix)
 			if err != clusterbootstrap.ErrPreparationConfig || root != "" || inode != 0 {
 				t.Fatal("unsafe listener accepted")
 			}
@@ -293,8 +293,93 @@ func TestSourceKubeletListenerRealKernelTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, observed, err := parseSourceKubeletListener(raw, map[uint64]string{inode: fd})
+	got, observed, err := parseSourceUnixListener(raw, map[uint64]string{inode: fd}, clusterbootstrap.KubeletPodResourcesSuffix)
 	if err != nil || got != root || observed != inode {
 		t.Fatalf("real kernel listener %q %d %v", got, observed, err)
+	}
+}
+
+func TestAtomicPodResourcesEndpoint(t *testing.T) {
+	root, err := os.MkdirTemp("", "podresources-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	dir := filepath.Join(root, "pod-resources")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bindName := filepath.Join(dir, "77603520")
+	canonical := filepath.Join(dir, "kubelet.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: bindName, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Rename(bindName, canonical); err != nil {
+		t.Fatal(err)
+	}
+	file, err := listener.File()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var inode uint64
+	fd := strconv.Itoa(int(file.Fd()))
+	link, err := os.Readlink("/proc/self/fd/" + fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Sscanf(link, "socket:[%d]", &inode); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	path, err := captureSourceSocketPath(ctx, "/", canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.close()
+	peer, err := connectSourceCSIPeer(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.close()
+	table, err := os.ReadFile("/proc/self/net/unix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, observed, err := findSourceUnixBinding(table, map[uint64]string{inode: fd}, clusterbootstrap.KubeletPodResourcesSuffix)
+	if err != nil || observed != inode || binding != bindName || int(peer.cred.Pid) != os.Getpid() || !peer.matchesBinding(binding) || peer.matchesBinding(canonical) {
+		t.Fatal("canonical path did not identify the originally bound listener")
+	}
+	if err := os.Rename(canonical, canonical+".old"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := net.ListenUnix("unix", &net.UnixAddr{Name: canonical, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if path.recheckSocket(ctx, "/", canonical) == nil {
+		t.Fatal("accepted replaced endpoint")
+	}
+}
+
+func TestSourceCSIActiveStreams(t *testing.T) {
+	const header = sourceKubeletUnixHeader
+	row := "0000000000000000: 00000002 00000000 "
+	active := row + "00000000 0001 03 999 //csi/csi.sock\n"
+	listen := row + "00010000 0001 01 123 //csi/csi.sock\n"
+	owned := map[uint64]string{999: "1", 123: "2", 456: "3"}
+	for _, data := range []string{listen + active, active + listen} {
+		root, inode, err := parseSourceUnixListener([]byte(header+data), owned, "/csi.sock")
+		if err != nil || root != "/csi" || inode != 123 {
+			t.Fatal("lost pinned Longhorn listener")
+		}
+	}
+	for _, data := range []string{active, listen + strings.Replace(listen, "01 123", "01 456", 1), strings.Replace(listen, "//csi", "///csi", 1)} {
+		if _, _, err := parseSourceUnixListener([]byte(header+data), owned, "/csi.sock"); err == nil {
+			t.Fatal("accepted missing or ambiguous listener")
+		}
 	}
 }

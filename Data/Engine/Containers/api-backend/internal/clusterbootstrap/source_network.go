@@ -46,6 +46,12 @@ func (n SourceNetwork) Validate() error {
 	return nil
 }
 
+// K3s v1.36.3+k3s1 adds this exact argument when no cipher override is set.
+const k3sDefaultAPICiphers = "tls-cipher-suites=" +
+	"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384," +
+	"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256," +
+	"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+
 // ParseSourceNetwork uses the actual K3s Control response, not an installer
 // file, environment default or the smaller per-node allocated pod subnet.
 // This deliberately supports the Borealis IPv4 baseline only. Custom critical
@@ -88,7 +94,13 @@ func ParseSourceNetwork(raw []byte, identity SourceNetwork) (SourceNetwork, erro
 	for _, key := range []string{"ExtraAPIArgs", "ExtraControllerArgs", "ExtraCloudControllerArgs", "ExtraEtcdArgs", "ExtraSchedulerArgs"} {
 		var values []string
 		value, exists := fields[key]
-		if !exists || json.Unmarshal(value, &values) != nil || len(values) != 0 {
+		if !exists || json.Unmarshal(value, &values) != nil {
+			return fail()
+		}
+		if key == "ExtraAPIArgs" && identity.K3sVersion == "v1.36.3+k3s1" && len(values) == 1 && values[0] == k3sDefaultAPICiphers {
+			continue
+		}
+		if len(values) != 0 {
 			return fail()
 		}
 	}
