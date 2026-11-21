@@ -58,11 +58,14 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		if err != nil {
 			return nil, err
 		}
-		digest, usage, err := clusterSSHLonghornUsageReceipt(path, object, digest)
+		digest, usage, err := clusterSSHStorageTelemetryReceipt(path, object, digest)
 		if err != nil {
 			return nil, err
 		}
 		if usage != nil {
+			if previous, seen := result.usage[path]; seen && !usage.consistentWith(previous) {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
 			result.usage[path] = *usage
 		}
 		if path != clusterSSHStorageClaimsPath && path != clusterSSHStoragePodsPath && !clusterSSHSiteWorkerPodsPathValid(path) && !clusterSSHCertManagerPodsPathValid(path) && !clusterSSHSnapshotPodsPathValid(path) && !clusterSSHCNPGPodsPathValid(path) && !clusterSSHSystemUpgradePodsPathValid(path) && !clusterSSHKubeVIPPodsPathValid(path) && !clusterSSHLonghornManagerPodsPathValid(path) && !clusterSSHLonghornPluginPodsPathValid(path) && !clusterSSHInstancePodsPathValid(path) && !clusterSSHLonghornUIPodsPathValid(path) && !clusterSSHLonghornCSIPodsPathValid(path) && !clusterSSHLonghornAttacherPodsPathValid(path) && !clusterSSHLonghornDriverPodsPathValid(path) && !clusterSSHStorageReplicasPathValid(path) {

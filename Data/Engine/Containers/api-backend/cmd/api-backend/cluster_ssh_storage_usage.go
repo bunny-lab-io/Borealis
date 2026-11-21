@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"maps"
 	"reflect"
 	"slices"
@@ -16,9 +14,48 @@ import (
 // Private evidence for explaining a resourceVersion change between adjacent
 // reads. Only the stable receipt crosses the controller/worker boundary.
 type clusterSSHStorageUsage struct {
-	revision    string
-	statusWrite string
-	counters    map[string]int64
+	revision string
+	writers  map[string]*clusterSSHStorageUpdate
+}
+
+// Associate each observation with its writer. A kubelet heartbeat cannot
+// explain a concurrent write attributed to the etcd supervisor.
+type clusterSSHStorageUpdate struct {
+	writeTime      time.Time
+	clocks         map[string]time.Time
+	counters       map[string]int64
+	packageMessage string
+}
+
+func (s *clusterSSHStorageUsage) writer(name string) *clusterSSHStorageUpdate {
+	if s.writers[name] == nil {
+		s.writers[name] = &clusterSSHStorageUpdate{}
+	}
+	return s.writers[name]
+}
+
+func (s clusterSSHStorageUsage) consistentWith(prior clusterSSHStorageUsage) bool {
+	if len(s.writers) != len(prior.writers) {
+		return false
+	}
+	changed := false
+	for name, current := range s.writers {
+		last := prior.writers[name]
+		if last == nil || current.writeTime.Before(last.writeTime) {
+			return false
+		}
+		for key, clock := range last.clocks {
+			if current.clocks[key].Before(clock) {
+				return false
+			}
+		}
+		different := !maps.Equal(current.counters, last.counters) || !maps.Equal(current.clocks, last.clocks) || current.packageMessage != last.packageMessage
+		if !different && !current.writeTime.Equal(last.writeTime) {
+			return false
+		}
+		changed = changed || different
+	}
+	return changed || s.revision == prior.revision
 }
 
 func (s clusterSSHStorageObservation) sameInputs(prior clusterSSHStorageObservation) bool {
@@ -27,19 +64,20 @@ func (s clusterSSHStorageObservation) sameInputs(prior clusterSSHStorageObservat
 	}
 	for path, now := range s.usage {
 		last, ok := prior.usage[path]
-		if !ok || ((now.revision != last.revision || now.statusWrite != last.statusWrite) && maps.Equal(now.counters, last.counters)) {
+		if !ok || !now.consistentWith(last) {
 			return false
 		}
 	}
 	return true
 }
 
-// Keep all status, spec, ownership and metadata fields except the recognized
-// live counters and their resourceVersion. Leave the original object intact
-// for the normal validators, including the check for a valid resourceVersion.
-func clusterSSHLonghornUsageReceipt(path string, object map[string]any, exact [32]byte) ([32]byte, *clusterSSHStorageUsage, error) {
+// Hash the stable inputs and retain recognized telemetry for the next recheck.
+// Downstream validators still receive the original object.
+func clusterSSHStorageTelemetryReceipt(path string, object map[string]any, exact [32]byte) ([32]byte, *clusterSSHStorageUsage, error) {
 	var kind, name string
 	switch {
+	case strings.HasPrefix(path, "/api/v1/nodes/"):
+		return clusterSSHKubeNodeReceipt(strings.TrimPrefix(path, "/api/v1/nodes/"), object, exact)
 	case strings.HasPrefix(path, clusterSSHStorageVolumePrefix):
 		kind, name = "Volume", strings.TrimPrefix(path, clusterSSHStorageVolumePrefix)
 	case strings.HasPrefix(path, clusterSSHInstanceNodePrefix):
@@ -52,7 +90,9 @@ func clusterSSHLonghornUsageReceipt(path string, object map[string]any, exact [3
 		return exact, nil, clusterbootstrap.ErrPreparationConfig
 	}
 	status := maps.Clone(clusterSSHStorageMap(object, "status"))
-	sample := clusterSSHStorageUsage{revision: id.Revision, counters: map[string]int64{}}
+	sample := clusterSSHStorageUsage{revision: id.Revision, writers: map[string]*clusterSSHStorageUpdate{}}
+	update := sample.writer("longhorn-manager/status")
+	update.counters = map[string]int64{}
 	if kind == "Volume" {
 		raw, exists := status["actualSize"]
 		if !exists {
@@ -62,12 +102,22 @@ func clusterSSHLonghornUsageReceipt(path string, object map[string]any, exact [3
 		if !ok {
 			return exact, nil, clusterbootstrap.ErrPreparationConfig
 		}
-		sample.counters["actualSize"] = n
+		update.counters["actualSize"] = n
 		status["actualSize"] = 0
 	} else {
+		if err := clusterSSHRequiredPackageOrder(status, update); err != nil {
+			return exact, nil, err
+		}
 		disks := maps.Clone(clusterSSHStorageMap(status, "diskStatus"))
 		for key, raw := range disks {
 			disk, _ := raw.(map[string]any)
+			disk = maps.Clone(disk)
+			if disk["healthDataLastCollectedAt"] != nil && disk["healthDataLastCollectedAt"] != "" {
+				if err := update.projectClock(disk, "healthDataLastCollectedAt", key); err != nil {
+					return exact, nil, err
+				}
+				disks[key] = disk
+			}
 			if _, exists := disk["storageAvailable"]; !exists {
 				continue
 			}
@@ -76,8 +126,7 @@ func clusterSSHLonghornUsageReceipt(path string, object map[string]any, exact [3
 			if !ok || !valid || available > maximum {
 				return exact, nil, clusterbootstrap.ErrPreparationConfig
 			}
-			sample.counters[key] = available
-			disk = maps.Clone(disk)
+			update.counters[key] = available
 			disk["storageAvailable"] = 0
 			if conditions, ok := disk["conditions"].([]any); ok {
 				conditions = slices.Clone(conditions)
@@ -100,41 +149,12 @@ func clusterSSHLonghornUsageReceipt(path string, object map[string]any, exact [3
 			}
 			disks[key] = disk
 		}
-		if len(sample.counters) == 0 {
+		if len(update.counters) == 0 && len(update.clocks) == 0 && update.packageMessage == "" {
 			return exact, nil, nil
 		}
-		status["diskStatus"] = disks
-	}
-	projected := maps.Clone(object)
-	meta := maps.Clone(clusterSSHStorageMap(object, "metadata"))
-	delete(meta, "resourceVersion")
-	// Kubernetes timestamps the manager's status update alongside its new revision.
-	// Bind the manager and its field ownership, allowing only that write time to move.
-	fields, _ := meta["managedFields"].([]any)
-	for i, item := range fields {
-		entry, _ := item.(map[string]any)
-		if entry["manager"] != "longhorn-manager" || entry["operation"] != "Update" || entry["subresource"] != "status" || entry["apiVersion"] != "longhorn.io/v1beta2" || entry["fieldsType"] != "FieldsV1" {
-			continue
+		if disks != nil {
+			status["diskStatus"] = disks
 		}
-		stamp, exists := entry["time"]
-		if !exists {
-			continue
-		}
-		timestamp, _ := stamp.(string)
-		if _, err := time.Parse(time.RFC3339Nano, timestamp); err != nil || sample.statusWrite != "" {
-			return exact, nil, clusterbootstrap.ErrPreparationConfig
-		}
-		sample.statusWrite = timestamp
-		fields = slices.Clone(fields)
-		entry = maps.Clone(entry)
-		entry["time"] = "<status update>"
-		fields[i] = entry
-		meta["managedFields"] = fields
 	}
-	projected["metadata"], projected["status"] = meta, status
-	raw, err := json.Marshal(projected)
-	if err != nil {
-		return exact, nil, err
-	}
-	return sha256.Sum256(raw), &sample, nil
+	return clusterSSHProjectStorageMetadata(object, status, clusterSSHStorageMap(object, "metadata"), sample, exact)
 }
