@@ -15,9 +15,13 @@ import (
 // arguments, environment or configuration contents are read. CSI connection
 // reads kernel credentials only; no application payload is sent or received.
 func sourceKubelet(ctx context.Context) (clusterbootstrap.SourceKubelet, error) {
+	return readSourceKubelet(ctx, checkSourceKubeletExecutable)
+}
+
+func readSourceKubelet(ctx context.Context, executableCheck func(context.Context, *os.File) error) (clusterbootstrap.SourceKubelet, error) {
 	return observeSourceKubelet(ctx, "/proc", func(ctx context.Context) ([]byte, error) {
 		return sourceLinkCommand(ctx, "/usr/bin/systemctl", "show", "k3s.service", "--property=Id,MainPID,InvocationID,ActiveState,SubState", "--no-pager")
-	}, checkSourceKubeletExecutable, captureSourceCSIListener)
+	}, executableCheck, captureSourceCSIListener)
 }
 
 type sourceKubeletService struct {

@@ -66,7 +66,15 @@ func (m *manager) inspectSourceNetwork(ctx context.Context) (map[string]any, err
 		}
 		return strings.TrimSpace(string(machine)), strings.TrimSpace(string(boot)), nil
 	}
-	observed, err := observeSourceNetwork(ctx, m.nodeName, identity, get, sourceManagementLink, sourceKubelet)
+	var executable sourceKubeletExecutableProof
+	defer executable.close()
+	check := func(ctx context.Context, file *os.File) error {
+		return executable.verify(ctx, file, checkSourceKubeletExecutable)
+	}
+	kubelet := func(ctx context.Context) (clusterbootstrap.SourceKubelet, error) {
+		return readSourceKubelet(ctx, check)
+	}
+	observed, err := observeSourceNetwork(ctx, m.nodeName, identity, get, sourceManagementLink, kubelet)
 	if err != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}

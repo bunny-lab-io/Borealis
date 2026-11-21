@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // This verifier consumes an already opened procfs executable descriptor. The
@@ -19,6 +21,50 @@ func checkSourceKubeletExecutable(ctx context.Context, file *os.File) error {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	return hashSourceKubeletExecutable(ctx, file, pin)
+}
+
+// One synchronous native observation owns the descriptor. Holding it prevents
+// inode reuse. Every subsequent procfs open must identify the same unchanged
+// executable, including ownership, mode, size, mtime and ctime.
+type sourceKubeletExecutableProof struct {
+	held    *os.File
+	initial os.FileInfo
+}
+
+func (p *sourceKubeletExecutableProof) verify(ctx context.Context, file *os.File, hash func(context.Context, *os.File) error) error {
+	before, err := file.Stat()
+	if err != nil || ctx.Err() != nil || !sourceKubeletExecutableUnchanged(before, before) {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	if p.held != nil {
+		held, err := p.held.Stat()
+		if err != nil || !sourceKubeletExecutableUnchanged(p.initial, held) || !sourceKubeletExecutableUnchanged(held, before) {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
+	}
+	if hash(ctx, file) != nil || ctx.Err() != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	fd, err := unix.FcntlInt(file.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	p.held = os.NewFile(uintptr(fd), "observed-k3s-executable")
+	after, err := p.held.Stat()
+	if err != nil || !sourceKubeletExecutableUnchanged(before, after) {
+		p.close()
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	p.initial = before
+	return nil
+}
+
+func (p *sourceKubeletExecutableProof) close() {
+	if p.held != nil {
+		p.held.Close()
+		p.held = nil
+	}
 }
 
 func hashSourceKubeletExecutable(ctx context.Context, source io.Reader, pin clusterbootstrap.K3sAssetPin) error {

@@ -86,3 +86,51 @@ func TestSourceKubeletExecutableRejectsUnreviewedProductionDescriptor(t *testing
 		t.Fatal("production observer accepted unreviewed executable")
 	}
 }
+
+func TestSourceExecutableProofLifetime(t *testing.T) {
+	open := func(name string) *os.File {
+		t.Helper()
+		file, err := os.Open(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { file.Close() })
+		return file
+	}
+	first, second := open("/usr/bin/true"), open("/usr/bin/true")
+	replacement := open("/usr/bin/false")
+	ctx := context.Background()
+	hashes := 0
+	hash := func(context.Context, *os.File) error { hashes++; return nil }
+	var proof sourceKubeletExecutableProof
+	defer proof.close()
+	if err := proof.verify(ctx, first, hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := proof.verify(ctx, second, hash); err != nil || hashes != 1 {
+		t.Fatalf("same executable: %v, hashes %d", err, hashes)
+	}
+	if proof.verify(ctx, replacement, hash) == nil {
+		t.Fatal("accepted a different executable")
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if proof.verify(canceled, second, hash) == nil {
+		t.Fatal("accepted an expired observation")
+	}
+	held := proof.held
+	proof.close()
+	if _, err := held.Stat(); err == nil {
+		t.Fatal("descriptor survived closure")
+	}
+	if err := proof.verify(ctx, second, hash); err != nil || hashes != 2 {
+		t.Fatalf("new observation: %v, hashes %d", err, hashes)
+	}
+	proof.close()
+	if proof.verify(ctx, second, func(context.Context, *os.File) error { return errors.New("digest mismatch") }) == nil || proof.held != nil {
+		t.Fatal("retained an unverified executable")
+	}
+}
