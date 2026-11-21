@@ -46,6 +46,7 @@
       "TestClusterSSHPreparationRenewalPostgresRechecksAfterLockWait",
       "TestClusterSSHPreparationRequestPostgresIntentAndReplay",
       "TestClusterSSHQualificationPostgresExpiredClaimResume",
+      "TestClusterSSHQualificationPostgresOriginalBudgetOnReclaim",
       "TestClusterSSHWorkerPostgresAuthorityLocksAndPhaseClaims",
       "TestPostgresControlBootstrapOutlivesOwnershipTransactionBudget",
       "TestPostgresControlCancellationReleasesTransactionLocks",

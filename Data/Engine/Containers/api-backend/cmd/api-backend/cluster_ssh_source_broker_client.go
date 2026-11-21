@@ -26,6 +26,10 @@ type clusterSSHSourceBrokerClient struct {
 }
 
 func newClusterSSHSourceBrokerClientFromEnv() (*clusterSSHSourceBrokerClient, error) {
+	return newClusterSSHSourceBrokerClientWithTimeout(clusterSSHSourceSnapshotTimeout)
+}
+
+func newClusterSSHSourceBrokerClientWithTimeout(budget time.Duration) (*clusterSSHSourceBrokerClient, error) {
 	secret := strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET"))
 	requestCipher, err := clusterSSHSourceBrokerCipher(secret, "request")
 	if err != nil {
@@ -37,10 +41,10 @@ func newClusterSSHSourceBrokerClientFromEnv() (*clusterSSHSourceBrokerClient, er
 	}
 	return &clusterSSHSourceBrokerClient{
 		requestCipher: requestCipher, responseCipher: responseCipher,
-		httpClient: &http.Client{Timeout: 35 * time.Second, Transport: &http.Transport{
+		httpClient: &http.Client{Timeout: budget + 5*time.Second, Transport: &http.Transport{
 			Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
 			DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
-			ResponseHeaderTimeout: 32 * time.Second,
+			ResponseHeaderTimeout: budget + 2*time.Second,
 		}},
 		peers: clusterSSHSourceBrokerPeers,
 	}, nil
@@ -108,7 +112,11 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 		if c == nil || c.peers == nil || c.httpClient == nil || authority == nil || parent.Err() != nil {
 			return fail()
 		}
-		ctx, cancel := context.WithTimeout(parent, 45*time.Second)
+		budget := clusterSSHSourceSnapshotTimeout
+		if lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify" && !joining {
+			budget = clusterSSHQualificationSnapshotTimeout
+		}
+		ctx, cancel := context.WithTimeout(parent, budget+15*time.Second)
 		defer cancel()
 		select {
 		case gate <- struct{}{}:
@@ -122,7 +130,11 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 		}
 		request := clusterSSHSourceBrokerRequest{Joining: joining, Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
 			Lease: lease, Baseline: baseline, Binding: sealed.binding, Generation: sealed.generation, Ciphertext: sealed.ciphertext}
-		if !request.valid(time.Now()) {
+		if budget == clusterSSHQualificationSnapshotTimeout {
+			request.AcceptBefore = request.ExpiresAt
+			request.ExpiresAt += int64((budget - clusterSSHSourceSnapshotTimeout) / time.Second)
+		}
+		if !request.validSource(time.Now()) {
 			return fail()
 		}
 		value, err := c.fetch(ctx, request)

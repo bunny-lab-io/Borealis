@@ -40,7 +40,7 @@ func (s *postgresOperatorStore) loadClusterSSHInspectionCohort(ctx context.Conte
   CROSS JOIN moment
   WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.attempt=$3
     AND o.current_step='inspect_ssh_targets' AND l.expires_at>moment.now
-  ORDER BY t.ordinal LIMIT 3`, operationID, controllerHolder, attempt, clusterControllerLeaseName, clusterSSHInspectionLifetimeSeconds)
+  ORDER BY t.ordinal LIMIT 3`, operationID, controllerHolder, attempt, clusterControllerLeaseName, clusterSSHFreshEvidenceSeconds)
 	if err != nil {
 		return clusterSSHInspectionCohort{}, errClusterUnavailable
 	}

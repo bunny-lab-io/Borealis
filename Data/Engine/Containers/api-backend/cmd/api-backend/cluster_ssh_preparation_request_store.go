@@ -104,7 +104,7 @@ func (s *postgresOperatorStore) requestClusterSSHPreparation(ctx context.Context
 	if replay {
 		stored, err := parseClusterSSHPreparationRequest(payload["ssh_preparation_request"], w.Authorization, w.Proof.Source)
 		if err != nil || stored.RequestID != confirmation.RequestID || stored.Actor != confirmation.Actor ||
-			stored.PlanSHA256 != confirmation.PlanSHA256 || stored.IdentitySource != confirmation.IdentitySource || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHInspectionLifetimeSeconds {
+			stored.PlanSHA256 != confirmation.PlanSHA256 || stored.IdentitySource != confirmation.IdentitySource || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHFreshEvidenceSeconds {
 			return fail()
 		}
 		confirmation = stored
@@ -140,11 +140,11 @@ func (s *postgresOperatorStore) requestClusterSSHPreparation(ctx context.Context
  AND $8::bigint>moment.now-$9 AND $8::bigint<=moment.now
  AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$10
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
- WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$9 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)
+ WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$13 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)
  AND $11::bigint>moment.now-$9 AND $11::bigint<=moment.now
  RETURNING floor(moment.now)::bigint`, id, string(updated), clusterSSHQualificationStep, w.Authorization.Attempt, w.Payload,
-		clusterControllerLeaseName, w.Authorization.ControllerHolder, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds,
-		len(w.Proof.Cohort.Targets), qualification.ObservedAt, replay).Scan(&now) != nil || ctx.Err() != nil {
+		clusterControllerLeaseName, w.Authorization.ControllerHolder, confirmation.ConfirmedAt, clusterSSHFreshEvidenceSeconds,
+		len(w.Proof.Cohort.Targets), qualification.ObservedAt, replay, clusterSSHInspectionLifetimeSeconds).Scan(&now) != nil || ctx.Err() != nil {
 		return fail()
 	}
 	if !replay {

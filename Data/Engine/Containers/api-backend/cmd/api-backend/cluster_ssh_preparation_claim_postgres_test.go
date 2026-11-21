@@ -164,7 +164,7 @@ func TestClusterSSHPreparationClaimPostgresRejectsDrift(t *testing.T) {
 				f.exec(t, `DELETE FROM engine.cluster_onboarding_targets WHERE id=$1`, last)
 			case "stale qualification":
 				report := f.op.Payload["ssh_qualification"].(clusterSSHQualificationReport)
-				report.ObservedAt -= clusterSSHInspectionLifetimeSeconds
+				report.ObservedAt -= clusterSSHFreshEvidenceSeconds
 				authorization.QualificationSHA256, _ = clusterSSHPreparationDigest(report)
 				var inspected clusterSSHParentProof
 				wire := marshalClusterJSON(f.op.Payload)

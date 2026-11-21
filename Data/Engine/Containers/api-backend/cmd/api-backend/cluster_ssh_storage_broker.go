@@ -19,14 +19,14 @@ type clusterSSHStorageSnapshot struct {
 }
 
 func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx context.Context, authority clusterSSHPreparationAuthorityRead, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
-	return r.readSSHStoragePreparationSnapshotFor(ctx, authority, false, census)
+	return r.readSSHStoragePreparationSnapshotFor(ctx, authority, false, clusterSSHSourceSnapshotTimeout, census)
 }
 
-func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx context.Context, authority clusterSSHPreparationAuthorityRead, joining bool, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
+func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx context.Context, authority clusterSSHPreparationAuthorityRead, joining bool, budget time.Duration, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
 	if census == nil || authority == nil || r == nil || r.kube == nil || r.kube.httpClient == nil || r.namespace != "borealis" {
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	// Join every private response Close, including named-target absence reads.
 	// Borrow the existing transport; this scope owns only its copies and tracker.
@@ -97,7 +97,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 	var value clusterSSHPreparationSnapshot
 	started := time.Now()
 	stage := "initial storage inventories"
-	err := withClusterSSHSourceStorage(ctx, scopedAuthority, getStorage, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
+	err := withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
 		case censusGate <- struct{}{}:
 			policy = storage.WorkerPolicy

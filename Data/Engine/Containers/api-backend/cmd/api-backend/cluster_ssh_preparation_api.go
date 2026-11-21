@@ -66,7 +66,7 @@ func (s *clusterSSHPreparationAPI) plan(w http.ResponseWriter, r *http.Request) 
 	var confirmation any
 	if len(raw) != 0 {
 		stored, err := parseClusterSSHPreparationRequest(raw, snapshot.work.Authorization, snapshot.work.Proof.Source)
-		if err != nil || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHInspectionLifetimeSeconds {
+		if err != nil || stored.ConfirmedAt > now || now-stored.ConfirmedAt >= clusterSSHFreshEvidenceSeconds {
 			writeClusterSSHOnboardingError(w, errClusterConflict)
 			return
 		}

@@ -209,6 +209,13 @@ func (l *clusterSSHNetworkReaderLifetime) close() error {
 	return nil
 }
 
+func (lease clusterSSHTargetLease) networkTargetBudget() time.Duration {
+	if lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify" {
+		return clusterSSHQualificationBudget
+	}
+	return 3 * time.Minute
+}
+
 func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstrap.Expected, claims []clusterSSHNetworkTargetClaim,
 	dependencies clusterSSHNetworkTargetDependencies, consume func(context.Context, clusterSSHNetworkTargetReaders) error) error {
 	if parent.Err() != nil || baseline.Validate() != nil || len(claims) < 1 || len(claims) > 2 || consume == nil ||
@@ -218,9 +225,7 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 	claims = slices.Clone(claims)
 	authority := newClusterSSHNetworkTargetAuthority(baseline, claims, dependencies)
 	check := func(ctx context.Context) error { _, err := authority(ctx); return err }
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-	defer cancel()
-	return runClusterSSHPreparationScope(ctx, time.Second, check, func(ctx context.Context) (result error) {
+	return runClusterSSHPreparationScopeFor(parent, time.Second, claims[0].Lease.networkTargetBudget(), check, func(ctx context.Context) (result error) {
 		frozen, err := authority(ctx)
 		if err != nil {
 			return clusterbootstrap.ErrPreparationConfig

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClusterSSHQualificationDistinguishesSourceFromProfileFailure(t *testing.T) {
@@ -82,5 +83,64 @@ func TestClusterSSHQualificationReportBoundary(t *testing.T) {
 	got := runClusterSSHQualification(context.Background(), nil, nil, clusterSSHQualificationWork{Proof: clusterSSHParentProof{Cohort: clusterSSHInspectionCohort{Attempt: 1}}})
 	if !got.valid(1) || got.Checks[0].State != "blocked" || got.Ready {
 		t.Fatal("baseline bypass")
+	}
+}
+
+func TestClusterSSHQualificationTotalDeadline(t *testing.T) {
+	f := newSSHNetworkTargetsFixture(t, false, "peer")
+	now := time.Now().Unix()
+	work := clusterSSHQualificationWork{Proof: clusterSSHParentProof{Cohort: f.a.Cohort}}
+	work.Proof.Cohort.Targets[0].InspectedAt = now - 8*60
+	work.Proof.Cohort.Targets[1].InspectedAt = now - 9*60
+	if want := now + 6*60; work.deadline().Unix() != want {
+		t.Fatalf("expected original pair deadline %d, got %v", want, work.deadline())
+	}
+	f.a.Cohort.ObservedAt = now
+	for i := range f.claims {
+		f.claims[i].Lease.OperationStep = clusterSSHQualificationStep
+		f.claims[i].Lease.Step = "qualify"
+	}
+	check := func(parent context.Context, want time.Time) {
+		t.Helper()
+		called := false
+		err := runClusterSSHNetworkTargets(parent, f.a.Baseline, f.claims, f.deps, func(ctx context.Context, _ clusterSSHNetworkTargetReaders) error {
+			called = true
+			end, ok := ctx.Deadline()
+			if !ok || end.Before(want.Add(-time.Second)) || end.After(want.Add(time.Second)) {
+				t.Fatalf("unexpected target reader deadline %v, expected %v", end, want)
+			}
+			return nil
+		})
+		if err != nil || !called {
+			t.Fatal("active qualification did not consume original claims", err)
+		}
+	}
+	check(context.Background(), time.Now().Add(15*time.Minute))
+	parent, stop := context.WithDeadline(context.Background(), work.deadline())
+	defer stop()
+	check(parent, work.deadline())
+	f.a.Cohort.Targets[1].InspectedAt = now - 15*60
+	if validateClusterSSHInspectionCohort(f.a.Cohort, f.a.Source) == nil {
+		t.Fatal("expired original inspection accepted")
+	}
+}
+
+func TestClusterSSHQualificationSnapshotAdmissionWindow(t *testing.T) {
+	r, _, _ := sshBrokerFixture(t)
+	r.Lease.OperationStep, r.Lease.Step = clusterSSHQualificationStep, "qualify"
+	now := time.Now()
+	r.AcceptBefore, r.ExpiresAt = now.Unix()+35, now.Unix()+65
+	if !r.validSource(now) || r.snapshotTimeout() != time.Minute || r.valid(now) ||
+		r.validSource(now.Add(35*time.Second)) {
+		t.Fatal("incorrect qualification source route or arrival deadline")
+	}
+	r.ExpiresAt++
+	if r.validSource(now) {
+		t.Fatal("unsigned budget extension accepted")
+	}
+	r.ExpiresAt--
+	r.Lease.OperationStep, r.Lease.Step = clusterSSHPreparationOperationStep, "stage_source"
+	if r.validSource(now) {
+		t.Fatal("mutating preparation lease used qualification time allowance")
 	}
 }

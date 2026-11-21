@@ -4,9 +4,16 @@ import (
 	"borealis/api-backend/internal/clusterremote"
 	"errors"
 	"net/netip"
+	"time"
 )
 
-const clusterSSHInspectionLifetimeSeconds int64 = 300
+const (
+	clusterSSHQualificationBudget = 15 * time.Minute
+	// The original host observation bounds the entire read-only attempt, including retries.
+	clusterSSHInspectionLifetimeSeconds = int64(clusterSSHQualificationBudget / time.Second)
+	// New claims, completed qualification and operator confirmation need fresh evidence.
+	clusterSSHFreshEvidenceSeconds int64 = 300
+)
 
 var (
 	errClusterSSHCohort         = errors.New("SSH inspection cohort is incomplete, stale or no longer owned by this operation")

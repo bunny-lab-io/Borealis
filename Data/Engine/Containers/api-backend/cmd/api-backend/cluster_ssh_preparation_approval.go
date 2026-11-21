@@ -94,7 +94,7 @@ func (s *postgresOperatorStore) readClusterSSHPreparationProposal(ctx context.Co
 		return fail()
 	}
 	report, err := parseClusterSSHQualificationReport(string(reportRaw), operation.Attempt)
-	if err != nil || !completedClusterSSHQualification(report) || report.ObservedAt > now || now-report.ObservedAt >= clusterSSHInspectionLifetimeSeconds {
+	if err != nil || !completedClusterSSHQualification(report) || report.ObservedAt > now || now-report.ObservedAt >= clusterSSHFreshEvidenceSeconds {
 		return fail()
 	}
 	w.Source, err = readClusterSSHQueueSource(ctx, s.db)
@@ -232,10 +232,10 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
  AND $9::bigint>moment.now-$11 AND $9::bigint<=moment.now AND $10::bigint>moment.now-$11 AND $10::bigint<=moment.now
  AND $10::bigint>=$9::bigint AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$12
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
- WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$11 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)
+ WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$13 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)
  RETURNING floor(moment.now)::bigint`, w.Authorization.OperationID, clusterSSHPreparationOperationStep, string(updated), clusterSSHQualificationStep,
 		w.Authorization.Attempt, w.Payload, clusterControllerLeaseName, c.holder, qualification.ObservedAt, confirmation.ConfirmedAt,
-		clusterSSHInspectionLifetimeSeconds, len(w.Proof.Cohort.Targets)).Scan(&now) != nil || !proof.valid(plan) || ctx.Err() != nil {
+		clusterSSHFreshEvidenceSeconds, len(w.Proof.Cohort.Targets), clusterSSHInspectionLifetimeSeconds).Scan(&now) != nil || !proof.valid(plan) || ctx.Err() != nil {
 		return errClusterConflict
 	}
 	if insertClusterEvent(ctx, tx, w.Authorization.OperationID, "", w.Source.ClusterID, "ssh_preparation_approved", "running",

@@ -244,7 +244,7 @@ func (c *clusterSSHVIPBrokerClient) withNetworkOwner(parent context.Context, aut
 	if consume == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	return withClusterSSHNetworkInputs(parent, authority, source, target, refresh, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
+	return withClusterSSHNetworkInputsFor(parent, lease.networkTargetBudget(), authority, source, target, refresh, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
 		return c.withOwner(ctx, authority, lease, baseline, sealed, sources, func(ctx context.Context, owner clusterSSHVIPOwner, vipChecks clusterSSHPreparationChecks) error {
 			scope, cancel := context.WithCancel(ctx)
 			defer cancel()

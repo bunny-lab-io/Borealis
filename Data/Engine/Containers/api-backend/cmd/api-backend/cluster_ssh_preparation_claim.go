@@ -270,9 +270,9 @@ func (s *postgresOperatorStore) claimClusterSSHPreparation(ctx context.Context, 
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t
  LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
  WHERE t.operation_id=$5 AND (t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$6
- AND t.lease_expires_at>moment.now AND t.inspected_at>moment.now-$4 AND t.inspected_at<=moment.now
+ AND t.lease_expires_at>moment.now AND t.inspected_at>moment.now-$8 AND t.inspected_at<=moment.now
  AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now) IS NOT TRUE)`, clusterControllerLeaseName,
-		controller, qualification.ObservedAt, clusterSSHInspectionLifetimeSeconds, operation.ID, holder, confirmation.ConfirmedAt).Scan(&present) != nil {
+		controller, qualification.ObservedAt, clusterSSHFreshEvidenceSeconds, operation.ID, holder, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds).Scan(&present) != nil {
 		return fail()
 	}
 	if tx.Commit() != nil {

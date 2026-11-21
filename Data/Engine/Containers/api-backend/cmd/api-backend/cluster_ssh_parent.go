@@ -52,7 +52,7 @@ func readClusterSSHParentProgress(ctx context.Context, reader clusterSSHParentRe
  CROSS JOIN moment
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='running' AND o.attempt=$3 AND o.current_step=$4
    AND l.expires_at>moment.now
- GROUP BY c.cluster_id,c.enabled,c.active_size,c.desired_size,c.status,c.hmr_state`, operation.ID, holder, operation.Attempt, operation.CurrentStep, clusterControllerLeaseName, clusterSSHInspectionLifetimeSeconds).
+ GROUP BY c.cluster_id,c.enabled,c.active_size,c.desired_size,c.status,c.hmr_state`, operation.ID, holder, operation.Attempt, operation.CurrentStep, clusterControllerLeaseName, clusterSSHFreshEvidenceSeconds).
 		Scan(&p.ClusterID, &p.Enabled, &p.ActiveSize, &p.DesiredSize, &p.Status, &p.HMRState, &p.Members, &p.PendingAdmissions,
 			&p.Targets, &p.SafeTargets, &p.Credentials, &p.Complete, &p.Fresh)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -218,7 +218,7 @@ func (c *clusterController) transitionSSHInspectionParent(ctx context.Context, o
  AND inspected_at=$11 AND inspected_at>extract(epoch FROM clock_timestamp())-$13 AND inspection_json=$12
  AND current_step='inspection_complete' AND state='queued' AND credential_state='available' AND lease_holder='' AND lease_expires_at=0
  FOR SHARE`, target.Binding.TargetID, operation.ID, clusterID, target.Binding.Address, target.Binding.Port,
-				target.Key.Algorithm, target.Binding.Fingerprint, target.Ordinal, operation.Attempt, target.Generation, target.InspectedAt, reports[i], clusterSSHInspectionLifetimeSeconds, wireKeys[i]).Scan(&present) != nil {
+				target.Key.Algorithm, target.Binding.Fingerprint, target.Ordinal, operation.Attempt, target.Generation, target.InspectedAt, reports[i], clusterSSHFreshEvidenceSeconds, wireKeys[i]).Scan(&present) != nil {
 				return errClusterSSHCohort
 			}
 		}

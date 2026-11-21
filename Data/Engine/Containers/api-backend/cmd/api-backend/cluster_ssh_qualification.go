@@ -127,7 +127,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		report.Checks[stage].State = "blocked"
 		return report
 	}
-	sourceClient, err := newClusterSSHSourceBrokerClientFromEnv()
+	sourceClient, err := newClusterSSHSourceBrokerClientWithTimeout(clusterSSHQualificationSnapshotTimeout)
 	if err != nil {
 		report.Checks[stage].State = "blocked"
 		return report
@@ -189,6 +189,19 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 	return report
 }
 
+// The original inspection times also bound a reclaimed attempt. A sibling
+// target or a worker restart cannot start another fifteen-minute window.
+func (w clusterSSHQualificationWork) deadline() time.Time {
+	var oldest time.Time
+	for _, target := range w.Proof.Cohort.Targets {
+		observed := time.Unix(target.InspectedAt, 0)
+		if oldest.IsZero() || observed.Before(oldest) {
+			oldest = observed
+		}
+	}
+	return oldest.Add(clusterSSHQualificationBudget)
+}
+
 func (r *clusterSSHInspectionRuntime) qualifyOnce(ctx context.Context) error {
 	lookup, cancel := context.WithTimeout(ctx, 3*time.Second)
 	id, err := r.store.pendingClusterSSHQualification(lookup)
@@ -207,7 +220,7 @@ func (r *clusterSSHInspectionRuntime) qualifyOnce(ctx context.Context) error {
 			return errClusterSSHCredentials
 		}
 	}
-	qualificationCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	qualificationCtx, cancel := context.WithDeadline(ctx, work.deadline())
 	report := runClusterSSHQualification(qualificationCtx, r.store, r.aegis, work)
 	cancel()
 	if ctx.Err() != nil {

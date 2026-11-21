@@ -46,9 +46,7 @@ func readClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 	for i := range selection {
 		selection[i].Paths = slices.Clone(selection[i].Paths)
 	}
-	return readers.within(parent, func(parent context.Context) error {
-		ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-		defer cancel()
+	return readers.within(parent, func(ctx context.Context) error {
 		frozen, err := readers.Authority(ctx)
 		if err != nil || validateClusterSSHInspectionCohort(frozen.Cohort, frozen.Source) != nil || len(selection) != len(frozen.Cohort.Targets) {
 			return clusterbootstrap.ErrPreparationConfig

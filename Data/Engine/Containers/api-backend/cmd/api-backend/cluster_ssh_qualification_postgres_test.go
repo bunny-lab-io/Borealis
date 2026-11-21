@@ -250,3 +250,52 @@ func TestClusterSSHQualificationPostgresExpiredClaimResume(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClusterSSHQualificationPostgresOriginalBudgetOnReclaim(t *testing.T) {
+	f := newSSHQualificationFixture(t, false)
+	store := f.c.store
+	work, err := store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Move the original evidence and its exact retained receipt together in
+	// this disposable database. Ownership and expiry checks use real SQL time.
+	backdate := func(age time.Duration) {
+		t.Helper()
+		at := time.Now().Add(-age).Unix()
+		for i := range work.Proof.Cohort.Targets {
+			work.Proof.Cohort.Targets[i].InspectedAt = at
+		}
+		work.Proof.Cohort.ObservedAt = at
+		raw := sshPreparationProofPayload(t, work.Proof, work.Baseline)
+		f.exec(t, "UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1", f.op.ID, string(raw))
+		f.exec(t, "UPDATE engine.cluster_onboarding_targets SET inspected_at=$2 WHERE operation_id=$1", f.op.ID, at)
+	}
+	backdate(8 * time.Minute)
+	old := work.Claims[0]
+	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, old.Lease, work.Baseline, old.Sealed); err != nil {
+		t.Fatal("active qualification expired at the old five-minute boundary", err)
+	}
+	f.exec(t, "UPDATE engine.cluster_onboarding_targets SET lease_expires_at=1 WHERE operation_id=$1", f.op.ID)
+	reclaimed, err := store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
+	if err != nil || reclaimed.deadline() != work.deadline() {
+		t.Fatal("reclaim lost original deadline", err)
+	}
+	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, old.Lease, work.Baseline, old.Sealed); err == nil {
+		t.Fatal("superseded worker retained authority")
+	}
+	backdate(15 * time.Minute)
+	current := reclaimed.Claims[0]
+	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, current.Lease, work.Baseline, current.Sealed); err == nil {
+		t.Fatal("live lease outlasted original qualification budget")
+	}
+	f.exec(t, "UPDATE engine.cluster_onboarding_targets SET lease_expires_at=1 WHERE operation_id=$1", f.op.ID)
+	if _, err := store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID()); err == nil {
+		t.Fatal("reclaim restarted an expired budget")
+	}
+	backdate(8 * time.Minute)
+	f.exec(t, "UPDATE engine.cluster_onboarding_targets SET state='queued',current_step='inspection_complete',lease_holder='',lease_expires_at=0,lease_generation=inspected_generation WHERE operation_id=$1", f.op.ID)
+	if _, err := store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID()); err == nil {
+		t.Fatal("initial worker accepted stale inspection")
+	}
+}

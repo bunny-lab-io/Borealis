@@ -26,9 +26,7 @@ func withClusterSSHTargetHostEvidence(parent context.Context, readers clusterSSH
 	if readers.within == nil || readers.Authority == nil || readers.Refresh == nil || readers.Peer == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	return readers.within(parent, func(parent context.Context) error {
-		ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-		defer cancel()
+	return readers.within(parent, func(ctx context.Context) error {
 		frozen, err := readers.Authority(ctx)
 		if err != nil || validateClusterSSHInspectionCohort(frozen.Cohort, frozen.Source) != nil {
 			return clusterbootstrap.ErrPreparationConfig

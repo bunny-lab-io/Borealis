@@ -79,13 +79,17 @@ func withClusterSSHNetworkPeers(parent context.Context, authority clusterSSHPrep
 func withClusterSSHNetworkInputs(parent context.Context, authority clusterSSHPreparationAuthorityRead,
 	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
 	consume func(context.Context, []clusterSSHManagementPeer, []clusterbootstrap.SourceNetwork, clusterSSHPreparationChecks) error) error {
+	return withClusterSSHNetworkInputsFor(parent, 3*time.Minute, authority, source, target, refresh, consume)
+}
+
+func withClusterSSHNetworkInputsFor(parent context.Context, maximum time.Duration, authority clusterSSHPreparationAuthorityRead,
+	source clusterSSHPreparationSnapshotRead, target clusterSSHTargetNetworkRead, refresh func(context.Context) error,
+	consume func(context.Context, []clusterSSHManagementPeer, []clusterbootstrap.SourceNetwork, clusterSSHPreparationChecks) error) error {
 	if authority == nil || source == nil || target == nil || refresh == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-	defer cancel()
 	check := newClusterSSHPreparationLeaseCheck(authority, refresh)
-	return runClusterSSHPreparationScope(ctx, 5*time.Second, check, func(ctx context.Context) error {
+	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, check, func(ctx context.Context) error {
 		// Freeze an owned copy, including keys and ordered cohort, before reads.
 		value, err := authority(ctx)
 		if err != nil || check(ctx) != nil {

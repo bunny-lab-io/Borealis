@@ -744,9 +744,9 @@ func (c *clusterController) clusterSSHPreparationArtifactTerminal(snapshot clust
  AND $7::bigint>moment.now-$9 AND $7::bigint<=moment.now AND $8::bigint>moment.now-$9 AND $8::bigint<=moment.now
  AND $8::bigint>=$7::bigint AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$10
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
- WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$9 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)`,
+ WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$11 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)`,
 			w.Authorization.OperationID, clusterSSHPreparationOperationStep, w.Authorization.Attempt, string(updated), clusterControllerLeaseName, c.holder,
-			qualification.ObservedAt, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds, len(w.Proof.Cohort.Targets)).Scan(&present)
+			qualification.ObservedAt, confirmation.ConfirmedAt, clusterSSHFreshEvidenceSeconds, len(w.Proof.Cohort.Targets), clusterSSHInspectionLifetimeSeconds).Scan(&present)
 		if err != nil || present != 1 || ctx.Err() != nil {
 			return errClusterConflict
 		}

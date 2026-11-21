@@ -79,7 +79,7 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 		return c.recordSSHPreparationBlocked(parent, operation, "Preparation awaits explicit confirmation of the current plan.")
 	}
 	confirmation, err := parseClusterSSHPreparationRequest(request, snapshot.work.Authorization, snapshot.work.Proof.Source)
-	if err != nil || confirmation.ConfirmedAt > now || now-confirmation.ConfirmedAt >= clusterSSHInspectionLifetimeSeconds {
+	if err != nil || confirmation.ConfirmedAt > now || now-confirmation.ConfirmedAt >= clusterSSHFreshEvidenceSeconds {
 		return c.recordSSHPreparationBlocked(parent, operation, "Preparation confirmation is expired or changed; inspect and confirm the current plan again.")
 	}
 	if getJSON == nil {

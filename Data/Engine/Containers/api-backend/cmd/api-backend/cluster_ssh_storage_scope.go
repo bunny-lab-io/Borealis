@@ -27,10 +27,16 @@ func (r *kubernetesClusterStepRunner) withSSHSourceStorage(ctx context.Context, 
 func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPreparationAuthorityRead,
 	getJSON func(context.Context, string, any) error,
 	consume func(context.Context, clusterSSHStorageRequirements, clusterSSHPreparationChecks) error) error {
+	return withClusterSSHSourceStorageFor(parent, clusterSSHSourceSnapshotTimeout, authority, getJSON, consume)
+}
+
+func withClusterSSHSourceStorageFor(parent context.Context, budget time.Duration, authority clusterSSHPreparationAuthorityRead,
+	getJSON func(context.Context, string, any) error,
+	consume func(context.Context, clusterSSHStorageRequirements, clusterSSHPreparationChecks) error) error {
 	if authority == nil || getJSON == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	var frozen []byte
 	var expected clusterSSHPreparationAuthority

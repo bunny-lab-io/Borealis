@@ -177,11 +177,11 @@ func (s *postgresOperatorStore) claimClusterSSHQualification(ctx context.Context
  WHERE t.id=$1 AND t.operation_id=$4 AND t.cluster_id=$5 AND t.operation_attempt=$6
  AND t.management_ip=$7 AND t.ssh_port=$8 AND t.host_key_algorithm=$9 AND t.host_key_fingerprint=$10 AND t.host_key_base64=$11 AND t.ordinal=$12
  AND t.inspected_attempt=$6 AND t.inspected_generation=$13 AND t.inspected_at=$14 AND t.inspection_json=$15
- AND t.inspected_at>moment.now-$16 AND t.inspected_at<=moment.now AND t.credential_state='available'
+ AND t.inspected_at>moment.now-(CASE WHEN t.state='running' THEN $17::bigint ELSE $16::bigint END) AND t.inspected_at<=moment.now AND t.credential_state='available'
  AND ((t.state='queued' AND t.current_step='inspection_complete' AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
  OR(t.state='running' AND t.current_step='qualify' AND t.lease_expires_at<=moment.now AND t.lease_generation>t.inspected_generation))
  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
- RETURNING t.lease_generation,p.aegis_generation,p.ciphertext`, t.Binding.TargetID, holder, clusterSSHTargetLeaseSeconds, operationID, t.Binding.ClusterID, attempt, t.Binding.Address, t.Binding.Port, t.Key.Algorithm, t.Key.Fingerprint, keys[t.Binding.TargetID], t.Ordinal, t.Generation, t.InspectedAt, reports[t.Binding.TargetID], clusterSSHInspectionLifetimeSeconds).Scan(&claim.Lease.Generation, &claim.Sealed.generation, &claim.Sealed.ciphertext) != nil {
+ RETURNING t.lease_generation,p.aegis_generation,p.ciphertext`, t.Binding.TargetID, holder, clusterSSHTargetLeaseSeconds, operationID, t.Binding.ClusterID, attempt, t.Binding.Address, t.Binding.Port, t.Key.Algorithm, t.Key.Fingerprint, keys[t.Binding.TargetID], t.Ordinal, t.Generation, t.InspectedAt, reports[t.Binding.TargetID], clusterSSHFreshEvidenceSeconds, clusterSSHInspectionLifetimeSeconds).Scan(&claim.Lease.Generation, &claim.Sealed.generation, &claim.Sealed.ciphertext) != nil {
 			return fail()
 		}
 		claims[t.Binding.TargetID] = claim
@@ -251,6 +251,11 @@ func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Cont
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=$4 AND c.baseline_release=$5 AND c.baseline_sha=$6
  AND l.name=$7 AND l.holder=$8 AND l.expires_at>extract(epoch FROM clock_timestamp())
  AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$9`, operation.OperationID, operation.OperationAttempt, work.Payload, work.Proof.Source.ClusterID, work.Baseline.Release, work.Baseline.SourceSHA, clusterControllerLeaseName, operation.ControllerHolder, len(work.Claims)).Scan(&now) != nil {
+		return errClusterConflict
+	}
+	// Cancellation and timeout reports can still release their claims. Never
+	// publish a passing report after the database-clock budget has expired.
+	if completedClusterSSHQualification(&report) && now >= work.deadline().Unix() {
 		return errClusterConflict
 	}
 	for i, claim := range work.Claims {

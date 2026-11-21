@@ -17,25 +17,28 @@ import (
 )
 
 const (
-	clusterSSHSourceBrokerPath  = "/internal/cluster/ssh-preparation-source"
-	clusterSSHSourceBrokerHost  = "borealis-cluster-source.borealis.svc"
-	clusterSSHSourceBrokerLimit = 384 << 10
-	clusterSSHSourceBrokerMedia = "application/octet-stream"
+	clusterSSHSourceSnapshotTimeout        = 30 * time.Second
+	clusterSSHQualificationSnapshotTimeout = 60 * time.Second
+	clusterSSHSourceBrokerPath             = "/internal/cluster/ssh-preparation-source"
+	clusterSSHSourceBrokerHost             = "borealis-cluster-source.borealis.svc"
+	clusterSSHSourceBrokerLimit            = 384 << 10
+	clusterSSHSourceBrokerMedia            = "application/octet-stream"
 )
 
 // These wire types are used only inside authenticated encryption. Neither the
 // sealed credential nor source settings belong in generic JSON responses/logs.
 type clusterSSHSourceBrokerRequest struct {
-	Joined     bool                        `json:"joined,omitempty"`
-	Joining    bool                        `json:"joining,omitempty"`
-	Version    int                         `json:"version"`
-	ID         string                      `json:"id"`
-	ExpiresAt  int64                       `json:"expires_at"`
-	Lease      clusterSSHTargetLease       `json:"lease"`
-	Baseline   clusterbootstrap.Expected   `json:"baseline"`
-	Binding    clusterSSHCredentialBinding `json:"binding"`
-	Generation string                      `json:"aegis_generation"`
-	Ciphertext string                      `json:"credential_ciphertext"`
+	Joined       bool                        `json:"joined,omitempty"`
+	Joining      bool                        `json:"joining,omitempty"`
+	Version      int                         `json:"version"`
+	ID           string                      `json:"id"`
+	AcceptBefore int64                       `json:"accept_before,omitempty"` // Optional earlier admission deadline for read-only qualification.
+	ExpiresAt    int64                       `json:"expires_at"`
+	Lease        clusterSSHTargetLease       `json:"lease"`
+	Baseline     clusterbootstrap.Expected   `json:"baseline"`
+	Binding      clusterSSHCredentialBinding `json:"binding"`
+	Generation   string                      `json:"aegis_generation"`
+	Ciphertext   string                      `json:"credential_ciphertext"`
 }
 
 func (clusterSSHSourceBrokerRequest) String() string   { return "source broker request [redacted]" }
@@ -55,11 +58,26 @@ func (r clusterSSHSourceBrokerRequest) valid(now time.Time) bool {
 func (r clusterSSHSourceBrokerRequest) validWithin(now time.Time, seconds int64) bool {
 	// Other fixed brokers embed this contract. Joined completion is exclusive
 	// to the source route and cannot be smuggled into custody/VIP/join requests.
-	return !r.Joined && r.validSourceWithin(now, seconds)
+	return r.AcceptBefore == 0 && !r.Joined && r.validSourceWithin(now, seconds)
 }
 
 func (r clusterSSHSourceBrokerRequest) validSource(now time.Time) bool {
+	if r.AcceptBefore != 0 {
+		// The extra time is for already-admitted work. The original request
+		// arrival window, nonce checks and renewed database leases still apply.
+		return !r.Joined && !r.Joining && r.Lease.OperationStep == clusterSSHQualificationStep && r.Lease.Step == "qualify" &&
+			r.AcceptBefore > now.Unix() && r.AcceptBefore <= now.Unix()+40 &&
+			r.ExpiresAt-r.AcceptBefore == int64((clusterSSHQualificationSnapshotTimeout-clusterSSHSourceSnapshotTimeout)/time.Second) &&
+			r.validSourceWithin(now, int64(clusterSSHQualificationSnapshotTimeout/time.Second)+10)
+	}
 	return r.validSourceWithin(now, 40)
+}
+
+func (r clusterSSHSourceBrokerRequest) snapshotTimeout() time.Duration {
+	if r.AcceptBefore != 0 {
+		return clusterSSHQualificationSnapshotTimeout
+	}
+	return clusterSSHSourceSnapshotTimeout
 }
 
 func (r clusterSSHSourceBrokerRequest) validSourceWithin(now time.Time, seconds int64) bool {
@@ -155,7 +173,7 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 			defer cancel()
 			return store.loadClusterSSHPreparationAuthority(ctx, request.Lease, request.Baseline, request.sealed())
 		}
-		return runner.readSSHStoragePreparationSnapshotFor(ctx, authority, request.Joining, func(ctx context.Context, window int64) ([]int64, error) {
+		return runner.readSSHStoragePreparationSnapshotFor(ctx, authority, request.Joining, request.snapshotTimeout(), func(ctx context.Context, window int64) ([]int64, error) {
 			return readClusterSSHWorkerCensus(ctx, store.db, window)
 		})
 	}
@@ -292,7 +310,11 @@ func (b *clusterSSHSourceBroker) handle(w http.ResponseWriter, r *http.Request) 
 	defer func() { b.mu.Lock(); b.active--; b.mu.Unlock() }()
 	ctx, cancel := context.WithDeadline(r.Context(), time.Unix(request.ExpiresAt, 0))
 	defer cancel()
-	ctx, stop := context.WithTimeout(ctx, 30*time.Second)
+	if request.AcceptBefore != 0 {
+		// The shared listener normally bounds response writes at forty seconds.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Unix(request.ExpiresAt, 0))
+	}
+	ctx, stop := context.WithTimeout(ctx, request.snapshotTimeout())
 	defer stop()
 	if request.Joined {
 		value, err := b.readJoined(ctx, request)
