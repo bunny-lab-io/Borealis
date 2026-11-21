@@ -102,6 +102,20 @@ func parseClusterSSHQualificationReport(raw string, attempt int64) (*clusterSSHQ
 	return &r, nil
 }
 
+// The first complete source snapshot used by profile sizing also establishes
+// the source gate. Every subsequent profile check still acquires fresh proof.
+func qualifyClusterSSHHostProfile(ctx context.Context, readers clusterSSHNetworkTargetReaders, source clusterSSHPreparationSnapshotRead) (bool, error) {
+	sourceRead := false
+	err := withClusterSSHTargetProfileSizing(ctx, readers, func(ctx context.Context) (clusterSSHPreparationSnapshot, error) {
+		value, err := source(ctx)
+		if err == nil {
+			sourceRead = true
+		}
+		return value, err
+	}, func(context.Context, []clusterSSHTargetHostEvidence) error { return nil })
+	return sourceRead, err
+}
+
 // This first runtime qualification pass records supported observations and
 // explicit remaining gates. It cannot mark ready, confirm, stage or admit.
 // Complete runtime/image disk demands, aggregate workload fit, mount/reboot
@@ -126,12 +140,12 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 	err = withClusterSSHNetworkTargets(ctx, store, aegis, work.Baseline, work.Claims, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
 		anchor := work.Claims[0]
 		source := sourceClient.snapshotRead(readers.Authority, anchor.Lease, work.Baseline, anchor.Sealed)
-		if _, err := source(ctx); err != nil {
-			return err
+		profileSourceRead, err := qualifyClusterSSHHostProfile(ctx, readers, source)
+		if profileSourceRead {
+			report.Checks[0].State = "passed"
+			stage = 1
 		}
-		report.Checks[stage].State = "passed"
-		stage = 1
-		if err := withClusterSSHTargetProfileSizing(ctx, readers, source, func(context.Context, []clusterSSHTargetHostEvidence) error { return nil }); err != nil {
+		if err != nil {
 			return err
 		}
 		report.Checks[stage].State = "passed"

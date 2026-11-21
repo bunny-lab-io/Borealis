@@ -4,9 +4,34 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestClusterSSHQualificationDistinguishesSourceFromProfileFailure(t *testing.T) {
+	for _, sourceOK := range []bool{false, true} {
+		f := newSSHNetworkTargetsFixture(t, false, "peer")
+		reads := 0
+		err := runClusterSSHNetworkTargets(context.Background(), f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+			sourceRead, profileErr := qualifyClusterSSHHostProfile(ctx, readers, func(context.Context) (clusterSSHPreparationSnapshot, error) {
+				reads++
+				if !sourceOK {
+					return clusterSSHPreparationSnapshot{}, errors.New("source unavailable")
+				}
+				// Acquired successfully, but insufficient to establish profile sizing.
+				return clusterSSHPreparationSnapshot{}, nil
+			})
+			if sourceRead != sourceOK || profileErr == nil {
+				t.Fatalf("source success %t, acquired %t, profile error %v", sourceOK, sourceRead, profileErr)
+			}
+			return profileErr
+		})
+		if err == nil || reads != 1 {
+			t.Fatalf("expected failed qualification after one source read, got %d reads, error %v", reads, err)
+		}
+	}
+}
 
 func TestClusterSSHQualificationReportBoundary(t *testing.T) {
 	r := newClusterSSHQualificationReport(1)

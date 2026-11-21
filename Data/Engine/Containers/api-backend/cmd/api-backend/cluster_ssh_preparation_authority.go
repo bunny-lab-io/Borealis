@@ -211,10 +211,13 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
         AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation>=t.inspected_generation))
   ) IS NOT TRUE)`, lease.OperationID, lease.OperationAttempt, payload, proof.Source.ClusterID, clusterControllerLeaseName, lease.ControllerHolder, sealed.generation,
 		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String(), lease.OperationStep, lease.Step).Scan(&now)
-	if err != nil || tx.Commit() != nil {
+	// This transaction only observes rows under shared locks. Release them
+	// without a synchronous commit for the row-lock WAL records. Keep the
+	// final database-clock check after all waits and fail if cleanup fails.
+	if err != nil || tx.Rollback() != nil {
 		return fail()
 	}
-	// Parsing, hashing, crypto and payload shaping happen only after commit.
+	// Parsing, hashing, crypto and payload shaping happen after lock release.
 	if source.ActiveOperationID != lease.OperationID || source.Release != baseline.Release || source.SHA != baseline.SourceSHA ||
 		source.ClusterID != proof.Source.ClusterID || source.ActiveSize != proof.Source.ActiveSize || source.DesiredSize != proof.Source.DesiredSize ||
 		source.Status != proof.Source.Status || source.HMRState != proof.Source.HMRState || source.ControlVIP != proof.Source.ControlPlaneVIP || source.EdgeVIP != proof.Source.EdgeVIP {
