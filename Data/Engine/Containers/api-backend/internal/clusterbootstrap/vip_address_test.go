@@ -92,6 +92,47 @@ func TestVIPAddressCompleteOwnershipAndAbsence(t *testing.T) {
 	}
 }
 
+// kube-vip marks its inbound service address deprecated for source-address
+// selection. The primary management address must remain preferred.
+func TestVIPSourceAddressPreference(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		flag             any
+		preferred, valid uint64
+		accept           bool
+	}{
+		{"observed permanent VIP", true, 4294967295, 4294967295, true},
+		{"zero preferred lifetime", true, 0, 4294967295, true},
+		{"expires", true, 0, 120, false}, {"finite preference", true, 30, 4294967295, false},
+		{"missing deprecated flag", false, 0, 4294967295, false}, {"malformed flag", "true", 0, 4294967295, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rows []map[string]any
+			if err := json.Unmarshal(vipKernelFixture(t, true), &rows); err != nil {
+				t.Fatal(err)
+			}
+			addrs := rows[0]["addr_info"].([]any)
+			vip := addrs[1].(map[string]any)
+			vip["deprecated"], vip["preferred_life_time"], vip["valid_life_time"] = tc.flag, tc.preferred, tc.valid
+			raw, _ := json.Marshal(rows)
+			link, err := ParseManagementLink(raw, 1234, "192.168.90.20")
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err := ParseVIPAddress(raw, link, "192.168.90.250")
+			if (err == nil && v.Present) != tc.accept {
+				t.Fatalf("VIP present %v error %v", v.Present, err)
+			}
+			primary := addrs[0].(map[string]any)
+			primary["deprecated"] = true
+			raw, _ = json.Marshal(rows)
+			if _, err := ParseManagementLink(raw, 1234, "192.168.90.20"); err == nil {
+				t.Fatal("accepted deprecated management address")
+			}
+		})
+	}
+}
+
 func TestSourceVIPReceiptAndRequestBoundaries(t *testing.T) {
 	raw, identity := sourceNetworkFixture(t)
 	network, err := ParseSourceNetwork(raw, identity)

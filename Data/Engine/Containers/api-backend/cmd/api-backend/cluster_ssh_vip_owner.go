@@ -34,17 +34,20 @@ type clusterSSHVIPOwner struct {
 // The caller retains every required worker/credential lease; this read-only
 // scope neither claims work nor renews credentials. API workers cannot directly
 // construct its Kubernetes readers. No result is a durable qualification grant.
-func withClusterSSHVIPOwner(parent context.Context, authority clusterSSHPreparationAuthorityRead,
+func withClusterSSHVIPOwner(parent context.Context, maximum time.Duration, authority clusterSSHPreparationAuthorityRead,
 	networks []clusterbootstrap.SourceNetwork, readVIP clusterSSHSourceVIPRead, readLease clusterSSHVIPLeaseRead,
 	consume func(context.Context, clusterSSHVIPOwner, clusterSSHPreparationChecks) error) error {
 	if authority == nil || readVIP == nil || readLease == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, maximum)
 	defer cancel()
 	initial, err := authority(ctx)
 	if err != nil || initial.Baseline.Validate() != nil || !validClusterSSHObservationLease(initial.Lease) || validateClusterSSHSourceNetworks(initial, networks) != nil ||
 		initial.Source.ControlPlaneVIP != initial.Source.EdgeVIP {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	if maximum != clusterSSHVIPScopeTimeout && (maximum != clusterSSHQualificationVIPTimeout || initial.Lease.OperationStep != clusterSSHQualificationStep || initial.Lease.Step != "qualify") {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	networks = slices.Clone(networks)

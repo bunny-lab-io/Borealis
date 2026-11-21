@@ -23,23 +23,30 @@ type clusterSSHVIPBroker struct {
 }
 
 type clusterSSHVIPSession struct {
-	start    string
-	ctx      context.Context
-	cancel   context.CancelFunc
-	checks   clusterSSHPreparationChecks
-	finish   chan struct{}
-	finishID string
-	mu       sync.Mutex
-	changed  chan struct{}
-	seen     map[string]bool
-	closing  bool
-	active   int
+	start         string
+	ctx           context.Context
+	cancel        context.CancelFunc
+	checks        clusterSSHPreparationChecks
+	finish        chan struct{}
+	finishID      string
+	mu            sync.Mutex
+	changed       chan struct{}
+	seen          map[string]bool
+	qualification bool
+	closing       bool
+	active        int
 }
 
 func (s *clusterSSHVIPSession) enter(v clusterSSHVIPControl) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closing || s.ctx.Err() != nil || s.seen[v.ID] || len(s.seen) >= 128 || s.active >= 4 {
+	limit := 128
+	if s.qualification {
+		// Preserve the bounded nonce history for the longer stream, including
+		// its mandatory half-second heartbeats.
+		limit *= int(clusterSSHQualificationVIPTimeout / clusterSSHVIPScopeTimeout)
+	}
+	if s.closing || s.ctx.Err() != nil || s.seen[v.ID] || len(s.seen) >= limit || s.active >= 4 {
 		s.cancel()
 		return false
 	}
@@ -94,7 +101,7 @@ func newClusterSSHVIPBroker(store *postgresOperatorStore, runner *kubernetesClus
 			defer cancel()
 			return store.loadClusterSSHPreparationAuthority(ctx, v.Request.Lease, v.Request.Baseline, v.Request.sealed())
 		}
-		return withClusterSSHVIPOwner(ctx, authority, v.Sources, runner.newSSHSourceVIPRead(authority), runner.kube.readClusterSSHVIPLease, consume)
+		return withClusterSSHVIPOwner(ctx, v.observationTimeout(), authority, v.Sources, runner.newSSHSourceVIPRead(authority), runner.kube.readClusterSSHVIPLease, consume)
 	}
 	return b
 }
@@ -142,7 +149,7 @@ func (b *clusterSSHVIPBroker) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { b.mu.Lock(); b.active--; b.mu.Unlock() }()
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), v.observationTimeout())
 	defer cancel()
 	ctx, stop := context.WithDeadline(ctx, time.Unix(v.Request.ExpiresAt, 0))
 	defer stop()
@@ -164,7 +171,7 @@ func (b *clusterSSHVIPBroker) start(w http.ResponseWriter, r *http.Request) {
 	scopeID := newClusterUUID()
 	completedID := ""
 	err = b.run(ctx, v, func(scope context.Context, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
-		s := &clusterSSHVIPSession{start: v.Request.ID, ctx: scope, cancel: cancel, checks: checks, finish: make(chan struct{}), changed: make(chan struct{}), seen: map[string]bool{}}
+		s := &clusterSSHVIPSession{qualification: v.Request.AcceptBefore != 0, start: v.Request.ID, ctx: scope, cancel: cancel, checks: checks, finish: make(chan struct{}), changed: make(chan struct{}), seen: map[string]bool{}}
 		b.mu.Lock()
 		b.scopes[scopeID] = s
 		b.mu.Unlock()

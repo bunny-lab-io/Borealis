@@ -90,7 +90,7 @@ func ParseManagementLink(raw []byte, namespace uint64, address string) (Manageme
 			matches++
 			var bits int
 			var mac string
-			if !managementEthernet(iface) || !managementPermanentAddress(row) ||
+			if !managementEthernet(iface) || !permanentIPv4Address(row, false) ||
 				json.Unmarshal(row["prefixlen"], &bits) != nil || bits < 0 || bits > 32 || json.Unmarshal(iface["address"], &mac) != nil {
 				return fail()
 			}
@@ -129,7 +129,7 @@ func managementEthernet(iface map[string]json.RawMessage) bool {
 	return seen["UP"] && seen["LOWER_UP"] && seen["BROADCAST"]
 }
 
-func managementPermanentAddress(row map[string]json.RawMessage) bool {
+func permanentIPv4Address(row map[string]json.RawMessage, serviceVIP bool) bool {
 	if _, exists := row["peer"]; exists {
 		return false
 	}
@@ -139,16 +139,28 @@ func managementPermanentAddress(row map[string]json.RawMessage) bool {
 			return false
 		}
 	}
-	for _, key := range []string{"dynamic", "deprecated", "tentative", "dadfailed"} {
+	for _, key := range []string{"dynamic", "tentative", "dadfailed"} {
 		if raw, exists := row[key]; exists && string(raw) != "false" {
 			return false
 		}
 	}
-	for _, key := range []string{"valid_life_time", "preferred_life_time"} {
-		var value uint64
-		if json.Unmarshal(row[key], &value) != nil || value != 4294967295 {
+	// kube-vip deliberately deprecates its service address for outbound source
+	// selection. Its valid lifetime must still be permanent. Hosts must keep
+	// their own management addresses preferred.
+	deprecated := false
+	if flag, present := row["deprecated"]; present {
+		switch string(flag) {
+		case "true":
+			if !serviceVIP {
+				return false
+			}
+			deprecated = true
+		case "false":
+		default:
 			return false
 		}
 	}
-	return true
+	const forever = "4294967295"
+	preferred := string(row["preferred_life_time"])
+	return string(row["valid_life_time"]) == forever && (preferred == forever || (deprecated && preferred == "0"))
 }

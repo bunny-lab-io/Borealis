@@ -190,7 +190,7 @@ func TestClusterSSHVIPOwnerCompleteFreshScope(t *testing.T) {
 				}
 				return nil
 			}
-			err := withClusterSSHVIPOwner(ctx, authority, networks, readVIP, readLease, consume)
+			err := withClusterSSHVIPOwner(ctx, clusterSSHVIPScopeTimeout, authority, networks, readVIP, readLease, consume)
 			wantOK := slices.Contains([]string{"expansion", "replacement", "closed scope", "consumer copy", "input copy"}, mode)
 			if (err == nil) != wantOK {
 				t.Fatal("VIP scope result", err)
@@ -257,7 +257,7 @@ func TestClusterSSHVIPOwnerExpiryAndJoinedCancellation(t *testing.T) {
 				return nil // Cancellation must fail even when consumer ignores it.
 			}
 			start := time.Now()
-			err := withClusterSSHVIPOwner(context.Background(), authority, networks, readVIP, readLease, consume)
+			err := withClusterSSHVIPOwner(context.Background(), clusterSSHVIPScopeTimeout, authority, networks, readVIP, readLease, consume)
 			if err == nil || time.Since(start) > 8*time.Second {
 				t.Fatal("unbounded or successful expired scope", err)
 			}
@@ -431,7 +431,7 @@ func TestClusterSSHVIPOwnerThroughFreshTLSJobs(t *testing.T) {
 		}
 		return checks.Authority(ctx)
 	}
-	if err := withClusterSSHVIPOwner(context.Background(), authority, networks, runner.newSSHSourceVIPRead(authority), kube.readClusterSSHVIPLease, consume); err != nil || posts.Load() != 6 || consumed.Load() != 1 {
+	if err := withClusterSSHVIPOwner(context.Background(), clusterSSHVIPScopeTimeout, authority, networks, runner.newSSHSourceVIPRead(authority), kube.readClusterSSHVIPLease, consume); err != nil || posts.Load() != 6 || consumed.Load() != 1 {
 		t.Fatal("TLS Job scope failed", err, posts.Load())
 	}
 }

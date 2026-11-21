@@ -84,7 +84,7 @@ func ParseVIPAddress(raw []byte, expected ManagementLink, address string) (VIPAd
 			}
 			matches++
 			var bits int
-			if matches != 1 || !managementEthernet(iface) || !managementPermanentAddress(row) || json.Unmarshal(row["prefixlen"], &bits) != nil || bits != 32 ||
+			if matches != 1 || !managementEthernet(iface) || !permanentIPv4Address(row, true) || json.Unmarshal(row["prefixlen"], &bits) != nil || bits != 32 ||
 				json.Unmarshal(iface["ifname"], &v.Interface) != nil || json.Unmarshal(iface["ifindex"], &v.Index) != nil || json.Unmarshal(iface["address"], &v.MAC) != nil {
 				return fail()
 			}

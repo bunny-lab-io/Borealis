@@ -135,8 +135,33 @@ func validClusterSSHVIPOwner(owner clusterSSHVIPOwner, a clusterSSHPreparationAu
 	}
 	return false
 }
+
+const (
+	clusterSSHVIPScopeTimeout = 30 * time.Second
+	// Two independent full source snapshots can each take up to a minute.
+	// Native VIP Jobs and both SSH peers also run inside the observation.
+	clusterSSHQualificationVIPTimeout = 3 * time.Minute
+)
+
+func (v clusterSSHVIPStart) observationTimeout() time.Duration {
+	if v.Request.AcceptBefore != 0 {
+		return clusterSSHQualificationVIPTimeout
+	}
+	return clusterSSHVIPScopeTimeout
+}
+
 func validClusterSSHVIPStart(v clusterSSHVIPStart) bool {
-	if !v.Request.valid(time.Now()) || len(v.Sources) < 1 || len(v.Sources) > 2 {
+	// Accept a longer execution window only for an already-admitted read-only
+	// qualification. Validate the original short admission envelope separately.
+	r := v.Request
+	if r.AcceptBefore != 0 {
+		if r.Joining || r.Joined || r.Lease.OperationStep != clusterSSHQualificationStep || r.Lease.Step != "qualify" ||
+			r.ExpiresAt != r.AcceptBefore+int64((clusterSSHQualificationVIPTimeout-clusterSSHVIPScopeTimeout)/time.Second) {
+			return false
+		}
+		r.ExpiresAt, r.AcceptBefore = r.AcceptBefore, 0
+	}
+	if !r.valid(time.Now()) || len(v.Sources) < 1 || len(v.Sources) > 2 {
 		return false
 	}
 	for _, source := range v.Sources {

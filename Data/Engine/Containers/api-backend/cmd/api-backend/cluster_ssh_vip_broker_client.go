@@ -22,7 +22,7 @@ type clusterSSHVIPBrokerClient struct {
 }
 
 func newClusterSSHVIPBrokerClientFromEnv() (*clusterSSHVIPBrokerClient, error) {
-	base, err := newClusterSSHSourceBrokerClientFromEnv()
+	base, err := newClusterSSHSourceBrokerClientWithTimeout(clusterSSHQualificationVIPTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,11 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 	if c == nil || c.httpClient == nil || c.peers == nil || authority == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	ctx, cancel := context.WithTimeout(parent, 35*time.Second)
+	budget := clusterSSHVIPScopeTimeout
+	if lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify" {
+		budget = clusterSSHQualificationVIPTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, budget+5*time.Second)
 	defer cancel()
 	initial, err := authority(ctx)
 	if err != nil || initial.Lease != lease || initial.Baseline != baseline || validateClusterSSHSourceNetworks(initial, sources) != nil || initial.Source.ControlPlaneVIP != initial.Source.EdgeVIP {
@@ -108,6 +112,10 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 		return nil
 	}
 	start := clusterSSHVIPStart{Request: clusterSSHSourceBrokerRequest{Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35, Lease: lease, Baseline: baseline, Binding: sealed.binding, Generation: sealed.generation, Ciphertext: sealed.ciphertext}, Sources: sources}
+	if budget == clusterSSHQualificationVIPTimeout {
+		start.Request.AcceptBefore = start.Request.ExpiresAt
+		start.Request.ExpiresAt += int64((budget - clusterSSHVIPScopeTimeout) / time.Second)
+	}
 	if !validClusterSSHVIPStart(start) {
 		return clusterbootstrap.ErrPreparationConfig
 	}

@@ -61,7 +61,7 @@ func sshVIPBrokerRun(a clusterSSHPreparationAuthority, lease clusterbootstrap.VI
 			}
 			return sshVIPObservation(n, a.Source.ControlPlaneVIP, m.Name == lease.Holder), nil
 		}
-		return withClusterSSHVIPOwner(ctx, authority, v.Sources, readVIP, readLease, consume)
+		return withClusterSSHVIPOwner(ctx, v.observationTimeout(), authority, v.Sources, readVIP, readLease, consume)
 	}
 }
 
@@ -491,5 +491,52 @@ func TestClusterSSHVIPBrokerAdmissionAndResourceBounds(t *testing.T) {
 				t.Fatal("exhausted scope not fenced")
 			}
 		})
+	}
+}
+
+func TestClusterSSHVIPQualificationExecutionWindow(t *testing.T) {
+	a, sources, _ := sshVIPFixture(t, false)
+	request, _, _ := sshBrokerFixture(t)
+	request.Lease = a.Lease
+	request.Binding = a.Cohort.Targets[0].Binding
+	request.Lease.OperationStep, request.Lease.Step = clusterSSHQualificationStep, "qualify"
+	now := time.Now()
+	request.AcceptBefore = now.Unix() + 35
+	extra := int64((clusterSSHQualificationVIPTimeout - clusterSSHVIPScopeTimeout) / time.Second)
+	request.ExpiresAt = request.AcceptBefore + extra
+	start := clusterSSHVIPStart{Request: request, Sources: sources}
+	if !validClusterSSHVIPStart(start) || start.observationTimeout() != clusterSSHQualificationVIPTimeout || request.valid(now) || request.validSource(now) {
+		t.Fatal("qualification VIP window crossed an endpoint boundary")
+	}
+	for _, tc := range []string{"expired admission", "future admission", "extended execution", "preparation", "joining", "joined", "invalid credential"} {
+		t.Run(tc, func(t *testing.T) {
+			v := start
+			switch tc {
+			case "expired admission":
+				v.Request.AcceptBefore = now.Unix() - 1
+				v.Request.ExpiresAt = v.Request.AcceptBefore + extra
+			case "future admission":
+				v.Request.AcceptBefore = now.Unix() + 100
+				v.Request.ExpiresAt = v.Request.AcceptBefore + extra
+			case "extended execution":
+				v.Request.ExpiresAt++
+			case "preparation":
+				v.Request.Lease.OperationStep, v.Request.Lease.Step = clusterSSHPreparationOperationStep, "stage_source"
+			case "joining":
+				v.Request.Joining = true
+			case "joined":
+				v.Request.Joined = true
+			case "invalid credential":
+				v.Request.Generation = ""
+			}
+			if validClusterSSHVIPStart(v) {
+				t.Fatal("accepted invalid VIP session")
+			}
+		})
+	}
+	legacy := start
+	legacy.Request.ExpiresAt, legacy.Request.AcceptBefore = request.AcceptBefore, 0
+	if !validClusterSSHVIPStart(legacy) || legacy.observationTimeout() != clusterSSHVIPScopeTimeout {
+		t.Fatal("legacy VIP window changed")
 	}
 }
