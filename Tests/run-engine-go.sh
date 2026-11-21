@@ -30,10 +30,10 @@ printf '==> Engine Go tests\n'
 # Keep package timeout inside the command budget so failures retain Go stacks.
 # JSON streams across parallel packages; verbose text alone can stay buffered
 # until a package exits, losing unfinished-test evidence on command timeout.
-TEST_FLAGS=(-json -count=1 -timeout=20m)
+TEST_FLAGS=(-json -count=1)
 case "${BOREALIS_ENGINE_GO_RACE:-0}" in
-  0) ;;
-  1) TEST_FLAGS+=(-race) ;;
+  0) TEST_FLAGS+=(-timeout=20m) ;;
+  1) TEST_FLAGS+=(-race -timeout=25m) ;;
   *) printf 'ENGINE GO FAIL: BOREALIS_ENGINE_GO_RACE must be 0 or 1.\n' >&2; exit 2 ;;
 esac
 run_timed "${TIMEOUT_SECONDS}" env GOWORK=off "${GO_BIN}" -C "${MODULE_ROOT}" test "${TEST_FLAGS[@]}" ./... \
