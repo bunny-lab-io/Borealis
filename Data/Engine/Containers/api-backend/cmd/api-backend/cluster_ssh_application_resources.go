@@ -231,8 +231,8 @@ func withClusterSSHTargetApplicationSizing(parent context.Context, readers clust
 		}
 		for _, target := range targets {
 			// Fits already validated hardware bounds before this callback.
-			totalMemory := target.Host.MemoryKiB * 1024
-			if cpu > uint64(target.Host.CPUCount)*1000 || totalMemory < clusterSSHHostMemoryReserveBytes ||
+			totalMemory := target.MemoryKiB * 1024
+			if cpu > uint64(target.CPUCount)*1000 || totalMemory < clusterSSHHostMemoryReserveBytes ||
 				memory > totalMemory-clusterSSHHostMemoryReserveBytes {
 				return clusterbootstrap.ErrPreparationConfig
 			}

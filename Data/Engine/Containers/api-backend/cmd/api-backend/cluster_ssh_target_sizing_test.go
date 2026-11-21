@@ -104,13 +104,13 @@ func TestClusterSSHTargetSizingOriginalNativeCohort(t *testing.T) {
 					t.Fatal("incomplete capacity decision")
 				}
 				for i, target := range targets {
-					if target.TargetID != f.claims[i].Lease.TargetID || target.Host.CPUCount != 16 || target.Host.MemoryKiB != 33554432 {
+					if target.TargetID != f.claims[i].Lease.TargetID || target.CPUCount != 16 || target.MemoryKiB != 33554432 {
 						t.Fatal("historical or reordered capacity decision")
 					}
 				}
 				switch mode {
 				case "consumer copy":
-					targets[0].TargetID, targets[0].Host.CPUCount = "changed", 1
+					targets[0].TargetID, targets[0].CPUCount = "changed", 1
 				case "claim lost":
 					f.lost.Store(2)
 				case "cancel consumer":

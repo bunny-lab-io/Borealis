@@ -11,11 +11,12 @@ import (
 	"time"
 )
 
-// Public scalar observations only. These values are not durable qualification
-// receipts. The consumer owns sizing, storage and remaining clean-host policy.
+// The profile consumer needs CPU and total RAM. Storage admission obtains its
+// own fresh, path-specific capacity evidence.
 type clusterSSHTargetHostEvidence struct {
-	TargetID string
-	Host     clusterremote.HostFacts
+	TargetID  string
+	CPUCount  uint32
+	MemoryKiB uint64
 }
 
 // Use only inside withClusterSSHNetworkTargets. Its original-claim heartbeat
@@ -49,8 +50,8 @@ func withClusterSSHTargetHostEvidence(parent context.Context, readers clusterSSH
 			}
 			return nil
 		}
-		read := func() ([]clusterSSHTargetHostEvidence, error) {
-			values := make([]clusterSSHTargetHostEvidence, 0, len(frozen.Cohort.Targets))
+		read := func() ([]clusterremote.HostFacts, error) {
+			values := make([]clusterremote.HostFacts, 0, len(frozen.Cohort.Targets))
 			for _, item := range frozen.Cohort.Targets {
 				if current() != nil {
 					return nil, clusterbootstrap.ErrPreparationConfig
@@ -69,7 +70,10 @@ func withClusterSSHTargetHostEvidence(parent context.Context, readers clusterSSH
 				if err != nil {
 					return nil, clusterbootstrap.ErrPreparationConfig
 				}
-				values = append(values, clusterSSHTargetHostEvidence{TargetID: item.Binding.TargetID, Host: host})
+				// Free space can change during SSH inspection itself. It is
+				// neither consumed nor certified by a CPU/RAM profile.
+				host.DiskFreeKiB = 0
+				values = append(values, host)
 			}
 			return values, current()
 		}
@@ -78,34 +82,23 @@ func withClusterSSHTargetHostEvidence(parent context.Context, readers clusterSSH
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		second, err := read()
-		if err != nil {
+		if err != nil || !slices.Equal(first, second) {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		for i := range first {
-			free := min(first[i].Host.DiskFreeKiB, second[i].Host.DiskFreeKiB)
-			first[i].Host.DiskFreeKiB, second[i].Host.DiskFreeKiB = 0, 0
-			if first[i] != second[i] {
-				return clusterbootstrap.ErrPreparationConfig
+		profile := make([]clusterSSHTargetHostEvidence, len(first))
+		for i, host := range first {
+			profile[i] = clusterSSHTargetHostEvidence{
+				TargetID:  frozen.Cohort.Targets[i].Binding.TargetID,
+				CPUCount:  host.CPUCount,
+				MemoryKiB: host.MemoryKiB,
 			}
-			first[i].Host.DiskFreeKiB = free
 		}
-		if current() != nil || consume(ctx, slices.Clone(first)) != nil || current() != nil {
+		if current() != nil || consume(ctx, profile) != nil || current() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		final, err := read()
-		if err != nil {
+		if err != nil || !slices.Equal(first, final) {
 			return clusterbootstrap.ErrPreparationConfig
-		}
-		for i := range first {
-			// A lower final reading invalidates the conservative availability
-			// offered to the consumer. This still reserves no filesystem space.
-			if final[i].Host.DiskFreeKiB < first[i].Host.DiskFreeKiB {
-				return clusterbootstrap.ErrPreparationConfig
-			}
-			final[i].Host.DiskFreeKiB = first[i].Host.DiskFreeKiB
-			if final[i] != first[i] {
-				return clusterbootstrap.ErrPreparationConfig
-			}
 		}
 		return current()
 	})

@@ -10,7 +10,7 @@ import (
 )
 
 func TestClusterSSHHostEvidenceOriginalNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "CPU drift", "ignored failure", "background loss", "free drift", "free rises", "source lost", "cancel", "consumer error", "consumer copy", "key alias", "cached", "zero", "substituted"} {
+	for _, mode := range []string{"expansion", "replacement", "CPU drift", "final CPU drift", "disk total drift", "ignored failure", "background loss", "free drift", "free rises", "source lost", "cancel", "consumer error", "consumer copy", "key alias", "cached", "zero", "substituted"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "peer")
 			// Fresh native fixtures report 16 CPUs; historical inspection is
@@ -26,8 +26,14 @@ func TestClusterSSHHostEvidenceOriginalNativeCohort(t *testing.T) {
 				if (mode == "CPU drift" || mode == "ignored failure") && f.opens[i].Load() > 1 {
 					return strings.Replace(wire, "cpu_count=16", "cpu_count=24", 1)
 				}
+				if mode == "final CPU drift" && consumed {
+					return strings.Replace(wire, "cpu_count=16", "cpu_count=15", 1)
+				}
+				if mode == "disk total drift" && consumed {
+					return strings.Replace(wire, "disk_total_kib=524288000", "disk_total_kib=524287996", 1)
+				}
 				if mode == "free drift" && consumed {
-					return strings.Replace(wire, "disk_free_kib=314572800", "disk_free_kib=1", 1)
+					return strings.Replace(wire, "disk_free_kib=314572800", "disk_free_kib=314572756", 1)
 				}
 				if mode == "free rises" {
 					if consumed {
@@ -73,12 +79,9 @@ func TestClusterSSHHostEvidenceOriginalNativeCohort(t *testing.T) {
 						t.Fatal("partial cohort")
 					}
 					for i, value := range evidence {
-						if value.TargetID != f.claims[i].Lease.TargetID || value.Host.Hostname != f.a.Cohort.Targets[i].Report.Hostname || value.Host.CPUCount != 16 || value.Host.MemoryKiB != 33554432 {
+						if value.TargetID != f.claims[i].Lease.TargetID || value.CPUCount != 16 || value.MemoryKiB != 33554432 {
 							t.Fatal("historical, foreign or unordered hardware")
 						}
-					}
-					if mode == "free rises" && evidence[0].Host.DiskFreeKiB != 300000000 {
-						t.Fatal("not conservative across complete rounds")
 					}
 					switch mode {
 					case "source lost":
@@ -95,7 +98,7 @@ func TestClusterSSHHostEvidenceOriginalNativeCohort(t *testing.T) {
 					case "consumer error":
 						return errors.New("private consumer error")
 					case "consumer copy":
-						evidence[0].Host.CPUCount = 1
+						evidence[0].CPUCount = 1
 						evidence[0].TargetID = "changed"
 					}
 					return nil
@@ -105,7 +108,7 @@ func TestClusterSSHHostEvidenceOriginalNativeCohort(t *testing.T) {
 				}
 				return evidenceErr
 			})
-			wantSuccess := mode == "expansion" || mode == "replacement" || mode == "consumer copy" || mode == "free rises" || mode == "key alias"
+			wantSuccess := mode == "expansion" || mode == "replacement" || mode == "consumer copy" || mode == "free rises" || mode == "free drift" || mode == "key alias"
 			if (err == nil) != wantSuccess {
 				t.Fatal("unsafe host evidence scope", err)
 			}

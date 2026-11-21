@@ -53,7 +53,7 @@ func withClusterSSHTargetSizing(parent context.Context, readers clusterSSHNetwor
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			for _, target := range targets {
-				if sizing.Fits(target.Host.CPUCount, target.Host.MemoryKiB) != nil {
+				if sizing.Fits(target.CPUCount, target.MemoryKiB) != nil {
 					return clusterbootstrap.ErrPreparationConfig
 				}
 			}

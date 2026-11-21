@@ -118,7 +118,7 @@ func TestClusterSSHStorageCapacityAllocationAndInodes(t *testing.T) {
 }
 
 func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "low space", "policy drift", "replica alias drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory", "current-only wire", "downgraded reader", "persistent final drift"} {
+	for _, mode := range []string{"expansion", "replacement", "low space", "final small decrease", "final insufficient space", "policy drift", "replica alias drift", "source lost", "consumer error", "consumer copy", "demand copy", "historical filesystem", "existing directory", "current-only wire", "downgraded reader", "persistent final drift"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			f.filesystemWire = func(i int, raw []byte) []byte {
@@ -138,7 +138,10 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 				}
 				wire.Evidence.Filesystems[0].TotalBytes = 120 << 30
 				wire.Evidence.Filesystems[0].AvailableBytes = 90 << 30
-				if mode == "low space" && i == 0 {
+				if mode == "final small decrease" && i == 0 && f.opens[i].Load() > 2 {
+					wire.Evidence.Filesystems[0].AvailableBytes -= 44 << 10
+				}
+				if i == 0 && (mode == "low space" || (mode == "final insufficient space" && f.opens[i].Load() > 2)) {
 					wire.Evidence.Filesystems[0].AvailableBytes = 80 << 30
 				}
 				if mode == "existing directory" {
@@ -198,9 +201,12 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 						t.Fatal("partial cohort")
 					}
 					for i, v := range out {
-						want := !(mode == "low space" && i == 0)
+						want := i != 0 || (mode != "low space" && mode != "final insufficient space")
 						if v.TargetID != f.claims[i].Lease.TargetID || v.Fits != want || len(v.Budgets) != 1 || v.Budgets[0].OtherBytes != 8<<30 {
 							t.Fatal("wrong native capacity plan")
+						}
+						if i == 0 && mode == "final small decrease" && v.Budgets[0].AvailableBytes != (90<<30)-(44<<10) {
+							t.Fatal("final availability missing from reported budget")
 						}
 					}
 					switch mode {
@@ -214,7 +220,7 @@ func TestClusterSSHStorageCapacityNativeCohort(t *testing.T) {
 					return nil
 				})
 			})
-			good := mode == "expansion" || mode == "replacement" || mode == "low space" || mode == "consumer copy" || mode == "demand copy"
+			good := mode == "expansion" || mode == "replacement" || mode == "low space" || mode == "final small decrease" || mode == "final insufficient space" || mode == "consumer copy" || mode == "demand copy"
 			if (err == nil) != good {
 				t.Fatal("unsafe capacity scope", err)
 			}

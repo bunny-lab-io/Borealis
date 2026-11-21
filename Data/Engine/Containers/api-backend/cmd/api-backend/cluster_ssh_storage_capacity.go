@@ -225,7 +225,9 @@ func withClusterSSHTargetStorageCapacity(parent context.Context, readers cluster
 		if current() != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		if withClusterSSHTargetFilesystemEvidence(ctx, readers, selection, func(ctx context.Context, fs []clusterSSHTargetFilesystemEvidence) error {
+		// Use the lowest observed availability across the three native reads
+		// when comparing demand and reserve on each verified filesystem.
+		if readClusterSSHTargetFilesystemEvidence(ctx, readers, selection, false, func(ctx context.Context, fs []clusterSSHTargetFilesystemEvidence) error {
 			if current() != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
