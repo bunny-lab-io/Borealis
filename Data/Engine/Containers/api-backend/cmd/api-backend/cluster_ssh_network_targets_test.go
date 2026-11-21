@@ -457,3 +457,62 @@ func TestClusterSSHNetworkPeerBoundaryRenewsEachOriginalClaimOnce(t *testing.T) 
 	}
 	f.assertClosed(t)
 }
+
+// Count only calls issued by the explicit comparison. The independent scope
+// heartbeat can run at any point, including on a slow race-test runner.
+func TestClusterSSHNetworkQualificationReadsOriginalClaimsWithoutRenewing(t *testing.T) {
+	type comparisonKey struct{}
+	for _, staleSibling := range []bool{false, true} {
+		t.Run(fmt.Sprintf("staleSibling=%t", staleSibling), func(t *testing.T) {
+			f := newSSHNetworkTargetsFixture(t, false, "boot")
+			for i := range f.claims {
+				f.claims[i].Lease.OperationStep = clusterSSHQualificationStep
+				f.claims[i].Lease.Step = "qualify"
+			}
+			f.a.Lease = f.claims[0].Lease
+			var reads []clusterSSHNetworkTargetClaim
+			var writes []clusterSSHNetworkTargetClaim
+			originalRead, originalRenew := f.deps.authority, f.deps.renew
+			f.deps.authority = func(claim clusterSSHNetworkTargetClaim) clusterSSHPreparationAuthorityRead {
+				read := originalRead(claim)
+				return func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+					if ctx.Value(comparisonKey{}) == true {
+						reads = append(reads, claim)
+						if staleSibling && claim == f.claims[1] {
+							return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrSessionAuthority
+						}
+					}
+					return read(ctx)
+				}
+			}
+			f.deps.renew = func(ctx context.Context, claim clusterSSHNetworkTargetClaim) error {
+				if ctx.Value(comparisonKey{}) == true {
+					writes = append(writes, claim)
+				}
+				return originalRenew(ctx, claim)
+			}
+			compared := false
+			err := runClusterSSHNetworkTargets(context.Background(), f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+				ctx = context.WithValue(ctx, comparisonKey{}, true)
+				_, err := readers.Authority(ctx)
+				compared = true
+				if !slices.Equal(reads, f.claims) || len(writes) != 0 || (err != nil) != staleSibling {
+					t.Fatal("qualification comparison must read each original claim once and reject stale ownership")
+				}
+				if err != nil {
+					return err
+				}
+				reads = nil
+				err = readers.Refresh(ctx)
+				want := []clusterSSHNetworkTargetClaim{f.claims[0], f.claims[0], f.claims[1], f.claims[1]}
+				if !slices.Equal(reads, want) || !slices.Equal(writes, f.claims) {
+					t.Fatal("explicit refresh must verify each claim on both sides of its renewal")
+				}
+				return err
+			})
+			if !compared || (err != nil) != staleSibling {
+				t.Fatal("qualification scope lost the result of its paired authority comparison")
+			}
+		})
+	}
+}

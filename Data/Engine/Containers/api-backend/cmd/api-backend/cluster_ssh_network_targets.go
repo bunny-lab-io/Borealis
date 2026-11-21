@@ -89,14 +89,15 @@ func validateClusterSSHNetworkClaims(a clusterSSHPreparationAuthority, baseline 
 // ciphertext and database-clock ownership after row-lock waits. The common
 // source/cohort baseline cannot silently change between independent adapters.
 func newClusterSSHNetworkTargetAuthority(baseline clusterbootstrap.Expected, claims []clusterSSHNetworkTargetClaim,
-	dependencies clusterSSHNetworkTargetDependencies) clusterSSHPreparationAuthorityRead {
+	dependencies clusterSSHNetworkTargetDependencies) func(context.Context, bool) (clusterSSHPreparationAuthority, error) {
 	gate := make(chan struct{}, 1)
 	var retained []byte
 	var anchor clusterSSHPreparationAuthority
+	observations := make([]clusterSSHPreparationAuthorityRead, len(claims))
 	checks := make([]func(context.Context) error, len(claims))
 	for i, claim := range claims {
 		read := dependencies.authority(claim)
-		checks[i] = newClusterSSHPreparationLeaseCheck(func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+		observations[i] = func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
 			if read == nil {
 				return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
 			}
@@ -124,9 +125,10 @@ func newClusterSSHNetworkTargetAuthority(baseline clusterbootstrap.Expected, cla
 				anchor = owned
 			}
 			return owned, nil
-		}, func(ctx context.Context) error { return dependencies.renew(ctx, claim) })
+		}
+		checks[i] = newClusterSSHPreparationLeaseCheck(observations[i], func(ctx context.Context) error { return dependencies.renew(ctx, claim) })
 	}
-	return func(parent context.Context) (clusterSSHPreparationAuthority, error) {
+	return func(parent context.Context, renew bool) (clusterSSHPreparationAuthority, error) {
 		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 		select {
@@ -135,8 +137,14 @@ func newClusterSSHNetworkTargetAuthority(baseline clusterbootstrap.Expected, cla
 		case <-ctx.Done():
 			return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
 		}
-		for _, check := range checks {
-			if check(ctx) != nil || ctx.Err() != nil {
+		for i, check := range checks {
+			var err error
+			if renew {
+				err = check(ctx)
+			} else {
+				_, err = observations[i](ctx)
+			}
+			if err != nil || ctx.Err() != nil {
 				return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrPreparationConfig
 			}
 		}
@@ -212,8 +220,12 @@ func (l *clusterSSHNetworkReaderLifetime) close() error {
 	return nil
 }
 
+func (lease clusterSSHTargetLease) isNetworkQualification() bool {
+	return lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify"
+}
+
 func (lease clusterSSHTargetLease) networkTargetBudget() time.Duration {
-	if lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify" {
+	if lease.isNetworkQualification() {
 		return clusterSSHQualificationBudget
 	}
 	return 3 * time.Minute
@@ -226,8 +238,12 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	claims = slices.Clone(claims)
-	authority := newClusterSSHNetworkTargetAuthority(baseline, claims, dependencies)
-	check := func(ctx context.Context) error { _, err := authority(ctx); return err }
+	verify := newClusterSSHNetworkTargetAuthority(baseline, claims, dependencies)
+	// The qualification heartbeat and explicit refreshes renew both leases.
+	// Nested proof comparisons still read both original claims from the store.
+	renewOnRead := !claims[0].Lease.isNetworkQualification()
+	authority := func(ctx context.Context) (clusterSSHPreparationAuthority, error) { return verify(ctx, renewOnRead) }
+	check := func(ctx context.Context) error { _, err := verify(ctx, true); return err }
 	return runClusterSSHPreparationScopeFor(parent, time.Second, claims[0].Lease.networkTargetBudget(), check, func(ctx context.Context) (result error) {
 		frozen, err := authority(ctx)
 		if err != nil {
