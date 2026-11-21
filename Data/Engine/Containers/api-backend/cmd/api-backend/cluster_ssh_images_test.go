@@ -43,7 +43,7 @@ func imageReleaseFixture(t *testing.T, expected ...clusterbootstrap.Expected) *b
 }
 
 func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "image drift", "K3s drift", "external drift", "source drift", "Postgres drift", "source settings drift", "sibling lost", "inode exhausted"} {
+	for _, mode := range []string{"expansion", "replacement", "image drift", "K3s drift", "external drift", "source drift", "Postgres drift", "source settings drift", "sibling lost", "lost during download", "source changed during download", "inode exhausted"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, mode == "replacement", "filesystem")
 			release := imageReleaseFixture(t, f.a.Baseline)
@@ -82,16 +82,31 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 			}
 			snapshot := clusterSSHPreparationSnapshot{Expected: expected, Settings: map[string]string{"BOREALIS_TEST": "original"}, Storage: sshStorageSnapshotFixture(t, f.a)}
 			image := newQualificationPostgresFixture()
+			sourceReads := 0
+			atDownload := false
 			acquire := func(ctx context.Context, reference string, check func(context.Context) error) (clusterSSHQualificationPostgresArchive, error) {
+				before := sourceReads
 				if reference != snapshot.Storage.Requirements.PostgresImage.Resolved || check(ctx) != nil {
 					t.Fatal("PostgreSQL source/authority lost")
+				}
+				atDownload = true
+				if mode == "lost during download" {
+					f.lost.Store(2)
+					if check(ctx) == nil {
+						t.Fatal("archive I/O ignored lost sibling claim")
+					}
+					return image, clusterbootstrap.ErrSessionAuthority
+				}
+				if check(ctx) != nil || sourceReads != before {
+					t.Fatal("archive I/O repeated the complete source observation")
 				}
 				return image, nil
 			}
 			consumed := false
 			source := func(ctx context.Context) (clusterSSHPreparationSnapshot, error) {
+				sourceReads++
 				v := snapshot
-				if mode == "Postgres drift" && consumed {
+				if (mode == "Postgres drift" && consumed) || (mode == "source changed during download" && atDownload) {
 					v.Storage.Requirements.PostgresImage.Resolved = clusterSSHPostgresRepository + "@sha256:" + strings.Repeat("f", 64)
 				}
 				if mode == "source settings drift" && consumed {
@@ -137,7 +152,7 @@ func TestClusterSSHImageCapacityNativeAuthority(t *testing.T) {
 			if image.closes != 1 {
 				t.Fatal("qualification archive leaked")
 			}
-			if (err == nil) != (mode == "expansion" || mode == "replacement") || consumed != (mode != "inode exhausted") {
+			if (err == nil) != (mode == "expansion" || mode == "replacement") || consumed != (mode != "inode exhausted" && mode != "lost during download" && mode != "source changed during download") {
 				t.Fatalf("image-capacity authority: consumed=%v error=%v", consumed, err)
 			}
 			f.assertClosed(t)

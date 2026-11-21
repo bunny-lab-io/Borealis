@@ -212,14 +212,14 @@ func withClusterSSHImageStorageCapacityAcquired(ctx context.Context, readers clu
 			}
 			return value, nil
 		}
-		check := func(ctx context.Context) error {
-			if ctx.Err() != nil || readers.Refresh(ctx) != nil {
-				return clusterbootstrap.ErrImageArchive
-			}
-			_, err := boundSource(ctx)
+		// Bind the immutable image reference immediately before acquisition. Archive
+		// I/O checks the original cohort's authority at every native boundary.
+		// Target sizing rereads the entire source before using the measured bytes,
+		// and the final read brackets the archive's remeasurement and cleanup.
+		if _, err := boundSource(ctx); err != nil {
 			return err
 		}
-		if err := withClusterSSHQualificationPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, demands, check, acquire,
+		if err := withClusterSSHQualificationPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, demands, readers.Refresh, acquire,
 			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
 				return withClusterSSHTargetStorageCapacity(ctx, readers, boundSource, capacity.Target, consume)
 			}); err != nil {

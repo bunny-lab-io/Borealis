@@ -15,7 +15,7 @@ type clusterSSHQualificationPostgresArchive interface {
 type clusterSSHQualificationPostgresAcquire func(context.Context, string, func(context.Context) error) (clusterSSHQualificationPostgresArchive, error)
 
 func acquireClusterSSHQualificationPostgres(ctx context.Context, reference string, check func(context.Context) error) (clusterSSHQualificationPostgresArchive, error) {
-	image, err := clusterbootstrap.AcquirePostgresImage(ctx, "", reference, check)
+	image, err := clusterbootstrap.AcquirePostgresImage(ctx, clusterSSHScratchParent(), reference, check)
 	if err != nil {
 		return nil, err
 	}
