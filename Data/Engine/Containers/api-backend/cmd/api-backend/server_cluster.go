@@ -245,7 +245,7 @@ func clusterReleasesHandler(auth *authService) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
-		ctx = clusterContextWithGitHubToken(ctx, auth)
+		ctx = clusterContextWithGitHubToken(ctx, auth.store, auth.aegis)
 		store, ok := auth.store.(clusterStore)
 		if !ok {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cluster_control_unavailable"})
@@ -522,7 +522,7 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusAccepted, result)
 			return
 		}
-		ctx = clusterContextWithGitHubToken(ctx, auth)
+		ctx = clusterContextWithGitHubToken(ctx, auth.store, auth.aegis)
 		current, currentSHA, k3sVersion, stateErr := clusterReleaseState(snapshot)
 		if stateErr != nil {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "release_not_selectable", "message": stateErr.Error()})
@@ -1340,16 +1340,18 @@ func clusterGitHubJSON(ctx context.Context, endpoint string, output any) error {
 	return json.Unmarshal(raw, output)
 }
 
-func clusterContextWithGitHubToken(ctx context.Context, auth *authService) context.Context {
-	if auth == nil || auth.aegis == nil {
+func clusterContextWithGitHubToken(ctx context.Context, operators operatorStore, aegis authSecretService) context.Context {
+	if aegis == nil {
 		return ctx
 	}
-	store, ok := auth.store.(githubTokenManagementStore)
+	store, ok := operators.(githubTokenManagementStore)
 	if !ok {
 		return ctx
 	}
-	record, err := store.loadGithubToken(ctx, auth.aegis)
-	if err != nil || strings.TrimSpace(record.Token) == "" {
+	lookup, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	record, err := store.loadGithubToken(lookup, aegis)
+	if err != nil || record.ResetRequired || strings.TrimSpace(record.Token) == "" {
 		return ctx
 	}
 	return context.WithValue(ctx, clusterGitHubTokenContextKey{}, strings.TrimSpace(record.Token))

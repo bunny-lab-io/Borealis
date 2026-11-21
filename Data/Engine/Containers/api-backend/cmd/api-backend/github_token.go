@@ -129,7 +129,6 @@ func (s *postgresOperatorStore) loadGithubToken(ctx context.Context, secret auth
 	if err != nil {
 		return githubTokenRecord{}, errors.Join(errOperatorStoreDown, err)
 	}
-	defer conn.Close()
 
 	var token sql.NullString
 	var resetRequired sql.NullInt64
@@ -139,6 +138,7 @@ func (s *postgresOperatorStore) loadGithubToken(ctx context.Context, secret auth
 		  FROM engine.github_token
 		 LIMIT 1
 	`).Scan(&token, &resetRequired, &resetAt)
+	conn.Close() // Return the connection before invoking Aegis.
 	if errors.Is(err, sql.ErrNoRows) {
 		return githubTokenRecord{}, nil
 	}

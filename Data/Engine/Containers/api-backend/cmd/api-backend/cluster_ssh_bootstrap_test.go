@@ -97,7 +97,8 @@ func newBootstrapReleaseFixture(t *testing.T) *bootstrapReleaseFixture {
 }
 
 func bootstrapContext() context.Context {
-	return context.WithValue(context.Background(), clusterGitHubTokenContextKey{}, bootstrapTestToken)
+	store := &fakeOperatorStore{githubTokenRecord: githubTokenRecord{Token: bootstrapTestToken}}
+	return clusterContextWithGitHubToken(context.Background(), store, &authLoginTestAegis{})
 }
 
 func TestClusterSSHBootstrapRefreshesPublicationAndRejectsInvalidAssets(t *testing.T) {
@@ -285,5 +286,18 @@ func TestClusterSSHScratchParent(t *testing.T) {
 	t.Setenv("BOREALIS_CLUSTER_SCRATCH_DIR", volume)
 	if got := clusterSSHScratchParent(); got != volume {
 		t.Fatalf("configured scratch parent = %q, want %q", got, volume)
+	}
+}
+
+func TestClusterSSHBootstrapOmitsUnusableGitHubToken(t *testing.T) {
+	for _, store := range []*fakeOperatorStore{
+		{},
+		{githubTokenRecord: githubTokenRecord{Token: bootstrapTestToken, ResetRequired: true}},
+		{githubTokenErr: errAegisLocked},
+	} {
+		ctx := clusterContextWithGitHubToken(context.Background(), store, &authLoginTestAegis{})
+		if ctx.Value(clusterGitHubTokenContextKey{}) != nil {
+			t.Fatal("unavailable or reset-required GitHub credential attached to release request")
+		}
 	}
 }

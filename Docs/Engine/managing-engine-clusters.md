@@ -630,6 +630,8 @@ The selected tag resolves once to an immutable commit SHA.  The API verifies tha
 
 Downgrades and unrelated histories fail closed.
 
+Engines use the GitHub token configured in Borealis when looking up a release and downloading its assets during SSH onboarding. Without a configured, usable token, public releases use GitHub’s anonymous quota. If release requests exhaust that quota, restore authenticated access or wait for the quota to reset before repeating host qualification. A failed release lookup can stop capacity verification before disk measurements are available.
+
 Queueing refreshes release verification even when the selector already shows a compatible version. If GitHub is unavailable or publication changed, restore access or select a newly published immutable release before retrying the request.
 
 Engine compatibility follows the cluster's verified K3s version. A completed K3s upgrade changes eligible Engine releases immediately; an old API process environment cannot restore the previous baseline. Unknown or conflicting version observations block updates until cluster state is reconciled. Engine redeploy preserves installed K3s instead of applying the fresh-install default.

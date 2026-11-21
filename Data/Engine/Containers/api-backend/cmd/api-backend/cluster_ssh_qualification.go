@@ -221,7 +221,8 @@ func (r *clusterSSHInspectionRuntime) qualifyOnce(ctx context.Context) error {
 		}
 	}
 	qualificationCtx, cancel := context.WithDeadline(ctx, work.deadline())
-	report := runClusterSSHQualification(qualificationCtx, r.store, r.aegis, work)
+	releaseCtx := clusterContextWithGitHubToken(qualificationCtx, r.store, r.aegis)
+	report := runClusterSSHQualification(releaseCtx, r.store, r.aegis, work)
 	cancel()
 	if ctx.Err() != nil {
 		return ctx.Err()
