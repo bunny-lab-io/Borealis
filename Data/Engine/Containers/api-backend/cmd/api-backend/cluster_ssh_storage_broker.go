@@ -3,6 +3,7 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"log"
 	"math"
 	"net/http"
 	"slices"
@@ -94,6 +95,8 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		getStorage, getPreparation = projected, projected
 	}
 	var value clusterSSHPreparationSnapshot
+	started := time.Now()
+	stage := "initial storage inventories"
 	err := withClusterSSHSourceStorage(ctx, scopedAuthority, getStorage, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
 		case censusGate <- struct{}{}:
@@ -113,9 +116,14 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 			}
 			return current, nil
 		}
+		stage = "source network and configuration"
 		var err error
 		value, err = newClusterSSHPreparationSnapshotRead(boundAuthority, getPreparation, r.newSSHSourceNetworkRead(boundAuthority))(ctx)
-		if err != nil || !storage.KubeVIP.matchesNetworks(value.Sources) || !storage.csiSocketMatchesNetworks(value.Sources) || checks.Authority(ctx) != nil {
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		stage = "network and storage placement"
+		if !storage.KubeVIP.matchesNetworks(value.Sources) || !storage.csiSocketMatchesNetworks(value.Sources) || checks.Authority(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		observation := storage.observation
@@ -134,6 +142,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		case <-ctx.Done():
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		stage = "worker budget"
 		if _, _, ok := clusterSSHDesiredWorkerWorkloadBudget(value); !ok {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -154,23 +163,28 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 			value.CapacitySHA256, value.CapacityTargets = digest, slices.Clone(targets)
 			return nil
 		}
+		stage = "target capacity"
 		current, err := boundAuthority(ctx)
 		if err != nil || capacityCheck(ctx, current) != nil || checks.Authority(ctx) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		stage = "final storage inventory"
 		return nil
 	})
 	if err != nil || ctx.Err() != nil || !cleanup.clean() {
+		log.Printf("SSH preparation storage snapshot rejected at %s after %s", stage, time.Since(started).Round(time.Millisecond))
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	before, err := scopedAuthority(ctx)
 	if err != nil || capacityCheck == nil || capacityCheck(ctx, before) != nil {
+		log.Print("SSH preparation storage snapshot rejected at final target capacity")
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	after, err := scopedAuthority(ctx)
 	after.Cohort.ObservedAt = 0
 	afterDigest, digestErr := clusterSSHPreparationDigest(after)
 	if err != nil || digestErr != nil || afterDigest != capacityAuthority || ctx.Err() != nil || !cleanup.clean() {
+		log.Print("SSH preparation storage snapshot rejected at final authority comparison")
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	return value, nil

@@ -14,6 +14,7 @@ import (
 type clusterSSHStorageObservation struct {
 	Requirements clusterSSHStorageRequirements
 	receipts     map[string][32]byte
+	usage        map[string]clusterSSHStorageUsage
 }
 
 func clusterSSHStorageListReceipt(object map[string]any, kind, namespace string, limit int) ([]map[string]any, [32]byte, error) {
@@ -32,8 +33,8 @@ func clusterSSHStorageListReceipt(object map[string]any, kind, namespace string,
 }
 
 // No raw Kubernetes object or diagnostic survives the collection. Receipts
-// bind exact objects (including revision/spec/status); list ordering and the
-// collection's global resourceVersion are not individual object changes.
+// bind object contents, with separately sampled Longhorn usage counters.
+// List ordering and collection resourceVersion are not individual changes.
 func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort,
 	getJSON func(context.Context, string, any) error) (clusterSSHStorageObservation, error) {
 	fail := func() (clusterSSHStorageObservation, error) {
@@ -42,7 +43,7 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 	if getJSON == nil || ctx.Err() != nil || len(source.Members) < 1 || len(source.Members) > 2 {
 		return fail()
 	}
-	result := clusterSSHStorageObservation{receipts: map[string][32]byte{}}
+	result := clusterSSHStorageObservation{receipts: map[string][32]byte{}, usage: map[string]clusterSSHStorageUsage{}}
 	read := func(path string) (map[string]any, error) {
 		var raw json.RawMessage
 		err := getJSON(ctx, path, &raw)
@@ -56,6 +57,13 @@ func observeClusterSSHStorage(ctx context.Context, source clusterSSHSourceCohort
 		object, digest, err := clusterSSHStorageObject(raw)
 		if err != nil {
 			return nil, err
+		}
+		digest, usage, err := clusterSSHLonghornUsageReceipt(path, object, digest)
+		if err != nil {
+			return nil, err
+		}
+		if usage != nil {
+			result.usage[path] = *usage
 		}
 		if path != clusterSSHStorageClaimsPath && path != clusterSSHStoragePodsPath && !clusterSSHSiteWorkerPodsPathValid(path) && !clusterSSHCertManagerPodsPathValid(path) && !clusterSSHSnapshotPodsPathValid(path) && !clusterSSHCNPGPodsPathValid(path) && !clusterSSHSystemUpgradePodsPathValid(path) && !clusterSSHKubeVIPPodsPathValid(path) && !clusterSSHLonghornManagerPodsPathValid(path) && !clusterSSHLonghornPluginPodsPathValid(path) && !clusterSSHInstancePodsPathValid(path) && !clusterSSHLonghornUIPodsPathValid(path) && !clusterSSHLonghornCSIPodsPathValid(path) && !clusterSSHLonghornAttacherPodsPathValid(path) && !clusterSSHLonghornDriverPodsPathValid(path) && !clusterSSHStorageReplicasPathValid(path) {
 			// Application resources and worker policy both inspect the scheduler.

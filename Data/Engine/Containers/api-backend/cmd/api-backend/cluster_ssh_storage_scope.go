@@ -107,12 +107,10 @@ func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPre
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			value, err := observeClusterSSHStorage(ctx, expected.Source, get)
-			if err != nil || checkSource() != nil || ctx.Err() != nil || (retained != nil && !reflect.DeepEqual(value, *retained)) {
+			if err != nil || checkSource() != nil || ctx.Err() != nil || (retained != nil && !value.sameInputs(*retained)) {
 				return clusterbootstrap.ErrPreparationConfig
 			}
-			if retained == nil {
-				retained = &value
-			}
+			retained = &value
 			return nil
 		}
 		checks := clusterSSHPreparationChecks{

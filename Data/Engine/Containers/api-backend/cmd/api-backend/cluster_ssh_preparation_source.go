@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -78,11 +79,13 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 	var retainedSources []clusterbootstrap.SourceNetwork
 	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
 		started := time.Now()
-		fail := func() (clusterSSHPreparationSnapshot, error) {
+		fail := func(stage string) (clusterSSHPreparationSnapshot, error) {
+			// Fixed stage names only. Never log Secret, Job or authority data.
+			log.Printf("SSH preparation source snapshot rejected at %s after %s", stage, time.Since(started).Round(time.Millisecond))
 			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		if authority == nil || getJSON == nil || network == nil || parent.Err() != nil {
-			return fail()
+			return fail("inputs")
 		}
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()
@@ -90,23 +93,23 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		case gate <- struct{}{}:
 			defer func() { <-gate }()
 		case <-ctx.Done():
-			return fail()
+			return fail("reader gate")
 		}
 		before, err := authority(ctx)
 		if err != nil || before.Baseline.Validate() != nil || validateClusterSSHInspectionCohort(before.Cohort, before.Source) != nil {
-			return fail()
+			return fail("initial authority")
 		}
 		observed, err := observeClusterSSHSourceCohort(ctx, getJSON, before.Source)
 		if err != nil || !reflect.DeepEqual(observed, before.Source) {
-			return fail()
+			return fail("initial source membership")
 		}
 		sources, err := observeClusterSSHSourceNetworks(ctx, before, network)
 		if err != nil || (retainedSources != nil && !slices.Equal(retainedSources, sources)) {
-			return fail()
+			return fail("initial source network")
 		}
 		expected, err := buildClusterSSHPreparationExpected(before.Cohort, observed, before.Lease, before.Baseline, before.K3sVersion, sources[0].PodCIDR, sources[0].ServiceCIDR, before.payload)
 		if err != nil {
-			return fail()
+			return fail("expected configuration")
 		}
 		readSecret := func() (clusterbootstrap.PreparationRuntimeSecret, error) {
 			// RawMessage remains private local memory and is never error context.
@@ -118,35 +121,35 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 		}
 		secret, err := readSecret()
 		if err != nil {
-			return fail()
+			return fail("runtime settings read")
 		}
 		settings := secret.Settings()
 		if _, err := clusterbootstrap.NewPreparationConfiguration(expected, settings); err != nil {
-			return fail()
+			return fail("configuration validation")
 		}
 		// Reobserve every source link, including changes while another source
 		// or the private Secret was read. Job/Pod receipts cannot be reused.
 		currentSources, err := observeClusterSSHSourceNetworks(ctx, before, network)
 		if err != nil || !slices.Equal(sources, currentSources) {
-			return fail()
+			return fail("source network recheck")
 		}
 		// Finish with fresh public source, private Secret and short DB reads. No
 		// DB connection remains held during Kubernetes, TLS or secret decoding.
 		reobserved, err := observeClusterSSHSourceCohort(ctx, getJSON, before.Source)
 		if err != nil || !reflect.DeepEqual(observed, reobserved) {
-			return fail()
+			return fail("source membership recheck")
 		}
 		rechecked, err := readSecret()
 		if err != nil || !secret.SameObservation(rechecked) {
-			return fail()
+			return fail("runtime settings recheck")
 		}
 		after, err := authority(ctx)
 		if err != nil || ctx.Err() != nil {
-			return fail()
+			return fail("final authority read")
 		}
 		before.Cohort.ObservedAt, after.Cohort.ObservedAt = 0, 0
 		if !reflect.DeepEqual(before, after) || (retained != nil && !secret.SameObservation(*retained)) {
-			return fail()
+			return fail("final authority comparison")
 		}
 		if retained == nil {
 			retained = &secret
