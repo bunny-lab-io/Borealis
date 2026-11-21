@@ -7,6 +7,7 @@ You can follow the instructions on this page to install the Borealis Engine onto
 
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
     - Stable release bootstrap supports Linux AMD64 and ARM64 and requires `curl`, Python 3, and GNU Coreutils. Multi-node clusters remain AMD64-only.
+    - For clustered hosting, provision at least **240 GB of system disk per Engine**. Follow the [cluster storage requirements](managing-engine-clusters.md#requirements) when sizing and restoring virtual machines.
     - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
     - Run `Install-Engine.sh` and later `Engine.sh` with `sudo` unless shell user can access `/var/run/docker.sock`.
 
@@ -34,12 +35,12 @@ The CPU and RAM bands below describe current automatic profile selection **per E
 === "Homelab"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Non-clustered (1 Engine) or clustered (3 Engines) | Personal labs, testing, feature development, very small sites | About 30-40 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
+    | Non-clustered (1 Engine) or clustered (3 Engines) | Personal labs, testing, feature development, very small sites | About 30-40 | 1-3 | < 8 | < 16 GiB | 5 | Standalone 80-150 GiB / clustered 240 GB minimum |
 
 === "Small Business"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-    | Non-clustered (1 Engine) or clustered (3 Engines) | Smaller production environments | About 100-200 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
+    | Non-clustered (1 Engine) or clustered (3 Engines) | Smaller production environments | About 100-200 | 2-4 | 8-15 | 16-31 GiB | 8 | Standalone 150-250 GiB / clustered 240 GB minimum |
 
 === "MSP / Production (Clustered)"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |

@@ -18,6 +18,7 @@ Cluster conversion remains disabled until the exact installed stable K3s version
 ## Requirements
 
 * Ubuntu 24.04 or newer on every node
+* A system disk of at least **240 GB per clustered Engine**, including the first node and each joining or replacement node. Size larger for workloads that need additional replica, rebuild or installation space.
 * AMD64/Intel server architecture using the same Borealis sizing profile; ARM nodes are not supported
 * Static private IPv4 addresses on the same Layer 2 network
 * One unused private IPv4 address on the same Layer 2 network for the Cluster Virtual IP
@@ -32,6 +33,12 @@ Cluster conversion remains disabled until the exact installed stable K3s version
   * Hosts using genuine multipath storage must apply the Longhorn device blacklist before deployment
 * Supported odd active membership of one or three nodes
 * A content-addressed `rancher/k3s-upgrade` image configured in `BOREALIS_K3S_UPGRADE_IMAGE` before requesting a K3s control-plane update
+
+### Verify guest storage after a VM resize or rollback
+
+Check disk, partition and mounted filesystem sizes inside each guest with `lsblk`, `findmnt /` and `df -h /`. A virtual disk resize can leave the partition and filesystem at their previous sizes. After restoring a snapshot, check all three sizes again and repeat only the growth steps the guest needs.
+
+For a directly mounted ext4 root on the final partition, preview the change with `sudo growpart -N /dev/sda 2` if the guest identifies its root as `/dev/sda2`. Verify that the start sector stays the same and only the partition end moves into unused space. Apply with `sudo growpart /dev/sda 2`, then grow the mounted filesystem with `sudo resize2fs /dev/sda2`. Use the actual guest device names and the procedure appropriate to its filesystem and volume layout. Verify the result with `df -h /`. On an active Engine, also verify PostgreSQL readiness and Longhorn volume health.
 
 ## Enable the First Cluster Node
 
