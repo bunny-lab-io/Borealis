@@ -184,7 +184,11 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	client, err := newClusterSSHSourceBrokerClientFromEnv()
+	budget := clusterSSHSourceSnapshotTimeout
+	if joining {
+		budget = clusterSSHReadOnlySnapshotTimeout
+	}
+	client, err := newClusterSSHSourceBrokerClientWithTimeout(budget)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}

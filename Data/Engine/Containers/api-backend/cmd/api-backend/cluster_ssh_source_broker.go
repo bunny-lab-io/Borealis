@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	clusterSSHSourceSnapshotTimeout        = 30 * time.Second
-	clusterSSHQualificationSnapshotTimeout = 60 * time.Second
-	clusterSSHSourceBrokerPath             = "/internal/cluster/ssh-preparation-source"
-	clusterSSHSourceBrokerHost             = "borealis-cluster-source.borealis.svc"
-	clusterSSHSourceBrokerLimit            = 384 << 10
-	clusterSSHSourceBrokerMedia            = "application/octet-stream"
+	clusterSSHSourceSnapshotTimeout   = 30 * time.Second
+	clusterSSHReadOnlySnapshotTimeout = 60 * time.Second
+	clusterSSHSourceBrokerPath        = "/internal/cluster/ssh-preparation-source"
+	clusterSSHSourceBrokerHost        = "borealis-cluster-source.borealis.svc"
+	clusterSSHSourceBrokerLimit       = 384 << 10
+	clusterSSHSourceBrokerMedia       = "application/octet-stream"
 )
 
 // These wire types are used only inside authenticated encryption. Neither the
@@ -32,7 +32,7 @@ type clusterSSHSourceBrokerRequest struct {
 	Joining      bool                        `json:"joining,omitempty"`
 	Version      int                         `json:"version"`
 	ID           string                      `json:"id"`
-	AcceptBefore int64                       `json:"accept_before,omitempty"` // Optional earlier admission deadline for read-only qualification.
+	AcceptBefore int64                       `json:"accept_before,omitempty"` // Earlier admission deadline for an extended read-only source snapshot.
 	ExpiresAt    int64                       `json:"expires_at"`
 	Lease        clusterSSHTargetLease       `json:"lease"`
 	Baseline     clusterbootstrap.Expected   `json:"baseline"`
@@ -61,21 +61,28 @@ func (r clusterSSHSourceBrokerRequest) validWithin(now time.Time, seconds int64)
 	return r.AcceptBefore == 0 && !r.Joined && r.validSourceWithin(now, seconds)
 }
 
+func extendedClusterSSHSourceRead(lease clusterSSHTargetLease, joining bool) bool {
+	if joining {
+		return validClusterSSHPreparationLease(lease)
+	}
+	return lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify"
+}
+
 func (r clusterSSHSourceBrokerRequest) validSource(now time.Time) bool {
 	if r.AcceptBefore != 0 {
 		// The extra time is for already-admitted work. The original request
 		// arrival window, nonce checks and renewed database leases still apply.
-		return !r.Joined && !r.Joining && r.Lease.OperationStep == clusterSSHQualificationStep && r.Lease.Step == "qualify" &&
+		return !r.Joined && extendedClusterSSHSourceRead(r.Lease, r.Joining) &&
 			r.AcceptBefore > now.Unix() && r.AcceptBefore <= now.Unix()+40 &&
-			r.ExpiresAt-r.AcceptBefore == int64((clusterSSHQualificationSnapshotTimeout-clusterSSHSourceSnapshotTimeout)/time.Second) &&
-			r.validSourceWithin(now, int64(clusterSSHQualificationSnapshotTimeout/time.Second)+10)
+			r.ExpiresAt-r.AcceptBefore == int64((clusterSSHReadOnlySnapshotTimeout-clusterSSHSourceSnapshotTimeout)/time.Second) &&
+			r.validSourceWithin(now, int64(clusterSSHReadOnlySnapshotTimeout/time.Second)+10)
 	}
 	return r.validSourceWithin(now, 40)
 }
 
 func (r clusterSSHSourceBrokerRequest) snapshotTimeout() time.Duration {
 	if r.AcceptBefore != 0 {
-		return clusterSSHQualificationSnapshotTimeout
+		return clusterSSHReadOnlySnapshotTimeout
 	}
 	return clusterSSHSourceSnapshotTimeout
 }
@@ -175,6 +182,10 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 		}
 		return runner.readSSHStoragePreparationSnapshotFor(ctx, authority, request.Joining, request.snapshotTimeout(), func(ctx context.Context, window int64) ([]int64, error) {
 			return readClusterSSHWorkerCensus(ctx, store.db, window)
+		}, func(phase string) {
+			if request.Joining {
+				store.recordSSHWorkerStorageFailure(ctx, request.Lease, phase)
+			}
 		})
 	}
 	b.readJoined = func(ctx context.Context, request clusterSSHSourceBrokerRequest) (clusterSSHJoinedTargets, error) {

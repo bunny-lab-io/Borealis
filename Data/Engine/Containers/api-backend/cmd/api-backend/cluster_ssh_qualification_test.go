@@ -141,6 +141,14 @@ func TestClusterSSHQualificationSnapshotAdmissionWindow(t *testing.T) {
 	r.ExpiresAt--
 	r.Lease.OperationStep, r.Lease.Step = clusterSSHPreparationOperationStep, "stage_source"
 	if r.validSource(now) {
-		t.Fatal("mutating preparation lease used qualification time allowance")
+		t.Fatal("unmarked preparation lease used the longer time allowance")
+	}
+	r.Joining = true
+	if !r.validSource(now) || r.snapshotTimeout() != time.Minute || r.valid(now) || r.validSource(now.Add(35*time.Second)) {
+		t.Fatal("joining storage snapshot must keep the original admission cutoff")
+	}
+	r.Joined = true
+	if r.validSource(now) {
+		t.Fatal("extended storage read admitted a joined-target request")
 	}
 }

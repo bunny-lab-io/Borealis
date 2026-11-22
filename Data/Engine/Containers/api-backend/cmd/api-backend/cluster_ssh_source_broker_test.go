@@ -787,23 +787,27 @@ func TestClusterSSHSourceBrokerConcurrentReadsReleaseOnCancellation(t *testing.T
 }
 
 func TestClusterSSHQualificationSnapshotTransportDeadline(t *testing.T) {
-	request, a, snapshot := sshBrokerFixture(t)
-	request.Lease.OperationStep, request.Lease.Step = clusterSSHQualificationStep, "qualify"
-	a.Lease = request.Lease
-	broker := newClusterSSHSourceBroker(nil, nil, a.Lease.ControllerHolder, sshBrokerTestSecret)
-	broker.read = func(ctx context.Context, got clusterSSHSourceBrokerRequest) (clusterSSHPreparationSnapshot, error) {
-		deadline, ok := ctx.Deadline()
-		remaining := time.Until(deadline)
-		if !ok || got.AcceptBefore == 0 || remaining <= 55*time.Second || remaining > time.Minute {
-			t.Errorf("qualification snapshot deadline %v, admission cutoff present %t", remaining, got.AcceptBefore != 0)
+	for _, joining := range []bool{false, true} {
+		request, a, snapshot := sshBrokerFixture(t)
+		if !joining {
+			request.Lease.OperationStep, request.Lease.Step = clusterSSHQualificationStep, "qualify"
 		}
-		return snapshot, nil
-	}
-	server := httptest.NewServer(http.HandlerFunc(broker.handle))
-	defer server.Close()
-	client := sshBrokerClient(t, server.URL)
-	read := client.snapshotRead(func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, request.Lease, request.Baseline, request.sealed())
-	if _, err := read(context.Background()); err != nil {
-		t.Fatal(err)
+		a.Lease = request.Lease
+		broker := newClusterSSHSourceBroker(nil, nil, a.Lease.ControllerHolder, sshBrokerTestSecret)
+		broker.read = func(ctx context.Context, got clusterSSHSourceBrokerRequest) (clusterSSHPreparationSnapshot, error) {
+			deadline, ok := ctx.Deadline()
+			remaining := time.Until(deadline)
+			if !ok || got.AcceptBefore == 0 || got.Joining != joining || remaining <= 55*time.Second || remaining > time.Minute {
+				t.Errorf("qualification snapshot deadline %v, admission cutoff present %t", remaining, got.AcceptBefore != 0)
+			}
+			return snapshot, nil
+		}
+		server := httptest.NewServer(http.HandlerFunc(broker.handle))
+		defer server.Close()
+		client := sshBrokerClient(t, server.URL)
+		read := client.snapshotReadFor(func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, request.Lease, request.Baseline, request.sealed(), joining)
+		if _, err := read(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -156,12 +156,13 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
     switch (event.event_type) {
       case "ssh_check_started":
       case "ssh_source_stage_ready":
+      case "ssh_worker_storage_blocked":
       case "ssh_source_stage_blocked":
       case "ssh_preparation_blocked":
         if (operation.kind === "ssh_onboarding" && event.message) {
           label = event.message;
           if (event.event_type === "ssh_source_stage_ready") tone = "complete";
-          if (event.event_type === "ssh_source_stage_blocked") tone = "failed";
+          if (event.event_type === "ssh_source_stage_blocked" || event.event_type === "ssh_worker_storage_blocked") tone = "failed";
         }
         break;
       case "automatic_recovery_observation_started":

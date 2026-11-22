@@ -19,10 +19,10 @@ type clusterSSHStorageSnapshot struct {
 }
 
 func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshot(ctx context.Context, authority clusterSSHPreparationAuthorityRead, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
-	return r.readSSHStoragePreparationSnapshotFor(ctx, authority, false, clusterSSHSourceSnapshotTimeout, census)
+	return r.readSSHStoragePreparationSnapshotFor(ctx, authority, false, clusterSSHSourceSnapshotTimeout, census, nil)
 }
 
-func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx context.Context, authority clusterSSHPreparationAuthorityRead, joining bool, budget time.Duration, census clusterSSHWorkerCensusRead) (clusterSSHPreparationSnapshot, error) {
+func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx context.Context, authority clusterSSHPreparationAuthorityRead, joining bool, budget time.Duration, census clusterSSHWorkerCensusRead, blocked func(string)) (clusterSSHPreparationSnapshot, error) {
 	if census == nil || authority == nil || r == nil || r.kube == nil || r.kube.httpClient == nil || r.namespace != "borealis" {
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
@@ -96,6 +96,13 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 	}
 	var value clusterSSHPreparationSnapshot
 	started := time.Now()
+	reject := func(phase string) (clusterSSHPreparationSnapshot, error) {
+		log.Printf("SSH preparation storage snapshot rejected at %s after %s", phase, time.Since(started).Round(time.Millisecond))
+		if blocked != nil {
+			blocked(phase)
+		}
+		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+	}
 	stage := "initial storage inventories"
 	err := withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
@@ -172,20 +179,17 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		return nil
 	})
 	if err != nil || ctx.Err() != nil || !cleanup.clean() {
-		log.Printf("SSH preparation storage snapshot rejected at %s after %s", stage, time.Since(started).Round(time.Millisecond))
-		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+		return reject(stage)
 	}
 	before, err := scopedAuthority(ctx)
 	if err != nil || capacityCheck == nil || capacityCheck(ctx, before) != nil {
-		log.Print("SSH preparation storage snapshot rejected at final target capacity")
-		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+		return reject("final target capacity")
 	}
 	after, err := scopedAuthority(ctx)
 	after.Cohort.ObservedAt = 0
 	afterDigest, digestErr := clusterSSHPreparationDigest(after)
 	if err != nil || digestErr != nil || afterDigest != capacityAuthority || ctx.Err() != nil || !cleanup.clean() {
-		log.Print("SSH preparation storage snapshot rejected at final authority comparison")
-		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+		return reject("final authority comparison")
 	}
 	return value, nil
 }

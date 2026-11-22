@@ -221,6 +221,27 @@ func (s *postgresOperatorStore) recordSSHCheckStarted(parent context.Context, co
 	}
 }
 
+// An expired snapshot can still report which read stopped. The event is
+// historical and may only describe its original active target generation.
+func (s *postgresOperatorStore) recordSSHWorkerStorageFailure(parent context.Context, lease clusterSSHTargetLease, phase string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), time.Second)
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO engine.cluster_operation_events
+ (operation_id,cluster_id,event_type,state,message,details_json,created_at)
+ SELECT o.id,s.cluster_id,'ssh_worker_storage_blocked',o.state,$1,
+ json_build_object('attempt',o.attempt,'target_id',t.id,'generation',t.lease_generation)::text,floor(extract(epoch FROM clock_timestamp()))
+ FROM engine.cluster_operations o JOIN engine.cluster_onboarding_targets t ON t.operation_id=o.id,
+ engine.cluster_state s,engine.cluster_application_leases l
+ WHERE o.kind='ssh_onboarding' AND o.id=$2 AND o.attempt=$3 AND o.current_step='prepare_ssh_targets' AND o.state='running'
+ AND s.id=1 AND s.active_operation_id=o.id AND l.name=$4 AND l.holder=$5 AND l.expires_at>extract(epoch FROM clock_timestamp())
+ AND t.id=$6 AND t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$7 AND t.lease_generation=$8`,
+		"Preparation worker storage check stopped during "+phase+".", lease.OperationID, lease.OperationAttempt,
+		clusterControllerLeaseName, lease.ControllerHolder, lease.TargetID, lease.Holder, lease.Generation)
+	if err != nil {
+		log.Printf("cluster operation %s: worker storage failure could not be recorded", lease.OperationID)
+	}
+}
+
 func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Context, work clusterSSHQualificationWork, report clusterSSHQualificationReport) error {
 	if len(work.Claims) != len(work.Proof.Cohort.Targets) || len(work.Claims) < 1 || len(work.Claims) > 2 || !report.valid(work.Proof.Cohort.Attempt) {
 		return errClusterConflict

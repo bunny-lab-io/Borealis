@@ -127,7 +127,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		report.Checks[stage].State = "blocked"
 		return report
 	}
-	sourceClient, err := newClusterSSHSourceBrokerClientWithTimeout(clusterSSHQualificationSnapshotTimeout)
+	sourceClient, err := newClusterSSHSourceBrokerClientWithTimeout(clusterSSHReadOnlySnapshotTimeout)
 	if err != nil {
 		report.Checks[stage].State = "blocked"
 		return report

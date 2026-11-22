@@ -113,8 +113,8 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 			return fail()
 		}
 		budget := clusterSSHSourceSnapshotTimeout
-		if lease.OperationStep == clusterSSHQualificationStep && lease.Step == "qualify" && !joining {
-			budget = clusterSSHQualificationSnapshotTimeout
+		if extendedClusterSSHSourceRead(lease, joining) {
+			budget = clusterSSHReadOnlySnapshotTimeout
 		}
 		ctx, cancel := context.WithTimeout(parent, budget+15*time.Second)
 		defer cancel()
@@ -130,7 +130,7 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 		}
 		request := clusterSSHSourceBrokerRequest{Joining: joining, Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
 			Lease: lease, Baseline: baseline, Binding: sealed.binding, Generation: sealed.generation, Ciphertext: sealed.ciphertext}
-		if budget == clusterSSHQualificationSnapshotTimeout {
+		if budget == clusterSSHReadOnlySnapshotTimeout {
 			request.AcceptBefore = request.ExpiresAt
 			request.ExpiresAt += int64((budget - clusterSSHSourceSnapshotTimeout) / time.Second)
 		}
