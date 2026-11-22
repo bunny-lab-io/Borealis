@@ -138,6 +138,9 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		return report
 	}
 	err = withClusterSSHNetworkTargets(ctx, store, aegis, work.Baseline, work.Claims, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+		if err := store.awaitInspectionRelease(ctx, work); err != nil {
+			return err
+		}
 		anchor := work.Claims[0]
 		source := sourceClient.snapshotRead(readers.Authority, anchor.Lease, work.Baseline, anchor.Sealed)
 		profileSourceRead, err := qualifyClusterSSHHostProfile(ctx, readers, source)

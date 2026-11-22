@@ -29,6 +29,7 @@ const (
 type clusterPreparationReleaseKey struct{}
 type clusterPreparationReleaseRequest struct {
 	ID, Operation, Holder, Confirmation string
+	Inspection                          string `json:"Inspection,omitempty"`
 	Attempt, Expires                    int64
 	Expected                            clusterbootstrap.Expected
 	AssetName                           string
@@ -59,21 +60,24 @@ func clusterPreparationReleaseCiphers() (cipher.AEAD, cipher.AEAD, error) {
 }
 
 func clusterPreparationReleaseContext(ctx context.Context, client *clusterSSHPreparationCleanBrokerClient, snapshot clusterSSHPreparationApprovalSnapshot) (context.Context, error) {
-	request, response, err := clusterPreparationReleaseCiphers()
-	if err != nil {
-		return nil, err
-	}
 	var intent struct {
 		Request clusterSSHPreparationConfirmation `json:"ssh_preparation_request"`
 	}
 	if json.Unmarshal([]byte(snapshot.work.Payload), &intent) != nil || !vipScopeUUID(intent.Request.RequestID) {
 		return nil, errClusterConflict
 	}
+	return clusterBoundReleaseContext(ctx, client, snapshot.work.Baseline, clusterPreparationReleaseRequest{Operation: snapshot.work.Authorization.OperationID, Attempt: snapshot.work.Authorization.Attempt, Holder: snapshot.work.Authorization.ControllerHolder, Confirmation: intent.Request.RequestID})
+}
+
+func clusterBoundReleaseContext(ctx context.Context, client *clusterSSHPreparationCleanBrokerClient, expected clusterbootstrap.Expected, binding clusterPreparationReleaseRequest) (context.Context, error) {
+	request, response, err := clusterPreparationReleaseCiphers()
+	if err != nil {
+		return nil, err
+	}
 	httpClient := *client.httpClient
 	httpClient.Timeout = 0 // Caller owns transfer cancellation; header and admission deadlines stay bounded.
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	reader := &clusterPreparationReleaseReader{request: request, response: response, endpoint: client.endpoint, client: &httpClient, expected: snapshot.work.Baseline,
-		binding: clusterPreparationReleaseRequest{Operation: snapshot.work.Authorization.OperationID, Attempt: snapshot.work.Authorization.Attempt, Holder: snapshot.work.Authorization.ControllerHolder, Confirmation: intent.Request.RequestID}}
+	reader := &clusterPreparationReleaseReader{request: request, response: response, endpoint: client.endpoint, client: &httpClient, expected: expected, binding: binding}
 	return context.WithValue(ctx, clusterPreparationReleaseKey{}, reader), nil
 }
 
@@ -255,11 +259,18 @@ func registerClusterPreparationReleaseRoute(mux *http.ServeMux, auth *authServic
 }
 
 // The terminal artifact proof runs just after the atomic approval commit.
-// Only that cleanup-fenced phase or the original confirmed waiting phase may
-// read the release. No transaction or borrowed connection spans GitHub IO.
+// Inspection-only staging uses a separate binding that expires when the
+// controller has the release. No SQL connection spans GitHub IO.
 func (s *postgresOperatorStore) preparationReleaseCurrent(ctx context.Context, q clusterPreparationReleaseRequest) bool {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	if !q.validReleaseAuthority() {
+		return false
+	}
+	if q.Inspection != "" {
+		status, err := s.sourceStageStatus(ctx, q)
+		return err == nil && status == clusterSSHStagePending
+	}
 	var present int
 	return s != nil && s.db != nil && s.db.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_operations o,engine.cluster_state s,engine.cluster_application_leases l
  WHERE o.id=$1 AND o.attempt=$2 AND o.kind='ssh_onboarding' AND s.id=1 AND s.active_operation_id=o.id
@@ -271,6 +282,11 @@ func (s *postgresOperatorStore) preparationReleaseCurrent(ctx context.Context, q
  AND ((o.state='waiting' AND o.current_step=$8) OR (o.state='running' AND o.current_step=$9 AND o.error_text=$10))`,
 		q.Operation, q.Attempt, q.Expected.Release, q.Expected.SourceSHA, clusterControllerLeaseName, q.Holder, q.Confirmation, clusterSSHQualificationStep, clusterSSHPreparationOperationStep, clusterSSHPreparationCleanupPending, int64(clusterSSHFreshEvidenceSeconds)).Scan(&present) == nil && present == 1
 }
+func (q clusterPreparationReleaseRequest) validReleaseAuthority() bool {
+	return (vipScopeUUID(q.Confirmation) && q.Inspection == "") ||
+		(q.Confirmation == "" && validClusterSSHPreparationDigest(q.Inspection))
+}
+
 func (b *clusterPreparationReleaseBroker) acceptRequest(id string, expires, now int64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -302,7 +318,7 @@ func (b *clusterPreparationReleaseBroker) handle(w http.ResponseWriter, r *http.
 	closeErr := r.Body.Close()
 	var q clusterPreparationReleaseRequest
 	now := time.Now().Unix()
-	if err != nil || closeErr != nil || openClusterSSHVIP(b.request, clusterPreparationReleasePath, raw, &q, clusterPreparationReleaseRequestLimit) != nil || !vipScopeUUID(q.ID) || !vipScopeUUID(q.Operation) || !vipScopeUUID(q.Confirmation) || q.Attempt < 1 || q.Holder == "" || len(q.Holder) > 1024 || q.Expires <= now || q.Expires > now+30 || q.Expected.Validate() != nil || q.Expected.Repository != clusterGitHubRepo() {
+	if err != nil || closeErr != nil || openClusterSSHVIP(b.request, clusterPreparationReleasePath, raw, &q, clusterPreparationReleaseRequestLimit) != nil || !vipScopeUUID(q.ID) || !vipScopeUUID(q.Operation) || !q.validReleaseAuthority() || q.Attempt < 1 || q.Holder == "" || len(q.Holder) > 1024 || q.Expires <= now || q.Expires > now+30 || q.Expected.Validate() != nil || q.Expected.Repository != clusterGitHubRepo() {
 		fail()
 		return
 	}

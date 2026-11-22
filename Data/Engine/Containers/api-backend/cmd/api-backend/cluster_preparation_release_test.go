@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -199,5 +201,120 @@ func testPreparationReleasePhaseBinding(t *testing.T) {
 	f.exec(t, `UPDATE engine.cluster_operations SET error_text=NULL WHERE id=$1`, f.op.ID)
 	if current(q) {
 		t.Fatal("released preparation retained broker access")
+	}
+}
+
+func testInspectionReleaseStaging(t *testing.T) {
+	f := newSSHQualificationFixture(t, false)
+	s := f.c.store
+	work, err := s.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := clusterSSHPreparationDigest(work.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := clusterPreparationReleaseRequest{Operation: f.op.ID, Attempt: f.op.Attempt, Holder: f.c.holder, Expected: work.Baseline, Inspection: digest}
+	if status, err := s.sourceStageStatus(f.ctx, q); err != nil || status != clusterSSHStagePending {
+		t.Fatal("source stage missing", status, err)
+	}
+	if !s.preparationReleaseCurrent(f.ctx, q) {
+		t.Fatal("inspected source download denied")
+	}
+	for _, alter := range []func(*clusterPreparationReleaseRequest){
+		func(q *clusterPreparationReleaseRequest) { q.Inspection = strings.Repeat("a", 64) },
+		func(q *clusterPreparationReleaseRequest) { q.Attempt++ },
+		func(q *clusterPreparationReleaseRequest) { q.Operation = newClusterUUID() },
+		func(q *clusterPreparationReleaseRequest) { q.Holder = "another" },
+		func(q *clusterPreparationReleaseRequest) { q.Expected.SourceSHA = strings.Repeat("1", 40) },
+		func(q *clusterPreparationReleaseRequest) { q.Confirmation = newClusterUUID() },
+	} {
+		other := q
+		alter(&other)
+		if s.preparationReleaseCurrent(f.ctx, other) {
+			t.Fatal("changed binding retained source authority")
+		}
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, 20*time.Millisecond)
+	defer cancel()
+	if err := s.awaitInspectionRelease(ctx, work); err == nil || ctx.Err() != context.DeadlineExceeded {
+		t.Fatal("qualification escaped pending stage", err)
+	}
+	if err := f.c.setStageStatus(f.ctx, q, clusterSSHStagePending, clusterSSHStageReady); err != nil {
+		t.Fatal(err)
+	}
+	if s.preparationReleaseCurrent(f.ctx, q) || s.awaitInspectionRelease(f.ctx, work) != nil || s.db.Stats().InUse != 0 {
+		t.Fatal("staged handoff retained transfer authority or blocked native qualification")
+	}
+	if f.c.setStageStatus(f.ctx, q, clusterSSHStagePending, clusterSSHStageReady) == nil {
+		t.Fatal("stale stage receipt replayed")
+	}
+	if _, err := f.c.claimClusterSSHPreparation(f.ctx, f.op, newClusterUUID()); err == nil {
+		t.Fatal("source staging authorized target mutation")
+	}
+	bytes := &sshApprovalArtifactBytes{}
+	dir := t.TempDir()
+	f.c.sourceStage = &clusterSSHSourceStage{clusterSSHPreparationArtifactBytes: bytes, directory: dir, binding: q}
+	if err := f.c.pruneSourceStage(f.ctx); err != nil || bytes.closes.Load() != 0 {
+		t.Fatal("discarded valid staged files", err)
+	}
+	if _, err := s.cancelClusterOperation(f.ctx, "fixture", f.op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.pruneSourceStage(f.ctx); err != nil || bytes.closes.Load() != 1 || f.c.sourceStage != nil {
+		t.Fatal("cancelled files retained", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("cancelled directory retained")
+	}
+}
+
+func TestClusterPreparationReleaseStageTransferAndRestart(t *testing.T) {
+	q := clusterPreparationReleaseRequest{Operation: newClusterUUID(), Attempt: 1, Holder: "original", Inspection: strings.Repeat("a", 64)}
+	bytes := &sshApprovalArtifactBytes{}
+	root := t.TempDir()
+	t.Setenv("BOREALIS_CLUSTER_SCRATCH_DIR", root)
+	dir := filepath.Join(root, clusterSSHStageDirectory)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := clusterController{sourceStage: &clusterSSHSourceStage{clusterSSHPreparationArtifactBytes: bytes, directory: dir, binding: q, postgres: "original-image"}}
+	other := q
+	other.Attempt++
+	if _, err := c.takeSourceStage(other, "original-image"); err == nil {
+		t.Fatal("wrong attempt received files")
+	}
+	if _, err := c.takeSourceStage(q, "changed-image"); err == nil {
+		t.Fatal("changed source image received files")
+	}
+	owned, err := c.takeSourceStage(q, "original-image")
+	if err != nil || c.sourceStage != nil {
+		t.Fatal("original transfer", err)
+	}
+	if _, err := c.takeSourceStage(q, "original-image"); err == nil {
+		t.Fatal("replayed staged files")
+	}
+	if err := owned.Close(); err != nil || bytes.closes.Load() != 1 {
+		t.Fatal("files remained open", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("directory retained")
+	}
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	otherDir := filepath.Join(root, "unrelated")
+	if err := os.Mkdir(otherDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := initializeSSHSourceScratch(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("abandoned staging retained")
+	}
+	if _, err := os.Stat(otherDir); err != nil {
+		t.Fatal("unrelated directory lost", err)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const clusterSSHStageLost = "Source staging is unavailable. Start a fresh inspection before preparation."
+const clusterSSHAwaitConfirmation = "Preparation awaits explicit confirmation of the current plan."
 const clusterSSHPreparationCleanupPending = "Preparation approval cleanup pending; worker dispatch remains blocked."
 
 type clusterSSHPreparationGateScope func(context.Context, clusterSSHPreparationApprovalSnapshot,
@@ -17,6 +19,14 @@ type clusterSSHPreparationGateScope func(context.Context, clusterSSHPreparationA
 // Only the sole controller evaluates waiting confirmation and commits approval.
 // API executors retain Aegis/identity custody and consume the durable reservation.
 func (c *clusterController) runSSHPreparationParent(ctx context.Context, operation clusterControllerOperation, getJSON func(context.Context, string, any) error) error {
+	if required, _ := operation.Payload["ssh_source_staging_required"].(bool); required && operation.State == "waiting" && operation.CurrentStep == clusterSSHQualificationStep {
+		if operation.Payload["ssh_qualification"] == nil {
+			return c.stageInspectionRelease(ctx, operation)
+		}
+		if c.sourceStage == nil {
+			return c.recordSSHPreparationBlocked(ctx, operation, clusterSSHStageLost)
+		}
+	}
 	var projection clusterSSHPreparationTargetsRead
 	return c.runSSHPreparationParentWithGates(ctx, operation, getJSON,
 		func(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot, consume func(context.Context, clusterSSHPreparationGates) (clusterSSHPreparationReadinessReceipt, error)) error {
@@ -80,7 +90,7 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 		return c.recordSSHPreparationBlocked(parent, operation, "Preparation confirmation is invalid; inspect and confirm the current plan again.")
 	}
 	if len(request) == 0 {
-		return c.recordSSHPreparationBlocked(parent, operation, "Preparation awaits explicit confirmation of the current plan.")
+		return c.recordSSHPreparationBlocked(parent, operation, clusterSSHAwaitConfirmation)
 	}
 	confirmation, err := parseClusterSSHPreparationRequest(request, snapshot.work.Authorization, snapshot.work.Proof.Source)
 	if err != nil || confirmation.ConfirmedAt > now || now-confirmation.ConfirmedAt >= clusterSSHFreshEvidenceSeconds {
@@ -149,6 +159,7 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 
 // Persist only changed public state. Waiting controller ticks cannot spam
 // events, alter the confirmed payload, claim targets or refresh proof expiry.
+// Losing the local stage after a native failure must preserve its diagnosis.
 func (c *clusterController) recordSSHPreparationBlocked(parent context.Context, operation clusterControllerOperation, reason string) error {
 	if c == nil || c.store == nil || c.store.db == nil || len(reason) == 0 || len(reason) > 4096 || operation.State != "waiting" || operation.CurrentStep != clusterSSHQualificationStep {
 		return errClusterConflict
@@ -167,8 +178,10 @@ func (c *clusterController) recordSSHPreparationBlocked(parent context.Context, 
  FROM moment,engine.cluster_state s,engine.cluster_application_leases l
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step=$2 AND o.attempt=$3
  AND s.id=1 AND s.active_operation_id=o.id AND l.name=$5 AND l.holder=$6 AND l.expires_at>moment.now
- AND COALESCE(o.error_text,'')<>$4 RETURNING s.cluster_id,floor(moment.now)::bigint`, operation.ID,
-		clusterSSHQualificationStep, operation.Attempt, reason, clusterControllerLeaseName, c.holder).Scan(&clusterID, &now)
+ AND COALESCE(o.error_text,'')<>$4
+ AND ($4<>$7 OR COALESCE(o.error_text,'') IN ('',$8,$9))
+ RETURNING s.cluster_id,floor(moment.now)::bigint`, operation.ID,
+		clusterSSHQualificationStep, operation.Attempt, reason, clusterControllerLeaseName, c.holder, clusterSSHStageLost, clusterSSHStageReady, clusterSSHAwaitConfirmation).Scan(&clusterID, &now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

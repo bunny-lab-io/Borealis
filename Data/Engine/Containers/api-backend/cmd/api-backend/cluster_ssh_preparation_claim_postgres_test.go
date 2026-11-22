@@ -39,6 +39,8 @@ func newSSHPreparationClaimFixture(t *testing.T, replacement bool) (sshPreparati
 	if json.Unmarshal([]byte(raw), &payload) != nil {
 		t.Fatal("decode payload")
 	}
+	// This fixture starts with already-approved legacy work and no controller-local files.
+	delete(payload, "ssh_source_staging_required")
 	payload["ssh_preparation_confirmation"] = sshPreparationConfirmationFixture(t, &authorization, proof.Source)
 	plan, _ := clusterSSHPreparationPlanDigest(authorization)
 	var receipts [6]string

@@ -132,6 +132,7 @@ type clusterControllerStepRunner interface {
 }
 
 type clusterController struct {
+	sourceStage                *clusterSSHSourceStage
 	leaseTransport             leaseExecutor
 	leaseConfirmedAt           atomic.Pointer[time.Time]
 	store                      *postgresOperatorStore
@@ -315,6 +316,7 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		soak:             envDurationSeconds("BOREALIS_CLUSTER_MIN_READY_SOAK_SECONDS", 30*time.Second),
 	}
 	controller := &clusterController{store: store, runner: runner, holder: holder, now: time.Now, maxIdleConnections: cfg.DBMaxIdleConns, leaseTransport: &postgresLeaseTransport{dsn: normalizePostgresDriverURL(cfg)}}
+	defer controller.discardSourceStage()
 	runner.persistRemovalFence = controller.persistRemovalFence
 	runner.recordOperationSoak = controller.recordOperationSoak
 	healthServer := controller.healthServer()
@@ -340,6 +342,9 @@ func runClusterController(ctx context.Context, cfg gatewayConfig) error {
 		case err := <-healthExited:
 			return err
 		}
+	}
+	if err := initializeSSHSourceScratch(); err != nil {
+		return err
 	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -411,7 +416,8 @@ func (c *clusterController) healthServer() *http.Server {
 func (c *clusterController) runOnce(ctx context.Context) error {
 	owned, err := c.acquireLease(ctx)
 	if err != nil || !owned {
-		return err
+		controllerErr := c.discardSourceStage()
+		return errors.Join(err, controllerErr)
 	}
 	confirmedAt := time.Now()
 	if confirmed := c.leaseConfirmedAt.Load(); confirmed != nil {
@@ -424,6 +430,9 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	c.store.db.SetMaxIdleConns(c.maxIdleConnections)
 	defer leaseGuard.Close()
 	runCtx := leaseGuard.Context()
+	if err := c.pruneSourceStage(runCtx); err != nil {
+		return err
+	}
 	if err := c.reconcileAdmissions(runCtx); err != nil {
 		return err
 	}

@@ -308,6 +308,21 @@ func (c *clusterController) withPreparationArtifacts(parent context.Context, sna
 	d.acquire = func(ctx context.Context, postgres string, check func(context.Context) error) (clusterSSHPreparationArtifactBytes, error) {
 		return acquireClusterSSHPreparationArtifacts(ctx, scratch, work.Baseline, version, postgres, check)
 	}
+	var required bool
+	if clusterBootstrapObject([]byte(work.Payload), map[string]any{"ssh_source_staging_required": &required}) != nil {
+		return errClusterConflict
+	}
+	if required {
+		// A waiting stage supplies bytes only. The current source observation,
+		// publication and all four approval proofs still run in this scope.
+		d.acquire = func(ctx context.Context, postgres string, check func(context.Context) error) (clusterSSHPreparationArtifactBytes, error) {
+			binding := clusterPreparationReleaseRequest{Operation: operation.ID, Attempt: operation.Attempt, Holder: c.holder, Inspection: work.Authorization.InspectionSHA256, Expected: work.Baseline}
+			if check(ctx) != nil {
+				return nil, errClusterConflict
+			}
+			return c.takeSourceStage(binding, postgres)
+		}
+	}
 	d.terminal = func(receipt clusterSSHPreparationReadinessReceipt, artifact string) (func(context.Context) error, error) {
 		if reflect.DeepEqual(receipt, clusterSSHPreparationReadinessReceipt{}) {
 			return proposal, nil

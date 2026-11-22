@@ -15,12 +15,13 @@ func newSSHQualificationFixture(t *testing.T, replacement bool) sshPreparationAu
 	f := newSSHPreparationAuthorityFixtureForTopology(t, replacement)
 	// Reuse the real controller-produced inspection proof, returning only the
 	// isolated fixture's reserved preparation rows to their original wait.
-	f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets' WHERE id=$1`, f.op.ID)
+	f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets',error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStagePending)
 	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='queued',current_step='inspection_complete',lease_holder='',lease_expires_at=0,lease_generation=inspected_generation WHERE operation_id=$1`, f.op.ID)
 	return f
 }
 
 func TestClusterSSHQualificationPostgresReadOnlyLifecycle(t *testing.T) {
+	t.Run("source staging authority and custody", testInspectionReleaseStaging)
 	for _, replacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "expansion", true: "replacement"}[replacement], func(t *testing.T) {
 			f := newSSHQualificationFixture(t, replacement)

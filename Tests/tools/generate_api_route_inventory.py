@@ -156,7 +156,7 @@ def classify(pattern: str) -> tuple[str, str]:
     if route_path == "/internal/cluster/k3s-join-result":
         return "internal-cluster", "operator-derived-aead-and-pending-native-job-receipt"
     if route_path == "/internal/cluster/preparation-release":
-        return "internal-cluster", "operator-derived-aead-and-confirmed-release-read"
+        return "internal-cluster", "operator-derived-aead-and-inspection-or-confirmation-bound-release-read"
     if route_path == "/internal/cluster/ssh-preparation-clean-targets":
         return "internal-cluster", "operator-derived-aead-and-confirmed-waiting-proposal"
     if route_path in {"/internal/cluster/ssh-preparation-source", "/internal/cluster/ssh-vip-scope", "/internal/cluster/ssh-vip-check"}:

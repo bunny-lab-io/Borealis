@@ -63,7 +63,7 @@ func newSSHPreparationAuthorityFixtureForTopology(t *testing.T, replacement bool
 	}
 	// Reserved preparation phase exists only in this isolated fixture. Production
 	// claiming still rejects it; these tests do not implement a transition.
-	f.exec(t, `UPDATE engine.cluster_operations SET state='running',current_step='prepare_ssh_targets' WHERE id=$1`, f.op.ID)
+	f.exec(t, `UPDATE engine.cluster_operations SET state='running',current_step='prepare_ssh_targets',error_text=NULL WHERE id=$1`, f.op.ID)
 	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET current_step='stage_source' WHERE operation_id=$1`, f.op.ID)
 	lease := old
 	lease.Holder = newClusterUUID()
