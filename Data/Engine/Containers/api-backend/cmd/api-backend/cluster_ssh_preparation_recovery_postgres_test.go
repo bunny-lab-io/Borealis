@@ -95,10 +95,38 @@ func TestClusterSSHPreparationRecoveryPostgresAtomicCohort(t *testing.T) {
 		t.Run(map[bool]string{false: "expansion", true: "replacement"}[replacement], func(t *testing.T) {
 			f, initial := newSSHPreparationRecoveryFixture(t, replacement)
 			beforeEvents := f.events(t)
-			record, err := f.c.reserveClusterSSHPreparationRecovery(f.ctx, f.op)
-			if err != nil {
-				t.Fatal("reserve", err)
+			targetID := f.targets[0].Binding.TargetID
+			renew := func() {
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=floor(extract(epoch FROM clock_timestamp()))::bigint+45 WHERE id=$1`, targetID)
 			}
+			expire := func() {
+				f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=1 WHERE id=$1`, targetID)
+			}
+			renew()
+			if _, selected, err := f.c.claimOperation(f.ctx); err != nil || selected {
+				t.Fatal("selected cohort with a live worker", err)
+			}
+			expire()
+			op, selected, err := f.c.claimOperation(f.ctx)
+			if err != nil || !selected || op.ID != f.op.ID {
+				t.Fatal("controller missed expired cohort", err)
+			}
+			renew()
+			before := sshPreparationRecoveryState(t, f)
+			if err := f.c.runSSHPreparationParent(f.ctx, op, nil); err == nil || before != sshPreparationRecoveryState(t, f) {
+				t.Fatal("late renewal did not fence recovery", err)
+			}
+			expire()
+			if err := f.c.runSSHPreparationParent(f.ctx, op, nil); err != nil {
+				t.Fatal("controller recovery reservation", err)
+			}
+			recovered := op
+			recovered.CurrentStep = clusterSSHPreparationRecoveryOperationStep
+			stored, err := f.c.readClusterSSHPreparationRecovery(f.ctx, recovered)
+			if err != nil {
+				t.Fatal("read controller reservation", err)
+			}
+			record := stored.record
 			assertSSHPreparationRecoveryEvents(t, f, record, 1)
 			if _, err := f.c.reserveClusterSSHPreparationRecovery(f.ctx, f.op); err == nil {
 				t.Fatal("lost reservation acknowledgement minted second reservation")

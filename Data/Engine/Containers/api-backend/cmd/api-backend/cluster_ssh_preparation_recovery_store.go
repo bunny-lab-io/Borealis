@@ -140,7 +140,7 @@ func (c *clusterController) readClusterSSHPreparationRecovery(ctx context.Contex
 	return snapshot, nil
 }
 
-// Reservation is callable but has no production caller. All initial claims
+// The original controller reserves interrupted preparation. All initial claims
 // must be expired and still at stage_source; partial settlement is unsupported.
 // Retain old holders/generations/expiries in both target rows and the immutable
 // record. Expiration alone never proves the old producer stopped.

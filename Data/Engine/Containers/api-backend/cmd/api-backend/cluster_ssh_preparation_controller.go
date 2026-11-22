@@ -74,7 +74,13 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 				return c.runSSHPreparedAdmissionParent(parent, operation)
 			}
 		}
-		return nil // Reserved work belongs to the existing API executor.
+		if _, completed := operation.Payload["ssh_preparation"]; !completed && operation.Payload["ssh_preparation_authorization"] != nil {
+			// Selection observed an expired cohort. Recheck custody atomically
+			// because a worker may have renewed since the controller selected it.
+			_, err := c.reserveClusterSSHPreparationRecovery(parent, operation)
+			return err
+		}
+		return nil
 	}
 	if operation.State != "waiting" || operation.CurrentStep != clusterSSHQualificationStep || scope == nil {
 		return errClusterConflict

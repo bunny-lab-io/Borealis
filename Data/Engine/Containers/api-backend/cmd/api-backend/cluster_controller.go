@@ -1432,12 +1432,22 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		  JOIN engine.cluster_state c ON c.active_operation_id=o.id
 		 WHERE o.state IN ('queued','running','waiting')
 		   AND o.kind<>'ssh_identity_recovery'
-		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='prepare_ssh_targets'
-		     AND COALESCE(o.payload_json::jsonb->'ssh_preparation'->>'version','') NOT IN ('1','2'))
+		   AND (o.kind<>'ssh_onboarding' OR o.current_step<>'prepare_ssh_targets'
+		     OR o.payload_json::jsonb->'ssh_preparation'->>'version' IN ('1','2')
+		     OR (o.state='running' AND NOT (o.payload_json::jsonb ? 'ssh_preparation')
+		       AND o.payload_json::jsonb->'ssh_preparation_authorization'->>'controller_holder'=$3
+		       AND EXISTS (
+		         SELECT 1 FROM engine.cluster_onboarding_targets t
+		         LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
+		         WHERE t.operation_id=o.id GROUP BY t.operation_id
+		         HAVING bool_and((t.state='running' AND t.current_step='stage_source'
+		           AND t.credential_state='available' AND p.expires_at>extract(epoch FROM statement_timestamp())
+		           AND t.lease_holder<>'' AND t.lease_expires_at>0
+		           AND t.lease_expires_at<=extract(epoch FROM statement_timestamp())) IS TRUE))))
 		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
 		   AND NOT (o.kind='ssh_onboarding' AND COALESCE(o.error_text,'') IN ($1,$2))
 		 FOR UPDATE OF o SKIP LOCKED
-	`, clusterSSHPreparedAdmissionRunning, clusterSSHPreparedAdmissionBlocked).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
+	`, clusterSSHPreparedAdmissionRunning, clusterSSHPreparedAdmissionBlocked, c.holder).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return clusterControllerOperation{}, false, nil
 	}
