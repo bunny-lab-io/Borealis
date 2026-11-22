@@ -136,8 +136,12 @@ func newClusterSSHPreparationStorageRead(snapshot clusterSSHPreparationApprovalS
 			return fail("Authenticated proposal-bound persistent filesystem reader is unavailable.")
 		}
 		observed, err := read(ctx, plan)
-		if err != nil || observed.validate(owned) != nil || observed.Digest != input.Targets.Digest || !slices.Equal(observed.Targets, input.Targets.Targets) ||
-			!validClusterSSHPreparationPackages(observed.Targets, observed.Packages) || !reflect.DeepEqual(observed.Packages, input.Targets.Packages) ||
+		// Both observations independently prove clean hosts under the original proposal.
+		// Only their capacity inputs must agree across separate SSH sessions.
+		sameCapacityInputs := func(a, b clusterSSHPreparationTargetCPU) bool {
+			return a.TargetID == b.TargetID && a.CPU == b.CPU && a.PackagesSHA256 == b.PackagesSHA256
+		}
+		if err != nil || observed.validate(owned) != nil || !slices.EqualFunc(observed.Targets, input.Targets.Targets, sameCapacityInputs) ||
 			!validClusterSSHPreparationFilesystems(owned, paths, observed.Filesystems) || check(ctx) != nil || ctx.Err() != nil {
 			return fail("Fresh persistent mounts, bytes or inodes are unavailable or changed on an original target; inspect targets again.")
 		}

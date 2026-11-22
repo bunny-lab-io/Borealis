@@ -256,7 +256,7 @@ func TestClusterSSHPreparationStorageSourceBorrowsVerifiedCapacity(t *testing.T)
 // Source objects use the complete capacity readers. Filesystem and demand
 // doubles exercise the approval decision independently of live installation.
 func TestClusterSSHPreparationStorageGate(t *testing.T) {
-	for _, mode := range []string{"valid", "missing demand", "unavailable family", "empty demand", "missing reader", "reader failure", "source unavailable", "configuration drift", "storage drift", "collector provenance", "CPU drift", "namespace drift", "foreign target", "missing filesystem", "temporary filesystem", "existing storage", "byte shortage", "inode shortage", "late authority", "cancel", "source changed after filesystem", "wrong plan"} {
+	for _, mode := range []string{"valid", "new clean observation", "changed package profile", "missing demand", "unavailable family", "empty demand", "missing reader", "reader failure", "source unavailable", "configuration drift", "storage drift", "collector provenance", "CPU drift", "namespace drift", "foreign target", "missing filesystem", "temporary filesystem", "existing storage", "byte shortage", "inode shortage", "late authority", "cancel", "source changed after filesystem", "wrong plan"} {
 		t.Run(mode, func(t *testing.T) {
 			f, capacity, source := sshPreparationStorageGateFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -335,6 +335,20 @@ func TestClusterSSHPreparationStorageGate(t *testing.T) {
 						v.Filesystems = append(v.Filesystems, clusterSSHTargetFilesystemEvidence{TargetID: target.TargetID, Storage: e})
 					}
 					switch mode {
+					case "new clean observation", "changed package profile":
+						v.Targets[0].ObservationSHA256 = strings.Repeat("e", 64)
+						v.Packages[0].ObservationSHA256 = v.Targets[0].ObservationSHA256
+						if mode == "changed package profile" {
+							v.Packages[0].Selection.ProfileSHA256 = strings.Repeat("b", 64)
+							v.Targets[0].PackagesSHA256, err = clusterSSHPreparationPackageDigest(v.Packages[0].Selection)
+							if err != nil {
+								t.Fatal(err)
+							}
+						}
+						v.Digest, err = clusterSSHPreparationTargetCPUDigest(f.snapshot, v.Targets)
+						if err != nil || v.validate(f.snapshot) != nil {
+							t.Fatal("fixture must independently pass the current proposal", err)
+						}
 					case "reader failure":
 						return clusterSSHPreparationCleanObservation{}, errClusterConflict
 					case "foreign target":
@@ -355,7 +369,7 @@ func TestClusterSSHPreparationStorageGate(t *testing.T) {
 				plan = strings.Repeat("f", 64)
 			}
 			digest, err := gate(ctx, plan)
-			if mode == "valid" {
+			if mode == "valid" || mode == "new clean observation" {
 				if err != nil || !validClusterSSHPreparationDigest(digest) {
 					t.Fatal("supported component storage rejected", err)
 				}
