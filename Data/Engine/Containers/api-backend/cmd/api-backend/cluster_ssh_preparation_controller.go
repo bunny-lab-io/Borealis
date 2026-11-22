@@ -25,6 +25,10 @@ func (c *clusterController) runSSHPreparationParent(ctx context.Context, operati
 			var filesystems clusterSSHPreparationFilesystemReader
 			check := c.preparationCleanTargetsProposalCheck(snapshot)
 			if err == nil {
+				ctx, err = clusterPreparationReleaseContext(ctx, client, snapshot)
+				if err != nil {
+					return err
+				}
 				clean, projection = clusterSSHPreparationTargetCPUReaderPair(snapshot, client.preparationTargetsRead(snapshot, check))
 				filesystems = func(paths []string) clusterSSHPreparationTargetsRead {
 					return client.preparationTargetsFilesystemRead(snapshot, check, paths)

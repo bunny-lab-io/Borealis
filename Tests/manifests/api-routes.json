@@ -1926,6 +1926,15 @@
     "test_exemption": null
   },
   {
+    "pattern": "POST /internal/cluster/preparation-release",
+    "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_preparation_release.go",
+    "line": 254,
+    "class": "internal-cluster",
+    "authentication": "operator-derived-aead-and-confirmed-release-read",
+    "test": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_preparation_release_test.go",
+    "test_exemption": null
+  },
+  {
     "pattern": "POST /internal/cluster/ssh-k3s-join",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
     "line": 381,

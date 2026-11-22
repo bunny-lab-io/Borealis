@@ -161,6 +161,7 @@ func TestClusterSSHPreparationControllerPostgresWaiting(t *testing.T) {
 }
 
 func TestClusterSSHPreparationControllerPostgresApprovalDispatchFence(t *testing.T) {
+	t.Run("release phase binding", testPreparationReleasePhaseBinding)
 	t.Run("composed expansion", func(t *testing.T) { testSSHPreparationComposedDispatch(t, false) })
 	t.Run("composed storage shortage", func(t *testing.T) { testSSHPreparationComposedDispatch(t, true) })
 	for _, mode := range []string{"pair", "replacement", "cleanup failure", "owner changed", "cancelled cleanup"} {

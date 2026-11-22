@@ -109,6 +109,10 @@ REVIEWED_ROUTE_TESTS[(
     "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go",
 )] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_source_broker_test.go"
 REVIEWED_ROUTE_TESTS[(
+    "POST /internal/cluster/preparation-release",
+    "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_preparation_release.go",
+)] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_preparation_release_test.go"
+REVIEWED_ROUTE_TESTS[(
     "POST /internal/cluster/ssh-preparation-clean-targets",
     "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_clean_broker.go",
 )] = "Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_clean_broker_test.go"
@@ -151,6 +155,8 @@ def classify(pattern: str) -> tuple[str, str]:
         return "internal-cluster", "operator-derived-aead-and-confirmed-source-preparation-lease"
     if route_path == "/internal/cluster/k3s-join-result":
         return "internal-cluster", "operator-derived-aead-and-pending-native-job-receipt"
+    if route_path == "/internal/cluster/preparation-release":
+        return "internal-cluster", "operator-derived-aead-and-confirmed-release-read"
     if route_path == "/internal/cluster/ssh-preparation-clean-targets":
         return "internal-cluster", "operator-derived-aead-and-confirmed-waiting-proposal"
     if route_path in {"/internal/cluster/ssh-preparation-source", "/internal/cluster/ssh-vip-scope", "/internal/cluster/ssh-vip-check"}:

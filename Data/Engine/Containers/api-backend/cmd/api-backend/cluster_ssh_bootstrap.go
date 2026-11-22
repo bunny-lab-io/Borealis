@@ -168,21 +168,41 @@ func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap
 	if expected.Repository != clusterGitHubRepo() {
 		return nil, errors.New("node bootstrap repository differs from configured authority")
 	}
-	endpoint := fmt.Sprintf("%s/repos/%s/releases/tags/%s", clusterGitHubAPIBase(), expected.Repository, expected.Release)
 	var release clusterBootstrapRelease
-	if clusterGitHubJSON(ctx, endpoint, &release) != nil {
-		return nil, errors.New("node bootstrap publication metadata unavailable")
+	var sha string
+	var err error
+	if reader, ok := ctx.Value(clusterPreparationReleaseKey{}).(*clusterPreparationReleaseReader); ok {
+		var reply clusterPreparationReleaseReply
+		reply, err = reader.read(ctx, expected, nil)
+		if err == nil && reply.Release != nil {
+			release, sha = *reply.Release, reply.SHA
+		}
+	} else {
+		release, sha, err = fetchClusterPackagedRelease(ctx, expected)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if err := validateClusterPackagedRelease(expected, release, sha); err != nil {
+		return nil, err
+	}
+	return selectClusterPackagedAssets(expected, release, required)
+}
+
+func validateClusterPackagedRelease(expected clusterbootstrap.Expected, release clusterBootstrapRelease, sha string) error {
 	_, publishedErr := time.Parse(time.RFC3339, release.PublishedAt)
 	qualification := strings.Contains(expected.Release, "-rc.")
 	if release.TagName != expected.Release || release.Draft == nil || *release.Draft || release.Prerelease == nil ||
 		*release.Prerelease != qualification || release.Immutable == nil || !*release.Immutable || publishedErr != nil || len(release.Assets) > 100 {
-		return nil, errors.New("node bootstrap release must be published immutable matching channel")
+		return errors.New("node bootstrap release must be published immutable matching channel")
 	}
-	sha, err := resolveClusterGitHubTagSHA(ctx, expected.Release)
-	if err != nil || sha != expected.SourceSHA {
-		return nil, errors.New("node bootstrap release tag does not match authorized source")
+	if sha != expected.SourceSHA {
+		return errors.New("node bootstrap release tag does not match authorized source")
 	}
+	return nil
+}
+
+func selectClusterPackagedAssets(expected clusterbootstrap.Expected, release clusterBootstrapRelease, required map[string]int64) (map[string]clusterBootstrapAsset, error) {
 	assets := map[string]clusterBootstrapAsset{}
 	ids := map[int64]bool{}
 	for _, asset := range release.Assets {
@@ -190,7 +210,7 @@ func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap
 		if !needed {
 			continue
 		}
-		apiURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), expected.Repository, asset.ID)
+		apiURL := clusterPackagedAssetAPIURL(asset.ID)
 		if _, exists := assets[asset.Name]; exists || ids[asset.ID] || asset.ID < 1 || asset.State != "uploaded" ||
 			asset.Size < 1 || asset.Size > maximum || !clusterBootstrapDigestPattern.MatchString(asset.Digest) ||
 			asset.URL != apiURL || asset.BrowserDownloadURL != clusterbootstrap.AssetURL(expected, asset.Name) {
@@ -204,6 +224,16 @@ func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap
 	return assets, nil
 }
 
+func fetchClusterPackagedRelease(ctx context.Context, expected clusterbootstrap.Expected) (clusterBootstrapRelease, string, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/releases/tags/%s", clusterGitHubAPIBase(), expected.Repository, expected.Release)
+	var release clusterBootstrapRelease
+	if clusterGitHubJSON(ctx, endpoint, &release) != nil {
+		return release, "", errors.New("node bootstrap publication metadata unavailable")
+	}
+	sha, err := resolveClusterGitHubTagSHA(ctx, expected.Release)
+	return release, sha, err
+}
+
 // GitHub's asset endpoint returns either binary200 or302 to its signed asset
 // CDN URL. Follow exactly one approved HTTPS redirect using a NEW request with
 // no Authorization, cookies or Referer. Never surface the signed URL in errors.
@@ -213,25 +243,22 @@ func openClusterBootstrapAsset(ctx context.Context, asset clusterBootstrapAsset)
 
 func openClusterPackagedAsset(ctx context.Context, asset clusterBootstrapAsset, maximum int64) (*http.Response, error) {
 	invalid := errors.New("node bootstrap asset download failed; remote diagnostics withheld")
-	apiURL := fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), clusterGitHubRepo(), asset.ID)
+	apiURL := clusterPackagedAssetAPIURL(asset.ID)
 	if asset.ID < 1 || asset.URL != apiURL || asset.Size < 1 || maximum < 1 || maximum > clusterbootstrap.MaxImageArchiveBytes || asset.Size > maximum {
 		return nil, invalid
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, invalid
+	var response *http.Response
+	var err error
+	if reader, ok := ctx.Value(clusterPreparationReleaseKey{}).(*clusterPreparationReleaseReader); ok {
+		var reply clusterPreparationReleaseReply
+		reply, err = reader.read(ctx, reader.expected, &asset)
+		if err == nil {
+			response = reply.assetResponse
+		}
+	} else {
+		response, err = openClusterAssetFirstHop(ctx, apiURL)
 	}
-	request.Header.Set("Accept", "application/octet-stream")
-	request.Header.Set("Accept-Encoding", "identity")
-	request.Header.Set("User-Agent", "Borealis-Cluster-Controller")
-	if token, _ := ctx.Value(clusterGitHubTokenContextKey{}).(string); token != "" {
-		request.Header.Set("Authorization", "Bearer "+token)
-	}
-	client := *http.DefaultClient
-	client.Jar = nil
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
+	if err != nil || response == nil {
 		return nil, invalid
 	}
 	if response.StatusCode == http.StatusFound {
@@ -241,19 +268,14 @@ func openClusterPackagedAsset(ctx context.Context, asset clusterBootstrapAsset, 
 		if closeErr := response.Body.Close(); closeErr != nil || ctx.Err() != nil {
 			return nil, invalid
 		}
-		target, err := url.Parse(location)
-		if err != nil || len(location) > 8192 || target.Scheme != "https" || target.Host != "release-assets.githubusercontent.com" ||
-			target.User != nil || target.Fragment != "" || !strings.HasPrefix(target.Path, "/github-production-release-asset/") {
+		if !validClusterAssetRedirect(location) {
 			return nil, invalid
 		}
-		request, err = http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 		if err != nil {
 			return nil, invalid
 		}
-		request.Header.Set("Accept", "application/octet-stream")
-		request.Header.Set("Accept-Encoding", "identity")
-		request.Header.Set("User-Agent", "Borealis-Cluster-Controller")
-		response, err = client.Do(request)
+		response, err = doClusterAssetRequest(request)
 		if err != nil {
 			return nil, invalid
 		}
@@ -264,4 +286,35 @@ func openClusterPackagedAsset(ctx context.Context, asset clusterBootstrapAsset, 
 		return nil, invalid
 	}
 	return response, nil
+}
+
+func validClusterAssetRedirect(location string) bool {
+	target, err := url.Parse(location)
+	return err == nil && len(location) <= 8192 && target.Scheme == "https" && target.Host == "release-assets.githubusercontent.com" &&
+		target.User == nil && target.Fragment == "" && strings.HasPrefix(target.Path, "/github-production-release-asset/")
+}
+
+func clusterPackagedAssetAPIURL(id int64) string {
+	return fmt.Sprintf("%s/repos/%s/releases/assets/%d", clusterGitHubAPIBase(), clusterGitHubRepo(), id)
+}
+
+func openClusterAssetFirstHop(ctx context.Context, apiURL string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, errClusterUnavailable
+	}
+	if token, _ := ctx.Value(clusterGitHubTokenContextKey{}).(string); token != "" && clusterGitHubAPIEndpoint(apiURL) {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	return doClusterAssetRequest(request)
+}
+
+func doClusterAssetRequest(request *http.Request) (*http.Response, error) {
+	request.Header.Set("Accept", "application/octet-stream")
+	request.Header.Set("Accept-Encoding", "identity")
+	request.Header.Set("User-Agent", "Borealis-Cluster-Controller")
+	client := *http.DefaultClient
+	client.Jar = nil
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client.Do(request)
 }

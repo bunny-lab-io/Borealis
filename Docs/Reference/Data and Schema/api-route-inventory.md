@@ -220,6 +220,7 @@ Regenerate with `python3 Tests/tools/generate_api_route_inventory.py`, then run 
 | `POST /internal/cluster/existing-identity-custody` | `internal-cluster` | `operator-derived-aead-and-existing-member-phase-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:386` |
 | `POST /internal/cluster/existing-identity-plan` | `internal-cluster` | `operator-derived-aead-and-controller-reservation` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:384` |
 | `POST /internal/cluster/k3s-join-result` | `internal-cluster` | `operator-derived-aead-and-pending-native-job-receipt` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:382` |
+| `POST /internal/cluster/preparation-release` | `internal-cluster` | `operator-derived-aead-and-confirmed-release-read` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_preparation_release.go:254` |
 | `POST /internal/cluster/ssh-k3s-join` | `internal-cluster` | `operator-derived-aead-and-confirmed-source-preparation-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:381` |
 | `POST /internal/cluster/ssh-prejoin-custody` | `internal-cluster` | `operator-derived-aead-and-preparation-phase-lease` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_controller.go:388` |
 | `POST /internal/cluster/ssh-preparation-clean-targets` | `internal-cluster` | `operator-derived-aead-and-confirmed-waiting-proposal` | `Data/Engine/Containers/api-backend/cmd/api-backend/cluster_ssh_preparation_clean_broker.go:112` |

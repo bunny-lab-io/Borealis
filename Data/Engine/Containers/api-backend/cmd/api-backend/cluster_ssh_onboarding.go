@@ -47,6 +47,7 @@ func registerClusterSSHOnboardingRoutes(mux *http.ServeMux, auth *authService) {
 	registerClusterSSHPreparationRoutes(mux, auth)
 	registerClusterExistingIdentityRoutes(mux, auth)
 	registerClusterSSHPreparationCleanBrokerRoute(mux, auth)
+	registerClusterPreparationReleaseRoute(mux, auth)
 }
 
 type clusterSSHSubmissionTarget struct {
