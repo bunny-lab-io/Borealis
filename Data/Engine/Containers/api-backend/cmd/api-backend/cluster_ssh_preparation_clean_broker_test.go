@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,42 @@ import (
 )
 
 const sshPreparationCleanBrokerTestSecret = "synthetic-clean-broker-secret-32-bytes"
+
+func TestClusterSSHPreparationServiceAddress(t *testing.T) {
+	const host = "api-backend.borealis.svc.cluster.local."
+	const owner = "_http._tcp." + host
+	ips := []net.IPAddr{{IP: net.ParseIP("10.43.1.17")}}
+	lab := []*net.SRV{{Target: host, Port: 5001}}
+	for _, tc := range []struct {
+		name, owner string
+		ips         []net.IPAddr
+		records     []*net.SRV
+		want        string
+	}{
+		{"lab service", owner, ips, lab, "http://10.43.1.17:5001"},
+		{"default port", owner, ips, []*net.SRV{{Target: host, Port: 5000}}, "http://10.43.1.17:5000"},
+		{"custom cluster domain", "_http._tcp.api-backend.borealis.svc.lab.", ips, []*net.SRV{{Target: "api-backend.borealis.svc.lab.", Port: 8181}}, "http://10.43.1.17:8181"},
+		{"no named port", owner, ips, nil, ""},
+		{"ambiguous port", owner, ips, []*net.SRV{lab[0], lab[0]}, ""},
+		{"zero port", owner, ips, []*net.SRV{{Target: host}}, ""},
+		{"foreign target", owner, ips, []*net.SRV{{Target: "unrelated.borealis.svc.cluster.local.", Port: 5001}}, ""},
+		{"foreign service", "_http._tcp.unrelated.borealis.svc.cluster.local.", ips, []*net.SRV{{Target: "unrelated.borealis.svc.cluster.local.", Port: 5001}}, ""},
+		{"wrong protocol", "_http._udp." + host, ips, lab, ""},
+		{"missing address", owner, nil, lab, ""},
+		{"ambiguous address", owner, []net.IPAddr{ips[0], ips[0]}, lab, ""},
+		{"public address", owner, []net.IPAddr{{IP: net.ParseIP("203.0.113.1")}}, lab, ""},
+		{"loopback", owner, []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, lab, ""},
+		{"IPv6", owner, []net.IPAddr{{IP: net.ParseIP("fd00::1")}}, lab, ""},
+		{"zoned address", owner, []net.IPAddr{{IP: ips[0].IP, Zone: "eth0"}}, lab, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := clusterSSHPreparationServiceAddress(tc.ips, tc.owner, tc.records)
+			if got != tc.want || (err == nil) != (tc.want != "") {
+				t.Fatalf("service address = %q, %v", got, err)
+			}
+		})
+	}
+}
 
 func sshPreparationCleanBrokerSnapshot(t *testing.T) clusterSSHPreparationApprovalSnapshot {
 	t.Helper()

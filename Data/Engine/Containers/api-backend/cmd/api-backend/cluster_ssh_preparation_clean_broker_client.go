@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -45,12 +46,31 @@ func clusterSSHPreparationCleanBrokerEndpoint(parent context.Context) (string, e
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, clusterSSHPreparationCleanBrokerHost)
-	// Existing API ClusterIP Service, fixed port only. Neither environment nor
-	// proposal input can select another host, URL, port or proxy.
-	if err != nil || len(addresses) != 1 || addresses[0].IP.To4() == nil || !addresses[0].IP.IsPrivate() || addresses[0].Zone != "" {
+	if err != nil {
 		return "", clusterbootstrap.ErrPreparationConfig
 	}
-	return "http://" + net.JoinHostPort(addresses[0].IP.String(), "5000"), nil
+	owner, records, err := net.DefaultResolver.LookupSRV(ctx, "http", "tcp", clusterSSHPreparationCleanBrokerHost)
+	if err != nil {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	return clusterSSHPreparationServiceAddress(addresses, owner, records)
+}
+
+// Use the named HTTP port of the existing ClusterIP Service. Never dial a
+// target supplied by SRV, proposal data or an environment override.
+func clusterSSHPreparationServiceAddress(addresses []net.IPAddr, owner string, records []*net.SRV) (string, error) {
+	if len(addresses) != 1 || addresses[0].IP.To4() == nil || !addresses[0].IP.IsPrivate() || addresses[0].Zone != "" {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	if len(records) != 1 || records[0] == nil || records[0].Port == 0 {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	port := records[0]
+	if !strings.HasPrefix(strings.ToLower(port.Target), clusterSSHPreparationCleanBrokerHost+".") ||
+		!strings.EqualFold(owner, "_http._tcp."+port.Target) {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	return "http://" + net.JoinHostPort(addresses[0].IP.String(), strconv.Itoa(int(port.Port))), nil
 }
 
 func (c *clusterController) preparationCleanTargetsBrokerRead(snapshot clusterSSHPreparationApprovalSnapshot) func(context.Context, string) (string, error) {
