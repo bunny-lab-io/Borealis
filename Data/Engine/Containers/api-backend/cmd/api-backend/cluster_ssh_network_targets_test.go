@@ -519,7 +519,7 @@ func TestClusterSSHNetworkQualificationReadsOriginalClaimsWithoutRenewing(t *tes
 }
 
 func TestClusterSSHQualificationNetworkProbesSharePeerScope(t *testing.T) {
-	for _, mode := range []string{"both pass", "boot failed", "source drift between probes", "final source drift"} {
+	for _, mode := range []string{"both pass", "boot failed", "source drift between probes", "final source drift", "VIP changed after ARP"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHNetworkTargetsFixture(t, false, "boot")
 			for i := range f.claims {
@@ -531,15 +531,24 @@ func TestClusterSSHQualificationNetworkProbesSharePeerScope(t *testing.T) {
 			var vipChanged atomic.Bool
 			var vipReads atomic.Int64
 			broker := newClusterSSHVIPBroker(nil, nil, a.Lease.ControllerHolder, sshBrokerTestSecret)
-			broker.run = sshVIPBrokerRun(a, f.vipLease, &vipChanged, &vipReads)
+			run := sshVIPBrokerRun(a, f.vipLease, &vipChanged, &vipReads)
+			var vipActive atomic.Bool
+			broker.run = func(ctx context.Context, start clusterSSHVIPStart, consume func(context.Context, clusterSSHVIPOwner, clusterSSHPreparationChecks) error) error {
+				vipActive.Store(true)
+				defer vipActive.Store(false)
+				return run(ctx, start, consume)
+			}
 			server := sshVIPBrokerServer(t, broker)
 			client := sshVIPBrokerClient(t, server.URL)
 			snapshots := 0
 			source := func(context.Context) (clusterSSHPreparationSnapshot, error) {
+				if vipActive.Load() {
+					t.Error("full peer scan ran inside a controller VIP session")
+				}
 				snapshots++
 				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, a.Lease, a.Baseline, a.K3sVersion, f.sources[0].PodCIDR, f.sources[0].ServiceCIDR)
 				digest := strings.Repeat("a", 64)
-				if mode == "source drift between probes" && snapshots == 5 || mode == "final source drift" && snapshots == 7 {
+				if mode == "source drift between probes" && snapshots == 3 || mode == "final source drift" && snapshots == 4 {
 					digest = strings.Repeat("b", 64)
 				}
 				return clusterSSHPreparationSnapshot{Expected: expected, Observation: digest, Sources: slices.Clone(f.sources), started: time.Now()}, err
@@ -552,21 +561,25 @@ func TestClusterSSHQualificationNetworkProbesSharePeerScope(t *testing.T) {
 				arp := func(ctx context.Context, peers []clusterSSHManagementPeer, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
 					arpCalls++
 					f.kind = "arp"
-					return readers.observeNetworkARP(ctx, peers, owner, checks)
+					err := readers.observeNetworkARP(ctx, peers, owner, checks)
+					if mode == "VIP changed after ARP" {
+						vipChanged.Store(true)
+					}
+					return err
 				}
 				var err error
 				completed, err = client.observeNetworks(ctx, readers, source, a.Lease, a.Baseline, f.claims[0].Sealed, readers.observeNetworkBoot, arp)
 				return err
 			})
-			wantCompleted := map[string]int{"both pass": 2, "boot failed": 0, "source drift between probes": 1, "final source drift": 2}[mode]
+			wantCompleted := map[string]int{"both pass": 2, "boot failed": 0, "source drift between probes": 1, "final source drift": 2, "VIP changed after ARP": 1}[mode]
 			wantARP := 0
-			if wantCompleted == 2 {
+			if wantCompleted == 2 || mode == "VIP changed after ARP" {
 				wantARP = 1
 			}
 			if (err == nil) != (mode == "both pass") || completed != wantCompleted || arpCalls != wantARP {
 				t.Fatalf("completed %d probes, entered ARP %d times, error %v", completed, arpCalls, err)
 			}
-			if mode == "both pass" && (snapshots != 7 || vipReads.Load() != 10) {
+			if mode == "both pass" && (snapshots != 4 || vipReads.Load() != 6) {
 				t.Fatalf("got %d full peer rounds, %d VIP reads", snapshots, vipReads.Load())
 			}
 			f.assertClosed(t)

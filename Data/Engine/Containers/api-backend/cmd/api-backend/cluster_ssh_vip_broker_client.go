@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"slices"
@@ -248,22 +249,40 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 func (c *clusterSSHVIPBrokerClient) withNetworkOwner(parent context.Context, readers clusterSSHNetworkTargetReaders, source clusterSSHPreparationSnapshotRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
 	consume clusterSSHNetworkProbe) error {
-	_, err := c.observeNetworks(parent, readers, source, lease, baseline, sealed, consume)
+	if consume == nil {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	_, err := c.observeNetworks(parent, readers, source, lease, baseline, sealed,
+		func(ctx context.Context, peers []clusterSSHManagementPeer, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
+			if checks.Inputs(ctx) != nil || consume(ctx, peers, owner, checks) != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			return checks.Inputs(ctx)
+		})
 	return err
 }
 
 type clusterSSHNetworkProbe func(context.Context, []clusterSSHManagementPeer, clusterSSHVIPOwner, clusterSSHPreparationChecks) error
 
-// Keep one continuous peer comparison across the ordered probes. Each probe
-// independently acquires, rechecks and closes its live controller VIP scope.
+// The outer peer scope verifies the initial and final networks. Between read-only
+// probes, verify the peers after the previous VIP session has completely closed.
+// Each controller session independently observes ownership before and after its probe.
 func (c *clusterSSHVIPBrokerClient) observeNetworks(parent context.Context, readers clusterSSHNetworkTargetReaders, source clusterSSHPreparationSnapshotRead,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, probes ...clusterSSHNetworkProbe) (int, error) {
 	completed := 0
-	if len(probes) == 0 || slices.ContainsFunc(probes, func(probe clusterSSHNetworkProbe) bool { return probe == nil }) {
+	if len(probes) == 0 || (len(probes) > 1 && !lease.isNetworkQualification()) || slices.ContainsFunc(probes, func(probe clusterSSHNetworkProbe) bool { return probe == nil }) {
 		return 0, clusterbootstrap.ErrPreparationConfig
 	}
+	boundary := "initial_peer_verification"
 	err := withClusterSSHNetworkInputsFor(parent, lease.networkTargetBudget(), readers, source, func(ctx context.Context, peers []clusterSSHManagementPeer, sources []clusterbootstrap.SourceNetwork, peerChecks clusterSSHPreparationChecks) error {
 		for _, consume := range probes {
+			if completed > 0 {
+				boundary = "between_probe_verification"
+				if peerChecks.Inputs(ctx) != nil {
+					return clusterbootstrap.ErrPreparationConfig
+				}
+			}
+			boundary = "vip_session_start"
 			err := c.withOwner(ctx, readers.Authority, lease, baseline, sealed, sources, func(ctx context.Context, owner clusterSSHVIPOwner, vipChecks clusterSSHPreparationChecks) error {
 				scope, cancel := context.WithCancel(ctx)
 				defer cancel()
@@ -291,17 +310,23 @@ func (c *clusterSSHVIPBrokerClient) observeNetworks(parent context.Context, read
 					}
 				}
 				checks := clusterSSHPreparationChecks{Inputs: combine(true), Authority: combine(false)}
-				if checks.Inputs(scope) != nil || consume(scope, slices.Clone(peers), owner, checks) != nil || scope.Err() != nil {
+				boundary = "native_probe"
+				if consume(scope, slices.Clone(peers), owner, checks) != nil || scope.Err() != nil {
 					return clusterbootstrap.ErrPreparationConfig
 				}
-				return checks.Inputs(scope)
+				boundary = "vip_session_completion"
+				return nil
 			})
 			if err != nil {
 				return err
 			}
 			completed++
 		}
+		boundary = "final_peer_verification"
 		return nil
 	})
+	if err != nil && lease.isNetworkQualification() {
+		log.Printf("cluster SSH qualification network verification failed operation=%s completed_probes=%d boundary=%s", lease.OperationID, completed, boundary)
+	}
 	return completed, err
 }
