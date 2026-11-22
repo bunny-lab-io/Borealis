@@ -162,7 +162,7 @@ func TestClusterSSHPreparationCapacityWaitingCompleteRounds(t *testing.T) {
 				if f.targetReads != 2 || f.censusReads != 2 || f.storage.calls[clusterSSHRuntimeSecretPath] != 4 || f.storage.calls[clusterSSHStoragePostgresPath] != 2 {
 					t.Fatalf("missing complete rounds: targets=%d census=%d secret=%d storage=%d", f.targetReads, f.censusReads, f.storage.calls[clusterSSHRuntimeSecretPath], f.storage.calls[clusterSSHStoragePostgresPath])
 				}
-				if f.networkReads != 2*len(f.snapshot.work.Proof.Source.Members) {
+				if f.networkReads != len(f.snapshot.work.Proof.Source.Members) {
 					t.Fatal("capacity duplicated native source observations", f.networkReads)
 				}
 				value, err := approval(context.Background(), f.plan)

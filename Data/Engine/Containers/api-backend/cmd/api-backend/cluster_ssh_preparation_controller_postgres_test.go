@@ -408,7 +408,7 @@ func testSSHPreparationComposedDispatch(t *testing.T, shortage bool) {
 		}
 		return
 	}
-	if err != nil || bytes.closes.Load() != 1 || bytes.proves.Load() != 4 {
+	if err != nil || bytes.closes.Load() != 1 || bytes.proves.Load() != 3 {
 		t.Fatalf("approval scope: err=%v closes=%d proofs=%d", err, bytes.closes.Load(), bytes.proves.Load())
 	}
 	pending, err := f.c.store.pendingClusterSSHPreparation(f.ctx, snapshot.work.Proof.Source.Members[0].Name)

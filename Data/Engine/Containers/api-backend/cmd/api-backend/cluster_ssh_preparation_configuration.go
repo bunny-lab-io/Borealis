@@ -106,7 +106,7 @@ func clusterSSHPreparationConfigurationNativeInputs(work clusterSSHPreparationWo
 }
 
 // Private requests have their own shorter deadline. A successful body Close
-// cannot erase its expiry while the enclosing 30-second proof is still live.
+// cannot erase its expiry while the enclosing approval is still live.
 // The existing tracker owns closure and records this error permanently.
 type clusterSSHPreparationConfigurationHTTP struct{ http.RoundTripper }
 
@@ -161,7 +161,7 @@ func newClusterSSHPreparationConfigurationReadWithProjection(work clusterSSHPrep
 			validateClusterSSHInspectionCohort(owned.Proof.Cohort, owned.Proof.Source) != nil {
 			return fail()
 		}
-		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+		ctx, cancel := context.WithTimeout(parent, clusterSSHPreparationFreshness)
 		defer cancel()
 		select {
 		case serial <- struct{}{}:
@@ -229,8 +229,9 @@ func newClusterSSHPreparationConfigurationReadWithProjection(work clusterSSHPrep
 		if err != nil {
 			return fail()
 		}
-		again, err := readNetworks()
-		if err != nil || !slices.Equal(sources, again) || readSource() != nil {
+		// Capacity and inherited configuration each observe the native network.
+		// Keep the source and Secret checks around this sample.
+		if readSource() != nil {
 			return fail()
 		}
 		current, err := readSecret()

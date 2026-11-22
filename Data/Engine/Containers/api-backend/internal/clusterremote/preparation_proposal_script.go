@@ -151,7 +151,7 @@ class Snapshot:
         finally:
             os.close(directory)
 
-    def entries(self, path, limit):
+    def entries(self, path, limit, prefix=None):
         try:
             fd = self.directory(path)
         except FileNotFoundError:
@@ -164,6 +164,8 @@ class Snapshot:
                     names.append(entry.name)
                     require(len(names) <= limit)
             names.sort()
+            if prefix is not None:
+                names = [name for name in names if name.startswith(prefix)]
             self.listings[path] = names
             return names
         finally:
@@ -343,7 +345,7 @@ def supervision(snapshot):
     cgroups = snapshot.directory("sys/fs/cgroup/system.slice")
     os.close(cgroups)
     for path in ("sys/fs/cgroup/system.slice", "run/systemd/transient"):
-        require(not any(name.startswith("borealis-bootstrap-") for name in snapshot.entries(path, 32768)))
+        require(not snapshot.entries(path, 32768, prefix="borealis-bootstrap-"))
     return {"manager": values, "runner": digest(cli), "mount": mounts[0], "controllers": controllers,
         "journal_absent": True, "bootstrap_producers_absent": True}
 

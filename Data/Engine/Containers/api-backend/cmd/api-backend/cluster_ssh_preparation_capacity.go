@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // Values from the existing waiting configuration read. No private settings,
@@ -189,7 +188,7 @@ func newClusterSSHPreparationCapacityStorageRead(snapshot clusterSSHPreparationA
 			check == nil || getJSON == nil || configuration == nil || targets == nil || census == nil || parent.Err() != nil || failed.Load() {
 			return fail("Fresh waiting-proposal CPU, inherited-profile, workload census or Longhorn evidence is unavailable; inspect and retry the original proposal.")
 		}
-		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+		ctx, cancel := context.WithTimeout(parent, clusterSSHPreparationFreshness)
 		defer cancel()
 		select {
 		case serial <- struct{}{}:

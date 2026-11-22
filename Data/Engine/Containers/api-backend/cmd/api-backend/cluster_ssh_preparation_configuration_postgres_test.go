@@ -177,7 +177,7 @@ func TestClusterSSHPreparationConfigurationPostgresNative(t *testing.T) {
 			read := f.c.preparationConfigurationRead(snapshot)
 			plan, _ := clusterSSHPreparationPlanDigest(snapshot.work.Authorization)
 			first, err := read(f.ctx, plan)
-			if err != nil || !validClusterSSHPreparationDigest(first) || posts.Load() != int64(2*len(source.Members)) {
+			if err != nil || !validClusterSSHPreparationDigest(first) || posts.Load() != int64(len(source.Members)) {
 				t.Fatal("initial preclaim native read", err, posts.Load())
 			}
 			switch mode {
@@ -251,7 +251,7 @@ func TestClusterSSHPreparationConfigurationPostgresNative(t *testing.T) {
 			if (err == nil) != valid || (valid && second != first) || (!valid && second != "") {
 				t.Fatal(mode, err)
 			}
-			if valid && posts.Load() != int64(4*len(source.Members)) {
+			if valid && posts.Load() != int64(2*len(source.Members)) {
 				t.Fatal("source receipt reused", posts.Load())
 			}
 			if f.c.store.db.Stats().InUse != 0 {

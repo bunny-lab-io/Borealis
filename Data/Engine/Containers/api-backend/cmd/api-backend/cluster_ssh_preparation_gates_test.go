@@ -18,7 +18,7 @@ func sshPreparationGatesFixture() clusterSSHPreparationGates {
 }
 
 func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
-	for _, mode := range []string{"success", "missing", "failed", "changed", "invalid", "source changed", "cancelled", "ignored failure"} {
+	for _, mode := range []string{"success", "missing", "failed", "invalid", "source changed", "cancelled", "ignored failure"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -33,11 +33,8 @@ func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
 				if ctx.Done() == nil {
 					t.Error("unbounded observation")
 				}
-				if mode == "failed" || (mode == "ignored failure" && reads > 1) {
+				if mode == "failed" {
 					return "", errClusterConflict
-				}
-				if mode == "changed" && reads > 1 {
-					return strings.Repeat("f", 64), nil
 				}
 				if mode == "invalid" {
 					return strings.Repeat("0", 64), nil
@@ -50,7 +47,7 @@ func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
 			var escaped clusterSSHPreparationApprovalProof
 			err := withClusterSSHPreparationApprovalProof(ctx, plan, gates, func(context.Context) error {
 				sourceReads++
-				if mode == "source changed" && sourceReads > 2 {
+				if (mode == "source changed" || mode == "ignored failure") && sourceReads == 2 {
 					return errClusterConflict
 				}
 				return nil
@@ -72,8 +69,8 @@ func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
 			if (err == nil) != (mode == "success") {
 				t.Fatal("wrong gate outcome", err)
 			}
-			if mode == "success" && (!consumed || reads != 2 || sourceReads != 6) {
-				t.Fatal("incomplete proof rounds")
+			if mode == "success" && (!consumed || reads != 1 || sourceReads != 2) {
+				t.Fatal("expected one gate run and two source checks")
 			}
 			if escaped.recheck != nil {
 				before := reads
@@ -87,34 +84,33 @@ func TestClusterSSHPreparationGatesRequireLiveCompleteProof(t *testing.T) {
 
 // Virtual time exercises release-sized I/O without slowing the regression suite.
 func TestClusterSSHPreparationApprovalBudgets(t *testing.T) {
-	for _, mode := range []string{"slow archives", "archive drift", "native expiry", "commit expiry", "parent expiry", "ignored recheck"} {
+	for _, mode := range []string{"slow archive", "bad archive", "native expiry", "commit expiry", "parent expiry", "ignored recheck"} {
 		t.Run(mode, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				parent, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				if mode == "parent expiry" {
 					var stop context.CancelFunc
-					parent, stop = context.WithTimeout(parent, time.Minute)
+					parent, stop = context.WithTimeout(parent, 20*time.Second)
 					defer stop()
 				}
 				plan := strings.Repeat("a", 64)
 				gates := sshPreparationGatesFixture()
-				archives, nativeReads := 0, 0
+				archives := 0
 				gates[0] = func(ctx context.Context, _ string) (string, error) {
 					archives++
 					time.Sleep(40 * time.Second)
-					if mode == "archive drift" && archives == 2 {
-						return strings.Repeat("b", 64), nil
+					if mode == "bad archive" {
+						return "", errClusterConflict
 					}
 					return plan, ctx.Err()
 				}
 				gates[1] = func(ctx context.Context, _ string) (string, error) {
-					nativeReads++
 					deadline, ok := ctx.Deadline()
-					if !ok || time.Until(deadline) > 30*time.Second {
+					if !ok || time.Until(deadline) > clusterSSHPreparationFreshness {
 						t.Fatal("native observation escaped freshness window")
 					}
-					if mode == "native expiry" && nativeReads == 2 {
+					if mode == "native expiry" {
 						<-ctx.Done()
 					}
 					return plan, ctx.Err()
@@ -128,14 +124,14 @@ func TestClusterSSHPreparationApprovalBudgets(t *testing.T) {
 							return err
 						}
 						if mode == "commit expiry" {
-							time.Sleep(31 * time.Second)
+							time.Sleep(clusterSSHPreparationFreshness + time.Second)
 							if proof.valid(plan) {
 								t.Fatal("expired approval still valid")
 							}
 						}
 						return nil
 					})
-				if (err == nil) != (mode == "slow archives") || archives != 2 {
+				if (err == nil) != (mode == "slow archive") || archives != 1 {
 					t.Fatalf("archives=%d error=%v", archives, err)
 				}
 			})

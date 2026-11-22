@@ -136,23 +136,23 @@ func TestClusterSSHPreparationConfigurationFreshPlan(t *testing.T) {
 				requested = strings.Repeat("f", 64)
 			}
 			digest, err := read(ctx, requested)
-			valid := mode == "pair" || mode == "replacement" || mode == "copied input" || mode == "changed next read"
+			valid := mode == "network drift" || mode == "pair" || mode == "replacement" || mode == "copied input" || mode == "changed next read"
 			if (err == nil) != valid || (err != nil && digest != "") {
 				t.Fatal(mode, err)
 			}
 			if valid {
-				if networks != 2*len(source.Members) || reads != 2 {
+				if networks != len(source.Members) || reads != 2 {
 					t.Fatal("missing fresh source rounds", networks, reads)
 				}
 				if mode == "changed next read" {
 					secret["metadata"].(map[string]any)["uid"] = newClusterUUID()
 				}
 				again, err := read(ctx, plan)
-				if mode == "changed next read" {
+				if mode == "changed next read" || mode == "network drift" {
 					if err == nil {
-						t.Fatal("prior digest accepted changed Secret")
+						t.Fatal("prior digest accepted changed configuration")
 					}
-				} else if err != nil || again != digest || networks != 4*len(source.Members) || reads != 4 {
+				} else if err != nil || again != digest || networks != 2*len(source.Members) || reads != 4 {
 					t.Fatal("fresh repeat failed", err)
 				}
 			} else {
@@ -346,7 +346,7 @@ func TestClusterSSHPreparationConfigurationNativeCleanup(t *testing.T) {
 			if (err == nil) != valid || valid && !validClusterSSHPreparationDigest(digest) || !valid && digest != "" {
 				t.Fatal("unconfirmed native cleanup exported configuration digest", mode, err)
 			}
-			if valid && (posts.Load() != int64(2*len(work.Proof.Source.Members)) || checksAfter.Load() == 0) {
+			if valid && (posts.Load() != int64(len(work.Proof.Source.Members)) || checksAfter.Load() == 0) {
 				t.Fatal("fresh Job or post-cleanup proposal check missing")
 			}
 			if !valid {

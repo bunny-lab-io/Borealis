@@ -90,7 +90,7 @@ func TestClusterSSHPreparationApprovalPostgresLifecycle(t *testing.T) {
 }
 
 func TestClusterSSHPreparationApprovalPostgresFreshCoordinator(t *testing.T) {
-	for _, mode := range []string{"success", "missing gate", "changed source", "changed gate"} {
+	for _, mode := range []string{"success", "missing gate", "changed source", "invalid artifact"} {
 		t.Run(mode, func(t *testing.T) {
 			f, snapshot, confirmation, _ := newSSHPreparationApprovalFixture(t, false)
 			gates := sshPreparationCPUGatesFixture(t, snapshot)
@@ -100,8 +100,8 @@ func TestClusterSSHPreparationApprovalPostgresFreshCoordinator(t *testing.T) {
 				if f.c.store.db.Stats().InUse != 0 {
 					t.Error("phase gate held connection")
 				}
-				if mode == "changed gate" && calls > 1 {
-					return strings.Repeat("f", 64), nil
+				if mode == "invalid artifact" {
+					return "", errClusterConflict
 				}
 				return strings.Repeat("a", 64), nil
 			}
@@ -158,7 +158,7 @@ func TestClusterSSHPreparationApprovalPostgresRejectsDrift(t *testing.T) {
 			case "missing proof":
 				proof = clusterSSHPreparationApprovalProof{}
 			case "expired proof":
-				proof.started = time.Now().Add(-time.Minute)
+				proof.started = time.Now().Add(-clusterSSHPreparationFreshness)
 			case "wrong proof":
 				proof.plan = "changed"
 			case "proof rejected":

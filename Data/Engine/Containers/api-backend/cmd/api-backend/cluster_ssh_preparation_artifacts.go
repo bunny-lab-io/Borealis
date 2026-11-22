@@ -14,7 +14,7 @@ import (
 
 const (
 	clusterSSHPreparationArchiveBudget = 10 * time.Minute
-	clusterSSHPreparationFreshness     = 30 * time.Second
+	clusterSSHPreparationFreshness     = time.Duration(clusterSSHFreshEvidenceSeconds) * time.Second
 )
 
 type clusterSSHPreparationArtifactGate func(context.Context, string) (string, error)
@@ -47,7 +47,7 @@ type clusterSSHPreparationArtifactDependencies struct {
 // Only the immutable_artifacts gate is exposed. No target lease, SSH connection,
 // native journal receipt, capacity grant or production polling is created.
 // Acquisition uses existing artifact bounds and the live waiting proposal expiry.
-// Owned release verification has one bounded budget across all four passes.
+// One budget covers the owned release checks through dispatch cleanup.
 // Live readiness, commit and the final dispatch check retain short lifetimes.
 func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d clusterSSHPreparationArtifactDependencies, consume clusterSSHPreparationArtifactConsumer) (result error) {
 	if parent.Err() != nil || !validClusterSSHPreparationDigest(plan) || d.proposal == nil || d.source == nil || d.publication == nil || d.acquire == nil || d.terminal == nil || consume == nil {
@@ -241,7 +241,7 @@ func runClusterSSHPreparationArtifacts(parent context.Context, plan string, d cl
 	if _, err := prove(proofCtx, terminal); err != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	fresh, finish := context.WithTimeout(proofCtx, clusterSSHPreparationFreshness)
+	fresh, finish := context.WithTimeout(proofCtx, 30*time.Second)
 	defer finish()
 	cleanup()
 	if result != nil || terminal(fresh) != nil || fresh.Err() != nil {

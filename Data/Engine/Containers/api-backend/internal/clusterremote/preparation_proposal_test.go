@@ -583,7 +583,7 @@ func TestPreparationProposalCommandBounds(t *testing.T) {
 }
 
 func TestPreparationProposalNativeSupervision(t *testing.T) {
-	for _, mode := range []string{"fresh", "old request", "PID1 name", "PID1 cgroup", "PID1 executable", "deleted executable", "plain executable", "manager version", "duplicate manager field", "manager alias", "missing manager features", "runner version", "runner mismatch", "cgroup v1", "cgroup submount", "cgroup rebound", "missing cgroup mount", "duplicate cgroup mount", "missing CPU controller", "missing memory controller", "missing PID controller", "duplicate controller", "retained journal", "journal symlink", "journal unsafe parent", "bootstrap unit", "bootstrap failed unit", "bootstrap cgroup", "bootstrap transient", "changed manager", "changed controllers", "late journal", "late producer"} {
+	for _, mode := range []string{"fresh", "unrelated SSH session", "late bootstrap transient", "old request", "PID1 name", "PID1 cgroup", "PID1 executable", "deleted executable", "plain executable", "manager version", "duplicate manager field", "manager alias", "missing manager features", "runner version", "runner mismatch", "cgroup v1", "cgroup submount", "cgroup rebound", "missing cgroup mount", "duplicate cgroup mount", "missing CPU controller", "missing memory controller", "missing PID controller", "duplicate controller", "retained journal", "journal symlink", "journal unsafe parent", "bootstrap unit", "bootstrap failed unit", "bootstrap cgroup", "bootstrap transient", "changed manager", "changed controllers", "late journal", "late producer"} {
 		t.Run(mode, func(t *testing.T) {
 			root, write, prelude := preparationNativeFixture(t)
 			p := preparationProposalFixture()
@@ -663,11 +663,18 @@ func TestPreparationProposalNativeSupervision(t *testing.T) {
 				write("run/systemd/transient/borealis-bootstrap-retained.service", "retained")
 			case "changed manager":
 				prelude += "original_observe = observe\ndef observe(p):\n    global fixture_manager\n    result = original_observe(p)\n    fixture_manager = fixture_manager.replace(b'255.4', b'255.5')\n    return result\n"
-			case "changed controllers", "late journal", "late producer":
+			case "changed controllers", "late journal", "late producer", "unrelated SSH session", "late bootstrap transient":
 				path, value := "/sys/fs/cgroup/cgroup.controllers", "cpu memory pids\n"
 				if mode == "late journal" {
 					write("var/lib/borealis/placeholder", "")
 					path, value = "/var/lib/borealis/cluster-bootstrap", "retained"
+				}
+				if mode == "unrelated SSH session" || mode == "late bootstrap transient" {
+					write("run/systemd/transient/session-1.scope", "")
+					path = "/run/systemd/transient/session-2.scope"
+					if mode == "late bootstrap transient" {
+						path = "/run/systemd/transient/borealis-bootstrap-late.service"
+					}
 				}
 				if mode == "late producer" {
 					path, value = "/sys/fs/cgroup/system.slice/borealis-bootstrap-late.service", "retained"
@@ -675,7 +682,7 @@ func TestPreparationProposalNativeSupervision(t *testing.T) {
 				prelude += "original_observe = observe\ndef observe(p):\n    result = original_observe(p)\n    with open(ROOT + " + strconv.Quote(path) + ", 'w') as output:\n        output.write(" + strconv.Quote(value) + ")\n    return result\n"
 			}
 			raw, err := runPreparationNativeFixture(t, root, prelude, p)
-			if mode == "fresh" {
+			if mode == "fresh" || mode == "unrelated SSH session" {
 				if err != nil {
 					t.Fatal("fresh supervision rejected", err)
 				}

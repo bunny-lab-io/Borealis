@@ -205,16 +205,11 @@ func TestClusterSSHPreparationNativeGatesPreserveNativeReaders(t *testing.T) {
 }
 
 func TestClusterSSHPreparationNativeGatesPreciseErrors(t *testing.T) {
-	for _, mode := range []string{"missing", "private failure", "native blocker", "recheck blocker"} {
+	for _, mode := range []string{"missing", "private failure", "native blocker"} {
 		t.Run(mode, func(t *testing.T) {
 			gates := sshPreparationGatesFixture()
 			plan := strings.Repeat("a", 64)
-			calls := 0
 			gates[3] = func(context.Context, string) (string, error) {
-				calls++
-				if mode == "recheck blocker" && calls == 1 {
-					return strings.Repeat("d", 64), nil
-				}
 				if mode == "private failure" {
 					return "", errors.New("private settings and transport detail")
 				}
@@ -233,10 +228,10 @@ func TestClusterSSHPreparationNativeGatesPreciseErrors(t *testing.T) {
 			if !errors.Is(err, errClusterConflict) || !errors.As(err, &blocked) || blocked.Gate != "persistent_storage" || strings.Contains(err.Error(), "private settings") {
 				t.Fatal("gate failure lost safe precise diagnosis", err)
 			}
-			if consumed != (mode == "recheck blocker") {
+			if consumed {
 				t.Fatal("failed initial proof reached consumer")
 			}
-			if (mode == "native blocker" || mode == "recheck blocker") && blocked.Reason != "Fresh filesystem evidence is unavailable." {
+			if mode == "native blocker" && blocked.Reason != "Fresh filesystem evidence is unavailable." {
 				t.Fatal("native actionable reason discarded")
 			}
 		})
