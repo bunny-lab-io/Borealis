@@ -142,6 +142,10 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 			return err
 		}
 		anchor := work.Claims[0]
+		observe := func(check string) {
+			store.recordSSHCheckStarted(ctx, work.Proof.Cohort, work.Payload, check, anchor.Lease)
+		}
+		observe("source_inputs_and_host_profile")
 		source := sourceClient.snapshotRead(readers.Authority, anchor.Lease, work.Baseline, anchor.Sealed)
 		profileSourceRead, err := qualifyClusterSSHHostProfile(ctx, readers, source)
 		if profileSourceRead {
@@ -156,6 +160,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		// Published application/K3s/external inventory and an owned, measured
 		// PostgreSQL archive supply conditional target demand. Aggregate worker,
 		// OS/runtime headroom and workload fit remain separate readiness gates.
+		observe("replica_capacity")
 		if err := withClusterSSHImageStorageCapacity(ctx, readers, source, func(ctx context.Context, capacity []clusterSSHTargetStorageCapacity) error {
 			report.Storage = capacity
 			report.Checks[stage].State = "passed"
@@ -169,6 +174,7 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 			return err
 		}
 		stage = 3
+		observe("network_boot_and_arp")
 		completed, err := vipClient.observeNetworks(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed, readers.observeNetworkBoot, readers.observeNetworkARP)
 		if completed > 0 {
 			report.Checks[stage].State = "passed"

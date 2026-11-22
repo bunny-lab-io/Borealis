@@ -16,15 +16,12 @@ import (
 // while artifact bytes and persistent target filesystem proof are synthetic.
 // Exercise the production gate order and rounded demand with independent target observations.
 func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
-	for _, mode := range []string{"component success", "missing filesystem reader", "second target shortage", "supervised target drift", "configuration drift after capacity", "source lost before commit"} {
+	for _, mode := range []string{"component success", "missing filesystem reader", "second target shortage", "supervision authority lost", "configuration drift after capacity", "source lost before commit"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSSHWaitingCapacityFixture(t, false, "absent")
 			nativeCalls, networkCalls, capacityCalls, configurationCalls := 0, 0, 0, 0
 			native := func(ctx context.Context, plan string) (clusterSSHPreparationCleanObservation, error) {
 				nativeCalls++
-				if mode == "supervised target drift" && nativeCalls == 2 {
-					f.targets[0].CPU.ObservationSHA256 = strings.Repeat("f", 64)
-				}
 				digest, err := clusterSSHPreparationTargetCPUDigest(f.snapshot, f.targets)
 				if ctx.Err() != nil || plan != f.plan {
 					err = errClusterConflict
@@ -124,7 +121,13 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 			if mode == "missing filesystem reader" {
 				storage = nil
 			}
-			gates := clusterSSHPreparationNativeGates(f.snapshot, artifact, artifact, clean, capacityGate, storage, configurationGate)
+			supervisionSource := storageSource
+			if mode == "supervision authority lost" {
+				supervisionSource = func(context.Context, string) (clusterSSHPreparationStorageGateSource, error) {
+					return clusterSSHPreparationStorageGateSource{}, errClusterConflict
+				}
+			}
+			gates := clusterSSHPreparationNativeGates(f.snapshot, artifact, artifact, clean, capacityGate, storage, configurationGate, supervisionSource)
 			source := func(ctx context.Context) error {
 				if mode == "source lost before commit" && configurationCalls == 1 {
 					return errClusterConflict
@@ -144,7 +147,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 					err := withClusterSSHPreparationCPUApprovalProof(ctx, f.snapshot, scoped, source, approvalProjection,
 						func(ctx context.Context, proof clusterSSHPreparationApprovalProof) error {
 							entered = true
-							if nativeCalls != 2 || capacityCalls != 1 || configurationCalls != 1 || networkCalls != 2*len(f.snapshot.work.Proof.Source.Members) || proof.capacity == nil {
+							if nativeCalls != 1 || capacityCalls != 1 || configurationCalls != 1 || networkCalls != 2*len(f.snapshot.work.Proof.Source.Members) || proof.capacity == nil {
 								t.Fatalf("wrong initial production ordering: native=%d capacity=%d configuration=%d source=%d", nativeCalls, capacityCalls, configurationCalls, networkCalls)
 							}
 							// Production commit performs this last waiting recheck before SQL mutation.
@@ -159,7 +162,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 					return receipt, err
 				})
 			if mode == "component success" {
-				if err != nil || !approved || nativeCalls != 2 || capacityCalls != 1 || configurationCalls != 1 || networkCalls != 2*len(f.snapshot.work.Proof.Source.Members) {
+				if err != nil || !approved || nativeCalls != 1 || capacityCalls != 1 || configurationCalls != 1 || networkCalls != 2*len(f.snapshot.work.Proof.Source.Members) {
 					t.Fatalf("component composition/recheck failed: %v, native=%d capacity=%d configuration=%d source=%d", err, nativeCalls, capacityCalls, configurationCalls, networkCalls)
 				}
 			} else {

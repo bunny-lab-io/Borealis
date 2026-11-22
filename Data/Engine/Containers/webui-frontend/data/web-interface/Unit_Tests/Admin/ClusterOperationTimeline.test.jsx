@@ -7,6 +7,18 @@ const operation = { id: "op-1", state: "running", current_step: "preflight", upd
 const event = (id, event_type, details = {}) => ({ id, operation_id: operation.id, event_type, details, created_at: 100 + id });
 const build = (events, patch = {}) => buildClusterOperationTimeline({ ...operation, ...patch }, events, [{ id: "n1", node_name: "engine-1" }]);
 
+it("shows the running check and retained staging failure without advancing preparation", () => {
+  const patch = { kind: "ssh_onboarding", state: "waiting", current_step: "qualify_ssh_targets" };
+  const rows = [
+    { ...event(1, "ssh_check_started"), message: "Checking host profile." },
+    { ...event(2, "ssh_source_stage_blocked"), message: "Source staging failed during application image archives." },
+  ];
+  const timeline = build(rows, patch);
+  expect(timeline.entries.map(({ label }) => label)).toEqual(rows.map(({ message }) => message));
+  expect(timeline.entries[1].tone).toBe("failed");
+  expect(timeline.current.step).toBe("qualify_ssh_targets");
+});
+
 describe("server-owned soak timing", () => {
   const startMS = Date.parse("2026-10-28T12:00:00Z");
   const runID = "11111111-1111-4111-8111-111111111111";

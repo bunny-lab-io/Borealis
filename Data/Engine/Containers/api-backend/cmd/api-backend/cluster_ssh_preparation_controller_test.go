@@ -65,6 +65,18 @@ func TestClusterSSHPreparationBlockedDiagnostics(t *testing.T) {
 	if len(reasons) != 2 || strings.Contains(strings.Join(reasons, ";"), "private") {
 		t.Fatal("diagnostics leaked or lost", reasons)
 	}
+	for _, msg := range []string{supervisionScopeUnavailable, supervisionHelperUnavailable, supervisionTargetsUnavailable, supervisionEvidenceChanged} {
+		reasons := clusterSSHPreparationBlockedReasons(clusterSSHPreparationGateBlocked{"supervised_recovery", msg})
+		if len(reasons) != 1 || reasons[0] != "supervised_recovery: "+msg {
+			t.Fatal("lost the specific supervision failure", reasons)
+		}
+	}
+	for _, gate := range clusterSSHPreparationGateCodes {
+		reasons := clusterSSHPreparationBlockedReasons(clusterSSHPreparationGateBlocked{gate, "private detail"})
+		if len(reasons) != 1 || !strings.HasPrefix(reasons[0], gate+": ") || strings.Contains(reasons[0], "private detail") {
+			t.Fatal("public gate name missing or private cause exposed", gate, reasons)
+		}
+	}
 	if len(clusterSSHPreparationBlockedReasons(private)) != 0 {
 		t.Fatal("private failure promoted into gate reason")
 	}

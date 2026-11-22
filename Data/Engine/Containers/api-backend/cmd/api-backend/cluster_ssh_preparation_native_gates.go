@@ -63,7 +63,7 @@ func clusterSSHPreparationArtifactConsumerForGates(snapshot clusterSSHPreparatio
 	filesystems clusterSSHPreparationFilesystemReader, consume clusterSSHPreparationNativeGateConsumer) clusterSSHPreparationArtifactConsumer {
 	return func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
 		storage := newClusterSSHPreparationStorageRead(snapshot, check, source, preparationWaitingStorageDemand(storageDemand), filesystems)
-		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, helper, cleanTargets, capacity, storage, configuration)
+		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, helper, cleanTargets, capacity, storage, configuration, source)
 		return consumeClusterSSHPreparationNativeGates(ctx, gates, consume)
 	}
 }
@@ -134,10 +134,18 @@ func consumeClusterSSHPreparationNativeGates(parent context.Context, gates clust
 // an error with no digest; qualification/profile minima and source-only storage
 // observations are never promoted into complete readiness evidence.
 func clusterSSHPreparationNativeGates(snapshot clusterSSHPreparationApprovalSnapshot, artifacts, helper clusterSSHPreparationArtifactGate,
-	cleanTargets, capacity, storage, configuration func(context.Context, string) (string, error)) clusterSSHPreparationGates {
+	cleanTargets, capacity, storage, configuration func(context.Context, string) (string, error), source clusterSSHPreparationStorageGateSourceRead) clusterSSHPreparationGates {
 	var gates clusterSSHPreparationGates
 	gates[0], gates[1], gates[2], gates[3], gates[4] = artifacts, cleanTargets, capacity, storage, configuration
-	gates[5] = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, helper, cleanTargets)
+	// Capacity retains the clean and supervision observation from this approval.
+	// Its accessor checks the live proposal before lending the original cohort.
+	gates[5] = newClusterSSHPreparationSupervisedRecoveryRead(snapshot, helper, func(ctx context.Context, plan string) (string, error) {
+		if source == nil {
+			return "", errClusterConflict
+		}
+		current, err := source(ctx, plan)
+		return current.Targets.Digest, err
+	})
 	for _, blocked := range clusterSSHPreparationNativeBlockers(cleanTargets != nil, capacity != nil, storage != nil) {
 		for i, code := range clusterSSHPreparationGateCodes {
 			if code == blocked.Gate {

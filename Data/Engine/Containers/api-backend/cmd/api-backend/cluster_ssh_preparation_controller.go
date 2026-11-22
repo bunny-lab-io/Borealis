@@ -109,6 +109,14 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 		if err := c.recordSSHPreparationBlocked(ctx, operation, clusterSSHPreparationCleanupPending); err != nil {
 			return committed, err
 		}
+		for i, read := range gates {
+			if read != nil {
+				gates[i] = func(checkCtx context.Context, plan string) (string, error) {
+					c.store.recordSSHCheckStarted(checkCtx, snapshot.work.Proof.Cohort, snapshot.work.Payload, clusterSSHPreparationGateCodes[i], clusterSSHTargetLease{})
+					return read(checkCtx, plan)
+				}
+			}
+		}
 		if err = c.approveClusterSSHPreparation(ctx, snapshot, confirmation, getJSON, gates, targets...); err != nil {
 			return committed, err
 		}
@@ -194,7 +202,7 @@ func (c *clusterController) recordSSHPreparationBlocked(parent context.Context, 
 // Retain only fixed canonical gate diagnostics from nested errors.Join values.
 // No native/SQL/SSH error text is copied to operator-visible state.
 func clusterSSHPreparationPublicGateErrors(err error) []error {
-	seen := map[string]bool{}
+	seen := map[string]string{}
 	var visit func(error)
 	visit = func(err error) {
 		if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -205,13 +213,27 @@ func clusterSSHPreparationPublicGateErrors(err error) []error {
 		}
 		var blocked clusterSSHPreparationGateBlocked
 		if errors.As(err, &blocked) {
-			seen[blocked.Gate] = true
+			if _, exists := seen[blocked.Gate]; !exists {
+				seen[blocked.Gate] = ""
+			}
+			if blocked.Gate == "supervised_recovery" {
+				switch blocked.Reason {
+				case supervisionScopeUnavailable, supervisionHelperUnavailable, supervisionTargetsUnavailable, supervisionEvidenceChanged:
+					seen[blocked.Gate] = blocked.Reason
+				}
+			}
 		}
 	}
 	visit(err)
 	var reasons []error
-	for _, known := range clusterSSHPreparationNativeBlockers(false, false, false) {
-		if seen[known.Gate] {
+	canonical := append(clusterSSHPreparationNativeBlockers(false, false, false),
+		clusterSSHPreparationGateBlocked{"immutable_artifacts", "The controller could not verify the release artifacts."},
+		clusterSSHPreparationGateBlocked{"inherited_configuration", "The controller could not verify the inherited configuration."})
+	for _, known := range canonical {
+		if reason, exists := seen[known.Gate]; exists {
+			if reason != "" {
+				known.Reason = reason
+			}
 			reasons = append(reasons, known)
 		}
 	}

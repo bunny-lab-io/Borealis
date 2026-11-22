@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+const (
+	supervisionScopeUnavailable   = "The current preparation proposal or its supervision check expired or changed."
+	supervisionHelperUnavailable  = "The controller could not verify the immutable preparation helper within the supervision check."
+	supervisionTargetsUnavailable = "The controller could not verify the current proposal's clean-target observation."
+	supervisionEvidenceChanged    = "Supervision evidence changed within the same preparation proposal."
+)
+
 // Fresh-target supervision permits a safe halt, not automatic effect replay.
 // The native proposal proves current systemd/cgroup prerequisites and absence
 // of prior journals/producers. The immutable helper checks its actual executor
@@ -15,7 +22,7 @@ import (
 // distinct stopped producer for uncertainty reconciliation. The original worker
 // retains uncertain claims and settles only a complete joined cohort.
 //
-// Production must supply its current native proposal reader and the live gate owned
+// Production supplies the current approval’s validated clean observation and the live gate owned
 // by withPreparationArtifacts. Neither historical qualification nor a receipt
 // loaded from SQL can construct these capabilities. Final byte reproof and
 // cleanup remain owned by that synchronous artifact scope.
@@ -33,12 +40,12 @@ func newClusterSSHPreparationSupervisedRecoveryRead(snapshot clusterSSHPreparati
 	var failed atomic.Bool
 	var retained [2]string
 	return func(parent context.Context, requested string) (string, error) {
-		fail := func() (string, error) {
+		fail := func(reason string) (string, error) {
 			failed.Store(true)
-			return "", clusterSSHPreparationGateBlocked{"supervised_recovery", "Fresh native supervision or immutable helper proof is unavailable or changed; preserve retained journals and inspect stopped-producer evidence before retrying preparation."}
+			return "", clusterSSHPreparationGateBlocked{"supervised_recovery", reason}
 		}
 		if !valid || failed.Load() || parent.Err() != nil || requested != plan {
-			return fail()
+			return fail(supervisionScopeUnavailable)
 		}
 		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		defer cancel()
@@ -46,22 +53,22 @@ func newClusterSSHPreparationSupervisedRecoveryRead(snapshot clusterSSHPreparati
 		case serial <- struct{}{}:
 			defer func() { <-serial }()
 		case <-ctx.Done():
-			return fail()
+			return fail(supervisionScopeUnavailable)
 		}
 		if failed.Load() || ctx.Err() != nil {
-			return fail()
+			return fail(supervisionScopeUnavailable)
 		}
 		artifact, err := artifacts(ctx, plan)
 		if err != nil || !validClusterSSHPreparationDigest(artifact) || ctx.Err() != nil {
-			return fail()
+			return fail(supervisionHelperUnavailable)
 		}
 		targets, err := cleanTargets(ctx, plan)
 		if err != nil || !validClusterSSHPreparationDigest(targets) || ctx.Err() != nil || failed.Load() {
-			return fail()
+			return fail(supervisionTargetsUnavailable)
 		}
 		observed := [2]string{artifact, targets}
 		if retained != ([2]string{}) && observed != retained {
-			return fail()
+			return fail(supervisionEvidenceChanged)
 		}
 		digest, err := clusterSSHPreparationDigest(struct {
 			Domain, Plan  string
@@ -69,7 +76,7 @@ func newClusterSSHPreparationSupervisedRecoveryRead(snapshot clusterSSHPreparati
 			Proofs        [2]string
 		}{"preparation-supervised-safe-halt-v1", plan, clusterremote.PreparationProposalVersion, observed})
 		if err != nil || ctx.Err() != nil || failed.Load() {
-			return fail()
+			return fail(supervisionScopeUnavailable)
 		}
 		retained = observed
 		return digest, nil

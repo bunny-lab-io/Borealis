@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"slices"
 	"strings"
+	"time"
 )
 
 type clusterSSHQualificationWork struct {
@@ -195,6 +197,30 @@ func (s *postgresOperatorStore) claimClusterSSHQualification(ctx context.Context
 	return work, nil
 }
 
+// A progress entry describes work in flight. It has no role in admission or
+// recovery. Record each check once per attempt under the original controller
+// and exact operation payload. Qualification workers also match their lease.
+func (s *postgresOperatorStore) recordSSHCheckStarted(parent context.Context, cohort clusterSSHInspectionCohort, payload, check string, worker clusterSSHTargetLease) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO engine.cluster_operation_events
+ (operation_id,cluster_id,event_type,state,message,details_json,created_at)
+ SELECT o.id,s.cluster_id,'ssh_check_started','waiting',$1,json_build_object('attempt',o.attempt,'check',$2::text)::text,floor(extract(epoch FROM clock_timestamp()))
+ FROM engine.cluster_operations o,engine.cluster_state s,engine.cluster_application_leases l
+ WHERE o.id=$3 AND o.attempt=$4 AND o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step='qualify_ssh_targets'
+ AND o.payload_json=$5 AND s.id=1 AND s.active_operation_id=o.id AND s.cluster_id=$6
+ AND l.name=$7 AND l.holder=$8 AND l.expires_at>extract(epoch FROM clock_timestamp())
+ AND ($9='' OR EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t WHERE t.id=$9 AND t.operation_id=o.id
+ AND t.current_step='qualify' AND t.lease_holder=$10 AND t.lease_generation=$11 AND t.lease_expires_at>extract(epoch FROM clock_timestamp())))
+ AND NOT EXISTS(SELECT 1 FROM engine.cluster_operation_events e WHERE e.operation_id=o.id AND e.event_type='ssh_check_started'
+ AND e.details_json::jsonb->>'attempt'=o.attempt::text AND e.details_json::jsonb->>'check'=$2)`,
+		"Checking "+strings.ReplaceAll(check, "_", " ")+".", check, cohort.OperationID, cohort.Attempt, payload, cohort.ClusterID,
+		clusterControllerLeaseName, cohort.ControllerHolder, worker.TargetID, worker.Holder, worker.Generation)
+	if err != nil && parent.Err() == nil {
+		log.Printf("cluster operation %s: progress entry unavailable for %s", cohort.OperationID, check)
+	}
+}
+
 func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Context, work clusterSSHQualificationWork, report clusterSSHQualificationReport) error {
 	if len(work.Claims) != len(work.Proof.Cohort.Targets) || len(work.Claims) < 1 || len(work.Claims) > 2 || !report.valid(work.Proof.Cohort.Attempt) {
 		return errClusterConflict
@@ -283,7 +309,11 @@ func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Cont
 	if _, err = tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET payload_json=$2,updated_at=$3 WHERE id=$1`, operation.OperationID, string(updated), now); err != nil {
 		return errClusterUnavailable
 	}
-	if insertClusterEvent(ctx, tx, operation.OperationID, "", work.Proof.Source.ClusterID, "ssh_qualification_observed", "waiting", "Read-only qualification results recorded; remaining prerequisites and confirmation are required.", map[string]any{"attempt": operation.OperationAttempt}, now) != nil || tx.Commit() != nil {
+	outcomes := make([]string, 0, len(report.Checks))
+	for _, check := range report.Checks {
+		outcomes = append(outcomes, strings.ReplaceAll(check.Code, "_", " ")+" "+check.State)
+	}
+	if insertClusterEvent(ctx, tx, operation.OperationID, "", work.Proof.Source.ClusterID, "ssh_qualification_observed", "waiting", "Host readiness checks: "+strings.Join(outcomes, ", ")+".", map[string]any{"attempt": operation.OperationAttempt}, now) != nil || tx.Commit() != nil {
 		return errClusterUnavailable
 	}
 	return nil

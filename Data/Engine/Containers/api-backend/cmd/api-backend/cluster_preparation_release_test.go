@@ -250,6 +250,16 @@ func testInspectionReleaseStaging(t *testing.T) {
 	if f.c.setStageStatus(f.ctx, q, clusterSSHStagePending, clusterSSHStageReady) == nil {
 		t.Fatal("stale stage receipt replayed")
 	}
+	lease := work.Claims[0].Lease
+	s.recordSSHCheckStarted(f.ctx, work.Proof.Cohort, work.Payload, "host_profile", lease)
+	s.recordSSHCheckStarted(f.ctx, work.Proof.Cohort, work.Payload, "host_profile", lease)
+	lease.Generation++
+	s.recordSSHCheckStarted(f.ctx, work.Proof.Cohort, work.Payload, "replica_capacity", lease)
+	var checks, staged int
+	if err := s.db.QueryRowContext(f.ctx, `SELECT count(*) FILTER (WHERE event_type='ssh_check_started'),
+ count(*) FILTER (WHERE event_type='ssh_source_stage_ready' AND message=$2) FROM engine.cluster_operation_events WHERE operation_id=$1`, f.op.ID, clusterSSHStageReady).Scan(&checks, &staged); err != nil || checks != 1 || staged != 1 {
+		t.Fatalf("operation history checks=%d staged=%d err=%v", checks, staged, err)
+	}
 	if _, err := f.c.claimClusterSSHPreparation(f.ctx, f.op, newClusterUUID()); err == nil {
 		t.Fatal("source staging authorized target mutation")
 	}

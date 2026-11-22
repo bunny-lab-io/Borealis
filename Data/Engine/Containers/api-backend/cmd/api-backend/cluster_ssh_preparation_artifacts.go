@@ -563,7 +563,19 @@ func clusterSSHPreparationArtifactDemand(expected clusterbootstrap.Expected, ver
 	})
 }
 
+// phase is a fixed local label. Underlying transport errors may contain private URLs.
+type clusterSSHReleaseStageFailure struct {
+	phase string
+	cause error
+}
+
+func (e clusterSSHReleaseStageFailure) Error() string {
+	return "Source staging failed during " + e.phase + ". Start a fresh inspection."
+}
+func (e clusterSSHReleaseStageFailure) Unwrap() error { return e.cause }
+
 func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, expected clusterbootstrap.Expected, version, postgres string, check func(context.Context) error) (_ clusterSSHPreparationArtifactBytes, result error) {
+	phase := "release authority check"
 	var closes []func() error
 	defer func() {
 		if result != nil {
@@ -572,11 +584,13 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 					result = clusterbootstrap.ErrPreparationConfig
 				}
 			}
+			result = clusterSSHReleaseStageFailure{phase, result}
 		}
 	}()
 	if check == nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	phase = "bootstrap bundle"
 	bundle, err := prepareClusterSSHBootstrap(ctx, expected, scratch)
 	if bundle != nil {
 		closes = append(closes, bundle.Close)
@@ -584,14 +598,17 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	phase = "bootstrap publication"
 	manifest, bootstrap, err := readClusterSSHBootstrapPublication(ctx, expected)
 	if err != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	phase = "host package inventory"
 	packages, err := resolveClusterSSHHostPackageInventory(ctx, expected)
 	if err != nil {
 		return nil, err
 	}
+	phase = "host package archive"
 	packageBytes, err := packages.stage(ctx, scratch, check)
 	if packageBytes != nil {
 		closes = append(closes, packageBytes.Close)
@@ -599,14 +616,17 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil {
 		return nil, err
 	}
+	phase = "host package sizing"
 	packageDemand, err := packages.demands(ctx, packageBytes, check)
 	if err != nil {
 		return nil, err
 	}
+	phase = "application image inventory"
 	application, err := resolveClusterSSHImageInventory(ctx, expected)
 	if err != nil {
 		return nil, err
 	}
+	phase = "application image archives"
 	images, err := application.stage(ctx, scratch, check)
 	if images != nil {
 		closes = append(closes, images.Close)
@@ -614,10 +634,12 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil {
 		return nil, err
 	}
+	phase = "external image inventory"
 	external, err := resolveClusterSSHExternalInventory(ctx, expected)
 	if err != nil {
 		return nil, err
 	}
+	phase = "external image archives"
 	externalImages, err := external.stage(ctx, scratch, check)
 	if externalImages != nil {
 		closes = append(closes, externalImages.Close)
@@ -625,10 +647,12 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil {
 		return nil, err
 	}
+	phase = "K3s inventory"
 	k3s, err := resolveClusterSSHK3sInventory(ctx, expected, version)
 	if err != nil {
 		return nil, err
 	}
+	phase = "K3s artifacts"
 	k3sInputs, err := k3s.stage(ctx, scratch, check)
 	if k3sInputs != nil {
 		closes = append(closes, k3sInputs.Close)
@@ -636,6 +660,7 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil {
 		return nil, err
 	}
+	phase = "PostgreSQL image"
 	pg, err := clusterbootstrap.AcquirePostgresImage(ctx, scratch, postgres, check)
 	if pg != nil {
 		closes = append(closes, pg.Close)
@@ -643,14 +668,17 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	phase = "PostgreSQL image sizing"
 	pgDemand, err := pg.StorageDemand(ctx, check)
 	if err != nil {
 		return nil, err
 	}
+	phase = "bootstrap helper verification"
 	managerSource, _, managerBytes, err := bundle.ManagerProof()
 	if err != nil || managerSource != expected || check(ctx) != nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
+	phase = "installation sizing"
 	demand, err := clusterSSHPreparationArtifactDemand(expected, version, postgres, application, external, k3s, managerBytes, pgDemand)
 	if err != nil {
 		return nil, err
@@ -659,6 +687,7 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	if err != nil {
 		return nil, err
 	}
+	phase = "release assembly"
 	artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected, version, postgres, images, k3sInputs, externalImages, pg, check)
 	if err != nil {
 		return nil, err
@@ -667,9 +696,11 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 	// Compute the ordered transport digest while the proposal still owns
 	// acquisition. All four timed proofs re-read every file and compare its
 	// digest, framing and position with this private reference.
+	phase = "release byte verification"
 	if _, err := artifacts.ApprovalDigest(ctx, check); err != nil {
 		return nil, err
 	}
+	phase = "release publication verification"
 	static, err := clusterSSHPreparationGroupPublication(expected, version, bootstrap, application.assets, external.assets, k3s.assets)
 	if err != nil {
 		return nil, err

@@ -63,6 +63,18 @@ func (v *sshApprovalArtifactBytes) storageDemand(ctx context.Context, check func
 	return nil, clusterbootstrap.ErrPreparationConfig
 }
 
+func TestClusterSSHPreparationArtifactsStageFailure(t *testing.T) {
+	cause := errors.New("private transfer detail")
+	failure := clusterSSHReleaseStageFailure{phase: "application image archives", cause: cause}
+	if got := failure.Error(); got != "Source staging failed during application image archives. Start a fresh inspection." || !errors.Is(failure, cause) {
+		t.Fatal("stage error must identify the public phase and preserve its private cause")
+	}
+	_, err := acquireClusterSSHPreparationArtifacts(context.Background(), t.TempDir(), clusterbootstrap.Expected{}, "", "", nil)
+	if !errors.As(err, &failure) || failure.phase != "release authority check" || !errors.Is(err, clusterbootstrap.ErrPreparationConfig) {
+		t.Fatal("acquisition failed without identifying the initial authority check")
+	}
+}
+
 func TestClusterSSHPreparationArtifactsDemandConsumer(t *testing.T) {
 	for _, mode := range []string{"valid", "wrong plan", "failed bytes", "source drift", "absent round", "reused demand", "reused helper"} {
 		t.Run(mode, func(t *testing.T) {

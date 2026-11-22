@@ -154,6 +154,16 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
     let tone = "recorded";
     let next = null;
     switch (event.event_type) {
+      case "ssh_check_started":
+      case "ssh_source_stage_ready":
+      case "ssh_source_stage_blocked":
+      case "ssh_preparation_blocked":
+        if (operation.kind === "ssh_onboarding" && event.message) {
+          label = event.message;
+          if (event.event_type === "ssh_source_stage_ready") tone = "complete";
+          if (event.event_type === "ssh_source_stage_blocked") tone = "failed";
+        }
+        break;
       case "automatic_recovery_observation_started":
         label = "Automatic recovery observation started · Maintenance dispatch remains gated";
         break;
@@ -211,7 +221,7 @@ export function buildClusterOperationTimeline(operation, events = [], nodes = []
           // "completed" is shared vocabulary; only this exact producer state
           // proves completion of an existing-member identity recovery operation.
           if (known && (event.event_type !== "completed" || event.state === "succeeded")) {
-            label = known.label;
+            label = event.event_type === "ssh_qualification_observed" && event.message ? event.message : known.label;
             tone = known.tone || "recorded";
             if (known.next && (!PREPARATION_RECOVERY_EVENTS.has(event.event_type) || preparationRecoveryParentEvent(event))) {
               next = { ...known.next, message: event.message };

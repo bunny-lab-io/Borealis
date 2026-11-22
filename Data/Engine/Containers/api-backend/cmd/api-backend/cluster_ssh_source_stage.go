@@ -4,16 +4,18 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	clusterSSHStagePending   = "Staging the inspected release on the original controller."
 	clusterSSHStageReady     = "Release staged on the original controller. Read-only host qualification is in progress."
-	clusterSSHStageFailed    = "Source staging failed or lost ownership. Start a fresh inspection."
+	clusterSSHStageFailed    = "The original controller no longer holds the staged release. Start a fresh inspection."
 	clusterSSHStageDirectory = "inspection-release"
 )
 
@@ -101,9 +103,16 @@ func (s *postgresOperatorStore) sourceStageStatus(parent context.Context, q clus
 func (c *clusterController) setStageStatus(ctx context.Context, q clusterPreparationReleaseRequest, from, to string) error {
 	bound, stop := context.WithTimeout(ctx, 3*time.Second)
 	defer stop()
-	res, err := c.store.db.ExecContext(bound, `UPDATE engine.cluster_operations o SET error_text=$11,updated_at=floor(extract(epoch FROM clock_timestamp()))
+	event := "ssh_source_stage_blocked"
+	if to == clusterSSHStageReady {
+		event = "ssh_source_stage_ready"
+	}
+	res, err := c.store.db.ExecContext(bound, `WITH updated AS (UPDATE engine.cluster_operations o SET error_text=$11,updated_at=floor(extract(epoch FROM clock_timestamp()))
  FROM engine.cluster_state s,engine.cluster_application_leases l WHERE `+clusterSSHStageAuthority+` AND o.error_text=$10
- AND NOT(o.payload_json::jsonb ?| ARRAY['ssh_qualification','ssh_preparation_request'])`, append(stageAuthorityArgs(q), from, to)...)
+ AND NOT(o.payload_json::jsonb ?| ARRAY['ssh_qualification','ssh_preparation_request'])
+ RETURNING o.id,o.attempt,o.updated_at,s.cluster_id)
+ INSERT INTO engine.cluster_operation_events(operation_id,cluster_id,event_type,state,message,details_json,created_at)
+ SELECT id,cluster_id,$12,'waiting',$11,json_build_object('attempt',attempt)::text,updated_at FROM updated`, append(stageAuthorityArgs(q), from, to, event)...)
 	if err != nil {
 		return err
 	}
@@ -189,9 +198,16 @@ func (c *clusterController) stageInspectionRelease(ctx context.Context, op clust
 	default:
 		return nil
 	}
+	phase := "controller setup"
+	var authorityLost atomic.Bool
 	defer func() {
 		if result != nil {
-			result = errors.Join(result, c.setStageStatus(ctx, q, clusterSSHStagePending, clusterSSHStageFailed))
+			message := clusterSSHReleaseStageFailure{phase, result}.Error()
+			if authorityLost.Load() {
+				message = "The controller could not confirm source staging authority during " + phase + ". Start a fresh inspection."
+			}
+			log.Printf("cluster operation %s: %s", op.ID, message)
+			result = errors.Join(result, c.setStageStatus(ctx, q, clusterSSHStagePending, message))
 		}
 	}()
 	runner, ok := c.runner.(*kubernetesClusterStepRunner)
@@ -208,6 +224,7 @@ func (c *clusterController) stageInspectionRelease(ctx context.Context, op clust
 	if err != nil {
 		return err
 	}
+	phase = "scratch directory setup"
 	dir := filepath.Join(clusterSSHScratchParent(), clusterSSHStageDirectory)
 	if os.Getenv("BOREALIS_CLUSTER_SCRATCH_DIR") == "" {
 		dir, err = os.MkdirTemp(os.TempDir(), "borealis-inspection-release-")
@@ -225,22 +242,33 @@ func (c *clusterController) stageInspectionRelease(ctx context.Context, op clust
 	}()
 	check := func(ctx context.Context) error {
 		if !c.store.preparationReleaseCurrent(ctx, q) {
+			// A cancelled reader during cleanup cannot establish that ownership changed.
+			if ctx.Err() == nil {
+				authorityLost.Store(true)
+			}
 			return errClusterConflict
 		}
 		return nil
 	}
+	phase = "source profile observation"
 	err = runClusterSSHArtifactPreparationScope(bound, 5*time.Second, check, func(ctx context.Context) error {
 		source, err := readClusterSSHPreparationArtifactSource(ctx, proof.Source, runner.kube.getClusterSSHStorageJSON, check, nil)
 		if err != nil {
 			return err
 		}
+		phase = "release acquisition"
 		stage.postgres = source.Postgres
 		stage.clusterSSHPreparationArtifactBytes, err = acquireClusterSSHPreparationArtifacts(ctx, dir, expected, version, source.Postgres, check)
+		var failure clusterSSHReleaseStageFailure
+		if errors.As(err, &failure) {
+			phase = failure.phase
+		}
 		return err
 	})
 	if err != nil {
 		return err
 	}
+	phase = "publication of the staged release"
 	if err = c.setStageStatus(bound, q, status, clusterSSHStageReady); err != nil {
 		return err
 	}

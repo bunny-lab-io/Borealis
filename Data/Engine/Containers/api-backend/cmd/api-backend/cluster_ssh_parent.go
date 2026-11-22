@@ -166,7 +166,7 @@ func (c *clusterController) transitionSSHInspectionParent(ctx context.Context, o
 	errorText := ""
 	if action == "review" {
 		errorText = clusterSSHStagePending
-		state, step, event, message = "waiting", clusterSSHQualificationStep, "ssh_inspection_complete", "SSH inspections complete. Further qualification and operator confirmation are required."
+		state, step, event, message = "waiting", clusterSSHQualificationStep, "ssh_inspection_complete", "SSH inspections complete. The original controller is staging the release for host readiness checks."
 	} else if action == "fail" {
 		state, step, event, message = "failed", operation.CurrentStep, "ssh_inspection_failed", "SSH inspection stopped without changing cluster membership or application state."
 		errorText = errClusterSSHCohort.Error()
@@ -232,6 +232,9 @@ func (c *clusterController) transitionSSHInspectionParent(ctx context.Context, o
 				return errClusterSSHCohort
 			}
 		}
+	}
+	if action == "fail" {
+		message = errorText
 	}
 	var now int64
 	if tx.QueryRowContext(ctx, `SELECT floor(extract(epoch FROM clock_timestamp()))::bigint`).Scan(&now) != nil {
