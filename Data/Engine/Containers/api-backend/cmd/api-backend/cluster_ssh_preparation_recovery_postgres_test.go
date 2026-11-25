@@ -91,6 +91,7 @@ func assertSSHPreparationRecoveryInert(t *testing.T, f sshPreparationAuthorityFi
 }
 
 func TestClusterSSHPreparationRecoveryPostgresAtomicCohort(t *testing.T) {
+	t.Run("production inventory interruption", testSSHInventoryInterruption)
 	for _, replacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "expansion", true: "replacement"}[replacement], func(t *testing.T) {
 			f, initial := newSSHPreparationRecoveryFixture(t, replacement)

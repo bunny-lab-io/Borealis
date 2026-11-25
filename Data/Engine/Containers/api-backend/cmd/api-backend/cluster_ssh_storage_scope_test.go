@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+func TestClusterSSHFinalInventoryTiming(t *testing.T) {
+	f := newSSHStorageFixture(t, false)
+	final := false
+	timing := &clusterSSHFinalInventoryTiming{}
+	started := time.Now()
+	get := func(ctx context.Context, path string, out any) error {
+		if final && path == clusterSSHStoragePostgresPath {
+			return errors.New("private response must not escape")
+		}
+		return f.get(ctx, path, out)
+	}
+	err := withClusterSSHSourceStorageFor(context.Background(), clusterSSHSourceSnapshotTimeout, f.authority, get, timing,
+		func(context.Context, clusterSSHStorageRequirements, clusterSSHPreparationChecks) error {
+			final = true
+			return nil
+		})
+	summary := timing.summary(started)
+	if err == nil || !final || timing.reads == 0 || timing.last != "GET "+clusterSSHStoragePostgresPath ||
+		timing.finished.Before(timing.started) || !strings.Contains(summary, timing.last) || strings.Contains(summary, "private response") {
+		t.Fatalf("final read attribution %q, err %v", summary, err)
+	}
+	timing.measure("/api/v1/pods?labelSelector=private", "after GET", func() error { return nil })
+	if strings.Contains(timing.summary(started), "labelSelector") {
+		t.Fatal("query selector escaped into timing")
+	}
+}
+
 func TestClusterSSHStorageScope(t *testing.T) {
 	for _, mode := range []string{"expansion", "replacement", "application receipt drift", "application resources drift", "initial revision drift", "final revision drift", "final content drift", "CNPG receipt drift", "CNPG config receipt drift", "CNPG secret receipt drift", "CNPG config override", "kube-vip receipt drift", "kube-vip image drift", "kube-vip interface drift", "snapshot receipt drift", "snapshot image drift", "upgrade receipt drift", "upgrade kubectl drift", "UI receipt drift", "UI image drift", "manager receipt drift", "manager Settings drift", "Longhorn receipt drift", "Longhorn CSI drift", "cert-manager receipt drift", "cert-manager solver drift", "source boot drift", "source authority drift", "target authority drift", "lost authority during GET", "ignored input failure", "ignored cancelled authority", "consumer failure"} {
 		t.Run(mode, func(t *testing.T) {

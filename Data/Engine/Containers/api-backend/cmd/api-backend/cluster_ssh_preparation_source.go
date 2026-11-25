@@ -166,7 +166,11 @@ func newClusterSSHPreparationSnapshotRead(authority clusterSSHPreparationAuthori
 func withClusterSSHPreparationSource(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials,
 	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
-	return withClusterSSHPreparationSourceFor(parent, scratchParent, store, aegis, lease, baseline, sealed, false, consume)
+	client, err := newClusterSSHSourceBrokerClientFromEnv()
+	if err != nil {
+		return err
+	}
+	return withClusterSSHPreparationSourceFor(parent, scratchParent, store, aegis, lease, baseline, sealed, false, consume, nil, client)
 }
 
 // Derive the outer allowance from the existing native session budget and source
@@ -180,16 +184,11 @@ func clusterSSHPreparationSourceBudget(joining bool) time.Duration {
 // verification remain native journal phases with independently proven prefixes.
 func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, joining bool,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error, allocate func(context.Context) (string, error), client *clusterSSHSourceBrokerClient) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
-	budget := clusterSSHSourceSnapshotTimeout
-	if joining {
-		budget = clusterSSHReadOnlySnapshotTimeout
-	}
-	client, err := newClusterSSHSourceBrokerClientWithTimeout(budget)
-	if err != nil {
+	if client == nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
@@ -207,6 +206,17 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		expected, settings := initial.Expected, initial.Settings
 		if err != nil {
 			return clusterbootstrap.ErrPreparationConfig
+		}
+		// This is the first successful read. Nothing in the joining executor
+		// may allocate private scratch or start native work before this commit.
+		if joining {
+			if allocate == nil {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			scratchParent, err = allocate(ctx)
+			if err != nil {
+				return err
+			}
 		}
 		config, err := clusterbootstrap.NewPreparationConfiguration(expected, settings)
 		if err != nil {

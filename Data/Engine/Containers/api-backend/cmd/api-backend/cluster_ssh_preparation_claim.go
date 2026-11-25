@@ -128,6 +128,16 @@ func (c *clusterController) claimClusterSSHPreparation(ctx context.Context, oper
 // API executors consume only the durable reservation from the original live
 // controller. This grants no controller lease, approval or uncertain-work replay.
 func (s *postgresOperatorStore) claimClusterSSHPreparation(ctx context.Context, operation clusterControllerOperation, controller, holder string) (clusterSSHPreparationWork, error) {
+	return s.claimSSHPreparation(ctx, operation, controller, holder, false)
+}
+
+// Only the API runtime whose source acquisition enforces the allocation fence
+// may advertise that the initial claim is limited to read-only inventory.
+func (s *postgresOperatorStore) claimFencedSSHPreparation(ctx context.Context, operation clusterControllerOperation, controller, holder string) (clusterSSHPreparationWork, error) {
+	return s.claimSSHPreparation(ctx, operation, controller, holder, true)
+}
+
+func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operation clusterControllerOperation, controller, holder string, fenced bool) (clusterSSHPreparationWork, error) {
 	fail := func() (clusterSSHPreparationWork, error) { return clusterSSHPreparationWork{}, errClusterConflict }
 	if s == nil || s.db == nil || ctx.Err() != nil || !clusterUUIDRE.MatchString(holder) ||
 		!clusterUUIDRE.MatchString(operation.ID) || operation.Kind != "ssh_onboarding" || operation.State != "running" ||
@@ -258,6 +268,11 @@ func (s *postgresOperatorStore) claimClusterSSHPreparation(ctx context.Context, 
 			return fail()
 		}
 		claims[target.Binding.TargetID] = claim
+	}
+	if fenced {
+		if err := insertSSHPreparationFenceEvent(ctx, tx, operation.ID, operation.Attempt, holder, sshPreparationReadOnlyClaim, sshPreparationFenceDigest(work.Payload)); err != nil {
+			return fail()
+		}
 	}
 	// Re-evaluate every clock-sensitive predicate after all locks and updates.
 	// A lost acknowledgement deliberately cannot obtain another generation;

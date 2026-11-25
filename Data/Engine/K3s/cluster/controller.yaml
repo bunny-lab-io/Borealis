@@ -224,6 +224,8 @@ spec:
             - {name: BOREALIS_PROCESS_ROLE, value: borealis-cluster-controller}
             - {name: BOREALIS_CLUSTER_SCRATCH_DIR, value: /var/tmp/borealis-cluster}
             - {name: BOREALIS_CLUSTER_CONTROLLER_PORT, value: "8090"}
+            - name: BOREALIS_ENGINE_NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
             - name: BOREALIS_CLUSTER_CONTROLLER_ID
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - {name: BOREALIS_CLUSTER_ACTION_IMAGE, value: borealis-engine/api-backend:sha-000000000000}

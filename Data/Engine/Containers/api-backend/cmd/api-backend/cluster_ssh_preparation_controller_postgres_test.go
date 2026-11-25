@@ -47,7 +47,7 @@ func TestClusterSSHPreparationControllerPostgresNativeSettlement(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(broker.handle))
 			defer server.Close()
 			client := sshBrokerClient(t, server.URL)
-			worker := newClusterSSHNativePrejoinPreparationWorkerRead(f.c.store, f.aegis, t.TempDir(), clusterExistingIdentitySourceProcess{}, client.joinedTargetsRead)
+			worker := newClusterSSHPrejoinWorkerWithClient(f.c.store, f.aegis, t.TempDir(), clusterExistingIdentitySourceProcess{}, client.joinedTargetsRead, client)
 			// Only native effects are simulated. Normal controller approval, API
 			// claim, renewal, authenticated controller proof and v2 SQL settlement
 			// all run unchanged against the disposable database.

@@ -345,13 +345,14 @@ def reconcile_one(
         set_container_environment(containers[0], "BOREALIS_CLUSTER_ACTION_IMAGE", image)
     if base == "api-backend":
         set_container_environment(containers[0], "BOREALIS_API_BACKGROUND_LOOPS", "0" if candidate else "1")
+    if base in ("api-backend", "borealis-cluster-controller"):
         # Identity custody binds this actual Pod/Node, never copied literal
         # values from another member's runtime template.
         identity_fields = {
             "BOREALIS_ENGINE_NODE_NAME": "spec.nodeName",
-            "BOREALIS_ENGINE_POD_NAME": "metadata.name",
-            "BOREALIS_ENGINE_POD_UID": "metadata.uid",
         }
+        if base == "api-backend":
+            identity_fields.update(BOREALIS_ENGINE_POD_NAME="metadata.name", BOREALIS_ENGINE_POD_UID="metadata.uid")
         environment = containers[0].setdefault("env", [])
         environment[:] = [entry for entry in environment if entry.get("name") not in identity_fields]
         environment.extend({"name": name, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": field}}}

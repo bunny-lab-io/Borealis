@@ -77,8 +77,7 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 		if _, completed := operation.Payload["ssh_preparation"]; !completed && operation.Payload["ssh_preparation_authorization"] != nil {
 			// Selection observed an expired cohort. Recheck custody atomically
 			// because a worker may have renewed since the controller selected it.
-			_, err := c.reserveClusterSSHPreparationRecovery(parent, operation)
-			return err
+			return c.reconcileSSHPreparationInterruption(parent, operation)
 		}
 		return nil
 	}

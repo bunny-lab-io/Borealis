@@ -96,7 +96,12 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 	}
 	var value clusterSSHPreparationSnapshot
 	started := time.Now()
+	var finalTiming *clusterSSHFinalInventoryTiming
+	if joining {
+		finalTiming = &clusterSSHFinalInventoryTiming{}
+	}
 	reject := func(phase string) (clusterSSHPreparationSnapshot, error) {
+		phase += finalTiming.summary(started)
 		log.Printf("SSH preparation storage snapshot rejected at %s after %s", phase, time.Since(started).Round(time.Millisecond))
 		if blocked != nil {
 			blocked(phase)
@@ -104,7 +109,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	stage := "initial storage inventories"
-	err := withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
+	err := withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, finalTiming, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
 		case censusGate <- struct{}{}:
 			policy = storage.WorkerPolicy
@@ -190,6 +195,9 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 	afterDigest, digestErr := clusterSSHPreparationDigest(after)
 	if err != nil || digestErr != nil || afterDigest != capacityAuthority || ctx.Err() != nil || !cleanup.clean() {
 		return reject("final authority comparison")
+	}
+	if elapsed := time.Since(started); joining && elapsed >= clusterSSHSourceSnapshotTimeout {
+		log.Printf("SSH joining storage snapshot completed in %s%s", elapsed.Round(time.Millisecond), finalTiming.summary(started))
 	}
 	return value, nil
 }

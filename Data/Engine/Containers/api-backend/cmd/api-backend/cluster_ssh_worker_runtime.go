@@ -192,7 +192,7 @@ func newClusterSSHPreparationRuntime(store *postgresOperatorStore, aegis *goAegi
 		pending: func(ctx context.Context) (clusterSSHPendingPreparation, error) {
 			return store.pendingClusterSSHPreparation(ctx, process.NodeName)
 		},
-		claim: store.claimClusterSSHPreparation,
+		claim: store.claimFencedSSHPreparation,
 		execute: func(ctx context.Context, work clusterSSHPreparationWork) error {
 			return worker.prepare(clusterContextWithGitHubToken(ctx, store, aegis), work)
 		},

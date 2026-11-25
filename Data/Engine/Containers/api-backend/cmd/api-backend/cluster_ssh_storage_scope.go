@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -27,11 +29,52 @@ func (r *kubernetesClusterStepRunner) withSSHSourceStorage(ctx context.Context, 
 func withClusterSSHSourceStorage(parent context.Context, authority clusterSSHPreparationAuthorityRead,
 	getJSON func(context.Context, string, any) error,
 	consume func(context.Context, clusterSSHStorageRequirements, clusterSSHPreparationChecks) error) error {
-	return withClusterSSHSourceStorageFor(parent, clusterSSHSourceSnapshotTimeout, authority, getJSON, consume)
+	return withClusterSSHSourceStorageFor(parent, clusterSSHSourceSnapshotTimeout, authority, getJSON, nil, consume)
+}
+
+// Only the final synchronous inventory uses this recorder. By then all borrowed
+// input readers have closed and joined. Keep request bodies, selectors, error
+// strings and credentials out of both controller logs and the event timeline.
+type clusterSSHFinalInventoryTiming struct {
+	started, finished                                    time.Time
+	reads                                                int
+	last, slowest                                        string
+	lastElapsed, slowestElapsed, authorityTime, readTime time.Duration
+}
+
+func (t *clusterSSHFinalInventoryTiming) measure(path, step string, read func() error) error {
+	if t == nil {
+		return read()
+	}
+	start := time.Now()
+	err := read()
+	elapsed := time.Since(start)
+	path, _, _ = strings.Cut(path, "?") // inventory readers construct validated Kubernetes paths
+	t.last, t.lastElapsed = step+" "+path, elapsed
+	if elapsed > t.slowestElapsed {
+		t.slowest, t.slowestElapsed = t.last, elapsed
+	}
+	if step == "GET" {
+		t.reads++
+		t.readTime += elapsed
+	} else {
+		t.authorityTime += elapsed
+	}
+	return err
+}
+
+func (t *clusterSSHFinalInventoryTiming) summary(snapshotStarted time.Time) string {
+	if t == nil || t.finished.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf(" (final inventory began at %s, took %s, %d GETs totaling %s, surrounding authority checks %s, last %q %s, slowest %q %s)",
+		t.started.Sub(snapshotStarted).Round(time.Millisecond), t.finished.Sub(t.started).Round(time.Millisecond),
+		t.reads, t.readTime.Round(time.Millisecond), t.authorityTime.Round(time.Millisecond),
+		t.last, t.lastElapsed.Round(time.Millisecond), t.slowest, t.slowestElapsed.Round(time.Millisecond))
 }
 
 func withClusterSSHSourceStorageFor(parent context.Context, budget time.Duration, authority clusterSSHPreparationAuthorityRead,
-	getJSON func(context.Context, string, any) error,
+	getJSON func(context.Context, string, any) error, finalTiming *clusterSSHFinalInventoryTiming,
 	consume func(context.Context, clusterSSHStorageRequirements, clusterSSHPreparationChecks) error) error {
 	if authority == nil || getJSON == nil || consume == nil || parent.Err() != nil {
 		return clusterbootstrap.ErrPreparationConfig
@@ -83,12 +126,14 @@ func withClusterSSHSourceStorageFor(parent context.Context, budget time.Duration
 				result = clusterbootstrap.ErrPreparationConfig
 			}
 		}()
+		var timing *clusterSSHFinalInventoryTiming
 		get := func(ctx context.Context, path string, out any) error {
-			if checkAuthority(ctx) != nil {
+			check := func() error { return checkAuthority(ctx) }
+			if timing.measure(path, "before GET", check) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
-			err := getJSON(ctx, path, out)
-			if (err != nil && !(err == errClusterSSHCNPGConfigAbsent && clusterSSHCNPGOptionalConfigPath(path))) || ctx.Err() != nil || checkAuthority(ctx) != nil {
+			err := timing.measure(path, "GET", func() error { return getJSON(ctx, path, out) })
+			if (err != nil && !(err == errClusterSSHCNPGConfigAbsent && clusterSSHCNPGOptionalConfigPath(path))) || ctx.Err() != nil || timing.measure(path, "after GET", check) != nil {
 				return clusterbootstrap.ErrPreparationConfig
 			}
 			return err
@@ -140,6 +185,11 @@ func withClusterSSHSourceStorageFor(parent context.Context, budget time.Duration
 		// cancelled and joined, not allowed to delay closure behind the input gate.
 		if lifetime.close() != nil {
 			return clusterbootstrap.ErrPreparationConfig
+		}
+		timing = finalTiming
+		if timing != nil {
+			timing.started = time.Now()
+			defer func() { timing.finished = time.Now() }()
 		}
 		return checkInputs(ctx)
 	})

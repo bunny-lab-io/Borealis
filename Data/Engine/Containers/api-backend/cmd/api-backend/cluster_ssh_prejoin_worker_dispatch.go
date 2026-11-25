@@ -5,7 +5,9 @@ import (
 	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"encoding/json"
+	"os"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,11 +28,36 @@ func newClusterSSHNativePrejoinPreparationWorker(store *postgresOperatorStore, a
 
 func newClusterSSHNativePrejoinPreparationWorkerRead(store *postgresOperatorStore, aegis *goAegisService,
 	scratchParent string, process clusterExistingIdentitySourceProcess, joined clusterSSHPrejoinJoinedRead) *clusterSSHPreparationWorker {
+	client, err := newClusterSSHSourceBrokerClientWithTimeout(clusterSSHReadOnlySnapshotTimeout)
+	if err != nil {
+		return nil
+	}
+	return newClusterSSHPrejoinWorkerWithClient(store, aegis, scratchParent, process, joined, client)
+}
+
+func newClusterSSHPrejoinWorkerWithClient(store *postgresOperatorStore, aegis *goAegisService, scratchParent string,
+	process clusterExistingIdentitySourceProcess, joined clusterSSHPrejoinJoinedRead, client *clusterSSHSourceBrokerClient) *clusterSSHPreparationWorker {
 	if store == nil || store.db == nil || aegis == nil || joined == nil {
 		return nil
 	}
 	dispatch := func(ctx context.Context, claims []clusterSSHNetworkTargetClaim, baseline clusterbootstrap.Expected, confirmation string,
 		binding engineidentity.Binding, current func(context.Context) error) ([]clusterSSHPrejoinDispatchResult, error) {
+		if len(claims) == 0 {
+			return nil, clusterbootstrap.ErrSessionAuthority
+		}
+		var admitted sync.Once
+		var directory string
+		var allocationErr error
+		var nativeEntered atomic.Bool
+		beforeAllocation := func(ctx context.Context) (string, error) {
+			admitted.Do(func() {
+				allocationErr = store.openSSHPreparationAllocation(ctx, claims)
+				if allocationErr == nil {
+					directory, allocationErr = os.MkdirTemp(scratchParent, "claimed-"+claims[0].Lease.OperationID+"-")
+				}
+			})
+			return directory, allocationErr
+		}
 		source := clusterSSHPrejoinSource{Binding: binding, Process: process}
 		if !clusterSSHPrejoinLocalProcessMatches(source) {
 			return nil, clusterbootstrap.ErrSessionAuthority
@@ -41,12 +68,13 @@ func newClusterSSHNativePrejoinPreparationWorkerRead(store *postgresOperatorStor
 		scope := func(ctx context.Context, index int, consume func(context.Context, clusterbootstrap.PreparationExpected, clusterSSHPrejoinNativeTarget) error) error {
 			claim := claims[index]
 			acquire := func(ctx context.Context, consume clusterSSHPrejoinWorkerSourceConsumer) error {
-				return withClusterSSHPreparationSourceFor(ctx, scratchParent, store, aegis, claim.Lease, baseline, claim.Sealed, true, consume)
+				return withClusterSSHPreparationSourceFor(ctx, scratchParent, store, aegis, claim.Lease, baseline, claim.Sealed, true, consume, beforeAllocation, client)
 			}
 			return withClusterSSHPrejoinWorkerInputs(ctx, claim, baseline, confirmation, source,
 				newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed), acquire, storage,
 				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
 					postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
+					nativeEntered.Store(true)
 					return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
 						checks.Authority, checks.K3sJoin, true, func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
 							target.inputs = checks.Inputs
@@ -54,7 +82,22 @@ func newClusterSSHNativePrejoinPreparationWorkerRead(store *postgresOperatorStor
 						})
 				}, current)
 		}
-		return dispatchClusterSSHPrejoinCohort(ctx, claims, baseline, binding, scope, current)
+		result, err := dispatchClusterSSHPrejoinCohort(ctx, claims, baseline, binding, scope, current)
+		if directory != "" {
+			if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
+				return nil, clusterbootstrap.ErrPreparationConfig
+			}
+			if err != nil && !nativeEntered.Load() {
+				// This synchronous dispatch has joined its scopes and released
+				// the exact private directory, even when the caller timed out.
+				final, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+				defer cancel()
+				if releaseErr := store.recordSSHPreparationReadOnlyReturn(final, claims[0].Lease); releaseErr != nil {
+					return nil, releaseErr
+				}
+			}
+		}
+		return result, err
 	}
 	return &clusterSSHPreparationWorker{store: store, aegis: aegis, cohort: dispatch, joined: joined, interval: 5 * time.Second}
 }
