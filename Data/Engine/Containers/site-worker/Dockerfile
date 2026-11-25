@@ -33,6 +33,6 @@ COPY Data/Engine/Containers/site-worker/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
 COPY Data/Engine/Containers/site-worker/entrypoint.sh /usr/local/bin/borealis-site-worker
 
-RUN chmod +x /usr/local/bin/borealis-site-worker
+RUN chmod 0755 /usr/local/bin/borealis-site-worker
 
 ENTRYPOINT ["/usr/local/bin/borealis-site-worker"]

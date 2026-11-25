@@ -18,7 +18,7 @@ COPY Data/Engine/Containers/api-backend/dist/wireguard-control /usr/local/bin/bo
 COPY Data/Engine/Containers/api-backend/dist/wireguard-control-client /usr/local/bin/borealis-wireguard-control-client
 COPY Data/Engine/Containers/api-backend/dist/wireguard-route-daemon /usr/local/bin/borealis-wireguard-route-daemon
 COPY Data/Engine/Containers/wireguard-tunnel/healthcheck.sh /usr/local/bin/borealis-wireguard-healthcheck
-RUN chmod +x /usr/local/bin/borealis-wireguard-control /usr/local/bin/borealis-wireguard-control-client /usr/local/bin/borealis-wireguard-route-daemon /usr/local/bin/borealis-wireguard-healthcheck
+RUN chmod 0755 /usr/local/bin/borealis-wireguard-control /usr/local/bin/borealis-wireguard-control-client /usr/local/bin/borealis-wireguard-route-daemon /usr/local/bin/borealis-wireguard-healthcheck
 
 EXPOSE 30000/udp
 

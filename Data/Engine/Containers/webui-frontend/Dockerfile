@@ -23,7 +23,7 @@ COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
 COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
 COPY static-server.js /usr/local/bin/borealis-webui-static-server.js
 
-RUN chmod +x \
+RUN chmod 0755 \
     /usr/local/bin/borealis-webui-frontend \
     /usr/local/bin/borealis-webui-healthcheck \
     /usr/local/bin/borealis-webui-static-server.js
@@ -53,7 +53,7 @@ COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
 COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
 COPY static-server.js /usr/local/bin/borealis-webui-static-server.js
 
-RUN chmod +x \
+RUN chmod 0755 \
     /usr/local/bin/borealis-webui-frontend \
     /usr/local/bin/borealis-webui-healthcheck \
     /usr/local/bin/borealis-webui-static-server.js

@@ -40,9 +40,9 @@ def git_environment() -> dict[str, str]:
     return env
 
 
-def git(root: Path, *args: str) -> str:
+def git(root: Path, *args: str, umask: int = -1) -> str:
     result = subprocess.run(["git", "-C", str(root), *args], env=git_environment(),
-                            capture_output=True, text=True, timeout=120, check=False)
+                            capture_output=True, text=True, timeout=120, check=False, umask=umask)
     if result.returncode:
         raise ValueError("local Git packaging command failed; diagnostics withheld")
     return result.stdout.strip()
@@ -80,7 +80,9 @@ def source_snapshot(source: Path, target: Path, release: str, source_sha: str,
         "\tlogAllRefUpdates = false\n[remote \"origin\"]\n"
         f"\turl = https://github.com/{repository}.git\n"
         "\tfetch = +refs/heads/*:refs/remotes/origin/*\n", encoding="utf-8")
-    git(target, "reset", "--hard", source_sha)
+    # Docker COPY preserves checkout modes. Keep the surrounding temporary
+    # directory private while making shipped scripts readable by runtime UIDs.
+    git(target, "reset", "--hard", source_sha, umask=0o022)
     if git(target, "status", "--porcelain"):
         raise ValueError("tagged source checkout is not clean")
     git(target, "-c", "pack.threads=1", "repack", "-ad")

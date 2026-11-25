@@ -86,6 +86,18 @@ class NodeBootstrapAssetsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "replace"):
             self.build()
 
+    def test_private_packaging_umask_preserves_runtime_read_access(self):
+        target = self.root / "snapshot"
+        previous = os.umask(0o077)
+        try:
+            builder.source_snapshot(self.source, target, RELEASE, self.sha, REPOSITORY)
+        finally:
+            os.umask(previous)
+        self.assertEqual((target / "Engine.sh").stat().st_mode & 0o777, 0o755)
+        self.assertEqual((target / "release-marker").stat().st_mode & 0o777, 0o644)
+        self.assertEqual((target / "Data/Engine").stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
+
     def test_missing_moved_or_unrelated_tag_fails_before_build(self):
         for changes in ({"release": "2026.09.999-rc.2"}, {"source_sha": "a" * 40}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):

@@ -103,7 +103,8 @@ def build_runtime(source: Path, go_bin: str) -> Path:
     for name in ("api-backend", "wireguard-control", "wireguard-control-client", "wireguard-route-daemon"):
         run([go_bin, "-C", str(dist.parent), "build", "-trimpath", "-buildvcs=false",
              "-ldflags=-buildid=", "-o", str(dist / name), "./cmd/" + name], env=env, timeout=600)
-    shutil.copyfile(dist / "api-backend", dist / "borealis-cluster-controller")
+        (dist / name).chmod(0o755)
+    shutil.copy(dist / "api-backend", dist / "borealis-cluster-controller")
     return manager
 
 

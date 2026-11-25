@@ -248,6 +248,10 @@ After publication:
 - Normal release correction: publish next monthly revision.
 - Incorrect release notes: edit notes or title without changing tag, assets, or channel.
 
+If a qualification container reports `Permission denied` on its entrypoint, inspect the file in the published image using the workload's runtime UID. An interpreter must be able to read its script as well as traverse the parent directories. Keep the runtime UID and publish corrected image assets under the next candidate tag.
+
+A successful Cluster Management rolling update confirms the selected source revision. During a qualification that requires the published images, compare the running API, controller and frontend image digests and the installed node-manager checksum with the release inventories before confirming new hosts. The standard rolling update can build images locally from the same source.
+
 Do not use deletion as version rollback. Clusters reject older or unrelated targets and stable installer requires exact named release.
 
 ??? example "Detailed Codex Breakdown"
