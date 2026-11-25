@@ -25,6 +25,24 @@ func TestBootstrapStartingK3sUnitStates(t *testing.T) {
 	if validateBootstrapStartingK3s(absent, true) != nil || validateBootstrapStartingK3s(absent, false) == nil {
 		t.Fatal("absent unit escaped cursor-only scope")
 	}
+	// Both clean qualification hosts report an explicit empty Type for a
+	// not-found unit. An omitted property is still incomplete evidence.
+	emptyType := strings.Replace(absent, "Type=simple\n", "Type=\n", 1)
+	if validateBootstrapStartingK3s(emptyType, true) != nil || validateBootstrapStartingK3s(emptyType, false) == nil {
+		t.Fatal("clean missing unit must allow inspection only")
+	}
+	for _, changed := range []string{
+		strings.Replace(emptyType, "Type=\n", "", 1),
+		strings.Replace(emptyType, "Type=\n", "Type=oneshot\n", 1),
+		strings.Replace(emptyType, "UnitFileState=\n", "UnitFileState=disabled\n", 1),
+		strings.Replace(emptyType, "NeedDaemonReload=no", "NeedDaemonReload=yes", 1),
+		strings.Replace(inert, "Type=notify", "Type=", 1),
+		strings.Replace(running, "Type=notify", "Type=", 1),
+	} {
+		if validateBootstrapStartingK3s(changed, true) == nil {
+			t.Fatal("ambiguous service type accepted", changed)
+		}
+	}
 	for _, raw := range []string{pre, starting, running} {
 		for _, change := range [][2]string{{"Job=12", "Job=stop"}, {"ControlPID=0", "ControlPID=01"}, {"LoadState=loaded", "LoadState=not-found"}, {"SubState=start", "SubState=auto-restart"}, {"NeedDaemonReload=no", "NeedDaemonReload=yes"}, {"UnitFileState=disabled", "UnitFileState=enabled"}, {"Result=success", "Result=exit-code"}, {"DropInPaths=\n", "DropInPaths=/foreign\n"}, {"FragmentPath=/etc/systemd/system/k3s.service", "FragmentPath=/foreign"}, {strings.Repeat("a", 32), strings.Repeat("0", 32)}} {
 			changed := strings.Replace(raw, change[0], change[1], 1)

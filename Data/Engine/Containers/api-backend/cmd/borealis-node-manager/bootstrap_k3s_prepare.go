@@ -111,7 +111,10 @@ func validateBootstrapInertK3s(raw string, complete bool) error {
 			return errBootstrapSource
 		}
 	case "not-found":
-		if complete || values["UnitFileState"] != "" && values["UnitFileState"] != "disabled" || values["FragmentPath"] != "" || values["Type"] != "simple" {
+		// systemd can report an empty Type for a missing unit with no file
+		// state or pending reload. A loaded unit still requires Type=notify.
+		cleanAbsent := values["Type"] == "" && values["UnitFileState"] == "" && values["NeedDaemonReload"] == "no"
+		if complete || values["UnitFileState"] != "" && values["UnitFileState"] != "disabled" || values["FragmentPath"] != "" || values["Type"] != "simple" && !cleanAbsent {
 			return errBootstrapSource
 		}
 	default:
