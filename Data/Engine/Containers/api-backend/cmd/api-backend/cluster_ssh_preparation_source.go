@@ -223,7 +223,15 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		inputCheck := newClusterSSHPreparationInputCheck(config, read)
-		inputs, err := prepareClusterSSHTargetInputs(ctx, expected, settings, scratchParent, read)
+		checks := clusterSSHPreparationChecks{
+			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
+			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
+		}
+		// The first full snapshot bound the source, settings and storage. Hashing
+		// private release files cannot change a host. Keep claim/credential
+		// checks live here and re-read the complete snapshot before handoff.
+		checkBytes := checks.privateArtifactCheck(joining)
+		inputs, err := prepareClusterSSHTargetInputs(ctx, expected, config, scratchParent, checkBytes, prepareClusterSSHBootstrap)
 		if err != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -232,24 +240,20 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				result = clusterbootstrap.ErrPreparationConfig
 			}
 		}()
-		checks := clusterSSHPreparationChecks{
-			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
-			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
-		}
 		checks.Storage = newClusterSSHPrejoinWorkerStorageRead(ctx, initial.Storage, checks.Authority)
 		packages, err := resolveClusterSSHHostPackageInventory(ctx, expected.Source)
 		if err != nil {
 			return err
 		}
-		packageBytes, err := packages.stage(ctx, scratchParent, checks.Inputs)
+		packageBytes, err := packages.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			return err
 		}
-		if err := inputs.BindHostPackages(ctx, expected, packageBytes, checks.Inputs); err != nil {
+		if err := inputs.BindHostPackages(ctx, expected, packageBytes, checkBytes); err != nil {
 			_ = packageBytes.Close()
 			return err
 		}
-		packageDemand, err := packages.demands(ctx, packageBytes, checks.Inputs)
+		packageDemand, err := packages.demands(ctx, packageBytes, checkBytes)
 		if err != nil {
 			return err
 		}
@@ -262,7 +266,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		if err != nil {
 			return err
 		}
-		images, err := inventory.stage(ctx, scratchParent, checks.Inputs)
+		images, err := inventory.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			return err
 		}
@@ -275,7 +279,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		if err != nil {
 			return err
 		}
-		externalImages, err := externalInventory.stage(ctx, scratchParent, checks.Inputs)
+		externalImages, err := externalInventory.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			return err
 		}
@@ -284,7 +288,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				result = clusterbootstrap.ErrImageArchive
 			}
 		}()
-		postgresImage, err := clusterbootstrap.AcquirePostgresImage(ctx, scratchParent, initial.Storage.Requirements.PostgresImage.Resolved, checks.Inputs)
+		postgresImage, err := clusterbootstrap.AcquirePostgresImage(ctx, scratchParent, initial.Storage.Requirements.PostgresImage.Resolved, checkBytes)
 		if err != nil {
 			return err
 		}
@@ -294,7 +298,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			}
 		}()
 		// Static publications may have changed during dynamic acquisition.
-		if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checks.Inputs(ctx) != nil {
+		if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checkBytes(ctx) != nil {
 			return clusterbootstrap.ErrImageArchive
 		}
 		// Compose target demands separately from physically reserved PostgreSQL
@@ -303,7 +307,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		if err != nil {
 			return err
 		}
-		k3sInputs, err := k3s.stage(ctx, scratchParent, checks.Inputs)
+		k3sInputs, err := k3s.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			return err
 		}
@@ -312,7 +316,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				result = clusterbootstrap.ErrImageArchive
 			}
 		}()
-		artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected.Source, expected.K3sVersion, initial.Storage.Requirements.PostgresImage.Resolved, images, k3sInputs, externalImages, postgresImage, checks.Inputs)
+		artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected.Source, expected.K3sVersion, initial.Storage.Requirements.PostgresImage.Resolved, images, k3sInputs, externalImages, postgresImage, checkBytes)
 		if err != nil {
 			return err
 		}
@@ -350,11 +354,11 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		if err != nil {
 			return err
 		}
-		bundleDemand, err := inputs.StorageDemand(ctx, expected, checks.Inputs)
+		bundleDemand, err := inputs.StorageDemand(ctx, expected, checkBytes)
 		if err != nil {
 			return err
 		}
-		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checks.Inputs, baseDemand,
+		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checkBytes, baseDemand,
 			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
 				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, k3s, packages, capacity)
 				if err != nil {
@@ -363,14 +367,16 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				if err := packages.refresh(ctx); err != nil {
 					return err
 				}
+				// The joining consumer rechecks full inputs on both sides of its
+				// target storage check before it can enter native dispatch.
 				if err := consume(ctx, inputs, artifacts, initial.Storage.Requirements.PostgresImage.Resolved, capacity, expected, checks); err != nil {
 					return err
 				}
-				fresh, err := inputs.StorageDemand(ctx, expected, checks.Inputs)
+				fresh, err := inputs.StorageDemand(ctx, expected, checkBytes)
 				if err != nil || fresh != bundleDemand {
 					return clusterbootstrap.ErrImageArchive
 				}
-				freshPackages, err := packages.demands(ctx, packageBytes, checks.Inputs)
+				freshPackages, err := packages.demands(ctx, packageBytes, checkBytes)
 				if err != nil || !reflect.DeepEqual(freshPackages, packageDemand) {
 					return clusterbootstrap.ErrImageArchive
 				}

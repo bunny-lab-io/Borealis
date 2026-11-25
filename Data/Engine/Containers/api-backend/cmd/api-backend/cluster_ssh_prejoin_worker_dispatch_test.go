@@ -67,6 +67,15 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 				if mode == "acquisition failure" || mode == "source error redaction" {
 					return errors.New("private source credential")
 				}
+				if mode == "input failure" {
+					// Local archive checks can finish while the cluster configuration
+					// changes. The production handoff must detect drift before native.
+					for range 3 {
+						if err := checks.privateArtifactCheck(true)(ctx); err != nil || inputCalls != 0 {
+							t.Fatal("private verification repeated the full source inventory")
+						}
+					}
+				}
 				if mode == "missing callback" {
 					return nil
 				}
@@ -148,6 +157,9 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 					return nil
 				})
 			success := mode == "pair" || mode == "replacement" || mode == "source slice ownership" || mode == "native slice ownership"
+			if mode == "input failure" && (inputCalls == 0 || dispatched) {
+				t.Fatal("source drift at handoff reached native execution")
+			}
 			if (err == nil) != success {
 				t.Fatalf("incorrect dispatch outcome: %v", err)
 			}

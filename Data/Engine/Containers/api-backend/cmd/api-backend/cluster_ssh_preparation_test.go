@@ -155,7 +155,8 @@ func TestClusterSSHPreparationInputsRejectChangedAuthorityBeforeAndAfterDownload
 			if mode == "invalid input" {
 				runtime["SECRET_KEY"] = "private-test"
 			}
-			p, err := prepareClusterSSHTargetInputsWith(ctx, e, runtime, t.TempDir(), read, download)
+			config, _ := clusterbootstrap.NewPreparationConfiguration(e, runtime)
+			p, err := prepareClusterSSHTargetInputs(ctx, e, config, t.TempDir(), newClusterSSHPreparationInputCheck(config, read), download)
 			if err == nil || p != nil || strings.Contains(err.Error(), "private-test") {
 				t.Fatal("invalid preparation reached accepted output/private diagnostics")
 			}
@@ -184,13 +185,32 @@ func TestClusterSSHPreparationInputsUseFreshPublicationVerifier(t *testing.T) {
 	read := func(context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
 		return e, settings, nil
 	}
+	config, err := clusterbootstrap.NewPreparationConfiguration(e, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := newClusterSSHPreparationInputCheck(config, read)
 	immutable := false
 	f.release.Immutable = &immutable
-	if _, err := prepareClusterSSHTargetInputs(bootstrapContext(), e, settings, t.TempDir(), read); err == nil || f.archiveReads != 0 {
+	if _, err := prepareClusterSSHTargetInputs(bootstrapContext(), e, config, t.TempDir(), check, prepareClusterSSHBootstrap); err == nil || f.archiveReads != 0 {
 		t.Fatal("mutable publication reached archive")
 	}
 	immutable = true
-	if _, err := prepareClusterSSHTargetInputs(bootstrapContext(), e, settings, t.TempDir(), read); err == nil || f.archiveReads != 1 {
+	if _, err := prepareClusterSSHTargetInputs(bootstrapContext(), e, config, t.TempDir(), check, prepareClusterSSHBootstrap); err == nil || f.archiveReads != 1 {
 		t.Fatal("invalid archive accepted or fixed verifier bypassed")
+	}
+}
+
+func TestClaimedPrivateArtifactReadsKeepLiveCustody(t *testing.T) {
+	claimErr := errors.New("revoked claim")
+	checks := clusterSSHPreparationChecks{
+		Authority: func(context.Context) error { return claimErr },
+		Inputs:    func(context.Context) error { return nil },
+	}
+	if err := checks.privateArtifactCheck(true)(context.Background()); err != claimErr {
+		t.Fatal("private joining verification accepted revoked custody")
+	}
+	if err := checks.privateArtifactCheck(false)(context.Background()); err != nil {
+		t.Fatal("non-joining verification lost its original source reader")
 	}
 }

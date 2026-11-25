@@ -217,7 +217,12 @@ func withClusterSSHPreparationRecoveryProjectedInputs(ctx context.Context, proje
 	if err != nil {
 		return fail()
 	}
-	inputs, err := prepareClusterSSHTargetInputsWith(ctx, expected, runtime, scratchParent, read, download)
+	config, err := clusterbootstrap.NewPreparationConfiguration(expected, runtime)
+	if err != nil {
+		return fail()
+	}
+	inputCheck := newClusterSSHPreparationInputCheck(config, read)
+	inputs, err := prepareClusterSSHTargetInputs(ctx, expected, config, scratchParent, inputCheck, download)
 	if inputs != nil {
 		defer func() {
 			if closeInputs == nil {
@@ -231,11 +236,6 @@ func withClusterSSHPreparationRecoveryProjectedInputs(ctx context.Context, proje
 	if err != nil || inputs == nil || current(ctx) != nil {
 		return fail()
 	}
-	config, err := clusterbootstrap.NewPreparationConfiguration(expected, runtime)
-	if err != nil {
-		return fail()
-	}
-	inputCheck := newClusterSSHPreparationInputCheck(config, read)
 	envelope, err := aegis.openClusterSSHCredentials(ctx, sealed, item.Binding)
 	if err != nil || envelope.Binding != item.Binding || envelope.validate() != nil || current(ctx) != nil {
 		return fail()

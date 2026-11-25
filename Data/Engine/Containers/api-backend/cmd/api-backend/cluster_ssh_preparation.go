@@ -101,24 +101,14 @@ func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, so
 // qualification transition and remote dispatcher remain separate integration.
 type clusterSSHPreparationRead func(context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error)
 
-func prepareClusterSSHTargetInputs(parent context.Context, expected clusterbootstrap.PreparationExpected, runtime map[string]string,
-	scratchParent string, read clusterSSHPreparationRead) (*clusterbootstrap.PreparationInputs, error) {
-	return prepareClusterSSHTargetInputsWith(parent, expected, runtime, scratchParent, read, prepareClusterSSHBootstrap)
-}
-
-// Package-private downloader seam permits deterministic ownership-loss tests.
-// Production always uses the fresh GitHub publication/asset verifier above.
-func prepareClusterSSHTargetInputsWith(parent context.Context, expected clusterbootstrap.PreparationExpected, runtime map[string]string,
-	scratchParent string, read clusterSSHPreparationRead,
+// The bundle remains private until the caller verifies the current source and
+// configuration at handoff. Every local byte check still requires a live claim.
+func prepareClusterSSHTargetInputs(parent context.Context, expected clusterbootstrap.PreparationExpected,
+	config *clusterbootstrap.PreparationConfiguration, scratchParent string, check func(context.Context) error,
 	download func(context.Context, clusterbootstrap.Expected, string) (*clusterbootstrap.Bundle, error)) (*clusterbootstrap.PreparationInputs, error) {
-	if expected.Validate() != nil || read == nil || download == nil {
+	if expected.Validate() != nil || config == nil || check == nil || download == nil {
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
-	config, err := clusterbootstrap.NewPreparationConfiguration(expected, runtime)
-	if err != nil {
-		return nil, err
-	}
-	check := newClusterSSHPreparationInputCheck(config, read)
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {

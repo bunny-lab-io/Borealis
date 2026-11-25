@@ -18,6 +18,13 @@ type clusterSSHPreparationChecks struct {
 	Storage func(context.Context) (clusterSSHStorageSnapshot, error)
 }
 
+func (c clusterSSHPreparationChecks) privateArtifactCheck(joining bool) func(context.Context) error {
+	if joining {
+		return c.Authority
+	}
+	return c.Inputs
+}
+
 // One scope owns acquisition and synchronous consumption. Callers must honor
 // ctx and join their descendants before returning; the scope never abandons a
 // work goroutine or reports success while cleanup is still running.
