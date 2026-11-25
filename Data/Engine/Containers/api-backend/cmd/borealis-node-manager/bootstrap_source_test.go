@@ -4,10 +4,12 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBootstrapSourceScratchRequiresOwnedPreparationWrapper(t *testing.T) {
@@ -128,6 +130,15 @@ func TestBootstrapSourceNativeProofBindings(t *testing.T) {
 			if (err == nil) != (mode == "valid") {
 				t.Fatal("unexpected native proof", err)
 			}
+			if err != nil {
+				var stage bootstrapSourceStage
+				if !errors.As(err, &stage) || !errors.Is(err, errBootstrapSource) || strings.Contains(err.Error(), "private") {
+					t.Fatal("missing sanitized failure stage", err)
+				}
+				if mode == "unit" && stage != "k3s.service" || mode == "paths drift" && stage != "host_paths_recheck" {
+					t.Fatal("incorrect failing sub-check", stage)
+				}
+			}
 			if mode == "valid" && (hosts != 2 || boots != 2 || paths != 2 || units != 3) {
 				t.Fatal("missing repeated proof")
 			}
@@ -212,5 +223,25 @@ func TestBootstrapSourceUnits(t *testing.T) {
 		if validateBootstrapAbsentUnit(raw) == nil {
 			t.Fatal("unknown or active unit accepted")
 		}
+	}
+}
+
+func TestBootstrapInspectionJournalFields(t *testing.T) {
+	// Use a Unix datagram receiver as journald does, independently of SSH.
+	path := filepath.Join(t.TempDir(), "journal")
+	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	writeBootstrapInspectionFailure(path, "k3s.service", 25*time.Millisecond)
+	var packet [512]byte
+	n, err := conn.Read(packet[:])
+	want := "PRIORITY=4\nSYSLOG_IDENTIFIER=borealis-native-inspection\nMESSAGE=Native progress inspection failed at k3s.service after 25ms\n"
+	if err != nil || string(packet[:n]) != want {
+		t.Fatalf("unexpected journal datagram: %q, %v", packet[:n], err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
+	"log"
 	"time"
 )
 
@@ -51,7 +52,18 @@ func ExchangePrejoinPreparationSession(parent context.Context, input io.ReadClos
 }
 
 func exchangePreparationSessionResult(parent context.Context, input io.ReadCloser, output io.WriteCloser,
-	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress, completion *PrejoinPreparationReceipt) error {
+	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress, completion *PrejoinPreparationReceipt) (resultErr error) {
+	// Only locally chosen labels reach the source log. Frames, archive bytes,
+	// target stderr and credential material must stay inside the session.
+	stage := "validate_request"
+	if progress != nil {
+		began := time.Now()
+		defer func() {
+			if resultErr != nil {
+				log.Printf("native progress inspection exchange failed: phase=%s elapsed=%s", stage, time.Since(began).Round(time.Millisecond))
+			}
+		}()
+	}
 	if request.IdentitySource != nil {
 		source := *request.IdentitySource
 		request.IdentitySource = &source
@@ -81,18 +93,22 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 		}
 		return nil
 	}
+	stage = "initial_authority"
 	if check() != nil {
 		return ErrSessionAuthority
 	}
+	stage = "preamble"
 	preamble, _ := SessionPreamble(request.Session.Nonce)
 	if _, err := io.WriteString(output, preamble); err != nil {
 		return ErrSessionProtocol
 	}
 	reader := &io.LimitedReader{R: input, N: profile.output + 1}
+	stage = "receiver_ready"
 	var ready PreparationSessionFrame
 	if ReadSessionFrame(reader, &ready) != nil || ready != (PreparationSessionFrame{Protocol: 1, State: "ready", Nonce: request.Session.Nonce}) {
 		return ErrSessionProtocol
 	}
+	stage = "send_request"
 	if WriteSessionFrame(output, request) != nil {
 		return ErrSessionProtocol
 	}
@@ -179,6 +195,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 			}
 		}()
 	}
+	stage = "target_verification"
 	var sequence, total int64
 	awaitingAck, sentEnd, eof := false, false, false
 	seenChallenges := make(map[string]bool)
@@ -188,6 +205,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 		if total == 0 {
 			return ErrSessionProtocol
 		}
+		stage = "terminal_receipt"
 		sentEnd = true
 		return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "end", Nonce: request.Session.Nonce, RequestSHA256: digest, Sequence: sequence})
 	}
@@ -234,6 +252,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 				}
 				seenChallenges[frame.Nonce] = true
 				if check() != nil {
+					stage = "challenge_authority"
 					return ErrSessionAuthority
 				}
 				frame.State = "heartbeat"
@@ -251,6 +270,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 				if started || frame.Sequence != 0 || len(seenChallenges) == 0 {
 					return ErrSessionProtocol
 				}
+				stage = "input_transfer"
 				start()
 			case "ack":
 				if !awaitingAck || sentEnd || frame.Sequence != sequence {
@@ -287,6 +307,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 					return ErrSessionProtocol
 				}
 				if check() != nil {
+					stage = "terminal_authority"
 					return ErrSessionAuthority
 				}
 				// Preserve the successful SSH channel until its owner verifies

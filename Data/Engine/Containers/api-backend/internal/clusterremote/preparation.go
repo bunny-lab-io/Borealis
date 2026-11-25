@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -222,6 +223,9 @@ func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clu
 	}
 	bundle, err := inputs.SourceBundle(ctx, expected, serialized)
 	if err != nil {
+		if progress != nil {
+			log.Print("native progress inspection failed at source bundle verification")
+		}
 		return ErrBootstrapVerification
 	}
 	bundleSource, digest, size, err := bundle.ManagerProof()
@@ -269,7 +273,16 @@ func (client *Client) transferPreparationArtifactResult(parent context.Context, 
 }
 
 func (client *Client) transferPreparationCompletion(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
-	action string, source *engineidentity.Binding, postgresReference string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
+	action string, source *engineidentity.Binding, postgresReference string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress, completion *clusterbootstrap.PrejoinPreparationReceipt) (resultErr error) {
+	stage := "validate_action"
+	if progress != nil {
+		started := time.Now()
+		defer func() {
+			if resultErr != nil && stage != "exchange" {
+				log.Printf("native progress inspection transport failed: phase=%s elapsed=%s", stage, time.Since(started).Round(time.Millisecond))
+			}
+		}()
+	}
 	if completion != nil && action != "reconcile_prejoin_identity_activation" {
 		return ErrBootstrapVerification
 	}
@@ -284,9 +297,11 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { client.Close() })
 	defer stop()
+	stage = "initial_authority"
 	if refreshBootstrapAuthority(ctx, check) != nil {
 		return ErrBootstrapVerification
 	}
+	stage = "session_request"
 	var random [32]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return ErrBootstrapVerification
@@ -304,6 +319,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if err != nil {
 		return ErrBootstrapVerification
 	}
+	stage = "manager_file"
 	manager, err := os.Open(managerPath)
 	if err != nil {
 		return ErrBootstrapVerification
@@ -313,6 +329,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if err != nil || !info.Mode().IsRegular() || size < 1 || size > clusterbootstrap.MaxBundleBytes || info.Size() != size {
 		return ErrBootstrapVerification
 	}
+	stage = "ssh_session"
 	session, err := client.ssh.NewSession()
 	if err != nil {
 		return ErrBootstrapVerification
@@ -330,9 +347,11 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if artifactPreparationAction(action) || clusterbootstrap.HostPackagePreparationAction(action) {
 		command = artifactPreparationCommand(size, digest, nonce)
 	}
+	stage = "wrapper_start"
 	if err != nil || session.Start(command) != nil {
 		return ErrBootstrapVerification
 	}
+	stage = "manager_upload"
 	buffer := make([]byte, 128<<10)
 	remaining, checked := size, time.Now()
 	for remaining > 0 {
@@ -351,6 +370,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 		}
 		remaining -= int64(n)
 	}
+	stage = "sudo_input"
 	secret := append(bytes.Clone(sudoPassword), '\n')
 	defer clear(secret)
 	if _, err := io.Copy(stdin, bytes.NewReader(secret)); err != nil {
@@ -359,6 +379,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	// Closing the session releases a blocked stdout reader on cancellation.
 	input := preparationSSHOutput{Reader: stdout, close: func() error { return session.Close() }}
 	output := preparationSSHInput{Writer: stdin, close: func() error { return client.Close() }}
+	stage = "exchange"
 	var receipt clusterbootstrap.PrejoinPreparationReceipt
 	var cursor clusterbootstrap.PreparationProgress
 	if completion != nil {
@@ -372,7 +393,12 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 		return ErrBootstrapVerification
 	}
 	_ = stdin.Close()
-	if session.Wait() != nil || diagnostics.overflow || refreshBootstrapAuthority(ctx, check) != nil {
+	stage = "wrapper_exit"
+	if session.Wait() != nil || diagnostics.overflow {
+		return ErrBootstrapVerification
+	}
+	stage = "final_authority"
+	if refreshBootstrapAuthority(ctx, check) != nil {
 		return ErrBootstrapVerification
 	}
 	if progress != nil {

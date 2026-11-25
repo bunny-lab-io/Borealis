@@ -5,17 +5,38 @@ import (
 	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 var errBootstrapSource = errors.New("source preparation evidence unavailable or changed; private data withheld")
+
+// Only local stage labels reach the host journal. The SSH protocol streams
+// carry private data, so never forward an underlying error or packet here.
+type bootstrapSourceStage string
+
+func (s bootstrapSourceStage) Error() string { return string(s) }
+func (s bootstrapSourceStage) Unwrap() error { return errBootstrapSource }
+
+func writeBootstrapInspectionFailure(journal string, stage bootstrapSourceStage, elapsed time.Duration) {
+	conn, err := net.DialTimeout("unixgram", journal, 100*time.Millisecond)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	if conn.SetWriteDeadline(time.Now().Add(100*time.Millisecond)) == nil {
+		fmt.Fprintf(conn, "PRIORITY=4\nSYSLOG_IDENTIFIER=borealis-native-inspection\nMESSAGE=Native progress inspection failed at %s after %s\n", stage, elapsed.Round(time.Millisecond))
+	}
+}
 
 func bootstrapSourceSessionContained(args []string) {
 	bootstrapSourceSessionContainedFor(args, false)
@@ -34,9 +55,23 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		fatalf("source preparation executor invalid")
 	}
 	defer guard.Close()
+	started := time.Now()
+	var firstFailure sync.Once
+	report := func(action string, stage bootstrapSourceStage, err error) error {
+		if action == "inspect_preparation_progress" && err != nil {
+			firstFailure.Do(func() {
+				var specific bootstrapSourceStage
+				if errors.As(err, &specific) {
+					stage = specific
+				}
+				writeBootstrapInspectionFailure("/run/systemd/journal/socket", stage, time.Since(started))
+			})
+		}
+		return err
+	}
 	verify := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest) error {
-		if verifyBootstrapSource(ctx, request, true) != nil {
-			return errBootstrapSource
+		if err := verifyBootstrapSource(ctx, request, true); err != nil {
+			return report(request.Action, "host_verification", err)
 		}
 		if request.IdentitySource != nil {
 			_, err := bootstrapPrejoinQuiescence(ctx, request)
@@ -53,20 +88,20 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		}
 		check := func(ctx context.Context) error {
 			if guard.CheckAuthority(ctx) != nil {
-				return errBootstrapSource
+				return report(request.Action, "executor_authority", errBootstrapSource)
 			}
 			return nil
 		}
 		executable, err := os.Executable()
 		if err != nil {
-			return errBootstrapSource
+			return report(request.Action, "receiver_executable", errBootstrapSource)
 		}
 		// The outer root wrapper owns this entire parent and removes it even
 		// when this helper exits without running input cleanup. Never stage
 		// direct /opt children beyond that wrapper's exact cleanup ownership.
 		scratch, err := bootstrapSourceScratch(executable, bootstrapSourceSafeDirectory)
 		if err != nil {
-			return errBootstrapSource
+			return report(request.Action, "receiver_scratch", errBootstrapSource)
 		}
 		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts, join *clusterbootstrap.K3sJoinMaterial) error {
 			if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
@@ -75,13 +110,16 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			// The supervised root helper owns only this fixed private journal.
 			// Parent safety is checked independently before creating its leaf.
 			if bootstrapSourceSafeDirectory("/var/lib") != nil || ensureBootstrapMutationRoot("/var/lib") != nil {
-				return errBootstrapSource
+				return report(request.Action, "journal_directory", errBootstrapSource)
 			}
 			authority := func(ctx context.Context) error {
-				if check(ctx) != nil || verifyBootstrapSource(ctx, request, false) != nil || check(ctx) != nil {
-					return errBootstrapSource
+				if err := check(ctx); err != nil {
+					return err
 				}
-				return nil
+				if err := verifyBootstrapSource(ctx, request, false); err != nil {
+					return report(request.Action, "journal_authority", err)
+				}
+				return check(ctx)
 			}
 			openJournal := clusterbootstrap.OpenMutationJournal
 			if artifacts {
@@ -89,7 +127,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			}
 			journal, err := openJournal(ctx, bootstrapMutationRoot, expected.Target, expected.Source, nonce, authority)
 			if err != nil {
-				return errBootstrapSource
+				return report(request.Action, "journal_open", errBootstrapSource)
 			}
 			if request.IdentitySource != nil {
 				install, installErr := bootstrapPrejoinInstallation(ctx, request, authority)
@@ -194,6 +232,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			switch request.Action {
 			case "inspect_preparation_progress":
 				progress, err = inputs.InspectPreparationProgress(ctx, journal)
+				report(request.Action, "journal_cursor", err)
 			case "stage_source":
 				_, err = inputs.PublishSource(ctx, journal)
 			case "reconcile_source":
@@ -244,10 +283,11 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				return consume(ctx, inputs, material, nil, nil)
 			})
 		}
-		return clusterbootstrap.ConsumePreparation(ctx, scratch, expected, request.Session.ManagerSHA256, input, check,
+		err = clusterbootstrap.ConsumePreparation(ctx, scratch, expected, request.Session.ManagerSHA256, input, check,
 			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
 				return consume(ctx, inputs, nil, nil, nil)
 			})
+		return report(request.Action, "input_transfer_or_cleanup", err)
 	}
 	var sessionErr error
 	if artifacts {
@@ -293,17 +333,17 @@ func bootstrapSourceScratch(executable string, safe func(string) error) (string,
 func verifyBootstrapSource(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, destination bool) error {
 	expected, err := request.Expected()
 	if err != nil || ctx.Err() != nil {
-		return errBootstrapSource
+		return bootstrapSourceStage("request")
 	}
 	if verifyBootstrapTargetCPU(ctx, expected, request.Action, clusterbootstrap.ObservePreparationTargetCPU) != nil {
-		return errBootstrapSource
+		return bootstrapSourceStage("target_cpu")
 	}
 	if verifyBootstrapTargetPackages(ctx, expected, request.Action, readBootstrapDockerProbe) != nil {
-		return errBootstrapSource
+		return bootstrapSourceStage("target_packages")
 	}
 	root, err := os.OpenRoot("/")
 	if err != nil {
-		return errBootstrapSource
+		return bootstrapSourceStage("host_root")
 	}
 	defer root.Close()
 	return verifyBootstrapSourceWith(ctx, request, destination, bootstrapSourceObservers{
@@ -349,30 +389,39 @@ type bootstrapSourceObservers struct {
 func verifyBootstrapSourceWith(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, destination bool, observers bootstrapSourceObservers) error {
 	expected, err := request.Expected()
 	if err != nil || ctx.Err() != nil || observers.host == nil || observers.boot == nil || observers.paths == nil || observers.unit == nil {
-		return errBootstrapSource
+		return bootstrapSourceStage("request")
 	}
 	checkHost := func() error {
 		if ctx.Err() != nil || observers.host(ctx, request.Session) != nil {
-			return errBootstrapSource
+			return bootstrapSourceStage("host_identity")
 		}
 		boot, err := observers.boot()
 		if err != nil || boot != expected.TargetBootID+"\n" || ctx.Err() != nil {
-			return errBootstrapSource
+			return bootstrapSourceStage("boot_identity")
 		}
 		return nil
 	}
-	if checkHost() != nil || observers.paths(request.Action, destination) != nil {
-		return errBootstrapSource
+	if err := checkHost(); err != nil {
+		return err
+	}
+	if observers.paths(request.Action, destination) != nil {
+		return bootstrapSourceStage("host_paths")
 	}
 	for _, unit := range []string{"k3s.service", "k3s-agent.service", "borealis-node-manager.service"} {
-		if ctx.Err() != nil || observers.unit(ctx, unit) != nil {
-			return errBootstrapSource
+		if ctx.Err() != nil {
+			return bootstrapSourceStage("cancelled")
+		}
+		if observers.unit(ctx, unit) != nil {
+			return bootstrapSourceStage(unit)
 		}
 	}
-	if ctx.Err() != nil || observers.paths(request.Action, destination) != nil || checkHost() != nil {
-		return errBootstrapSource
+	if ctx.Err() != nil {
+		return bootstrapSourceStage("cancelled")
 	}
-	return nil
+	if observers.paths(request.Action, destination) != nil {
+		return bootstrapSourceStage("host_paths_recheck")
+	}
+	return checkHost()
 }
 
 func readBootstrapSourceBoot() (string, error) {
