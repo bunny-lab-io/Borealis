@@ -165,14 +165,17 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 			return fail()
 		}
 	}
+	generations := make(map[string]int64, len(targets))
 	for i, target := range targets {
-		if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2 AND cluster_id=$3
+		var generation int64
+		if tx.QueryRowContext(ctx, `SELECT lease_generation FROM engine.cluster_onboarding_targets WHERE id=$1 AND operation_id=$2 AND cluster_id=$3
  AND management_ip=$4 AND ssh_port=$5 AND host_key_algorithm=$6 AND host_key_fingerprint=$7 AND host_key_base64=$8
  AND ordinal=$9 AND inspected_at=$10 AND inspected_attempt=$11 AND inspected_generation=$12 AND inspection_json=$13
  FOR SHARE`, target.Binding.TargetID, lease.OperationID, proof.Source.ClusterID, target.Binding.Address, target.Binding.Port,
-			target.Key.Algorithm, target.Binding.Fingerprint, keys[i], target.Ordinal, target.InspectedAt, target.Attempt, target.Generation, reports[i]).Scan(&present) != nil {
+			target.Key.Algorithm, target.Binding.Fingerprint, keys[i], target.Ordinal, target.InspectedAt, target.Attempt, target.Generation, reports[i]).Scan(&generation) != nil {
 			return fail()
 		}
+		generations[target.Binding.TargetID] = generation
 	}
 	for _, member := range members {
 		if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_nodes WHERE id=$1 AND node_name=$2 AND management_ip=$3
@@ -185,13 +188,23 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 		return fail()
 	}
 	var now int64
+	// A fenced claim was committed only after fresh qualification, confirmation
+	// and readiness for the entire pair. Bind it to this worker and payload.
+	// A legacy/unclaimed read still needs the original inspection to be fresh.
+	payloadDigest := sshPreparationFenceDigest(payload)
+	var fencedPreparation bool
 	// Every expiry is evaluated after every lock wait, using one fresh DB time.
 	// No inner credential join may hide a missing/expired second target.
-	err = tx.QueryRowContext(ctx, `WITH moment AS MATERIALIZED (SELECT extract(epoch FROM clock_timestamp()) AS now)
- SELECT floor(moment.now)::bigint
- FROM moment,engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l,
+	err = tx.QueryRowContext(ctx, `WITH moment AS MATERIALIZED (SELECT extract(epoch FROM clock_timestamp()) AS now),
+ claim AS (SELECT $15='prepare_ssh_targets' AND count(*)=1 AS fenced
+   FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$17
+     AND details_json::jsonb->>'attempt'=$2::bigint::text
+     AND details_json::jsonb->>'worker_sha256'=$18 AND details_json::jsonb->>'payload_sha256'=$19)
+ SELECT floor(moment.now)::bigint,claim.fenced
+ FROM moment,claim,engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l,
  engine.aegis_cipher_state a,engine.cluster_onboarding_targets own,engine.cluster_onboarding_credentials credential
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state=CASE WHEN $15='qualify_ssh_targets' THEN 'waiting' ELSE 'running' END AND o.current_step=$15 AND o.attempt=$2 AND o.payload_json=$3
+ AND (NOT claim.fenced OR COALESCE(o.error_text,'')='')
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=$4
  AND l.name=$5 AND l.holder=$6 AND l.expires_at>moment.now AND a.id=1 AND a.verification_token=$7
  AND own.id=$8 AND own.operation_id=o.id AND own.state='running' AND own.current_step=$16
@@ -203,14 +216,16 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
   WHERE t.operation_id=o.id AND (
    t.cluster_id=c.cluster_id AND t.operation_attempt=o.attempt AND t.credential_state='available'
    AND t.inspected_attempt=o.attempt AND t.inspected_generation>0
-   AND ($15='recover_ssh_identity' OR t.inspected_at>moment.now-$13) AND t.inspected_at<=moment.now
+   AND (claim.fenced OR $15='recover_ssh_identity' OR t.inspected_at>moment.now-$13) AND t.inspected_at<=moment.now
+   AND (NOT claim.fenced OR (t.state='running' AND t.current_step=$16 AND t.lease_holder=$9))
    AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now
    AND ((t.state='queued' AND t.current_step IN ('inspection_complete',$16) AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
     OR (t.state='running' AND t.current_step=$16 AND t.lease_holder ~ $14 AND t.lease_expires_at>moment.now AND t.lease_generation>t.inspected_generation)
     OR ($15='recover_ssh_identity' AND t.state='prepared' AND t.current_step IN ($16,'identity_recovery_pending','identity_recovery_complete')
         AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation>=t.inspected_generation))
   ) IS NOT TRUE)`, lease.OperationID, lease.OperationAttempt, payload, proof.Source.ClusterID, clusterControllerLeaseName, lease.ControllerHolder, sealed.generation,
-		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String(), lease.OperationStep, lease.Step).Scan(&now)
+		lease.TargetID, lease.Holder, lease.Generation, sealed.ciphertext, len(targets), clusterSSHInspectionLifetimeSeconds, clusterUUIDRE.String(), lease.OperationStep, lease.Step,
+		sshPreparationReadOnlyClaim, sshPreparationFenceDigest(lease.Holder), payloadDigest).Scan(&now, &fencedPreparation)
 	// This transaction only observes rows under shared locks. Release them
 	// without a synchronous commit for the row-lock WAL records. Keep the
 	// final database-clock check after all waits and fail if cleanup fails.
@@ -249,16 +264,29 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 			if err != nil {
 				return fail()
 			}
+			if fencedPreparation {
+				for _, target := range authorization.Targets {
+					if generations[target.TargetID] != target.QualificationGeneration+1 {
+						return fail()
+					}
+				}
+			}
 			identitySource = &confirmation.IdentitySource
 		}
 	}
-	proof.Cohort.ObservedAt = now
+	// A confirmed claim keeps the historical inspection at its original time.
+	// The SQL above checks current custody using the database clock in both cases.
+	if fencedPreparation && identitySource == nil {
+		return fail()
+	}
+	if !fencedPreparation {
+		proof.Cohort.ObservedAt = now
+	}
 	if validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil || ctx.Err() != nil {
 		return fail()
 	}
-	payloadDigest := sha256.Sum256([]byte(payload))
 	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Queue: queue, Lease: lease, Baseline: baseline,
-		K3sVersion: version, PayloadSHA256: hex.EncodeToString(payloadDigest[:]), Recovery: recovery, IdentitySource: identitySource, payload: payload}, nil
+		K3sVersion: version, PayloadSHA256: payloadDigest, Recovery: recovery, IdentitySource: identitySource, payload: payload}, nil
 }
 
 func parseClusterSSHPreparationInspection(payload []byte, lease clusterSSHTargetLease, baseline clusterbootstrap.Expected) (clusterSSHParentProof, string, error) {

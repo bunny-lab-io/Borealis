@@ -78,7 +78,76 @@ func (f sshPreparationAuthorityFixture) read(ctx context.Context) (clusterSSHPre
 	return newClusterSSHPreparationAuthorityRead(f.c.store, f.aegis, f.lease, f.baseline, f.sealed)(ctx)
 }
 
+// Exercise the same read/renew/read check used by native challenges, past
+// the cutoff, without waiting an hour or changing the recorded approval.
+func checkSSHClaimedExecutionWindow(t *testing.T) {
+	f, _ := newSSHPreparationClaimFixture(t, false)
+	work, err := f.c.store.claimFencedSSHPreparation(f.ctx, f.op, f.c.holder, newClusterUUID())
+	if err != nil || len(work.Claims) != 2 {
+		t.Fatalf("fresh paired claim: %v", err)
+	}
+	// This fixture has one private connection. Advance only its database clock.
+	schema := "qualification_clock_" + strings.ReplaceAll(newClusterUUID(), "-", "")
+	f.exec(t, "CREATE SCHEMA "+schema)
+	t.Cleanup(func() {
+		f.exec(t, "RESET search_path")
+		f.exec(t, "DROP SCHEMA "+schema+" CASCADE")
+	})
+	f.exec(t, "CREATE FUNCTION "+schema+".clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT pg_catalog.clock_timestamp() + interval '61 minutes' $$")
+	f.exec(t, "SET search_path TO "+schema+",pg_catalog,public")
+	var elapsed int64
+	if err := f.c.store.db.QueryRowContext(f.ctx, "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint - $1", work.Proof.Cohort.ObservedAt).Scan(&elapsed); err != nil || elapsed <= clusterSSHInspectionLifetimeSeconds {
+		t.Fatalf("fixture clock did not cross the inspection deadline: %d seconds, %v", elapsed, err)
+	}
+	// Model uninterrupted heartbeats. The envelope expiries, claim receipts,
+	// worker identities, generations and approved inspection are still original.
+	f.exec(t, `UPDATE engine.cluster_application_leases SET expires_at=extract(epoch FROM clock_timestamp())::bigint+45 WHERE name=$1`, clusterControllerLeaseName)
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=extract(epoch FROM clock_timestamp())::bigint+45 WHERE operation_id=$1`, f.op.ID)
+	for _, claim := range work.Claims {
+		read := newClusterSSHPreparationAuthorityRead(f.c.store, f.aegis, claim.Lease, work.Baseline, claim.Sealed)
+		authority, err := read(f.ctx)
+		if err != nil || authority.Cohort.ObservedAt != work.Proof.Cohort.ObservedAt {
+			t.Fatalf("original inspection no longer bound to the claim: %v", err)
+		}
+		check := newClusterSSHPreparationLeaseCheck(read, func(ctx context.Context) error {
+			return f.c.store.renewClusterSSHPreparationTarget(ctx, claim.Lease, claim.Sealed)
+		})
+		if err := check(f.ctx); err != nil {
+			t.Fatalf("current claimed execution after the qualification deadline: %v", err)
+		}
+	}
+	first, sibling := work.Claims[0], work.Claims[1]
+	read := newClusterSSHPreparationAuthorityRead(f.c.store, f.aegis, first.Lease, work.Baseline, first.Sealed)
+	reject := func(reason string) {
+		t.Helper()
+		if _, err := read(f.ctx); err == nil {
+			t.Fatalf("accepted %s after the inspection deadline", reason)
+		}
+	}
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_generation=lease_generation+1 WHERE id=$1`, sibling.Lease.TargetID)
+	reject("replaced sibling generation")
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_generation=$2,lease_expires_at=1 WHERE id=$1`, sibling.Lease.TargetID, sibling.Lease.Generation)
+	reject("expired sibling lease")
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=extract(epoch FROM clock_timestamp())::bigint+45 WHERE id=$1`, sibling.Lease.TargetID)
+	f.exec(t, `UPDATE engine.cluster_operations SET error_text='worker interrupted' WHERE id=$1`, f.op.ID)
+	reject("interrupted worker")
+	f.exec(t, `UPDATE engine.cluster_operations SET error_text=NULL WHERE id=$1`, f.op.ID)
+	var originalReceipt string
+	if err := f.c.store.db.QueryRowContext(f.ctx, `SELECT details_json FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$2`, f.op.ID, sshPreparationReadOnlyClaim).Scan(&originalReceipt); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `UPDATE engine.cluster_operation_events SET details_json='{}' WHERE operation_id=$1 AND event_type=$2`, f.op.ID, sshPreparationReadOnlyClaim)
+	reject("missing claim receipt")
+	f.exec(t, `UPDATE engine.cluster_operation_events SET details_json=$3 WHERE operation_id=$1 AND event_type=$2`, f.op.ID, sshPreparationReadOnlyClaim, originalReceipt)
+	if _, err := read(f.ctx); err != nil {
+		t.Fatalf("restored original claim should still have authority: %v", err)
+	}
+	f.exec(t, `UPDATE engine.cluster_onboarding_credentials SET expires_at=1 WHERE target_id=$1`, sibling.Lease.TargetID)
+	reject("expired original sibling credential")
+}
+
 func TestClusterSSHPreparationAuthorityPostgresReadsOutsideConnection(t *testing.T) {
+	t.Run("claimed execution after qualification deadline", checkSSHClaimedExecutionWindow)
 	for _, topology := range []string{"expansion", "replacement"} {
 		t.Run(topology, func(t *testing.T) {
 			f := newSSHPreparationAuthorityFixtureForTopology(t, topology == "replacement")

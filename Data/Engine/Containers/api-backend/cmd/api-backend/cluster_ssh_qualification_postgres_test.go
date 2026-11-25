@@ -272,10 +272,10 @@ func TestClusterSSHQualificationPostgresOriginalBudgetOnReclaim(t *testing.T) {
 		f.exec(t, "UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1", f.op.ID, string(raw))
 		f.exec(t, "UPDATE engine.cluster_onboarding_targets SET inspected_at=$2 WHERE operation_id=$1", f.op.ID, at)
 	}
-	backdate(20 * time.Minute)
+	backdate(45 * time.Minute)
 	old := work.Claims[0]
 	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, old.Lease, work.Baseline, old.Sealed); err != nil {
-		t.Fatal("active qualification expired at the old fifteen-minute boundary", err)
+		t.Fatal("active qualification expired at the old thirty-minute boundary", err)
 	}
 	f.exec(t, "UPDATE engine.cluster_onboarding_targets SET lease_expires_at=1 WHERE operation_id=$1", f.op.ID)
 	reclaimed, err := store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
@@ -285,7 +285,7 @@ func TestClusterSSHQualificationPostgresOriginalBudgetOnReclaim(t *testing.T) {
 	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, old.Lease, work.Baseline, old.Sealed); err == nil {
 		t.Fatal("superseded worker retained authority")
 	}
-	backdate(30 * time.Minute)
+	backdate(time.Hour)
 	current := reclaimed.Claims[0]
 	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, current.Lease, work.Baseline, current.Sealed); err == nil {
 		t.Fatal("live lease outlasted original qualification budget")
