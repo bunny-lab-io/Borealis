@@ -95,6 +95,11 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 	frozen, _ := json.Marshal(expected)
 	authorityGate := make(chan struct{}, 1)
 	checkLocal := func(ctx context.Context) error {
+		if lease.isNetworkQualification() {
+			var stop context.CancelFunc
+			ctx, stop = context.WithTimeout(ctx, 3*time.Second)
+			defer stop()
+		}
 		select {
 		case authorityGate <- struct{}{}:
 			defer func() { <-authorityGate }()
@@ -178,17 +183,32 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 	}()
 	defer func() { cancel(); response.Body.Close(); <-done }()
 	control := func(parent context.Context, step string) error {
-		fail := func() error { cancel(); return clusterbootstrap.ErrPreparationConfig }
+		started := time.Now()
+		fail := func(stage string) error {
+			if lease.isNetworkQualification() {
+				log.Printf("cluster SSH qualification VIP control failed operation=%s step=%s phase=%s elapsed=%s", lease.OperationID, step, stage, time.Since(started).Round(time.Millisecond))
+			}
+			cancel()
+			return clusterbootstrap.ErrPreparationConfig
+		}
 		duration := time.Second
 		if step == "inputs" {
 			duration = 30 * time.Second
 		}
-		requestCtx, stop := context.WithTimeout(parent, duration)
+		outer, stop := context.WithCancel(parent)
 		defer stop()
 		end := context.AfterFunc(ctx, stop)
 		defer end()
-		if requestCtx.Err() != nil || checkLocal(requestCtx) != nil {
-			return fail()
+		controlCtx := outer
+		if !lease.isNetworkQualification() {
+			var limit context.CancelFunc
+			controlCtx, limit = context.WithTimeout(outer, duration)
+			defer limit()
+		}
+		// The qualification reader bounds both original claims and compares its
+		// frozen authority. Queueing for this local read is not an HTTP exchange.
+		if checkLocal(controlCtx) != nil || controlCtx.Err() != nil {
+			return fail("local_authority_before")
 		}
 		request := clusterSSHVIPControl{Version: 1, ID: newClusterUUID(), Start: start.Request.ID, Scope: ready.Scope, Step: step}
 		if step == "finish" {
@@ -196,17 +216,22 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 		}
 		wire, err := sealClusterSSHVIP(c.checkRequest, clusterSSHVIPCheckPath, request, clusterSSHVIPFrameLimit)
 		if err != nil {
-			return fail()
+			return fail("encode")
 		}
+		requestCtx, stopRequest := context.WithTimeout(controlCtx, duration)
+		defer stopRequest()
 		reply, err := c.post(requestCtx, peer, clusterSSHVIPCheckPath, wire)
 		if err != nil {
-			return fail()
+			return fail("controller_exchange")
 		}
 		raw, err := io.ReadAll(io.LimitReader(reply.Body, clusterSSHVIPFrameLimit+1))
 		reply.Body.Close()
 		var result clusterSSHVIPMessage
-		if err != nil || openClusterSSHVIP(c.checkResponse, clusterSSHVIPCheckPath, raw, &result, clusterSSHVIPFrameLimit) != nil || result.Version != 1 || result.ID != request.ID || result.Scope != ready.Scope || result.Status != "ok" || result.Owner != nil || checkLocal(requestCtx) != nil || requestCtx.Err() != nil || ctx.Err() != nil {
-			return fail()
+		if err != nil || openClusterSSHVIP(c.checkResponse, clusterSSHVIPCheckPath, raw, &result, clusterSSHVIPFrameLimit) != nil || result.Version != 1 || result.ID != request.ID || result.Scope != ready.Scope || result.Status != "ok" || result.Owner != nil || requestCtx.Err() != nil {
+			return fail("controller_receipt")
+		}
+		if checkLocal(controlCtx) != nil || controlCtx.Err() != nil || ctx.Err() != nil {
+			return fail("local_authority_after")
 		}
 		return nil
 	}

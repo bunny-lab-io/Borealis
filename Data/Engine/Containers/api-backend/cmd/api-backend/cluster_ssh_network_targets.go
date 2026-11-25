@@ -282,16 +282,30 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 				if !valid(item) {
 					return clusterbootstrap.ErrPreparationConfig
 				}
+				claim := claims[index]
 				current := func(ctx context.Context) error {
-					if check(ctx) != nil || (outer != nil && outer(ctx) != nil) || ctx.Err() != nil {
-						return clusterbootstrap.ErrPreparationConfig
+					started := time.Now()
+					var stage string
+					switch {
+					case ctx.Err() != nil:
+						stage = "scope_closed"
+					case check(ctx) != nil:
+						stage = "paired_claim"
+					case outer != nil && outer(ctx) != nil:
+						stage = "enclosing_authority"
+					case ctx.Err() != nil:
+						stage = "scope_closed"
+					default:
+						return nil
 					}
-					return nil
+					if claim.Lease.isNetworkQualification() {
+						log.Printf("cluster SSH qualification target authority failed operation=%s target=%s phase=%s elapsed=%s", claim.Lease.OperationID, claim.Lease.TargetID, stage, time.Since(started).Round(time.Millisecond))
+					}
+					return clusterbootstrap.ErrPreparationConfig
 				}
 				if current(ctx) != nil {
 					return clusterbootstrap.ErrPreparationConfig
 				}
-				claim := claims[index]
 				envelope, err := dependencies.open(ctx, claim.Sealed, item.Binding)
 				if err != nil || envelope.Binding != item.Binding || envelope.validate() != nil || current(ctx) != nil {
 					return clusterbootstrap.ErrPreparationConfig

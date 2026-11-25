@@ -4,6 +4,7 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -19,7 +20,14 @@ func sourceNetworkClient(args []string) error {
 	return sourceObservationClient(args, false)
 }
 
-func sourceObservationClient(args []string, vip bool) error {
+func sourceObservationClient(args []string, vip bool) (resultErr error) {
+	started := time.Now()
+	phase := "job_identity"
+	defer func() {
+		if resultErr != nil {
+			log.Printf("source observation Job rejected phase=%s elapsed=%s", phase, time.Since(started).Round(time.Millisecond))
+		}
+	}()
 	jobUID, podUID := os.Getenv("BOREALIS_SOURCE_JOB_UID"), os.Getenv("BOREALIS_SOURCE_POD_UID")
 	address := ""
 	if vip && len(args) == 2 {
@@ -30,6 +38,7 @@ func sourceObservationClient(args []string, vip bool) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	phase = "manager_auth_file"
 	file, err := os.OpenFile(defaultSecretPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
@@ -49,12 +58,14 @@ func sourceObservationClient(args []string, vip bool) error {
 		return (&net.Dialer{}).DialContext(ctx, "unix", defaultSocketPath)
 	}, DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
+	phase = "manager_observation"
 	receipt, err := readSourceObservationReceipt(ctx, &http.Client{Transport: transport}, strings.TrimSpace(string(raw)), args[0], jobUID, podUID, address)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	// Kubelet provides this writable file even with a read-only container root.
 	// Never create a replacement or follow a symlink supplied by another path.
+	phase = "job_receipt"
 	output, err := os.OpenFile("/dev/termination-log", os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return clusterbootstrap.ErrPreparationConfig
@@ -100,6 +111,7 @@ func readSourceObservationReceipt(ctx context.Context, client *http.Client, toke
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		log.Printf("source observation manager rejected request status=%d", response.StatusCode)
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, clusterbootstrap.SourceNetworkReceiptLimit+1))

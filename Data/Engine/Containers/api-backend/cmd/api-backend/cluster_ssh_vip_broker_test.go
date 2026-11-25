@@ -66,9 +66,12 @@ func sshVIPBrokerRun(a clusterSSHPreparationAuthority, lease clusterbootstrap.VI
 }
 
 func TestClusterSSHVIPBrokerLiveScopeAndFailures(t *testing.T) {
-	for _, mode := range []string{"success", "replacement", "follower", "concurrent inputs", "copied inputs", "closed checks", "changed source", "changed final source", "locked worker", "changed authority", "ignored failed check", "canceled check", "consumer error", "canceled consumer", "controller loss", "blocked control", "lost control response", "redirect", "wrong response ID", "wrong response scope", "replayed control", "truncated stream", "early complete"} {
+	for _, mode := range []string{"success", "qualification local authority", "replacement", "follower", "concurrent inputs", "copied inputs", "closed checks", "changed source", "changed final source", "locked worker", "changed authority", "ignored failed check", "canceled check", "consumer error", "canceled consumer", "controller loss", "blocked control", "lost control response", "redirect", "wrong response ID", "wrong response scope", "replayed control", "truncated stream", "early complete"} {
 		t.Run(mode, func(t *testing.T) {
 			a, sources, lease := sshVIPFixture(t, mode == "replacement")
+			if mode == "qualification local authority" {
+				a.Lease.OperationStep, a.Lease.Step = clusterSSHQualificationStep, "qualify"
+			}
 			r, _, _ := sshBrokerFixture(t)
 			r.Lease = a.Lease
 			r.Baseline = a.Baseline
@@ -167,7 +170,15 @@ func TestClusterSSHVIPBrokerLiveScopeAndFailures(t *testing.T) {
 			c := sshVIPBrokerClient(t, peers...)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			authority := func(context.Context) (clusterSSHPreparationAuthority, error) {
+			authority := func(ctx context.Context) (clusterSSHPreparationAuthority, error) {
+				if mode == "qualification local authority" {
+					deadline, ok := ctx.Deadline()
+					// Local validation keeps its own bounded budget on both sides
+					// of the authenticated RPC, including the first heartbeat.
+					if !ok || time.Until(deadline) < 1500*time.Millisecond {
+						return a, errors.New("local observation inherited RPC deadline")
+					}
+				}
 				v := a
 				if locked.Load() {
 					if mode == "changed authority" {
@@ -248,7 +259,7 @@ func TestClusterSSHVIPBrokerLiveScopeAndFailures(t *testing.T) {
 			}
 			start := time.Now()
 			err := c.withOwner(ctx, authority, a.Lease, a.Baseline, r.sealed(), sources, consume)
-			good := slices.Contains([]string{"success", "replacement", "follower", "concurrent inputs", "copied inputs", "closed checks"}, mode)
+			good := slices.Contains([]string{"success", "qualification local authority", "replacement", "follower", "concurrent inputs", "copied inputs", "closed checks"}, mode)
 			if (err == nil) != good {
 				t.Fatal("bridge outcome", mode, err)
 			}
