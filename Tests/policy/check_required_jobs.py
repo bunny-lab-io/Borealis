@@ -5,6 +5,7 @@ import json
 import os
 import sys
 
+from Tests.helpers.engine_go_shard import LANES, receipt
 from Tests.policy.check_postgres_inventory import ci_identity, required_shards, shard_receipt
 
 
@@ -33,6 +34,9 @@ def audit_jobs(needs, shards, identity):
     actual = {job: record["result"] for job, record in needs.items()}
     if actual != expected:
         raise ValueError(f"required job mismatch: expected {expected}, received {actual}")
+    if scope["engine_go"] == "true":
+        if needs["engine-go"]["outputs"] != {lane: receipt(identity, lane) for lane in LANES}:
+            raise ValueError("missing, stale or mismatched Engine Go lane results")
     if scope["database"] == "true":
         receipts = needs["database"]["outputs"]
         expected_receipts = {

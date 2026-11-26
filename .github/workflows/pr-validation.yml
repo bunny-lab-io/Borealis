@@ -132,12 +132,23 @@ jobs:
           if-no-files-found: ignore
 
   engine-go:
-    name: Engine / go-runtimes
+    name: Engine / go-runtimes / ${{ matrix.lane }}
     needs: changes
     if: needs.changes.outputs.engine_go == 'true'
     runs-on: ubuntu-24.04
     # Allow setup, the bounded race suite, and runtime builds.
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [static, packages, api1, api2, api3, api4]
+    outputs:
+      static: ${{ steps.lane.outputs.static }}
+      packages: ${{ steps.lane.outputs.packages }}
+      api1: ${{ steps.lane.outputs.api1 }}
+      api2: ${{ steps.lane.outputs.api2 }}
+      api3: ${{ steps.lane.outputs.api3 }}
+      api4: ${{ steps.lane.outputs.api4 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -148,14 +159,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes netplan.io python3-netplan python3-yaml
-      - run: ./Tests/run-engine-go.sh
+      - id: lane
+        run: ./Tests/run-engine-go.sh
         env:
           CGO_ENABLED: "1"
           BOREALIS_ENGINE_GO_RACE: "1"
+          BOREALIS_ENGINE_GO_LANE: ${{ matrix.lane }}
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: engine-go-results
+          name: engine-go-results-${{ matrix.lane }}
           path: Unit_Test_Results/
           if-no-files-found: ignore
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from Tests.helpers.engine_go_shard import LANES, receipt
 from Tests.helpers.changed_paths import MANIFEST as CI_MANIFEST, matches
 from Tests.policy.check_postgres_inventory import (
     PACKAGE, SHARD_COUNT, audit_python_results, audit_results, required_shards, required_tests,
@@ -149,7 +150,10 @@ class RequiredJobsTests(unittest.TestCase):
         for jobs in SCOPE.values():
             needs.update({job: {"result": "success"} for job in jobs})
         receipts = {f"shard_{i}": shard_receipt(identity, i, tests) for i, tests in enumerate(shards, 1)}
+        needs["engine-go"]["outputs"] = {lane: receipt(identity, lane) for lane in LANES}
         needs["database"]["outputs"] = receipts
+        with self.assertRaises(ValueError):
+            audit_jobs({**needs, "engine-go": {"result": "success", "outputs": {}}}, shards, identity)
         audit_jobs(needs, shards, identity)
         for key in ("shard_1", f"shard_{len(shards)}"):
             for wrong in ("", receipts["shard_2"], shard_receipt(["16", "head", "other"], 1, shards[0])):

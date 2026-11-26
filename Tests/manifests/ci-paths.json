@@ -23,7 +23,11 @@
     "Tests/tools/routeinventory/**",
     "Tests/manifests/api-routes.json",
     "Tests/policy/check_api_routes.py",
-    ".github/workflows/pr-validation.yml"
+    ".github/workflows/pr-validation.yml",
+    "Tests/helpers/engine_go_shard.py",
+    "Tests/manifests/engine-api-timings.json",
+    "Tests/policy/check_required_jobs.py",
+    "Tests/manifests/postgres-tests.json"
   ],
   "engine-python": [
     "Data/Engine/Containers/site-worker/data/**/*.py",
