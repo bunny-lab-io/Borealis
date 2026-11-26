@@ -20,6 +20,7 @@ import (
 )
 
 type clusterBootstrapAsset struct {
+	development        clusterbootstrap.Expected
 	ID                 int64  `json:"id"`
 	Name               string `json:"name"`
 	State              string `json:"state"`
@@ -168,6 +169,9 @@ func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap
 	if expected.Repository != clusterGitHubRepo() {
 		return nil, errors.New("node bootstrap repository differs from configured authority")
 	}
+	if expected.Development != "" {
+		return resolveClusterDevelopmentAssets(ctx, expected, required)
+	}
 	var release clusterBootstrapRelease
 	var sha string
 	var err error
@@ -192,7 +196,7 @@ func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap
 func validateClusterPackagedRelease(expected clusterbootstrap.Expected, release clusterBootstrapRelease, sha string) error {
 	_, publishedErr := time.Parse(time.RFC3339, release.PublishedAt)
 	qualification := strings.Contains(expected.Release, "-rc.")
-	if release.TagName != expected.Release || release.Draft == nil || *release.Draft || release.Prerelease == nil ||
+	if expected.Development != "" || release.TagName != expected.Release || release.Draft == nil || *release.Draft || release.Prerelease == nil ||
 		*release.Prerelease != qualification || release.Immutable == nil || !*release.Immutable || publishedErr != nil || len(release.Assets) > 100 {
 		return errors.New("node bootstrap release must be published immutable matching channel")
 	}
@@ -243,6 +247,23 @@ func openClusterBootstrapAsset(ctx context.Context, asset clusterBootstrapAsset)
 
 func openClusterPackagedAsset(ctx context.Context, asset clusterBootstrapAsset, maximum int64) (*http.Response, error) {
 	invalid := errors.New("node bootstrap asset download failed; remote diagnostics withheld")
+	if asset.development.Development != "" {
+		if asset.Size < 1 || asset.Size > maximum || maximum > clusterbootstrap.MaxImageArchiveBytes {
+			return nil, invalid
+		}
+		if reader, ok := ctx.Value(clusterPreparationReleaseKey{}).(*clusterPreparationReleaseReader); ok {
+			reply, err := reader.read(ctx, asset.development, &asset)
+			if err != nil || !reply.Direct || reply.assetResponse == nil {
+				return nil, invalid
+			}
+			return reply.assetResponse, nil
+		}
+		catalog, _, err := clusterLocalDevelopmentCatalog(asset.development)
+		if err != nil {
+			return nil, err
+		}
+		return openClusterDevelopmentAsset(catalog, asset)
+	}
 	apiURL := clusterPackagedAssetAPIURL(asset.ID)
 	if asset.ID < 1 || asset.URL != apiURL || asset.Size < 1 || maximum < 1 || maximum > clusterbootstrap.MaxImageArchiveBytes || asset.Size > maximum {
 		return nil, invalid

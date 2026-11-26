@@ -20,7 +20,7 @@ import (
 
 func preparationFixture() (PreparationExpected, map[string]string) {
 	r := sessionFixture()
-	e := PreparationExpected{Source: Expected{r.Repository, r.Release, r.SourceSHA, true}, Target: r.Binding,
+	e := PreparationExpected{Source: Expected{r.Repository, r.Release, r.SourceSHA, true, ""}, Target: r.Binding,
 		CohortSHA256: strings.Repeat("d", 64),
 		TargetBootID: "55555555-5555-4555-8555-555555555555", KubeSystemUID: "66666666-6666-4666-8666-666666666666",
 		ControlPlaneVIP: "192.168.3.248", EdgeVIP: "192.168.3.248", ManagementCIDR: "192.168.3.0/24", K3sVersion: "v1.36.3+k3s1",

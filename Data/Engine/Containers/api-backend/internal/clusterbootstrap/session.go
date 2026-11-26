@@ -109,6 +109,7 @@ type SessionRequest struct {
 	SourceSHA          string                   `json:"source_sha"`
 	ManagerSHA256      string                   `json:"manager_sha256"`
 	AllowQualification bool                     `json:"allow_qualification"`
+	Development        string                   `json:"development,omitempty"`
 	IdentityRecovery   *IdentityRecoveryRequest `json:"identity_recovery,omitempty"`
 }
 
@@ -128,7 +129,7 @@ func (r SessionRequest) Validate() error {
 	default:
 		return ErrSessionProtocol
 	}
-	return (Expected{r.Repository, r.Release, r.SourceSHA, r.AllowQualification}).Validate()
+	return (Expected{r.Repository, r.Release, r.SourceSHA, r.AllowQualification, r.Development}).Validate()
 }
 
 type SessionMessage struct {

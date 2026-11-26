@@ -40,6 +40,7 @@ type clusterPreparationReleaseRequest struct {
 }
 type clusterPreparationReleaseReply struct {
 	ID, SHA, Redirect string
+	Catalog           []byte `json:"catalog,omitempty"`
 	Release           *clusterBootstrapRelease
 	Direct            bool
 	assetResponse     *http.Response
@@ -144,11 +145,12 @@ func (r *clusterPreparationReleaseReader) read(ctx context.Context, expected clu
 		return fail()
 	}
 	if asset == nil {
-		if reply.Release == nil || reply.Redirect != "" || reply.Direct || reply.SHA != expected.SourceSHA {
+		development := expected.Development != ""
+		if development != (len(reply.Catalog) > 0) || development == (reply.Release != nil) || reply.Redirect != "" || reply.Direct || reply.SHA != expected.SourceSHA {
 			return fail()
 		}
 	} else {
-		if reply.Release != nil || reply.SHA != "" || reply.Direct == (reply.Redirect != "") {
+		if len(reply.Catalog) > 0 || (expected.Development != "" && !reply.Direct) || reply.Release != nil || reply.SHA != "" || reply.Direct == (reply.Redirect != "") {
 			return fail()
 		}
 		if reply.Direct {
@@ -312,7 +314,7 @@ func (b *clusterPreparationReleaseBroker) acceptRequest(id string, expires, now 
 func (b *clusterPreparationReleaseBroker) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	fail := func() { http.Error(w, "Preparation release read unavailable", http.StatusServiceUnavailable) }
-	if r.URL.Path != clusterPreparationReleasePath || r.URL.RawQuery != "" || r.URL.ForceQuery || r.Method != http.MethodPost || r.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || r.Header.Get("Content-Encoding") != "" || b.check == nil || b.credentials == nil {
+	if r.URL.Path != clusterPreparationReleasePath || r.URL.RawQuery != "" || r.URL.ForceQuery || r.Method != http.MethodPost || r.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || r.Header.Get("Content-Encoding") != "" || b.check == nil {
 		fail()
 		return
 	}
@@ -344,10 +346,6 @@ func (b *clusterPreparationReleaseBroker) handle(w http.ResponseWriter, r *http.
 	// the shorter request deadline before returning any response.
 	transfer, done := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer done()
-	authenticated := b.credentials(transfer)
-	if token, ok := authenticated.Value(clusterGitHubTokenContextKey{}).(string); ok {
-		ctx = context.WithValue(ctx, clusterGitHubTokenContextKey{}, token)
-	}
 	reply := clusterPreparationReleaseReply{ID: q.ID}
 	var direct io.ReadCloser
 	var asset clusterBootstrapAsset
@@ -355,44 +353,76 @@ func (b *clusterPreparationReleaseBroker) handle(w http.ResponseWriter, r *http.
 		fail()
 		return
 	}
-	release, err := b.publication(ctx, q.Expected, q.AssetID != 0)
-	if err != nil {
-		fail()
-		return
-	}
-	if q.AssetID == 0 {
-		reply.Release, reply.SHA = &release, q.Expected.SourceSHA
-	} else {
-		assets, err := selectClusterPackagedAssets(q.Expected, release, map[string]int64{q.AssetName: clusterbootstrap.MaxImageArchiveBytes})
-		asset = assets[q.AssetName]
-		if err != nil || asset.ID != q.AssetID {
-			fail()
-			return
-		}
-		cancelAdmission := time.AfterFunc(time.Until(time.Unix(q.Expires, 0)), done)
-		res, err := b.openPublishedAsset(authenticated, asset)
-		cancelAdmission.Stop()
+	if q.Expected.Development != "" {
+		catalog, raw, err := clusterLocalDevelopmentCatalog(q.Expected)
 		if err != nil {
 			fail()
 			return
 		}
-		defer res.Body.Close()
-		switch res.StatusCode {
-		case http.StatusFound:
-			reply.Redirect = res.Header.Get("Location")
-			if !validClusterAssetRedirect(reply.Redirect) {
+		if q.AssetID == 0 {
+			reply.Catalog, reply.SHA = raw, q.Expected.SourceSHA
+		} else {
+			asset, err = clusterDevelopmentAsset(catalog, q.AssetName, clusterbootstrap.MaxImageArchiveBytes)
+			if err != nil || asset.ID != q.AssetID {
 				fail()
 				return
 			}
-		case http.StatusOK:
-			if res.Header.Get("Content-Encoding") != "" || (res.ContentLength >= 0 && res.ContentLength != asset.Size) {
+			res, err := openClusterDevelopmentAsset(catalog, asset)
+			if err != nil {
 				fail()
 				return
 			}
+			defer res.Body.Close()
 			reply.Direct, direct = true, res.Body
-		default:
+		}
+	} else {
+		if b.credentials == nil {
 			fail()
 			return
+		}
+		authenticated := b.credentials(transfer)
+		if token, ok := authenticated.Value(clusterGitHubTokenContextKey{}).(string); ok {
+			ctx = context.WithValue(ctx, clusterGitHubTokenContextKey{}, token)
+		}
+		release, err := b.publication(ctx, q.Expected, q.AssetID != 0)
+		if err != nil {
+			fail()
+			return
+		}
+		if q.AssetID == 0 {
+			reply.Release, reply.SHA = &release, q.Expected.SourceSHA
+		} else {
+			assets, err := selectClusterPackagedAssets(q.Expected, release, map[string]int64{q.AssetName: clusterbootstrap.MaxImageArchiveBytes})
+			asset = assets[q.AssetName]
+			if err != nil || asset.ID != q.AssetID {
+				fail()
+				return
+			}
+			cancelAdmission := time.AfterFunc(time.Until(time.Unix(q.Expires, 0)), done)
+			res, err := b.openPublishedAsset(authenticated, asset)
+			cancelAdmission.Stop()
+			if err != nil {
+				fail()
+				return
+			}
+			defer res.Body.Close()
+			switch res.StatusCode {
+			case http.StatusFound:
+				reply.Redirect = res.Header.Get("Location")
+				if !validClusterAssetRedirect(reply.Redirect) {
+					fail()
+					return
+				}
+			case http.StatusOK:
+				if res.Header.Get("Content-Encoding") != "" || (res.ContentLength >= 0 && res.ContentLength != asset.Size) {
+					fail()
+					return
+				}
+				reply.Direct, direct = true, res.Body
+			default:
+				fail()
+				return
+			}
 		}
 	}
 	if !b.check(ctx, q) || ctx.Err() != nil {

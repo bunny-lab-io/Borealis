@@ -73,7 +73,7 @@ func imageInstallRoot(directory string) (*os.Root, error) {
 
 func (s *ImageSet) imageInstallReady(j *MutationJournal) bool {
 	if s.inventory == nil || s.root == nil || j == nil || j.state.Source.Repository != s.inventory.wire.Repository ||
-		j.state.Source.Release != s.inventory.wire.Release || j.state.Source.SourceSHA != s.inventory.wire.SourceSHA {
+		j.state.Source.Release != s.inventory.expected.Release || j.state.Source.Development != s.inventory.expected.Development || j.state.Source.SourceSHA != s.inventory.wire.SourceSHA {
 		return false
 	}
 	for _, step := range []string{"stage_source", "install_identity", "prepare_host"} {

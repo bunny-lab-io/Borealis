@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
-	"strings"
 )
 
 // A settled phase has no worker lease. This snapshot is deliberately separate
@@ -145,7 +144,7 @@ func (c *clusterController) loadClusterSSHPreparedAuthority(ctx context.Context,
 		Scan(&payload, &baseline.Release, &baseline.SourceSHA) != nil {
 		return fail()
 	}
-	baseline.Repository, baseline.AllowQualification = clusterGitHubRepo(), strings.Contains(baseline.Release, "-rc.")
+	baseline = clusterBaselineExpected(baseline.Release, baseline.SourceSHA)
 	queue, err := readClusterSSHQueueSource(ctx, c.store.db)
 	if err != nil {
 		return fail()

@@ -80,6 +80,10 @@ func main() {
 		if k3sArchiveProof(os.Args[2:]) != nil {
 			fatalf("immutable K3s evidence invalid or changed")
 		}
+	case "development-candidate-proof":
+		if err := developmentCandidateProof(os.Args[2:]); err != nil {
+			fatalf("development candidate verification failed: %v", err)
+		}
 	case "image-archive-proof":
 		if imageArchiveProof(os.Args[2:]) != nil {
 			fatalf("immutable image evidence invalid or changed")

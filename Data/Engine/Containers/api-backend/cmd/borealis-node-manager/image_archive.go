@@ -80,3 +80,23 @@ func archiveProof(archive string, inspect func(context.Context, *os.File, int64)
 	}
 	return json.NewEncoder(os.Stdout).Encode(proof)
 }
+
+func developmentCandidateProof(args []string) error {
+	flags := flag.NewFlagSet("development-candidate-proof", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	root := flags.String("root", "", "")
+	id := flags.String("candidate", "", "")
+	sha := flags.String("source-sha", "", "")
+	repo := flags.String("repository", "bunny-lab-io/Borealis", "")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return clusterbootstrap.ErrPreparationConfig
+	}
+	catalog, _, err := clusterbootstrap.ReadDevelopmentCatalog(*root, *id, *sha, *repo)
+	if err != nil {
+		return err
+	}
+	if err = catalog.VerifyReadOnly(context.Background(), *root); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]string{"candidate": *id, "source_sha": *sha, "channel": "development", "artifact_verification": "passed"})
+}

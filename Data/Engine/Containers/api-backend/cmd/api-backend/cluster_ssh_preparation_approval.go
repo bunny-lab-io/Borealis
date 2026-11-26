@@ -76,7 +76,7 @@ func (s *postgresOperatorStore) readClusterSSHPreparationProposal(ctx context.Co
 		operation.Attempt, clusterControllerLeaseName, holder).Scan(&w.Payload, &w.Baseline.Release, &w.Baseline.SourceSHA, &now) != nil {
 		return fail()
 	}
-	w.Baseline.Repository, w.Baseline.AllowQualification = clusterGitHubRepo(), strings.Contains(w.Baseline.Release, "-rc.")
+	w.Baseline = clusterBaselineExpected(w.Baseline.Release, w.Baseline.SourceSHA)
 	if w.Baseline.Validate() != nil {
 		return fail()
 	}

@@ -7,29 +7,54 @@ import (
 	"strings"
 )
 
+type retainedImageSource struct {
+	SourceSHA    string `json:"source_sha"`
+	InputsSHA256 string `json:"inputs_sha256"`
+}
+
 type imageInventoryWire struct {
-	Version    int                 `json:"version"`
-	Repository string              `json:"repository"`
-	Release    string              `json:"release"`
-	SourceSHA  string              `json:"source_sha"`
-	Platform   string              `json:"platform"`
-	Images     []ImageArchiveProof `json:"images"`
+	RetainedRelease string                         `json:"retained_release,omitempty"`
+	Reused          map[string]retainedImageSource `json:"reused,omitempty"`
+	Version         int                            `json:"version"`
+	Repository      string                         `json:"repository"`
+	Release         string                         `json:"release"`
+	SourceSHA       string                         `json:"source_sha"`
+	Platform        string                         `json:"platform"`
+	Images          []ImageArchiveProof            `json:"images"`
 }
 
 // ImageInventory binds measured application images to an independently resolved
 // immutable release. It excludes OS/K3s/external images and runtime growth;
 // callers cannot interpret it as a complete installation-capacity certificate.
 type ImageInventory struct {
-	wire imageInventoryWire
-	raw  []byte
+	expected Expected
+	wire     imageInventoryWire
+	raw      []byte
 }
 
 func ParseImageInventory(raw []byte, expected Expected) (*ImageInventory, error) {
-	if expected.Validate() != nil || len(raw) == 0 || len(raw) > MaxImageInventoryBytes || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "images"}, nil) != nil {
+	optional := []string(nil)
+	if expected.Development != "" {
+		optional = []string{"retained_release", "reused"}
+	}
+	if !expected.acceptsInventory("image", raw) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "images"}, optional) != nil {
 		return nil, ErrImageArchive
 	}
 	var v imageInventoryWire
-	if imageJSON(raw, &v) != nil || v.Version != 1 || v.Repository != expected.Repository || v.Release != expected.Release || v.SourceSHA != expected.SourceSHA || v.Platform != "linux-amd64" || len(v.Images) != len(imageRoles) {
+	if imageJSON(raw, &v) != nil || (v.Version != 1 && v.Version != 2) || v.Repository != expected.Repository || v.Release != expected.packagingRelease() || v.SourceSHA != expected.SourceSHA || v.Platform != "linux-amd64" || len(v.Images) != len(imageRoles) {
+		return nil, ErrImageArchive
+	}
+	if v.Version == 2 {
+		if expected.Development == "" || !strings.HasPrefix(v.RetainedRelease, "release-") ||
+			!digestPattern.MatchString(strings.TrimPrefix(v.RetainedRelease, "release-")) || len(v.Reused) == 0 {
+			return nil, ErrImageArchive
+		}
+		for role, origin := range v.Reused {
+			if !slices.Contains(imageRoles, role) || !shaPattern.MatchString(origin.SourceSHA) || origin.SourceSHA == strings.Repeat("0", 40) || !digestPattern.MatchString(origin.InputsSHA256) {
+				return nil, ErrImageArchive
+			}
+		}
+	} else if v.RetainedRelease != "" || v.Reused != nil {
 		return nil, ErrImageArchive
 	}
 	var outer struct {
@@ -37,7 +62,7 @@ func ParseImageInventory(raw []byte, expected Expected) (*ImageInventory, error)
 	}
 	_ = json.Unmarshal(raw, &outer)
 	for i, proof := range v.Images {
-		if imageFields(outer.Images[i], []string{"role", "image", "archive_sha256", "archive_bytes", "manifest_digest", "config_digest", "layers"}, nil) != nil || proof.Role != imageRoles[i] || proof.Image != ImageReference(proof.Role, expected.SourceSHA) || !digestPattern.MatchString(proof.ArchiveSHA256) || proof.ArchiveBytes < 1 || proof.ArchiveBytes > MaxImageArchiveBytes || len(proof.Layers) < 1 || len(proof.Layers) > 128 {
+		if imageFields(outer.Images[i], []string{"role", "image", "archive_sha256", "archive_bytes", "manifest_digest", "config_digest", "layers"}, nil) != nil || proof.Role != imageRoles[i] || proof.Image != ImageReference(proof.Role, v.buildSource(proof.Role)) || !digestPattern.MatchString(proof.ArchiveSHA256) || proof.ArchiveBytes < 1 || proof.ArchiveBytes > MaxImageArchiveBytes || len(proof.Layers) < 1 || len(proof.Layers) > 128 {
 			return nil, ErrImageArchive
 		}
 		for _, digest := range []string{proof.ManifestDigest, proof.ConfigDigest} {
@@ -62,7 +87,14 @@ func ParseImageInventory(raw []byte, expected Expected) (*ImageInventory, error)
 			}
 		}
 	}
-	return &ImageInventory{wire: v, raw: bytes.Clone(raw)}, nil
+	return &ImageInventory{expected: expected, wire: v, raw: bytes.Clone(raw)}, nil
+}
+
+func (v imageInventoryWire) buildSource(role string) string {
+	if source, ok := v.Reused[role]; ok {
+		return source.SourceSHA
+	}
+	return v.SourceSHA
 }
 
 func validImageDigest(value string) bool {

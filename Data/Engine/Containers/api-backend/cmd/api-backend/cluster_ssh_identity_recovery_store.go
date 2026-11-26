@@ -150,7 +150,7 @@ func (s *postgresOperatorStore) claimClusterSSHIdentityRecoveryTarget(ctx contex
 	if err != nil {
 		return clusterSSHIdentityRecoveryClaim{}, errClusterUnavailable
 	}
-	baseline := clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: release, SourceSHA: sha, AllowQualification: strings.Contains(release, "-rc.")}
+	baseline := clusterBaselineExpected(release, sha)
 	anchor := clusterSSHTargetLease{OperationID: operationID, TargetID: targetID, Holder: holder, ControllerHolder: controller, OperationAttempt: attempt,
 		OperationStep: clusterSSHIdentityRecoveryOperationStep, Step: clusterSSHIdentityRecoveryTargetStep, OperationKind: "ssh_onboarding"}
 	proof, _, err := parseClusterSSHPreparationInspection([]byte(payload), anchor, baseline)

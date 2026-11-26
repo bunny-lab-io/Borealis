@@ -64,7 +64,7 @@ func (s *HostPackageSet) verifyOwnedArchive(ctx context.Context, expected Expect
 		return ErrSessionAuthority
 	}
 	wire := s.inventory.wire
-	if wire.Repository != expected.Repository || wire.Release != expected.Release || wire.SourceSHA != expected.SourceSHA {
+	if s.inventory.development != expected.Development || wire.Repository != expected.Repository || wire.Release != expected.packagingRelease() || wire.SourceSHA != expected.SourceSHA {
 		return ErrImageArchive
 	}
 	asset := s.inventory.Archive()

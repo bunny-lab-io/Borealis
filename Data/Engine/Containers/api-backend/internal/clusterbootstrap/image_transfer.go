@@ -117,6 +117,10 @@ func (s *ImageSet) runtimeManifest() ([]byte, error) {
 		services[image.Role] = map[string]any{"image": repository + "@" + image.ManifestDigest, "archive_reference": image.Image, "hash": image.ManifestDigest[len("sha256:"):], "mode": "prod", "manifest_digest": image.ManifestDigest, "config_digest": image.ConfigDigest}
 	}
 	h := sha256.Sum256(s.inventory.raw)
-	return json.Marshal(map[string]any{"schema_version": 1, "project": "borealis-engine", "mode": "prod", "source_sha": s.inventory.wire.SourceSHA,
-		"release": s.inventory.wire.Release, "image_inventory_sha256": hex.EncodeToString(h[:]), "services": services})
+	manifest := map[string]any{"schema_version": 1, "project": "borealis-engine", "mode": "prod", "source_sha": s.inventory.wire.SourceSHA,
+		"release": s.inventory.expected.Release, "image_inventory_sha256": hex.EncodeToString(h[:]), "services": services}
+	if s.inventory.expected.Development != "" {
+		manifest["channel"] = "development"
+	}
+	return json.Marshal(manifest)
 }

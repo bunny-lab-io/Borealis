@@ -101,7 +101,7 @@ func (s clusterExistingIdentitySnapshot) valid(source string) bool {
 		len(s.Members) != 3 || (clusterremote.Target{Address: s.VIP, Port: 22}).Validate() != nil {
 		return false
 	}
-	baseline := clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: s.Release, SourceSHA: s.SHA, AllowQualification: strings.Contains(s.Release, "-rc.")}
+	baseline := clusterBaselineExpected(s.Release, s.SHA)
 	if baseline.Validate() != nil || clusterDatabaseRuntimeRequiresRecovery(s.Config) {
 		return false
 	}
@@ -248,7 +248,7 @@ func (c *clusterController) reserveClusterExistingIdentity(parent context.Contex
 	}
 	plan := clusterExistingIdentityPlan{Version: 1, OperationID: id, SourceID: source, TargetID: snapshot.TargetID, MaintenanceID: maintenance,
 		MaintenanceAttempt: snapshot.MaintenanceAttempt, ObservedAt: now, Controller: c.holder, ClusterID: snapshot.ClusterID, KubeSystemUID: namespace,
-		Baseline: clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: snapshot.Release, SourceSHA: snapshot.SHA, AllowQualification: strings.Contains(snapshot.Release, "-rc.")}, ConfigSHA256: configDigest, SnapshotSHA256: snapshotDigest, Members: members}
+		Baseline: clusterBaselineExpected(snapshot.Release, snapshot.SHA), ConfigSHA256: configDigest, SnapshotSHA256: snapshotDigest, Members: members}
 	payload, err := json.Marshal(plan)
 	if err != nil || !plan.valid() || len(payload) > 64<<10 {
 		return fail()

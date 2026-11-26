@@ -154,8 +154,7 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
 		Scan(&work.Payload, &work.Baseline.Release, &work.Baseline.SourceSHA) != nil {
 		return fail()
 	}
-	work.Baseline.Repository = clusterGitHubRepo()
-	work.Baseline.AllowQualification = strings.Contains(work.Baseline.Release, "-rc.")
+	work.Baseline = clusterBaselineExpected(work.Baseline.Release, work.Baseline.SourceSHA)
 	if work.Baseline.Validate() != nil {
 		return fail()
 	}

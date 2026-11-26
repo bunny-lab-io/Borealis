@@ -18,8 +18,9 @@ type externalInventoryWire struct {
 // Static external images only. Dynamic PostgreSQL, OS/runtime growth, source
 // image authority and placement remain separate requirements for readiness.
 type ExternalImageInventory struct {
-	wire externalInventoryWire
-	raw  []byte
+	development string
+	wire        externalInventoryWire
+	raw         []byte
 }
 
 func ParseExternalImageInventory(raw []byte, expected Expected) (*ExternalImageInventory, error) {
@@ -27,11 +28,11 @@ func ParseExternalImageInventory(raw []byte, expected Expected) (*ExternalImageI
 }
 
 func parseExternalImageInventory(raw []byte, expected Expected, pins []ExternalImagePin) (*ExternalImageInventory, error) {
-	if expected.Validate() != nil || len(raw) == 0 || len(raw) > MaxImageInventoryBytes || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "images"}, nil) != nil {
+	if !expected.acceptsInventory("external", raw) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "images"}, nil) != nil {
 		return nil, ErrImageArchive
 	}
 	var wire externalInventoryWire
-	if imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.Release || wire.SourceSHA != expected.SourceSHA || wire.Platform != "linux-amd64" || len(wire.Images) != len(pins) || len(pins) != 23 {
+	if imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.packagingRelease() || wire.SourceSHA != expected.SourceSHA || wire.Platform != "linux-amd64" || len(wire.Images) != len(pins) || len(pins) != 23 {
 		return nil, ErrImageArchive
 	}
 	var outer struct {
@@ -78,7 +79,7 @@ func parseExternalImageInventory(raw []byte, expected Expected, pins []ExternalI
 			return nil, ErrImageArchive
 		}
 	}
-	return &ExternalImageInventory{wire: wire, raw: bytes.Clone(raw)}, nil
+	return &ExternalImageInventory{development: expected.Development, wire: wire, raw: bytes.Clone(raw)}, nil
 }
 
 func (v *ExternalImageInventory) Images() []ExternalImageProof {

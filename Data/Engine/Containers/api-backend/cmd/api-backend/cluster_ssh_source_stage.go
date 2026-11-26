@@ -156,7 +156,7 @@ func (c *clusterController) stageInspectionRelease(ctx context.Context, op clust
 		return err
 	}
 	release := cleanText(op.Payload["baseline_release"])
-	expected := clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: release, SourceSHA: cleanText(op.Payload["baseline_sha"]), AllowQualification: strings.Contains(release, "-rc.")}
+	expected := clusterBaselineExpected(release, cleanText(op.Payload["baseline_sha"]))
 	proof, version, err := parseClusterSSHPreparationInspection(payload, clusterSSHTargetLease{OperationID: op.ID, OperationAttempt: op.Attempt, ControllerHolder: c.holder}, expected)
 	if err != nil || version != clusterbootstrap.K3sPins().Version {
 		return errClusterConflict

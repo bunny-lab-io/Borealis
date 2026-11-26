@@ -266,8 +266,9 @@ type hostPackageInventoryWire struct {
 // neither target compatibility, dependency-resolution authority, generated or
 // service demand, installation permission, nor persistent-storage readiness.
 type HostPackageInventory struct {
-	wire hostPackageInventoryWire
-	raw  []byte
+	development string
+	wire        hostPackageInventoryWire
+	raw         []byte
 }
 
 func ParseHostPackageInventory(raw []byte, expected Expected) (*HostPackageInventory, error) {
@@ -280,9 +281,9 @@ func ParseHostPackageInventory(raw []byte, expected Expected) (*HostPackageInven
 
 func parseHostPackageInventory(raw []byte, expected Expected, plan HostPackagePlan, digest string) (*HostPackageInventory, error) {
 	var wire hostPackageInventoryWire
-	if expected.Validate() != nil || validateHostPackagePlan(plan) != nil || !digestPattern.MatchString(digest) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes ||
+	if !expected.acceptsInventory("host_package", raw) || validateHostPackagePlan(plan) != nil || !digestPattern.MatchString(digest) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes ||
 		imageFields(raw, []string{"version", "repository", "release", "source_sha", "os", "os_version", "suite", "platform", "plan_sha256", "archive", "packages", "data_directories"}, nil) != nil ||
-		imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.Release || wire.SourceSHA != expected.SourceSHA ||
+		imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.packagingRelease() || wire.SourceSHA != expected.SourceSHA ||
 		wire.OS != plan.OS || wire.OSVersion != plan.OSVersion || wire.Suite != plan.Suite || wire.Platform != plan.Platform || wire.PlanSHA256 != digest ||
 		!reflect.DeepEqual(wire.Packages, plan.Packages) || !slices.Equal(wire.DataDirectories, plan.DataDirectories) || wire.Archive.Name != HostPackageArchiveName || wire.Archive.Size != hostPackageArchiveSize(plan.Packages) ||
 		!digestPattern.MatchString(wire.Archive.SHA256) || wire.Archive.SHA256 == strings.Repeat("0", 64) {
@@ -301,7 +302,7 @@ func parseHostPackageInventory(raw []byte, expected Expected, plan HostPackagePl
 			return nil, ErrImageArchive
 		}
 	}
-	return &HostPackageInventory{wire: wire, raw: bytes.Clone(raw)}, nil
+	return &HostPackageInventory{development: expected.Development, wire: wire, raw: bytes.Clone(raw)}, nil
 }
 
 func (v *HostPackageInventory) Packages() []HostPackagePin {

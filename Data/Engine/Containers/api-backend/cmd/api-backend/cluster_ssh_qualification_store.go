@@ -110,8 +110,7 @@ func (s *postgresOperatorStore) claimClusterSSHQualification(ctx context.Context
  AND octet_length(o.payload_json)<=262144`, operationID, clusterControllerLeaseName).Scan(&work.Payload, &attempt, &controller, &work.Baseline.Release, &work.Baseline.SourceSHA) != nil {
 		return fail()
 	}
-	work.Baseline.Repository = clusterGitHubRepo()
-	work.Baseline.AllowQualification = strings.Contains(work.Baseline.Release, "-rc.")
+	work.Baseline = clusterBaselineExpected(work.Baseline.Release, work.Baseline.SourceSHA)
 	anchor := clusterSSHTargetLease{OperationID: operationID, Holder: holder, ControllerHolder: controller, OperationAttempt: attempt, OperationKind: "ssh_onboarding", OperationStep: clusterSSHQualificationStep, Step: "qualify"}
 	var err error
 	var version string

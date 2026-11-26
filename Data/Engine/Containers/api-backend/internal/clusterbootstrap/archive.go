@@ -27,6 +27,7 @@ import (
 // Caller must Close after SSH transfer. Paths remain private to trusted caller;
 // mutation of scratch after verification invalidates its proof.
 type Bundle struct {
+	expected Expected
 	root     string
 	identity identity
 	asset    assetIdentity
@@ -44,8 +45,11 @@ func (b *Bundle) ManagerProof() (Expected, string, int64, error) {
 	if b == nil || b.root == "" || !filepath.IsAbs(b.root) || !digestPattern.MatchString(b.identity.NodeManager.SHA256) {
 		return Expected{}, "", 0, errors.New("verified node bootstrap bundle required")
 	}
-	i := b.identity
-	return Expected{Repository: i.Repository, Release: i.Release, SourceSHA: i.SourceSHA, AllowQualification: strings.Contains(i.Release, "-rc.")}, i.NodeManager.SHA256, i.NodeManager.Size, nil
+	expected := b.expected
+	if expected.Development == "" {
+		expected.AllowQualification = strings.Contains(expected.Release, "-rc.")
+	}
+	return expected, b.identity.NodeManager.SHA256, b.identity.NodeManager.Size, nil
 }
 
 type sourceFile struct {
@@ -72,7 +76,7 @@ func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, inp
 	if err != nil {
 		return nil, errors.New("node bootstrap scratch unavailable")
 	}
-	b := &Bundle{root: root, identity: m.identity, asset: m.asset}
+	b := &Bundle{root: root, expected: m.expected, identity: m.identity, asset: m.asset}
 	defer func() {
 		if err != nil {
 			_ = b.Close()
@@ -259,7 +263,7 @@ func scanArchive(ctx context.Context, file *os.File, m *Manifest) (*bootstrapArc
 	if hex.EncodeToString(compressed.Sum(nil)) != m.asset.SHA256 {
 		return nil, PreparationScratchDemand{}, ErrPreparationConfig
 	}
-	i, err := parseIdentity(inner, Expected{Repository: m.identity.Repository, Release: m.identity.Release, SourceSHA: m.identity.SourceSHA, AllowQualification: true})
+	i, err := parseIdentity(inner, m.expected)
 	if err != nil || i != m.identity || managerSHA != m.identity.NodeManager.SHA256 || len(files) == 0 {
 		return nil, PreparationScratchDemand{}, errors.New("node bootstrap inner identity or binary digest mismatch")
 	}
@@ -334,7 +338,7 @@ func allowedGitPath(name string, directory bool) bool {
 	case "HEAD", "config", "index", "shallow", "packed-refs", "info/refs", "objects/info/packs":
 		return true
 	}
-	return packFilePattern.MatchString(name) || strings.HasPrefix(name, "refs/tags/") && releasePattern.MatchString(strings.TrimPrefix(name, "refs/tags/"))
+	return packFilePattern.MatchString(name) || strings.HasPrefix(name, "refs/tags/") && (releasePattern.MatchString(strings.TrimPrefix(name, "refs/tags/")) || strings.HasPrefix(name, "refs/tags/dev-src-") && shaPattern.MatchString(strings.TrimPrefix(name, "refs/tags/dev-src-")))
 }
 
 func extractArchive(ctx context.Context, archive *os.File, destination string, allocate func(*os.File, int64) error) error {

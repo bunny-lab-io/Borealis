@@ -122,7 +122,7 @@ func (p *PreparationInputs) publishSource(ctx context.Context, j *MutationJourna
 		if verifySourceArchive(ctx, archive, p.bundle.asset) != nil {
 			return "", ErrPreparationConfig
 		}
-		manifest := &Manifest{identity: p.bundle.identity, asset: p.bundle.asset}
+		manifest := &Manifest{expected: p.bundle.expected, identity: p.bundle.identity, asset: p.bundle.asset}
 		_, demand, err := scanArchive(ctx, archive, manifest)
 		if err != nil {
 			return "", ErrPreparationConfig

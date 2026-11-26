@@ -33,8 +33,7 @@ func (c *clusterController) readClusterSSHPreparationRecoveryWork(ctx context.Co
 		Scan(&snapshot.payload, &work.Baseline.Release, &work.Baseline.SourceSHA) != nil {
 		return fail()
 	}
-	work.Baseline.Repository = clusterGitHubRepo()
-	work.Baseline.AllowQualification = strings.Contains(work.Baseline.Release, "-rc.")
+	work.Baseline = clusterBaselineExpected(work.Baseline.Release, work.Baseline.SourceSHA)
 	base, recovery, err := clusterSSHPreparationRecoveryPayload(snapshot.payload)
 	if err != nil || work.Baseline.Validate() != nil || (len(recovery) != 0) != (snapshot.step == clusterSSHPreparationRecoveryOperationStep) {
 		return fail()

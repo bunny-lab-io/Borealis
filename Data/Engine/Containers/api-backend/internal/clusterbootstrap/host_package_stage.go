@@ -31,7 +31,7 @@ func (*HostPackageSet) MarshalJSON() ([]byte, error) { return nil, ErrImageArchi
 func StageHostPackages(ctx context.Context, parent string, expected Expected, inventory *HostPackageInventory,
 	open func(context.Context) (io.ReadCloser, error), check func(context.Context) error) (_ *HostPackageSet, result error) {
 	if expected.Validate() != nil || inventory == nil || len(inventory.raw) == 0 || open == nil ||
-		inventory.wire.Repository != expected.Repository || inventory.wire.Release != expected.Release || inventory.wire.SourceSHA != expected.SourceSHA ||
+		inventory.development != expected.Development || inventory.wire.Repository != expected.Repository || inventory.wire.Release != expected.packagingRelease() || inventory.wire.SourceSHA != expected.SourceSHA ||
 		imageBoundary(ctx, check) != nil {
 		return nil, ErrImageArchive
 	}

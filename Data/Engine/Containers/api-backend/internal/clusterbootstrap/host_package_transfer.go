@@ -25,7 +25,7 @@ func (p *PreparationInputs) BindHostPackages(ctx context.Context, expected Prepa
 	packages.mu.Lock()
 	defer packages.mu.Unlock()
 	if packages.failed || packages.root == nil || packages.file == nil || packages.inventory == nil ||
-		packages.inventory.wire.Repository != expected.Source.Repository || packages.inventory.wire.Release != expected.Source.Release ||
+		packages.inventory.development != expected.Source.Development || packages.inventory.wire.Repository != expected.Source.Repository || packages.inventory.wire.Release != expected.Source.packagingRelease() ||
 		packages.inventory.wire.SourceSHA != expected.Source.SourceSHA || imageBoundary(ctx, check) != nil {
 		return ErrPreparationConfig
 	}

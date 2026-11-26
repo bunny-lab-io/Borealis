@@ -173,7 +173,7 @@ func (client *Client) verifyBootstrapExecutableRequestAction(ctx context.Context
 		recoveryCopy = &value
 	}
 	request := clusterbootstrap.SessionRequest{Protocol: 1, Action: action, Nonce: nonce, Binding: binding, Repository: expected.Repository, Release: expected.Release,
-		SourceSHA: expected.SourceSHA, ManagerSHA256: digest, AllowQualification: expected.AllowQualification, IdentityRecovery: recoveryCopy}
+		SourceSHA: expected.SourceSHA, ManagerSHA256: digest, Development: expected.Development, AllowQualification: expected.AllowQualification, IdentityRecovery: recoveryCopy}
 	if request.Validate() != nil {
 		return invalid, ErrBootstrapVerification
 	}

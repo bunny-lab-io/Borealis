@@ -36,12 +36,20 @@ type Expected struct {
 	Release            string
 	SourceSHA          string
 	AllowQualification bool
+	Development        string `json:"development,omitempty"`
 }
 
 func (e Expected) Validate() error {
-	if !repositoryPattern.MatchString(e.Repository) || len(e.Release) > 64 || !releasePattern.MatchString(e.Release) ||
+	if !repositoryPattern.MatchString(e.Repository) ||
 		!shaPattern.MatchString(e.SourceSHA) || e.SourceSHA == strings.Repeat("0", 40) ||
 		(strings.Contains(e.Release, "-rc.") && !e.AllowQualification) {
+		return errors.New("node bootstrap expected release identity invalid")
+	}
+	if e.Development != "" {
+		_, err := e.developmentBinding()
+		return err
+	}
+	if len(e.Release) > 64 || !releasePattern.MatchString(e.Release) {
 		return errors.New("node bootstrap expected release identity invalid")
 	}
 	return nil
@@ -74,6 +82,7 @@ type assetIdentity struct {
 // Manifest can only be initialized through ParseManifest. It contains public
 // release metadata; private fields prevent callers from skipping validation.
 type Manifest struct {
+	expected Expected
 	identity identity
 	asset    assetIdentity
 }
@@ -88,11 +97,18 @@ func AssetURL(e Expected, name string) string {
 	return "https://github.com/" + e.Repository + "/releases/download/" + e.Release + "/" + name
 }
 
+func (e Expected) bundleURL(digest string) string {
+	if e.Development != "" {
+		return "borealis-local:sha256:" + digest
+	}
+	return AssetURL(e, BundleName)
+}
+
 var identityFields = []string{"schema_version", "repository", "release", "source_sha", "source_tree", "platform", "go_version", "node_manager"}
 
 func ParseManifest(raw []byte, expected Expected) (*Manifest, error) {
-	if err := expected.Validate(); err != nil {
-		return nil, err
+	if !expected.acceptsInventory("bootstrap", raw) {
+		return nil, ErrPreparationConfig
 	}
 	fields, err := exactObject(raw, append(append([]string{}, identityFields...), "asset"))
 	if err != nil {
@@ -113,10 +129,16 @@ func ParseManifest(raw []byte, expected Expected) (*Manifest, error) {
 	}
 	if json.Unmarshal(raw, &outer) != nil || outer.Asset.Name != BundleName ||
 		outer.Asset.Size < 1 || outer.Asset.Size > MaxBundleBytes || !digestPattern.MatchString(outer.Asset.SHA256) ||
-		outer.Asset.URL != AssetURL(expected, BundleName) {
+		outer.Asset.URL != expected.bundleURL(outer.Asset.SHA256) {
 		return nil, errors.New("node bootstrap archive identity invalid")
 	}
-	return &Manifest{identity: i, asset: outer.Asset}, nil
+	if expected.Development != "" {
+		b, err := expected.developmentBinding()
+		if err != nil || b.Tree != i.SourceTree {
+			return nil, ErrPreparationConfig
+		}
+	}
+	return &Manifest{expected: expected, identity: i, asset: outer.Asset}, nil
 }
 
 func parseIdentity(raw []byte, expected Expected) (identity, error) {
@@ -129,7 +151,7 @@ func parseIdentity(raw []byte, expected Expected) (identity, error) {
 		return i, err
 	}
 	if json.Unmarshal(raw, &i) != nil || i.SchemaVersion != 1 || i.Repository != expected.Repository ||
-		i.Release != expected.Release || i.SourceSHA != expected.SourceSHA || !shaPattern.MatchString(i.SourceTree) ||
+		i.Release != expected.packagingRelease() || i.SourceSHA != expected.SourceSHA || !shaPattern.MatchString(i.SourceTree) ||
 		i.SourceTree == strings.Repeat("0", 40) || i.Platform != "linux-amd64" || i.GoVersion != "go1.25.12" ||
 		i.NodeManager.Path != ManagerPath || i.NodeManager.Size < 1 || i.NodeManager.Size > MaxBundleBytes || !digestPattern.MatchString(i.NodeManager.SHA256) {
 		return identity{}, errors.New("node bootstrap source or binary identity invalid")

@@ -59,7 +59,7 @@ func preparationSessionRequestWithArtifacts(expected PreparationExpected, manage
 	}
 	r := PreparationSessionRequest{Session: SessionRequest{Protocol: 1, Action: "verify", Nonce: nonce, Binding: expected.Target,
 		Repository: expected.Source.Repository, Release: expected.Source.Release, SourceSHA: expected.Source.SourceSHA,
-		AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source, PostgresReference: postgresReference}
+		Development: expected.Source.Development, AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source, PostgresReference: postgresReference}
 	_, err = r.Expected()
 	return r, err
 }
@@ -94,7 +94,7 @@ func (r PreparationSessionRequest) Expected() (PreparationExpected, error) {
 		return PreparationExpected{}, ErrSessionProtocol
 	}
 	canonical, err := json.Marshal(expected)
-	if err != nil || !bytes.Equal(raw, canonical) || expected.Target != r.Session.Binding || expected.Source != (Expected{r.Session.Repository, r.Session.Release, r.Session.SourceSHA, r.Session.AllowQualification}) {
+	if err != nil || !bytes.Equal(raw, canonical) || expected.Target != r.Session.Binding || expected.Source != (Expected{r.Session.Repository, r.Session.Release, r.Session.SourceSHA, r.Session.AllowQualification, r.Session.Development}) {
 		return PreparationExpected{}, ErrSessionProtocol
 	}
 	return expected, nil

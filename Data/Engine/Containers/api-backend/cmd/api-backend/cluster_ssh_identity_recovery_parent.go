@@ -70,7 +70,7 @@ func (c *clusterController) loadClusterSSHIdentityRecoveryReservation(ctx contex
 	if attempt != operation.Attempt || controller != c.holder {
 		return fail()
 	}
-	baseline := clusterbootstrap.Expected{Repository: clusterGitHubRepo(), Release: release, SourceSHA: sha, AllowQualification: strings.Contains(release, "-rc.")}
+	baseline := clusterBaselineExpected(release, sha)
 	if baseline.Validate() != nil {
 		return fail()
 	}

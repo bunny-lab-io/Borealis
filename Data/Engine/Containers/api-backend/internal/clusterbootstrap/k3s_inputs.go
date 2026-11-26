@@ -222,8 +222,9 @@ type k3sInventoryWire struct {
 }
 
 type K3sInventory struct {
-	wire k3sInventoryWire
-	raw  []byte
+	development string
+	wire        k3sInventoryWire
+	raw         []byte
 }
 
 func ParseK3sInventory(raw []byte, expected Expected, version string) (*K3sInventory, error) {
@@ -236,7 +237,7 @@ func parseK3sInventory(raw []byte, expected Expected, version string, p K3sInput
 		return nil, ErrImageArchive
 	}
 	var w k3sInventoryWire
-	if expected.Validate() != nil || len(raw) > MaxK3sInventoryBytes || version != p.Version || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "k3s_version", "binary", "payload", "installer", "archive"}, nil) != nil || imageJSON(raw, &w) != nil {
+	if !expected.acceptsInventory("k3s", raw) || len(raw) > MaxK3sInventoryBytes || version != p.Version || imageFields(raw, []string{"version", "repository", "release", "source_sha", "platform", "k3s_version", "binary", "payload", "installer", "archive"}, nil) != nil || imageJSON(raw, &w) != nil {
 		return nil, ErrImageArchive
 	}
 	var fields map[string]json.RawMessage
@@ -251,10 +252,10 @@ func parseK3sInventory(raw []byte, expected Expected, version string, p K3sInput
 		return nil, ErrImageArchive
 	}
 	a := w.Archive
-	if w.Version != 2 || w.Repository != expected.Repository || w.Release != expected.Release || w.SourceSHA != expected.SourceSHA || w.Platform != "linux-amd64" || w.K3sVersion != version || w.Binary != p.Binary || a.ArchiveSHA256 != p.Archive.SHA256 || a.ArchiveBytes != p.Archive.Size || a.ContentBytes < 1 || a.ContentBytes > a.ArchiveBytes || a.ContentEntries < 1 || a.ContentEntries > 4096 || a.ExpandedBytes < 1024 || a.ExpandedBytes > 64<<30 || a.ExpandedEntries < 1 || a.ExpandedEntries > 8*MaxImageEntries || !slices.Equal(a.Images, p.Images) {
+	if w.Version != 2 || w.Repository != expected.Repository || w.Release != expected.packagingRelease() || w.SourceSHA != expected.SourceSHA || w.Platform != "linux-amd64" || w.K3sVersion != version || w.Binary != p.Binary || a.ArchiveSHA256 != p.Archive.SHA256 || a.ArchiveBytes != p.Archive.Size || a.ContentBytes < 1 || a.ContentBytes > a.ArchiveBytes || a.ContentEntries < 1 || a.ContentEntries > 4096 || a.ExpandedBytes < 1024 || a.ExpandedBytes > 64<<30 || a.ExpandedEntries < 1 || a.ExpandedEntries > 8*MaxImageEntries || !slices.Equal(a.Images, p.Images) {
 		return nil, ErrImageArchive
 	}
-	return &K3sInventory{wire: w, raw: bytes.Clone(raw)}, nil
+	return &K3sInventory{development: expected.Development, wire: w, raw: bytes.Clone(raw)}, nil
 }
 
 func (v *K3sInventory) Export() ([]byte, error) {

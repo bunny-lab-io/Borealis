@@ -24,7 +24,7 @@ func digest(raw []byte) string {
 }
 
 func manifestFixture() (Expected, map[string]any) {
-	e := Expected{"bunny-lab-io/Borealis", "2026.09.999-rc.1", strings.Repeat("a", 40), true}
+	e := Expected{"bunny-lab-io/Borealis", "2026.09.999-rc.1", strings.Repeat("a", 40), true, ""}
 	return e, map[string]any{
 		"schema_version": 1, "repository": e.Repository, "release": e.Release, "source_sha": e.SourceSHA,
 		"source_tree": strings.Repeat("b", 40), "platform": "linux-amd64", "go_version": "go1.25.12",
@@ -95,7 +95,7 @@ func TestManifestRejectsAmbiguousOrUnboundIdentity(t *testing.T) {
 	if _, err := ParseManifest(raw, e); err == nil {
 		t.Fatal("qualification accepted without opt-in")
 	}
-	for _, e := range []Expected{{"../outside", "2026.09.1", strings.Repeat("a", 40), false}, {"org/repo", "main", strings.Repeat("a", 40), true}, {"org/repo", "2026.09.1", "HEAD", false}} {
+	for _, e := range []Expected{{"../outside", "2026.09.1", strings.Repeat("a", 40), false, ""}, {"org/repo", "main", strings.Repeat("a", 40), true, ""}, {"org/repo", "2026.09.1", "HEAD", false, ""}} {
 		if e.Validate() == nil {
 			t.Fatal("invalid expected identity accepted")
 		}

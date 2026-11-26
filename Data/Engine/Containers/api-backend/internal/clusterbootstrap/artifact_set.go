@@ -56,8 +56,11 @@ func (a *PreparationArtifacts) verifyBindings(ctx context.Context, check func(co
 		return ErrImageArchive
 	}
 	app, k3s, external := a.application.inventory, a.k3s.inventory, a.external.inventory
+	if app.expected.Development != a.expected.Development || k3s.development != a.expected.Development || external.development != a.expected.Development {
+		return ErrImageArchive
+	}
 	for _, identity := range [][3]string{{app.wire.Repository, app.wire.Release, app.wire.SourceSHA}, {k3s.wire.Repository, k3s.wire.Release, k3s.wire.SourceSHA}, {external.wire.Repository, external.wire.Release, external.wire.SourceSHA}} {
-		if identity != [3]string{a.expected.Repository, a.expected.Release, a.expected.SourceSHA} {
+		if identity != [3]string{a.expected.Repository, a.expected.packagingRelease(), a.expected.SourceSHA} {
 			return ErrImageArchive
 		}
 	}

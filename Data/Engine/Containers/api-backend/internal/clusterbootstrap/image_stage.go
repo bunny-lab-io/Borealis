@@ -110,7 +110,7 @@ func (s *ImageSet) receive(ctx context.Context, proof ImageArchiveProof, f *os.F
 	if err != nil || n != proof.ArchiveBytes || hex.EncodeToString(h.Sum(nil)) != proof.ArchiveSHA256 {
 		return ErrImageArchive
 	}
-	actual, err := InspectImageArchive(ctx, f, n, proof.Role, s.inventory.wire.SourceSHA)
+	actual, err := InspectImageArchive(ctx, f, n, proof.Role, s.inventory.wire.buildSource(proof.Role))
 	if err != nil || s.inventory.MatchesArchive(actual) != nil || f.Sync() != nil || !stagedImageFileMatches(s.root, ImageAssetName(proof.Role), f, proof.ArchiveBytes) || ctx.Err() != nil {
 		return ErrImageArchive
 	}

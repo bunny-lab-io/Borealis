@@ -200,7 +200,7 @@ func bootstrapIdentityInstallation(ctx context.Context, nonce, action string, au
 		UID:     actionRuntimeID, GID: actionRuntimeID, Check: check, Quiesced: stopped,
 	}
 	source := clusterbootstrap.Expected{
-		Repository: request.Repository, Release: request.Release, SourceSHA: request.SourceSHA, AllowQualification: request.AllowQualification,
+		Repository: request.Repository, Release: request.Release, SourceSHA: request.SourceSHA, AllowQualification: request.AllowQualification, Development: request.Development,
 	}
 	return source, install, nil
 }

@@ -166,7 +166,9 @@ func (b *Bundle) verifyStagedPreparationBytes(ctx context.Context, k3sVersion st
 		AllowedReleaseChannels []string `json:"allowed_release_channels"`
 	}
 	channel := "stable"
-	if strings.Contains(b.identity.Release, "-rc.") {
+	if b.expected.Development != "" {
+		channel = "development"
+	} else if strings.Contains(b.identity.Release, "-rc.") {
 		channel = "qualification"
 	}
 	if json.Unmarshal(raw, &manifest) != nil || !manifest.ClusterCompatible || manifest.RequiredK3sBaseline != k3sVersion || !slices.Contains(manifest.AllowedReleaseChannels, channel) {
