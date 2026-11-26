@@ -148,6 +148,13 @@ class DevelopmentSnapshotTests(unittest.TestCase):
             def choose():
                 return update.binary_layer(retained, "api-backend", root, item, paths)
             self.assertEqual(choose(), [("api-backend", "/usr/local/bin/server")])
+            metadata = "Data/Engine/release-manifest.json"
+            retained.current[metadata] = "updated"
+            paths.add(metadata)
+            self.assertEqual(choose(), [("api-backend", "/usr/local/bin/server")])
+            file.write_text(instructions + "COPY Data/Engine /usr/share/source\n")
+            self.assertIsNone(choose())
+            file.write_text(instructions)
             retained.current["Dockerfile"] = "different"
             self.assertIsNone(choose())
             retained.current["Dockerfile"] = "original"

@@ -21,7 +21,12 @@ def binary_layer(reuse, role, snapshot, item, paths):
     declared = {n for n in reuse.original.keys() | reuse.current.keys()
                 if reuse.original.get(n) != reuse.current.get(n)
                 and any(n == p or n.startswith(p + "/") for p in paths)}
-    if not declared or any(not n.startswith(MODULE) or not n.endswith((".go", "/go.mod", "/go.sum")) for n in declared):
+    # The API declares rollout compatibility metadata as an input to release
+    # selection. The Go compiler reads the module. A byte copied into the
+    # actual runtime image must still take the normal full build path.
+    compatibility = "Data/Engine/release-manifest.json"
+    binary_changes = declared - {compatibility}
+    if not binary_changes or any(not n.startswith(MODULE) or not n.endswith((".go", "/go.mod", "/go.sum")) for n in binary_changes):
         return None
     # Apply this shortcut only to known Dockerfiles whose post-COPY effects
     # consist of setting executable modes. Other instructions require a full build.
@@ -37,6 +42,11 @@ def binary_layer(reuse, role, snapshot, item, paths):
             copy_seen = True
             if len(parts) != 3 or not parts[2].startswith("/"):
                 return None
+            if compatibility in declared:
+                source = Path(parts[1])
+                if (not re.fullmatch(r"[A-Za-z0-9_./-]+", parts[1]) or source.is_absolute()
+                        or ".." in source.parts or Path(compatibility).is_relative_to(source)):
+                    return None
             if parts[1].startswith(DIST):
                 name = parts[1][len(DIST):]
                 if not re.fullmatch(r"[a-z][a-z0-9-]+", name) or not re.fullmatch(r"/usr/local/bin/[a-z][a-z0-9-]+", parts[2]):
