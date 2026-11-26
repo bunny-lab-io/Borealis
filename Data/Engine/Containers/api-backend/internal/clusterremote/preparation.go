@@ -11,7 +11,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -213,14 +212,7 @@ func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clu
 		binding.Address != client.target.Address || binding.Port != client.target.Port || binding.HostKeyAlgorithm != client.approved.Algorithm || binding.HostKeyFingerprint != client.approved.Fingerprint {
 		return ErrBootstrapVerification
 	}
-	// Archive production and challenge handling run concurrently. Serialize
-	// caller authority callbacks without detached renewals.
-	var authorityMu sync.Mutex
-	serialized := func(ctx context.Context) error {
-		authorityMu.Lock()
-		defer authorityMu.Unlock()
-		return refreshBootstrapAuthority(ctx, check)
-	}
+	serialized := preparationAuthority(check, progress != nil)
 	bundle, err := inputs.SourceBundle(ctx, expected, serialized)
 	if err != nil {
 		if progress != nil {
@@ -248,6 +240,36 @@ func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clu
 			}
 			return inputs.WritePreparation(ctx, expected, output, serialized)
 		}, progress, completion)
+}
+
+// Archive production and the native challenge share one live authority reader.
+// A cancelled waiter must leave immediately. Every admitted caller performs a
+// new proof under its own deadline, including the caller following a slow read.
+func preparationAuthority(check func(context.Context) error, inspecting bool) func(context.Context) error {
+	slot := make(chan struct{}, 1)
+	return func(ctx context.Context) error {
+		start := time.Now()
+		wait, cancelWait := context.WithTimeout(ctx, clusterbootstrap.PreparationProofTimeout)
+		defer cancelWait()
+		select {
+		case slot <- struct{}{}:
+			defer func() { <-slot }()
+		case <-wait.Done():
+			if inspecting {
+				log.Printf("native progress authority failed: phase=wait_for_reader wait=%s", time.Since(start).Round(time.Millisecond))
+			}
+			return ErrBootstrapVerification
+		}
+		if wait.Err() != nil {
+			return ErrBootstrapVerification
+		}
+		began := time.Now()
+		err := refreshBootstrapAuthority(ctx, check)
+		if inspecting && err != nil {
+			log.Printf("native progress authority failed: phase=verify wait=%s proof=%s", began.Sub(start).Round(time.Millisecond), time.Since(began).Round(time.Millisecond))
+		}
+		return err
+	}
 }
 
 // Package-private executable seam supports pinned loopback SSH fixtures. Public

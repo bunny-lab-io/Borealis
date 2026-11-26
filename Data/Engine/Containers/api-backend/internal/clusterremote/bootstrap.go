@@ -296,7 +296,7 @@ func sameIdentityRecovery(observed, expected *clusterbootstrap.IdentityRecoveryR
 }
 
 func refreshBootstrapAuthority(ctx context.Context, check func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, clusterbootstrap.PreparationProofTimeout)
 	defer cancel()
 	// The callback owns short DB/crypto checks and must honor ctx. Do not leave
 	// it renewing authority after this session has returned and closed inputs.

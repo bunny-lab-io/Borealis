@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net"
 	"reflect"
 	"slices"
@@ -148,14 +149,27 @@ func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOpe
 	return withClusterSSHProcessIdentityPhase(parent, store, aegis, source, claim, baseline, clusterSSHStartupDispatchBudget(artifacts != nil, joinRead != nil, startup), startup,
 		func(ctx context.Context, material *engineidentity.Material, sourceRefresh func(context.Context) error) error {
 			readKey := func(ctx context.Context) (clusterremote.HostKey, error) {
-				if sourceRefresh(ctx) != nil || preparation(ctx) != nil || ctx.Err() != nil {
+				began := time.Now()
+				failed := func(step string) (clusterremote.HostKey, error) {
+					// Only trusted stage names and the local context status reach the log.
+					log.Printf("native preparation authority rejected: step=%s elapsed=%s context=%v", step, time.Since(began).Round(time.Millisecond), ctx.Err())
 					return clusterremote.HostKey{}, clusterbootstrap.ErrSessionAuthority
+				}
+				if sourceRefresh(ctx) != nil {
+					return failed("source_custody")
+				}
+				if preparation(ctx) != nil || ctx.Err() != nil {
+					return failed("preparation_authority")
 				}
 				current, err := authority(ctx)
 				if err != nil {
-					return clusterremote.HostKey{}, clusterbootstrap.ErrSessionAuthority
+					return failed("target_authority")
 				}
-				return clusterSSHPrejoinDispatchKey(current, source, claim, baseline, expected)
+				key, err := clusterSSHPrejoinDispatchKey(current, source, claim, baseline, expected)
+				if err != nil {
+					return failed("target_binding")
+				}
+				return key, nil
 			}
 			key, err := readKey(ctx)
 			if err != nil {

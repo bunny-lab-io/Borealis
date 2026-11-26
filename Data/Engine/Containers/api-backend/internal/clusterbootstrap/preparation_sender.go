@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// PreparationProofTimeout bounds a single live controller/target proof.
+const PreparationProofTimeout = 3 * time.Second
+
 // ExchangePreparationSession transfers private inputs only after native target
 // verification. Transport owns approved-key pinning and executor supervision.
 // Producer and refresh must honor cancellation; both finish before return.
@@ -84,8 +87,8 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 			output.Close()
 		}
 	}()
-	check := func() error {
-		checkCtx, checkCancel := context.WithTimeout(ctx, 3*time.Second)
+	check := func(budget time.Duration) error {
+		checkCtx, checkCancel := context.WithTimeout(ctx, budget)
 		defer checkCancel()
 		err := refresh(checkCtx)
 		if err != nil || checkCtx.Err() != nil {
@@ -94,7 +97,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 		return nil
 	}
 	stage = "initial_authority"
-	if check() != nil {
+	if check(PreparationProofTimeout) != nil {
 		return ErrSessionAuthority
 	}
 	stage = "preamble"
@@ -251,7 +254,18 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 					return ErrSessionProtocol
 				}
 				seenChallenges[frame.Nonce] = true
-				if check() != nil {
+				budget := PreparationProofTimeout
+				if progress != nil && started {
+					// Only this read-only challenge can queue behind the running
+					// archive producer. The transport separately caps the wait and
+					// fresh proof. The peer still enforces its original lease.
+					budget += PreparationProofTimeout
+				}
+				began := time.Now()
+				if check(budget) != nil {
+					if progress != nil {
+						log.Printf("native progress challenge rejected: challenge=%d transfer_started=%t check_elapsed=%s", len(seenChallenges), started, time.Since(began).Round(time.Millisecond))
+					}
 					stage = "challenge_authority"
 					return ErrSessionAuthority
 				}
@@ -306,7 +320,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 				if !sentEnd || awaitingAck || frame.Sequence != sequence {
 					return ErrSessionProtocol
 				}
-				if check() != nil {
+				if check(PreparationProofTimeout) != nil {
 					stage = "terminal_authority"
 					return ErrSessionAuthority
 				}

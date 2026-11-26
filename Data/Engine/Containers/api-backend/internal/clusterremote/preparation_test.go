@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -365,4 +367,131 @@ func TestPreparationWrapperOwnsScratchAfterHelperExit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Use the native peer's real five-second challenge cadence with a virtual clock.
+// The producer starts a proof at second four. The challenge at second five
+// waits for it and must still execute and pass its own fresh proof.
+func TestPreparationProgressConcurrentChallenge(t *testing.T) {
+	target := &fakeSSH{target: Target{Address: "192.168.50.11", Port: 22}, key: HostKey{Algorithm: "ssh-ed25519", Fingerprint: "SHA256:" + strings.Repeat("A", 43)}}
+	expected := preparationRemoteExpected(target)
+	for _, mode := range []string{"accepted", "revoked", "proof deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				request, err := clusterbootstrap.NewPreparationSessionRequest(expected, strings.Repeat("b", 64), strings.Repeat("a", 64), "inspect_preparation_progress")
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				client, server := net.Pipe()
+				defer client.Close()
+				defer server.Close()
+				done := make(chan error, 1)
+				go func() {
+					done <- clusterbootstrap.ServePreparationSessionWithProgress(ctx, server, server, request.Session.Nonce,
+						func(context.Context, clusterbootstrap.PreparationSessionRequest) error { return nil },
+						func(_ context.Context, _ clusterbootstrap.PreparationSessionRequest, r io.Reader) (clusterbootstrap.PreparationProgress, error) {
+							_, err := io.ReadAll(r)
+							return clusterbootstrap.PreparationProgress{Step: "empty"}, err
+						}, func(time.Time) error { return nil })
+				}()
+				first := true
+				var producerStarted atomic.Bool
+				proofDone := make(chan struct{})
+				check := preparationAuthority(func(ctx context.Context) error {
+					if !producerStarted.Load() {
+						return nil
+					}
+					if first {
+						first = false
+						time.Sleep(2500 * time.Millisecond)
+						return ctx.Err()
+					}
+					select {
+					case <-proofDone:
+						return nil
+					default:
+					}
+					if mode == "proof deadline" {
+						deadline, ok := ctx.Deadline()
+						if !ok || time.Until(deadline) != clusterbootstrap.PreparationProofTimeout {
+							t.Error("proof did not receive its own bounded deadline")
+						}
+						<-ctx.Done()
+						return ctx.Err()
+					}
+					select {
+					case <-time.After(2 * time.Second):
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					close(proofDone)
+					if mode == "revoked" {
+						return clusterbootstrap.ErrSessionAuthority
+					}
+					return nil
+				}, true)
+				progress, err := clusterbootstrap.ExchangePreparationProgressSession(ctx, client, client, request, func(ctx context.Context, w io.Writer) error {
+					time.Sleep(4 * time.Second)
+					producerStarted.Store(true)
+					if err := check(ctx); err != nil {
+						return err
+					}
+					select {
+					case <-proofDone:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					_, err := io.WriteString(w, "fixture")
+					return err
+				}, check)
+				remoteErr := <-done
+				if mode != "accepted" {
+					if err != clusterbootstrap.ErrSessionAuthority || progress != (clusterbootstrap.PreparationProgress{}) || remoteErr == nil {
+						t.Fatal("revocation escaped", progress, err, remoteErr)
+					}
+				} else if err != nil || progress.Step != "empty" || remoteErr != nil {
+					t.Fatal("fresh proof lost after waiting for producer", progress, err, remoteErr)
+				}
+				select {
+				case <-proofDone:
+					if mode == "proof deadline" {
+						t.Fatal("expired proof completed")
+					}
+				default:
+					if mode != "proof deadline" {
+						t.Fatal("challenge never completed its own proof")
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestPreparationAuthorityCancelledWaiter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		check := preparationAuthority(func(ctx context.Context) error {
+			close(entered) // A cancelled second call must never enter.
+			<-release
+			return ctx.Err()
+		}, true)
+		first := make(chan error, 1)
+		go func() { first <- check(context.Background()) }()
+		<-entered
+		wait, cancel := context.WithCancel(context.Background())
+		second := make(chan error, 1)
+		go func() { second <- check(wait) }()
+		synctest.Wait()
+		cancel()
+		if err := <-second; err == nil {
+			t.Fatal("cancelled waiter accepted")
+		}
+		close(release)
+		if err := <-first; err != nil {
+			t.Fatal(err)
+		}
+	})
 }
