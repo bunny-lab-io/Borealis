@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Tests/tools"))
 import build_node_external_assets as assets
 import node_registry_download as registry
+import package_retained_external_images as retained
 sys.path.pop(0)
 
 
@@ -20,6 +21,31 @@ class Response(io.BytesIO):
     def __init__(self, data, **headers):
         super().__init__(data)
         self.status, self.headers = 200, headers
+
+
+class RetainedArchiveTests(unittest.TestCase):
+    def test_require_published_bytes_and_exact_target_native_proof(self):
+        digest = "a" * 64
+        asset = dict(state="uploaded", size=3, digest="sha256:" + digest)
+        pin = dict(reference="image", index_digest="one", manifest_digest="two", config_digest="three")
+        proof = dict(pin, archive_bytes=3, archive_sha256=digest)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "image.oci.tar"
+            path.write_bytes(b"oci")
+            for changes, rc, success in (({}, 0, True), ({"reference": "other"}, 0, False),
+                                         ({"archive_sha256": "b" * 64}, 0, False),
+                                         ({"archive_bytes": 4}, 0, False), ({"index_digest": "different"}, 0, False),
+                                         ({}, 1, False)):
+                with self.subTest(changes=changes, rc=rc), mock.patch.object(retained.subprocess, "run") as run:
+                    run.return_value.returncode = rc
+                    run.return_value.stdout = json.dumps(dict(proof, **changes))
+                    if success:
+                        self.assertEqual(retained.verify_archive("native", path, pin, asset), proof)
+                    else:
+                        with self.assertRaises(ValueError):
+                            retained.verify_archive("native", path, pin, asset)
+            with self.assertRaises(ValueError):
+                retained.verify_archive("native", path, pin, dict(asset, size=4))
 
 
 class RegistryDownloadTests(unittest.TestCase):

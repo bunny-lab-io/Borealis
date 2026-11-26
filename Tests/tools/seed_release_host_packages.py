@@ -38,6 +38,14 @@ def unpack(archive, output, plan, expected_digest, expected_size):
         stage.rename(output)
 
 
+def immutable_release(repository, release):
+    meta = json.loads(subprocess.check_output(["gh", "api", f"repos/{repository}/releases/tags/{release}"]))
+    if (meta.get("tag_name") != release or meta.get("draft") is not False or meta.get("immutable") is not True
+            or not meta.get("published_at") or meta.get("prerelease") is not ("-rc." in release)):
+        raise ValueError("asset reuse requires an immutable published release")
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
@@ -51,10 +59,7 @@ def main():
     if not packages.bootstrap.REPOSITORY.fullmatch(args.repository) or not packages.bootstrap.RELEASE.fullmatch(args.release):
         raise ValueError("invalid published release selector")
     plan, _ = packages.parse_plan((args.source / packages.LOCK).read_bytes())
-    meta = json.loads(subprocess.check_output(["gh", "api", f"repos/{args.repository}/releases/tags/{args.release}"]))
-    if (meta.get("tag_name") != args.release or meta.get("draft") is not False or meta.get("immutable") is not True
-            or not meta.get("published_at") or meta.get("prerelease") is not ("-rc." in args.release)):
-        raise ValueError("package seed requires an immutable published release")
+    meta = immutable_release(args.repository, args.release)
     (asset,) = [a for a in meta["assets"] if a["name"] == packages.ARCHIVE]
     if (asset["state"] != "uploaded" or not re.fullmatch("sha256:[0-9a-f]{64}", asset["digest"])
             or asset["size"] != packages.archive_size(plan["packages"])):
