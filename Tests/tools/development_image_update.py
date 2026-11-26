@@ -19,11 +19,11 @@ def binary_layer(role, snapshot, item, declared):
     if role not in ROLES or not declared or item["context"] != ".":
         return None
     declared = set(declared)
-    # The API declares rollout compatibility metadata as an input to release
-    # selection. The Go compiler reads the module. A byte copied into the
-    # actual runtime image must still take the normal full build path.
-    compatibility = "Data/Engine/release-manifest.json"
-    binary_changes = declared - {compatibility}
+    # Deployment metadata stays in the frozen bootstrap. Some roles also
+    # declare it as a build input, so check every COPY before reusing layers.
+    metadata = {Path(name) for name in declared if name == "Data/Engine/release-manifest.json"
+                or (name.startswith("Data/Engine/K3s/cluster/") and name.endswith(".yaml"))}
+    binary_changes = declared - {str(path) for path in metadata}
     if not binary_changes or any(not n.startswith(MODULE) or not n.endswith((".go", "/go.mod", "/go.sum")) for n in binary_changes):
         return None
     # Apply this shortcut only to known Dockerfiles whose post-COPY effects
@@ -40,10 +40,10 @@ def binary_layer(role, snapshot, item, declared):
             copy_seen = True
             if len(parts) != 3 or not parts[2].startswith("/"):
                 return None
-            if compatibility in declared:
+            if metadata:
                 source = Path(parts[1])
                 if (not re.fullmatch(r"[A-Za-z0-9_./-]+", parts[1]) or source.is_absolute()
-                        or ".." in source.parts or Path(compatibility).is_relative_to(source)):
+                        or ".." in source.parts or any(path.is_relative_to(source) for path in metadata)):
                     return None
             if parts[1].startswith(DIST):
                 name = parts[1][len(DIST):]

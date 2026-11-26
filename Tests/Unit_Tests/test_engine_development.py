@@ -155,6 +155,13 @@ class DevelopmentSnapshotTests(unittest.TestCase):
             file.write_text(instructions + "COPY Data/Engine /usr/share/source\n")
             self.assertIsNone(choose())
             file.write_text(instructions)
+            schema = "Data/Engine/K3s/cluster/crds.yaml"
+            retained.current[schema] = "new schema"
+            paths.add(schema)
+            self.assertEqual(choose(), [("api-backend", "/usr/local/bin/server")])
+            file.write_text(instructions + "COPY Data/Engine/K3s/cluster /etc/cluster\n")
+            self.assertIsNone(choose())
+            file.write_text(instructions)
             retained.current["Dockerfile"] = "different"
             self.assertIsNone(choose())
             retained.current["Dockerfile"] = "original"
