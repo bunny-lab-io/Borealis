@@ -17,6 +17,31 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+class ClusterReleaseSchemaTests(unittest.TestCase):
+    def test_snapshot_digest_and_previous_release_limits_on_all_projections(self):
+        import yaml
+
+        documents = yaml.safe_load_all((MODULE_PATH.parent / "crds.yaml").read_text())
+        fields = {"BorealisCluster": "baselineRelease", "BorealisNodeRuntime": "desiredRelease",
+                  "BorealisClusterOperation": "targetRelease"}
+        for crd in documents:
+            kind = crd["spec"]["names"]["kind"]
+            if kind not in fields:
+                continue
+            with self.subTest(kind=kind):
+                schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]
+                field = schema["properties"]["spec"]["properties"][fields.pop(kind)]
+                self.assertEqual((field["type"], field["maxLength"]), ("string", len("dev-" + "a" * 64)))
+                legacy, snapshot = field["anyOf"]
+                self.assertEqual(legacy["maxLength"], 32)
+                if kind == "BorealisCluster":
+                    self.assertRegex("2026.11.1-rc.30", legacy["pattern"])
+                    self.assertRegex("dev-0123456789ab", legacy["pattern"])
+                    self.assertNotRegex("arbitrary", legacy["pattern"])
+                self.assertEqual(snapshot, {"pattern": "^dev-[0-9a-f]{64}$"})
+        self.assertFalse(fields)
+
+
 def patched_generic_deployment(container_name: str, image: str, revision: str) -> str:
     return json.dumps(
         {

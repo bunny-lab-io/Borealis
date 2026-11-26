@@ -55,6 +55,13 @@ python3 Tests/tools/retain_engine_development.py --runtime-catalog \
   --verifier /usr/local/sbin/borealis-node-manager
 ```
 
+When enabling local snapshots on an existing cluster, verify that its installed Borealis resource definitions support the full 68-character development identity. Older installations can display a snapshot and then stop at preflight with a Kubernetes 422 on `spec.targetRelease`. From the approved, snapshot-aware source on the coordinating Engine, preview and apply the managed definitions before the first local deployment. Stop for review if the API reports a field ownership conflict.
+
+```bash
+sudo k3s kubectl apply --server-side --dry-run=server --field-manager=borealis-engine -f Data/Engine/K3s/cluster/crds.yaml
+sudo k3s kubectl apply --server-side --field-manager=borealis-engine -f Data/Engine/K3s/cluster/crds.yaml
+```
+
 To opt in, install a root-owned `/etc/borealis/development-catalog.env` containing the following single line followed by a newline. Apply through the normal managed helper activation and node workload rollout. The API and controller receive read-only access to the verified generations. The build worker keeps its own separate directories.
 
 ```text

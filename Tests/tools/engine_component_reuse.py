@@ -46,8 +46,13 @@ class RetainedRelease:
                          if any(name == path or name.startswith(path + "/") for path in paths))
         return hashlib.sha256(json.dumps([sorted(paths), entries], separators=(",", ":")).encode()).hexdigest()
 
+    def changed_inputs(self, paths):
+        return sorted(name for name in self.original.keys() | self.current.keys()
+                      if self.original.get(name) != self.current.get(name)
+                      and any(name == path or name.startswith(path + "/") for path in paths))
+
     def unchanged(self, paths):
-        return self.inputs(paths, self.original) == self.inputs(paths, self.current)
+        return not self.changed_inputs(paths)
 
     def inventory(self, name):
         obj = self.record["assets"][name]

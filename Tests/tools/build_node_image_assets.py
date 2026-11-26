@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import uuid
@@ -165,15 +166,26 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                 for i in base_inventory["images"]:
                     role = i["role"]
                     paths = reuse.role_inputs(snapshot, manifest["services"][role])
-                    if paths and reuse.unchanged(paths):
+                    changed = reuse.changed_inputs(paths) if paths else None
+                    if changed == []:
                         if i["image"] != f"docker.io/borealis-engine/{role}:release-{reuse.base}":
                             raise ValueError("retained image build source mismatch")
                         reused[role] = i
                         input_digests[role] = reuse.inputs(paths, reuse.current)
                     else:
-                        copies = update.binary_layer(reuse, role, snapshot, manifest["services"][role], paths)
+                        copies = update.binary_layer(role, snapshot, manifest["services"][role], changed)
                         if copies:
                             layers[role] = (i, copies)
+                    method = "retained" if role in reused else "binary layer" if role in layers else "full Dockerfile"
+                    # JSON escaping preserves filenames without allowing terminal
+                    # controls, arbitrary lines or unbounded log output.
+                    summary = {"role": role, "build": method, "base_sha": reuse.base}
+                    if changed is None:
+                        summary["reason"] = "unresolved Dockerfile inputs"
+                    elif changed:
+                        summary["changed_input_count"] = len(changed)
+                        summary["changed_input_sample"] = [name[:180] for name in changed[:4]]
+                    print(json.dumps(summary, ensure_ascii=True, sort_keys=True), file=sys.stderr, flush=True)
             dev_builder = development_builder() if release.startswith("dev-src-") and len(reused) < len(ROLES) else None
             verifier = build_runtime(snapshot, go_bin) if len(reused) != len(ROLES) else None
             builder = "borealis-release-" + uuid.uuid4().hex

@@ -27,7 +27,12 @@ spec:
                 activeSize: {type: integer, enum: [1, 2, 3]}
                 desiredSize: {type: integer, enum: [1, 3]}
                 clusterVIP: {type: string, format: ipv4}
-                baselineRelease: {type: string, maxLength: 32, pattern: '^(?:[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?(?:-rc\.[1-9][0-9]*)?|dev-[0-9a-f]{12})$'}
+                baselineRelease:
+                  type: string
+                  maxLength: 68
+                  anyOf:
+                    - {maxLength: 32, pattern: '^(?:[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?(?:-rc\.[1-9][0-9]*)?|dev-[0-9a-f]{12})$'}
+                    - {pattern: '^dev-[0-9a-f]{64}$'}
                 releaseChannel: {type: string, enum: [stable, qualification, development]}
                 baselineSHA: {type: string, pattern: '^[0-9a-f]{40}$'}
                 hmrNodeID: {type: string, format: uuid}
@@ -94,7 +99,12 @@ spec:
                 nodeID: {type: string, format: uuid}
                 nodeName: {type: string, maxLength: 63}
                 desiredApplicationState: {type: string, enum: [active, drained, standby]}
-                desiredRelease: {type: string, maxLength: 32}
+                desiredRelease:
+                  type: string
+                  maxLength: 68
+                  anyOf:
+                    - {maxLength: 32}
+                    - {pattern: '^dev-[0-9a-f]{64}$'}
                 desiredReleaseChannel: {type: string, enum: [stable, qualification, development]}
                 desiredSHA: {type: string, pattern: '^[0-9a-f]{40}$'}
             status: {type: object, x-kubernetes-preserve-unknown-fields: true}
@@ -135,7 +145,12 @@ spec:
                 kind: {type: string, maxLength: 64}
                 step: {type: string, maxLength: 128}
                 targetNodeID: {type: string, format: uuid}
-                targetRelease: {type: string, maxLength: 32}
+                targetRelease:
+                  type: string
+                  maxLength: 68
+                  anyOf:
+                    - {maxLength: 32}
+                    - {pattern: '^dev-[0-9a-f]{64}$'}
                 targetReleaseChannel: {type: string, enum: [stable, qualification, development]}
                 targetSHA: {type: string, pattern: '^[0-9a-f]{40}$'}
             status: {type: object, x-kubernetes-preserve-unknown-fields: true}

@@ -5,10 +5,46 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// GitHub includes full attachment metadata even though the release picker
+// only decodes summary fields. A real release can occupy more than 70 KiB.
+func TestClusterReleaseCatalogWithAssetHeavyPages(t *testing.T) {
+	const count = 35
+	const fieldBytes = 75 << 10
+	var pages int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/releases") {
+			http.NotFound(w, r)
+			return
+		}
+		size, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if size < 1 || size > 100 || page != pages+1 {
+			http.Error(w, "invalid page", http.StatusBadRequest)
+			return
+		}
+		pages++
+		items := []map[string]any{}
+		for index := (page - 1) * size; index < page*size && index < count; index++ {
+			// Ignore drafts as in production; the last entry stays visible as
+			// an unselectable release when its independent tag lookup fails.
+			items = append(items, map[string]any{"draft": index != count-1, "tag_name": "2026.11.1-rc.30",
+				"prerelease": true, "assets": []map[string]string{{"label": strings.Repeat("a", fieldBytes)}}})
+		}
+		_ = json.NewEncoder(w).Encode(items)
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+	releases, err := fetchClusterReleaseCatalog(context.Background(), "dev-123456789abc", strings.Repeat("a", 40), "v1.36.3+k3s1")
+	if err != nil || pages < 2 || len(releases) != 1 || releases[0]["tag"] != "2026.11.1-rc.30" || releases[0]["selectable"] != false {
+		t.Fatalf("pages %d releases %#v error %v", pages, releases, err)
+	}
+}
 
 type clusterTestStore struct {
 	profile       operatorProfile
