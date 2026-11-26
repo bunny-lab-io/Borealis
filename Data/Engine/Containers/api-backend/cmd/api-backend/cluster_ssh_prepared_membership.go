@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -218,14 +219,26 @@ func readClusterSSHPreparedMembershipNodesForPhase(ctx context.Context, getJSON 
 func (r *kubernetesClusterStepRunner) readSSHPreparedMembership(ctx context.Context, operationID string, request clusterbootstrap.MembershipObservationRequest, check func() bool) (clusterSSHMembershipReceipt, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	fail := func() (clusterSSHMembershipReceipt, error) { return clusterSSHMembershipReceipt{}, errClusterConflict }
+	started := time.Now()
+	fail := func(check string) (clusterSSHMembershipReceipt, error) {
+		if emit, ok := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string)); ok {
+			observed := "rejected"
+			if ctx.Err() == context.DeadlineExceeded {
+				observed = "deadline_exceeded"
+			} else if ctx.Err() == context.Canceled {
+				observed = "canceled"
+			}
+			emit(fmt.Sprintf("check=%s observed=%s elapsed_ms=%d", check, observed, time.Since(started).Milliseconds()))
+		}
+		return clusterSSHMembershipReceipt{}, errClusterConflict
+	}
 	payload, err := clusterbootstrap.EncodeMembershipObservationRequest(request)
 	if err != nil || operationID != request.Prepared[0].Expected.Target.OperationID || r == nil || r.kube == nil || r.namespace != "borealis" || r.controllerHolder == "" || !clusterUUIDRE.MatchString(operationID) || !borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) || check == nil || ctx.Err() != nil {
-		return fail()
+		return fail("valid_membership_request")
 	}
 	request, err = clusterbootstrap.DecodeMembershipObservationRequest(payload)
 	if err != nil {
-		return fail()
+		return fail("decoded_request_binding")
 	}
 	nonce := newClusterUUID()
 	name := "borealis-source-" + strings.ReplaceAll(nonce, "-", "")
@@ -234,12 +247,15 @@ func (r *kubernetesClusterStepRunner) readSSHPreparedMembership(ctx context.Cont
 	container["command"] = []string{"/usr/local/bin/borealis-node-manager", "source-membership-client"}
 	container["args"] = []string{nonce, payload}
 	var job map[string]any
-	if !check() || r.kube.preparedMembershipJobJSON(ctx, http.MethodPost, "/apis/batch/v1/namespaces/borealis/jobs", manifest, &job) != nil {
-		return fail()
+	if !check() {
+		return fail("current_authority_before_membership_job")
+	}
+	if r.kube.preparedMembershipJobJSON(ctx, http.MethodPost, "/apis/batch/v1/namespaces/borealis/jobs", manifest, &job) != nil {
+		return fail("membership_job_creation")
 	}
 	uid, _ := nestedMap(job, "metadata")["uid"].(string)
 	if !clusterbootstrap.ValidSourceReceiptIdentity(nonce, uid, uid) || !validClusterSSHSourceJob(job, manifest, uid) {
-		return fail()
+		return fail("created_job_identity")
 	}
 	path := "/apis/batch/v1/namespaces/borealis/jobs/" + name
 	podsPath := "/api/v1/namespaces/borealis/pods?labelSelector=" + url.QueryEscape("batch.kubernetes.io/controller-uid="+uid)
@@ -254,49 +270,49 @@ func (r *kubernetesClusterStepRunner) readSSHPreparedMembership(ctx context.Cont
 	for {
 		if !time.Now().Before(nextCheck) {
 			if !check() {
-				return fail()
+				return fail("current_job_authority")
 			}
 			nextCheck = time.Now().Add(5 * time.Second)
 		}
 		job = nil
 		if r.kube.preparedMembershipJobJSON(ctx, http.MethodGet, path, nil, &job) != nil || !validClusterSSHSourceJob(job, manifest, uid) {
-			return fail()
+			return fail("membership_job_status_and_identity")
 		}
 		status := nestedMap(job, "status")
 		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
-			return fail()
+			return fail("successful_job_conditions")
 		}
 		var pods clusterSSHJobPods
 		if r.kube.preparedMembershipJobJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil {
-			return fail()
+			return fail("membership_job_pods")
 		}
 		if len(pods) == 1 {
 			podUID, _ := nestedMap(pods[0], "metadata")["uid"].(string)
 			if observedPodUID != "" && observedPodUID != podUID {
-				return fail()
+				return fail("stable_membership_pod_uid")
 			}
 			observedPodUID = podUID
 			message, complete, err := clusterSSHSourcePodMessage(pods[0], manifest, nonce, uid)
 			if err != nil {
-				return fail()
+				return fail("verified_membership_pod_status")
 			}
 			var value clusterbootstrap.MembershipObservation
 			if message != "" {
 				value, err = clusterbootstrap.ParseMembershipObservationReceipt([]byte(message), request, nonce, uid, podUID)
 				if err != nil {
-					return fail()
+					return fail("verified_native_membership_receipt")
 				}
 			}
 			if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
 				if !value.Valid(request) || !check() || ctx.Err() != nil {
-					return fail()
+					return fail("final_membership_receipt_and_authority")
 				}
 				return clusterSSHMembershipReceipt{value, nonce, uid, podUID}, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return fail()
+			return fail("membership_job_deadline")
 		case <-ticker.C:
 		}
 	}

@@ -228,14 +228,14 @@ func TestClusterSSHPreparedAdmissionCompletionPostgresReservation(t *testing.T) 
 			}
 			assertPreparedAdmissionStoreState(t, f, before, false)
 			if mode == "blocked fence" {
-				if err := f.c.recordSSHPreparedAdmissionBlocked(f.ctx, f.op); err != nil {
+				if err := f.c.recordSSHPreparedAdmissionBlocked(f.ctx, f.op, "fixture rejection"); err != nil {
 					t.Fatal(err)
 				}
 				before, err = preparedCohortSQLState(f.ctx, f)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := f.c.recordSSHPreparedAdmissionBlocked(f.ctx, f.op); err != nil {
+				if err := f.c.recordSSHPreparedAdmissionBlocked(f.ctx, f.op, "fixture rejection"); err != nil {
 					t.Fatal(err)
 				}
 			}

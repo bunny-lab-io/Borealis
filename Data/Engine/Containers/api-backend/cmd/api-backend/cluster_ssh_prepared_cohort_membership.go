@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -73,7 +74,8 @@ func readClusterSSHPreparedCohortMembershipWithJobs(parent context.Context, oper
 	// The private reader checks its child deadline before deferred Body.Close.
 	// Reuse the existing wrapper so nil-error cleanup after child/client expiry
 	// becomes a sticky tracker failure while the outer scope remains live.
-	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}}
+	observe, _ := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string))
+	cleanup := &clusterSSHMembershipHTTP{transport: clusterSSHPreparationConfigurationHTTP{transport}, observe: observe}
 	client, kube, jobs := *runner.kube.httpClient, *runner.kube, *runner
 	client.Transport = cleanup
 	kube.httpClient, jobs.kube = &client, &kube
@@ -202,6 +204,7 @@ func retainClusterSSHMembershipJob(seen [3]map[string]bool, nonce, jobUID, podUI
 // Close errors are sticky and response bodies must finish before evidence leaves.
 // This neither deletes a Job nor proves that a remote producer has stopped.
 type clusterSSHMembershipHTTP struct {
+	observe   func(string)
 	transport http.RoundTripper
 	failed    atomic.Bool
 	active    atomic.Int64
@@ -219,6 +222,9 @@ func (c *clusterSSHMembershipHTTP) RoundTrip(request *http.Request) (*http.Respo
 		c.active.Add(-1)
 		return nil, errClusterConflict
 	}
+	if c.observe != nil && (response.StatusCode < 200 || response.StatusCode >= 300) {
+		c.observe(fmt.Sprintf("check=membership_kubernetes_response expected=http_2xx observed=http_%d", response.StatusCode))
+	}
 	response.Body = &clusterSSHMembershipBody{ReadCloser: response.Body, owner: c}
 	return response, nil
 }
@@ -233,6 +239,9 @@ type clusterSSHMembershipBody struct {
 func (b *clusterSSHMembershipBody) Close() error {
 	b.once.Do(func() {
 		if b.ReadCloser.Close() != nil {
+			if b.owner.observe != nil {
+				b.owner.observe("check=kubernetes_response_close expected=clean_close observed=cleanup_failed")
+			}
 			b.owner.failed.Store(true)
 			b.err = errClusterConflict
 		}

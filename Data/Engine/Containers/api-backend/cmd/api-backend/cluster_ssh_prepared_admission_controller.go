@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log"
 	"reflect"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,15 +20,41 @@ func (c *clusterController) runSSHPreparedAdmissionParent(parent context.Context
 	if c == nil || c.store == nil || operation.Kind != "ssh_onboarding" || operation.State != "running" || !clusterSSHPreparedAuthorityPhase(operation.CurrentStep) {
 		return errClusterConflict
 	}
+	started := time.Now()
+	var first atomic.Pointer[string]
+	remember := func(line string) { first.CompareAndSwap(nil, &line) }
+	parent = context.WithValue(parent, clusterSSHPreparationObserverKey{}, remember)
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+	defer cancel()
 	original, _, err := c.loadClusterSSHPreparedAuthority(ctx, operation)
+	phase := "original_prepared_authority"
+	effects := "admission_not_started_in_this_call"
+	blocked := func(cause error, scope context.Context) error {
+		reason := "check_rejected"
+		if errors.Is(cause, context.DeadlineExceeded) || errors.Is(scope.Err(), context.DeadlineExceeded) {
+			reason = "deadline_exceeded"
+		} else if errors.Is(cause, context.Canceled) || scope.Err() == context.Canceled {
+			reason = "scope_canceled"
+		}
+		line := fmt.Sprintf("phase=%s observed=%s elapsed_ms=%d effects=%s", phase, reason, time.Since(started).Milliseconds(), effects)
+		for _, target := range original.receipt.Targets {
+			line += fmt.Sprintf(" prepared_target=%s preparation_generation=%d", target.TargetID, target.Generation)
+		}
+		if child := first.Load(); child != nil {
+			line += " " + *child
+		}
+		log.Printf("SSH admission blocked operation=%s attempt=%d step=%s %s", operation.ID, operation.Attempt, operation.CurrentStep, line)
+		return c.recordSSHPreparedAdmissionBlocked(parent, operation, line)
+	}
 	var observation clusterSSHPreparedObservation
 	if err == nil && operation.CurrentStep == "verify_quorum" {
+		phase = "serving_endpoints"
 		err = c.withClusterSSHPreparedAdmissionRuntime(ctx, operation, original, func(ctx context.Context, runner *kubernetesClusterStepRunner) error {
 			return runner.verifyReadyEndpoints(ctx)
 		})
 	}
 	if err == nil {
+		phase = "three_current_membership_proofs"
 		err = c.withClusterSSHPreparedAdmissionProof(ctx, operation, func(ctx context.Context, value clusterSSHPreparedCohortMembershipObservation, checks clusterSSHPreparedMembershipChecks) error {
 			// No state change inside this callback: final native reads and joined
 			// cleanup must succeed before transition or any admission effect.
@@ -34,8 +63,7 @@ func (c *clusterController) runSSHPreparedAdmissionParent(parent context.Context
 		})
 	}
 	if err != nil {
-		cancel()
-		return c.recordSSHPreparedAdmissionBlocked(parent, operation)
+		return blocked(err, ctx)
 	}
 	if operation.CurrentStep == clusterSSHPreparationOperationStep {
 		err = c.beginClusterSSHPreparedAdmission(ctx, operation, original, observation)
@@ -57,7 +85,15 @@ func (c *clusterController) runSSHPreparedAdmissionParent(parent context.Context
 	// The bounded proof has closed. Long-running deployment/soak keeps its own
 	// original SQL/Job custody and exact native target fences, never a retained
 	// quorum-ready flag or an extended preparation-observation scope.
+	phase = "reserved_admission_runtime"
 	err = c.withClusterSSHPreparedAdmissionRuntime(parent, operation, original, func(ctx context.Context, runner *kubernetesClusterStepRunner) error {
+		if bound := clusterSSHPreparedAdmissionRuntimeFrom(ctx); bound != nil {
+			defer func() {
+				if bound.mutated {
+					effects = "admission_mutation_attempted_consult_jobs"
+				}
+			}()
+		}
 		projected := operation
 		projected.Payload = copyMap(operation.Payload)
 		ids, names := []any{}, []any{}
@@ -67,6 +103,7 @@ func (c *clusterController) runSSHPreparedAdmissionParent(parent context.Context
 		projected.Payload["admission_ids"], projected.Payload["node_names"] = ids, names
 		projected.Payload["baseline_release"], projected.Payload["baseline_sha"] = original.baseline.Release, original.baseline.SourceSHA
 		projected.Payload["k3s_version"] = original.version
+		phase = "active_source_members"
 		nodes, err := c.activeNodes(ctx)
 		if err != nil || len(nodes) != len(original.proof.Source.Members) {
 			return errClusterConflict
@@ -81,22 +118,24 @@ func (c *clusterController) runSSHPreparedAdmissionParent(parent context.Context
 			}
 		}
 		ctx = runner.soakContext(ctx, operation, clusterControllerStep{Name: operation.CurrentStep})
+		phase = "paired_workload_activation"
 		if err := runner.admitPendingMembers(ctx, projected, nodes); err != nil {
 			return err
 		}
+		phase = "activated_workload_endpoints"
 		return runner.verifyReadyEndpoints(ctx)
 	})
 	if err != nil {
 		// Keep original operation, attempt, deterministic Jobs and reservations.
 		// A failed/uncertain effect cannot become generic retry or a new claim.
-		return c.recordSSHPreparedAdmissionBlocked(parent, operation)
+		return blocked(err, parent)
 	}
 	ctx, cancel = context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	return c.advanceClusterSSHPreparedAdmission(ctx, operation, original)
 }
 
-func (c *clusterController) recordSSHPreparedAdmissionBlocked(parent context.Context, operation clusterControllerOperation) error {
+func (c *clusterController) recordSSHPreparedAdmissionBlocked(parent context.Context, operation clusterControllerOperation, diagnostic string) error {
 	if c == nil || c.store == nil || c.store.db == nil || operation.Kind != "ssh_onboarding" || operation.State != "running" || !clusterSSHPreparedAuthorityPhase(operation.CurrentStep) {
 		return errClusterConflict
 	}
@@ -123,7 +162,7 @@ func (c *clusterController) recordSSHPreparedAdmissionBlocked(parent context.Con
 	if err != nil {
 		return errClusterConflict
 	}
-	if insertClusterEvent(ctx, tx, operation.ID, "", "", "ssh_prepared_admission_blocked", "running", message, map[string]any{"attempt": operation.Attempt, "step": operation.CurrentStep}, now) != nil || tx.Commit() != nil {
+	if insertClusterEvent(ctx, tx, operation.ID, "", "", "ssh_prepared_admission_blocked", "running", message+" "+diagnostic, map[string]any{"attempt": operation.Attempt, "step": operation.CurrentStep, "diagnostic": diagnostic, "custody": "original_cohort_reserved"}, now) != nil || tx.Commit() != nil {
 		return errClusterConflict
 	}
 	return nil

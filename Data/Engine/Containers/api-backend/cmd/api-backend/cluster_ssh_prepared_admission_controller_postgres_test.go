@@ -129,6 +129,17 @@ func TestClusterSSHPreparedAdmissionControllerPostgresEntry(t *testing.T) {
 				if step != clusterSSHPreparationOperationStep || reason != clusterSSHPreparedAdmissionBlocked {
 					t.Fatal("failed native proof did not retain blocked preparation", step, reason)
 				}
+				var detail string
+				if err := f.c.store.db.QueryRowContext(f.ctx, `SELECT details_json::jsonb->>'diagnostic' FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type='ssh_prepared_admission_blocked'`, f.op.ID).Scan(&detail); err != nil {
+					t.Fatal(err)
+				}
+				expected := "observed=http_502"
+				if mode == "final cleanup failure" {
+					expected = "observed=cleanup_failed"
+				}
+				if !strings.Contains(detail, expected) || !strings.Contains(detail, "phase=three_current_membership_proofs") || strings.Contains(detail, "synthetic") {
+					t.Fatal("missing sanitized admission evidence", detail)
+				}
 				posts, events := n.posts.Load(), f.events(t)
 				if err := f.c.runOnce(f.ctx); err != nil {
 					t.Fatal("blocked normal loop", err)
