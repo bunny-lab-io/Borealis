@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"regexp"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,12 +14,16 @@ type clusterSSHQualificationCheck struct {
 	State string `json:"state"`
 }
 type clusterSSHQualificationReport struct {
-	Version    int                               `json:"version"`
-	Attempt    int64                             `json:"attempt"`
-	ObservedAt int64                             `json:"observed_at"`
-	Ready      bool                              `json:"ready"`
-	Checks     []clusterSSHQualificationCheck    `json:"checks"`
-	Storage    []clusterSSHTargetStorageCapacity `json:"storage"`
+	// Historical diagnostics enter the existing fenced completion event only.
+	// They are never serialized into the signed readiness report.
+	vipFailure   clusterSSHVIPFailure
+	vipElapsedMS int64
+	Version      int                               `json:"version"`
+	Attempt      int64                             `json:"attempt"`
+	ObservedAt   int64                             `json:"observed_at"`
+	Ready        bool                              `json:"ready"`
+	Checks       []clusterSSHQualificationCheck    `json:"checks"`
+	Storage      []clusterSSHTargetStorageCapacity `json:"storage"`
 }
 
 var clusterSSHQualificationCodes = []string{"source_inputs", "host_profile", "replica_capacity", "network_boot", "network_arp", "remaining_prerequisites"}
@@ -172,12 +178,19 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		}
 		stage = 3
 		observe("network_boot_and_arp")
-		completed, err := vipClient.observeNetworks(ctx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed, readers.observeNetworkBoot, readers.observeNetworkARP)
+		began := time.Now()
+		var failure atomic.Pointer[clusterSSHVIPFailure]
+		networkCtx := context.WithValue(ctx, clusterSSHVIPFailureSinkKey{}, func(code clusterSSHVIPFailure) { failure.CompareAndSwap(nil, &code) })
+		completed, err := vipClient.observeNetworks(networkCtx, readers, source, anchor.Lease, work.Baseline, anchor.Sealed, readers.observeNetworkBoot, readers.observeNetworkARP)
 		if completed > 0 {
 			report.Checks[stage].State = "passed"
 			stage = 4
 		}
 		if err != nil {
+			if code := failure.Load(); code != nil {
+				report.vipFailure, report.vipElapsedMS = *code, time.Since(began).Milliseconds()
+				log.Printf("Network qualification controller_check=%s accepted_probes=%d elapsed_ms=%d operation=%s target=%s attempt=%d generation=%d", *code, completed, report.vipElapsedMS, anchor.Lease.OperationID, anchor.Lease.TargetID, anchor.Lease.OperationAttempt, anchor.Lease.Generation)
+			}
 			return err
 		}
 		report.Checks[stage].State = "passed"

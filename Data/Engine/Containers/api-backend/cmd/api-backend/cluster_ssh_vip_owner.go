@@ -81,11 +81,14 @@ func withClusterSSHVIPOwner(parent context.Context, maximum time.Duration, autho
 	var rejected sync.Once
 	emit, _ := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string))
 	reject := func(check, expected, observed string, started time.Time) {
-		if emit != nil {
-			rejected.Do(func() {
+		rejected.Do(func() {
+			if record, ok := ctx.Value(clusterSSHVIPFailureSinkKey{}).(func(clusterSSHVIPFailure)); ok {
+				record(clusterSSHVIPFailure(check + "." + observed))
+			}
+			if emit != nil {
 				emit(fmt.Sprintf("VIP observation status=failed check=%s expected=%s observed=%s elapsed_ms=%d installation_effects=none", check, expected, observed, time.Since(started).Milliseconds()))
-			})
-		}
+			}
+		})
 	}
 	// Expiry cancels consumers even while a lease GET or source Job is waiting.
 	// A timer race may fail early, but can never resurrect an expired scope.

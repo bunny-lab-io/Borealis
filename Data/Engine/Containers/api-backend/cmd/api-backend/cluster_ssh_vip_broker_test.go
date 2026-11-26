@@ -552,3 +552,36 @@ func TestClusterSSHVIPQualificationExecutionWindow(t *testing.T) {
 		t.Fatal("legacy VIP window changed")
 	}
 }
+
+func TestClusterSSHQualificationReceivesBoundVIPFailureWithoutGrant(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after_ready_%t", ready), func(t *testing.T) {
+			a, sources, lease := sshVIPFixture(t, false)
+			a.Lease.OperationStep, a.Lease.Step = clusterSSHQualificationStep, "qualify"
+			r, _, _ := sshBrokerFixture(t)
+			r.Lease, r.Baseline, r.Binding = a.Lease, a.Baseline, a.Cohort.Targets[0].Binding
+			b := newClusterSSHVIPBroker(nil, nil, a.Lease.ControllerHolder, sshBrokerTestSecret)
+			run := sshVIPBrokerRun(a, lease, &atomic.Bool{}, &atomic.Int64{})
+			b.run = func(ctx context.Context, v clusterSSHVIPStart, consume func(context.Context, clusterSSHVIPOwner, clusterSSHPreparationChecks) error) error {
+				if ready {
+					if err := run(ctx, v, consume); err != nil {
+						return err
+					}
+				}
+				return clusterSSHVIPFailure("vip_lease_get.deadline_exceeded")
+			}
+			c := sshVIPBrokerClient(t, sshVIPBrokerServer(t, b).URL)
+			var got atomic.Pointer[clusterSSHVIPFailure]
+			ctx := context.WithValue(context.Background(), clusterSSHVIPFailureSinkKey{}, func(code clusterSSHVIPFailure) { got.Store(&code) })
+			entered := false
+			err := c.withOwner(ctx, func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, a.Lease, a.Baseline, r.sealed(), sources,
+				func(context.Context, clusterSSHVIPOwner, clusterSSHPreparationChecks) error {
+					entered = true
+					return nil
+				})
+			if err == nil || entered != ready || got.Load() == nil || *got.Load() != "vip_lease_get.deadline_exceeded" {
+				t.Fatal("lost bound failure or accepted rejected observation", err, entered)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"crypto/cipher"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -111,6 +112,12 @@ func newClusterSSHVIPBroker(store *postgresOperatorStore, runner *kubernetesClus
 			first.CompareAndSwap(nil, &line)
 		}
 		ctx = context.WithValue(ctx, clusterSSHPreparationObserverKey{}, record)
+		var firstCode atomic.Pointer[clusterSSHVIPFailure]
+		ctx = context.WithValue(ctx, clusterSSHVIPFailureSinkKey{}, func(code clusterSSHVIPFailure) {
+			if code.valid() {
+				firstCode.CompareAndSwap(nil, &code)
+			}
+		})
 		log.Printf("cluster SSH VIP observation entered operation=%s target=%s attempt=%d generation=%d", lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation)
 		err := withClusterSSHVIPOwner(ctx, v.observationTimeout(), authority, v.Sources, runner.newSSHSourceVIPRead(authority), runner.kube.readClusterSSHVIPLease, consume)
 		line := fmt.Sprintf("VIP observation status=completed elapsed_ms=%d", time.Since(started).Milliseconds())
@@ -119,12 +126,13 @@ func newClusterSSHVIPBroker(store *postgresOperatorStore, runner *kubernetesClus
 			if failure := first.Load(); failure != nil {
 				line = *failure
 			}
-			// Authority has already failed. Record its first cause even after context cancellation.
-			write, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-			saveErr := store.recordSSHPreparationCheckpoint(write, lease, line)
-			stop()
-			if saveErr != nil {
-				log.Printf("cluster SSH VIP failure evidence unavailable in operation journal operation=%s target=%s attempt=%d generation=%d", lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation)
+			// This observer must remain read-only even after revocation. Only
+			// the owning qualification worker can record operation progress.
+			if lease.isNetworkQualification() {
+				err = clusterSSHVIPFailure("source_observation.rejected")
+				if code := firstCode.Load(); code != nil {
+					err = *code
+				}
 			}
 		}
 		log.Printf("%s operation=%s target=%s attempt=%d generation=%d", line, lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation)
@@ -196,6 +204,7 @@ func (b *clusterSSHVIPBroker) start(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	scopeID := newClusterUUID()
+	readySent := false
 	completedID := ""
 	err = b.run(ctx, v, func(scope context.Context, owner clusterSSHVIPOwner, checks clusterSSHPreparationChecks) error {
 		s := &clusterSSHVIPSession{qualification: v.Request.AcceptBefore != 0, start: v.Request.ID, ctx: scope, cancel: cancel, checks: checks, finish: make(chan struct{}), changed: make(chan struct{}), seen: map[string]bool{}}
@@ -206,6 +215,7 @@ func (b *clusterSSHVIPBroker) start(w http.ResponseWriter, r *http.Request) {
 		if send(clusterSSHVIPMessage{Version: 1, ID: v.Request.ID, Scope: scopeID, Status: "ready", Owner: &owner}) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		readySent = true
 		select {
 		case <-scope.Done():
 			return clusterbootstrap.ErrPreparationConfig
@@ -218,6 +228,15 @@ func (b *clusterSSHVIPBroker) start(w http.ResponseWriter, r *http.Request) {
 	// callbacks and the original controller heartbeat have joined.
 	if err == nil && ctx.Err() == nil {
 		_ = send(clusterSSHVIPMessage{Version: 1, ID: completedID, Scope: scopeID, Status: "complete"})
+	} else {
+		var failure clusterSSHVIPFailure
+		if r.Context().Err() == nil && errors.As(err, &failure) && failure.valid() {
+			scope := ""
+			if readySent {
+				scope = scopeID
+			}
+			_ = send(clusterSSHVIPMessage{Version: 1, ID: v.Request.ID, Scope: scope, Status: string(failure)})
+		}
 	}
 }
 func (b *clusterSSHVIPBroker) check(w http.ResponseWriter, r *http.Request) {

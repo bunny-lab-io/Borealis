@@ -27,6 +27,23 @@ type clusterSSHVIPStart struct {
 func (clusterSSHVIPStart) String() string   { return "VIP scope start [redacted]" }
 func (clusterSSHVIPStart) GoString() string { return "VIP scope start [redacted]" }
 
+// Only closed-vocabulary failures cross the authenticated observation stream.
+// They cannot satisfy any positive receipt or authorize another action.
+type clusterSSHVIPFailure string
+type clusterSSHVIPFailureSinkKey struct{}
+
+func (f clusterSSHVIPFailure) Error() string { return string(f) }
+func (f clusterSSHVIPFailure) Unwrap() error { return clusterbootstrap.ErrPreparationConfig }
+func (f clusterSSHVIPFailure) valid() bool {
+	switch f {
+	case "vip_lease_get.deadline_exceeded", "vip_lease_get.scope_canceled", "vip_lease_get.read_or_parse_rejected",
+		"vip_renewal.freshness_expired", "vip_lease_progress.renewal_rejected", "vip_holder.unrecognized_holder",
+		"poll_queue.scope_closed", "authority_before_lease.rejected", "authority_after_lease.rejected", "source_observation.rejected":
+		return true
+	}
+	return false
+}
+
 type clusterSSHVIPMessage struct {
 	Version int                 `json:"version"`
 	ID      string              `json:"id"`

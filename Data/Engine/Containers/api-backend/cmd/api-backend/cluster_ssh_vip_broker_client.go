@@ -133,6 +133,14 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 	if err != nil || len(peers) < 1 || len(peers) > 3 {
 		return clusterbootstrap.ErrPreparationConfig
 	}
+	recordFailure := func(message clusterSSHVIPMessage, scope string) {
+		failure := clusterSSHVIPFailure(message.Status)
+		if failure.valid() && message.Version == 1 && message.ID == start.Request.ID && message.Scope == scope && message.Owner == nil {
+			if record, ok := ctx.Value(clusterSSHVIPFailureSinkKey{}).(func(clusterSSHVIPFailure)); ok {
+				record(failure)
+			}
+		}
+	}
 	var response *http.Response
 	var ready clusterSSHVIPMessage
 	var peer string
@@ -146,6 +154,7 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 			response.Body.Close()
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		recordFailure(ready, "")
 		if ready.Status == "not_owner" && ready.Scope == "" && ready.Owner == nil {
 			response.Body.Close()
 			response = nil
@@ -175,6 +184,9 @@ func (c *clusterSSHVIPBrokerClient) withOwner(parent context.Context, authority 
 			if n != 0 || tailErr != io.EOF {
 				err = clusterbootstrap.ErrPreparationConfig
 			}
+		}
+		if err == nil {
+			recordFailure(final, ready.Scope)
 		}
 		if err != nil || finishID == "" || final.Version != 1 || final.ID != finishID || final.Scope != ready.Scope || final.Status != "complete" || final.Owner != nil || ctx.Err() != nil {
 			streamErr = clusterbootstrap.ErrPreparationConfig

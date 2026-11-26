@@ -343,7 +343,17 @@ func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Cont
 	for _, check := range report.Checks {
 		outcomes = append(outcomes, strings.ReplaceAll(check.Code, "_", " ")+" "+check.State)
 	}
-	if insertClusterEvent(ctx, tx, operation.OperationID, "", work.Proof.Source.ClusterID, "ssh_qualification_observed", "waiting", "Host readiness checks: "+strings.Join(outcomes, ", ")+".", map[string]any{"attempt": operation.OperationAttempt}, now) != nil || tx.Commit() != nil {
+	message := "Host readiness checks: " + strings.Join(outcomes, ", ") + "."
+	details := map[string]any{"attempt": operation.OperationAttempt}
+	if report.vipFailure.valid() {
+		message += " Source VIP check: " + string(report.vipFailure) + "."
+		details["controller_check"] = string(report.vipFailure)
+		details["elapsed_ms"] = report.vipElapsedMS
+		details["target_id"] = operation.TargetID
+		details["claim_generation"] = operation.Generation
+		details["installation_effects"] = "none_read_only_qualification"
+	}
+	if insertClusterEvent(ctx, tx, operation.OperationID, "", work.Proof.Source.ClusterID, "ssh_qualification_observed", "waiting", message, details, now) != nil || tx.Commit() != nil {
 		return errClusterUnavailable
 	}
 	return nil

@@ -65,8 +65,14 @@ func TestClusterSSHQualificationPostgresReadOnlyLifecycle(t *testing.T) {
 			}
 			report := newClusterSSHQualificationReport(work.Proof.Cohort.Attempt)
 			report.Checks[0].State = "blocked"
+			report.Checks[3].State = "blocked"
+			report.vipFailure, report.vipElapsedMS = "vip_lease_get.deadline_exceeded", 1000
 			if err := s.completeClusterSSHQualification(f.ctx, work, report); err != nil {
 				t.Fatal("complete", err)
+			}
+			var recorded bool
+			if err := s.db.QueryRowContext(f.ctx, `SELECT count(*)=1 FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type='ssh_qualification_observed' AND details_json::jsonb->>'controller_check'='vip_lease_get.deadline_exceeded' AND details_json::jsonb->>'target_id'=$2 AND message LIKE '%vip_lease_get.deadline_exceeded%'`, id, work.Claims[0].Lease.TargetID).Scan(&recorded); err != nil || !recorded {
+				t.Fatal("missing fenced qualification diagnostic", err)
 			}
 			progress, err := s.clusterSSHInspectionProgress(f.ctx, id)
 			if err != nil || progress.Qualification == nil || progress.Qualification.Ready || progress.Qualification.Checks[0].State != "blocked" || progress.State != "waiting" {
