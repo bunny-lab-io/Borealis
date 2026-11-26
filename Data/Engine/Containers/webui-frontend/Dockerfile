@@ -36,9 +36,14 @@ EXPOSE 8000
 
 ENTRYPOINT ["/usr/local/bin/borealis-webui-frontend"]
 
-FROM source AS build
+FROM node:22-alpine AS build
 
-RUN NODE_ENV=production npm run build
+WORKDIR /opt/Borealis/Data/Engine/web-interface
+COPY data/web-interface ./
+# The native snapshotter would copy the entire dependency tree for each
+# writable step. The production compiler only needs to read that tree.
+RUN --mount=type=bind,from=deps,source=/opt/Borealis/Data/Engine/web-interface/node_modules,target=/opt/Borealis/Data/Engine/web-interface/node_modules \
+    NODE_ENV=production npm run build
 
 FROM node:22-alpine AS prod
 
