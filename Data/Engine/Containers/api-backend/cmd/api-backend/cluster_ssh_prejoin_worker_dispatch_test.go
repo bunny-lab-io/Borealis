@@ -3,9 +3,11 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"borealis/api-backend/internal/engineidentity"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"reflect"
 	"slices"
 	"strings"
@@ -145,6 +147,13 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 			case "qualification claim":
 				claim.Lease.OperationStep, claim.Lease.Step = clusterSSHQualificationStep, "qualify"
 			}
+			var diagnostics bytes.Buffer
+			if mode == "input failure" {
+				writer := log.Writer()
+				log.SetOutput(&diagnostics)
+				t.Cleanup(func() { log.SetOutput(writer) })
+				ctx = context.WithValue(ctx, clusterSSHPrejoinDiagnosticKey{}, &clusterSSHPrejoinDiagnostic{operation: claim.Lease.OperationID, started: time.Now()})
+			}
 			result, err := dispatchClusterSSHPrejoinWorker(ctx, claim, a.Baseline, confirmation, source,
 				func(context.Context) (clusterSSHPreparationAuthority, error) { return a, nil }, acquire, func(context.Context, string, clusterbootstrap.PreparationExpected, clusterSSHPreparedImageCapacity, clusterSSHPreparationChecks) error {
 					return nil
@@ -157,6 +166,13 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 					return nil
 				})
 			success := mode == "pair" || mode == "replacement" || mode == "source slice ownership" || mode == "native slice ownership"
+			if mode == "input failure" {
+				reportClusterSSHPrejoinCheck(ctx, "outer scope")
+				line := diagnostics.String()
+				if strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "operation="+claim.Lease.OperationID+" check=input snapshot before target storage ") || strings.Contains(line, "private configuration") || strings.Contains(line, "outer scope") {
+					t.Fatal("first failing input boundary was not recorded safely")
+				}
+			}
 			if mode == "input failure" && (inputCalls == 0 || dispatched) {
 				t.Fatal("source drift at handoff reached native execution")
 			}

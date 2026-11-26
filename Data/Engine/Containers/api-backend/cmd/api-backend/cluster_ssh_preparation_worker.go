@@ -117,6 +117,9 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			return w.store.renewClusterSSHPreparationTarget(ctx, claim.Lease, claim.Sealed)
 		})
 	}
+	if w.cohort != nil {
+		parent = context.WithValue(parent, clusterSSHPrejoinDiagnosticKey{}, &clusterSSHPrejoinDiagnostic{operation: claims[0].Lease.OperationID, started: time.Now()})
+	}
 	checkAll := func(ctx context.Context) error {
 		for _, check := range checks {
 			if check(ctx) != nil {

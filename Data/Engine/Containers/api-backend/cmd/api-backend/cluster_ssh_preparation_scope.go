@@ -106,6 +106,7 @@ func newClusterSSHPreparationLeaseCheck(authority clusterSSHPreparationAuthority
 		case gate <- struct{}{}:
 			defer func() { <-gate }()
 		case <-ctx.Done():
+			reportClusterSSHPrejoinCheck(ctx, "lease serialization")
 			return clusterbootstrap.ErrSessionAuthority
 		}
 		observe := func() ([]byte, error) {
@@ -122,11 +123,25 @@ func newClusterSSHPreparationLeaseCheck(authority clusterSSHPreparationAuthority
 			return raw, nil
 		}
 		before, err := observe()
-		if err != nil || (retained != nil && !bytes.Equal(retained, before)) || renew(ctx) != nil || ctx.Err() != nil {
+		if err != nil {
+			reportClusterSSHPrejoinCheck(ctx, "lease authority before renewal")
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		if retained != nil && !bytes.Equal(retained, before) {
+			reportClusterSSHPrejoinCheck(ctx, "retained lease authority changed")
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		if renew(ctx) != nil || ctx.Err() != nil {
+			reportClusterSSHPrejoinCheck(ctx, "lease renewal")
 			return clusterbootstrap.ErrSessionAuthority
 		}
 		after, err := observe()
-		if err != nil || !bytes.Equal(before, after) || ctx.Err() != nil {
+		if err != nil || ctx.Err() != nil {
+			reportClusterSSHPrejoinCheck(ctx, "lease authority after renewal")
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		if !bytes.Equal(before, after) {
+			reportClusterSSHPrejoinCheck(ctx, "lease authority changed during renewal")
 			return clusterbootstrap.ErrSessionAuthority
 		}
 		if retained == nil {

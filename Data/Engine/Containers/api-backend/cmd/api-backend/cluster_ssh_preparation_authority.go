@@ -36,10 +36,16 @@ func newClusterSSHPreparationAuthorityRead(store *postgresOperatorStore, aegis *
 		// Both checks return their own connection before verifying the memory key.
 		// A correct persisted token alone cannot keep a locked API worker active.
 		if aegis.verifyClusterSSHGeneration(ctx, sealed.generation) != nil {
+			reportClusterSSHPrejoinCheck(ctx, "Aegis generation before authority read")
 			return fail()
 		}
 		authority, err := store.loadClusterSSHPreparationAuthority(ctx, lease, baseline, sealed)
-		if err != nil || aegis.verifyClusterSSHGeneration(ctx, sealed.generation) != nil || ctx.Err() != nil {
+		if err != nil {
+			reportClusterSSHPrejoinCheck(ctx, "database preparation authority")
+			return fail()
+		}
+		if aegis.verifyClusterSSHGeneration(ctx, sealed.generation) != nil || ctx.Err() != nil {
+			reportClusterSSHPrejoinCheck(ctx, "Aegis generation after authority read")
 			return fail()
 		}
 		return authority, nil

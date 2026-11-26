@@ -5,12 +5,30 @@ import (
 	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// First rejection wins, before outer scopes can collapse or cancel its cause.
+// Only call-site labels and a validated operation ID reach the worker log.
+type clusterSSHPrejoinDiagnosticKey struct{}
+type clusterSSHPrejoinDiagnostic struct {
+	once      sync.Once
+	operation string
+	started   time.Time
+}
+
+func reportClusterSSHPrejoinCheck(ctx context.Context, check string) {
+	if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
+		d.once.Do(func() {
+			log.Printf("SSH paired preparation rejected operation=%s check=%s elapsed=%s canceled=%t deadline=%t", d.operation, check, time.Since(d.started).Round(time.Millisecond), ctx.Err() == context.Canceled, ctx.Err() == context.DeadlineExceeded)
+		})
+	}
+}
 
 // Production composition for the existing API executor. Every original target
 // reaches configuration before any startup. Fresh retained scopes re-prove the
@@ -75,6 +93,9 @@ func newClusterSSHPrejoinWorkerWithClient(store *postgresOperatorStore, aegis *g
 				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
 					postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
 					nativeEntered.Store(true)
+					if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
+						d.once.Do(func() {})
+					}
 					return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
 						checks.Authority, checks.K3sJoin, true, func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
 							target.inputs = checks.Inputs
@@ -188,6 +209,7 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 		postgres string, capacity clusterSSHPreparedImageCapacity, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
 		if !called.CompareAndSwap(false, true) || inputs == nil || artifacts == nil || checks.Inputs == nil || checks.Authority == nil || checks.K3sJoin == nil || checks.Storage == nil || !validClusterSSHPrejoinWorkerCapacity(capacity) ||
 			expected.Validate() != nil || !clusterbootstrap.ValidPostgresImageReference(postgres) || check(ctx) != nil {
+			reportClusterSSHPrejoinCheck(ctx, "bound input contract")
 			cancel()
 			return fail
 		}
@@ -197,6 +219,7 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 			return fail
 		}
 		if _, err := clusterSSHPrejoinDispatchKey(value, source, claim, baseline, expected); err != nil {
+			reportClusterSSHPrejoinCheck(ctx, "dispatch key")
 			cancel()
 			return fail
 		}
@@ -251,7 +274,16 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 		capacity.Target = slices.Clone(capacity.Target)
 		// Finish the read-only storage scope, including terminal observations and
 		// joined cleanup, before any native preparation mutation.
-		if checks.Inputs(ctx) != nil || storage(ctx, value.payload, expected, capacity, checks) != nil || checks.Inputs(ctx) != nil {
+		if checks.Inputs(ctx) != nil {
+			reportClusterSSHPrejoinCheck(ctx, "input snapshot before target storage")
+			return fail
+		}
+		if storage(ctx, value.payload, expected, capacity, checks) != nil {
+			reportClusterSSHPrejoinCheck(ctx, "target filesystem capacity")
+			return fail
+		}
+		if checks.Inputs(ctx) != nil {
+			reportClusterSSHPrejoinCheck(ctx, "input snapshot after target storage")
 			return fail
 		}
 		nativeExpected := expected
