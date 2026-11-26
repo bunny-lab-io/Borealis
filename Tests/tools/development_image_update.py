@@ -15,12 +15,10 @@ MODULE = "Data/Engine/Containers/api-backend/"
 ROLES = {"api-backend", "borealis-operator", "job-scheduler", "wireguard-tunnel"}
 
 
-def binary_layer(reuse, role, snapshot, item, paths):
-    if role not in ROLES or not paths or item["context"] != ".":
+def binary_layer(role, snapshot, item, declared):
+    if role not in ROLES or not declared or item["context"] != ".":
         return None
-    declared = {n for n in reuse.original.keys() | reuse.current.keys()
-                if reuse.original.get(n) != reuse.current.get(n)
-                and any(n == p or n.startswith(p + "/") for p in paths)}
+    declared = set(declared)
     # The API declares rollout compatibility metadata as an input to release
     # selection. The Go compiler reads the module. A byte copied into the
     # actual runtime image must still take the normal full build path.

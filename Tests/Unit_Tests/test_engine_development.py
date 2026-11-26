@@ -146,7 +146,7 @@ class DevelopmentSnapshotTests(unittest.TestCase):
             file.write_text(instructions)
             paths = {update.MODULE.rstrip("/"), "Dockerfile"}
             def choose():
-                return update.binary_layer(retained, "api-backend", root, item, paths)
+                return update.binary_layer("api-backend", root, item, retained.changed_inputs(paths))
             self.assertEqual(choose(), [("api-backend", "/usr/local/bin/server")])
             metadata = "Data/Engine/release-manifest.json"
             retained.current[metadata] = "updated"
