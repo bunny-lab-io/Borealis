@@ -7,6 +7,10 @@ on:
         description: Stable or qualification draft release tag (YYYY.MM.REVISION[.HOTFIX][-rc.N])
         required: true
         type: string
+      host_package_seed:
+        description: Optional immutable release containing the target's frozen Ubuntu packages
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -37,6 +41,20 @@ jobs:
             | grep -Fx "${RELEASE_TAG}"$'\ttrue\t'"${prerelease}"
           printf 'prerelease=%s\n' "$prerelease" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout the selected workflow's package seed reader
+        if: inputs.host_package_seed != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: package-seed-tools
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /Tests/tools/seed_release_host_packages.py
+
+      - name: Keep producer tools outside the clean target checkout
+        if: inputs.host_package_seed != ''
+        run: mv "$GITHUB_WORKSPACE/package-seed-tools" "$RUNNER_TEMP/package-seed-tools"
+
       - name: Checkout immutable release tag
         uses: actions/checkout@v7
         with:
@@ -54,6 +72,16 @@ jobs:
         with:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+
+      - name: Verify reusable Ubuntu packages against the target lock
+        if: inputs.host_package_seed != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_SEED: ${{ inputs.host_package_seed }}
+        run: |
+          python3 "$RUNNER_TEMP/package-seed-tools/Tests/tools/seed_release_host_packages.py" \
+            --source . --repository "$GITHUB_REPOSITORY" --release "$PACKAGE_SEED" \
+            --output "$RUNNER_TEMP/verified-host-packages"
 
       - name: Build release assets
         if: steps.release.outputs.prerelease == 'false'
@@ -127,12 +155,15 @@ jobs:
         if: hashFiles('Tests/tools/build_node_host_package_assets.py') != ''
         env:
           RELEASE_TAG: ${{ inputs.release }}
+          PACKAGE_SEED: ${{ inputs.host_package_seed }}
         run: |
+          args=()
+          if [[ -n "$PACKAGE_SEED" ]]; then args+=(--archives "$RUNNER_TEMP/verified-host-packages"); fi
           python3 Tests/tools/build_node_host_package_assets.py \
             --source . --release "$RELEASE_TAG" \
             --source-sha "$(git rev-parse HEAD)" \
             --repository "$GITHUB_REPOSITORY" \
-            --output-dir "$RUNNER_TEMP/borealis-node-host-packages"
+            --output-dir "$RUNNER_TEMP/borealis-node-host-packages" "${args[@]}"
 
       - name: Upload standalone installer assets to draft release
         if: steps.release.outputs.prerelease == 'false'

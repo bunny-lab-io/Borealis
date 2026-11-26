@@ -159,6 +159,8 @@ gh run list --repo "${REPOSITORY}" \
   --event workflow_dispatch --branch "${RELEASE}" --limit 5
 ```
 
+When a previous immutable release contains the same frozen Ubuntu package set, pass `-f "host_package_seed=$PREVIOUS_RELEASE"` at dispatch. The runner checks the published archive digest and every package against the target lock before expensive image builds. A mismatch stops packaging. For an existing draft whose tagged workflow predates this option, dispatch the reviewed workflow from the approved integration ref and keep `-f "release=$RELEASE"` pointed at the original tag. The producer checks out the target tag for every release artifact.
+
 Before publication, wait for packaging to pass. Inspect bootstrap archive/manifest, `borealis-node-images-linux-amd64.json`, all nine `borealis-node-image-<service>-linux-amd64.oci.tar` assets, the four K3s assets, all23 external OCI archives with `borealis-node-external-images-linux-amd64.json`, and the Ubuntu host package tar/inventory named `borealis-node-host-packages-ubuntu-noble-linux-amd64` with `.tar` and `.json` suffixes. Verify GitHub asset digests and matching release/source identities. Packaging requires Docker Buildx and builds production images once in an isolated builder. K3s binary and bundled images use the release's pinned baseline. These assets are intended for delivery by the existing Engine; operators do not download or execute them on joining hosts. Packaging alone does not qualify SSH enrollment.
 
 ??? note "GitHub UI draft when workflow dispatch or tag creation is unavailable"

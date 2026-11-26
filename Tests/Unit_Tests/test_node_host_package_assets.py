@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "Tests/tools"))
 spec = importlib.util.spec_from_file_location("node_host_packages", ROOT / "Tests/tools/build_node_host_package_assets.py")
 packages = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packages)
+import seed_release_host_packages as seed
 sys.path.pop(0)
 
 
@@ -42,6 +43,24 @@ def wire(plan):
 
 
 class NodeHostPackageAssetsTests(unittest.TestCase):
+    def test_verified_release_seed_preserves_pins_and_rejects_drift(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan, cache = fixture_plan(root)
+            archive = root / "host.tar"
+            packages.assemble_archive(plan, cache, archive)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            output = root / "verified"
+            seed.unpack(archive, output, plan, digest, archive.stat().st_size)
+            for pin in plan["packages"]:
+                self.assertEqual((output / pin["file"]).read_bytes(), (cache / pin["file"]).read_bytes())
+            changed = copy.deepcopy(plan)
+            changed["packages"][0]["sha256"] = "0" * 64
+            for selected, expected in [(changed, digest), (plan, "0" * 64)]:
+                with self.assertRaises(ValueError):
+                    seed.unpack(archive, root / "bad", selected, expected, archive.stat().st_size)
+                self.assertFalse((root / "bad").exists())
+
     def test_locked_download_bounds_origins_and_error_redaction(self):
         data = b"pinned package bytes"
         pin = dict(name="python3", version="1.0", architecture="all", file="python3_1.0_all.deb", size=len(data),
