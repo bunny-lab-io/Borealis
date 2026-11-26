@@ -103,7 +103,7 @@ func (client *Client) ProbeARP(parent context.Context, sudoPassword []byte, expe
 		client.approved.Fingerprint != approved.Fingerprint || !bytes.Equal(client.approved.PublicKey, approved.PublicKey) || parent.Err() != nil {
 		return TargetARPObservation{}, ErrARP
 	}
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	ctx, cancel := context.WithTimeout(parent, NetworkProbeTimeout)
 	defer cancel()
 	boundary := func() bool {
 		c, stop := context.WithTimeout(ctx, time.Second)

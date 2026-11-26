@@ -586,3 +586,42 @@ func TestClusterSSHQualificationNetworkProbesSharePeerScope(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterSSHQualificationNativeAuthorityOutlivesIndividualExchange(t *testing.T) {
+	for _, probe := range []string{"boot", "arp"} {
+		t.Run(probe, func(t *testing.T) {
+			f := newSSHNetworkTargetsFixture(t, false, probe)
+			for i := range f.claims {
+				f.claims[i].Lease.OperationStep = clusterSSHQualificationStep
+				f.claims[i].Lease.Step = "qualify"
+			}
+			f.a.Lease = f.claims[0].Lease
+			// Several independently bounded successful custody checks can take
+			// longer than one VIP round trip in aggregate on a real member.
+			var calls atomic.Int32
+			authority := func(ctx context.Context) error {
+				if calls.Add(1) == 4 {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(1150 * time.Millisecond):
+					}
+				}
+				return ctx.Err()
+			}
+			err := runClusterSSHNetworkTargets(context.Background(), f.a.Baseline, f.claims, f.deps, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+				item := f.a.Cohort.Targets[0]
+				if probe == "boot" {
+					_, err := readers.Boot(ctx, item, f.boots[0], authority)
+					return err
+				}
+				_, err := readers.ARP(ctx, item, f.arps[0], authority)
+				return err
+			})
+			f.assertClosed(t)
+			if err != nil || calls.Load() < 4 {
+				t.Fatalf("qualified %s observation failed after %d custody checks: %v", probe, calls.Load(), err)
+			}
+		})
+	}
+}

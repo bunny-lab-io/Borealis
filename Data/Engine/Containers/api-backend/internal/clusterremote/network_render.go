@@ -81,6 +81,10 @@ func (client *Client) InspectNetworkRender(parent context.Context, sudoPassword 
 	return client.inspectNetworkRender(parent, sudoPassword, expected, approved, request, check, false)
 }
 
+// NetworkProbeTimeout bounds one read-only network render, boot or ARP probe,
+// including any supervising qualification authority checks.
+const NetworkProbeTimeout = 25 * time.Second
+
 func (client *Client) inspectNetworkRender(parent context.Context, sudoPassword []byte, expected Target, approved HostKey, request NetworkRenderRequest, check func(context.Context) error, boot bool) (TargetNetworkRender, error) {
 	started := time.Now()
 	request.Targets.Peers = slices.Clone(request.Targets.Peers)
@@ -96,7 +100,7 @@ func (client *Client) inspectNetworkRender(parent context.Context, sudoPassword 
 		client.approved.Fingerprint != approved.Fingerprint || !bytes.Equal(client.approved.PublicKey, approved.PublicKey) || parent.Err() != nil {
 		return TargetNetworkRender{}, ErrNetworkRender
 	}
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	ctx, cancel := context.WithTimeout(parent, NetworkProbeTimeout)
 	defer cancel()
 	boundary := func() bool {
 		c, stop := context.WithTimeout(ctx, time.Second)

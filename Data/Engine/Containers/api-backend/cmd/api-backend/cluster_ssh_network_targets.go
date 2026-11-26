@@ -333,6 +333,18 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 				switch {
 				case err != nil || client == nil:
 					phase = "connect"
+				case outer != nil && claim.Lease.isNetworkQualification():
+					// The complete custody check brackets a controller exchange
+					// with paired DB reads, each independently bounded. Run it
+					// before, during and after the read-only probe. The native
+					// transport callback only needs to propagate cancellation.
+					err := runClusterSSHPreparationScopeFor(ctx, 250*time.Millisecond, clusterremote.NetworkProbeTimeout, current, func(live context.Context) error {
+						return observe(live, item, client, sudo, context.Context.Err)
+					})
+					if err == nil {
+						return nil
+					}
+					phase = "supervised_native_observation"
 				case current(ctx) != nil:
 					phase = "authority_after_connect"
 				case observe(ctx, item, client, sudo, current) != nil:
