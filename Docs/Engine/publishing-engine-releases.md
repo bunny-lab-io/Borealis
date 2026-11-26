@@ -7,7 +7,8 @@ Borealis maintainers use this runbook to publish qualification builds for cluste
 | --- | --- | --- | --- | --- |
 | Stable | `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` | Normal release | Supported standalone installs and cluster updates | Required |
 | Qualification | `YYYY.MM.REVISION-rc.N` or `YYYY.MM.REVISION.HOTFIX-rc.N` | Pre-release | Unsupported cluster testing before stable publication | No standalone installer; node bootstrap and production images required for SSH onboarding |
-| Development | `dev-<first-12-commit-characters>` | Not a GitHub release | Initial cluster baseline and HMR restoration | Not applicable |
+| Local development snapshot | `dev-<64-character SHA-256>` | Engine-local | Explicitly selected, unsupported development candidate | Digest-bound local inventories and archives |
+| Legacy development baseline | `dev-<first-12-commit-characters>` | Not a GitHub release | Initial cluster baseline and HMR restoration | Not applicable |
 
 `REVISION` counts normal releases published during calendar month. `HOTFIX` counts focused corrections based on one normal release. `N` starts at `1` and increases for each qualification candidate built for same intended stable version. These values express publication order, not semantic major, minor, or patch scope. See [Security Policy](https://github.com/bunny-lab-io/Borealis/blob/main/SECURITY.md).
 
@@ -40,6 +41,19 @@ python3 Tests/tools/build_engine_development.py build \
 To reuse a retained immutable release, add `--reuse-release "$RETAINED_RELEASE"`. Unchanged roles retain their original image reference and digest. The packager compares their tracked build inputs and file modes before reuse.
 
 The command prints the published local directory. Use `verify DIRECTORY` with the same tool to check its source binding and content identity. A complete five-family package has a `dev-` identity derived from its manifest. Select `--family host_package` to exercise only frozen Ubuntu packaging. A partial build has a `components-` identity. Neither form publishes a GitHub tag. The native `borealis-node-manager development-candidate-proof` command verifies the complete local catalog and all artifact digests. This read-only check leaves installation, operation authority and cluster health untested. Current RC29 Engines still require an immutable GitHub release for rolling deployment and onboarding.
+
+### Provision the isolated image worker
+
+Enable this worker only on an explicitly authorized development Engine. The coordinating Engine can keep its existing cluster and HMR settings while the worker builds inert artifacts.
+
+1. Review the Ubuntu package transaction with `apt-get -s --no-upgrade --no-install-recommends install uidmap`. Install the signed package and its required dependencies. The Engine01 lab added `uidmap` and `libsubid4` only.
+2. Create a locked, dedicated account with `useradd --system --add-subids-for-system --create-home --user-group --home-dir /var/lib/borealis-build --shell /usr/sbin/nologin borealis-build`. Protect the home with mode `0700`. Verify one non-overlapping range of at least 65,536 entries in each of `/etc/subuid` and `/etc/subgid`. Use the ranges allocated on this Engine. Check `id borealis-build` and `sudo -l -U borealis-build`; the account belongs only to its private group and has no sudo rules.
+3. Verify the distribution's existing RootlessKit AppArmor profile is loaded. Install the pinned upstream Linux AMD64 `buildctl` and `buildkitd` executables under the root-owned directory `/var/lib/borealis-build-tools/v0.35.1/`. Verify the compressed archive SHA-256 `b248c2b91698aafef11818fe8b681dc5e341581f7d5676709ff45ca1f29b0408` before extracting either executable.
+4. Mount a bounded private filesystem at `/var/lib/borealis-build/state`, owned by the build account. Size it against current free bytes, inodes, expected layers and operational reserves. The lab used a newly created private 4 GiB ext4 backing file mounted with `nodev,nosuid`. After a reboot, remount the same retained filesystem before starting the worker. The service checks for this mount and stays stopped when it is absent.
+5. Install the supplied `borealis-buildkit.service` under `/etc/systemd/system/`. Create its root-owned `resources.conf` drop-in and `/etc/borealis-buildkit/buildkitd.toml` using measured host headroom. Select the native OCI snapshotter, set `max-parallelism`, enable cache GC below the filesystem limit and disable the containerd worker. The lab allowed two CPUs, 2 GiB RAM, zero swap and 256 tasks. The worker has a private network with no external route. Stage verified build inputs before an offline build.
+6. Run `systemctl daemon-reload` and start only `borealis-buildkit.service`. As the build user, run `buildctl --addr unix:///run/borealis-buildkit/buildkitd.sock debug workers`. Verify non-root execution using a real build and check that the Engine workloads and database remain healthy. Mount only this dedicated socket in an authorized packager with its own resource limits. Keep the operational sockets, database configuration and shared identity outside both workers.
+
+Stop the dedicated service to suspend development building. Its persistent cache and the deployment's independently retained recovery generation survive stopping the worker. This setup alone creates no cluster operation and changes no serving image.
 
 ## Understand Immutability
 
