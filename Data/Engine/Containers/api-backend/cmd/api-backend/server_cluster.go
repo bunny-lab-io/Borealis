@@ -1170,8 +1170,16 @@ func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA, runnin
 
 	items := make([]map[string]any, 0)
 	foundCurrent := false
-	for page := 1; page <= 20 && !foundCurrent; page++ {
-		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=100&page=%d", clusterGitHubAPIBase(), repo, page)
+	// GitHub includes every asset in each release list entry. Keep requests
+	// small enough for the standard bounded JSON reader and retain the
+	// existing history budgets for release-backed and development baselines.
+	const pageSize = 10
+	maxReleases := 2000
+	if current == "" || clusterDevelopmentReleaseRE.MatchString(current) || clusterSnapshotReleaseRE.MatchString(current) {
+		maxReleases = 100
+	}
+	for page := 1; page <= maxReleases/pageSize && !foundCurrent; page++ {
+		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=%d&page=%d", clusterGitHubAPIBase(), repo, pageSize, page)
 		var releases []clusterGitHubRelease
 		if err := clusterGitHubJSON(ctx, endpoint, &releases); err != nil {
 			return nil, err
@@ -1206,11 +1214,8 @@ func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA, runnin
 				break
 			}
 		}
-		// Standalone and commit-backed development baselines have no stable
-		// current tag to find. One page populates the picker without walking
-		// irrelevant historical release pages.
-		if current == "" || clusterDevelopmentReleaseRE.MatchString(current) || clusterSnapshotReleaseRE.MatchString(current) {
-			foundCurrent = true
+		if len(releases) < pageSize {
+			break
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
