@@ -15,7 +15,8 @@ WORKDIR /opt/Borealis/Data/Engine/web-interface
 
 COPY data/web-interface/package.json data/web-interface/package-lock.json /opt/Borealis/Data/Engine/web-interface/
 RUN --mount=type=bind,from=borealis-npm-seed,target=/root/.npm,rw \
-    npm ci --include=dev --no-fund --audit=false
+    npm ci --include=dev --no-fund --audit=false \
+    && mkdir -p node_modules/.vite-temp
 
 FROM deps AS source
 
@@ -43,6 +44,7 @@ COPY data/web-interface ./
 # The native snapshotter would copy the entire dependency tree for each
 # writable step. The production compiler only needs to read that tree.
 RUN --mount=type=bind,from=deps,source=/opt/Borealis/Data/Engine/web-interface/node_modules,target=/opt/Borealis/Data/Engine/web-interface/node_modules \
+    --mount=type=tmpfs,target=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp,size=8m \
     NODE_ENV=production npm run build
 
 FROM node:22-alpine AS prod
