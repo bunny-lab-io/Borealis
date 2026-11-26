@@ -183,7 +183,7 @@ func newClusterSSHSourceBroker(store *postgresOperatorStore, runner *kubernetesC
 		return runner.readSSHStoragePreparationSnapshotFor(ctx, authority, request.Joining, request.snapshotTimeout(), func(ctx context.Context, window int64) ([]int64, error) {
 			return readClusterSSHWorkerCensus(ctx, store.db, window)
 		}, func(phase string) {
-			if request.Joining {
+			if request.Joining || request.Lease.isNetworkQualification() {
 				store.recordSSHWorkerStorageFailure(ctx, request.Lease, phase)
 			}
 		})

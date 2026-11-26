@@ -33,6 +33,22 @@ func TestClusterSSHSourceBrokerPostgresAuthorityAndPrivateTransfer(t *testing.T)
 			t.Fatalf("worker history mismatch: count=%d message=%q err=%v", n, message, err)
 		}
 	})
+	t.Run("qualification source failure history", func(t *testing.T) {
+		f := newSSHQualificationFixture(t, false)
+		work, err := f.c.store.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
+		if err != nil || len(work.Claims) != 2 {
+			t.Fatal("paired qualification claim", err)
+		}
+		lease := work.Claims[0].Lease
+		const phase = "source network observation: authority after Job completion"
+		f.c.store.recordSSHWorkerStorageFailure(f.ctx, lease, phase)
+		lease.Generation--
+		f.c.store.recordSSHWorkerStorageFailure(f.ctx, lease, phase)
+		var n int
+		if err := f.c.store.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type='ssh_worker_storage_blocked' AND state='waiting' AND message=$2`, f.op.ID, "Host readiness check stopped during "+phase+".").Scan(&n); err != nil || n != 1 {
+			t.Fatalf("qualification history: %d %v", n, err)
+		}
+	})
 	runSSHBrokerPostgresCases(t, []string{
 		"expansion",
 		"replacement",

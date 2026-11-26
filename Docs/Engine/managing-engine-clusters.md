@@ -77,6 +77,8 @@ Current storage checks support installation and replica paths on one persistent 
 
 Closing the progress dialog stops viewing; it does not cancel a submitted inspection. Use **View Host Inspection** or **View inspection** in operation history to reopen it. Reloading an open progress page recovers the same inspection without sending credentials again. If a submission response is lost, refresh its status before starting another request. Unavailable status keeps retained results visible and disables cancellation until fresh status returns.
 
+If source readiness stops, open the operation timeline. A blocked storage check identifies the observation that stopped. For a source-network Job, the controller distinguishes an unreadable response, a mismatched host or receipt, and a change in authority. A successful Job exit alone does not complete readiness.
+
 Select **End inspection** to stop read-only inspection or readiness checks and release its temporary credentials and host reservations. Recorded reports remain available. This control is unavailable after preparation or joining begins; those later stages require their own recovery workflow.
 
 !!! info "Onboarding implementation status"

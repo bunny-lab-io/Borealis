@@ -225,6 +225,13 @@ func (s *postgresOperatorStore) recordSSHCheckStarted(parent context.Context, co
 // An expired snapshot can still report which read stopped. The event is
 // historical and may only describe its original active target generation.
 func (s *postgresOperatorStore) recordSSHWorkerStorageFailure(parent context.Context, lease clusterSSHTargetLease, phase string) {
+	if !validClusterSSHObservationLease(lease) {
+		return
+	}
+	state, label := "running", "Preparation worker storage check"
+	if lease.isNetworkQualification() {
+		state, label = "waiting", "Host readiness check"
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), time.Second)
 	defer cancel()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO engine.cluster_operation_events
@@ -233,11 +240,11 @@ func (s *postgresOperatorStore) recordSSHWorkerStorageFailure(parent context.Con
  json_build_object('attempt',o.attempt,'target_id',t.id,'generation',t.lease_generation)::text,floor(extract(epoch FROM clock_timestamp()))
  FROM engine.cluster_operations o JOIN engine.cluster_onboarding_targets t ON t.operation_id=o.id,
  engine.cluster_state s,engine.cluster_application_leases l
- WHERE o.kind='ssh_onboarding' AND o.id=$2 AND o.attempt=$3 AND o.current_step='prepare_ssh_targets' AND o.state='running'
+ WHERE o.kind='ssh_onboarding' AND o.id=$2 AND o.attempt=$3 AND o.current_step=$9 AND o.state=$10
  AND s.id=1 AND s.active_operation_id=o.id AND l.name=$4 AND l.holder=$5 AND l.expires_at>extract(epoch FROM clock_timestamp())
- AND t.id=$6 AND t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$7 AND t.lease_generation=$8`,
-		"Preparation worker storage check stopped during "+phase+".", lease.OperationID, lease.OperationAttempt,
-		clusterControllerLeaseName, lease.ControllerHolder, lease.TargetID, lease.Holder, lease.Generation)
+ AND t.id=$6 AND t.state='running' AND t.current_step=$11 AND t.lease_holder=$7 AND t.lease_generation=$8`,
+		label+" stopped during "+phase+".", lease.OperationID, lease.OperationAttempt,
+		clusterControllerLeaseName, lease.ControllerHolder, lease.TargetID, lease.Holder, lease.Generation, lease.OperationStep, state, lease.Step)
 	if err != nil {
 		log.Printf("cluster operation %s: worker storage failure could not be recorded", lease.OperationID)
 	}

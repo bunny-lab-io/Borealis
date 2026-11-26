@@ -109,6 +109,10 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 	}
 	stage := "initial storage inventories"
+	// Only fixed labels from the synchronous Job reader enter the operation journal.
+	runner.sourceObservationRejected = func(boundary string) {
+		stage = "source network observation: " + boundary
+	}
 	err := withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, finalTiming, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
 		case censusGate <- struct{}{}:

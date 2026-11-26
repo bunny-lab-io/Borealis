@@ -279,6 +279,8 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 			}))
 			defer server.Close()
 			runner := &kubernetesClusterStepRunner{kube: &kubernetesAPIClient{baseURL: server.URL, token: "synthetic-private", httpClient: server.Client()}, namespace: "borealis", controllerHolder: lease.ControllerHolder, actionImage: "registry.example/api@sha256:" + strings.Repeat("a", 64), jobPollInterval: time.Millisecond}
+			var rejection string
+			runner.sourceObservationRejected = func(phase string) { rejection = phase }
 			if mode == "wrong controller" {
 				runner.controllerHolder = "other"
 			}
@@ -337,6 +339,10 @@ func TestClusterSSHSourceActionFreshJobReceiptAndAuthority(t *testing.T) {
 				}
 			} else if err != clusterbootstrap.ErrPreparationConfig || got != (clusterbootstrap.SourceNetwork{}) {
 				t.Fatalf("unsafe observation: %v", err)
+			}
+			expectedBoundary := map[string]string{"success": "", "wrong source": "observed host identity", "wrong nonce": "receipt integrity", "two pods": "Pod list read", "lost authority": "authority after Job completion"}
+			if want, ok := expectedBoundary[mode]; ok && rejection != want {
+				t.Fatalf("observation rejected at %q, want %q", rejection, want)
 			}
 			if mode != "success" && posts.Load() > 1 {
 				t.Fatal("POST retried")

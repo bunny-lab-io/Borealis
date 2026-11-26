@@ -282,6 +282,9 @@ type kubernetesClusterStepRunner struct {
 	postgresReplicationProbe      func(context.Context, string, int64) (bool, error)
 	persistRemovalFence           func(context.Context, clusterControllerOperation, clusterRemovalFence) error
 	recordOperationSoak           clusterOperationSoakRecorder
+
+	// Set only on the private runner copy for one broker read.
+	sourceObservationRejected func(string)
 }
 
 func clusterControllerMode() bool {

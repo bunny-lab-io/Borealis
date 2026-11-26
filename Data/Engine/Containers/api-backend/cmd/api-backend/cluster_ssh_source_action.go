@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -114,11 +115,17 @@ type clusterSSHHostObservationReceipt struct {
 }
 
 func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context, host clusterSSHObservationHost, operationID, version, address string, inspectVIP bool, check func() bool) (clusterSSHHostObservationReceipt, error) {
-	fail := func() (clusterSSHHostObservationReceipt, error) {
+	started := time.Now()
+	fail := func(phase string) (clusterSSHHostObservationReceipt, error) {
+		// These labels are fixed. Never include the manager response, Kubernetes body or credentials.
+		if r != nil && r.sourceObservationRejected != nil {
+			r.sourceObservationRejected(phase)
+		}
+		log.Printf("SSH source observation rejected at %s after %s (context: %v)", phase, time.Since(started).Round(time.Millisecond), ctx.Err())
 		return clusterSSHHostObservationReceipt{}, clusterbootstrap.ErrPreparationConfig
 	}
 	if r == nil || r.kube == nil || r.namespace != "borealis" || r.controllerHolder == "" || !clusterUUIDRE.MatchString(operationID) || !borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) || check == nil || ctx.Err() != nil {
-		return fail()
+		return fail("inputs")
 	}
 	nonce := newClusterUUID()
 	name := "borealis-source-" + strings.ReplaceAll(nonce, "-", "")
@@ -131,12 +138,15 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 	var job map[string]any
 	// One POST only. Conflict or an uncertain POST receipt fails this read;
 	// neither a name lookup nor old successful Job can substitute for it.
-	if !check() || r.kube.doClusterSSHSourceJSON(ctx, http.MethodPost, "/apis/batch/v1/namespaces/borealis/jobs", manifest, &job) != nil {
-		return fail()
+	if !check() {
+		return fail("authority before Job creation")
+	}
+	if r.kube.doClusterSSHSourceJSON(ctx, http.MethodPost, "/apis/batch/v1/namespaces/borealis/jobs", manifest, &job) != nil {
+		return fail("Job creation")
 	}
 	uid, _ := nestedMap(job, "metadata")["uid"].(string)
 	if !clusterbootstrap.ValidSourceReceiptIdentity(nonce, uid, uid) || !validClusterSSHSourceJob(job, manifest, uid) {
-		return fail()
+		return fail("created Job identity")
 	}
 	path := "/apis/batch/v1/namespaces/borealis/jobs/" + name
 	podsPath := "/api/v1/namespaces/borealis/pods?labelSelector=" + url.QueryEscape("batch.kubernetes.io/controller-uid="+uid)
@@ -160,33 +170,36 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 	for {
 		if !time.Now().Before(nextCheck) {
 			if !check() {
-				return fail()
+				return fail("authority during Job execution")
 			}
 			nextCheck = time.Now().Add(5 * time.Second)
 		}
 		// JSON decoding into a reused map retains omitted keys. Each read
 		// must stand alone, including metadata and completion state.
 		job = nil
-		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, path, nil, &job) != nil || !validClusterSSHSourceJob(job, manifest, uid) {
-			return fail()
+		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, path, nil, &job) != nil {
+			return fail("Job status read")
+		}
+		if !validClusterSSHSourceJob(job, manifest, uid) {
+			return fail("observed Job identity")
 		}
 		status := nestedMap(job, "status")
 		if !sourceCount(status["failed"], 0) || !validSourceConditions(status) || sourceConditionTrue(status, "Failed") || sourceConditionTrue(status, "FailureTarget") {
-			return fail()
+			return fail("Job failure or invalid conditions")
 		}
 		var pods clusterSSHJobPods
 		if r.kube.doClusterSSHSourceJSON(ctx, http.MethodGet, podsPath, nil, &pods) != nil {
-			return fail()
+			return fail("Pod list read")
 		}
 		if len(pods) == 1 {
 			podUID, _ := nestedMap(pods[0], "metadata")["uid"].(string)
 			if observedPodUID != "" && podUID != observedPodUID {
-				return fail()
+				return fail("Pod replacement")
 			}
 			observedPodUID = podUID
 			message, complete, err := clusterSSHSourcePodMessage(pods[0], manifest, nonce, uid)
 			if err != nil {
-				return fail()
+				return fail("Pod contract or exit status")
 			}
 			var value clusterbootstrap.SourceVIPNetwork
 			if message != "" {
@@ -196,21 +209,24 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 					value.Network, err = clusterbootstrap.ParseSourceNetworkReceipt([]byte(message), nonce, uid, podUID)
 				}
 				if err != nil {
-					return fail()
+					return fail("receipt integrity")
 				}
 			}
 			network := value.Network
 			if complete && sourceConditionTrue(status, "Complete") && sourceCount(status["succeeded"], 1) && sourceCount(status["active"], 0) {
 				if network.NodeUID != host.NodeUID || network.Hostname != host.Hostname || network.MachineID != host.MachineID ||
-					network.BootID != host.BootID || !network.ManagementLink.MatchesAddress(host.Address) || network.K3sVersion != version || !check() {
-					return fail()
+					network.BootID != host.BootID || !network.ManagementLink.MatchesAddress(host.Address) || network.K3sVersion != version {
+					return fail("observed host identity")
+				}
+				if !check() {
+					return fail("authority after Job completion")
 				}
 				return clusterSSHHostObservationReceipt{value, nonce, uid, podUID}, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return fail()
+			return fail("waiting for Job completion")
 		case <-earlyPoll:
 			earlyPoll = nil
 		case <-ticker.C:
