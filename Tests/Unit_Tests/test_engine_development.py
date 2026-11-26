@@ -97,6 +97,30 @@ class DevelopmentSnapshotTests(unittest.TestCase):
                     self.assertIn("label:io.borealis.service=test", command)
                     self.assertFalse(any("docker.sock" in arg for arg in command))
 
+    def test_offline_frontend_uses_pinned_node_and_current_lockfile_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "data/web-interface/package-lock.json"
+            lock.parent.mkdir(parents=True)
+            lock.write_text("{}")
+            node = root / dev.images.WEBUI_NODE_SHA256
+            node.mkdir()
+            (node / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}')
+            cache = root / dev.bootstrap.digest(lock)
+            (cache / "_cacache").mkdir(parents=True)
+            item = {"dockerfile": "Data/Engine/Containers/webui-frontend/Dockerfile", "targets": {"prod": "prod"}}
+            def command():
+                return dev.images.development_image_command(["buildctl"], root, root / "Dockerfile",
+                                                            item, "image:dev", root / "image.oci", [])
+            with patch.object(dev.images, "WEBUI_BUILD_INPUTS", root), patch.dict("os.environ", BOREALIS_BUILD_INPUTS_OFFLINE="1"):
+                args = command()
+                self.assertIn(f"context:node:22-alpine=oci-layout://node@sha256:{node.name}", args)
+                self.assertIn(f"npm-seed={cache}", args)
+                self.assertIn("build-arg:NPM_CONFIG_OFFLINE=true", args)
+                lock.write_text('{"changed":true}')
+                with self.assertRaisesRegex(ValueError, "cache for this npm lockfile"):
+                    command()
+
     def test_upgrade_history_fast_forwards_existing_member_without_origin(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

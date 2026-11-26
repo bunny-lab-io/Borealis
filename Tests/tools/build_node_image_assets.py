@@ -113,6 +113,9 @@ def build_runtime(source: Path, go_bin: str) -> Path:
 # Development workers receive only this private BuildKit socket. The release
 # builder continues to use its ephemeral buildx instance in GitHub Actions.
 DEV_BUILDKIT = Path("/run/borealis-buildkit/buildkitd.sock")
+WEBUI_BUILD_INPUTS = Path("/build-inputs/webui")
+# linux/amd64 manifest from the Node 22 Alpine index used by the Engine.
+WEBUI_NODE_SHA256 = "12f54cafa58d0e96554ae05871e29663ff7241836377dc9a7916449b8adb062c"
 
 
 def development_builder():
@@ -134,6 +137,17 @@ def development_image_command(builder, context, dockerfile, item, reference, exp
         args.extend(["--opt", "label:" + label])
     if "targets" in item:
         args.extend(["--opt", "target=" + item["targets"]["prod"]])
+    if (item.get("dockerfile") == "Data/Engine/Containers/webui-frontend/Dockerfile"
+            and os.environ.get("BOREALIS_BUILD_INPUTS_OFFLINE") == "1"):
+        node = WEBUI_BUILD_INPUTS / WEBUI_NODE_SHA256
+        lock = source_path(context, "data/web-interface/package-lock.json")
+        npm = WEBUI_BUILD_INPUTS / bootstrap.digest(lock)
+        if not (npm / "_cacache").is_dir() or not (node / "oci-layout").is_file():
+            raise ValueError("offline WebUI build requires the pinned Node layout and a cache for this npm lockfile")
+        args.extend(["--oci-layout", f"node={node}",
+                     "--opt", f"context:node:22-alpine=oci-layout://node@sha256:{WEBUI_NODE_SHA256}",
+                     "--local", f"npm-seed={npm}", "--opt", "context:borealis-npm-seed=local:npm-seed",
+                     "--opt", "build-arg:NPM_CONFIG_OFFLINE=true"])
     return args
 
 

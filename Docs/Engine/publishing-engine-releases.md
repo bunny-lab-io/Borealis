@@ -40,6 +40,8 @@ python3 Tests/tools/build_engine_development.py build \
 
 To reuse a retained immutable release, add `--reuse-release "$RETAINED_RELEASE"`. Unchanged roles retain their original image reference and digest. The packager compares their tracked build inputs and file modes before reuse.
 
+For an offline WebUI rebuild, mount the verified Linux AMD64 Node OCI layout and the npm download cache read-only under `/build-inputs/webui`. Name the layout directory for the pinned Node manifest SHA-256 and the cache directory for the frozen frontend `package-lock.json` SHA-256. Seed the latter using the locked public packages on the same platform with lifecycle scripts disabled. The build worker runs the normal dependency installation and production compilation offline. A missing or damaged required package stops the build.
+
 The command prints the published local directory. Use `verify DIRECTORY` with the same tool to check its source binding and content identity. A complete five-family package has a `dev-` identity derived from its manifest. Select `--family host_package` to exercise only frozen Ubuntu packaging. A partial build has a `components-` identity. Neither form publishes a GitHub tag. The native `borealis-node-manager development-candidate-proof` command verifies the complete local catalog and all artifact digests. This read-only check leaves installation, operation authority and cluster health untested. Current RC29 Engines still require an immutable GitHub release for rolling deployment and onboarding.
 
 ### Deploy a retained development snapshot

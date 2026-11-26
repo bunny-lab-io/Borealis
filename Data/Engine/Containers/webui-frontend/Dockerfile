@@ -1,7 +1,10 @@
+FROM scratch AS borealis-npm-seed
+
 FROM node:22-alpine AS deps
 
 ARG BOREALIS_ENGINE_RUNTIME_UID=64646
 ARG BOREALIS_ENGINE_RUNTIME_GID=64646
+ARG NPM_CONFIG_OFFLINE=false
 
 ENV NODE_ENV=development
 
@@ -11,7 +14,8 @@ RUN addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
 WORKDIR /opt/Borealis/Data/Engine/web-interface
 
 COPY data/web-interface/package.json data/web-interface/package-lock.json /opt/Borealis/Data/Engine/web-interface/
-RUN npm ci --include=dev --no-fund --audit=false
+RUN --mount=type=bind,from=borealis-npm-seed,target=/root/.npm,rw \
+    npm ci --include=dev --no-fund --audit=false
 
 FROM deps AS source
 

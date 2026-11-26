@@ -103,7 +103,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | site-worker | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | traefik-edge | Traefik container image (`traefik:v3.7`) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
 | traefik-edge | Traefik (Borealis-managed local HTTPS edge and ACME client) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
-| webui-frontend | Node.js container base image (`node:22-alpine`) | [MIT plus Alpine package licenses](https://github.com/nodejs/node/blob/main/LICENSE) |
+| webui-frontend | Node.js container base image (`node:22-alpine`), with Linux AMD64 manifest `sha256:12f54cafa58d0e96554ae05871e29663ff7241836377dc9a7916449b8adb062c` for offline development builds. An empty `scratch` stage supplies the default npm cache mount. | [MIT plus Alpine package licenses](https://github.com/nodejs/node/blob/main/LICENSE) |
 | webui-frontend | @emotion/react 11.14.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @emotion/styled 11.14.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @fortawesome/fontawesome-free 7.3.1 | [CC-BY-4.0 AND OFL-1.1 AND MIT](https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt) |
