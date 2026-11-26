@@ -4,9 +4,12 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"crypto/cipher"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,7 +104,31 @@ func newClusterSSHVIPBroker(store *postgresOperatorStore, runner *kubernetesClus
 			defer cancel()
 			return store.loadClusterSSHPreparationAuthority(ctx, v.Request.Lease, v.Request.Baseline, v.Request.sealed())
 		}
-		return withClusterSSHVIPOwner(ctx, v.observationTimeout(), authority, v.Sources, runner.newSSHSourceVIPRead(authority), runner.kube.readClusterSSHVIPLease, consume)
+		lease := v.Request.Lease
+		started := time.Now()
+		var first atomic.Pointer[string]
+		record := func(line string) {
+			first.CompareAndSwap(nil, &line)
+		}
+		ctx = context.WithValue(ctx, clusterSSHPreparationObserverKey{}, record)
+		log.Printf("cluster SSH VIP observation entered operation=%s target=%s attempt=%d generation=%d", lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation)
+		err := withClusterSSHVIPOwner(ctx, v.observationTimeout(), authority, v.Sources, runner.newSSHSourceVIPRead(authority), runner.kube.readClusterSSHVIPLease, consume)
+		line := fmt.Sprintf("VIP observation status=completed elapsed_ms=%d", time.Since(started).Milliseconds())
+		if err != nil {
+			line = fmt.Sprintf("VIP observation status=failed check=scope_completion elapsed_ms=%d", time.Since(started).Milliseconds())
+			if failure := first.Load(); failure != nil {
+				line = *failure
+			}
+			// Authority has already failed. Record its first cause even after context cancellation.
+			write, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			saveErr := store.recordSSHPreparationCheckpoint(write, lease, line)
+			stop()
+			if saveErr != nil {
+				log.Printf("cluster SSH VIP failure evidence unavailable in operation journal operation=%s target=%s attempt=%d generation=%d", lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation)
+			}
+		}
+		log.Printf("%s operation=%s target=%s attempt=%d generation=%d", line, lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation)
+		return err
 	}
 	return b
 }

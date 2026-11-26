@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -171,6 +172,13 @@ func TestPreparationPinnedSSH(t *testing.T) {
 			defer credential.Destroy()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			var diagnostic, observed bytes.Buffer
+			if mode == "inspect remote failure" || mode == "inspect progress" {
+				ctx = WithPreparationObserver(ctx, func(line string) { observed.WriteString(line); observed.WriteByte(10) })
+				original := log.Writer()
+				log.SetOutput(&diagnostic)
+				t.Cleanup(func() { log.SetOutput(original) })
+			}
 			client, err := server.transport.Connect(ctx, server.target, server.key, credential)
 			if err != nil {
 				t.Fatal(err)
@@ -240,6 +248,16 @@ func TestPreparationPinnedSSH(t *testing.T) {
 			}
 			if err != nil && err != ErrBootstrapVerification {
 				t.Fatal("private error escaped", err)
+			}
+			if mode == "inspect remote failure" || mode == "inspect progress" {
+				out := diagnostic.String()
+				wanted := "status=completed last_completed=final_authority"
+				if mode == "inspect remote failure" {
+					wanted = "reason=remote_process_exit exit_code=1"
+				}
+				if !strings.Contains(observed.String(), wanted) || !strings.Contains(observed.String(), "expected=exit_zero_and_bounded_stderr") || !strings.Contains(out, wanted) || !strings.Contains(out, "target="+expected.Target.TargetID) || strings.Contains(out, string(server.password)) || strings.Contains(out, "private sudo fixture") {
+					t.Fatal("incomplete or unsafe SSH diagnostic")
+				}
 			}
 			if err == nil && !consumed.Load() {
 				t.Fatal("successful result without complete payload")

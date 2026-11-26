@@ -5,7 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -73,12 +76,29 @@ func withClusterSSHVIPOwner(parent context.Context, maximum time.Duration, autho
 	}
 	gate := make(chan struct{}, 1)
 	var progress clusterbootstrap.VIPLeaseProgress
+	// Latch the original observation before canceling the Job and sibling polls.
+	// Only closed-vocabulary observations are emitted; kube/SQL errors may carry private data.
+	var rejected sync.Once
+	emit, _ := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string))
+	reject := func(check, expected, observed string, started time.Time) {
+		if emit != nil {
+			rejected.Do(func() {
+				emit(fmt.Sprintf("VIP observation status=failed check=%s expected=%s observed=%s elapsed_ms=%d installation_effects=none", check, expected, observed, time.Since(started).Milliseconds()))
+			})
+		}
+	}
 	// Expiry cancels consumers even while a lease GET or source Job is waiting.
 	// A timer race may fail early, but can never resurrect an expired scope.
-	expiry := time.AfterFunc(5*time.Second, cancel)
+	scopeStarted := time.Now()
+	expiry := time.AfterFunc(5*time.Second, func() {
+		reject("vip_renewal", "renewal_within_five_seconds", "freshness_expired", scopeStarted)
+		cancel()
+	})
 	defer expiry.Stop()
 	poll := func(ctx context.Context) (clusterbootstrap.VIPLease, bool, error) {
-		fail := func() (clusterbootstrap.VIPLease, bool, error) {
+		began := time.Now()
+		fail := func(check, expected, observed string) (clusterbootstrap.VIPLease, bool, error) {
+			reject(check, expected, observed, began)
 			cancel()
 			return clusterbootstrap.VIPLease{}, false, clusterbootstrap.ErrPreparationConfig
 		}
@@ -86,29 +106,40 @@ func withClusterSSHVIPOwner(parent context.Context, maximum time.Duration, autho
 		case gate <- struct{}{}:
 			defer func() { <-gate }()
 		case <-ctx.Done():
-			return fail()
+			return fail("poll_queue", "live_context", "scope_closed")
 		}
 		if checkAuthority(ctx) != nil {
-			return fail()
+			return fail("authority_before_lease", "current_frozen_authority", "rejected")
 		}
 		started := time.Now()
 		readCtx, stop := context.WithTimeout(ctx, time.Second)
 		lease, err := readLease(readCtx)
 		readErr := readCtx.Err()
 		stop()
-		if err != nil || readErr != nil || checkAuthority(ctx) != nil || ctx.Err() != nil {
-			return fail()
+		if err != nil || readErr != nil {
+			observed := "read_or_parse_rejected"
+			switch {
+			case errors.Is(readErr, context.DeadlineExceeded):
+				observed = "deadline_exceeded"
+			case errors.Is(readErr, context.Canceled):
+				observed = "scope_canceled"
+			}
+			began = started
+			return fail("vip_lease_get", "valid_lease_within_one_second", observed)
+		}
+		if checkAuthority(ctx) != nil || ctx.Err() != nil {
+			return fail("authority_after_lease", "current_frozen_authority", "rejected")
 		}
 		found := false
 		for _, member := range expected.Source.Members {
 			found = found || member.Name == lease.Holder
 		}
 		if !found {
-			return fail()
+			return fail("vip_holder", "source_member", "unrecognized_holder")
 		}
 		ready, deadline, err := progress.Observe(lease, started, time.Now())
 		if err != nil || ctx.Err() != nil {
-			return fail()
+			return fail("vip_lease_progress", "fresh_same_epoch", "renewal_rejected")
 		}
 		expiry.Reset(time.Until(deadline))
 		return lease, ready, nil

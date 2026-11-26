@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -197,6 +198,49 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 	// the exact bounded session budget, including identity activation.
 	maximum := clusterSSHPreparationSourceBudget(joining)
 	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, leaseCheck, func(ctx context.Context) (result error) {
+		var phase, last string
+		var finalSnapshotPassed bool
+		var began time.Time
+		emit, _ := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string))
+		mark := func(next string) {
+			if emit == nil {
+				return
+			}
+			if phase != "" {
+				last = phase
+				emit(fmt.Sprintf("Source preparation phase=%s status=completed elapsed_ms=%d", phase, time.Since(began).Milliseconds()))
+			}
+			phase, began = next, time.Now()
+			emit(fmt.Sprintf("Source preparation phase=%s status=entered last_completed=%s", phase, last))
+		}
+		defer func() {
+			if emit == nil {
+				return
+			}
+			status := "completed"
+			if result != nil && !finalSnapshotPassed {
+				status = "failed"
+			}
+			emit(fmt.Sprintf("Source preparation phase=%s status=%s elapsed_ms=%d last_completed=%s", phase, status, time.Since(began).Milliseconds(), last))
+		}()
+		cleanup := func(name string, close func() error, rejection error) {
+			began := time.Now()
+			if emit != nil {
+				emit(fmt.Sprintf("Source cleanup resource=%s status=entered", name))
+			}
+			err := close()
+			if err != nil {
+				result = rejection
+			}
+			if emit != nil {
+				status := "completed"
+				if err != nil {
+					status = "failed"
+				}
+				emit(fmt.Sprintf("Source cleanup resource=%s status=%s elapsed_ms=%d", name, status, time.Since(began).Milliseconds()))
+			}
+		}
+		mark("source_snapshot")
 		snapshotRead := client.snapshotReadFor(authority, lease, baseline, sealed, joining)
 		initial, err := snapshotRead(ctx)
 		read := func(ctx context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error) {
@@ -213,11 +257,13 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			if allocate == nil {
 				return clusterbootstrap.ErrSessionAuthority
 			}
+			mark("allocation")
 			scratchParent, err = allocate(ctx)
 			if err != nil {
 				return err
 			}
 		}
+		mark("configuration")
 		config, err := clusterbootstrap.NewPreparationConfiguration(expected, settings)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "source configuration")
@@ -232,115 +278,107 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		// private release files cannot change a host. Keep claim/credential
 		// checks live here and re-read the complete snapshot before handoff.
 		checkBytes := checks.privateArtifactCheck(joining)
+		mark("bootstrap_binding")
 		inputs, err := prepareClusterSSHTargetInputs(ctx, expected, config, scratchParent, checkBytes, prepareClusterSSHBootstrap)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "bootstrap binding")
 			return clusterbootstrap.ErrPreparationConfig
 		}
-		defer func() {
-			if inputs.Close() != nil {
-				result = clusterbootstrap.ErrPreparationConfig
-			}
-		}()
+		defer cleanup("inputs", inputs.Close, clusterbootstrap.ErrPreparationConfig)
 		checks.Storage = newClusterSSHPrejoinWorkerStorageRead(ctx, initial.Storage, checks.Authority)
+		mark("host_package_inventory")
 		packages, err := resolveClusterSSHHostPackageInventory(ctx, expected.Source)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "host package inventory")
 			return err
 		}
+		mark("host_package_staging")
 		packageBytes, err := packages.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "host package staging")
 			return err
 		}
+		mark("host_package_binding")
 		if err := inputs.BindHostPackages(ctx, expected, packageBytes, checkBytes); err != nil {
 			_ = packageBytes.Close()
 			reportClusterSSHPrejoinCheck(ctx, "host package binding")
 			return err
 		}
+		mark("host_package_demand")
 		packageDemand, err := packages.demands(ctx, packageBytes, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "host package demand")
 			return err
 		}
+		mark("join_broker")
 		joinClient, err := newClusterSSHJoinBrokerClient()
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "join broker configuration")
 			return clusterbootstrap.ErrK3sJoinMaterial
 		}
 		checks.K3sJoin = newClusterSSHPreparationJoinRead(ctx, joinClient, expected, initial.Sources, lease, baseline, sealed, authority, checks.Authority)
+		mark("application_inventory")
 		inventory, err := resolveClusterSSHImageInventory(ctx, expected.Source)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "application inventory")
 			return err
 		}
+		mark("application_archives")
 		images, err := inventory.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "application image staging")
 			return err
 		}
-		defer func() {
-			if images.Close() != nil {
-				result = clusterbootstrap.ErrImageArchive
-			}
-		}()
+		defer cleanup("images", images.Close, clusterbootstrap.ErrImageArchive)
+		mark("external_inventory")
 		externalInventory, err := resolveClusterSSHExternalInventory(ctx, expected.Source)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "external inventory")
 			return err
 		}
+		mark("external_archives")
 		externalImages, err := externalInventory.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "external image staging")
 			return err
 		}
-		defer func() {
-			if externalImages.Close() != nil {
-				result = clusterbootstrap.ErrImageArchive
-			}
-		}()
+		defer cleanup("externalImages", externalImages.Close, clusterbootstrap.ErrImageArchive)
+		mark("postgres_acquisition")
 		postgresImage, err := clusterbootstrap.AcquirePostgresImage(ctx, scratchParent, initial.Storage.Requirements.PostgresImage.Resolved, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "PostgreSQL image acquisition")
 			return err
 		}
-		defer func() {
-			if postgresImage.Close() != nil {
-				result = clusterbootstrap.ErrImageArchive
-			}
-		}()
+		defer cleanup("postgresImage", postgresImage.Close, clusterbootstrap.ErrImageArchive)
 		// Static publications may have changed during dynamic acquisition.
+		mark("publication_recheck")
 		if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checkBytes(ctx) != nil {
 			reportClusterSSHPrejoinCheck(ctx, "publication recheck")
 			return clusterbootstrap.ErrImageArchive
 		}
 		// Compose target demands separately from physically reserved PostgreSQL
 		// acquisition scratch. Complete K3s assets remain owned through consumption.
+		mark("k3s_inventory")
 		k3s, err := resolveClusterSSHK3sInventory(ctx, expected.Source, expected.K3sVersion)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "K3s inventory")
 			return err
 		}
+		mark("k3s_archives")
 		k3sInputs, err := k3s.stage(ctx, scratchParent, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "K3s staging")
 			return err
 		}
-		defer func() {
-			if k3sInputs.Close() != nil {
-				result = clusterbootstrap.ErrImageArchive
-			}
-		}()
+		defer cleanup("k3sInputs", k3sInputs.Close, clusterbootstrap.ErrImageArchive)
+		mark("artifact_binding")
 		artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected.Source, expected.K3sVersion, initial.Storage.Requirements.PostgresImage.Resolved, images, k3sInputs, externalImages, postgresImage, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "artifact set binding")
 			return err
 		}
-		defer func() {
-			if artifacts.Close() != nil {
-				result = clusterbootstrap.ErrImageArchive
-			}
-		}()
+		defer cleanup("artifacts", artifacts.Close, clusterbootstrap.ErrImageArchive)
+		mark("filesystem_demands")
 		appDemand, err := inventory.demands()
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "application demand")
@@ -377,13 +415,16 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			reportClusterSSHPrejoinCheck(ctx, "combined filesystem demand")
 			return err
 		}
+		mark("bootstrap_demand")
 		bundleDemand, err := inputs.StorageDemand(ctx, expected, checkBytes)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "bootstrap demand")
 			return err
 		}
+		mark("postgres_capacity")
 		if err := withClusterSSHPostgresCapacity(ctx, initial.Storage.Requirements.PostgresImage, postgresImage, checkBytes, baseDemand,
 			func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
+				mark("worker_capacity")
 				capacity, err = clusterSSHPreparationWorkerCapacity(bundleDemand, inventory, externalInventory, k3s, packages, capacity)
 				if err != nil {
 					reportClusterSSHPrejoinCheck(ctx, "worker capacity")
@@ -395,9 +436,11 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				}
 				// The joining consumer rechecks full inputs on both sides of its
 				// target storage check before it can enter native dispatch.
+				mark("target_handoff")
 				if err := consume(ctx, inputs, artifacts, initial.Storage.Requirements.PostgresImage.Resolved, capacity, expected, checks); err != nil {
 					return err
 				}
+				mark("post_dispatch_recheck")
 				fresh, err := inputs.StorageDemand(ctx, expected, checkBytes)
 				if err != nil || fresh != bundleDemand {
 					return clusterbootstrap.ErrImageArchive
@@ -411,6 +454,7 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			reportClusterSSHPrejoinCheck(ctx, "PostgreSQL capacity or source consumer")
 			return err
 		}
+		mark("publication_cleanup")
 		if err := k3s.refresh(ctx); err != nil {
 			return err
 		}
@@ -425,7 +469,10 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		}
 		// A short session heartbeat must not spawn source Jobs. Revalidate full
 		// source/configuration after consumption before acknowledging success.
-		return checks.Inputs(ctx)
+		mark("final_source_snapshot")
+		err = checks.Inputs(ctx)
+		finalSnapshotPassed = err == nil
+		return err
 	})
 }
 

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -121,7 +122,11 @@ func (r *kubernetesClusterStepRunner) readSSHHostObservation(ctx context.Context
 		if r != nil && r.sourceObservationRejected != nil {
 			r.sourceObservationRejected(phase)
 		}
-		log.Printf("SSH source observation rejected at %s after %s (context: %v)", phase, time.Since(started).Round(time.Millisecond), ctx.Err())
+		elapsed := time.Since(started).Round(time.Millisecond)
+		log.Printf("SSH source observation rejected at %s after %s (context: %v) operation=%s", phase, elapsed, ctx.Err(), operationID)
+		if emit, ok := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string)); ok {
+			emit(fmt.Sprintf("Source observation status=failed check=%s expected=verified_source_job observed=rejected context=%v elapsed_ms=%d", phase, ctx.Err(), elapsed.Milliseconds()))
+		}
 		return clusterSSHHostObservationReceipt{}, clusterbootstrap.ErrPreparationConfig
 	}
 	if r == nil || r.kube == nil || r.namespace != "borealis" || r.controllerHolder == "" || !clusterUUIDRE.MatchString(operationID) || !borealisOperatorImmutableImageRefPattern.MatchString(r.actionImage) || check == nil || ctx.Err() != nil {

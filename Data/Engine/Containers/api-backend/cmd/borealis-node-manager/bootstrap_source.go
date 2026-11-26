@@ -38,6 +38,22 @@ func writeBootstrapInspectionFailure(journal string, stage bootstrapSourceStage,
 	}
 }
 
+// The caller supplies a protocol-validated request and fixed classifications.
+func writeBootstrapSessionEvent(journal string, binding clusterbootstrap.SessionBinding, action string, stage bootstrapSourceStage, status, guardReason string, elapsed time.Duration) {
+	if binding.Validate() != nil {
+		return
+	}
+	conn, err := net.DialTimeout("unixgram", journal, 100*time.Millisecond)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	if conn.SetWriteDeadline(time.Now().Add(100*time.Millisecond)) == nil {
+		fmt.Fprintf(conn, "SYSLOG_IDENTIFIER=borealis-native-preparation\nMESSAGE=operation=%s target=%s attempt=%d generation=%d action=%s phase=%s status=%s elapsed_ms=%d guard=%s\n",
+			binding.OperationID, binding.TargetID, binding.OperationAttempt, binding.Generation, action, stage, status, elapsed.Milliseconds(), guardReason)
+	}
+}
+
 func bootstrapSourceSessionContained(args []string) {
 	bootstrapSourceSessionContainedFor(args, false)
 }
@@ -57,51 +73,66 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 	defer guard.Close()
 	started := time.Now()
 	var firstFailure sync.Once
-	report := func(action string, stage bootstrapSourceStage, err error) error {
-		if action == "inspect_preparation_progress" && err != nil {
+	report := func(request clusterbootstrap.PreparationSessionRequest, stage bootstrapSourceStage, err error) error {
+		if err != nil {
 			firstFailure.Do(func() {
 				var specific bootstrapSourceStage
 				if errors.As(err, &specific) {
 					stage = specific
 				}
-				writeBootstrapInspectionFailure("/run/systemd/journal/socket", stage, time.Since(started))
+				if _, validErr := request.Expected(); validErr != nil {
+					return
+				}
+				if request.Action == "inspect_preparation_progress" {
+					writeBootstrapInspectionFailure("/run/systemd/journal/socket", stage, time.Since(started))
+				}
+				writeBootstrapSessionEvent("/run/systemd/journal/socket", request.Session.Binding, request.Action, stage, "failed", guard.FailureReason(), time.Since(started))
 			})
 		}
 		return err
 	}
 	verify := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest) error {
 		if err := verifyBootstrapSource(ctx, request, true); err != nil {
-			return report(request.Action, "host_verification", err)
+			return report(request, "host_verification", err)
 		}
 		if request.IdentitySource != nil {
 			_, err := bootstrapPrejoinQuiescence(ctx, request)
-			return err
+			return report(request, "target_quiescence", err)
 		}
 		return nil
 	}
 	var progress clusterbootstrap.PreparationProgress
 	var completion *clusterbootstrap.PrejoinPreparationReceipt
-	receive := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) error {
+	receive := func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (result error) {
 		expected, err := request.Expected()
 		if err != nil || request.Session.Nonce != nonce {
 			return errBootstrapSource
 		}
+		began := time.Now()
+		writeBootstrapSessionEvent("/run/systemd/journal/socket", expected.Target, request.Action, "receive", "entered", guard.FailureReason(), 0)
+		defer func() {
+			if result != nil {
+				report(request, "input_transfer_or_cleanup", result)
+			} else {
+				writeBootstrapSessionEvent("/run/systemd/journal/socket", expected.Target, request.Action, "receive", "completed", guard.FailureReason(), time.Since(began))
+			}
+		}()
 		check := func(ctx context.Context) error {
 			if guard.CheckAuthority(ctx) != nil {
-				return report(request.Action, "executor_authority", errBootstrapSource)
+				return report(request, "executor_authority", errBootstrapSource)
 			}
 			return nil
 		}
 		executable, err := os.Executable()
 		if err != nil {
-			return report(request.Action, "receiver_executable", errBootstrapSource)
+			return report(request, "receiver_executable", errBootstrapSource)
 		}
 		// The outer root wrapper owns this entire parent and removes it even
 		// when this helper exits without running input cleanup. Never stage
 		// direct /opt children beyond that wrapper's exact cleanup ownership.
 		scratch, err := bootstrapSourceScratch(executable, bootstrapSourceSafeDirectory)
 		if err != nil {
-			return report(request.Action, "receiver_scratch", errBootstrapSource)
+			return report(request, "receiver_scratch", errBootstrapSource)
 		}
 		consume := func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts, join *clusterbootstrap.K3sJoinMaterial) error {
 			if check(ctx) != nil || verify(ctx, request) != nil || check(ctx) != nil {
@@ -110,14 +141,14 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			// The supervised root helper owns only this fixed private journal.
 			// Parent safety is checked independently before creating its leaf.
 			if bootstrapSourceSafeDirectory("/var/lib") != nil || ensureBootstrapMutationRoot("/var/lib") != nil {
-				return report(request.Action, "journal_directory", errBootstrapSource)
+				return report(request, "journal_directory", errBootstrapSource)
 			}
 			authority := func(ctx context.Context) error {
 				if err := check(ctx); err != nil {
 					return err
 				}
 				if err := verifyBootstrapSource(ctx, request, false); err != nil {
-					return report(request.Action, "journal_authority", err)
+					return report(request, "journal_authority", err)
 				}
 				return check(ctx)
 			}
@@ -127,12 +158,12 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			}
 			journal, err := openJournal(ctx, bootstrapMutationRoot, expected.Target, expected.Source, nonce, authority)
 			if err != nil {
-				return report(request.Action, "journal_open", errBootstrapSource)
+				return report(request, "journal_open", errBootstrapSource)
 			}
 			if request.IdentitySource != nil {
 				install, installErr := bootstrapPrejoinInstallation(ctx, request, authority)
 				if installErr != nil {
-					return errors.Join(installErr, journal.Close())
+					return errors.Join(report(request, "installation_binding", installErr), report(request, "journal_close", journal.Close()))
 				}
 				switch request.Action {
 				case "activate_prejoin_identity", "reconcile_prejoin_identity_activation":
@@ -227,12 +258,12 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 				default:
 					err = errBootstrapSource
 				}
-				return errors.Join(err, journal.Close())
+				return errors.Join(report(request, "native_action", err), report(request, "journal_close", journal.Close()))
 			}
 			switch request.Action {
 			case "inspect_preparation_progress":
 				progress, err = inputs.InspectPreparationProgress(ctx, journal)
-				report(request.Action, "journal_cursor", err)
+				report(request, "journal_cursor", err)
 			case "stage_source":
 				_, err = inputs.PublishSource(ctx, journal)
 			case "reconcile_source":
@@ -258,7 +289,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			default:
 				err = errBootstrapSource
 			}
-			return errors.Join(err, journal.Close())
+			return errors.Join(report(request, "native_action", err), report(request, "journal_close", journal.Close()))
 		}
 		if artifacts {
 			if request.IdentitySource == nil || !(bootstrapArtifactAction(request.Action) || clusterbootstrap.HostPackagePreparationAction(request.Action)) {
@@ -287,7 +318,7 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs) error {
 				return consume(ctx, inputs, nil, nil, nil)
 			})
-		return report(request.Action, "input_transfer_or_cleanup", err)
+		return report(request, "input_transfer_or_cleanup", err)
 	}
 	var sessionErr error
 	if artifacts {

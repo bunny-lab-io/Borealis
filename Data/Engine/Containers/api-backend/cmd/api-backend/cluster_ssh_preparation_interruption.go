@@ -129,11 +129,21 @@ func (s *postgresOperatorStore) recordSSHPreparationReadOnlyReturn(ctx context.C
 	if returned {
 		return tx.Commit()
 	}
+	// Keep diagnosis inside the committed return receipt, after scratch cleanup.
+	// It is supplemental evidence and never participates in a fence predicate.
+	evidence := map[string]any{"installation_effects": "none", "last_checkpoint": "read_only_worker_returned_after_cleanup"}
+	if rejection := clusterSSHPrejoinRejectionFor(ctx); rejection != nil {
+		evidence["rejection"] = rejection
+	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO engine.cluster_operation_events(operation_id,event_type,state,message,details_json,created_at)
- SELECT operation_id,$3,'running','Source work ended and its temporary files were removed before target installation.',details_json,
+ SELECT operation_id,$3,'running','Source work ended and its temporary files were removed before target installation.',(details_json::jsonb || jsonb_build_object('diagnostic',$6::jsonb))::text,
  floor(extract(epoch FROM clock_timestamp())) FROM engine.cluster_operation_events
  WHERE operation_id=$1 AND event_type=$4 AND details_json::jsonb->>'worker_sha256'=$5 AND details_json::jsonb->>'attempt'=$2`,
-		lease.OperationID, strconv.FormatInt(lease.OperationAttempt, 10), sshPreparationReturned, sshPreparationAllocated, sshPreparationFenceDigest(lease.Holder))
+		lease.OperationID, strconv.FormatInt(lease.OperationAttempt, 10), sshPreparationReturned, sshPreparationAllocated, sshPreparationFenceDigest(lease.Holder), string(raw))
 	if err != nil {
 		return err
 	}

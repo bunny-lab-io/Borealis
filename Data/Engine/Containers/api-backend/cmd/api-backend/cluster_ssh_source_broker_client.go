@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/cipher"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -106,11 +108,15 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 	var retainedCapacity []clusterSSHPreparationTargetInstanceCPU
 	return func(parent context.Context) (clusterSSHPreparationSnapshot, error) {
 		started := time.Now()
-		fail := func() (clusterSSHPreparationSnapshot, error) {
+		fail := func(check string) (clusterSSHPreparationSnapshot, error) {
+			reportClusterSSHPrejoinCheck(parent, "source snapshot "+check)
+			if emit, ok := parent.Value(clusterSSHPreparationObserverKey{}).(func(string)); ok {
+				emit(fmt.Sprintf("Source snapshot status=failed check=%s observed=rejected elapsed_ms=%d", check, time.Since(started).Milliseconds()))
+			}
 			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
 		}
 		if c == nil || c.peers == nil || c.httpClient == nil || authority == nil || parent.Err() != nil {
-			return fail()
+			return fail("live_reader")
 		}
 		budget := clusterSSHSourceSnapshotTimeout
 		if extendedClusterSSHSourceRead(lease, joining) {
@@ -122,11 +128,11 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 		case gate <- struct{}{}:
 			defer func() { <-gate }()
 		case <-ctx.Done():
-			return fail()
+			return fail("scope_queue")
 		}
 		before, err := authority(ctx)
 		if err != nil || before.Lease != lease || before.Baseline != baseline {
-			return fail()
+			return fail("authority_before")
 		}
 		request := clusterSSHSourceBrokerRequest{Joining: joining, Version: 1, ID: newClusterUUID(), ExpiresAt: time.Now().Unix() + 35,
 			Lease: lease, Baseline: baseline, Binding: sealed.binding, Generation: sealed.generation, Ciphertext: sealed.ciphertext}
@@ -135,39 +141,57 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 			request.ExpiresAt += int64((budget - clusterSSHSourceSnapshotTimeout) / time.Second)
 		}
 		if !request.validSource(time.Now()) {
-			return fail()
+			return fail("request_binding")
 		}
 		value, err := c.fetch(ctx, request)
-		if err != nil || value.Expected.Validate() != nil || !clusterSSHSourceObservationRE.MatchString(value.Observation) ||
-			validateClusterSSHSourceNetworks(before, value.Sources) != nil ||
-			!validClusterSSHStorageSnapshot(value.Storage, before.Source) || !value.Storage.Requirements.KubeVIP.matchesNetworks(value.Sources) || !value.Storage.Requirements.csiSocketMatchesNetworks(value.Sources) ||
-			(retained != "" && (retained != value.Observation || !slices.Equal(retainedSources, value.Sources) || !reflect.DeepEqual(retainedStorage, value.Storage) || !slices.Equal(retainedSites, value.DesiredWorkerSites))) {
-			return fail()
+		switch {
+		case err != nil:
+			return fail("authenticated_response")
+		case value.Expected.Validate() != nil:
+			return fail("valid_expected_configuration")
+		case !clusterSSHSourceObservationRE.MatchString(value.Observation):
+			return fail("observation_digest")
+		case validateClusterSSHSourceNetworks(before, value.Sources) != nil:
+			return fail("source_network_binding")
+		case !validClusterSSHStorageSnapshot(value.Storage, before.Source):
+			return fail("storage_snapshot_binding")
+		case !value.Storage.Requirements.KubeVIP.matchesNetworks(value.Sources):
+			return fail("vip_network_binding")
+		case !value.Storage.Requirements.csiSocketMatchesNetworks(value.Sources):
+			return fail("csi_socket_network_binding")
+		case retained != "" && retained != value.Observation:
+			return fail("retained_observation_digest")
+		case retained != "" && !slices.Equal(retainedSources, value.Sources):
+			return fail("retained_networks")
+		case retained != "" && !reflect.DeepEqual(retainedStorage, value.Storage):
+			return fail("retained_storage")
+		case retained != "" && !slices.Equal(retainedSites, value.DesiredWorkerSites):
+			return fail("retained_worker_sites")
 		}
 		if _, _, ok := clusterSSHDesiredWorkerWorkloadBudget(value); !ok {
-			return fail()
+			return fail("workload_budget")
 		}
 		approved, capacityErr := clusterSSHPreparationCapacityReadiness(before.payload)
 		if capacityErr != nil || (approved == nil && (value.CapacitySHA256 != "" || value.CapacityTargets != nil || value.Expected.TargetCPU != nil)) ||
 			(approved != nil && (value.CapacitySHA256 != approved.Checks[2].SHA256 || len(value.CapacityTargets) != len(approved.Targets) ||
 				!clusterSSHPreparationCapacityCurrentValid(*approved.Capacity, value.CapacityTargets, joining) ||
 				!clusterSSHPreparationCapacityTransition(retainedCapacity, value.CapacityTargets, joining))) {
-			return fail()
+			return fail("approved_capacity")
 		}
 		expected, err := buildClusterSSHPreparationExpected(before.Cohort, before.Source, lease, baseline, before.K3sVersion, value.Expected.PodCIDR, value.Expected.ServiceCIDR, before.payload)
 		if err != nil || !reflect.DeepEqual(expected, value.Expected) || value.Sources[0].PodCIDR != expected.PodCIDR || value.Sources[0].ServiceCIDR != expected.ServiceCIDR {
-			return fail()
+			return fail("expected_network_configuration")
 		}
 		if _, err := clusterbootstrap.NewPreparationConfiguration(expected, value.Settings); err != nil {
-			return fail()
+			return fail("configuration_settings")
 		}
 		after, err := authority(ctx)
 		if err != nil || ctx.Err() != nil {
-			return fail()
+			return fail("authority_after")
 		}
 		before.Cohort.ObservedAt, after.Cohort.ObservedAt = 0, 0
 		if !reflect.DeepEqual(before, after) {
-			return fail()
+			return fail("retained_authority")
 		}
 		retained = value.Observation
 		retainedSources = slices.Clone(value.Sources)
@@ -285,28 +309,33 @@ func (c *clusterSSHSourceBrokerClient) recoveryNodeRead(authority clusterSSHPrep
 }
 
 func (c *clusterSSHSourceBrokerClient) exchange(parent context.Context, request clusterSSHSourceBrokerRequest) (clusterSSHSourceBrokerResponse, error) {
-	fail := func() (clusterSSHSourceBrokerResponse, error) {
+	started := time.Now()
+	fail := func(check, observed string) (clusterSSHSourceBrokerResponse, error) {
+		reportClusterSSHPrejoinCheck(parent, "source broker "+check+" "+observed)
+		if emit, ok := parent.Value(clusterSSHPreparationObserverKey{}).(func(string)); ok {
+			emit(fmt.Sprintf("Source broker status=failed check=%s observed=%s elapsed_ms=%d", check, observed, time.Since(started).Milliseconds()))
+		}
 		return clusterSSHSourceBrokerResponse{}, clusterbootstrap.ErrPreparationConfig
 	}
 	if c == nil || c.peers == nil || c.httpClient == nil || !request.validSource(time.Now()) || parent.Err() != nil {
-		return fail()
+		return fail("request_binding", "invalid_or_closed")
 	}
 	ctx, cancel := context.WithDeadline(parent, time.Unix(request.ExpiresAt, 0))
 	defer cancel()
 	peers, err := c.peers(ctx)
 	if err != nil || len(peers) == 0 || len(peers) > 3 {
-		return fail()
+		return fail("controller_discovery", "invalid_peer_set")
 	}
 	wire, err := sealClusterSSHSourceBroker(c.requestCipher, request)
 	if err != nil {
-		return fail()
+		return fail("request_seal", "encoding_rejected")
 	}
 	client := *c.httpClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	for _, peer := range peers {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, peer+clusterSSHSourceBrokerPath, bytes.NewReader(wire))
 		if err != nil {
-			return fail()
+			return fail("http_request", "construction_failed")
 		}
 		req.Header.Set("Content-Type", clusterSSHSourceBrokerMedia)
 		req.Header.Set("Accept", clusterSSHSourceBrokerMedia)
@@ -315,23 +344,38 @@ func (c *clusterSSHSourceBrokerClient) exchange(parent context.Context, request 
 		req.GetBody = nil
 		resp, err := client.Do(req)
 		if err != nil {
-			return fail()
+			observed := "transport_error"
+			if errors.Is(err, context.DeadlineExceeded) {
+				observed = "deadline_exceeded"
+			} else if errors.Is(err, context.Canceled) {
+				observed = "canceled"
+			}
+			return fail("controller_exchange", observed)
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, clusterSSHSourceBrokerLimit+1))
 		closeErr := resp.Body.Close()
 		if closeErr != nil {
-			return fail() // Failed cleanup cannot even advance to another peer.
+			return fail("response_close", "cleanup_failed") // Failed cleanup cannot even advance to another peer.
 		}
 		var value clusterSSHSourceBrokerResponse
-		if readErr != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia ||
-			resp.Header.Get("Content-Encoding") != "" || openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil ||
-			value.Version != 55 || value.ID != request.ID || value.Joining != request.Joining || value.Joined != request.Joined || ctx.Err() != nil {
-			return fail()
+		switch {
+		case readErr != nil:
+			return fail("response_body", "read_failed")
+		case resp.StatusCode != http.StatusOK:
+			return fail("http_status_expected_200", fmt.Sprintf("http_%d", resp.StatusCode))
+		case resp.Header.Get("Content-Type") != clusterSSHSourceBrokerMedia || resp.Header.Get("Content-Encoding") != "":
+			return fail("response_headers", "media_or_encoding_rejected")
+		case openClusterSSHSourceBroker(c.responseCipher, raw, &value) != nil:
+			return fail("response_envelope", "authentication_or_encoding_rejected")
+		case value.Version != 55 || value.ID != request.ID || value.Joining != request.Joining || value.Joined != request.Joined:
+			return fail("response_binding", "mismatch")
+		case ctx.Err() != nil:
+			return fail("response_deadline", "scope_closed")
 		}
 		if value.Status == "not_owner" && value.Snapshot == nil && value.Targets == nil {
 			continue
 		}
 		return value, nil
 	}
-	return fail()
+	return fail("controller_ownership", "no_matching_owner")
 }

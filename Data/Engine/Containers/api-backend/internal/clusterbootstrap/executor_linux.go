@@ -184,13 +184,14 @@ func currentExecutorFor(ctx context.Context, nonce string, artifacts bool) (Exec
 // main-process exit/crash triggers control-group cleanup, including setsid
 // descendants. This is containment, not a read-only absence reconciliation.
 type ExecutorGuard struct {
-	mu       sync.Mutex
-	ctx      context.Context
-	deadline time.Time
-	ready    bool
-	notify   func(string) error
-	cancel   context.CancelFunc
-	done     chan struct{}
+	mu         sync.Mutex
+	ctx        context.Context
+	deadline   time.Time
+	ready      bool
+	stopReason string
+	notify     func(string) error
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 func NewExecutorGuard(ctx context.Context, nonce string) (*ExecutorGuard, ExecutorIdentity, error) {
@@ -228,6 +229,11 @@ func newExecutorGuard(ctx context.Context, notify func(string) error, cadence ti
 				if ready && valid {
 					err = notify("WATCHDOG=1")
 				}
+				if ready && !valid {
+					guard.stopReason = "authority_expired"
+				} else if err != nil {
+					guard.stopReason = "watchdog_notification_failed"
+				}
 				guard.mu.Unlock()
 				if ready && (!valid || err != nil) {
 					cancel()
@@ -253,6 +259,7 @@ func (g *ExecutorGuard) ObserveDeadline(deadline time.Time) error {
 	g.deadline = deadline
 	if !g.ready {
 		if g.notify("READY=1\nWATCHDOG=1") != nil {
+			g.stopReason = "readiness_notification_failed"
 			g.cancel()
 			return ErrExecutorContainment
 		}
@@ -273,6 +280,23 @@ func (g *ExecutorGuard) CheckAuthority(ctx context.Context) error {
 		return ErrSessionAuthority
 	}
 	return nil
+}
+
+// FailureReason describes only the local observation. A failed notification
+// does not establish that systemd terminated the unit.
+func (g *ExecutorGuard) FailureReason() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stopReason != "" {
+		return g.stopReason
+	}
+	if g.ready && !time.Now().Before(g.deadline) {
+		return "authority_expired"
+	}
+	if g.ctx.Err() != nil {
+		return "scope_canceled"
+	}
+	return "none_observed"
 }
 
 func (g *ExecutorGuard) Close() {

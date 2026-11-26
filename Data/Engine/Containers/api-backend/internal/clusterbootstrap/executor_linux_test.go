@@ -134,6 +134,10 @@ func TestExecutorGuardExpiresAndStopsPinging(t *testing.T) {
 				t.Error("service readiness not explicitly armed")
 			}
 			mu.Unlock()
+			want := map[string]string{"expiry": "authority_expired", "cancel": "scope_canceled", "notify failure": "watchdog_notification_failed"}[mode]
+			if got := guard.FailureReason(); got != want {
+				t.Fatalf("guard reason %q, want %q", got, want)
+			}
 			if err := guard.ObserveDeadline(time.Now().Add(time.Second)); err == nil {
 				t.Fatal("dead supervisor accepted another grant")
 			}

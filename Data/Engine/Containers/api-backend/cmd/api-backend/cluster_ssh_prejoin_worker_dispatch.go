@@ -20,12 +20,42 @@ type clusterSSHPrejoinDiagnostic struct {
 	once      sync.Once
 	operation string
 	started   time.Time
+	first     atomic.Pointer[clusterSSHPrejoinRejection]
+}
+
+type clusterSSHPrejoinLeaseKey struct{}
+
+// Only validated identifiers, constant labels and locally measured durations.
+type clusterSSHPrejoinRejection struct {
+	Target      string `json:"target_id,omitempty"`
+	Attempt     int64  `json:"attempt,omitempty"`
+	Generation  int64  `json:"claim_generation,omitempty"`
+	Check       string `json:"check"`
+	Observation string `json:"observation"`
+	ElapsedMS   int64  `json:"elapsed_ms"`
+}
+
+func clusterSSHPrejoinRejectionFor(ctx context.Context) *clusterSSHPrejoinRejection {
+	if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
+		return d.first.Load()
+	}
+	return nil
 }
 
 func reportClusterSSHPrejoinCheck(ctx context.Context, check string) {
 	if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
 		d.once.Do(func() {
-			log.Printf("SSH paired preparation rejected operation=%s check=%s elapsed=%s canceled=%t deadline=%t", d.operation, check, time.Since(d.started).Round(time.Millisecond), ctx.Err() == context.Canceled, ctx.Err() == context.DeadlineExceeded)
+			lease, _ := ctx.Value(clusterSSHPrejoinLeaseKey{}).(clusterSSHTargetLease)
+			observed := "check_rejected"
+			switch ctx.Err() {
+			case context.Canceled:
+				observed = "caller_canceled"
+			case context.DeadlineExceeded:
+				observed = "deadline_exceeded"
+			}
+			rejection := &clusterSSHPrejoinRejection{Target: lease.TargetID, Attempt: lease.OperationAttempt, Generation: lease.Generation, Check: check, Observation: observed, ElapsedMS: time.Since(d.started).Milliseconds()}
+			d.first.Store(rejection)
+			log.Printf("SSH paired preparation rejected operation=%s check=%s target=%s attempt=%d generation=%d elapsed_ms=%d observation=%s", d.operation, check, rejection.Target, rejection.Attempt, rejection.Generation, rejection.ElapsedMS, observed)
 		})
 	}
 }
@@ -85,23 +115,26 @@ func newClusterSSHPrejoinWorkerWithClient(store *postgresOperatorStore, aegis *g
 		})
 		scope := func(ctx context.Context, index int, consume func(context.Context, clusterbootstrap.PreparationExpected, clusterSSHPrejoinNativeTarget) error) error {
 			claim := claims[index]
+			ctx = context.WithValue(ctx, clusterSSHPrejoinLeaseKey{}, claim.Lease)
 			acquire := func(ctx context.Context, consume clusterSSHPrejoinWorkerSourceConsumer) error {
 				return withClusterSSHPreparationSourceFor(ctx, scratchParent, store, aegis, claim.Lease, baseline, claim.Sealed, true, consume, beforeAllocation, client)
 			}
-			return withClusterSSHPrejoinWorkerInputs(ctx, claim, baseline, confirmation, source,
-				newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed), acquire, storage,
-				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
-					postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
-					nativeEntered.Store(true)
-					if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
-						d.once.Do(func() {})
-					}
-					return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
-						checks.Authority, checks.K3sJoin, true, func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
-							target.inputs = checks.Inputs
-							return consume(ctx, expected, target)
-						})
-				}, current)
+			return store.observeSSHPreparationStages(ctx, claim.Lease, func(ctx context.Context) error {
+				return withClusterSSHPrejoinWorkerInputs(ctx, claim, baseline, confirmation, source,
+					newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed), acquire, storage,
+					func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
+						postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
+						nativeEntered.Store(true)
+						if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
+							d.once.Do(func() {})
+						}
+						return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
+							checks.Authority, checks.K3sJoin, true, func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
+								target.inputs = checks.Inputs
+								return consume(ctx, expected, target)
+							})
+					}, current)
+			})
 		}
 		result, err := dispatchClusterSSHPrejoinCohort(ctx, claims, baseline, binding, scope, current)
 		if directory != "" {

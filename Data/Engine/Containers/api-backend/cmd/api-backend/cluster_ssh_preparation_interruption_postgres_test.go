@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Exercise the production poller, claim and controller. Only worker execution
@@ -42,12 +43,27 @@ func testSSHInventoryInterruption(t *testing.T) {
 						t.Fatal("repeated allocation")
 					}
 				}
+				if mode == "partial effects" {
+					l := work.Claims[0].Lease
+					if err := store.recordSSHPreparationCheckpoint(ctx, l, "SSH native preparation phase=wrapper_exit status=failed exit_code=1"); err != nil {
+						t.Fatal(err)
+					}
+					l.Generation++
+					if err := store.recordSSHPreparationCheckpoint(ctx, l, "unexpected generation"); err != errClusterConflict {
+						t.Fatal("unbound diagnostic accepted")
+					}
+				}
 				if mode == "returned before native" {
+					l := work.Claims[0].Lease
+					ctx = context.WithValue(ctx, clusterSSHPrejoinDiagnosticKey{}, &clusterSSHPrejoinDiagnostic{operation: l.OperationID, started: time.Now()})
+					ctx = context.WithValue(ctx, clusterSSHPrejoinLeaseKey{}, l)
+					reportClusterSSHPrejoinCheck(ctx, "external image staging")
 					for range 2 {
 						if err := store.recordSSHPreparationReadOnlyReturn(ctx, work.Claims[0].Lease); err != nil {
 							t.Fatal(err)
 						}
 					}
+
 				}
 				return interrupted
 			}
@@ -109,6 +125,13 @@ func testSSHInventoryInterruption(t *testing.T) {
 					t.Fatal("controller poll", err)
 				}
 			}
+			if mode == "returned before native" {
+				l := claimed.Claims[0].Lease
+				var evidenceOK bool
+				if err := store.db.QueryRowContext(f.ctx, `SELECT count(*)=1 FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$2 AND details_json::jsonb #>> '{diagnostic,rejection,check}'='external image staging' AND details_json::jsonb #>> '{diagnostic,rejection,target_id}'=$3 AND details_json::jsonb #>> '{diagnostic,installation_effects}'='none'`, l.OperationID, sshPreparationReturned, l.TargetID).Scan(&evidenceOK); err != nil || !evidenceOK {
+					t.Fatal("committed read-only receipt lost its first rejection")
+				}
+			}
 			var state, step, reason, active string
 			var credentials, events, targets int
 			if err := store.db.QueryRowContext(f.ctx, `SELECT o.state,o.current_step,coalesce(o.error_text,''),coalesce(c.active_operation_id,''),
@@ -138,6 +161,17 @@ func testSSHInventoryInterruption(t *testing.T) {
 			}
 			if mode != "inventory failed" {
 				return
+			}
+			// Read the committed record after automatic settlement and a second worker poll.
+			var entered, failed, rejected int
+			if err := store.db.QueryRowContext(f.ctx, `SELECT
+count(*) FILTER (WHERE message LIKE 'Source preparation phase=source_snapshot status=entered%'),
+count(*) FILTER (WHERE message LIKE 'Source preparation phase=source_snapshot status=failed%'),
+count(*) FILTER (WHERE message LIKE 'Source broker status=failed check=http_status_expected_200 observed=http_503%')
+FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type='ssh_preparation_checkpoint'
+AND details_json::jsonb->>'target_id'=$2 AND (details_json::jsonb->>'claim_generation')::bigint=$3`,
+				f.op.ID, claimed.Claims[0].Lease.TargetID, claimed.Claims[0].Lease.Generation).Scan(&entered, &failed, &rejected); err != nil || entered != 1 || failed != 1 || rejected != 1 {
+				t.Fatal("missing or duplicate first source snapshot evidence", entered, failed, rejected, err)
 			}
 			source, err := readClusterSSHQueueSource(f.ctx, store.db)
 			if err != nil {

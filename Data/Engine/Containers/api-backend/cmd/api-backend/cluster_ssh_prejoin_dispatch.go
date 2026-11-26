@@ -11,6 +11,8 @@ import (
 	"net"
 	"reflect"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -133,6 +135,73 @@ type clusterSSHPrejoinNativeTarget struct {
 	// only between native sessions, never from a short transport challenge.
 	inputs func(context.Context) error
 	run    func(context.Context, bool, int, func(context.Context) error, func(context.Context) error, *clusterbootstrap.PrejoinPreparationReceipt) error
+}
+
+func (s *postgresOperatorStore) recordSSHPreparationCheckpoint(ctx context.Context, lease clusterSSHTargetLease, line string) error {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO engine.cluster_operation_events(operation_id,cluster_id,event_type,state,message,details_json,created_at)
+SELECT o.id,t.cluster_id,'ssh_preparation_checkpoint',o.state,$6,json_build_object('attempt',o.attempt,'target_id',t.id,'claim_generation',t.lease_generation,'effects',CASE WHEN t.current_step='qualify' THEN 'none_read_only_qualification' ELSE 'consult_target_journal' END)::text,floor(extract(epoch FROM clock_timestamp()))
+FROM engine.cluster_operations o JOIN engine.cluster_onboarding_targets t ON t.operation_id=o.id
+WHERE o.id=$1 AND o.attempt=$2 AND t.id=$3 AND t.lease_generation=$4 AND t.lease_holder=$5`, lease.OperationID, lease.OperationAttempt, lease.TargetID, lease.Generation, lease.Holder, line)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errClusterConflict
+	}
+	return nil
+}
+
+// Stream already-redacted transport checkpoints outside the SSH/watchdog path.
+// They are observational events and never serve as execution or settlement proof.
+type clusterSSHPreparationObserverKey struct{}
+
+func (s *postgresOperatorStore) observeSSHPreparationStages(ctx context.Context, lease clusterSSHTargetLease, run func(context.Context) error) error {
+	lines := make(chan string, 64)
+	done := make(chan struct{})
+	var missed atomic.Int64
+	go func() {
+		defer close(done)
+		var retryAfter time.Time
+		for line := range lines {
+			if time.Now().Before(retryAfter) && !strings.Contains(line, "status=failed") {
+				missed.Add(1)
+				continue
+			}
+			write, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			err := s.recordSSHPreparationCheckpoint(write, lease, line)
+			cancel()
+			if err == nil {
+				continue
+			}
+			missed.Add(1)
+			// Bound repeated storage waits. A later failure still gets its own
+			// write; never replay the event with an uncertain write outcome.
+			retryAfter = time.Now().Add(time.Second)
+		}
+	}()
+	defer func() {
+		close(lines)
+		<-done
+		if n := missed.Load(); n != 0 {
+			log.Printf("SSH preparation checkpoint persistence incomplete operation=%s target=%s attempt=%d generation=%d missing=%d", lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation, n)
+		}
+	}()
+	send := func(line string) {
+		select {
+		case lines <- line:
+		default:
+			missed.Add(1)
+		}
+	}
+	ctx = context.WithValue(ctx, clusterSSHPreparationObserverKey{}, func(line string) {
+		log.Printf("operation=%s target=%s attempt=%d generation=%d %s", lease.OperationID, lease.TargetID, lease.OperationAttempt, lease.Generation, line)
+		send(line)
+	})
+	return run(clusterremote.WithPreparationObserver(ctx, send))
 }
 
 func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOperatorStore, aegis *goAegisService,

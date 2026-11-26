@@ -45,7 +45,7 @@ func sshVIPObservation(n clusterbootstrap.SourceNetwork, address string, present
 }
 
 func TestClusterSSHVIPOwnerCompleteFreshScope(t *testing.T) {
-	for _, mode := range []string{"expansion", "replacement", "closed scope", "consumer copy", "input copy", "distinct VIPs", "no owner", "duplicate owners", "wrong actual owner", "foreign holder", "missing sources", "stale observation", "future observation", "read error", "wrong VIP", "MAC drift", "boot drift", "Node drift", "namespace drift", "CIDR drift", "source changed after consume", "authority changed", "authority failed", "lease UID changed", "lease epoch changed", "lease holder changed", "lease acquired changed", "lease read failed", "consumer error", "cancel source", "cancel consume", "ignored input failure", "ignored authority failure"} {
+	for _, mode := range []string{"expansion", "replacement", "closed scope", "consumer copy", "input copy", "distinct VIPs", "no owner", "duplicate owners", "wrong actual owner", "foreign holder", "missing sources", "stale observation", "future observation", "read error", "wrong VIP", "MAC drift", "boot drift", "Node drift", "namespace drift", "CIDR drift", "source changed after consume", "authority changed", "authority failed", "lease UID changed", "lease epoch changed", "lease holder changed", "lease acquired changed", "lease read failed", "final lease deadline", "consumer error", "cancel source", "cancel consume", "ignored input failure", "ignored authority failure"} {
 		t.Run(mode, func(t *testing.T) {
 			a, networks, lease := sshVIPFixture(t, mode != "expansion")
 			original := slices.Clone(networks)
@@ -59,6 +59,8 @@ func TestClusterSSHVIPOwnerCompleteFreshScope(t *testing.T) {
 			var forceFailure atomic.Bool
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			var diagnostic atomic.Pointer[string]
+			ctx = context.WithValue(ctx, clusterSSHPreparationObserverKey{}, func(line string) { diagnostic.Store(&line) })
 			authority := func(context.Context) (clusterSSHPreparationAuthority, error) {
 				v := a
 				v.Cohort.ObservedAt += leaseReads.Load()
@@ -73,6 +75,10 @@ func TestClusterSSHVIPOwnerCompleteFreshScope(t *testing.T) {
 				return v, nil
 			}
 			readLease := func(ctx context.Context) (clusterbootstrap.VIPLease, error) {
+				if mode == "final lease deadline" && consumed.Load() > 0 && reads.Load() == 2*int64(len(original)) {
+					<-ctx.Done()
+					return clusterbootstrap.VIPLease{}, errors.New("private kube response")
+				}
 				count := leaseReads.Add(1)
 				v := lease
 				v.ResourceVersion = fmt.Sprintf("opaque-%d", count)
@@ -165,7 +171,7 @@ func TestClusterSSHVIPOwnerCompleteFreshScope(t *testing.T) {
 				if reads.Load() != 2*int64(len(original)) || owner.Owner.ID != expected.NodeID || owner.Owner.NodeUID != expected.NodeUID || owner.Owner.MachineID != expected.MachineID || owner.Owner.BootID != expected.BootID || owner.Owner.Link != original[len(original)-1].ManagementLink || owner.LeaseUID != lease.UID || owner.Transitions != lease.Transitions {
 					t.Fatal("incomplete or inferred ownership reached consumer")
 				}
-				if checks.Authority(ctx) != nil {
+				if mode != "final lease deadline" && checks.Authority(ctx) != nil {
 					t.Fatal("current authority rejected")
 				}
 				switch mode {
@@ -201,7 +207,17 @@ func TestClusterSSHVIPOwnerCompleteFreshScope(t *testing.T) {
 			if wantOK && (reads.Load() != 3*int64(len(original)) || consumed.Load() != 1) {
 				t.Fatal("post-consumption recheck missing")
 			}
-			canConsume := wantOK || slices.Contains([]string{"source changed after consume", "consumer error", "cancel consume", "ignored input failure", "ignored authority failure"}, mode)
+			if mode == "lease read failed" || mode == "final lease deadline" {
+				line := diagnostic.Load()
+				want := "observed=read_or_parse_rejected"
+				if mode == "final lease deadline" {
+					want = "observed=deadline_exceeded"
+				}
+				if line == nil || !strings.Contains(*line, "check=vip_lease_get") || !strings.Contains(*line, want) || strings.Contains(*line, "private") {
+					t.Fatal("missing sanitized lease failure")
+				}
+			}
+			canConsume := wantOK || slices.Contains([]string{"final lease deadline", "source changed after consume", "consumer error", "cancel consume", "ignored input failure", "ignored authority failure"}, mode)
 			if !canConsume && consumed.Load() != 0 {
 				t.Fatal("failed acquisition reached consumer")
 			}

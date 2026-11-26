@@ -7,10 +7,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"golang.org/x/crypto/ssh"
 	"io"
 	"log"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -294,6 +298,56 @@ func (client *Client) transferPreparationArtifactResult(parent context.Context, 
 	return client.transferPreparationCompletion(parent, managerPath, digest, size, expected, action, source, postgresReference, sudoPassword, check, produce, progress, nil)
 }
 
+type preparationObserverKey struct{}
+
+// WithPreparationObserver receives the same sanitized stage line as the local
+// worker log. The callback must return without waiting for database or network IO.
+func WithPreparationObserver(ctx context.Context, observe func(string)) context.Context {
+	return context.WithValue(ctx, preparationObserverKey{}, observe)
+}
+
+// Never carry arbitrary remote output, error text, paths or command lines into
+// operation evidence. A signal alone cannot establish a watchdog termination.
+func preparationFailureReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, clusterbootstrap.ErrSessionAuthority):
+		return "authority_rejected"
+	case errors.Is(err, clusterbootstrap.ErrSessionProtocol):
+		return "invalid_session_protocol"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected_end_of_stream"
+	case errors.Is(err, os.ErrNotExist):
+		return "file_missing"
+	case errors.Is(err, os.ErrPermission):
+		return "permission_denied"
+	case errors.Is(err, syscall.ENOSPC):
+		return "storage_full"
+	default:
+		return "underlying_error_withheld"
+	}
+}
+
+func preparationStderrClass(output *boundedOutput) string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	switch {
+	case output.overflow:
+		return "output_limit"
+	case output.buffer.Len() == 0:
+		return "empty"
+	case bytes.Contains(output.buffer.Bytes(), []byte("sudo: a password is required")):
+		return "sudo_password_required"
+	case bytes.Contains(output.buffer.Bytes(), []byte("Failed to start transient service unit")):
+		return "transient_unit_start_failed"
+	default:
+		return "other_output_redacted"
+	}
+}
+
 func (client *Client) transferPreparationCompletion(parent context.Context, managerPath, digest string, size int64, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, postgresReference string, sudoPassword []byte, check func(context.Context) error, produce func(context.Context, io.Writer) error, progress *clusterbootstrap.PreparationProgress, completion *clusterbootstrap.PrejoinPreparationReceipt) (resultErr error) {
 	stage := "validate_action"
@@ -341,9 +395,60 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if err != nil {
 		return ErrBootstrapVerification
 	}
-	stage = "manager_file"
+	// The request constructor validated the identifiers and action. Only fixed
+	// stage names, statuses and elapsed time cross the diagnostic boundary.
+	started := time.Now()
+	stageStart := started
+	last := stage
+	exitCode := -1
+	reason := "check_rejected"
+	var diagnostics boundedOutput
+	journal := "unverified"
+	expectedCondition := map[string]string{
+		"session_request": "validated_binding_and_action", "manager_file": "verified_helper_size_and_file", "ssh_session": "pinned_session_and_pipes",
+		"wrapper_start": "supervised_command_accepted", "manager_upload": "complete_helper_transfer_under_authority", "sudo_input": "complete_protected_input",
+		"exchange": "verified_protocol_result", "wrapper_exit": "exit_zero_and_bounded_stderr", "final_authority": "current_execution_authority",
+	}
+	emit := func(status string) {
+		stderrClass := "not_sampled"
+		if status == "failed" || stage == "wrapper_exit" && status == "completed" {
+			stderrClass = preparationStderrClass(&diagnostics)
+		}
+		line := fmt.Sprintf("SSH native preparation operation=%s target=%s attempt=%d generation=%d action=%s phase=%s status=%s last_completed=%s phase_ms=%d elapsed_ms=%d reason=%s exit_code=%d stderr=%s expected=%s journal_checkpoint=%s",
+			expected.Target.OperationID, expected.Target.TargetID, expected.Target.OperationAttempt, expected.Target.Generation, request.Action, stage, status, last, time.Since(stageStart).Milliseconds(), time.Since(started).Milliseconds(), reason, exitCode, stderrClass, expectedCondition[stage], journal)
+		log.Print(line)
+		if observe, ok := parent.Value(preparationObserverKey{}).(func(string)); ok && observe != nil {
+			observe(line)
+		}
+	}
+	advance := func(next string) {
+		reason = "passed"
+		last = stage
+		emit("completed")
+		stage = next
+		stageStart = time.Now()
+		reason = "pending"
+		emit("entered")
+		reason = "check_rejected"
+	}
+	defer func() {
+		if resultErr == nil {
+			last = stage
+			reason = "passed"
+			emit("completed")
+			return
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			reason = "deadline_exceeded"
+		} else if ctx.Err() == context.Canceled {
+			reason = "canceled"
+		}
+		emit("failed")
+	}()
+	advance("manager_file")
 	manager, err := os.Open(managerPath)
 	if err != nil {
+		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
 	}
 	defer manager.Close()
@@ -351,16 +456,18 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if err != nil || !info.Mode().IsRegular() || size < 1 || size > clusterbootstrap.MaxBundleBytes || info.Size() != size {
 		return ErrBootstrapVerification
 	}
-	stage = "ssh_session"
+	advance("ssh_session")
 	session, err := client.ssh.NewSession()
 	if err != nil {
+		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
 	}
 	defer session.Close()
-	diagnostics := boundedOutput{close: func() { client.Close() }}
+	diagnostics.close = func() { client.Close() }
 	session.Stderr = &diagnostics
 	stdin, err := session.StdinPipe()
 	if err != nil {
+		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
 	}
 	stdout, err := session.StdoutPipe()
@@ -368,16 +475,22 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if artifactPreparationAction(action) || clusterbootstrap.HostPackagePreparationAction(action) {
 		command = artifactPreparationCommand(size, digest, nonce)
 	}
-	stage = "wrapper_start"
-	if err != nil || session.Start(command) != nil {
+	advance("wrapper_start")
+	if err != nil {
+		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
 	}
-	stage = "manager_upload"
+	if err := session.Start(command); err != nil {
+		reason = preparationFailureReason(err)
+		return ErrBootstrapVerification
+	}
+	advance("manager_upload")
 	buffer := make([]byte, 128<<10)
 	remaining, checked := size, time.Now()
 	for remaining > 0 {
 		if time.Since(checked) >= clusterbootstrap.SessionChallengeEvery {
 			if refreshBootstrapAuthority(ctx, check) != nil {
+				reason = "authority_rejected"
 				return ErrBootstrapVerification
 			}
 			checked = time.Now()
@@ -387,20 +500,22 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 			return ErrBootstrapVerification
 		}
 		if _, err := io.Copy(stdin, bytes.NewReader(buffer[:n])); err != nil {
+			reason = preparationFailureReason(err)
 			return ErrBootstrapVerification
 		}
 		remaining -= int64(n)
 	}
-	stage = "sudo_input"
+	advance("sudo_input")
 	secret := append(bytes.Clone(sudoPassword), '\n')
 	defer clear(secret)
 	if _, err := io.Copy(stdin, bytes.NewReader(secret)); err != nil {
+		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
 	}
 	// Closing the session releases a blocked stdout reader on cancellation.
 	input := preparationSSHOutput{Reader: stdout, close: func() error { return session.Close() }}
 	output := preparationSSHInput{WriteCloser: stdin, close: func() error { return client.Close() }}
-	stage = "exchange"
+	advance("exchange")
 	var receipt clusterbootstrap.PrejoinPreparationReceipt
 	var cursor clusterbootstrap.PreparationProgress
 	if completion != nil {
@@ -411,17 +526,32 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 		err = clusterbootstrap.ExchangePreparationSession(ctx, input, output, request, produce, check)
 	}
 	if err != nil {
+		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
 	}
-	stage = "wrapper_exit"
-	if session.Wait() != nil || diagnostics.overflow {
+	advance("wrapper_exit")
+	if err := session.Wait(); err != nil {
+		var exit *ssh.ExitError
+		if errors.As(err, &exit) {
+			exitCode = exit.ExitStatus()
+			reason = "remote_process_exit"
+		} else {
+			reason = "wrapper_exit_unconfirmed"
+		}
 		return ErrBootstrapVerification
 	}
-	stage = "final_authority"
+	exitCode = 0
+	if diagnostics.overflow {
+		reason = "stderr_limit_exceeded"
+		return ErrBootstrapVerification
+	}
+	advance("final_authority")
 	if refreshBootstrapAuthority(ctx, check) != nil {
+		reason = "authority_rejected"
 		return ErrBootstrapVerification
 	}
 	if progress != nil {
+		journal = cursor.Step
 		*progress = cursor
 	}
 	if completion != nil {

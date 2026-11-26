@@ -121,8 +121,8 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 		parent = context.WithValue(parent, clusterSSHPrejoinDiagnosticKey{}, &clusterSSHPrejoinDiagnostic{operation: claims[0].Lease.OperationID, started: time.Now()})
 	}
 	checkAll := func(ctx context.Context) error {
-		for _, check := range checks {
-			if check(ctx) != nil {
+		for i, check := range checks {
+			if check(context.WithValue(ctx, clusterSSHPrejoinLeaseKey{}, claims[i].Lease)) != nil {
 				return clusterbootstrap.ErrSessionAuthority
 			}
 		}

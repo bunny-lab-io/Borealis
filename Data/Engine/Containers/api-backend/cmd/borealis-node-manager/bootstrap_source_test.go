@@ -245,3 +245,39 @@ func TestBootstrapInspectionJournalFields(t *testing.T) {
 		t.Fatalf("unexpected journal datagram: %q, %v", packet[:n], err)
 	}
 }
+
+func TestBootstrapNativeCheckpointKeepsOnlyPublicCorrelation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal")
+	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	request := identityRuntimeRequestFixture()
+	binding := request.Binding
+	if err := binding.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"entered", "completed", "failed"} {
+		writeBootstrapSessionEvent(path, binding, "stage_source", "native_action", status, "none_observed", 26*time.Millisecond)
+		var packet [512]byte
+		n, err := conn.Read(packet[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		line := string(packet[:n])
+		for _, want := range []string{binding.OperationID, binding.TargetID, "action=stage_source", "status=" + status, "elapsed_ms=26"} {
+			if !strings.Contains(line, want) {
+				t.Fatal("missing journal field", want)
+			}
+		}
+		for _, private := range []string{binding.HolderID, binding.HostKeyFingerprint, binding.MachineID, request.Nonce} {
+			if strings.Contains(line, private) {
+				t.Fatal("private binding field reached journal")
+			}
+		}
+	}
+}
