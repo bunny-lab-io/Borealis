@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "source slice ownership", "native slice ownership", "wrong confirmation", "wrong source", "qualification claim", "acquisition failure", "missing callback", "duplicate callback", "source cleanup failure", "native failure", "invalid receipt", "wrong expected", "authority drift before dispatch", "authority drift after dispatch", "sibling drift", "cohort renewal failure", "ignored authority failure", "input failure", "late input failure", "ignored join failure", "cancelled", "source error redaction"} {
+	for _, mode := range []string{"pair", "replacement", "source slice ownership", "native slice ownership", "wrong confirmation", "wrong source", "qualification claim", "acquisition failure", "missing callback", "duplicate callback", "source cleanup failure", "native failure", "native authority failure", "invalid receipt", "wrong expected", "authority drift before dispatch", "authority drift after dispatch", "sibling drift", "cohort renewal failure", "ignored authority failure", "input failure", "late input failure", "ignored join failure", "cancelled", "source error redaction"} {
 		t.Run(mode, func(t *testing.T) {
 			a := sshPrejoinCompletionAuthorityFixture(t, mode == "replacement")
 			_, process, _ := existingIdentitySourceFixture(t)
@@ -52,7 +52,12 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 					}
 					return nil
 				},
-				Authority: func(context.Context) error { return nil },
+				Authority: func(context.Context) error {
+					if mode == "native authority failure" && dispatched {
+						return errors.New("private source credential")
+					}
+					return nil
+				},
 				K3sJoin: func(ctx context.Context, binding engineidentity.Binding, consume clusterSSHJoinMaterialConsumer) error {
 					if binding != source.Binding {
 						t.Fatal("join source replaced")
@@ -148,7 +153,7 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 				claim.Lease.OperationStep, claim.Lease.Step = clusterSSHQualificationStep, "qualify"
 			}
 			var diagnostics bytes.Buffer
-			if mode == "input failure" {
+			if mode == "input failure" || mode == "native authority failure" {
 				writer := log.Writer()
 				log.SetOutput(&diagnostics)
 				t.Cleanup(func() { log.SetOutput(writer) })
@@ -169,8 +174,14 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 			if mode == "input failure" {
 				reportClusterSSHPrejoinCheck(ctx, "outer scope")
 				line := diagnostics.String()
-				if strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "operation="+claim.Lease.OperationID+" check=input snapshot before target storage ") || strings.Contains(line, "private configuration") || strings.Contains(line, "outer scope") {
+				if strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "operation="+claim.Lease.OperationID+" check=full input source proof ") || strings.Contains(line, "private configuration") || strings.Contains(line, "outer scope") {
 					t.Fatal("first failing input boundary was not recorded safely")
+				}
+			}
+			if mode == "native authority failure" {
+				line := diagnostics.String()
+				if !dispatched || strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "check=preparation authority source proof ") || strings.Contains(line, "private source credential") {
+					t.Fatal("native authority rejection lost or exposed its underlying error")
 				}
 			}
 			if mode == "input failure" && (inputCalls == 0 || dispatched) {

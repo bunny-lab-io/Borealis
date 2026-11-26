@@ -5,6 +5,7 @@ import (
 	"borealis/api-backend/internal/engineidentity"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"slices"
@@ -55,7 +56,12 @@ func reportClusterSSHPrejoinCheck(ctx context.Context, check string) {
 			}
 			rejection := &clusterSSHPrejoinRejection{Target: lease.TargetID, Attempt: lease.OperationAttempt, Generation: lease.Generation, Check: check, Observation: observed, ElapsedMS: time.Since(d.started).Milliseconds()}
 			d.first.Store(rejection)
-			log.Printf("SSH paired preparation rejected operation=%s check=%s target=%s attempt=%d generation=%d elapsed_ms=%d observation=%s", d.operation, check, rejection.Target, rejection.Attempt, rejection.Generation, rejection.ElapsedMS, observed)
+			line := fmt.Sprintf("SSH paired preparation rejected operation=%s check=%s target=%s attempt=%d generation=%d elapsed_ms=%d observation=%s status=failed", d.operation, check, rejection.Target, rejection.Attempt, rejection.Generation, rejection.ElapsedMS, observed)
+			if emit, ok := ctx.Value(clusterSSHPreparationObserverKey{}).(func(string)); ok {
+				emit(line)
+			} else {
+				log.Print(line)
+			}
 		})
 	}
 }
@@ -125,9 +131,6 @@ func newClusterSSHPrejoinWorkerWithClient(store *postgresOperatorStore, aegis *g
 					func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts,
 						postgres string, expected clusterbootstrap.PreparationExpected, checks clusterSSHPreparationChecks) error {
 						nativeEntered.Store(true)
-						if d, ok := ctx.Value(clusterSSHPrejoinDiagnosticKey{}).(*clusterSSHPrejoinDiagnostic); ok {
-							d.once.Do(func() {})
-						}
 						return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
 							checks.Authority, checks.K3sJoin, true, func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
 								target.inputs = checks.Inputs
@@ -257,10 +260,19 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 			return fail
 		}
 		expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
-		wrap := func(prove func(context.Context) error) func(context.Context) error {
+		wrap := func(label string, prove func(context.Context) error) func(context.Context) error {
 			return func(caller context.Context) error {
 				return lifetime.run(caller, func(bound context.Context) error {
-					if check(bound) != nil || prove(bound) != nil || check(bound) != nil {
+					if check(bound) != nil {
+						reportClusterSSHPrejoinCheck(bound, label+" cohort authority before")
+						return fail
+					}
+					if prove(bound) != nil {
+						reportClusterSSHPrejoinCheck(bound, label+" source proof")
+						return fail
+					}
+					if check(bound) != nil {
+						reportClusterSSHPrejoinCheck(bound, label+" cohort authority after")
 						return fail
 					}
 					return nil
@@ -287,7 +299,7 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 			return value, nil
 		}
 		joined := checks.K3sJoin
-		checks.Inputs, checks.Authority = wrap(checks.Inputs), wrap(checks.Authority)
+		checks.Inputs, checks.Authority = wrap("full input", checks.Inputs), wrap("preparation authority", checks.Authority)
 		checks.K3sJoin = func(caller context.Context, binding engineidentity.Binding, consume clusterSSHJoinMaterialConsumer) error {
 			return lifetime.run(caller, func(bound context.Context) error {
 				if binding != source.Binding || consume == nil || check(bound) != nil {
@@ -297,7 +309,7 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 					if joinCheck == nil || check(ctx) != nil {
 						return fail
 					}
-					return consume(ctx, material, wrap(joinCheck))
+					return consume(ctx, material, wrap("join material", joinCheck))
 				}) != nil || check(bound) != nil {
 					return fail
 				}
