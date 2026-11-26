@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -215,6 +218,7 @@ type clusterPreparationReleaseBroker struct {
 	request, response cipher.AEAD
 	check             func(context.Context, clusterPreparationReleaseRequest) bool
 	credentials       func(context.Context) context.Context
+	objects           string
 	slots             chan struct{}
 	mu                sync.Mutex
 	lastExpected      clusterbootstrap.Expected
@@ -245,7 +249,7 @@ func (b *clusterPreparationReleaseBroker) publication(ctx context.Context, expec
 }
 
 func registerClusterPreparationReleaseRoute(mux *http.ServeMux, auth *authService) {
-	b := &clusterPreparationReleaseBroker{slots: make(chan struct{}, 2)}
+	b := &clusterPreparationReleaseBroker{slots: make(chan struct{}, 2), objects: os.Getenv("BOREALIS_ENGINE_VERIFIED_OBJECTS")}
 	b.request, b.response, _ = clusterPreparationReleaseCiphers()
 	if auth != nil {
 		if store, ok := auth.store.(*postgresOperatorStore); ok && store != nil {
@@ -366,7 +370,7 @@ func (b *clusterPreparationReleaseBroker) handle(w http.ResponseWriter, r *http.
 			return
 		}
 		cancelAdmission := time.AfterFunc(time.Until(time.Unix(q.Expires, 0)), done)
-		res, err := openClusterAssetFirstHop(authenticated, clusterPackagedAssetAPIURL(asset.ID))
+		res, err := b.openPublishedAsset(authenticated, asset)
 		cancelAdmission.Stop()
 		if err != nil {
 			fail()
@@ -411,10 +415,49 @@ func (b *clusterPreparationReleaseBroker) handle(w http.ResponseWriter, r *http.
 		return
 	}
 	_ = control.Flush()
-	b.writeAsset(transfer, w, q, asset.Size, direct)
+	b.writeAsset(transfer, w, q, asset, direct)
 }
 
-func (b *clusterPreparationReleaseBroker) writeAsset(transfer context.Context, w io.Writer, q clusterPreparationReleaseRequest, size int64, direct io.Reader) {
+// The broker has already matched the operation, publication, tag and asset ID.
+// Only the digest selects a file. A hit still travels through the same
+// encrypted, authority-checked transfer as a direct GitHub response.
+func (b *clusterPreparationReleaseBroker) openPublishedAsset(ctx context.Context, asset clusterBootstrapAsset) (*http.Response, error) {
+	if b.objects != "" {
+		if !clusterBootstrapDigestPattern.MatchString(asset.Digest) {
+			return nil, errClusterUnavailable
+		}
+		root, err := os.OpenRoot(b.objects)
+		if err != nil {
+			return nil, errClusterUnavailable
+		}
+		defer root.Close()
+		name := strings.TrimPrefix(asset.Digest, "sha256:")
+		info, err := root.Lstat(name)
+		if err == nil {
+			if !info.Mode().IsRegular() || info.Size() != asset.Size {
+				return nil, errClusterUnavailable
+			}
+			file, err := root.Open(name)
+			if err != nil {
+				return nil, errClusterUnavailable
+			}
+			opened, err := file.Stat()
+			if err != nil || !os.SameFile(opened, info) {
+				file.Close()
+				return nil, errClusterUnavailable
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), ContentLength: asset.Size, Body: file}, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, errClusterUnavailable
+		}
+	}
+	return openClusterAssetFirstHop(ctx, clusterPackagedAssetAPIURL(asset.ID))
+}
+
+func (b *clusterPreparationReleaseBroker) writeAsset(transfer context.Context, w io.Writer, q clusterPreparationReleaseRequest, asset clusterBootstrapAsset, direct io.Reader) {
+	size := asset.Size
+	digest := sha256.New()
 	buf := make([]byte, clusterPreparationReleaseChunk)
 	nextCheck := time.Now().Add(5 * time.Second)
 	for offset := int64(0); offset < size; {
@@ -428,9 +471,10 @@ func (b *clusterPreparationReleaseBroker) writeAsset(transfer context.Context, w
 		if _, err := io.ReadFull(direct, buf[:n]); err != nil {
 			return
 		}
+		digest.Write(buf[:n])
 		if offset+n == size {
 			var extra [1]byte
-			if count, err := io.ReadFull(direct, extra[:]); count != 0 || err != io.EOF || !b.check(transfer, q) {
+			if count, err := io.ReadFull(direct, extra[:]); count != 0 || err != io.EOF || "sha256:"+hex.EncodeToString(digest.Sum(nil)) != asset.Digest || !b.check(transfer, q) {
 				return
 			}
 		}

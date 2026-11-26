@@ -64,7 +64,12 @@ class NodeArtifactCacheTests(unittest.TestCase):
     def test_retained_objects_not_evicted_and_size_bound(self):
         self.get(b"a" * 16, "a")
         retained = self.store.root / hashlib.sha256(b"a" * 16).hexdigest()
-        os.link(retained, self.root / "recovery")
+        for _ in range(2):
+            self.assertTrue(self.store.materialize(retained.name, 16, self.root / "recovery",
+                                                  None, offline=True, retain=True))
+        self.assertTrue(retained.samefile(self.root / "recovery"))
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            self.store.materialize(retained.name, 16, self.root / "a", None, offline=True, retain=True)
         self.get(b"b" * 16, "b")
         self.get(b"c" * 16, "c")
         self.assertEqual(retained.read_bytes(), b"a" * 16)

@@ -40,6 +40,7 @@ func TestClusterPreparationReleaseAuthenticatedReads(t *testing.T) {
 	transport := http.DefaultTransport
 	cdn := "https://release-assets.githubusercontent.com/github-production-release-asset/unit/42?fixture=1"
 	redirect := false
+	upstreamAssets := 0
 	http.DefaultClient = &http.Client{Transport: bootstrapRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() == cdn {
 			if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("Referer") != "" {
@@ -49,6 +50,9 @@ func TestClusterPreparationReleaseAuthenticatedReads(t *testing.T) {
 		}
 		if r.Header.Get("Authorization") != "Bearer "+bootstrapTestToken {
 			return &http.Response{StatusCode: 403, Header: make(http.Header), Body: http.NoBody}, nil
+		}
+		if strings.HasSuffix(r.URL.Path, "/releases/assets/2") {
+			upstreamAssets++
 		}
 		if redirect && strings.HasSuffix(r.URL.Path, "/releases/assets/2") {
 			return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{cdn}}, Body: http.NoBody}, nil
@@ -82,6 +86,27 @@ func TestClusterPreparationReleaseAuthenticatedReads(t *testing.T) {
 	redirect = true
 	if got := read(asset); got != "bundle" {
 		t.Fatal("redirect asset mismatch")
+	}
+	broker.objects = t.TempDir()
+	cached := filepath.Join(broker.objects, strings.TrimPrefix(asset.Digest, "sha256:"))
+	if err := os.WriteFile(cached, []byte("bundle"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := upstreamAssets
+	if got := read(asset); got != "bundle" || upstreamAssets != before {
+		t.Fatal("verified local read reacquired remote bytes")
+	}
+	if err := os.WriteFile(cached, []byte("damage"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	damaged, err := openClusterBootstrapAsset(ctx, asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, readErr := io.ReadAll(damaged.Body)
+	damaged.Body.Close()
+	if readErr == nil || upstreamAssets != before {
+		t.Fatal("corrupted local bytes completed or fetched a replacement")
 	}
 	changed := asset
 	changed.ID++

@@ -1,11 +1,13 @@
 """Build-side storage for pinned, inert inputs. Consumers keep their own output files."""
 
+import argparse
 import contextlib
 import fcntl
 import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import tempfile
 
@@ -76,7 +78,7 @@ class ArtifactCache:
         if not fits():
             raise ValueError("insufficient unpinned artifact cache capacity")
 
-    def materialize(self, digest, size, destination, acquire, *, offline=False):
+    def materialize(self, digest, size, destination, acquire, *, offline=False, retain=False):
         if not DIGEST.fullmatch(digest) or type(size) is not int or size <= 0:
             raise ValueError("invalid pinned artifact identity")
         destination = Path(destination)
@@ -95,7 +97,7 @@ class ArtifactCache:
             if not hit:
                 if offline:
                     raise ValueError("offline artifact missing: " + digest)
-                same_fs = destination.parent.stat().st_dev == self.root.stat().st_dev
+                same_fs = not retain and destination.parent.stat().st_dev == self.root.stat().st_dev
                 self._make_room(size, size if same_fs else 0, 2 if same_fs else 1)
                 try:
                     acquire(incoming)
@@ -111,6 +113,24 @@ class ArtifactCache:
             reader = stack.enter_context(regular_reader(obj, size))
             fcntl.flock(reader, fcntl.LOCK_SH)
             os.utime(reader.fileno())
+            if retain:
+                # Both names must live on the same provisioned filesystem. A
+                # durable hard link protects active or recovery content from LRU.
+                if not self._space(destination.parent, 0, 1):
+                    raise ValueError("insufficient retained artifact capacity")
+                if hashlib.file_digest(reader, "sha256").hexdigest() != digest:
+                    raise ValueError("cached artifact digest mismatch")
+                try:
+                    os.link(obj, destination, follow_symlinks=False)
+                except FileExistsError:
+                    if destination.is_symlink() or not destination.samefile(obj):
+                        raise ValueError("retained artifact reference conflicts")
+                dir_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+                return hit
             if not self._space(destination.parent, size, 1):
                 raise ValueError("insufficient staging capacity for verified object")
             # Keep private in-progress bytes invisible. link() publishes with
@@ -133,6 +153,12 @@ class ArtifactCache:
             return hit
 
 
+def configured_store():
+    budgets = [int(os.environ["BOREALIS_BUILD_CACHE_" + key])
+               for key in ("MAX_BYTES", "MAX_OBJECTS", "RESERVE_BYTES", "RESERVE_INODES")]
+    return ArtifactCache(os.environ["BOREALIS_BUILD_ARTIFACT_CACHE"], *budgets)
+
+
 def pinned_input(digest, size, destination, acquire):
     root = os.environ.get("BOREALIS_BUILD_ARTIFACT_CACHE")
     offline = os.environ.get("BOREALIS_BUILD_INPUTS_OFFLINE", "0")
@@ -143,6 +169,25 @@ def pinned_input(digest, size, destination, acquire):
             raise ValueError("offline packaging requires a configured artifact cache")
         acquire(destination)
         return
-    budgets = [int(os.environ["BOREALIS_BUILD_CACHE_" + key])
-               for key in ("MAX_BYTES", "MAX_OBJECTS", "RESERVE_BYTES", "RESERVE_INODES")]
-    ArtifactCache(root, *budgets).materialize(digest, size, destination, acquire, offline=offline == "1")
+    configured_store().materialize(digest, size, destination, acquire, offline=offline == "1")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Retain an inert asset from a verified release or development manifest.")
+    parser.add_argument("--artifact", type=Path, required=True)
+    parser.add_argument("--sha256", required=True)
+    parser.add_argument("--bytes", type=int, required=True)
+    parser.add_argument("--reference-directory", type=Path, required=True)
+    args = parser.parse_args()
+    reference = args.reference_directory.resolve(strict=True)
+    if reference != args.reference_directory.absolute() or not reference.is_dir():
+        raise ValueError("invalid retention directory")
+    def copy(path):
+        with regular_reader(args.artifact, args.bytes) as src, path.open("xb") as dst:
+            shutil.copyfileobj(src, dst)
+    hit = configured_store().materialize(args.sha256, args.bytes, reference / args.sha256, copy, retain=True)
+    print("retained", args.sha256, "cached" if hit else "acquired")
+
+
+if __name__ == "__main__":
+    main()
