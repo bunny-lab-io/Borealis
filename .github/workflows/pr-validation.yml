@@ -211,12 +211,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     outputs:
       shard_1: ${{ steps.database.outputs.shard_1 }}
       shard_2: ${{ steps.database.outputs.shard_2 }}
       shard_3: ${{ steps.database.outputs.shard_3 }}
       shard_4: ${{ steps.database.outputs.shard_4 }}
+      shard_5: ${{ steps.database.outputs.shard_5 }}
+      shard_6: ${{ steps.database.outputs.shard_6 }}
+      shard_7: ${{ steps.database.outputs.shard_7 }}
+      shard_8: ${{ steps.database.outputs.shard_8 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

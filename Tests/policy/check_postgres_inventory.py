@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "Tests/manifests/postgres-tests.json"
 SOURCE = ROOT / "Data/Engine/Containers/api-backend/cmd/api-backend"
 PACKAGE = "borealis/api-backend/cmd/api-backend"
-SHARD_COUNT = 4
+SHARD_COUNT = 8
 
 
 def required_shards(path: Path = MANIFEST) -> list[list[str]]:
@@ -96,8 +96,14 @@ def audit_results(required: list[str], path: Path) -> None:
         )
 
 
-def audit_python_results(directory: Path) -> None:
+def audit_python_results(directory: Path, shard: int = 1) -> None:
     schema = (directory / "postgres-integration.log").read_text(encoding="utf-8").splitlines()
+    if shard != 1:
+        if not schema or schema[-1] != "POSTGRES FIXTURE READY: canonical schema verified":
+            raise ValueError("isolated PostgreSQL schema initialization missing")
+        if (directory / "worker-admission-postgres.log").exists():
+            raise ValueError("unexpected duplicate admission results")
+        return
     if not schema or not schema[-1].startswith("POSTGRES INTEGRATION PASS:"):
         raise ValueError("canonical PostgreSQL integration result missing")
     admission = (directory / "worker-admission-postgres.log").read_text(encoding="utf-8").splitlines()
@@ -135,10 +141,10 @@ def main() -> int:
             tests = shards[args.shard - 1]
         if args.results:
             audit_results(tests, args.results)
+            audit_python_results(args.results.parent, args.shard or 1)
         if args.ci_receipt:
             if not args.shard or not args.results:
                 raise ValueError("CI receipt requires audited shard results")
-            audit_python_results(args.results.parent)
             receipt = shard_receipt(ci_identity(), args.shard, tests)
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                 print(f"shard_{args.shard}={receipt}", file=output)

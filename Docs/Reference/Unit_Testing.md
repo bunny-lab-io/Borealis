@@ -111,7 +111,7 @@ The PostgreSQL lane also executes `Data/Engine/Unit_Tests/test_worker_admission.
 
 Every required database test must run and pass. Missing tests, skipped tests or subtests, and incomplete results fail the lane. Keep the reported result directory when investigating a failure; CI retains database logs for successful and failed runs.
 
-Hosted CI runs four PostgreSQL shards. Each starts its own PostgreSQL 17 container, initializes the canonical schema, runs all Python admission cases, then runs whole Go test families serially. To reproduce one shard locally, run `CGO_ENABLED=1 GOFLAGS=-race BOREALIS_POSTGRES_SHARD=2 ./Tests/run-database-postgres.sh`. Omit the shard setting to run the full inventory against one container.
+Hosted CI runs eight PostgreSQL shards balanced using observed race-test durations. Each starts its own PostgreSQL 17 container, initializes and verifies the canonical schema, then runs whole Go test families serially. Shard 1 also owns the full Python database and admission contracts. To reproduce one shard locally, run `CGO_ENABLED=1 GOFLAGS=-race BOREALIS_POSTGRES_SHARD=2 ./Tests/run-database-postgres.sh`. Omit the shard setting to run the full inventory against one container.
 
 Each Go invocation has a 55-minute suite limit. Each runner command has a default 60-minute limit, and CI allows 70 minutes for setup, validation and diagnostic upload. CI enables the race detector through `GOFLAGS=-race`; a normal local invocation without that setting is not race evidence. `BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS` overrides the command limit; setting it below the package limit can stop Go before timeout diagnostics finish. Individual operation deadlines and all required assertions remain unchanged.
 

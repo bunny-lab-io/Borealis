@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 
 from Data.Engine import database
@@ -199,10 +200,16 @@ def assert_cluster_schema_phase_contract() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--initialize-only", action="store_true")
+    args = parser.parse_args()
     progress: list[str] = []
     database.initialise_engine_database(DATABASE_URL, progress_callback=progress.append)
     assert "users" in progress and "assemblies.official_assemblies" in progress
     assert_schema_contract()
+    if args.initialize_only:
+        print("POSTGRES FIXTURE READY: canonical schema verified")
+        return 0
     database.initialise_engine_database(DATABASE_URL)
     assert_schema_contract()
     assert_translation_and_transactions()

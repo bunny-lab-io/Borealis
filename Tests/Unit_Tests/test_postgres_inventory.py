@@ -7,7 +7,7 @@ import unittest
 
 from Tests.helpers.changed_paths import MANIFEST as CI_MANIFEST, matches
 from Tests.policy.check_postgres_inventory import (
-    PACKAGE, audit_python_results, audit_results, required_shards, required_tests,
+    PACKAGE, SHARD_COUNT, audit_python_results, audit_results, required_shards, required_tests,
     shard_receipt, source_tests, validate_inventory,
 )
 from Tests.policy.check_required_jobs import SCOPE, audit_jobs
@@ -67,11 +67,10 @@ func TestExternal(t *testing.T) { _ = databaseURL() }
     def test_invalid_manifests_fail(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
+            prefix = [[f"TestCase{i}"] for i in range(SHARD_COUNT - 1)]
             for shards in [
-                [], [["TestOne"]] * 4,
-                [["TestOne"], ["TestTwo"], ["TestThree"], []],
-                [["TestOne"], ["TestTwo"], ["TestThree"], ["Test.*"]],
-                [["TestOne"], ["TestTwo"], ["TestThree"], [12]],
+                [], [["TestOne"]] * SHARD_COUNT,
+                prefix + [[]], prefix + [["Test.*"]], prefix + [[12]],
             ]:
                 path.write_text(json.dumps({"shards": shards}))
                 with self.subTest(shards=shards), self.assertRaises(ValueError):
@@ -152,7 +151,7 @@ class RequiredJobsTests(unittest.TestCase):
         receipts = {f"shard_{i}": shard_receipt(identity, i, tests) for i, tests in enumerate(shards, 1)}
         needs["database"]["outputs"] = receipts
         audit_jobs(needs, shards, identity)
-        for key in ("shard_1", "shard_4"):
+        for key in ("shard_1", f"shard_{len(shards)}"):
             for wrong in ("", receipts["shard_2"], shard_receipt(["16", "head", "other"], 1, shards[0])):
                 with self.subTest(key=key, wrong=wrong), self.assertRaises(ValueError):
                     audit_jobs({**needs, "database": {"result": "success", "outputs": {**receipts, key: wrong}}},
@@ -163,6 +162,17 @@ class RequiredJobsTests(unittest.TestCase):
         needs["changes"]["outputs"]["database"] = "false"
         needs["database"] = {"result": "skipped"}
         audit_jobs(needs, shards, identity)
+
+    def test_isolated_schema_shard_cannot_claim_full_python_contracts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "postgres-integration.log").write_text("POSTGRES FIXTURE READY: canonical schema verified")
+            audit_python_results(root, 2)
+            with self.assertRaises(ValueError):
+                audit_python_results(root, 1)
+            (root / "worker-admission-postgres.log").touch()
+            with self.assertRaises(ValueError):
+                audit_python_results(root, 2)
 
     def test_missing_python_integration_evidence_fails(self):
         with tempfile.TemporaryDirectory() as temporary:

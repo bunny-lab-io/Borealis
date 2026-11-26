@@ -14,6 +14,11 @@ GO_BIN="$(resolve_go 1.25.12)"
 require_command python3
 SHARD_ARGS=()
 RECEIPT_ARGS=()
+SCHEMA_ARGS=()
+# One shard owns the full Python contracts. Every database gets its own real schema.
+if [[ "${BOREALIS_POSTGRES_SHARD:-1}" != 1 ]]; then
+  SCHEMA_ARGS=(--initialize-only)
+fi
 if [[ -n "${BOREALIS_POSTGRES_SHARD:-}" ]]; then
   SHARD_ARGS=(--shard "${BOREALIS_POSTGRES_SHARD}")
   if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
@@ -89,7 +94,7 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_ENGINE_AUTH_TOKEN_ROOT="${RESULT_DIR}/runtime/secrets/Auth_Tokens" \
   PYTHONPATH="${REPO_ROOT}" \
   PYTHONDONTWRITEBYTECODE=1 \
-  "${PYTHON_BIN}" "${REPO_ROOT}/Tests/integration/database/test_postgres_integration.py" \
+  "${PYTHON_BIN}" "${REPO_ROOT}/Tests/integration/database/test_postgres_integration.py" "${SCHEMA_ARGS[@]}" \
   >"${RESULT_DIR}/postgres-integration.log" 2>&1; then
   "${DOCKER[@]}" logs "${CONTAINER_NAME}" >"${RESULT_DIR}/postgres-container.log" 2>&1 || true
   tail -n 160 "${RESULT_DIR}/postgres-integration.log" >&2 || true
@@ -98,7 +103,7 @@ fi
 
 # Exercise the production Python admission transactions against the same
 # canonical schema. This entrypoint requires PostgreSQL and cannot skip SQL.
-if ! run_timed "${TIMEOUT_SECONDS}" env \
+if ((${#SCHEMA_ARGS[@]} == 0)) && ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   BOREALIS_PROJECT_ROOT="${REPO_ROOT}" \
   BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0 \
