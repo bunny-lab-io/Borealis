@@ -1290,6 +1290,42 @@ verify_cnpg_cutover_runtime "$cnpg_url"
         self.assertIn("--on-active=5s", engine)
         self.assertNotIn('/bin/sh -c', engine[engine.index("schedule_borealis_node_manager_refresh() {"):function_start])
 
+    def test_development_refresh_selects_packaged_helper_even_with_matching_marker(self):
+        # Exercise the real dispatcher and hash a running executable. Only the
+        # privileged service/socket and marker operations are simulated.
+        script = r"""
+revision="$(git rev-parse HEAD)"
+BOREALIS_NODE_MANAGER_BINARY="$(readlink /proc/$$/exe)"
+BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="dev-$(printf '%064d' 1)"
+BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256="$(sha256sum "$BOREALIS_NODE_MANAGER_BINARY" | cut -d' ' -f1)"
+marker="$revision"
+run_privileged() {
+  case "$1" in
+    cat) printf '%s\n' "$marker";;
+    systemctl) case "$*" in *MainPID*) echo "$$";; *NeedDaemonReload*) echo no;; *) return 0;; esac;;
+    cmp) return 0;;
+    test) if [[ "$2" == -S ]]; then return 0; fi; command test "${@:2}";;
+    systemd-run) printf '%s\n' "$*";;
+    *) "$@";;
+  esac
+}
+record_borealis_node_manager_revision() { echo "record $1"; }
+schedule_borealis_node_manager_refresh "$revision"
+marker=older
+schedule_borealis_node_manager_refresh "$revision"
+marker="$revision"
+BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256="$(printf '%064d' 0)"
+schedule_borealis_node_manager_refresh "$revision"
+"""
+        result = self.run_engine_library(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = result.stdout.strip().splitlines()
+        self.assertEqual(len(outputs), 2, outputs)
+        self.assertTrue(outputs[0].startswith("record "))
+        self.assertIn("--development-candidate dev-", outputs[1])
+        self.assertIn("EnvironmentFile=/etc/borealis/development-catalog.env", outputs[1])
+        self.assertNotIn("api-backend/dist", outputs[1])
+
     def test_pair_approval_notifies_every_joiner(self):
         store = (
             REPO_ROOT

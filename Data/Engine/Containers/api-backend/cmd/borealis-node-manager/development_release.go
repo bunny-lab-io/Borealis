@@ -116,3 +116,61 @@ func (m *manager) developmentMemberManifest(ctx context.Context, id, sha string,
 	}
 	return catalog.MemberImageManifest(parent, config)
 }
+
+// Read the small, candidate-bound bootstrap manifest. The full archive is
+// needed only when the selected helper or service unit actually changes.
+func developmentHelperManifest(id, sha string) (*clusterbootstrap.DevelopmentCatalog, *clusterbootstrap.Manifest, error) {
+	parent := os.Getenv("BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES")
+	catalog, _, err := clusterbootstrap.ReadDevelopmentCatalog(parent, id, sha, envDefault("BOREALIS_ENGINE_GITHUB_REPOSITORY", "bunny-lab-io/Borealis"))
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, ok := catalog.Upgrade(); !ok {
+		return nil, nil, errors.New("development candidate lacks member upgrade binding")
+	}
+	file, err := catalog.OpenAsset(parent, clusterbootstrap.ManifestName)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, clusterbootstrap.MaxManifestBytes+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	expected, ok := catalog.Asset(clusterbootstrap.ManifestName)
+	digest := sha256.Sum256(raw)
+	if !ok || int64(len(raw)) != expected.Bytes || hex.EncodeToString(digest[:]) != expected.SHA256 {
+		return nil, nil, clusterbootstrap.ErrPreparationConfig
+	}
+	manifest, err := clusterbootstrap.ParseManifest(raw, catalog.Expected())
+	if err != nil {
+		return nil, nil, err
+	}
+	asset, ok := catalog.Asset(clusterbootstrap.BundleName)
+	if !ok || asset.SHA256 != manifest.BundleSHA256() || asset.Bytes != manifest.BundleSize() {
+		return nil, nil, clusterbootstrap.ErrPreparationConfig
+	}
+	return catalog, manifest, nil
+}
+
+func verifyServingDevelopmentHelper(processPath, installedPath, revisionPath, digest, revision string) error {
+	process, err := os.Open(processPath)
+	if err != nil {
+		return err
+	}
+	defer process.Close()
+	running, err := process.Stat()
+	installed, installedErr := os.Stat(installedPath)
+	if err != nil || installedErr != nil || !running.Mode().IsRegular() || !os.SameFile(running, installed) {
+		return errors.New("development promotion requires the installed helper to be running")
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, process); err != nil || hex.EncodeToString(h.Sum(nil)) != digest {
+		return errors.New("running node-manager differs from the packaged development helper")
+	}
+	marker, err := os.ReadFile(revisionPath)
+	if err != nil || strings.TrimSpace(string(marker)) != revision {
+		return errors.New("running node-manager revision differs from development candidate")
+	}
+	return nil
+}

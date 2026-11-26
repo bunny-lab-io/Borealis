@@ -11469,6 +11469,30 @@ schedule_borealis_node_manager_refresh() {
   local main_pid=""
   current_revision="$(run_privileged cat "${BOREALIS_NODE_MANAGER_REVISION_FILE}" 2>/dev/null || true)"
   main_pid="$(run_privileged systemctl show --property=MainPID --value "${BOREALIS_NODE_MANAGER_SERVICE}" 2>/dev/null || true)"
+  local unit_name="borealis-node-manager-refresh-${revision:0:12}-$$"
+  if [[ -n "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+    local expected="${BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256:-}"
+    [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || die "Development refresh requires the packaged helper digest."
+    local installed_digest
+    installed_digest="$(run_privileged sha256sum -- "${BOREALIS_NODE_MANAGER_BINARY}")" || die "Cannot inspect installed node-manager."
+    if [[ "${installed_digest%% *}" == "${expected}" && "${main_pid}" =~ ^[1-9][0-9]*$ ]] \
+      && run_privileged test "/proc/${main_pid}/exe" -ef "${BOREALIS_NODE_MANAGER_BINARY}" \
+      && git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" diff --quiet "${revision}" -- Data/Engine/K3s/cluster/node-manager.service \
+      && run_privileged cmp -s "${K3S_CLUSTER_ASSET_DIR}/node-manager.service" "/etc/systemd/system/${BOREALIS_NODE_MANAGER_SERVICE}" \
+      && [[ "$(run_privileged systemctl show --property=NeedDaemonReload --value "${BOREALIS_NODE_MANAGER_SERVICE}")" == no ]] \
+      && run_privileged systemctl is-active --quiet "${BOREALIS_NODE_MANAGER_SERVICE}" \
+      && run_privileged test -S /run/borealis/node-manager.sock; then
+      if [[ "${current_revision}" != "${revision}" ]]; then
+        record_borealis_node_manager_revision "${revision}"
+      fi
+      return 0
+    fi
+    run_privileged systemd-run --unit "${unit_name}" --on-active=5s --property=Type=oneshot \
+      --property=EnvironmentFile=/etc/borealis/development-catalog.env --collect \
+      "${BOREALIS_NODE_MANAGER_BINARY}" activate-update --target-sha "${revision}" \
+      --source-root "${SCRIPT_DIR}" --development-candidate "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}"
+    return
+  fi
   if [[ "${current_revision}" == "${revision}" && "${main_pid}" =~ ^[1-9][0-9]*$ ]] \
     && run_privileged test "/proc/${main_pid}/exe" -ef "${BOREALIS_NODE_MANAGER_BINARY}"; then
     return 0
@@ -11477,7 +11501,6 @@ schedule_borealis_node_manager_refresh() {
   local service_source="${K3S_CLUSTER_ASSET_DIR}/node-manager.service"
   [[ -x "${staged_binary}" ]] || die "Node-manager refresh binary unavailable: ${staged_binary}"
   [[ -f "${service_source}" ]] || die "Node-manager refresh service unit unavailable: ${service_source}"
-  local unit_name="borealis-node-manager-refresh-${revision:0:12}-$$"
   run_privileged systemd-run \
     --unit "${unit_name}" \
     --on-active=5s \

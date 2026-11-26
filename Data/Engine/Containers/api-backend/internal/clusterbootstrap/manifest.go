@@ -87,9 +87,10 @@ type Manifest struct {
 	asset    assetIdentity
 }
 
-func (m *Manifest) BundleSize() int64    { return m.asset.Size }
-func (m *Manifest) BundleSHA256() string { return m.asset.SHA256 }
-func (m *Manifest) SourceSHA() string    { return m.identity.SourceSHA }
+func (m *Manifest) BundleSize() int64     { return m.asset.Size }
+func (m *Manifest) BundleSHA256() string  { return m.asset.SHA256 }
+func (m *Manifest) ManagerSHA256() string { return m.identity.NodeManager.SHA256 }
+func (m *Manifest) SourceSHA() string     { return m.identity.SourceSHA }
 
 // AssetURL is canonical and never provides a download authorization. HTTP
 // callers must use the independently validated GitHub release asset ID.

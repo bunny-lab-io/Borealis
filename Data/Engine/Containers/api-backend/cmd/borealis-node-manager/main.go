@@ -891,6 +891,7 @@ func activateUpdate(args []string) {
 	flags := flag.NewFlagSet("activate-update", flag.ExitOnError)
 	targetSHA := flags.String("target-sha", "", "Pinned lowercase commit SHA")
 	sourceRootFlag := flags.String("source-root", "", "Pinned release worktree root")
+	candidate := flags.String("development-candidate", "", "Exact local development candidate")
 	_ = flags.Parse(args)
 	if os.Geteuid() != 0 {
 		fatalf("activate-update requires root")
@@ -907,17 +908,6 @@ func activateUpdate(args []string) {
 	if err != nil || strings.ToLower(strings.TrimSpace(resolved)) != revision {
 		fatalf("activate-update source worktree does not match target SHA")
 	}
-	executable, err := os.Executable()
-	stagedBinary := filepath.Join(sourceRoot, "Data", "Engine", "Containers", "api-backend", "dist", "borealis-node-manager")
-	runningInfo, runningErr := os.Stat(executable)
-	stagedInfo, stagedErr := os.Stat(stagedBinary)
-	if err != nil || runningErr != nil || stagedErr != nil || !os.SameFile(runningInfo, stagedInfo) {
-		fatalf("activate-update must run target worktree node-manager binary")
-	}
-	serviceSource := filepath.Join(sourceRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")
-	if info, statErr := os.Stat(serviceSource); statErr != nil || !info.Mode().IsRegular() {
-		fatalf("activate-update target service unit is unavailable")
-	}
 	nodeName, err := os.Hostname()
 	nodeName = strings.ToLower(strings.TrimSpace(nodeName))
 	if err != nil || !nodePattern.MatchString(nodeName) {
@@ -925,38 +915,97 @@ func activateUpdate(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	if err := activateNodeManagerFiles(ctx, nodeName, revision, sourceRoot, *candidate); err != nil {
+		fatalf("activate-update: %v", err)
+	}
+	fmt.Printf("{\"node_name\":%q,\"manager_revision\":%q,\"activated\":true}\n", nodeName, revision)
+}
+
+func activateNodeManagerFiles(ctx context.Context, nodeName, revision, sourceRoot, candidate string) error {
+	var stagedBinary, serviceSource string
+	if candidate == "" {
+		executable, err := os.Executable()
+		stagedBinary = filepath.Join(sourceRoot, "Data", "Engine", "Containers", "api-backend", "dist", "borealis-node-manager")
+		runningInfo, runningErr := os.Stat(executable)
+		stagedInfo, stagedErr := os.Stat(stagedBinary)
+		if err != nil || runningErr != nil || stagedErr != nil || !os.SameFile(runningInfo, stagedInfo) {
+			return errors.New("activate-update must run target worktree node-manager binary")
+		}
+		serviceSource = filepath.Join(sourceRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")
+		if info, statErr := os.Stat(serviceSource); statErr != nil || !info.Mode().IsRegular() {
+			return errors.New("activate-update target service unit is unavailable")
+		}
+	} else {
+		installed, err := os.Stat("/usr/local/sbin/borealis-node-manager")
+		running, procErr := os.Stat("/proc/self/exe")
+		if err != nil || procErr != nil || !os.SameFile(installed, running) {
+			return errors.New("development activation requires the installed node-manager")
+		}
+		catalog, manifest, err := developmentHelperManifest(candidate, revision)
+		if err != nil {
+			return err
+		}
+		parent := os.Getenv("BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES")
+		if _, err = catalog.MemberImageManifest(parent, "/etc/borealis"); err != nil {
+			return err
+		}
+		archive, err := catalog.OpenAsset(parent, clusterbootstrap.BundleName)
+		if err != nil {
+			return err
+		}
+		defer archive.Close()
+		// Use the normal byte/inode reservation and verified Git tree. The serving
+		// checkout may contain a dist binary from an entirely different build.
+		bundle, err := clusterbootstrap.Stage(ctx, "/var/tmp", manifest, archive, "")
+		if err != nil {
+			return err
+		}
+		defer bundle.Close()
+		stagedBinary = bundle.ManagerPath()
+		serviceSource = filepath.Join(bundle.SourcePath(), "Data", "Engine", "K3s", "cluster", "node-manager.service")
+	}
 	if err := waitForNodeActionIdle(ctx, nodeName); err != nil {
-		fatalf("wait for node action idle: %v", err)
+		return fmt.Errorf("wait for node action idle: %w", err)
+	}
+	head, err := runGit(ctx, sourceRoot, "rev-parse", "HEAD")
+	if err != nil || strings.TrimSpace(head) != revision {
+		return errors.New("activation worktree moved while waiting for node actions")
+	}
+	if candidate != "" {
+		marker, err := os.ReadFile(filepath.Join("/etc/borealis", "staged-"+candidate))
+		if err != nil || strings.TrimSpace(string(marker)) != revision {
+			return errors.New("development staging revision changed before activation")
+		}
 	}
 	binary, err := os.ReadFile(stagedBinary)
 	if err != nil {
-		fatalf("read target node-manager binary: %v", err)
+		return fmt.Errorf("read target node-manager binary: %w", err)
 	}
 	if err := replaceExecutable("/usr/local/sbin/borealis-node-manager", binary); err != nil {
-		fatalf("install target node-manager binary: %v", err)
+		return fmt.Errorf("install target node-manager binary: %w", err)
 	}
 	if err := ensureMemberFenceDropInDirectory(); err != nil {
-		fatalf("prepare member-removal systemd drop-in directory: %v", err)
+		return fmt.Errorf("prepare member-removal systemd drop-in directory: %w", err)
 	}
 	if _, err := run(ctx, "", "install", "-m", "0644", "-o", "root", "-g", "root", serviceSource, "/etc/systemd/system/"+defaultServiceName); err != nil {
-		fatalf("install target node-manager service unit: %v", err)
+		return fmt.Errorf("install target node-manager service unit: %w", err)
 	}
 	if _, err := run(ctx, "", "systemctl", "daemon-reload"); err != nil {
-		fatalf("reload target node-manager service unit: %v", err)
+		return fmt.Errorf("reload target node-manager service unit: %w", err)
 	}
 	if _, err := run(ctx, "", "systemctl", "enable", defaultServiceName); err != nil {
-		fatalf("enable target node-manager service: %v", err)
+		return fmt.Errorf("enable target node-manager service: %w", err)
 	}
 	if _, err := run(ctx, "", "systemctl", "restart", defaultServiceName); err != nil {
-		fatalf("restart node-manager service: %v", err)
+		return fmt.Errorf("restart node-manager service: %w", err)
 	}
 	if err := waitForActiveNodeManagerExecutable(ctx, defaultServiceName, "/usr/local/sbin/borealis-node-manager", defaultSocketPath); err != nil {
-		fatalf("verify refreshed node-manager service: %v", err)
+		return fmt.Errorf("verify refreshed node-manager service: %w", err)
 	}
 	if err := replaceSecureConfig(defaultRevisionPath, []byte(revision+"\n")); err != nil {
-		fatalf("record node-manager revision: %v", err)
+		return fmt.Errorf("record node-manager revision: %w", err)
 	}
-	fmt.Printf("{\"node_name\":%q,\"manager_revision\":%q,\"activated\":true}\n", nodeName, revision)
+	return nil
 }
 
 func waitForNodeActionIdle(ctx context.Context, nodeName string) error {
@@ -1423,7 +1472,11 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA, snapshot stri
 		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false); err != nil {
 			return nil, err
 		}
-		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot)
+		_, helper, err := developmentHelperManifest(snapshot, targetSHA)
+		if err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot, "BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256="+helper.ManagerSHA256())
 	}
 	engineEnv = append(engineEnv,
 		"BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate",
@@ -1532,6 +1585,13 @@ func (m *manager) promoteCandidate(ctx context.Context, targetSHA, snapshot stri
 	if snapshot != "" {
 		manifest, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false)
 		if err != nil {
+			return nil, err
+		}
+		_, bootstrap, err := developmentHelperManifest(snapshot, targetSHA)
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyServingDevelopmentHelper("/proc/self/exe", "/usr/local/sbin/borealis-node-manager", defaultRevisionPath, bootstrap.ManagerSHA256(), targetSHA); err != nil {
 			return nil, err
 		}
 		imageManifest = manifest

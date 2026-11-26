@@ -144,3 +144,39 @@ func TestDevelopmentPromotionRetainsRecoveryBeforeServing(t *testing.T) {
 		t.Fatal("lost recovery manifest")
 	}
 }
+
+func TestDevelopmentPromotionRequiresActualPackagedHelper(t *testing.T) {
+	root := t.TempDir()
+	installed := filepath.Join(root, "installed")
+	running := filepath.Join(root, "running")
+	marker := filepath.Join(root, "marker")
+	digest := sha256.Sum256([]byte("packaged helper"))
+	sha := strings.Repeat("a", 40)
+	for path, value := range map[string]string{installed: "packaged helper", marker: sha + "\n"} {
+		if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Link(installed, running); err != nil {
+		t.Fatal(err)
+	}
+	want := hex.EncodeToString(digest[:])
+	if err := verifyServingDevelopmentHelper(running, installed, marker, want, sha); err != nil {
+		t.Fatal(err)
+	}
+	if verifyServingDevelopmentHelper(running, installed, marker, strings.Repeat("0", 64), sha) == nil {
+		t.Fatal("accepted wrong packaged digest with matching revision")
+	}
+	if verifyServingDevelopmentHelper(running, installed, marker, want, strings.Repeat("b", 40)) == nil {
+		t.Fatal("accepted stale revision marker")
+	}
+	if err := os.Remove(installed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, []byte("packaged helper"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if verifyServingDevelopmentHelper(running, installed, marker, want, sha) == nil {
+		t.Fatal("accepted replaced executable inode")
+	}
+}

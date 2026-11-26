@@ -62,6 +62,8 @@ sudo k3s kubectl apply --server-side --dry-run=server --field-manager=borealis-e
 sudo k3s kubectl apply --server-side --field-manager=borealis-engine -f Data/Engine/K3s/cluster/crds.yaml
 ```
 
+During a development member update, Borealis checks the running node-manager against the helper packaged with the selected snapshot. An unchanged running helper and matching service unit can retain their socket across the update. A changed helper uses the verified bootstrap bundle. Development promotion checks the running executable and revision before directing workloads to the candidate. A member running an older helper may need the controlled lab activation procedure when first adopting this behavior.
+
 To opt in, install a root-owned `/etc/borealis/development-catalog.env` containing the following single line followed by a newline. Apply through the normal managed helper activation and node workload rollout. The API and controller receive read-only access to the verified generations. The build worker keeps its own separate directories.
 
 ```text
