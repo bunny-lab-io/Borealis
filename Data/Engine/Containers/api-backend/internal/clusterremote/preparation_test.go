@@ -83,6 +83,10 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				go func() {
 					defer close(outputDone)
 					_, _ = io.Copy(channel, outReader)
+					if mode == "inspect progress" || mode == "deliver" {
+						// The wrapper retains stdout until its inherited stdin sees EOF.
+						<-copied
+					}
 					channel.CloseWrite()
 					outReader.Close()
 				}()

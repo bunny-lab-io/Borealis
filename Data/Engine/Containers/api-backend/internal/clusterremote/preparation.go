@@ -363,7 +363,6 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if err != nil {
 		return ErrBootstrapVerification
 	}
-	defer stdin.Close()
 	stdout, err := session.StdoutPipe()
 	command := preparationCommand(size, digest, nonce)
 	if artifactPreparationAction(action) || clusterbootstrap.HostPackagePreparationAction(action) {
@@ -400,7 +399,7 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	}
 	// Closing the session releases a blocked stdout reader on cancellation.
 	input := preparationSSHOutput{Reader: stdout, close: func() error { return session.Close() }}
-	output := preparationSSHInput{Writer: stdin, close: func() error { return client.Close() }}
+	output := preparationSSHInput{WriteCloser: stdin, close: func() error { return client.Close() }}
 	stage = "exchange"
 	var receipt clusterbootstrap.PrejoinPreparationReceipt
 	var cursor clusterbootstrap.PreparationProgress
@@ -414,7 +413,6 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	if err != nil {
 		return ErrBootstrapVerification
 	}
-	_ = stdin.Close()
 	stage = "wrapper_exit"
 	if session.Wait() != nil || diagnostics.overflow {
 		return ErrBootstrapVerification
@@ -440,8 +438,9 @@ type preparationSSHOutput struct {
 func (r preparationSSHOutput) Close() error { return r.close() }
 
 type preparationSSHInput struct {
-	io.Writer
+	io.WriteCloser
 	close func() error
 }
 
-func (r preparationSSHInput) Close() error { return r.close() }
+func (r preparationSSHInput) Close() error      { return r.close() }
+func (r preparationSSHInput) CloseWrite() error { return r.WriteCloser.Close() }

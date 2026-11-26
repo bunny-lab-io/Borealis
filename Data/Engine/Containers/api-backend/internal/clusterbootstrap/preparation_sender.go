@@ -117,6 +117,8 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 	}
 	frames := make(chan PreparationSessionFrame)
 	readDone := make(chan struct{})
+	finishRequest := make(chan struct{})
+	responseEOF := make(chan bool, 1)
 	go func() {
 		defer close(readDone)
 		defer close(frames)
@@ -125,18 +127,26 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 			if ReadSessionFrame(reader, &frame) != nil {
 				return
 			}
-			if frame.State == "verified" {
-				var trailing [1]byte
-				if n, err := reader.Read(trailing[:]); n != 0 || err != io.EOF || reader.N < 1 {
-					return
-				}
-			}
 			select {
 			case frames <- frame:
 			case <-ctx.Done():
 				return
 			}
 			if frame.State == "verified" {
+				select {
+				case <-finishRequest:
+				case <-ctx.Done():
+					return
+				}
+				// The wrapper can retain stdout until its reader sees stdin EOF.
+				// Half-close only the request. The owner still needs the exit status.
+				if stream, ok := output.(interface{ CloseWrite() error }); ok && stream.CloseWrite() != nil {
+					responseEOF <- false
+					return
+				}
+				var trailing [1]byte
+				n, err := reader.Read(trailing[:])
+				responseEOF <- n == 0 && err == io.EOF && reader.N > 0
 				return
 			}
 		}
@@ -319,6 +329,17 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 				}
 				if !sentEnd || awaitingAck || frame.Sequence != sequence {
 					return ErrSessionProtocol
+				}
+				close(finishRequest)
+				select {
+				case clean := <-responseEOF:
+					if !clean {
+						return ErrSessionProtocol
+					}
+				case <-ctx.Done():
+					return ErrSessionAuthority
+				case <-deadline.C:
+					return ErrSessionAuthority
 				}
 				if check(PreparationProofTimeout) != nil {
 					stage = "terminal_authority"
