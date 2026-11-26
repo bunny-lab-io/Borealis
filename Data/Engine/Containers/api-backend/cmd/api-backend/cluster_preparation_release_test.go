@@ -207,9 +207,13 @@ func testPreparationReleasePhaseBinding(t *testing.T) {
 func testInspectionReleaseStaging(t *testing.T) {
 	f := newSSHQualificationFixture(t, false)
 	s := f.c.store
+	f.exec(t, `UPDATE engine.cluster_operations SET error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStagePending)
 	work, err := s.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if s.completeClusterSSHQualification(f.ctx, work, newClusterSSHQualificationReport(f.op.Attempt)) == nil {
+		t.Fatal("host result preempted controller staging")
 	}
 	digest, err := clusterSSHPreparationDigest(work.Proof)
 	if err != nil {
@@ -236,15 +240,10 @@ func testInspectionReleaseStaging(t *testing.T) {
 			t.Fatal("changed binding retained source authority")
 		}
 	}
-	ctx, cancel := context.WithTimeout(f.ctx, 20*time.Millisecond)
-	defer cancel()
-	if err := s.awaitInspectionRelease(ctx, work); err == nil || ctx.Err() != context.DeadlineExceeded {
-		t.Fatal("qualification escaped pending stage", err)
-	}
 	if err := f.c.setStageStatus(f.ctx, q, clusterSSHStagePending, clusterSSHStageReady); err != nil {
 		t.Fatal(err)
 	}
-	if s.preparationReleaseCurrent(f.ctx, q) || s.awaitInspectionRelease(f.ctx, work) != nil || s.db.Stats().InUse != 0 {
+	if ready, err := s.inspectionReleaseReady(f.ctx, work); err != nil || !ready || s.preparationReleaseCurrent(f.ctx, q) || s.db.Stats().InUse != 0 {
 		t.Fatal("staged handoff retained transfer authority or blocked native qualification")
 	}
 	if f.c.setStageStatus(f.ctx, q, clusterSSHStagePending, clusterSSHStageReady) == nil {
@@ -277,6 +276,34 @@ func testInspectionReleaseStaging(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("cancelled directory retained")
+	}
+}
+
+func testReserveDuringSourceStaging(t *testing.T) {
+	f := newSSHQualificationFixture(t, false)
+	s := f.c.store
+	f.exec(t, `UPDATE engine.cluster_operations SET error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStagePending)
+	// The production polling entry point must return while staging even when
+	// target readers are unavailable. No host observation has taken place.
+	runtime := clusterSSHInspectionRuntime{store: s}
+	if err := runtime.qualifyOnce(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var reserved int
+	if err := s.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=$1 AND state='running' AND current_step='qualify'`, f.op.ID).Scan(&reserved); err != nil || reserved != 2 {
+		t.Fatal("missing fresh paired reservation", reserved, err)
+	}
+	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=1 WHERE operation_id=$1`, f.op.ID)
+	if id, err := s.pendingClusterSSHQualification(f.ctx); err != nil || id != "" {
+		t.Fatal("pending release scheduled target work", id, err)
+	}
+	if _, err := s.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID()); err == nil {
+		t.Fatal("reclaimed while waiting for the controller")
+	}
+	// A recorded staging failure remains actionable and cannot dispatch work.
+	f.exec(t, `UPDATE engine.cluster_operations SET error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStageFailed)
+	if id, err := s.pendingClusterSSHQualification(f.ctx); err != nil || id != "" {
+		t.Fatal("failed release scheduled target work", id, err)
 	}
 }
 

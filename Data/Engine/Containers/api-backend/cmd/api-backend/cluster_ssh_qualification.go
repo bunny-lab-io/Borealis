@@ -138,9 +138,6 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		return report
 	}
 	err = withClusterSSHNetworkTargets(ctx, store, aegis, work.Baseline, work.Claims, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
-		if err := store.awaitInspectionRelease(ctx, work); err != nil {
-			return err
-		}
 		anchor := work.Claims[0]
 		observe := func(check string) {
 			store.recordSSHCheckStarted(ctx, work.Proof.Cohort, work.Payload, check, anchor.Lease)
@@ -222,6 +219,12 @@ func (r *clusterSSHInspectionRuntime) qualifyOnce(ctx context.Context) error {
 	work, err := r.store.claimClusterSSHQualification(claimCtx, id, newClusterUUID())
 	cancel()
 	if err != nil {
+		return err
+	}
+	// Reserve the fresh cohort before its initial claim window closes. While
+	// the controller stages locally, no target reader or renewal is needed.
+	// The existing expired read-only claim path resumes after the ready event.
+	if ready, err := r.store.inspectionReleaseReady(ctx, work); err != nil || !ready {
 		return err
 	}
 	for _, claim := range work.Claims {

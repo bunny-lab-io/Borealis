@@ -32,7 +32,8 @@ func (s *postgresOperatorStore) pendingClusterSSHQualification(ctx context.Conte
  WHERE o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step='qualify_ssh_targets'
  AND EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t WHERE t.operation_id=o.id
  AND t.current_step IN ('inspection_complete','qualify') AND t.credential_state='available'
- AND t.lease_expires_at<=extract(epoch FROM clock_timestamp())) LIMIT 1`).Scan(&id)
+ AND (t.current_step='inspection_complete' OR (COALESCE(o.payload_json::jsonb->'ssh_source_staging_required','false'::jsonb)='false'::jsonb OR COALESCE(o.error_text,'')=$1))
+ AND t.lease_expires_at<=extract(epoch FROM clock_timestamp())) LIMIT 1`, clusterSSHStageReady).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -159,12 +160,13 @@ func (s *postgresOperatorStore) claimClusterSSHQualification(ctx context.Context
 	if lockClusterSSHQualification(ctx, tx, operationID, targets) != nil || checkClusterSSHQualificationSource(ctx, tx, work) != nil {
 		return fail()
 	}
-	var n int
-	if tx.QueryRowContext(ctx, `SELECT 1 FROM engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l
+	var stageReady bool
+	if tx.QueryRowContext(ctx, `SELECT (COALESCE(o.payload_json::jsonb->'ssh_source_staging_required','false'::jsonb)='false'::jsonb OR COALESCE(o.error_text,'')=$10)
+ FROM engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step='qualify_ssh_targets' AND o.attempt=$2 AND o.payload_json=$3
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=$4 AND c.baseline_release=$5 AND c.baseline_sha=$6
  AND l.name=$7 AND l.holder=$8 AND l.expires_at>extract(epoch FROM clock_timestamp())
- AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$9`, operationID, attempt, work.Payload, work.Proof.Source.ClusterID, work.Baseline.Release, work.Baseline.SourceSHA, clusterControllerLeaseName, controller, len(targets)).Scan(&n) != nil {
+ AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$9`, operationID, attempt, work.Payload, work.Proof.Source.ClusterID, work.Baseline.Release, work.Baseline.SourceSHA, clusterControllerLeaseName, controller, len(targets), clusterSSHStageReady).Scan(&stageReady) != nil {
 		return fail()
 	}
 	claims := map[string]clusterSSHNetworkTargetClaim{}
@@ -181,9 +183,9 @@ func (s *postgresOperatorStore) claimClusterSSHQualification(ctx context.Context
  AND t.inspected_attempt=$6 AND t.inspected_generation=$13 AND t.inspected_at=$14 AND t.inspection_json=$15
  AND t.inspected_at>moment.now-(CASE WHEN t.state='running' THEN $17::bigint ELSE $16::bigint END) AND t.inspected_at<=moment.now AND t.credential_state='available'
  AND ((t.state='queued' AND t.current_step='inspection_complete' AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=t.inspected_generation)
- OR(t.state='running' AND t.current_step='qualify' AND t.lease_expires_at<=moment.now AND t.lease_generation>t.inspected_generation))
+ OR($18 AND t.state='running' AND t.current_step='qualify' AND t.lease_expires_at<=moment.now AND t.lease_generation>t.inspected_generation))
  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
- RETURNING t.lease_generation,p.aegis_generation,p.ciphertext`, t.Binding.TargetID, holder, clusterSSHTargetLeaseSeconds, operationID, t.Binding.ClusterID, attempt, t.Binding.Address, t.Binding.Port, t.Key.Algorithm, t.Key.Fingerprint, keys[t.Binding.TargetID], t.Ordinal, t.Generation, t.InspectedAt, reports[t.Binding.TargetID], clusterSSHFreshEvidenceSeconds, clusterSSHInspectionLifetimeSeconds).Scan(&claim.Lease.Generation, &claim.Sealed.generation, &claim.Sealed.ciphertext) != nil {
+ RETURNING t.lease_generation,p.aegis_generation,p.ciphertext`, t.Binding.TargetID, holder, clusterSSHTargetLeaseSeconds, operationID, t.Binding.ClusterID, attempt, t.Binding.Address, t.Binding.Port, t.Key.Algorithm, t.Key.Fingerprint, keys[t.Binding.TargetID], t.Ordinal, t.Generation, t.InspectedAt, reports[t.Binding.TargetID], clusterSSHFreshEvidenceSeconds, clusterSSHInspectionLifetimeSeconds, stageReady).Scan(&claim.Lease.Generation, &claim.Sealed.generation, &claim.Sealed.ciphertext) != nil {
 			return fail()
 		}
 		claims[t.Binding.TargetID] = claim
@@ -295,9 +297,10 @@ func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Cont
 	if tx.QueryRowContext(ctx, `SELECT floor(extract(epoch FROM clock_timestamp()))::bigint
  FROM engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step='qualify_ssh_targets' AND o.attempt=$2 AND o.payload_json=$3
+ AND (COALESCE(o.payload_json::jsonb->'ssh_source_staging_required','false'::jsonb)='false'::jsonb OR COALESCE(o.error_text,'')=$10)
  AND c.id=1 AND c.active_operation_id=o.id AND c.cluster_id=$4 AND c.baseline_release=$5 AND c.baseline_sha=$6
  AND l.name=$7 AND l.holder=$8 AND l.expires_at>extract(epoch FROM clock_timestamp())
- AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$9`, operation.OperationID, operation.OperationAttempt, work.Payload, work.Proof.Source.ClusterID, work.Baseline.Release, work.Baseline.SourceSHA, clusterControllerLeaseName, operation.ControllerHolder, len(work.Claims)).Scan(&now) != nil {
+ AND (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=o.id)=$9`, operation.OperationID, operation.OperationAttempt, work.Payload, work.Proof.Source.ClusterID, work.Baseline.Release, work.Baseline.SourceSHA, clusterControllerLeaseName, operation.ControllerHolder, len(work.Claims), clusterSSHStageReady).Scan(&now) != nil {
 		return errClusterConflict
 	}
 	// Cancellation and timeout reports can still release their claims. Never

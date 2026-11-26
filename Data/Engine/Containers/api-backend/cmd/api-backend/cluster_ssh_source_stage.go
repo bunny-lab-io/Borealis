@@ -133,39 +133,21 @@ func (c *clusterController) pruneSourceStage(ctx context.Context) error {
 	return nil
 }
 
-func (s *postgresOperatorStore) awaitInspectionRelease(ctx context.Context, work clusterSSHQualificationWork) error {
+func (s *postgresOperatorStore) inspectionReleaseReady(ctx context.Context, work clusterSSHQualificationWork) (bool, error) {
 	var required bool
 	if clusterBootstrapObject([]byte(work.Payload), map[string]any{"ssh_source_staging_required": &required}) != nil {
-		return errClusterConflict
+		return false, errClusterConflict
 	}
 	if !required {
-		return nil
+		return true, nil
 	}
 	digest, err := clusterSSHPreparationDigest(work.Proof)
 	if err != nil {
-		return err
+		return false, err
 	}
 	q := clusterPreparationReleaseRequest{Operation: work.Proof.Cohort.OperationID, Attempt: work.Proof.Cohort.Attempt, Holder: work.Proof.Cohort.ControllerHolder, Inspection: digest, Expected: work.Baseline}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		status, err := s.sourceStageStatus(ctx, q)
-		if err != nil {
-			return err
-		}
-		switch status {
-		case clusterSSHStageReady:
-			return nil
-		case clusterSSHStagePending:
-		default:
-			return errClusterConflict
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	status, err := s.sourceStageStatus(ctx, q)
+	return status == clusterSSHStageReady, err
 }
 
 func (c *clusterController) stageInspectionRelease(ctx context.Context, op clusterControllerOperation) (result error) {
