@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 
 import build_node_bootstrap_assets as bootstrap
-from node_artifact_cache import pinned_input
+from node_artifact_cache import pinned_input, regular_reader
 
 LOCK = "Data/Engine/Containers/api-backend/internal/clusterbootstrap/host_packages.lock.json"
 INVENTORY = "borealis-node-host-packages-ubuntu-noble-linux-amd64.json"
@@ -231,7 +231,7 @@ def assemble_archive(plan: dict, archives: Path, destination: Path) -> None:
 
 def build_assets(*, source: Path, release: str, source_sha: str, repository: str,
                  output_dir: Path, archives: Path | None = None) -> dict:
-    if (not bootstrap.RELEASE.fullmatch(release) or not bootstrap.SHA.fullmatch(source_sha) or source_sha == "0" * 40 or
+    if (not bootstrap.packaging_identity(release, source_sha) or source_sha == "0" * 40 or
             not bootstrap.REPOSITORY.fullmatch(repository)):
         raise ValueError("invalid immutable host package release identity")
     if bootstrap.git(source, "status", "--porcelain", "--untracked-files=no"):
@@ -247,12 +247,18 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
             snapshot = Path(temporary) / "source"
             bootstrap.source_snapshot(source, snapshot, release, source_sha, repository)
             plan, digest = parse_plan((snapshot / LOCK).read_bytes())
-            if archives is None:
+            if archives is None or os.environ.get("BOREALIS_BUILD_ARTIFACT_CACHE"):
+                existing = archives
                 archives = Path(temporary) / "cache"
                 archives.mkdir()
                 for pin in plan["packages"]:
-                    pinned_input(pin["sha256"], pin["size"], archives / pin["file"],
-                                 lambda path, pin=pin: download(pin, path))
+                    def acquire(path, pin=pin):
+                        if existing is None:
+                            download(pin, path)
+                        else:
+                            with regular_reader(existing / pin["file"], pin["size"]) as src, path.open("xb") as dst:
+                                shutil.copyfileobj(src, dst)
+                    pinned_input(pin["sha256"], pin["size"], archives / pin["file"], acquire)
             destination = output_dir / ARCHIVE
             assemble_archive(plan, archives, destination)
             inventory = dict(plan, repository=repository, release=release, source_sha=source_sha, plan_sha256=digest,

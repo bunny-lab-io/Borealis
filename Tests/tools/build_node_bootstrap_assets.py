@@ -127,9 +127,14 @@ def archive(root: Path, destination: Path) -> None:
                         tar.addfile(info)
 
 
+def packaging_identity(release: str, source_sha: str) -> bool:
+    return bool(SHA.fullmatch(source_sha) and source_sha != "0" * 40 and
+                (RELEASE.fullmatch(release) or release == "dev-src-" + source_sha))
+
+
 def build_assets(*, source: Path, release: str, source_sha: str, repository: str,
                  output_dir: Path, go_bin: str) -> dict:
-    if not RELEASE.fullmatch(release) or not SHA.fullmatch(source_sha) or not REPOSITORY.fullmatch(repository):
+    if not packaging_identity(release, source_sha) or not REPOSITORY.fullmatch(repository):
         raise ValueError("invalid immutable node bootstrap identity")
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -152,9 +157,11 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
             archive(root, bundle)
             if bundle.stat().st_size > MAX_BUNDLE_BYTES:
                 raise ValueError("node bootstrap exceeds bounded download size")
+            bundle_sha = digest(bundle)
             manifest = dict(identity, asset={"name": BUNDLE_NAME, "size": bundle.stat().st_size,
-                            "sha256": digest(bundle),
-                            "url": f"https://github.com/{repository}/releases/download/{release}/{BUNDLE_NAME}"})
+                            "sha256": bundle_sha,
+                            "url": (f"borealis-local:sha256:{bundle_sha}" if release.startswith("dev-src-") else
+                                    f"https://github.com/{repository}/releases/download/{release}/{BUNDLE_NAME}")})
             with (output_dir / MANIFEST_NAME).open("x", encoding="utf-8") as handle:
                 handle.write(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
         except Exception:

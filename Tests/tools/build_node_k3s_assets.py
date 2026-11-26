@@ -170,7 +170,7 @@ def pinned_download(version, pin, destination):
 
 def build_assets(*, source: Path, release: str, source_sha: str, repository: str,
                  output_dir: Path, go_bin: str) -> dict:
-    if not bootstrap.RELEASE.fullmatch(release) or not bootstrap.SHA.fullmatch(source_sha) or not bootstrap.REPOSITORY.fullmatch(repository):
+    if not bootstrap.packaging_identity(release, source_sha) or not bootstrap.REPOSITORY.fullmatch(repository):
         raise ValueError("invalid immutable K3s release identity")
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=False)

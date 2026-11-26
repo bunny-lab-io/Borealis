@@ -110,7 +110,7 @@ def build_runtime(source: Path, go_bin: str) -> Path:
 
 def build_assets(*, source: Path, release: str, source_sha: str, repository: str,
                  output_dir: Path, go_bin: str, docker: str = "docker") -> dict:
-    if not bootstrap.RELEASE.fullmatch(release) or not bootstrap.SHA.fullmatch(source_sha) or not bootstrap.REPOSITORY.fullmatch(repository):
+    if not bootstrap.packaging_identity(release, source_sha) or not bootstrap.REPOSITORY.fullmatch(repository):
         raise ValueError("invalid immutable image release identity")
     output_dir = output_dir.resolve()
     # Dedicated output directory: an interrupted or previous packaging run is
