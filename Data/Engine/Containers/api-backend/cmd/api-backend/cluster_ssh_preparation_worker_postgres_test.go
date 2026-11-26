@@ -24,6 +24,7 @@ func newSSHPreparationWorkerFixture(t *testing.T, replacement bool) (sshPreparat
 }
 
 func TestClusterSSHPreparationWorkerPostgres(t *testing.T) {
+	t.Run("native transfer authority", checkNativeTransferAuthority)
 	for _, mode := range []string{"expansion", "replacement", "wrong source", "missing dispatcher", "missing sibling", "wrong envelope", "qualification lease", "dispatch failure", "wrong result", "wrong confirmation", "controller loss", "aegis lock", "ignored boundary failure", "cancelled", "cleanup failure"} {
 		t.Run(mode, func(t *testing.T) {
 			f, work := newSSHPreparationWorkerFixture(t, mode == "replacement")

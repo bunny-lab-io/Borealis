@@ -12,7 +12,9 @@ import (
 type clusterSSHPreparationChecks struct {
 	Inputs    func(context.Context) error
 	Authority func(context.Context) error
-	K3sJoin   func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error
+	// Borrow the source scope and its frozen authority across the worker's paired renewal.
+	bindPairedRenewal func(func(context.Context) error) func(context.Context) error
+	K3sJoin           func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error
 	// Copied storage projection from the same owned source acquisition. Full
 	// Inputs proof brackets its use; this accessor launches no source Jobs.
 	Storage func(context.Context) (clusterSSHStorageSnapshot, error)
@@ -94,9 +96,16 @@ func runClusterSSHPreparationScopeFor(parent context.Context, interval, maximum 
 // on both sides of the exact-envelope SQL renewal. Only observation time may
 // advance. JSON comparison owns its bytes, avoiding aliases into later reads.
 func newClusterSSHPreparationLeaseCheck(authority clusterSSHPreparationAuthorityRead, renew func(context.Context) error) func(context.Context) error {
+	proof := newClusterSSHPreparationLeaseProof(authority)
+	return func(ctx context.Context) error { return proof(ctx, renew) }
+}
+
+// All uses of a source scope share its original comparison value and gate,
+// including when the paired worker performs the exact selected renewal.
+func newClusterSSHPreparationLeaseProof(authority clusterSSHPreparationAuthorityRead) func(context.Context, func(context.Context) error) error {
 	gate := make(chan struct{}, 1)
 	var retained []byte
-	return func(parent context.Context) error {
+	return func(parent context.Context, renew func(context.Context) error) error {
 		if authority == nil || renew == nil || parent.Err() != nil {
 			return clusterbootstrap.ErrSessionAuthority
 		}
@@ -148,6 +157,14 @@ func newClusterSSHPreparationLeaseCheck(authority clusterSSHPreparationAuthority
 			retained = before
 		}
 		return nil
+	}
+}
+
+// Keep the source's cancellation and read/renew/read comparison on both
+// sides of a paired renewal. This callback is used only during native work.
+func bindClusterSSHPreparationRenewal(scope context.Context, proof func(context.Context, func(context.Context) error) error) func(func(context.Context) error) func(context.Context) error {
+	return func(renew func(context.Context) error) func(context.Context) error {
+		return clusterSSHPreparationBoundary(scope, func(ctx context.Context) error { return proof(ctx, renew) }, func(context.Context) error { return nil })
 	}
 }
 

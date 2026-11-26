@@ -56,7 +56,10 @@ func dispatchClusterSSHPrejoinCohort(parent context.Context, claims []clusterSSH
 			called = true
 			expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
 			var receipt clusterbootstrap.PrejoinPreparationReceipt
-			if target.inputs(ctx) != nil || target.run(ctx, true, -1, nil, check, &receipt) != nil || target.inputs(ctx) != nil || check(ctx) != nil {
+			// Only this target scope is open. Its native authority already
+			// refreshes every original claim through the worker. Supply extra
+			// live-target checks only in the multi-scope start pass below.
+			if target.inputs(ctx) != nil || target.run(ctx, true, -1, nil, nil, &receipt) != nil || target.inputs(ctx) != nil || check(ctx) != nil {
 				cancel()
 				return fail
 			}

@@ -299,7 +299,23 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 			return value, nil
 		}
 		joined := checks.K3sJoin
-		checks.Inputs, checks.Authority = wrap("full input", checks.Inputs), wrap("preparation authority", checks.Authority)
+		checks.Inputs = wrap("full input", checks.Inputs)
+		if checks.bindPairedRenewal != nil {
+			// check verifies the frozen selected confirmation on both sides of
+			// the worker's fresh read/renew/read of every original claim.
+			// The source brackets that whole proof with its own frozen reads.
+			paired := checks.bindPairedRenewal(check)
+			checks.Authority = func(caller context.Context) error {
+				err := lifetime.run(caller, paired)
+				if err != nil {
+					reportClusterSSHPrejoinCheck(caller, "preparation authority paired source proof")
+				}
+				return err
+			}
+			checks.bindPairedRenewal = nil
+		} else {
+			checks.Authority = wrap("preparation authority", checks.Authority)
+		}
 		checks.K3sJoin = func(caller context.Context, binding engineidentity.Binding, consume clusterSSHJoinMaterialConsumer) error {
 			return lifetime.run(caller, func(bound context.Context) error {
 				if binding != source.Binding || consume == nil || check(bound) != nil {

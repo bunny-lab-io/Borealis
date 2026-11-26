@@ -193,7 +193,9 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
-	leaseCheck := newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
+	leaseProof := newClusterSSHPreparationLeaseProof(authority)
+	renew := func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) }
+	leaseCheck := func(ctx context.Context) error { return leaseProof(ctx, renew) }
 	// Retain the existing twenty-minute source-acquisition allowance around
 	// the exact bounded session budget, including identity activation.
 	maximum := clusterSSHPreparationSourceBudget(joining)
@@ -273,6 +275,9 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		checks := clusterSSHPreparationChecks{
 			Inputs:    clusterSSHPreparationBoundary(ctx, leaseCheck, inputCheck),
 			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
+		}
+		if joining {
+			checks.bindPairedRenewal = bindClusterSSHPreparationRenewal(ctx, leaseProof)
 		}
 		// The first full snapshot bound the source, settings and storage. Hashing
 		// private release files cannot change a host. Keep claim/credential

@@ -72,7 +72,10 @@ func TestClusterSSHPrejoinCohortBarrier(t *testing.T) {
 				}
 				target.run = func(ctx context.Context, preparation bool, proofStep int, beforeStart, check func(context.Context) error, output *clusterbootstrap.PrejoinPreparationReceipt) error {
 					beforeInputs := append([]int(nil), inputCalls...)
-					if current(ctx) != nil || check == nil || check(ctx) != nil {
+					if preparation != (check == nil) {
+						t.Fatal("additional live-target proof must match the retained-scope phase")
+					}
+					if current(ctx) != nil || check != nil && check(ctx) != nil {
 						return clusterbootstrap.ErrSessionAuthority
 					}
 					if !reflect.DeepEqual(beforeInputs, inputCalls) {
