@@ -27,11 +27,12 @@ import (
 // Caller must Close after SSH transfer. Paths remain private to trusted caller;
 // mutation of scratch after verification invalidates its proof.
 type Bundle struct {
-	expected Expected
-	root     string
-	identity identity
-	asset    assetIdentity
-	index    *bootstrapArchiveIndex
+	rawManifest string
+	expected    Expected
+	root        string
+	identity    identity
+	asset       assetIdentity
+	index       *bootstrapArchiveIndex
 }
 
 func (b *Bundle) ArchivePath() string { return filepath.Join(b.root, BundleName) }
@@ -76,7 +77,7 @@ func stageBootstrapReserved(ctx context.Context, parent string, m *Manifest, inp
 	if err != nil {
 		return nil, errors.New("node bootstrap scratch unavailable")
 	}
-	b := &Bundle{root: root, expected: m.expected, identity: m.identity, asset: m.asset}
+	b := &Bundle{rawManifest: m.raw, root: root, expected: m.expected, identity: m.identity, asset: m.asset}
 	defer func() {
 		if err != nil {
 			_ = b.Close()

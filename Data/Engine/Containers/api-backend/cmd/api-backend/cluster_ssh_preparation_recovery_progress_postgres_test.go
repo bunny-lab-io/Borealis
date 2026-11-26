@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func recoveryProgressClaimFixture(t *testing.T, replacement bool, baseline clusterbootstrap.Expected) (sshPreparationAuthorityFixture, clusterSSHPreparationRecoveryClaim, map[string]any) {
+func sourceBoundPreparationFixture(t *testing.T, replacement bool, baseline clusterbootstrap.Expected) (sshPreparationAuthorityFixture, map[string]any) {
 	t.Helper()
 	f, authorization := newSSHPreparationClaimFixture(t, replacement)
 	f.baseline = baseline
@@ -54,6 +54,12 @@ func recoveryProgressClaimFixture(t *testing.T, replacement bool, baseline clust
 	receipts[4] = receipt
 	f.op.Payload["ssh_preparation_readiness"] = clusterSSHPreparationReadiness(plan, receipts)
 	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
+	return f, secret
+}
+
+func recoveryProgressClaimFixture(t *testing.T, replacement bool, baseline clusterbootstrap.Expected) (sshPreparationAuthorityFixture, clusterSSHPreparationRecoveryClaim, map[string]any) {
+	t.Helper()
+	f, secret := sourceBoundPreparationFixture(t, replacement, baseline)
 	if _, err := f.c.claimClusterSSHPreparation(f.ctx, f.op, newClusterUUID()); err != nil {
 		t.Fatal("initial actual claim", err)
 	}

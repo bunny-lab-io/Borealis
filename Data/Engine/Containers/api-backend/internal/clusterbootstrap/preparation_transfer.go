@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"io"
 	"os"
 )
@@ -57,13 +56,7 @@ func (p *PreparationInputs) WritePreparation(ctx context.Context, expected Prepa
 		return ErrPreparationConfig
 	}
 	defer clear(configuration)
-	manifest, err := json.Marshal(struct {
-		identity
-		Asset assetIdentity `json:"asset"`
-	}{p.bundle.identity, p.bundle.asset})
-	if err != nil {
-		return ErrPreparationConfig
-	}
+	manifest := []byte(p.bundle.rawManifest)
 	parsed, err := ParseManifest(manifest, expected.Source)
 	if err != nil || parsed.identity != p.bundle.identity || parsed.asset != p.bundle.asset {
 		return ErrPreparationConfig

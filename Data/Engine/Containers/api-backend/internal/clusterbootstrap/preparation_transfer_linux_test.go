@@ -6,10 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestConsumePreparationRequiresCompleteBoundInput(t *testing.T) {
@@ -63,6 +67,16 @@ func TestPreparationTransferAndAtomicPublication(t *testing.T) {
 	var stream bytes.Buffer
 	if err := p.WritePreparation(context.Background(), expected, &stream, mutationAuthority); err != nil {
 		t.Fatal(err)
+	}
+	// The development descriptor authenticates the original inventory bytes,
+	// including JSON field order and whitespace. Both ends must see that identity.
+	header := bytes.NewReader(stream.Bytes()[len(preparationTransferMagic):])
+	if _, err := readPreparationTransferField(header, MaxPreparationConfigBytes); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := readPreparationTransferField(header, MaxManifestBytes)
+	if err != nil || string(inventory) != p.bundle.rawManifest {
+		t.Fatal("sender changed the verified bootstrap inventory", err)
 	}
 	stream.WriteString("next-frame")
 	parent := mutationTempDir(t)
@@ -205,4 +219,110 @@ func TestPreparationTransferWriterFencesAndPrivacy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Exercise the native cursor and first installation effect across separate
+// framed sessions. All writes and the real journal live under the test root.
+func TestPreparationProgressToSourceInstallation(t *testing.T) {
+	inputs, journal, journalPath, destination := sourcePublicationFixture(t)
+	verifyPreparationProgressToSourceInstallation(t, inputs, journal, journalPath, destination)
+}
+
+func verifyPreparationProgressToSourceInstallation(t *testing.T, inputs *PreparationInputs, journal *MutationJournal, journalPath, destination string) {
+	t.Helper()
+	expected := inputs.configuration.wire.Expected
+	_, manager, _, err := inputs.bundle.ManagerProof()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*SessionLifetime)
+	defer cancel()
+	for _, action := range []string{"inspect_preparation_progress", "stage_source"} {
+		inspection := action == "inspect_preparation_progress"
+		digit := "a"
+		if !inspection {
+			digit = "b"
+		}
+		request, err := NewPreparationSessionRequest(expected, manager, strings.Repeat(digit, 64), action)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scratch := mutationTempDir(t)
+		client, target := net.Pipe()
+		done := make(chan error, 1)
+		duringTransfer := make(chan struct{})
+		var producing atomic.Bool
+		var resumed sync.Once
+		observe := func(time.Time) error {
+			if producing.Load() {
+				resumed.Do(func() { close(duringTransfer) })
+			}
+			return nil
+		}
+		go func() {
+			done <- servePreparationSessionWithProgress(ctx, target, target, request.Session.Nonce,
+				func(_ context.Context, r PreparationSessionRequest) error {
+					if r != request {
+						return ErrSessionProtocol
+					}
+					return nil
+				},
+				func(ctx context.Context, r PreparationSessionRequest, stream io.Reader) (PreparationProgress, error) {
+					var cursor PreparationProgress
+					err := ConsumePreparation(ctx, scratch, expected, manager, stream, mutationAuthority, func(ctx context.Context, received *PreparationInputs) error {
+						if inspection {
+							var err error
+							cursor, err = received.InspectPreparationProgress(ctx, journal)
+							return err
+						}
+						_, err := received.publishSource(ctx, journal, destination)
+						return err
+					})
+					return cursor, err
+				}, observe, sessionTiming{250 * time.Millisecond, SessionLeaseWindow, 2 * time.Second})
+		}()
+		produce := func(ctx context.Context, w io.Writer) error {
+			producing.Store(true)
+			select {
+			case <-duringTransfer:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return inputs.WritePreparation(ctx, expected, w, mutationAuthority)
+		}
+		var cursor PreparationProgress
+		if inspection {
+			cursor, err = ExchangePreparationProgressSession(ctx, client, client, request, produce, mutationAuthority)
+		} else {
+			err = ExchangePreparationSession(ctx, client, client, request, produce, mutationAuthority)
+		}
+		peerErr := <-done
+		client.Close()
+		if err != nil || peerErr != nil {
+			t.Fatalf("%s: sender=%v receiver=%v", action, err, peerErr)
+		}
+		entries, err := os.ReadDir(scratch)
+		if err != nil || len(entries) != 0 {
+			t.Fatal("receiver scratch retained", err)
+		}
+		if inspection {
+			if cursor.Step != "empty" || len(readMutationFixture(t, journalPath).Steps) != 0 {
+				t.Fatal("inspection changed journal or returned invalid cursor", cursor)
+			}
+			if _, err := os.Stat(filepath.Join(destination, "Borealis")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unexpected inspection effect", err)
+			}
+		}
+	}
+	if readMutationFixture(t, journalPath).Steps["stage_source"].State != "applied" {
+		t.Fatal("first installation effect not recorded")
+	}
+	if _, err := os.Stat(filepath.Join(destination, "Borealis", "Engine", "Deploy", "runtime.env")); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(inputs.bundle.ArchivePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("inspected and published a %d-byte verified archive in separate sessions", stat.Size())
 }

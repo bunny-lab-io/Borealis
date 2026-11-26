@@ -82,6 +82,7 @@ type assetIdentity struct {
 // Manifest can only be initialized through ParseManifest. It contains public
 // release metadata; private fields prevent callers from skipping validation.
 type Manifest struct {
+	raw      string // Original inventory bytes bound by development candidate identity.
 	expected Expected
 	identity identity
 	asset    assetIdentity
@@ -139,7 +140,7 @@ func ParseManifest(raw []byte, expected Expected) (*Manifest, error) {
 			return nil, ErrPreparationConfig
 		}
 	}
-	return &Manifest{expected: expected, identity: i, asset: outer.Asset}, nil
+	return &Manifest{raw: string(raw), expected: expected, identity: i, asset: outer.Asset}, nil
 }
 
 func parseIdentity(raw []byte, expected Expected) (identity, error) {
