@@ -20,12 +20,30 @@ type DevelopmentAsset struct {
 	Path   string `json:"-"`
 }
 
-type DevelopmentCatalog struct {
-	expected Expected
-	assets   map[string]DevelopmentAsset
+const DevelopmentHistoryName = "borealis-node-development-history.bundle"
+
+type DevelopmentUpgrade struct {
+	BaseSHA       string          `json:"base_sha"`
+	Compatibility json.RawMessage `json:"compatibility"`
 }
 
+type DevelopmentCatalog struct {
+	sourceTree string
+	upgrade    *DevelopmentUpgrade
+	expected   Expected
+	assets     map[string]DevelopmentAsset
+}
+
+func (c *DevelopmentCatalog) SourceTree() string { return c.sourceTree }
+
 func (c *DevelopmentCatalog) Expected() Expected { return c.expected }
+
+func (c *DevelopmentCatalog) Upgrade() (DevelopmentUpgrade, bool) {
+	if c.upgrade == nil {
+		return DevelopmentUpgrade{}, false
+	}
+	return DevelopmentUpgrade{BaseSHA: c.upgrade.BaseSHA, Compatibility: slices.Clone(c.upgrade.Compatibility)}, true
+}
 
 func (c *DevelopmentCatalog) Asset(name string) (DevelopmentAsset, bool) {
 	asset, ok := c.assets[name]
@@ -48,7 +66,7 @@ func developmentPaths() map[string]string {
 func ParseDevelopmentCatalog(expected Expected, raw []byte) (*DevelopmentCatalog, error) {
 	b, err := expected.developmentBinding()
 	if err != nil || len(raw) > 64<<10 || developmentHash(raw) != b.Manifest ||
-		imageFields(raw, []string{"schema", "channel", "kind", "repository", "source_sha", "source_tree", "platform", "artifacts"}, nil) != nil {
+		imageFields(raw, []string{"schema", "channel", "kind", "repository", "source_sha", "source_tree", "platform", "artifacts"}, []string{"upgrade"}) != nil {
 		return nil, ErrPreparationConfig
 	}
 	var manifest struct {
@@ -59,15 +77,28 @@ func ParseDevelopmentCatalog(expected Expected, raw []byte) (*DevelopmentCatalog
 		Source     string                     `json:"source_sha"`
 		Tree       string                     `json:"source_tree"`
 		Platform   string                     `json:"platform"`
+		Upgrade    json.RawMessage            `json:"upgrade"`
 		Artifacts  map[string]json.RawMessage `json:"artifacts"`
 	}
 	paths := developmentPaths()
 	if json.Unmarshal(raw, &manifest) != nil || manifest.Schema != 1 || manifest.Channel != b.Channel || manifest.Kind != "candidate" ||
-		manifest.Repository != b.Repository || manifest.Source != b.Source || manifest.Tree != b.Tree || manifest.Platform != b.Platform ||
-		len(manifest.Artifacts) != len(paths) {
+		manifest.Repository != b.Repository || manifest.Source != b.Source || manifest.Tree != b.Tree || manifest.Platform != b.Platform {
 		return nil, ErrPreparationConfig
 	}
-	c := &DevelopmentCatalog{expected: expected, assets: make(map[string]DevelopmentAsset, len(paths))}
+	c := &DevelopmentCatalog{sourceTree: b.Tree, expected: expected, assets: make(map[string]DevelopmentAsset, len(paths))}
+	if manifest.Upgrade != nil {
+		var upgrade DevelopmentUpgrade
+		if imageFields(manifest.Upgrade, []string{"base_sha", "compatibility"}, nil) != nil || json.Unmarshal(manifest.Upgrade, &upgrade) != nil ||
+			!shaPattern.MatchString(upgrade.BaseSHA) || upgrade.BaseSHA == expected.SourceSHA || upgrade.BaseSHA == strings.Repeat("0", 40) ||
+			len(upgrade.Compatibility) > 16384 || !json.Valid(upgrade.Compatibility) || upgrade.Compatibility[0] != '{' {
+			return nil, ErrPreparationConfig
+		}
+		c.upgrade = &upgrade
+		paths[DevelopmentHistoryName] = "upgrade"
+	}
+	if len(manifest.Artifacts) != len(paths) {
+		return nil, ErrPreparationConfig
+	}
 	for i, name := range slices.Sorted(maps.Keys(paths)) {
 		family := paths[name]
 		path := family + "/" + name
@@ -75,6 +106,9 @@ func ParseDevelopmentCatalog(expected Expected, raw []byte) (*DevelopmentCatalog
 		var obj DevelopmentAsset
 		if imageFields(data, []string{"bytes", "sha256"}, nil) != nil || json.Unmarshal(data, &obj) != nil ||
 			obj.Bytes < 1 || obj.Bytes > MaxImageArchiveBytes || !digestPattern.MatchString(obj.SHA256) {
+			return nil, ErrPreparationConfig
+		}
+		if name == DevelopmentHistoryName && obj.Bytes > MaxBundleBytes {
 			return nil, ErrPreparationConfig
 		}
 		if strings.HasSuffix(name, ".json") && obj.SHA256 != b.Inventories[family] {
@@ -111,6 +145,20 @@ func readCandidateFile(root *os.Root, path string, max int64) ([]byte, error) {
 // independently selected candidate ID and source SHA. Directory names do not
 // grant authority to build, stage an operation or modify a node.
 func ReadDevelopmentCatalog(parent, id, sha, repo string) (*DevelopmentCatalog, []byte, error) {
+	if !shaPattern.MatchString(sha) {
+		return nil, nil, ErrPreparationConfig
+	}
+	return readDevelopmentCatalog(parent, id, sha, repo)
+}
+
+// SelectDevelopmentCatalog is for an authenticated operator selecting a complete
+// locally retained digest by name. All operation-bound readers supply the SHA.
+func SelectDevelopmentCatalog(parent, id, repo string) (*DevelopmentCatalog, error) {
+	c, _, e := readDevelopmentCatalog(parent, id, "", repo)
+	return c, e
+}
+
+func readDevelopmentCatalog(parent, id, sha, repo string) (*DevelopmentCatalog, []byte, error) {
 	if !filepath.IsAbs(parent) || !strings.HasPrefix(id, "dev-") || !digestPattern.MatchString(strings.TrimPrefix(id, "dev-")) {
 		return nil, nil, ErrPreparationConfig
 	}
@@ -122,6 +170,13 @@ func ReadDevelopmentCatalog(parent, id, sha, repo string) (*DevelopmentCatalog, 
 	binding, err := readCandidateFile(root, "development-identity.json", 4096)
 	if err != nil {
 		return nil, nil, err
+	}
+	if sha == "" {
+		var identity developmentBinding
+		if json.Unmarshal(binding, &identity) != nil {
+			return nil, nil, ErrPreparationConfig
+		}
+		sha = identity.Source
 	}
 	expected := Expected{Repository: repo, Release: id, SourceSHA: sha, Development: string(binding)}
 	raw, err := readCandidateFile(root, "development-manifest.json", 64<<10)

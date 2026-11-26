@@ -8,6 +8,7 @@ Type=simple
 User=root
 Group=root
 Environment=BOREALIS_PROJECT_ROOT=/opt/Borealis
+EnvironmentFile=-/etc/borealis/development-catalog.env
 ExecStart=/usr/local/sbin/borealis-node-manager serve
 ExecStop=/usr/local/sbin/borealis-node-manager shutdown-handoff
 Restart=on-failure

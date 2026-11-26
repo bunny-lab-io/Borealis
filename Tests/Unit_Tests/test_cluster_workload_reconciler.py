@@ -33,6 +33,19 @@ def patched_generic_deployment(container_name: str, image: str, revision: str) -
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_development_mount_requires_local_opt_in(self):
+        pod, container = {}, {}
+        for enabled in (True, True, False, True):
+            MODULE.mount_development_catalog(pod, container, enabled)
+            self.assertEqual(len(pod["volumes"]), int(enabled))
+            self.assertEqual(len(container["env"]), int(enabled))
+            self.assertEqual(len(container["volumeMounts"]), int(enabled))
+        self.assertTrue(container["volumeMounts"][0]["readOnly"])
+        self.assertEqual(pod["volumes"][0]["hostPath"]["type"], "Directory")
+        container["volumeMounts"][0]["readOnly"] = False
+        with self.assertRaisesRegex(RuntimeError, "conflicting"):
+            MODULE.mount_development_catalog(pod, container, True)
+
     def test_cluster_scratch_preserves_existing_mounts_and_rejects_conflicts(self) -> None:
         path = "/var/tmp/borealis-cluster"
         memory = {"name": "tmp", "emptyDir": {"medium": "Memory", "sizeLimit": "128Mi"}}

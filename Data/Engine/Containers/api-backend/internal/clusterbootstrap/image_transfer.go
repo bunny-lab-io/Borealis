@@ -110,16 +110,18 @@ func (s *ImageSet) RuntimeManifest(ctx context.Context, check func(context.Conte
 	return s.runtimeManifest()
 }
 
-func (s *ImageSet) runtimeManifest() ([]byte, error) {
+func (s *ImageSet) runtimeManifest() ([]byte, error) { return s.inventory.runtimeManifest() }
+
+func (v *ImageInventory) runtimeManifest() ([]byte, error) {
 	services := map[string]any{}
-	for _, image := range s.inventory.Images() {
+	for _, image := range v.Images() {
 		repository, _, _ := strings.Cut(image.Image, ":")
 		services[image.Role] = map[string]any{"image": repository + "@" + image.ManifestDigest, "archive_reference": image.Image, "hash": image.ManifestDigest[len("sha256:"):], "mode": "prod", "manifest_digest": image.ManifestDigest, "config_digest": image.ConfigDigest}
 	}
-	h := sha256.Sum256(s.inventory.raw)
-	manifest := map[string]any{"schema_version": 1, "project": "borealis-engine", "mode": "prod", "source_sha": s.inventory.wire.SourceSHA,
-		"release": s.inventory.expected.Release, "image_inventory_sha256": hex.EncodeToString(h[:]), "services": services}
-	if s.inventory.expected.Development != "" {
+	h := sha256.Sum256(v.raw)
+	manifest := map[string]any{"schema_version": 1, "project": "borealis-engine", "mode": "prod", "source_sha": v.wire.SourceSHA,
+		"release": v.expected.Release, "image_inventory_sha256": hex.EncodeToString(h[:]), "services": services}
+	if v.expected.Development != "" {
 		manifest["channel"] = "development"
 	}
 	return json.Marshal(manifest)

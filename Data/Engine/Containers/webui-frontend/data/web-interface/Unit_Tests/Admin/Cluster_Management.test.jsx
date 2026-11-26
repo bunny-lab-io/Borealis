@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   releaseError: "",
   releaseChannel: "stable",
   lastStableRelease: "2026.08.1",
+  developmentCatalog: false,
   operations: [],
   events: [],
   database: { configured_instances: 3, ready_instances: 3, fully_ready: true },
@@ -54,6 +55,7 @@ vi.mock("react-router-dom", async (importOriginal) => {
         desired_size: state.desiredSize,
         baseline_release: "2026.08.1",
         release_channel: state.releaseChannel,
+        development_catalog_enabled: state.developmentCatalog,
         last_stable_release: state.lastStableRelease,
         k3s_version: "v1.36.3+k3s1",
         hmr: { state: state.hmrState, node_id: ["active", "restore_failed"].includes(state.hmrState) ? "11111111-1111-4111-8111-111111111111" : "" },
@@ -133,6 +135,7 @@ describe("Cluster Management", () => {
     state.releaseError = "";
     state.releaseChannel = "stable";
     state.lastStableRelease = "2026.08.1";
+    state.developmentCatalog = false;
     state.operations = [];
     state.events = [];
     state.database = { configured_instances: 3, ready_instances: 3, fully_ready: true };
@@ -849,6 +852,27 @@ describe("Cluster Management", () => {
         }),
       }),
     ));
+  });
+
+  it("selects a retained snapshot and requires a single-member outage acknowledgement", async () => {
+    state.developmentCatalog = true;
+    state.hmrState = "inactive";
+    state.activeSize = 1;
+    const tag = "dev-" + "b".repeat(64);
+    const entry = { tag, selectable: true, commit_sha: "c".repeat(40) };
+    const fetchMock = vi.fn(async (url) => ({ ok: true, json: async () => url.endsWith("?channel=development") ? { releases: [entry] } : {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderClusterManagement("/cluster-management?tab=maintenance");
+    fireEvent.click(screen.getByRole("button", { name: "Deploy development snapshot" }));
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Local snapshot" }));
+    fireEvent.click(await screen.findByRole("option", { name: tag }));
+    fireEvent.change(screen.getByLabelText("Typed confirmation"), { target: { value: "DEPLOY DEVELOPMENT" } });
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /accept the service outage/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/server/cluster/updates", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ scope: "all", node_ids: [], release_tag: tag, confirmation: "DEPLOY DEVELOPMENT", maintenance_outage_acknowledgement: "ACCEPT OUTAGE" }),
+    })));
   });
 
   it("bounds release catalog menu dimensions", () => {

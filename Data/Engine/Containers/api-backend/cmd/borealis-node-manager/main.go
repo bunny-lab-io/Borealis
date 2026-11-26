@@ -49,6 +49,7 @@ const (
 var (
 	stableReleasePattern        = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
 	qualificationReleasePattern = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?-rc\.[1-9][0-9]*$`)
+	snapshotReleasePattern      = regexp.MustCompile(`^dev-[0-9a-f]{64}$`)
 	developmentReleasePattern   = regexp.MustCompile(`^dev-[0-9a-f]{12}$`)
 	shaPattern                  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	nodePattern                 = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
@@ -597,6 +598,13 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	if request.Params == nil {
 		request.Params = map[string]any{}
 	}
+	snapshot := ""
+	if release, ok := request.Params["release_tag"].(string); ok && strings.HasPrefix(release, "dev-") && !developmentReleasePattern.MatchString(release) {
+		if !snapshotReleasePattern.MatchString(release) {
+			return nil, errors.New("invalid immutable development identity")
+		}
+		snapshot = release
+	}
 	switch strings.TrimSpace(request.Verb) {
 	case clusterbootstrap.PreparedAdmissionVerb:
 		return m.preparedAdmission(ctx, request.Params)
@@ -621,9 +629,9 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	case "StagePinnedRelease":
 		return m.stagePinnedRelease(ctx, requiredRelease(request.Params), requiredSHA(request.Params))
 	case "RedeployRevision":
-		return m.redeployRevision(ctx, requiredSHA(request.Params))
+		return m.redeployRevision(ctx, requiredSHA(request.Params), snapshot)
 	case "StageRevisionImages":
-		return m.stageRevisionImages(ctx, requiredSHA(request.Params))
+		return m.stageRevisionImages(ctx, requiredSHA(request.Params), snapshot)
 	case "RedeployStagedRevision":
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
@@ -646,9 +654,9 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	case "InspectCandidateHealth":
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":
-		return m.promoteCandidate(ctx, requiredSHA(request.Params))
+		return m.promoteCandidate(ctx, requiredSHA(request.Params), snapshot)
 	case "RunSchemaPhase":
-		return m.runSchemaPhase(ctx, requiredSchemaPhase(request.Params), requiredSHA(request.Params))
+		return m.runSchemaPhase(ctx, requiredSchemaPhase(request.Params), requiredSHA(request.Params), snapshot)
 	case "PrepareMemberRemoval":
 		return m.prepareMemberRemoval(ctx, request.Params)
 	case "RunK3sProbeConformance":
@@ -737,6 +745,9 @@ func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA strin
 	if err != nil || normalizeRemote(origin) != expectedOrigin {
 		return errors.New("origin does not match configured Borealis repository")
 	}
+	if snapshotReleasePattern.MatchString(release) {
+		return m.verifyLocalDevelopmentRevision(ctx, release, targetSHA)
+	}
 	ref := "refs/tags/" + release
 	if developmentReleasePattern.MatchString(release) {
 		ref = targetSHA
@@ -762,12 +773,12 @@ func validPinnedRelease(release, targetSHA string) bool {
 	if stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) {
 		return true
 	}
-	return developmentReleasePattern.MatchString(release) && release == "dev-"+targetSHA[:12]
+	return snapshotReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release) && release == "dev-"+targetSHA[:12]
 }
 
 func validReleaseName(release string) bool {
 	release = strings.TrimSpace(release)
-	return stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release)
+	return stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release) || snapshotReleasePattern.MatchString(release)
 }
 
 func (m *manager) stagePinnedRelease(ctx context.Context, release, targetSHA string) (map[string]any, error) {
@@ -1364,6 +1375,9 @@ func (m *manager) preflightRelease(ctx context.Context, release, targetSHA strin
 	}
 	head = strings.TrimSpace(head)
 	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+		if snapshotReleasePattern.MatchString(release) {
+			return nil, errors.New("development upgrade lacks local fast-forward proof")
+		}
 		shallow, shallowErr := runGit(ctx, m.repoRoot, "rev-parse", "--is-shallow-repository")
 		if shallowErr != nil || strings.TrimSpace(shallow) != "true" {
 			return nil, errors.New("target is not a fast-forward descendant")
@@ -1389,7 +1403,7 @@ func (m *manager) preflightRelease(ctx context.Context, release, targetSHA strin
 	return map[string]any{"release_tag": release, "revision": targetSHA, "worktree_clean": true, "fast_forward": true}, nil
 }
 
-func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[string]any, error) {
+func (m *manager) redeployRevision(ctx context.Context, targetSHA, snapshot string) (map[string]any, error) {
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
@@ -1405,6 +1419,12 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	if err != nil {
 		return nil, err
 	}
+	if snapshot != "" {
+		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false); err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot)
+	}
 	engineEnv = append(engineEnv,
 		"BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate",
 		"/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA,
@@ -1416,7 +1436,7 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	return map[string]any{"revision": targetSHA, "redeployed": true, "output": truncate(output, 8192)}, nil
 }
 
-func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (map[string]any, error) {
+func (m *manager) stageRevisionImages(ctx context.Context, targetSHA, snapshot string) (map[string]any, error) {
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
@@ -1432,6 +1452,12 @@ func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (ma
 	if err != nil {
 		return nil, err
 	}
+	if snapshot != "" {
+		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, true); err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot)
+	}
 	engineEnv = append(engineEnv,
 		"/usr/bin/bash", enginePath, "--cluster-stage-revision", "--revision", targetSHA,
 	)
@@ -1442,7 +1468,7 @@ func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (ma
 	return map[string]any{"revision": targetSHA, "images_staged": true, "output": truncate(output, 8192)}, nil
 }
 
-func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA string) (map[string]any, error) {
+func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA, snapshot string) (map[string]any, error) {
 	if phase != "expand" && phase != "finalize" {
 		return nil, errors.New("schema_phase must be expand or finalize")
 	}
@@ -1460,6 +1486,12 @@ func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA string) (
 	engineEnv, err := m.engineChildEnvironment(m.repoRoot)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot != "" {
+		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false); err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot)
 	}
 	engineEnv = append(engineEnv,
 		"/usr/bin/bash", enginePath,
@@ -1491,21 +1523,36 @@ func (m *manager) engineChildEnvironment(gitRoot string) ([]string, error) {
 	), nil
 }
 
-func (m *manager) promoteCandidate(ctx context.Context, targetSHA string) (map[string]any, error) {
+func (m *manager) promoteCandidate(ctx context.Context, targetSHA, snapshot string) (map[string]any, error) {
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
 	reconciler := filepath.Join(m.repoRoot, "Data", "Engine", "K3s", "cluster", "reconcile-node-workloads.py")
 	imageManifest := filepath.Join(m.repoRoot, "Engine", "Deploy", "image-manifest.json")
+	if snapshot != "" {
+		manifest, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false)
+		if err != nil {
+			return nil, err
+		}
+		imageManifest = manifest
+	}
 	if info, err := os.Stat(reconciler); err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("cluster workload reconciler is unavailable")
 	}
-	output, err := run(ctx, m.repoRoot, "/usr/bin/python3", reconciler,
-		"--node", m.nodeName,
-		"--revision", targetSHA,
-		"--image-manifest", imageManifest,
-		"--promote-candidate",
-	)
+	var output string
+	promote := func() error {
+		var err error
+		output, err = run(ctx, m.repoRoot, "/usr/bin/python3", reconciler,
+			"--node", m.nodeName, "--revision", targetSHA,
+			"--image-manifest", imageManifest, "--promote-candidate")
+		return err
+	}
+	var err error
+	if snapshot == "" {
+		err = promote()
+	} else {
+		err = promoteDevelopmentGeneration(ctx, filepath.Join(m.repoRoot, "Engine", "Deploy"), imageManifest, promote)
+	}
 	if err != nil {
 		return nil, err
 	}

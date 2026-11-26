@@ -50,7 +50,10 @@ func TestClusterDevelopmentCatalogRequiresCurrentAuthority(t *testing.T) {
 		}
 		return b
 	}
-	manifest := encode(map[string]any{"schema": 1, "kind": "candidate", "channel": "development", "source_sha": sha, "source_tree": tree, "repository": repo, "platform": "linux-amd64", "artifacts": objects})
+	objects["upgrade/"+clusterbootstrap.DevelopmentHistoryName] = map[string]any{"bytes": len(payload), "sha256": digest(payload)}
+	base := strings.Repeat("b", 40)
+	compat := clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, AllowedReleaseChannels: []string{"development"}, MinimumRollingVersion: "2026.08.0", MaximumVersionSkewReleases: 1, DatabaseMigration: "expand-contract", RequiredK3sBaseline: "v1.36.3+k3s1", RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"}
+	manifest := encode(map[string]any{"schema": 1, "kind": "candidate", "channel": "development", "source_sha": sha, "source_tree": tree, "repository": repo, "platform": "linux-amd64", "artifacts": objects, "upgrade": map[string]any{"base_sha": base, "compatibility": compat}})
 	binding := encode(map[string]any{"schema": 2, "channel": "development", "source_sha": sha, "source_tree": tree, "repository": repo, "platform": "linux-amd64", "inventories": inventories, "manifest_sha256": digest(manifest)})
 	id := "dev-" + digest(binding)
 	dir := filepath.Join(parent, id)
@@ -66,6 +69,60 @@ func TestClusterDevelopmentCatalogRequiresCurrentAuthority(t *testing.T) {
 	write("development-identity.json", binding)
 	bundle := "bootstrap/" + clusterbootstrap.BundleName
 	write(bundle, payload)
+	t.Run("local catalog to durable whole-cluster operation", func(t *testing.T) {
+		external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("unexpected GitHub request") }))
+		defer external.Close()
+		t.Setenv("BOREALIS_GITHUB_API_BASE_URL", external.URL)
+		t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", external.URL)
+		store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.11.1-rc.29", "baseline_sha": base, "active_size": int64(1), "config": map[string]any{"k3s_version": compat.RequiredK3sBaseline}}}
+		auth, token := clusterTestAuth(t, store)
+		mux := http.NewServeMux()
+		registerServerClusterRoutes(mux, auth)
+		call := func(method, path, body string) *httptest.ResponseRecorder {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, clusterTestRequest(t, method, path, body, token))
+			return w
+		}
+		list := call("GET", "/api/server/cluster/releases?channel=development", "")
+		if list.Code != 200 || !strings.Contains(list.Body.String(), id) || !strings.Contains(list.Body.String(), `"selectable":true`) {
+			t.Fatalf("catalog %d %s", list.Code, list.Body.String())
+		}
+		body := map[string]any{"release_tag": id, "scope": "all", "node_ids": []string{}, "confirmation": "UPDATE CLUSTER", "maintenance_outage_acknowledgement": "ACCEPT OUTAGE"}
+		post := func() *httptest.ResponseRecorder {
+			return call("POST", "/api/server/cluster/updates", string(encode(body)))
+		}
+		if w := post(); w.Code < 400 {
+			t.Fatal("casual confirmation accepted")
+		}
+		body["confirmation"] = "DEPLOY DEVELOPMENT"
+		body["maintenance_outage_acknowledgement"] = ""
+		if w := post(); w.Code < 400 {
+			t.Fatal("outage acknowledgement omitted")
+		}
+		body["maintenance_outage_acknowledgement"] = "ACCEPT OUTAGE"
+		if w := post(); w.Code != 202 {
+			t.Fatalf("dispatch %d %s", w.Code, w.Body.String())
+		}
+		m := store.mutation
+		if m.TargetSHA != sha || m.TargetRelease != id || m.Kind != "engine_update" {
+			t.Fatal("queued target differs")
+		}
+		var persisted map[string]any
+		if err := json.Unmarshal(encode(m.Payload), &persisted); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateClusterEngineUpdateIdentity(id, sha, persisted); err != nil {
+			t.Fatal(err)
+		}
+		persisted["release_origin"] = "github"
+		if validateClusterEngineUpdateIdentity(id, sha, persisted) == nil {
+			t.Fatal("forged release origin accepted")
+		}
+		store.snapshot["baseline_sha"] = tree
+		if w := post(); w.Code != 422 {
+			t.Fatalf("changed serving baseline %d", w.Code)
+		}
+	})
 	expected := clusterBaselineExpected(id, sha)
 	if expected.Development == "" || expected.Validate() != nil || clusterBaselineExpected(id, tree).Validate() == nil {
 		t.Fatal("baseline source binding")

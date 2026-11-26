@@ -951,6 +951,27 @@ export default function ClusterManagement() {
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
   const [selectedRelease, setSelectedRelease] = useState("");
+  const [developmentCatalog, setDevelopmentCatalog] = useState({ entries: [], message: "" });
+  const [selectedDevelopment, setSelectedDevelopment] = useState("");
+  const [outageAccepted, setOutageAccepted] = useState(false);
+  const developmentDialog = dialog?.kind === "update_development";
+  useEffect(() => {
+    if (!developmentDialog) return;
+    const abort = new AbortController();
+    async function loadCatalog() {
+      try {
+        const response = await fetch("/api/server/cluster/releases?channel=development", { credentials: "include", cache: "no-store", signal: abort.signal });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Development catalog unavailable.");
+        const entries = Array.isArray(payload.releases) ? payload.releases : [];
+        if (!abort.signal.aborted) setDevelopmentCatalog({ entries, message: entries.length ? "" : "No retained development snapshots." });
+      } catch (error) {
+        if (!abort.signal.aborted) setDevelopmentCatalog({ entries: [], message: error.message });
+      }
+    }
+    void loadCatalog();
+    return () => abort.abort();
+  }, [developmentDialog]);
   const [selectedQualificationRelease, setSelectedQualificationRelease] = useState("");
   const [selectedNode, setSelectedNode] = useState("");
   const [clusterVIP, setClusterVIP] = useState("");
@@ -987,6 +1008,10 @@ export default function ClusterManagement() {
   const normalOperationsEnabled = cluster?.status === "Healthy" && databaseRecoveryReady && applicationCapacityReady;
   const rollingUpdateEnabled = (normalOperationsEnabled || cluster?.status === "Mixed Version") && databaseRecoveryReady && applicationCapacityReady;
   const qualificationActive = String(cluster?.release_channel || "").toLowerCase() === "qualification";
+  const developmentActive = cluster?.release_channel === "development" && /^dev-[0-9a-f]{64}$/.test(cluster?.baseline_release || "");
+  const wholeClusterUpdateRequired = qualificationActive || developmentActive;
+  const selectedDevelopmentEntry = developmentCatalog.entries.find((entry) => entry.tag === selectedDevelopment && entry.selectable);
+  const developmentConfirmed = Boolean(selectedDevelopmentEntry && confirmation === "DEPLOY DEVELOPMENT" && (activeSize > 1 || outageAccepted));
   const replacementRecovery = activeSize === 2 && desiredMembershipSize === 3 && cluster?.status === "Degraded Quorum";
   const canPrepareMembership = (activeSize === 1 || replacementRecovery) && applicationCapacityReady;
   const canExpandToThree = activeSize === 1;
@@ -1123,6 +1148,11 @@ export default function ClusterManagement() {
   }, [notify, refresh]);
 
   const openAction = useCallback((kind, node = null) => {
+    if (kind === "update_development") {
+      setDevelopmentCatalog({ entries: [], message: "Loading retained snapshots…" });
+      setSelectedDevelopment("");
+      setOutageAccepted(false);
+    }
     setDialog({ kind, node });
     setConfirmation("");
     setReason("");
@@ -1147,6 +1177,16 @@ export default function ClusterManagement() {
       if (validation) return setError(validation);
     }
     if (kind === "hmr_exit") return mutate("/api/server/cluster/hmr/exit", { confirmation: sanitizedConfirmation });
+    if (kind === "update_development") {
+      if (!developmentConfirmed) return;
+      return mutate("/api/server/cluster/updates", {
+        scope: "all",
+        node_ids: [],
+        release_tag: selectedDevelopment,
+        confirmation: sanitizedConfirmation,
+        maintenance_outage_acknowledgement: activeSize === 1 && outageAccepted ? "ACCEPT OUTAGE" : "",
+      });
+    }
     if (kind === "update_all" || kind === "update_node" || kind === "update_qualification") {
       const oneNode = Number(cluster?.active_size || 1) === 1;
       const qualification = kind === "update_qualification";
@@ -1192,7 +1232,7 @@ export default function ClusterManagement() {
     if (kind === "switchover") return mutate("/api/server/cluster/postgres/switchover", { target_node_id: selectedNode, confirmation: "", reason: sanitizedReason });
     if (kind === "emergency_failover") return mutate("/api/server/cluster/postgres/emergency-failover", { target_node_id: selectedNode, confirmation: sanitizedConfirmation, reason: sanitizedReason });
     return undefined;
-  }, [canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedQualificationRelease, selectedRelease]);
+  }, [activeSize, developmentConfirmed, outageAccepted, selectedDevelopment, canExpandToThree, canPrepareMembership, cluster?.active_size, cluster?.hmr?.state, clusterVIP, confirmation, desiredSize, dialog, fencingConfirmation, k3sTargetVersion, mutate, nodeName, pairedNode, reason, selectedNode, selectedQualificationRelease, selectedRelease]);
 
   const operationRows = useMemo(
     () => {
@@ -1272,7 +1312,7 @@ export default function ClusterManagement() {
     const isDrained = String(nodeActionTarget?.application_state || "").toLowerCase() === "drained";
     const membershipActive = nodeActionTarget?.membership_state === "Active";
     const maintenanceDisabled = busy || (isDrained && !isolationInactive && !isolationExitAllowed) || (!normalOperationsEnabled && !isDrained);
-    const updateDisabled = busy || !normalOperationsEnabled || qualificationActive;
+    const updateDisabled = busy || !normalOperationsEnabled || wholeClusterUpdateRequired;
     const removalDisabled = busy || !normalOperationsEnabled || activeSize !== 3 || !membershipActive;
     const emergencyDisabled = busy || activeSize !== 3 || !membershipActive;
     return [
@@ -1291,7 +1331,7 @@ export default function ClusterManagement() {
         icon: UpdateIcon,
         group: "organize",
         disabled: updateDisabled,
-        description: qualificationActive ? "Stable promotion must update whole cluster" : "Install selected same-version or newer Engine version",
+        description: wholeClusterUpdateRequired ? "Stable promotion must update whole cluster" : "Install selected same-version or newer Engine version",
         onClick: () => openAction("update_node", nodeActionTarget),
       },
       {
@@ -1315,7 +1355,7 @@ export default function ClusterManagement() {
         onClick: () => openAction("emergency_remove", nodeActionTarget),
       },
     ];
-  }, [activeSize, busy, isolationExitAllowed, isolationInactive, nodeActionTarget, normalOperationsEnabled, openAction, qualificationActive]);
+  }, [activeSize, busy, isolationExitAllowed, isolationInactive, nodeActionTarget, normalOperationsEnabled, openAction, wholeClusterUpdateRequired]);
 
   const nodeColumnDefs = useMemo(() => [
     {
@@ -1537,6 +1577,7 @@ export default function ClusterManagement() {
         {cluster?.status === "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL is not fully ready: {readyDatabaseInstances ?? "unknown"} of {configuredDatabaseInstances} instances Ready. Normal cluster-changing operations stay blocked until redundancy recovers; recovery controls remain available.</Alert> : null}
         {!databaseRecoveryReady && cluster?.status !== "Degraded Database" ? <Alert severity={databaseDurabilityReady ? "warning" : "error"}>PostgreSQL recovery remains required even while cluster lifecycle status is {valueLabel(cluster?.status)}. Normal cluster-changing operations stay blocked.</Alert> : null}
         {!applicationCapacityReady ? <Alert severity="warning">One or more active cluster members remain application-drained. Restore drained node or finish explicit recovery before starting normal cluster operations.</Alert> : null}
+        {developmentActive ? <Alert severity="warning" sx={{ overflowWrap: "anywhere" }}>Unsupported development snapshot {cluster.baseline_release}. Full release validation is pending.</Alert> : null}
         {qualificationActive ? <Alert severity="warning">Qualification channel active on {valueLabel(cluster?.baseline_release)}. This GitHub prerelease is unsupported for production. Last stable baseline: {valueLabel(cluster?.last_stable_release, "none recorded")}. {cluster?.qualification_schema_finalize_pending ? "Contract-phase schema finalization remains pending. " : ""}Promote whole cluster forward to approved stable release; downgrade rollback is not supported.</Alert> : null}
         <Tabs
           value={tab}
@@ -1633,7 +1674,7 @@ export default function ClusterManagement() {
                 <InputLabel id="update-node-label">Node</InputLabel>
                 <Select labelId="update-node-label" label="Node" value={selectedNode} onChange={(event) => setSelectedNode(event.target.value)}>{nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.node_name}</MenuItem>)}</Select>
               </FormControl>
-              <Button variant="outlined" disabled={!rollingUpdateEnabled || qualificationActive || !selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
+              <Button variant="outlined" disabled={!rollingUpdateEnabled || wholeClusterUpdateRequired || !selectedRelease || !selectedNode} onClick={() => openAction("update_node", nodes.find((node) => node.id === selectedNode))}>Update Node</Button>
             </Stack>
           </Paper>
           <Paper sx={CARD_SX}>
@@ -1652,6 +1693,10 @@ export default function ClusterManagement() {
             </Box>
             <Button sx={{ mt: 2 }} color="warning" variant="contained" disabled={!rollingUpdateEnabled || !selectedQualificationRelease || !selectableQualificationReleases.length} onClick={() => openAction("update_qualification")}>Deploy Qualification One Node at a Time</Button>
           </Paper>
+          {cluster?.development_catalog_enabled ? <Paper sx={CARD_SX}>
+            <Typography variant="h6">Local development snapshots</Typography>
+            <Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!rollingUpdateEnabled || !isolationInactive || busy || Boolean(cluster?.active_operation_id)} onClick={() => openAction("update_development")}>Deploy development snapshot</Button>
+          </Paper> : null}
           <Paper sx={CARD_SX}><Typography variant="h6">K3s server upgrade</Typography><Typography variant="body2" sx={{ mt: 1, color: "#94a3b8" }}>Current: {valueLabel(cluster?.k3s_version)}. Stable target only; current minor patch or next minor. Borealis snapshots etcd, drains one application node, runs immutable system-upgrade Plan, then requires Ready/etcd voter health and probe conformance before next server.</Typography><Button sx={{ mt: 2 }} variant="outlined" color="warning" disabled={!normalOperationsEnabled || cluster?.hmr?.state !== "inactive"} onClick={() => openAction("k3s_update")}>Upgrade K3s One Server at a Time</Button></Paper>
           <Paper sx={CARD_SX}>
             <Typography variant="h6">Node admissions</Typography>
@@ -1702,6 +1747,19 @@ export default function ClusterManagement() {
           {dialog?.kind === "emergency_remove" ? <Alert severity="error" sx={{ mb: 2 }}>Emergency removal is only safe after external power fencing. Target must be powered off and unable to rejoin.</Alert> : null}
           {dialog?.kind === "k3s_update" ? <Alert severity="warning" sx={{ mb: 2 }}>K3s control-plane update stays separate from Engine release update. Failure halts sequence and leaves affected node drained.</Alert> : null}
           {dialog?.kind === "update_qualification" ? <Alert severity="warning" sx={{ mb: 2 }}>Selected GitHub prerelease is unsupported qualification software. Operation updates whole cluster and cannot downgrade back to last stable source. Promote forward after qualification.</Alert> : null}
+          {developmentDialog ? <>
+            <Alert severity="warning" sx={{ mb: 2 }}>This whole-cluster deployment uses an unsupported development build. Full release validation is pending.</Alert>
+            <FormControl fullWidth sx={DIALOG_SELECT_SX}>
+              <InputLabel id="development-snapshot-label">Local snapshot</InputLabel>
+              <Select labelId="development-snapshot-label" label="Local snapshot" value={selectedDevelopment} onChange={(event) => setSelectedDevelopment(event.target.value)}>
+                {developmentCatalog.entries.map((entry) => <MenuItem key={entry.tag} value={entry.tag} disabled={!entry.selectable}>{entry.tag}{entry.reason ? ` · ${entry.reason}` : ""}</MenuItem>)}
+              </Select>
+              <FormHelperText>{developmentCatalog.message || selectedDevelopmentEntry?.commit_sha}</FormHelperText>
+            </FormControl>
+            {activeSize === 1 ? <Box component="label" sx={{ display: "block", mt: 2 }}>
+              <input type="checkbox" checked={outageAccepted} onChange={(event) => setOutageAccepted(event.target.checked)} /> I accept the service outage while the only Engine updates.
+            </Box> : null}
+          </> : null}
           {dialog?.kind === "update_node" || dialog?.kind === "update_all" || dialog?.kind === "update_qualification" ? (
             <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}>
               <InputLabel id="dialog-release-label">{dialog?.kind === "update_qualification" ? "Qualification Version" : "Target Engine Version"}</InputLabel>
@@ -1717,10 +1775,10 @@ export default function ClusterManagement() {
           {dialog?.kind === "remove" ? <FormControl fullWidth sx={{ ...DIALOG_SELECT_SX, mt: 1.25, mb: 2 }}><InputLabel id="paired-removal-node-label">Paired removal node</InputLabel><Select labelId="paired-removal-node-label" label="Paired removal node" value={pairedNode} onChange={(event) => setPairedNode(event.target.value)}>{nodes.filter((candidate) => candidate.id !== dialog?.node?.id && candidate.membership_state === "Active").map((candidate) => <MenuItem key={candidate.id} value={candidate.id}>{candidate.node_name}</MenuItem>)}</Select></FormControl> : null}
           {dialog?.kind === "emergency_remove" ? <TextField fullWidth sx={{ ...DIALOG_INPUT_SX, mb: 2 }} label="External fencing confirmation" value={fencingConfirmation} onChange={(event) => setFencingConfirmation(event.target.value)} inputProps={{ maxLength: 21 }} helperText="Type TARGET IS POWERED OFF" /> : null}
           {["maintenance", "scale", "remove", "emergency_remove", "switchover", "emergency_failover"].includes(dialog?.kind) && !maintenanceExitDisablesIsolation ? <TextField fullWidth sx={DIALOG_INPUT_SX} label="Reason" value={reason} onChange={(event) => setReason(event.target.value.slice(0, 256))} inputProps={{ maxLength: 256 }} helperText={`${reason.length}/256 · single-line operational text`} /> : null}
-          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
+          {maintenanceExitDisablesIsolation || !['cluster_enable', 'maintenance', 'invite', 'scale', 'switchover'].includes(dialog?.kind) ? <TextField autoFocus fullWidth sx={{ ...DIALOG_INPUT_SX, mt: 2 }} label="Typed confirmation" inputProps={{ maxLength: 32 }} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} helperText={maintenanceExitDisablesIsolation ? "Type EXIT HMR to disable isolation" : dialog?.kind === "hmr_exit" ? "Type EXIT HMR to disable isolation" : dialog?.kind === "remove" ? "Type REMOVE NODE PAIR" : dialog?.kind === "emergency_remove" ? "Type EMERGENCY REMOVE NODE" : dialog?.kind === "k3s_update" ? "Type UPDATE K3S" : dialog?.kind === "emergency_failover" ? "Type EMERGENCY FAILOVER" : developmentDialog ? "Type DEPLOY DEVELOPMENT" : dialog?.kind === "update_qualification" ? "Type DEPLOY QUALIFICATION" : "Type UPDATE CLUSTER"} /> : null}
           {dialog?.kind !== "cluster_enable" ? <Typography variant="body2" sx={{ ...DIALOG_BODY_TEXT_SX, mt: 2 }}>Administrator access required. Destructive actions also require exact typed confirmation.</Typography> : null}
         </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button color={dialog?.kind === "update_qualification" ? "warning" : "primary"} sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
+        <DialogActions sx={DIALOG_ACTIONS_SX}><Button sx={DIALOG_BUTTON_SX} onClick={() => setDialog(null)} disabled={busy}>Cancel</Button><Button color={dialog?.kind === "update_qualification" ? "warning" : "primary"} sx={dialog?.kind === "emergency_remove" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX} onClick={() => void submitDialog()} disabled={busy || (developmentDialog && !developmentConfirmed)}>{dialog?.kind === "cluster_enable" ? "Enable Cluster" : dialog?.kind === "emergency_remove" ? "Remove Node" : "Submit"}</Button></DialogActions>
       </Dialog>
     </PageBodyFrame>
   );

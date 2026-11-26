@@ -29,6 +29,11 @@ RUNTIME_ENV="${DEPLOY_DIR}/runtime.env"
 WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 CLUSTER_STAGED_REVISION_FILE="${DEPLOY_DIR}/cluster-staged-revision"
+if [[ -n "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+  [[ "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}" =~ ^dev-[0-9a-f]{64}$ ]] || exit 2
+  IMAGE_MANIFEST="/etc/borealis/image-manifest-${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}.json"
+  CLUSTER_STAGED_REVISION_FILE="/etc/borealis/staged-${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}"
+fi
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
 K3S_NAMESPACE="${BOREALIS_K3S_NAMESPACE:-borealis}"
@@ -11877,6 +11882,53 @@ for key,value in sorted((payload.get("data") or {}).items()):
   restore_previous=0
 )
 
+# K3s imports the verified archives from its normal watched directory.
+# Resolve all roles in one observation and retain the ordinary Spegel check.
+wait_for_snapshot_images() {
+  local expected=""
+  expected="$(python3 - "${IMAGE_MANIFEST}" "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}" "${CLUSTER_TARGET_REVISION}" <<'PYMANIFEST'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    manifest = json.load(stream)
+if (manifest["channel"], manifest["release"], manifest["source_sha"]) != ("development", *sys.argv[2:]):
+    raise SystemExit("Selected development image generation changed")
+if len(manifest["services"]) != 9:
+    raise SystemExit("Incomplete application image generation")
+for item in manifest["services"].values():
+    print(item["archive_reference"], item["image"], item["manifest_digest"])
+PYMANIFEST
+)" || die "Invalid staged development image manifest."
+  local listing="" content="" source="" target="" digest="" seen="" present="" repository=""
+  local attempt=0 ready=0
+  for ((attempt=0; attempt<60; attempt++)); do
+    listing="$(k3s_ctr images ls)" || return 1
+    content="$(k3s_ctr content ls)" || return 1
+    ready=1
+    while read -r source target digest; do
+      present="$(awk -v image="${target}" '$1==image {print $3}' <<< "${listing}")"
+      if [[ -n "${present}" && "${present}" != "${digest}" ]]; then
+        die "Development image import conflicts with an existing digest reference."
+      fi
+      if [[ -z "${present}" ]]; then
+        seen="$(awk -v image="${source}" '$1==image {print $3}' <<< "${listing}")"
+        if [[ "${seen}" == "${digest}" ]]; then
+          k3s_ctr images tag "${source}" "${target}" >/dev/null || return 1
+        fi
+        ready=0
+      fi
+      repository="${target#*/}"
+      repository="${repository%@*}"
+      if ! awk -v digest="${digest}" -v label="containerd.io/distribution.source.${target%%/*}=${repository}" \
+          '$1==digest && index($0,label) {found=1} END {exit !found}' <<< "${content}"; then
+        ready=0
+      fi
+    done <<< "${expected}"
+    (( ready == 0 )) || return 0
+    sleep 2
+  done
+  die "Development image digests did not become available for local distribution."
+}
+
 stage_cluster_node_revision_images() {
   prepare_cluster_node_runtime
   K3S_PEER_CIDRS="$(read_env_value BOREALIS_K3S_PEER_CIDRS "${RUNTIME_ENV}")"
@@ -11885,15 +11937,21 @@ stage_cluster_node_revision_images() {
   export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
   export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
   load_existing_image_tags
-  build_images prod
-  export_image_manifest_env
-  write_image_manifest prod
+  if [[ -n "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+    wait_for_snapshot_images
+  else
+    build_images prod
+    export_image_manifest_env
+    write_image_manifest prod
+  fi
   local service=""
-  for service in "${BUILD_ROLES[@]}"; do
-    [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
-    import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
-  done
-  prune_stale_k3s_borealis_image_archives
+  if [[ -z "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+    for service in "${BUILD_ROLES[@]}"; do
+      [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
+      import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
+    done
+    prune_stale_k3s_borealis_image_archives
+  fi
   local marker_temp=""
   marker_temp="$(mktemp "${DEPLOY_DIR}/cluster-staged-revision.XXXXXX")"
   printf '%s\n' "${CLUSTER_TARGET_REVISION}" > "${marker_temp}"

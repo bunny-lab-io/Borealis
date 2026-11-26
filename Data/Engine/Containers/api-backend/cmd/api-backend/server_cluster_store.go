@@ -554,8 +554,20 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		}
 		compatibility := clusterCompatibilityMap(mutation.Payload["compatibility"])
 		releaseChannel := firstText(cleanText(mutation.Payload["release_channel"]), clusterReleaseChannel(mutation.TargetRelease))
-		if releaseChannel != clusterReleaseChannel(mutation.TargetRelease) || !textInSet(releaseChannel, "stable", "qualification") {
+		if releaseChannel != clusterReleaseChannel(mutation.TargetRelease) || !textInSet(releaseChannel, "stable", "qualification", "development") {
 			return nil, fmt.Errorf("%w: Engine update release channel does not match target tag", errClusterConflict)
+		}
+		if releaseChannel == "development" {
+			floor := clusterReleaseBase(baselineRelease)
+			if floor == "" {
+				floor = cleanText(parseClusterJSON(configJSON)["development_version_floor"])
+			}
+			if floor == "" || cleanText(mutation.Payload["development_version_floor"]) != floor || cleanText(mutation.Payload["source_release"]) != baselineRelease || cleanText(mutation.Payload["source_sha"]) != baselineSHA {
+				return nil, fmt.Errorf("%w: development baseline changed", errClusterConflict)
+			}
+		}
+		if clusterSnapshotReleaseRE.MatchString(baselineRelease) && cleanText(mutation.Payload["scope"]) != "all" {
+			return nil, fmt.Errorf("%w: leaving development requires a whole-cluster update", errClusterConflict)
 		}
 		mutation.Payload["release_channel"] = releaseChannel
 		if sourceRelease := cleanText(mutation.Payload["source_release"]); sourceRelease != "" && sourceRelease != baselineRelease {

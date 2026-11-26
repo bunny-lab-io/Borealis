@@ -1820,11 +1820,18 @@ func completedEngineReleaseConfig(config map[string]any, operation clusterContro
 	nextConfig := copyMap(config)
 	releaseChannel := clusterReleaseChannel(operation.TargetRelease)
 	nextConfig["release_channel"] = releaseChannel
+	if releaseChannel == "development" {
+		nextConfig["development_version_floor"] = cleanText(operation.Payload["development_version_floor"])
+		nextConfig["development_validation_status"] = cleanText(operation.Payload["validation_status"])
+	} else {
+		delete(nextConfig, "development_version_floor")
+		delete(nextConfig, "development_validation_status")
+	}
 	compatibility := clusterCompatibilityMap(operation.Payload["compatibility"])
-	if releaseChannel == "qualification" && cleanText(compatibility["database_migration"]) == "expand-contract" {
+	if textInSet(releaseChannel, "qualification", "development") && cleanText(compatibility["database_migration"]) == "expand-contract" {
 		nextConfig["qualification_schema_finalize_pending"] = true
 	}
-	if releaseChannel == "qualification" && clusterReleaseChannel(cleanText(operation.Payload["source_release"])) == "stable" {
+	if textInSet(releaseChannel, "qualification", "development") && clusterReleaseChannel(cleanText(operation.Payload["source_release"])) == "stable" {
 		nextConfig["last_stable_release"] = cleanText(operation.Payload["source_release"])
 		nextConfig["last_stable_sha"] = cleanText(operation.Payload["source_sha"])
 	}
@@ -3763,6 +3770,9 @@ func clusterNodeActionArgs(operation clusterControllerOperation, verb string) []
 	}
 	if verb == "StageRevisionImages" || verb == "RedeployRevision" || verb == "RedeployStagedRevision" || verb == "PromoteCandidate" {
 		args = append(args, "--target-sha", operation.TargetSHA)
+	}
+	if clusterSnapshotReleaseRE.MatchString(operation.TargetRelease) && textInSet(verb, "StageRevisionImages", "RedeployRevision", "RunSchemaPhase", "PromoteCandidate") {
+		args = append(args, "--release-tag", operation.TargetRelease)
 	}
 	if verb == "RunSchemaPhase" {
 		args = append(args, "--schema-phase", cleanText(operation.Payload["schema_phase"]), "--target-sha", operation.TargetSHA)

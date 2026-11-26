@@ -11,6 +11,7 @@ import ipaddress
 import json
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 from typing import Any
@@ -199,6 +200,50 @@ def mount_cluster_scratch(pod_spec: dict[str, Any], container: dict[str, Any]) -
     set_container_environment(container, "BOREALIS_CLUSTER_SCRATCH_DIR", path)
 
 
+DEVELOPMENT_CATALOG = "/var/lib/borealis-artifacts/candidates"
+CATALOG_VARIABLE = "BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES"
+
+
+def development_catalog_enabled() -> bool:
+    marker = pathlib.Path("/etc/borealis/development-catalog.env")
+    try:
+        config = marker.lstat()
+    except FileNotFoundError:
+        return False
+    if (not stat.S_ISREG(config.st_mode) or config.st_uid != 0 or config.st_mode & 0o022
+            or config.st_size > 128 or marker.read_bytes() != f"{CATALOG_VARIABLE}={DEVELOPMENT_CATALOG}\n".encode()):
+        raise RuntimeError("invalid local development catalog opt-in")
+    root = pathlib.Path(DEVELOPMENT_CATALOG)
+    info = root.lstat()
+    if (root.resolve() != root or not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+            or info.st_gid != 64646 or stat.S_IMODE(info.st_mode) != 0o750):
+        raise RuntimeError("development catalog must be a root-owned, read-only Engine group directory")
+    return True
+
+
+def mount_development_catalog(pod: dict[str, Any], container: dict[str, Any], enabled: bool) -> None:
+    name = "engine-development-catalog"
+    path = DEVELOPMENT_CATALOG
+    volumes = pod.setdefault("volumes", [])
+    mounts = container.setdefault("volumeMounts", [])
+    volume = {"name": name, "hostPath": {"path": path, "type": "Directory"}}
+    mount = {"name": name, "mountPath": path, "readOnly": True}
+    for item in volumes:
+        if (item.get("name") == name or (item.get("hostPath") or {}).get("path") == path) and item != volume:
+            raise RuntimeError("conflicting development catalog volume")
+    for item in mounts:
+        if (item.get("name") == name or item.get("mountPath") == path) and item != mount:
+            raise RuntimeError("conflicting development catalog mount")
+    volumes[:] = [item for item in volumes if item != volume]
+    mounts[:] = [item for item in mounts if item != mount]
+    environment = container.setdefault("env", [])
+    environment[:] = [item for item in environment if item.get("name") != CATALOG_VARIABLE]
+    if enabled:
+        volumes.append(volume)
+        mounts.append(mount)
+        set_container_environment(container, CATALOG_VARIABLE, path)
+
+
 def mount_shared_wireguard_keys(base: str, pod_spec: dict[str, Any], container: dict[str, Any]) -> None:
     volumes = pod_spec.setdefault("volumes", [])
     mounts = container.setdefault("volumeMounts", [])
@@ -332,6 +377,7 @@ def reconcile_one(
         container["imagePullPolicy"] = "IfNotPresent"
     if base in {"api-backend", "borealis-cluster-controller"}:
         mount_cluster_scratch(pod_spec, containers[0])
+        mount_development_catalog(pod_spec, containers[0], development_catalog_enabled())
     if base == "webui-frontend" and candidate:
         enforce_webui_production_candidate(pod_spec, containers[0])
     if base == "job-scheduler":

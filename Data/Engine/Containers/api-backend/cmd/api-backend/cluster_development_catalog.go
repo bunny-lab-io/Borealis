@@ -3,8 +3,12 @@ package main
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -77,4 +81,69 @@ func openClusterDevelopmentAsset(catalog *clusterbootstrap.DevelopmentCatalog, a
 		return nil, err
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), ContentLength: asset.Size, Body: file}, nil
+}
+
+func localSnapshotRelease(id, baseSHA, k3s, versionFloor string) (map[string]any, error) {
+	c, err := clusterbootstrap.SelectDevelopmentCatalog(clusterCandidateDirectory(), id, clusterGitHubRepo())
+	if err != nil {
+		return nil, errors.New("local development catalog unavailable")
+	}
+	meta, ok := c.Upgrade()
+	var m clusterReleaseManifest
+	if !ok || meta.BaseSHA != baseSHA || json.Unmarshal(meta.Compatibility, &m) != nil || !validRollingManifest(m, "development") ||
+		!clusterReleaseRE.MatchString(versionFloor) || compareClusterReleases(versionFloor, m.MinimumRollingVersion) < 0 ||
+		m.RequiredK3sBaseline != k3s || m.MaximumVersionSkewReleases < 1 {
+		return nil, errors.New("development candidate does not match the current rolling baseline")
+	}
+	return map[string]any{"tag": id, "title": id, "commit_sha": c.Expected().SourceSHA, "channel": "development", "selectable": true, "compatibility": m, "validation_status": "pending"}, nil
+}
+
+func localSnapshotReleases(baseSHA, k3s, floor string) ([]map[string]any, error) {
+	out := []map[string]any{}
+	if clusterCandidateDirectory() == "" {
+		return out, nil
+	}
+	dir, err := os.Open(clusterCandidateDirectory())
+	if err != nil {
+		return nil, errClusterUnavailable
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(257)
+	if (err != nil && err != io.EOF) || len(entries) > 256 {
+		return nil, errClusterUnavailable
+	}
+	for _, item := range entries {
+		if !item.IsDir() || !clusterSnapshotReleaseRE.MatchString(item.Name()) {
+			continue
+		}
+		v, e := localSnapshotRelease(item.Name(), baseSHA, k3s, floor)
+		if e != nil {
+			v = map[string]any{"tag": item.Name(), "channel": "development", "selectable": false, "reason": e.Error()}
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return cleanText(out[i]["tag"]) < cleanText(out[j]["tag"]) })
+	return out, nil
+}
+
+func developmentVersionFloor(snapshot map[string]any) string {
+	if base := clusterReleaseBase(cleanText(snapshot["baseline_release"])); base != "" {
+		return base
+	}
+	return cleanText(mapStringAny(snapshot["config"])["development_version_floor"])
+}
+
+// Keep calendar-version compatibility across a local snapshot, while GitHub
+// ancestry is always checked against the actually serving development commit.
+func supportedSnapshotExit(snapshot, item map[string]any) bool {
+	if !clusterSnapshotReleaseRE.MatchString(cleanText(snapshot["baseline_release"])) {
+		return true
+	}
+	floor := developmentVersionFloor(snapshot)
+	raw, err := json.Marshal(item["compatibility"])
+	var manifest clusterReleaseManifest
+	target := clusterReleaseBase(cleanText(item["tag"]))
+	return err == nil && json.Unmarshal(raw, &manifest) == nil && clusterReleaseRE.MatchString(floor) &&
+		target != "" && clusterReleaseRE.MatchString(manifest.MinimumRollingVersion) &&
+		compareClusterReleases(floor, manifest.MinimumRollingVersion) >= 0 && compareClusterReleases(target, floor) >= 0
 }

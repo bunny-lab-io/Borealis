@@ -42,6 +42,29 @@ To reuse a retained immutable release, add `--reuse-release "$RETAINED_RELEASE"`
 
 The command prints the published local directory. Use `verify DIRECTORY` with the same tool to check its source binding and content identity. A complete five-family package has a `dev-` identity derived from its manifest. Select `--family host_package` to exercise only frozen Ubuntu packaging. A partial build has a `components-` identity. Neither form publishes a GitHub tag. The native `borealis-node-manager development-candidate-proof` command verifies the complete local catalog and all artifact digests. This read-only check leaves installation, operation authority and cluster health untested. Current RC29 Engines still require an immutable GitHub release for rolling deployment and onboarding.
 
+### Deploy a retained development snapshot
+
+A coordinator running the development-aware API, controller and native helper can select a local snapshot under **Cluster Management**. For an existing member, build with `--base-sha "$SERVING_COMMIT"` as well as the target revision. This packages the fast-forward Git history and binds deployment compatibility to the snapshot. A joining-only package omits this history and cannot be selected for an existing member.
+
+On a lab Engine explicitly enabled for development, the administrator creates `/var/lib/borealis-artifacts/candidates` with owner root, group 64646 and mode 0750. Use the private, budgeted artifact store on the same filesystem. Import the chosen output with the installed trusted packager and native verifier. Run the import outside the build account.
+
+```bash
+python3 Tests/tools/retain_engine_development.py --runtime-catalog \
+  --source "$BUILD_OUTPUT" --references /var/lib/borealis-artifacts/candidates \
+  --candidate "$CANDIDATE" --source-sha "$LOCAL_COMMIT" \
+  --verifier /usr/local/sbin/borealis-node-manager
+```
+
+To opt in, install a root-owned `/etc/borealis/development-catalog.env` containing the following single line followed by a newline. Apply through the normal managed helper activation and node workload rollout. The API and controller receive read-only access to the verified generations. The build worker keeps its own separate directories.
+
+```text
+BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES=/var/lib/borealis-artifacts/candidates
+```
+
+Select the exact snapshot, review its source commit and type `DEPLOY DEVELOPMENT`. A one-member cluster requires an explicit outage acknowledgement. Rolling deployment retains the previous runtime image manifest and advances the serving manifest after workload promotion. The WebUI identifies a serving development snapshot as unsupported, with full release validation pending.
+
+To leave development, select a supported whole-cluster forward update whose published source includes the serving commit and meets the rolling, database and health gates. After successful promotion and completion of any distribution or recovery obligations, the administrator can remove the opt-in configuration on the next managed rollout. Live qualification of this path on the RC29 lab is outstanding.
+
 ### Provision the isolated image worker
 
 Enable this worker only on an explicitly authorized development Engine. The coordinating Engine can keep its existing cluster and HMR settings while the worker builds inert artifacts.
