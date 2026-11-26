@@ -69,12 +69,17 @@ export function preparationProgressBinding(progress, operationID) {
       target.inspected_generation, target.report])]);
 }
 
+function validPreparationRelease(value) {
+  if (typeof value !== "string") return false;
+  if (value.startsWith("dev-")) return value.length === 68 && digest(value.slice(4), 64);
+  return value.length <= 64 && /^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?(?:-rc\.[1-9][0-9]*)?$/.test(value);
+}
+
 export function validSSHPreparationPlan(plan, progress, operationID) {
   if (!fields(plan, ["operation_id", "attempt", "plan_sha256", "baseline_release", "source_sha", "targets", "identity_sources", "confirmation", "preparation_authorized", "state"])
     || !preparationProgressEligible(progress, operationID) || plan.operation_id !== operationID || plan.attempt !== progress.attempt
     || !digest(plan.plan_sha256, 64) || !digest(plan.source_sha, 40) || plan.preparation_authorized !== false || plan.state !== "awaiting_readiness"
-    || typeof plan.baseline_release !== "string" || plan.baseline_release.length > 64
-    || !/^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?(?:-rc\.[1-9][0-9]*)?$/.test(plan.baseline_release)
+    || !validPreparationRelease(plan.baseline_release)
     || !Array.isArray(plan.targets) || plan.targets.length !== progress.targets.length || !Array.isArray(plan.identity_sources)
     // Existing queue contract: two joining targets from one source, or one
     // replacement target with two original surviving sources.

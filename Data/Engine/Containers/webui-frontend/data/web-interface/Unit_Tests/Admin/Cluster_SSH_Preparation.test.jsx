@@ -57,6 +57,11 @@ describe("preparation public contract", () => {
     expect(sameSSHPreparationPlan(plan, reordered)).toBe(true);
   });
 
+  it.each(["d".repeat(63), "d".repeat(65), "D".repeat(64), "0".repeat(64), "g".repeat(64), `src-${"d".repeat(64)}`])("rejects malformed development identity %s", (suffix) => {
+    const { props, plan } = fixture();
+    expect(validSSHPreparationPlan({ ...plan, baseline_release: `dev-${suffix}` }, props.progress, operationID)).toBe(false);
+  });
+
   it.each(["operation", "attempt", "zero digest", "source sha", "release size", "release syntax", "target count", "target ID", "target order", "address", "port", "hostname", "fingerprint", "target duplicate", "source duplicate", "source hostname", "source count", "target as source", "authorized", "state", "extra", "confirmation source", "confirmation time"])("rejects malformed or mismatched plan: %s", (mode) => {
     const { props, plan } = fixture();
     if (mode === "operation") plan.operation_id = requestID;
@@ -107,8 +112,9 @@ describe("preparation public contract", () => {
 });
 
 describe("explicit preparation intent", () => {
-  it("does no mount calls, requires deliberate source/phrase and sends one captured request after recheck", async () => {
+  it.each(["2026.9.5.1", "2026.11.1-rc.29", `dev-${"d".repeat(64)}`])("requires deliberate source/phrase and sends one captured request for %s after recheck", async (baseline) => {
     const { props, plan, release } = fixture(1);
+    plan.baseline_release = baseline;
     vi.spyOn(crypto, "randomUUID").mockReturnValue(requestID);
     const fetch = vi.fn((path, init) => Promise.resolve(response(init.method === "POST" ? receipt(JSON.parse(init.body)) : plan, init.method === "POST" ? 202 : 200)));
     vi.stubGlobal("fetch", fetch);
@@ -149,9 +155,11 @@ describe("explicit preparation intent", () => {
     expect(postCalls(fetch)).toHaveLength(1);
   });
 
-  it.each(["digest", "source", "confirmation"])("rejects changed pre-submit plan %s without POST", async (mode) => {
+  it.each(["digest", "development candidate", "source", "confirmation"])("rejects changed pre-submit plan %s without POST", async (mode) => {
     const { props, plan, release } = fixture();
+    if (mode === "development candidate") plan.baseline_release = `dev-${"a".repeat(64)}`;
     const changed = structuredClone(plan);
+    if (mode === "development candidate") changed.baseline_release = `dev-${"b".repeat(64)}`;
     if (mode === "digest") changed.plan_sha256 = "c".repeat(64);
     if (mode === "source") changed.identity_sources[0].source_id = secondSourceID;
     if (mode === "confirmation") changed.confirmation = { request_id: requestID, confirmed_at: 1, source_id: sourceID };
