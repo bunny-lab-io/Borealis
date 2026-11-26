@@ -156,7 +156,9 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                 raise ValueError("release production role inventory changed")
             reused = {}
             input_digests = {}
+            layers = {}
             if reuse:
+                import development_image_update as update
                 base_inventory = reuse.inventory(INVENTORY)
                 if [i["role"] for i in base_inventory["images"]] != list(ROLES):
                     raise ValueError("retained role inventory mismatch")
@@ -168,6 +170,10 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                             raise ValueError("retained image build source mismatch")
                         reused[role] = i
                         input_digests[role] = reuse.inputs(paths, reuse.current)
+                    else:
+                        copies = update.binary_layer(reuse, role, snapshot, manifest["services"][role], paths)
+                        if copies:
+                            layers[role] = (i, copies)
             dev_builder = development_builder() if release.startswith("dev-src-") and len(reused) < len(ROLES) else None
             verifier = build_runtime(snapshot, go_bin) if len(reused) != len(ROLES) else None
             builder = "borealis-release-" + uuid.uuid4().hex
@@ -193,7 +199,11 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                     labels = [f"org.opencontainers.image.revision={source_sha}",
                               f"org.opencontainers.image.source=https://github.com/{repository}",
                               f"io.borealis.service={role}"]
-                    if dev_builder:
+                    if role in layers:
+                        proof, copies = layers[role]
+                        update.build_layer(run, dev_builder, reuse, role, proof, snapshot, copies,
+                                           root, reference, exported, labels)
+                    elif dev_builder:
                         args = development_image_command(dev_builder, context, dockerfile, item, reference, exported, labels)
                     else:
                         args = [docker, "buildx", "build", "--builder", builder, "--platform", "linux/amd64",
@@ -205,7 +215,8 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                         if "targets" in item:
                             args += ["--target", item["targets"]["prod"]]
                         args += [str(context)]
-                    run(args)
+                    if role not in layers:
+                        run(args)
                     normalize_index(exported, archive, reference)
                     measured = run([str(verifier), "image-archive-proof", "--archive", str(archive),
                                     "--role", role, "--source-sha", source_sha], timeout=600, capture=True)

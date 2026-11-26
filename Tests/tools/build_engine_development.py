@@ -12,6 +12,7 @@ import build_node_external_assets as external
 import build_node_host_package_assets as packages
 import build_node_image_assets as images
 import build_node_k3s_assets as k3s
+import development_upgrade as upgrade
 from engine_component_reuse import RetainedRelease
 
 PACKAGERS = dict(bootstrap=bootstrap, external=external, host_package=packages, image=images, k3s=k3s)
@@ -63,7 +64,7 @@ def artifact_names(family, source):
     return {external.INVENTORY, *(external.asset_name(i["reference"]) for c in pins["components"] for i in c["images"])}
 
 
-def build(source, revision, output, families, repository, go_bin, archives=None, reuse_release=None):
+def build(source, revision, output, families, repository, go_bin, archives=None, reuse_release=None, base_sha=None):
     if not bootstrap.REPOSITORY.fullmatch(repository) or not families or set(families) - PACKAGERS.keys():
         raise ValueError("invalid packaging selection")
     output = output.resolve(strict=True)
@@ -98,6 +99,13 @@ def build(source, revision, output, families, repository, go_bin, archives=None,
         descriptor = dict(schema=1, channel="development", kind="candidate" if complete else "component-set",
                           repository=repository, source_sha=sha, source_tree=tree, platform=bootstrap.PLATFORM,
                           artifacts=objects)
+        if base_sha is not None:
+            if not complete:
+                raise ValueError("existing-member history requires a complete candidate")
+            directory = result / upgrade.FAMILY
+            descriptor["upgrade"] = upgrade.package(source, snapshot, base_sha, sha, directory)
+            history = directory / upgrade.BUNDLE
+            objects[upgrade.FAMILY + "/" + upgrade.BUNDLE] = dict(bytes=history.stat().st_size, sha256=bootstrap.digest(history))
         raw = canonical(descriptor)
         identity_bytes = binding(descriptor) if complete else raw
         if complete:
@@ -133,11 +141,20 @@ def verify(directory):
     if (not prefix or record["channel"] != "development" or record["schema"] != 1 or canonical(record) != raw or
             directory.name != prefix + hashlib.sha256(bound).hexdigest()):
         raise ValueError("development identity mismatch")
-    if (set(record) != {"schema", "channel", "kind", "repository", "source_sha", "source_tree", "platform", "artifacts"}
+    upgrade_input = "upgrade" in record
+    if (set(record) - {"upgrade"} != {"schema", "channel", "kind", "repository", "source_sha", "source_tree", "platform", "artifacts"}
             or not bootstrap.REPOSITORY.fullmatch(record["repository"]) or record["platform"] != bootstrap.PLATFORM
             or any(not bootstrap.SHA.fullmatch(record[k]) or record[k] == "0" * 40 for k in ("source_sha", "source_tree"))):
         raise ValueError("invalid development source identity")
     families = {p.name for p in directory.iterdir()} - ({INDEX, BINDING} if kind == "candidate" else {INDEX})
+    if upgrade_input:
+        meta = record["upgrade"]
+        folder = directory / upgrade.FAMILY
+        if (kind != "candidate" or set(meta) != {"base_sha", "compatibility"} or not bootstrap.SHA.fullmatch(meta["base_sha"])
+                or meta["base_sha"] == record["source_sha"] or not isinstance(meta["compatibility"], dict)
+                or folder.is_symlink() or not folder.is_dir() or {p.name for p in folder.iterdir()} != {upgrade.BUNDLE}):
+            raise ValueError("invalid development upgrade package")
+        families.discard(upgrade.FAMILY)
     if not families or families - PACKAGERS.keys() or (kind == "candidate") != (families == PACKAGERS.keys()):
         raise ValueError("invalid development family selection")
     if any((directory / f).is_symlink() or not (directory / f).is_dir() for f in families):
@@ -183,6 +200,7 @@ def main():
     package.add_argument("--go-bin", default="go")
     package.add_argument("--archives", type=Path)
     package.add_argument("--reuse-release", type=Path, help="Explicit digest-named retained immutable release")
+    package.add_argument("--base-sha", help="Exact current source SHA for an existing-member upgrade")
     check = cmds.add_parser("verify")
     check.add_argument("directory", type=Path)
     args = parser.parse_args()
@@ -191,7 +209,7 @@ def main():
         print(record["channel"], record["kind"], record["source_sha"], len(record["artifacts"]))
     else:
         print(build(args.source, args.revision, args.output, args.family or list(PACKAGERS),
-                    args.repository, args.go_bin, args.archives, args.reuse_release))
+                    args.repository, args.go_bin, args.archives, args.reuse_release, args.base_sha))
 
 
 if __name__ == "__main__":

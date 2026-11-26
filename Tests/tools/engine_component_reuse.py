@@ -128,7 +128,9 @@ class RetainedRelease:
                 raise ValueError("retained external reference set mismatch")
             blobs = [(external.asset_name(i["reference"]), i["archive_sha256"], i["archive_bytes"]) for i in inv["images"]]
         elif family == "k3s":
-            if not self.unchanged([k3s.LOCK, "Data/Engine/release-manifest.json"]):
+            pins = json.loads((snapshot / k3s.LOCK).read_bytes())
+            manifest = json.loads((snapshot / "Data/Engine/release-manifest.json").read_bytes())
+            if not self.unchanged([k3s.LOCK]) or manifest["required_k3s_baseline"] != pins["version"]:
                 return None
             name = k3s.INVENTORY
             inv = self.inventory(name)

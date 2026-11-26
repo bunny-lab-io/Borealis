@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import build_engine_development as dev
+import development_image_update as image_update
 sys.path.pop(0)
 
 
@@ -95,3 +96,60 @@ class DevelopmentSnapshotTests(unittest.TestCase):
                     self.assertIn("target=prod", command)
                     self.assertIn("label:io.borealis.service=test", command)
                     self.assertFalse(any("docker.sock" in arg for arg in command))
+
+    def test_upgrade_history_fast_forwards_existing_member_without_origin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            src = root / "src"
+            src.mkdir()
+            git = dev.bootstrap.git
+            git(src, "init", "--quiet", "--template=")
+            git(src, "config", "user.email", "fixture@example.invalid")
+            git(src, "config", "user.name", "fixture")
+            manifest = src / "Data/Engine/release-manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('{"cluster_compatible":true}')
+            git(src, "add", ".")
+            git(src, "commit", "--quiet", "-m", "baseline")
+            base = git(src, "rev-parse", "HEAD")
+            recipient = root / "recipient"
+            git(root, "clone", "--quiet", "--no-local", src.as_uri(), str(recipient))
+            git(recipient, "remote", "remove", "origin")
+            (src / "fix").write_text("focused change")
+            git(src, "add", ".")
+            git(src, "commit", "--quiet", "-m", "correction")
+            sha = git(src, "rev-parse", "HEAD")
+            package = root / "upgrade"
+            info = dev.upgrade.package(src, src, base, sha, package)
+            self.assertEqual(info, {"base_sha": base, "compatibility": {"cluster_compatible": True}})
+            bundle = str(package / dev.upgrade.BUNDLE)
+            git(recipient, "bundle", "verify", bundle)
+            git(recipient, "fetch", "--no-tags", "--no-write-fetch-head", bundle, dev.upgrade.REF)
+            self.assertEqual(git(recipient, "rev-parse", "HEAD"), base)
+            git(recipient, "merge", "--ff-only", sha)
+            self.assertEqual((recipient / "fix").read_text(), "focused change")
+            with self.assertRaises(ValueError):
+                dev.upgrade.package(src, src, sha, base, root / "backward")
+
+    def test_binary_layer_requires_only_compiled_changes_and_equivalent_copy_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            update = image_update
+            changed = update.MODULE + "cmd/api-backend/route.go"
+            file = root / "Dockerfile"
+            item = {"context": ".", "dockerfile": "Dockerfile"}
+            retained = dev.RetainedRelease.__new__(dev.RetainedRelease)
+            retained.original = {changed: "old", "Dockerfile": "original"}
+            retained.current = {changed: "new", "Dockerfile": "original"}
+            instructions = ("FROM base\nCOPY " + update.DIST + "api-backend /usr/local/bin/server\n"
+                            "RUN chmod 0755 /usr/local/bin/server\nUSER borealis-engine\n")
+            file.write_text(instructions)
+            paths = {update.MODULE.rstrip("/"), "Dockerfile"}
+            def choose():
+                return update.binary_layer(retained, "api-backend", root, item, paths)
+            self.assertEqual(choose(), [("api-backend", "/usr/local/bin/server")])
+            retained.current["Dockerfile"] = "different"
+            self.assertIsNone(choose())
+            retained.current["Dockerfile"] = "original"
+            file.write_text(instructions + "RUN generate-app-configuration\n")
+            self.assertIsNone(choose())
