@@ -53,3 +53,45 @@ class DevelopmentSnapshotTests(unittest.TestCase):
         self.assertTrue(dev.bootstrap.packaging_identity("dev-src-" + sha, sha))
         self.assertFalse(dev.bootstrap.packaging_identity("dev-src-" + "b"*40, sha))
         self.assertFalse(dev.bootstrap.RELEASE.fullmatch("dev-src-" + sha))
+
+    def test_reuse_requires_unchanged_inputs_and_supported_dockerfile(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)
+            dockerfile = source / "Dockerfile"
+            item = {"context": ".", "dockerfile": "Dockerfile", "inputs": ["config/**"]}
+            retained = dev.RetainedRelease.__new__(dev.RetainedRelease)
+            dockerfile.write_text("FROM scratch\nCOPY config /app\n")
+            paths = retained.role_inputs(source, item)
+            self.assertIn("config", paths)
+            retained.original = {"config/app": "100644 blob a", "outside": "100644 blob b"}
+            retained.current = {**retained.original, "outside": "100644 blob c"}
+            self.assertTrue(retained.unchanged(paths))
+            retained.current["config/app"] = "100755 blob a"
+            self.assertFalse(retained.unchanged(paths))
+            for contents in ("# syntax=example/frontend\nCOPY config /app\n",
+                             "RUN --mount=type=bind,target=/data true\n",
+                             "COPY *.sh /bin/\n", "ADD https://example.invalid/a /a\n"):
+                dockerfile.write_text(contents)
+                self.assertIsNone(retained.role_inputs(source, item))
+
+    def test_changed_development_image_requires_dedicated_worker(self):
+        import socket
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "buildkitd.sock"
+            with patch.object(dev.images, "DEV_BUILDKIT", path):
+                with self.assertRaisesRegex(ValueError, "dedicated BuildKit"):
+                    dev.images.development_builder()
+                path.write_text("fixture")
+                with self.assertRaises(ValueError):
+                    dev.images.development_builder()
+                path.unlink()
+                with socket.socket(socket.AF_UNIX) as sock:
+                    sock.bind(str(path))
+                    command = dev.images.development_image_command(dev.images.development_builder(),
+                        root, root / "Dockerfile", {"targets": {"prod": "prod"}}, "image:dev",
+                        root / "export.oci", ["io.borealis.service=test"])
+                    self.assertEqual(command[:4], ["buildctl", "--addr", "unix://" + str(path), "build"])
+                    self.assertIn("target=prod", command)
+                    self.assertIn("label:io.borealis.service=test", command)
+                    self.assertFalse(any("docker.sock" in arg for arg in command))

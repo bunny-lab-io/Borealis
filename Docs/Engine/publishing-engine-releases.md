@@ -29,7 +29,7 @@ Derive the budgets from available capacity after accounting for the running Engi
 
 ## Package a local development revision
 
-In an isolated Linux build worker, give the development packager a local Git repository and revision. A local commit is sufficient. The worker freezes that commit before opening any build inputs. Uncommitted or untracked files stay outside the snapshot. Keep operational credentials, the operational database and privileged cluster sockets outside the worker. Image packaging requires a separately isolated build daemon.
+In an isolated Linux build worker, give the development packager a local Git repository and revision. A local commit is sufficient. The worker freezes that commit before opening any build inputs. Uncommitted or untracked files stay outside the snapshot. Keep operational credentials, the operational database and privileged cluster sockets outside the worker. For a changed application image, mount a dedicated, resource-limited BuildKit worker socket at `/run/borealis-buildkit/buildkitd.sock` inside the build worker and make `buildctl` available. Keep the daemon and its persistent layer cache separate from the operational Engine runtime.
 
 ```bash
 mkdir -p "$BUILD_OUTPUT"
@@ -37,7 +37,9 @@ python3 Tests/tools/build_engine_development.py build \
   --source "$SOURCE_REPO" --revision "$LOCAL_COMMIT" --output "$BUILD_OUTPUT"
 ```
 
-The command prints the published local directory. Use `verify DIRECTORY` with the same tool to check its source binding and content identity. A complete five-family package has a `dev-` identity derived from its manifest. Select `--family host_package` to exercise only frozen Ubuntu packaging. A partial build has a `components-` identity. Neither form publishes a GitHub tag. Current RC29 Engines still require an immutable GitHub release for rolling deployment and onboarding.
+To reuse a retained immutable release, add `--reuse-release "$RETAINED_RELEASE"`. Unchanged roles retain their original image reference and digest. The packager compares their tracked build inputs and file modes before reuse.
+
+The command prints the published local directory. Use `verify DIRECTORY` with the same tool to check its source binding and content identity. A complete five-family package has a `dev-` identity derived from its manifest. Select `--family host_package` to exercise only frozen Ubuntu packaging. A partial build has a `components-` identity. Neither form publishes a GitHub tag. The native `borealis-node-manager development-candidate-proof` command verifies the complete local catalog and all artifact digests. This read-only check leaves installation, operation authority and cluster health untested. Current RC29 Engines still require an immutable GitHub release for rolling deployment and onboarding.
 
 ## Understand Immutability
 

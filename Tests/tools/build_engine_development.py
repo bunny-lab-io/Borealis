@@ -12,13 +12,26 @@ import build_node_external_assets as external
 import build_node_host_package_assets as packages
 import build_node_image_assets as images
 import build_node_k3s_assets as k3s
+from engine_component_reuse import RetainedRelease
 
 PACKAGERS = dict(bootstrap=bootstrap, external=external, host_package=packages, image=images, k3s=k3s)
 INDEX = "development-manifest.json"
+BINDING = "development-identity.json"
 
 
 def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def binding(record):
+    inventories = {}
+    for family, pkg in PACKAGERS.items():
+        name = bootstrap.MANIFEST_NAME if family == "bootstrap" else pkg.INVENTORY
+        inventories[family] = record["artifacts"][family + "/" + name]["sha256"]
+    return canonical(dict(schema=2, channel="development", repository=record["repository"],
+                          source_sha=record["source_sha"], source_tree=record["source_tree"],
+                          platform=record["platform"], inventories=inventories,
+                          manifest_sha256=hashlib.sha256(canonical(record)).hexdigest()))
 
 
 def freeze_revision(source, revision, destination):
@@ -50,7 +63,7 @@ def artifact_names(family, source):
     return {external.INVENTORY, *(external.asset_name(i["reference"]) for c in pins["components"] for i in c["images"])}
 
 
-def build(source, revision, output, families, repository, go_bin, archives=None):
+def build(source, revision, output, families, repository, go_bin, archives=None, reuse_release=None):
     if not bootstrap.REPOSITORY.fullmatch(repository) or not families or set(families) - PACKAGERS.keys():
         raise ValueError("invalid packaging selection")
     output = output.resolve(strict=True)
@@ -58,14 +71,19 @@ def build(source, revision, output, families, repository, go_bin, archives=None)
         work = Path(temp)
         snapshot = work / "snapshot"
         sha, tree, label = freeze_revision(source, revision, snapshot)
+        base = RetainedRelease(reuse_release, repository, source, sha) if reuse_release else None
         result = work / "artifacts"
         result.mkdir()
         objects = {}
         for family in sorted(set(families)):
             directory = result / family
             kwargs = dict(archives=archives) if family == "host_package" else dict(go_bin=go_bin)
-            inventory = PACKAGERS[family].build_assets(source=snapshot, release=label, source_sha=sha,
-                        repository=repository, output_dir=directory, **kwargs)
+            inventory = base.dependency_family(family, snapshot, sha, label, directory) if base else None
+            if inventory is None:
+                if family == "image" and base:
+                    kwargs["reuse"] = base
+                inventory = PACKAGERS[family].build_assets(source=snapshot, release=label, source_sha=sha,
+                            repository=repository, output_dir=directory, **kwargs)
             if inventory["source_sha"] != sha or inventory["release"] != label or inventory["repository"] != repository:
                 raise ValueError("packager returned a different snapshot")
             names = artifact_names(family, snapshot)
@@ -81,7 +99,10 @@ def build(source, revision, output, families, repository, go_bin, archives=None)
                           repository=repository, source_sha=sha, source_tree=tree, platform=bootstrap.PLATFORM,
                           artifacts=objects)
         raw = canonical(descriptor)
-        identity = ("dev-" if complete else "components-") + hashlib.sha256(raw).hexdigest()
+        identity_bytes = binding(descriptor) if complete else raw
+        if complete:
+            (result / BINDING).write_bytes(identity_bytes)
+        identity = ("dev-" if complete else "components-") + hashlib.sha256(identity_bytes).hexdigest()
         (result / INDEX).write_bytes(raw)
         destination = output / identity
         # Same filesystem. An interrupted build never appears at the final name.
@@ -101,14 +122,22 @@ def verify(directory):
     record = json.loads(raw)
     kind = record["kind"]
     prefix = {"candidate": "dev-", "component-set": "components-"}.get(kind)
+    bound = raw
+    if kind == "candidate":
+        pointer = directory / BINDING
+        if pointer.is_symlink() or not pointer.is_file() or pointer.stat().st_size > 4096:
+            raise ValueError("development candidate binding missing")
+        bound = binding(record)
+        if pointer.read_bytes() != bound:
+            raise ValueError("development candidate composition mismatch")
     if (not prefix or record["channel"] != "development" or record["schema"] != 1 or canonical(record) != raw or
-            directory.name != prefix + hashlib.sha256(raw).hexdigest()):
+            directory.name != prefix + hashlib.sha256(bound).hexdigest()):
         raise ValueError("development identity mismatch")
     if (set(record) != {"schema", "channel", "kind", "repository", "source_sha", "source_tree", "platform", "artifacts"}
             or not bootstrap.REPOSITORY.fullmatch(record["repository"]) or record["platform"] != bootstrap.PLATFORM
             or any(not bootstrap.SHA.fullmatch(record[k]) or record[k] == "0" * 40 for k in ("source_sha", "source_tree"))):
         raise ValueError("invalid development source identity")
-    families = {p.name for p in directory.iterdir() if p != directory / INDEX}
+    families = {p.name for p in directory.iterdir()} - ({INDEX, BINDING} if kind == "candidate" else {INDEX})
     if not families or families - PACKAGERS.keys() or (kind == "candidate") != (families == PACKAGERS.keys()):
         raise ValueError("invalid development family selection")
     if any((directory / f).is_symlink() or not (directory / f).is_dir() for f in families):
@@ -153,6 +182,7 @@ def main():
     package.add_argument("--repository", default="bunny-lab-io/Borealis")
     package.add_argument("--go-bin", default="go")
     package.add_argument("--archives", type=Path)
+    package.add_argument("--reuse-release", type=Path, help="Explicit digest-named retained immutable release")
     check = cmds.add_parser("verify")
     check.add_argument("directory", type=Path)
     args = parser.parse_args()
@@ -161,7 +191,7 @@ def main():
         print(record["channel"], record["kind"], record["source_sha"], len(record["artifacts"]))
     else:
         print(build(args.source, args.revision, args.output, args.family or list(PACKAGERS),
-                    args.repository, args.go_bin, args.archives))
+                    args.repository, args.go_bin, args.archives, args.reuse_release))
 
 
 if __name__ == "__main__":

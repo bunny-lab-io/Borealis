@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -108,10 +109,39 @@ def build_runtime(source: Path, go_bin: str) -> Path:
     return manager
 
 
+# Development workers receive only this private BuildKit socket. The release
+# builder continues to use its ephemeral buildx instance in GitHub Actions.
+DEV_BUILDKIT = Path("/run/borealis-buildkit/buildkitd.sock")
+
+
+def development_builder():
+    try:
+        mode = DEV_BUILDKIT.lstat().st_mode
+    except FileNotFoundError:
+        mode = 0
+    if not stat.S_ISSOCK(mode) or DEV_BUILDKIT.resolve() != DEV_BUILDKIT:
+        raise ValueError("changed development images require the dedicated BuildKit worker socket")
+    return ["buildctl", "--addr", "unix://" + str(DEV_BUILDKIT)]
+
+
+def development_image_command(builder, context, dockerfile, item, reference, exported, labels):
+    args = [*builder, "build", "--frontend", "dockerfile.v0",
+            "--local", f"context={context}", "--local", f"dockerfile={dockerfile.parent}",
+            "--opt", f"filename={dockerfile.name}", "--opt", "platform=linux/amd64",
+            "--output", f"type=oci,name={reference},oci-mediatypes=true,compression=gzip,dest={exported}"]
+    for label in labels:
+        args.extend(["--opt", "label:" + label])
+    if "targets" in item:
+        args.extend(["--opt", "target=" + item["targets"]["prod"]])
+    return args
+
+
 def build_assets(*, source: Path, release: str, source_sha: str, repository: str,
-                 output_dir: Path, go_bin: str, docker: str = "docker") -> dict:
+                 output_dir: Path, go_bin: str, docker: str = "docker", reuse=None) -> dict:
     if not bootstrap.packaging_identity(release, source_sha) or not bootstrap.REPOSITORY.fullmatch(repository):
         raise ValueError("invalid immutable image release identity")
+    if reuse is not None and not release.startswith("dev-src-"):
+        raise ValueError("component reuse requires a development snapshot")
     output_dir = output_dir.resolve()
     # Dedicated output directory: an interrupted or previous packaging run is
     # never overwritten. Nothing is uploaded until the complete inventory exists.
@@ -124,30 +154,57 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
             manifest = json.loads((snapshot / "Data/Engine/Containers/build-manifest.json").read_text(), object_pairs_hook=unique_object)
             if set(manifest["services"]) != set(ROLES):
                 raise ValueError("release production role inventory changed")
-            verifier = build_runtime(snapshot, go_bin)
+            reused = {}
+            input_digests = {}
+            if reuse:
+                base_inventory = reuse.inventory(INVENTORY)
+                if [i["role"] for i in base_inventory["images"]] != list(ROLES):
+                    raise ValueError("retained role inventory mismatch")
+                for i in base_inventory["images"]:
+                    role = i["role"]
+                    paths = reuse.role_inputs(snapshot, manifest["services"][role])
+                    if paths and reuse.unchanged(paths):
+                        if i["image"] != f"docker.io/borealis-engine/{role}:release-{reuse.base}":
+                            raise ValueError("retained image build source mismatch")
+                        reused[role] = i
+                        input_digests[role] = reuse.inputs(paths, reuse.current)
+            dev_builder = development_builder() if release.startswith("dev-src-") and len(reused) < len(ROLES) else None
+            verifier = build_runtime(snapshot, go_bin) if len(reused) != len(ROLES) else None
             builder = "borealis-release-" + uuid.uuid4().hex
             created = False
             images = []
             try:
-                run([docker, "buildx", "create", "--driver", "docker-container", "--name", builder], timeout=120)
-                created = True
+                if verifier and not dev_builder:
+                    run([docker, "buildx", "create", "--driver", "docker-container", "--name", builder], timeout=120)
+                    created = True
                 for role in ROLES:
+                    if role in reused:
+                        proof = reused[role]
+                        reuse.copy(f"borealis-node-image-{role}-linux-amd64.oci.tar", output_dir,
+                                   proof["archive_sha256"], proof["archive_bytes"])
+                        images.append(proof)
+                        continue
                     item = manifest["services"][role]
                     dockerfile = source_path(snapshot, item["dockerfile"])
                     context = source_path(snapshot, item["context"], directory=True)
                     reference = f"docker.io/borealis-engine/{role}:release-{source_sha}"
                     exported = root / f"{role}.oci.tar"
                     archive = output_dir / f"borealis-node-image-{role}-linux-amd64.oci.tar"
-                    args = [docker, "buildx", "build", "--builder", builder, "--platform", "linux/amd64",
-                            "--provenance=false", "--sbom=false", "--tag", reference,
-                            "--label", f"org.opencontainers.image.revision={source_sha}",
-                            "--label", f"org.opencontainers.image.source=https://github.com/{repository}",
-                            "--label", f"io.borealis.service={role}",
-                            "--output", f"type=oci,oci-mediatypes=true,compression=gzip,dest={exported}",
-                            "--file", str(dockerfile)]
-                    if "targets" in item:
-                        args += ["--target", item["targets"]["prod"]]
-                    args += [str(context)]
+                    labels = [f"org.opencontainers.image.revision={source_sha}",
+                              f"org.opencontainers.image.source=https://github.com/{repository}",
+                              f"io.borealis.service={role}"]
+                    if dev_builder:
+                        args = development_image_command(dev_builder, context, dockerfile, item, reference, exported, labels)
+                    else:
+                        args = [docker, "buildx", "build", "--builder", builder, "--platform", "linux/amd64",
+                                "--provenance=false", "--sbom=false", "--tag", reference,
+                                "--output", f"type=oci,oci-mediatypes=true,compression=gzip,dest={exported}",
+                                "--file", str(dockerfile)]
+                        for label in labels:
+                            args.extend(["--label", label])
+                        if "targets" in item:
+                            args += ["--target", item["targets"]["prod"]]
+                        args += [str(context)]
                     run(args)
                     normalize_index(exported, archive, reference)
                     measured = run([str(verifier), "image-archive-proof", "--archive", str(archive),
@@ -161,6 +218,9 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                     run([docker, "buildx", "rm", builder], timeout=120)
             inventory = dict(version=1, repository=repository, release=release, source_sha=source_sha,
                              platform="linux-amd64", images=images)
+            if reused:
+                inventory.update(version=2, retained_release=reuse.directory.name, reused={
+                    role: {"source_sha": reuse.base, "inputs_sha256": input_digests[role]} for role in reused})
             (output_dir / INVENTORY).write_text(json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n")
             return inventory
     except BaseException:
