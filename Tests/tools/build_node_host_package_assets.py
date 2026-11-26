@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 
 import build_node_bootstrap_assets as bootstrap
+from node_artifact_cache import pinned_input
 
 LOCK = "Data/Engine/Containers/api-backend/internal/clusterbootstrap/host_packages.lock.json"
 INVENTORY = "borealis-node-host-packages-ubuntu-noble-linux-amd64.json"
@@ -250,7 +251,8 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                 archives = Path(temporary) / "cache"
                 archives.mkdir()
                 for pin in plan["packages"]:
-                    download(pin, archives / pin["file"])
+                    pinned_input(pin["sha256"], pin["size"], archives / pin["file"],
+                                 lambda path, pin=pin: download(pin, path))
             destination = output_dir / ARCHIVE
             assemble_archive(plan, archives, destination)
             inventory = dict(plan, repository=repository, release=release, source_sha=source_sha, plan_sha256=digest,

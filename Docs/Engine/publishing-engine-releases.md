@@ -11,8 +11,21 @@ Borealis maintainers use this runbook to publish qualification builds for cluste
 
 `REVISION` counts normal releases published during calendar month. `HOTFIX` counts focused corrections based on one normal release. `N` starts at `1` and increases for each qualification candidate built for same intended stable version. These values express publication order, not semantic major, minor, or patch scope. See [Security Policy](https://github.com/bunny-lab-io/Borealis/blob/main/SECURITY.md).
 
-!!! tip "Normal development path"
+!!! tip "Qualification and stable publication"
     Merge reviewed changes to `main`, publish `-rc.1` from resulting commit, and test it through Cluster Management. Fix failures through another reviewed commit and publish `-rc.2`. When candidate passes, create stable tag from same tested commit.
+
+## Reuse pinned packaging inputs
+
+An isolated Linux build worker can retain verified K3s downloads, external OCI blobs and frozen Ubuntu packages between builds. Give the build account its own private directory on a provisioned filesystem. Set the following environment variables before running the ordinary node packagers.
+
+| Variable | Value |
+|---|---|
+| `BOREALIS_BUILD_ARTIFACT_CACHE` | Absolute path to the build account’s mode-0700 object directory |
+| `BOREALIS_BUILD_CACHE_MAX_BYTES` / `BOREALIS_BUILD_CACHE_MAX_OBJECTS` | Cache byte and object budgets for this worker |
+| `BOREALIS_BUILD_CACHE_RESERVE_BYTES` / `BOREALIS_BUILD_CACHE_RESERVE_INODES` | Capacity that must remain available for staged output, other workloads and recovery |
+| `BOREALIS_BUILD_INPUTS_OFFLINE=1` | Require these inputs to be present before packaging |
+
+Derive the budgets from available capacity after accounting for the running Engine, retained releases, build workspace and expanded outputs. The packagers verify each input against the checked-out pin and still run their native archive checks. A missing offline input or damaged object stops packaging. Build outputs are independent files. Existing release publication and deployment checks apply.
 
 ## Understand Immutability
 

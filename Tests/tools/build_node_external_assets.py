@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 
 import build_node_bootstrap_assets as bootstrap
+from node_artifact_cache import pinned_input
 import resolve_node_external_images as pins
 from node_registry_download import RegistryReader
 
@@ -37,7 +38,8 @@ def assemble_archive(pin: dict, cache: Path, destination: Path) -> None:
     def fetch(digest, size, *, manifest=False):
         path = cache / digest.split(":", 1)[1]
         if not path.exists():
-            reader.fetch(digest, size, path, manifest=manifest)
+            pinned_input(digest.removeprefix("sha256:"), size, path,
+                         lambda tmp: reader.fetch(digest, size, tmp, manifest=manifest))
         # Cache is private to this packaging run. Verify all reused bytes too.
         if not path.is_file() or path.is_symlink() or path.stat().st_size != size:
             raise ValueError("external image cache identity changed")

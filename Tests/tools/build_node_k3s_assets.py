@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 
 import build_node_bootstrap_assets as bootstrap
+from node_artifact_cache import pinned_input
 
 INVENTORY = "borealis-node-k3s-linux-amd64.json"
 BINARY = "borealis-node-k3s-linux-amd64"
@@ -163,6 +164,10 @@ def download(version: str, pin: dict, destination: Path) -> None:
         raise ValueError("pinned K3s asset download failed") from None
 
 
+def pinned_download(version, pin, destination):
+    pinned_input(pin["sha256"], pin["size"], destination, lambda path: download(version, pin, path))
+
+
 def build_assets(*, source: Path, release: str, source_sha: str, repository: str,
                  output_dir: Path, go_bin: str) -> dict:
     if not bootstrap.RELEASE.fullmatch(release) or not bootstrap.SHA.fullmatch(source_sha) or not bootstrap.REPOSITORY.fullmatch(repository):
@@ -180,10 +185,10 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
                 raise ValueError("K3s packaging lock differs from release baseline")
             verifier = root / "node-manager"
             bootstrap.build_manager(snapshot, verifier, go_bin)
-            download(pins["version"], pins["binary"], output_dir / BINARY)
+            pinned_download(pins["version"], pins["binary"], output_dir / BINARY)
             payload = measure_payload(output_dir / BINARY, pins, root)
-            download(pins["version"], pins["archive"], output_dir / ARCHIVE)
-            download(pins["version"], pins["installer"], output_dir / INSTALLER)
+            pinned_download(pins["version"], pins["archive"], output_dir / ARCHIVE)
+            pinned_download(pins["version"], pins["installer"], output_dir / INSTALLER)
             result = subprocess.run([str(verifier), "k3s-archive-proof", "--archive", str(output_dir / ARCHIVE)],
                                     check=True, stdout=subprocess.PIPE, timeout=600)
             proof = json.loads(result.stdout)

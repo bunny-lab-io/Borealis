@@ -51,6 +51,8 @@ Disposable Engine lab nodes are remote targets:
 
 Access all three through SSH from workstation for separately authorized inspection, deployment, runtime repair, and qualification. Never edit deployed checkout as development source. Before any command that can install, deploy, start, stop, restart, reconfigure, or qualify Engine runtime, verify local hostname is not an Engine node, identify exact remote target, and confirm applicable authorization and documented procedure. Repository implementation authorization does not authorize remote runtime action.
 
+The operator authorized immutable Engine-local development snapshots for clustered troubleshooting. Use isolated build workers and disposable test databases with no operational credentials or cluster-management sockets. Reuse pinned packaging inputs within calculated resource budgets. Preserve the original controller’s deployment authority, the explicit development entry/exit boundary and the mandatory qualification and stable release gates. Track implementation and live qualification of this path in #530. Unrestricted clustered HMR entry remains disabled.
+
 For clustering work, preserve original-controller authority, inherited shared identity, and existing fencing, lease, and quorum guarantees. Follow `Docs/Engine/managing-engine-clusters.md` for phase-specific requirements.
 
 ## Core Operating Model
