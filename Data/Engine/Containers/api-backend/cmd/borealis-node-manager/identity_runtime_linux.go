@@ -16,7 +16,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -374,6 +373,10 @@ func captureIdentityRuntimeMount(path string, uid, gid int) (identityRuntimeMoun
 }
 
 func identityRuntimeProcessesAbsent(ctx context.Context, proc, root string, identity identityRuntimeMount) error {
+	return checkIdentityRuntimeProcesses(ctx, proc, root, identity, false)
+}
+
+func checkIdentityRuntimeProcesses(ctx context.Context, proc, root string, identity identityRuntimeMount, prejoin bool) error {
 	if ctx.Err() != nil || identity.Device == 0 || identity.Inode == 0 || identity.Mount == 0 {
 		return errIdentityRuntimeProof
 	}
@@ -417,16 +420,19 @@ func identityRuntimeProcessesAbsent(ctx context.Context, proc, root string, iden
 			continue
 		}
 		path := filepath.Join(base, "root", strings.TrimPrefix(root, string(filepath.Separator)))
-		info, err := os.Stat(path)
+		var leaf unix.Statx_t
+		const mask = unix.STATX_INO | unix.STATX_MNT_ID
+		err = unix.Statx(unix.AT_FDCWD, path, 0, mask, &leaf)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		if err != nil {
+		if err != nil || leaf.Mask&mask != mask {
 			return errIdentityRuntimeProof
 		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || (uint64(stat.Dev) == identity.Device && stat.Ino == identity.Inode) {
-			return errIdentityRuntimeProof
+		if unix.Mkdev(leaf.Dev_major, leaf.Dev_minor) == identity.Device && leaf.Ino == identity.Inode {
+			if !prejoin || !inheritedPrejoinRoot(proc, base, leaf) {
+				return errIdentityRuntimeProof
+			}
 		}
 		after, err := os.Stat(filepath.Join(base, "ns", "mnt"))
 		if errors.Is(err, os.ErrNotExist) {
@@ -437,6 +443,22 @@ func identityRuntimeProcessesAbsent(ctx context.Context, proc, root string, iden
 		}
 	}
 	return nil
+}
+
+// A sandboxed host service may see the Engine ancestor through a private
+// copy of the host's root mount. Compare mount IDs only within the service's
+// namespace. A bind mount of the protected path gets its own mount ID even
+// when its device and inode are identical.
+func inheritedPrejoinRoot(proc, process string, leaf unix.Statx_t) bool {
+	const mask = unix.STATX_INO | unix.STATX_MNT_ID
+	var root, host unix.Statx_t
+	if unix.Statx(unix.AT_FDCWD, filepath.Join(process, "root"), 0, mask, &root) != nil ||
+		unix.Statx(unix.AT_FDCWD, filepath.Join(proc, "1/root"), 0, mask, &host) != nil ||
+		root.Mask&mask != mask || host.Mask&mask != mask {
+		return false
+	}
+	return root.Dev_major == host.Dev_major && root.Dev_minor == host.Dev_minor && root.Ino == host.Ino &&
+		root.Mnt_id != 0 && root.Mnt_id == leaf.Mnt_id
 }
 
 func identityRuntimeKnownHostConsumer(process string) (bool, error) {

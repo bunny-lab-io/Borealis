@@ -62,7 +62,7 @@ func bootstrapPrejoinQuiescence(ctx context.Context, request clusterbootstrap.Pr
 			return mount, true, err
 		},
 		processes: func(path string, mount identityRuntimeMount) error {
-			return identityRuntimeProcessesAbsent(ctx, "/proc", path, mount)
+			return checkIdentityRuntimeProcesses(ctx, "/proc", path, mount, true)
 		},
 	})
 }

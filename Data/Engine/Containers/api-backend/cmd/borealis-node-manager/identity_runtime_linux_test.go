@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func identityRuntimeRequestFixture() clusterbootstrap.SessionRequest {
@@ -287,11 +289,25 @@ func TestIdentityRuntimeMountAndProcessProof(t *testing.T) {
 	if err := os.Symlink("/usr/bin/true", filepath.Join(proc, "2", "exe")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/", filepath.Join(proc, "2", "root")); err != nil {
+	if err := os.Symlink(filepath.Dir(root), filepath.Join(proc, "2", "root")); err != nil {
 		t.Fatal(err)
 	}
-	if err := identityRuntimeProcessesAbsent(context.Background(), proc, root, mount); !errors.Is(err, errIdentityRuntimeProof) {
+	if err := identityRuntimeProcessesAbsent(context.Background(), proc, "/secrets", mount); !errors.Is(err, errIdentityRuntimeProof) {
 		t.Fatal("container identity mount accepted", err)
+	}
+	if err := os.Symlink(filepath.Dir(root), filepath.Join(proc, "1", "root")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkIdentityRuntimeProcesses(context.Background(), proc, "/secrets", mount, true); err != nil {
+		t.Fatal("ordinary host-root visibility rejected", err)
+	}
+	var bound unix.Statx_t
+	if err := unix.Statx(unix.AT_FDCWD, root, 0, unix.STATX_INO|unix.STATX_MNT_ID, &bound); err != nil {
+		t.Fatal(err)
+	}
+	bound.Mnt_id++
+	if inheritedPrejoinRoot(proc, filepath.Join(proc, "2"), bound) {
+		t.Fatal("separate mount of the same inode accepted")
 	}
 	if err := os.Remove(filepath.Join(proc, "2", "root")); err != nil {
 		t.Fatal(err)
@@ -300,7 +316,7 @@ func TestIdentityRuntimeMountAndProcessProof(t *testing.T) {
 	if err := os.Symlink(isolated, filepath.Join(proc, "2", "root")); err != nil {
 		t.Fatal(err)
 	}
-	if err := identityRuntimeProcessesAbsent(context.Background(), proc, root, mount); err != nil {
+	if err := identityRuntimeProcessesAbsent(context.Background(), proc, "/secrets", mount); err != nil {
 		t.Fatal("unrelated container mount rejected", err)
 	}
 	if err := os.Remove(filepath.Join(proc, "2", "ns", "mnt")); err != nil {
@@ -315,7 +331,10 @@ func TestIdentityRuntimeMountAndProcessProof(t *testing.T) {
 	if err := os.Symlink("/usr/local/bin/borealis-api-backend-go", filepath.Join(proc, "2", "exe")); err != nil {
 		t.Fatal(err)
 	}
-	if err := identityRuntimeProcessesAbsent(context.Background(), proc, root, mount); !errors.Is(err, errIdentityRuntimeProof) {
+	if err := identityRuntimeProcessesAbsent(context.Background(), proc, "/secrets", mount); !errors.Is(err, errIdentityRuntimeProof) {
 		t.Fatal("known host consumer accepted", err)
+	}
+	if err := checkIdentityRuntimeProcesses(context.Background(), proc, "/secrets", mount, true); !errors.Is(err, errIdentityRuntimeProof) {
+		t.Fatal("known prejoin identity consumer accepted", err)
 	}
 }
