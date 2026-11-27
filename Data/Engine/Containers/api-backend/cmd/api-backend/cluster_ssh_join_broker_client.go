@@ -57,6 +57,12 @@ func (c *clusterSSHJoinBrokerClient) withMaterial(parent context.Context, expect
 	if err != nil {
 		return fail
 	}
+	// The initial check binds the secret request to this target and source.
+	// At material handoff the pair fence checks current ownership for both.
+	_, pair := scope.Value(clusterSSHPairManifestKey{}).(map[string]string)
+	if owner, ok := scope.Value(clusterSSHPairOwnerKey{}).(func(context.Context) error); pair && ok {
+		checkAuthority = owner
+	}
 	gate := make(chan struct{}, 1)
 	check := func(ctx context.Context) error {
 		ctx, stop := context.WithTimeout(ctx, 3*time.Second)
@@ -75,7 +81,15 @@ func (c *clusterSSHJoinBrokerClient) withMaterial(parent context.Context, expect
 	if check(scope) != nil {
 		return fail
 	}
-	material, err := c.acquire(scope, request, check)
+	duringTransfer := check
+	if _, bounded := clusterbootstrap.PreparationTimeRemaining(scope); bounded {
+		duringTransfer = clusterbootstrap.CheckPreparationDeadline
+	}
+	frameCheck := check
+	if pair {
+		frameCheck = duringTransfer
+	}
+	material, err := c.acquire(scope, request, frameCheck)
 	if err != nil {
 		return fail
 	}
@@ -83,10 +97,6 @@ func (c *clusterSSHJoinBrokerClient) withMaterial(parent context.Context, expect
 	readerCtx, cancelReaders := context.WithCancel(scope)
 	lifetime := &clusterSSHNetworkReaderLifetime{ctx: readerCtx, cancel: cancelReaders}
 	defer lifetime.close()
-	duringTransfer := check
-	if _, bounded := clusterbootstrap.PreparationTimeRemaining(scope); bounded {
-		duringTransfer = clusterbootstrap.CheckPreparationDeadline
-	}
 	refresh := func(ctx context.Context) error {
 		if lifetime.run(ctx, duringTransfer) != nil {
 			return fail

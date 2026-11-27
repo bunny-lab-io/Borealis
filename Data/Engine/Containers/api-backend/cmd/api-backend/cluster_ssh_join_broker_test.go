@@ -171,12 +171,24 @@ func TestClusterSSHJoinControllerRouteRegistration(t *testing.T) {
 }
 
 func TestClusterSSHJoinWorkerScopeAndPreparationCapability(t *testing.T) {
-	for _, mode := range []string{"complete", "clock", "not owner", "locked before", "locked after", "authority drift", "source substitution", "preparation lost", "consumer failure", "ignored check failure", "unfinished check", "wrong response id", "redirect", "public peer", "cancel", "closed preparation", "snapshot owned", "duplicate source"} {
+	for _, mode := range []string{"complete", "pair", "pair revoked during read", "clock", "not owner", "locked before", "locked after", "authority drift", "source substitution", "preparation lost", "consumer failure", "ignored check failure", "unfinished check", "wrong response id", "redirect", "public peer", "cancel", "closed preparation", "snapshot owned", "duplicate source"} {
 		t.Run(mode, func(t *testing.T) {
 			b, request, authority, frame := sshJoinBrokerFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			calls, reads, consumed := 0, 0, 0
+			pair := mode == "pair" || mode == "pair revoked during read"
+			if pair {
+				until := time.Now().Add(time.Minute)
+				ctx = clusterbootstrap.WithPreparationDeadline(ctx, func() time.Time { return until })
+				ctx = context.WithValue(ctx, clusterSSHPairManifestKey{}, map[string]string{})
+				ctx = context.WithValue(ctx, clusterSSHPairOwnerKey{}, func(ctx context.Context) error {
+					if mode == "pair revoked during read" && calls > 0 {
+						return clusterbootstrap.ErrSessionAuthority
+					}
+					return ctx.Err()
+				})
+			}
 			lost := false
 			var block atomic.Bool
 			started, finished := make(chan struct{}), make(chan struct{})
@@ -278,9 +290,12 @@ func TestClusterSSHJoinWorkerScopeAndPreparationCapability(t *testing.T) {
 				}
 				return nil
 			})
-			success := mode == "complete" || mode == "clock" || mode == "not owner" || mode == "snapshot owned"
+			success := mode == "complete" || mode == "pair" || mode == "clock" || mode == "not owner" || mode == "snapshot owned"
 			if (err == nil) != success {
 				t.Fatal("wrong scoped result", err, calls, reads, consumed)
+			}
+			if pair && (reads != 1 || calls != 1 || (consumed == 1) != success) {
+				t.Fatal("unexpected join material handoff", reads, calls, consumed)
 			}
 			if mode == "unfinished check" {
 				select {

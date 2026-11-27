@@ -35,18 +35,32 @@ func dispatchClusterSSHPrejoinCohort(ctx context.Context, claims []clusterSSHNet
 		}
 	}
 	targets := make([]clusterSSHPrejoinNativeTarget, len(claims))
+	targetContexts := make([]context.Context, len(claims))
 	results := make([]clusterSSHPrejoinDispatchResult, len(claims))
 	var open func(context.Context, int) error
 	open = func(ctx context.Context, i int) error {
 		if i == len(targets) {
 			for _, phase := range []clusterSSHInstallPhase{prepareBeforeJoin, joinDrainedServer, finishJoinedServer} {
 				for i, target := range targets {
-					if current(ctx) != nil || target.current(ctx) != nil {
+					if current(ctx) != nil {
 						return fail
 					}
+					// Use this target's SSH observer and journal identity. The
+					// innermost scope still cancels execution on either host.
+					phaseCtx, cancel := context.WithCancel(targetContexts[i])
+					stop := context.AfterFunc(ctx, cancel)
 					var receipt clusterbootstrap.PrejoinPreparationReceipt
-					if err := target.run(ctx, phase, &receipt); err != nil {
+					err := target.current(phaseCtx)
+					if err == nil && ctx.Err() == nil {
+						err = target.run(phaseCtx, phase, &receipt)
+					}
+					stop()
+					cancel()
+					if err != nil {
 						return err
+					}
+					if ctx.Err() != nil {
+						return ctx.Err()
 					}
 					if phase == finishJoinedServer {
 						if receipt.Validate(results[i].Expected, source) != nil {
@@ -70,11 +84,15 @@ func dispatchClusterSSHPrejoinCohort(ctx context.Context, claims []clusterSSHNet
 			expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
 			results[i].Expected = expected
 			targets[i] = target
+			targetContexts[i] = ctx
 			err := open(ctx, i+1)
 			completed = err == nil
 			return err
 		})
-		if err != nil || !completed || ctx.Err() != nil {
+		if err != nil {
+			return err
+		}
+		if !completed || ctx.Err() != nil {
 			return fail
 		}
 		return nil

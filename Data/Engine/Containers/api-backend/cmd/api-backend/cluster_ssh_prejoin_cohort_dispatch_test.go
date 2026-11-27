@@ -4,6 +4,7 @@ import (
 	"borealis/api-backend/internal/clusterbootstrap"
 	"borealis/api-backend/internal/engineidentity"
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,7 @@ func TestClusterSSHPrejoinCohortBarrier(t *testing.T) {
 				return ctx.Err()
 			}
 			scope := func(ctx context.Context, i int, consume func(context.Context, clusterbootstrap.PreparationExpected, clusterSSHPrejoinNativeTarget) error) error {
+				ctx = context.WithValue(ctx, clusterSSHPrejoinLeaseKey{}, claims[i].Lease)
 				opens++
 				defer func() { closes++ }()
 				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, claims[i].Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
@@ -36,6 +38,9 @@ func TestClusterSSHPrejoinCohortBarrier(t *testing.T) {
 					t.Fatal(err)
 				}
 				run := func(ctx context.Context, phase clusterSSHInstallPhase, receipt *clusterbootstrap.PrejoinPreparationReceipt) error {
+					if ctx.Value(clusterSSHPrejoinLeaseKey{}) != claims[i].Lease {
+						t.Fatal("SSH phase received another target's diagnostic context")
+					}
 					if opens != len(claims) || closes != 0 {
 						t.Fatal("input scope escaped")
 					}
@@ -61,6 +66,9 @@ func TestClusterSSHPrejoinCohortBarrier(t *testing.T) {
 			success := mode == "pair" || mode == "replacement"
 			if (err == nil) != success || success != (result != nil) || opens != len(claims) || closes != opens {
 				t.Fatal("pair outcome", err, phases)
+			}
+			if (mode == "second prepare fails" || mode == "second join fails" || mode == "cleanup fails") && !errors.Is(err, clusterbootstrap.ErrMutationUnknown) {
+				t.Fatal("lost uncertain-effect classification", err)
 			}
 			want := []clusterSSHInstallPhase{prepareBeforeJoin, prepareBeforeJoin, joinDrainedServer, joinDrainedServer, finishJoinedServer, finishJoinedServer}
 			switch mode {
